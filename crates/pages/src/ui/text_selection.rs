@@ -5,7 +5,7 @@
 //!
 //! The page's text comes from the app ([`PageTextSource`]: PdfCraft's extracted text layer); the layer keeps no text.
 
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CancelReason, Cursor, CursorIcon, Metrics, Sense};
@@ -42,6 +42,12 @@ pub trait PageTextSource {
     fn text_of(&self, glyphs: Range<usize>) -> String;
     /// The text of a column selection, one line per row.
     fn column_text(&self, glyphs: &[usize]) -> String;
+    /// The rows of the page between glyphs `anchor` and `head`, when a drag released at `end_x` ends on a row past
+    /// its last glyph; `None` when the page does not say.
+    fn rows_between(&self, anchor: usize, head: usize, end_x: f64) -> Option<Vec<usize>> {
+        let _ = (anchor, head, end_x);
+        None
+    }
 }
 
 /// What is selected on one page.
@@ -55,6 +61,10 @@ pub enum TextSpan {
         anchor: usize,
         /// Index of the glyph the drag has reached.
         head: usize,
+        /// The page of the glyph the drag has reached; the selection's page is where it started.
+        head_page: usize,
+        /// Where on its line the drag was released, in page points, when it ended past the line's last glyph.
+        end_x: Option<f64>,
     },
     /// The glyphs inside a rectangle (page points), drawn from the corner the drag started at.
     #[non_exhaustive]
@@ -69,7 +79,12 @@ pub enum TextSpan {
 impl TextSpan {
     /// A run from the glyph `anchor` to the glyph `head`.
     pub fn run(anchor: usize, head: usize) -> Self {
-        TextSpan::Run { anchor, head }
+        TextSpan::Run { anchor, head, head_page: 0, end_x: None } // P3(pdf-canvas-w5): CV-C24
+    }
+
+    /// A run from the glyph `anchor` on the selection's page to the glyph `head` on page `head_page`.
+    pub fn run_to(anchor: usize, head_page: usize, head: usize) -> Self {
+        TextSpan::Run { anchor, head, head_page, end_x: None }
     }
 
     /// The column from the page point `from` to the page point `to`.
@@ -98,7 +113,7 @@ impl TextSelection {
     // pdfcraft: crates/ui-egui/src/canvas/selection.rs:29 `Selection::rects`.
     pub fn rects(&self, text: &dyn PageTextSource) -> Vec<Rect> {
         match self.span {
-            TextSpan::Run { anchor, head } => text.line_rects(run_range(anchor, head)),
+            TextSpan::Run { anchor, head, .. } => text.line_rects(run_range(anchor, head)),
             TextSpan::Column { from, to } => {
                 let glyphs = text.glyphs_in(Rect::from_points(from, to));
                 runs(&glyphs).into_iter().flat_map(|run| text.line_rects(run)).collect()
@@ -106,13 +121,37 @@ impl TextSelection {
         }
     }
 
-    /// The selected text, as Copy puts it on the clipboard.
+    /// The pages the selection covers, from its first to its last.
+    pub fn pages(&self) -> RangeInclusive<usize> {
+        todo!("CV-C24")
+    }
+
+    /// The glyphs of the selection on `page`; `None` when it covers nothing there.
+    pub fn glyphs_on(&self, page: usize, text: &dyn PageTextSource) -> Option<Range<usize>> {
+        let _ = (page, text);
+        todo!("CV-C24")
+    }
+
+    /// The selection on `page` as rectangles, one per line piece.
+    pub fn rects_on(&self, page: usize, text: &dyn PageTextSource) -> Vec<Rect> {
+        let _ = (page, text);
+        todo!("CV-C24")
+    }
+
+    /// The selected text, as Copy puts it on the clipboard; `None` while a covered page is unread.
     // pdfcraft: crates/ui-egui/src/canvas/selection.rs:37 `Selection::text`.
-    pub fn text(&self, text: &dyn PageTextSource) -> String {
-        match self.span {
-            TextSpan::Run { anchor, head } => text.text_of(run_range(anchor, head)),
+    pub fn text(&self, texts: &dyn PageTexts) -> Option<String> {
+        let text = texts.page(self.page)?; // P3(pdf-canvas-w5): CV-C24, the first page only
+        Some(match self.span {
+            TextSpan::Run { anchor, head, .. } => text.text_of(run_range(anchor, head)),
             TextSpan::Column { from, to } => text.column_text(&text.glyphs_in(Rect::from_points(from, to))),
-        }
+        })
+    }
+
+    /// The covered pages whose text is not read yet.
+    pub fn unread_pages(&self, texts: &dyn PageTexts) -> Vec<usize> {
+        let _ = texts;
+        todo!("CV-C24")
     }
 }
 
@@ -340,16 +379,16 @@ impl CanvasTool for TextSelectTool<'_> {
         let extended = before.filter(|selection| pointer.mods.shift && clicks < 2 && selection.page == placed.page);
         let (span, start) = match (clicks, extended) {
             (2.., _) => match click_unit(text, clicks, glyph).filter(|unit| !unit.is_empty()) {
-                Some(unit) => (TextSpan::Run { anchor: unit.start, head: unit.end - 1 }, TextSpan::Run { anchor: glyph, head: glyph }),
+                Some(unit) => (TextSpan::run_to(unit.start, placed.page, unit.end - 1), TextSpan::run_to(glyph, placed.page, glyph)),
                 None => {
                     self.set(None);
                     return ToolAction::Done;
                 }
             },
             (_, Some(TextSelection { span: TextSpan::Run { anchor, .. }, .. })) => {
-                (TextSpan::Run { anchor, head: glyph }, TextSpan::Run { anchor, head: anchor })
+                (TextSpan::run_to(anchor, placed.page, glyph), TextSpan::run_to(anchor, placed.page, anchor))
             }
-            _ => (TextSpan::Run { anchor: glyph, head: glyph }, TextSpan::Run { anchor: glyph, head: glyph }),
+            _ => (TextSpan::run_to(glyph, placed.page, glyph), TextSpan::run_to(glyph, placed.page, glyph)),
         };
         self.state.gesture = Some((placed.page, start));
         self.state.clicks = clicks;
@@ -373,12 +412,12 @@ impl CanvasTool for TextSelectTool<'_> {
                     Some(unit) if clicks >= 2 => {
                         let reached = click_unit(text, clicks, hit).filter(|unit| !unit.is_empty()).unwrap_or(hit..hit + 1);
                         if reached.start < unit.start {
-                            TextSpan::Run { anchor: unit.end - 1, head: reached.start }
+                            TextSpan::run_to(unit.end - 1, page, reached.start)
                         } else {
-                            TextSpan::Run { anchor: unit.start, head: (reached.end - 1).max(unit.end - 1) }
+                            TextSpan::run_to(unit.start, page, (reached.end - 1).max(unit.end - 1))
                         }
                     }
-                    _ => TextSpan::Run { anchor, head: hit },
+                    _ => TextSpan::run_to(anchor, page, hit),
                 }
             }
             (span, _) => span,
@@ -390,7 +429,7 @@ impl CanvasTool for TextSelectTool<'_> {
         self.drag(pointer, cx);
         if let Some(selection) = self.state.selection
             && matches!(selection.span, TextSpan::Column { .. })
-            && self.texts.page(selection.page).is_none_or(|text| selection.text(text).is_empty())
+            && selection.text(self.texts).is_none_or(|text| text.is_empty())
         {
             self.set(None);
         }
@@ -413,7 +452,7 @@ impl CanvasTool for TextSelectTool<'_> {
                 true
             }
             ToolKey::Nudge { direction, mods, .. } if mods.shift => {
-                let TextSpan::Run { anchor, head } = selection.span else { return false };
+                let TextSpan::Run { anchor, head, .. } = selection.span else { return false };
                 let Some(text) = self.texts.page(selection.page) else { return false };
                 let count = text.glyph_count();
                 let vertical = direction.y != 0.0;
@@ -427,7 +466,10 @@ impl CanvasTool for TextSelectTool<'_> {
                 } else {
                     head.saturating_sub(1)
                 };
-                self.set(Some(TextSelection { page: selection.page, span: TextSpan::Run { anchor, head: moved.min(count.saturating_sub(1)) } }));
+                self.set(Some(TextSelection {
+                    page: selection.page,
+                    span: TextSpan::run_to(anchor, selection.page, moved.min(count.saturating_sub(1))),
+                }));
                 true
             }
             _ => false,

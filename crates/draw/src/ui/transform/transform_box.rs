@@ -102,6 +102,9 @@ pub enum RotateZone {
     Outside,
     /// Only the band outside a corner (PhotoCraft's Move tool controls); the rest of the outside is the tool's.
     Band,
+    /// A round handle on a stem above the box's top side, or below its bottom side when the canvas has no room above.
+    /// It rotates like the outside, and no outside region is declared.
+    Knob,
     /// Only within `points` screen points of the box's sides (PhotoCraft's type box with ⌘ held). The whole outside is
     /// still the box's: a press further out starts nothing and applies nothing, and reaches neither the content under
     /// the box nor the tool, and the pointer there is the arrow.
@@ -124,6 +127,7 @@ impl RotateZone {
         match self {
             RotateZone::Border { points } => border_distance(quad, pointer) <= points,
             RotateZone::Outside | RotateZone::Band => true,
+            RotateZone::Knob => todo!("ED-F7"),
         }
     }
 }
@@ -193,6 +197,7 @@ craft_ui::words! {
         bottom_edge: "transform.bottomEdge" = "Bottom edge";
         left_edge: "transform.leftEdge" = "Left edge";
         pivot: "transform.pivot" = "Reference point";
+        rotate_knob: "transform.rotateKnob" = "Rotate";
         readout_angle: "transform.readoutAngle" = "Angle:";
         readout_width: "transform.readoutWidth" = "W:";
         readout_height: "transform.readoutHeight" = "H:";
@@ -1033,6 +1038,7 @@ impl Component for TransformBox<'_> {
                 }
             }
             RotateZone::Band => {}
+            RotateZone::Knob => todo!("ED-F7"),
         }
     }
 

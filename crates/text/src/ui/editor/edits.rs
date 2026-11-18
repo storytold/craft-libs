@@ -40,6 +40,8 @@ pub(super) struct Done {
     pub changed: bool,
     pub commit: bool,
     pub cancel: bool,
+    pub next: bool,
+    pub previous: bool,
 }
 
 /// Length and hash of `text`, to tell whether it changed between passes.

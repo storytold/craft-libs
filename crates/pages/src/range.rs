@@ -103,13 +103,29 @@ pub enum Subset {
     Odd,
 }
 
-/// Acrobat's Page Range Options: All pages, or Pages from `from` to `to` (1-based), and a subset.
+/// Which pages a [`PageRange`] starts from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum PageScope {
+    /// All pages; `from` and `to` are kept but not applied.
+    #[default]
+    All,
+    /// The current page.
+    Current,
+    /// The selected pages, in order without repeats; an empty selection falls back to the current page.
+    Selection,
+    /// Pages `from` to `to`.
+    Range,
+}
+
+/// Acrobat's Page Range Options: All pages, the current page, the selected pages, or Pages from `from` to `to`
+/// (1-based), and a subset.
 /// Shared by the Header & Footer, Watermark and Background dialogs in PdfCraft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct PageRange {
-    /// All pages; `from` and `to` are kept but not applied.
-    pub all: bool,
+    /// Which pages the range starts from.
+    pub scope: PageScope,
     /// First page of the range, 1-based.
     pub from: usize,
     /// The last page of the range; `None` is the document's last page, whatever its length.
@@ -120,15 +136,17 @@ pub struct PageRange {
 
 impl Default for PageRange {
     fn default() -> Self {
-        PageRange { all: true, from: 1, to: None, subset: Subset::All }
+        PageRange { scope: PageScope::All, from: 1, to: None, subset: Subset::All }
     }
 }
 
 impl PageRange {
-    /// The pages (0-based) the range selects in a document of `count` pages.
+    /// The pages (0-based) the range selects in a document of `count` pages, with `current` the current page and
+    /// `selection` the selected pages.
     // pdfcraft: crates/ui-egui/src/dialogs/marks_ui.rs:46 `PageRange::pages`.
-    pub fn pages(&self, count: usize) -> Vec<usize> {
-        let (from, to) = if self.all { (1, count) } else { (self.from.max(1), self.to.map_or(count, |to| to.min(count))) };
+    pub fn pages(&self, count: usize, current: usize, selection: &[usize]) -> Vec<usize> {
+        let _ = (current, selection); // P3(pdf-dialogs-w3): DG-C17
+        let (from, to) = if self.scope == PageScope::All { (1, count) } else { (self.from.max(1), self.to.map_or(count, |to| to.min(count))) };
         (from..=to)
             .filter(|page| match self.subset {
                 Subset::All => true,

@@ -18,6 +18,7 @@
 //! if let Some(view) = reply.and_then(|reply| reply.view) { out.adopt(&mut view_state, &view); }
 //! ```
 
+mod pager;
 mod pictures;
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -30,11 +31,11 @@ use crate::layout::{
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
-    tool_pass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageBorder, PageFrame, PageKey, Pasteboard, PasteboardOutput, ToolPass,
+    canvas_space, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
-use craft_ui::primitives::textures::ThumbSource;
+use craft_ui::primitives::textures::{TextureState, TextureStatistics, ThumbSource};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::DataColor;
@@ -94,7 +95,32 @@ pub struct PageViewState {
     /// A page the next pass brings to the top of the view, with a fraction of its height to put at the top; that
     /// pass clears it.
     #[serde(skip)]
-    pub go_to: Option<(usize, f64)>,
+    pub go_to: Option<GoTo>,
+    /// A page or spread the next pass turns to: forward when `true`; that pass clears it.
+    #[serde(skip)]
+    pub turn: Option<bool>,
+}
+
+/// Where the next pass takes the view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum GoTo {
+    /// `page` at the top of the view, with `fraction` of its height above the top.
+    Top {
+        /// The page.
+        page: usize,
+        /// The fraction of the page's height to put at the top.
+        fraction: f64,
+    },
+    /// The point `at` on `page`, placed at `view` times the viewport; a NaN axis keeps that axis's offset.
+    Point {
+        /// The page.
+        page: usize,
+        /// The point on the page, in page points.
+        at: Point,
+        /// Where in the viewport the point goes, as fractions of its width and height.
+        view: (f64, f64),
+    },
 }
 
 impl Default for PageViewState {
@@ -118,14 +144,35 @@ impl PageViewState {
             offset: (0.0, 0.0),
             rotation: 0,
             go_to: None,
+            turn: None,
         }
     }
 
     /// Ask the next pass to bring `page` to the top of the view (page box, outline, thumbnails, find), and make it
     /// current now.
     pub fn go_to(&mut self, page: usize) {
-        self.go_to = Some((page, 0.0));
+        self.go_to = Some(GoTo::Top { page, fraction: 0.0 });
         self.current = page;
+    }
+
+    /// Ask the next pass to place the point `at` on `page` at `view` times the viewport; a NaN axis keeps that axis's
+    /// offset.
+    pub fn go_to_point(&mut self, page: usize, at: Point, view: (f64, f64)) {
+        let _ = (page, at, view);
+        todo!("CV-C18")
+    }
+
+    /// Ask the next pass to bring `fraction` of `page`'s height to the top of the view.
+    pub fn go_to_fraction(&mut self, page: usize, fraction: f64) {
+        let _ = (page, fraction);
+        todo!("CV-C18")
+    }
+
+    /// Turns one page in a single-page view and one spread in Two-up, forward or back; past either end it does
+    /// nothing.
+    pub fn step(&mut self, forward: bool) {
+        let _ = forward;
+        todo!("CV-C18")
     }
 
     /// Zoom In / Zoom Out: the next rung of craft-ui's [`ZoomLadder`] above (or below) the shown zoom, within
@@ -138,7 +185,7 @@ impl PageViewState {
 }
 
 /// One page on screen this pass, for overlays: its index, screen rectangle and scale.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PlacedPage {
     /// Page index, 0-based.
@@ -149,13 +196,15 @@ pub struct PlacedPage {
     pub scale: f64,
     /// The part of the page's height that shows (screen points from its top).
     pub band: (f32, f32),
+    /// What the page's picture shows this pass.
+    pub picture: TextureState,
 }
 
 impl PlacedPage {
     /// Page `page` at `rect` on screen, `scale` screen points to a page point, with `band` the visible part of its height in
-    /// screen points.
-    pub const fn new(page: usize, rect: Rect, scale: f64, band: (f32, f32)) -> Self {
-        PlacedPage { page, rect, scale, band }
+    /// screen points and `picture` what its picture shows.
+    pub fn new(page: usize, rect: Rect, scale: f64, band: (f32, f32), picture: TextureState) -> Self {
+        PlacedPage { page, rect, scale, band, picture }
     }
 
     /// Page point (origin top-left, y down) to screen.
@@ -204,6 +253,8 @@ pub struct PageViewOutput {
     /// The pasteboard outside the pages (`None` when the pass drew nothing): a secondary press or the Menu key there asks the app for Photoshop's
     /// pasteboard colour menu at [`PasteboardOutput::context_at`]; a page name click is not used here.
     pub pasteboard: Option<PasteboardOutput>,
+    /// What the page and detail picture stores hold and did this pass.
+    pub textures: TextureStatistics,
     frame: Frame,
 }
 
@@ -251,6 +302,8 @@ pub struct PageView<'a> {
     bodies: Option<&'a [(f64, f64)]>,
     describer: Option<&'a dyn AccessDescriber>,
     paper: DataColor,
+    border: PageBorder,
+    keep: &'a [usize],
 }
 
 impl<'a> PageView<'a> {
@@ -266,7 +319,23 @@ impl<'a> PageView<'a> {
             bodies: None,
             describer: None,
             paper,
+            border: PageBorder::DropShadow,
+            keep: &[],
         }
+    }
+
+    /// The border round each page; a drop shadow by default, and none with the page gaps off.
+    #[must_use]
+    pub fn border(mut self, border: PageBorder) -> Self {
+        self.border = border;
+        self
+    }
+
+    /// The pages whose pictures the view keeps loaded whether or not they are in view.
+    #[must_use]
+    pub fn keep(mut self, pages: &'a [usize]) -> Self {
+        self.keep = pages;
+        self
     }
 
     /// The layout constants; the state's display, continuous, cover and page gaps override theirs.
@@ -312,7 +381,8 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper } = self;
+        let PageView { label, source, state, options, navigation, bodies, describer, paper, border, keep } = self;
+        let _ = (border, keep); // P3(pdf-canvas-w4): CV-C19, CV-C20
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
         let sizes: Vec<Size> = (0..count).map(|page| source.page_size(page)).collect();
@@ -364,6 +434,7 @@ impl<'a> PageView<'a> {
             current_changed: seen.current_changed,
             toggle_white_space,
             pasteboard: seen.pasteboard,
+            textures: TextureStatistics::default(), // P3(pdf-canvas-w4): CV-C30
             frame: seen.frame,
         }
     }
@@ -554,7 +625,12 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
             want.1 = state.offset.1;
         }
     }
-    let go_to = keys.go_to.or(state.go_to.take());
+    // P3(pdf-canvas-w4): CV-C18, a `Point` goes to its page's top until the view places it
+    let asked = state.go_to.take().map(|go_to| match go_to {
+        GoTo::Top { page, fraction } => (page, fraction),
+        GoTo::Point { page, .. } => (page, 0.0),
+    });
+    let go_to = keys.go_to.or(asked);
     let went = go_to.is_some();
     if let Some((page, fraction)) = go_to {
         state.current = page.min(count.saturating_sub(1));
@@ -595,6 +671,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
             rect: to_screen(&drawn.layout.rects[page]),
             scale: drawn.scale * ratio,
             band: (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32),
+            picture: TextureState::Missing, // P3(pdf-canvas-w4): CV-C23
         })
         .collect();
     let frames: Vec<PageFrame> = rows.iter().map(|&p| PageFrame::new(drawn_frame.document_rect(&band_rect(&drawn.layout, p))).fill(paper)).collect();

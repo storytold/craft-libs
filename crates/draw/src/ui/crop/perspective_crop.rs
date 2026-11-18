@@ -2,7 +2,7 @@
 //! the canvas's arena; the perspective grid shows while the quad can be committed.
 
 use craft_behavior::geometry::{Homography, screen_step};
-use craft_behavior::kurbo::{Point, Vec2 as DocVec};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     CanvasView, CursorIcon, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase,
     Roving, Sense,
@@ -140,13 +140,18 @@ pub struct PerspectiveCropQuad<'a> {
     /// The shield painted over the document outside a valid quad; `None` paints none.
     #[prop]
     shield: Option<CropShield>,
+    /// The rectangle every corner stays inside while dragged or moved by keys, in document units; `None` leaves the
+    /// corners unbounded.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w3): PO-P16
+    bounds: Option<DocRect>,
     report: Report,
 }
 
 impl<'a> PerspectiveCropQuad<'a> {
     /// A quad named `label` over `quad`, in document units.
     pub fn new(label: impl Into<Label>, quad: Bind<'a, PerspectiveQuad>) -> Self {
-        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, shield: None, report: Report::default() }.label(label)
+        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, shield: None, bounds: None, report: Report::default() }.label(label)
     }
 }
 

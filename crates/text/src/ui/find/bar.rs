@@ -12,7 +12,7 @@ use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
-use super::FindLabels;
+use super::{FindLabels, FindRequest};
 use crate::find::{FindMatches, FindOptions};
 
 /// Step through the matches. The bar reads them while it is shown; the chords are the keymap's to rebind.
@@ -39,6 +39,8 @@ pub struct FindBarOutput {
     pub stepped: bool,
     /// Esc in the field or the close button.
     pub closed: bool,
+    /// Replace or Replace All in the replace row; the app runs it.
+    pub request: Option<FindRequest>,
     /// The bar's row.
     pub response: Response,
 }
@@ -68,6 +70,16 @@ impl FindBarState {
     pub fn is_opening(&self) -> bool {
         self.opened
     }
+
+    /// Whether the bar was asked for and not yet shown, clearing it, for a caller that shows no [`FindBar`].
+    pub fn taken(&mut self) -> bool {
+        todo!("CV-C17")
+    }
+
+    /// The bar is being opened with its replace row, and focus goes to the Replace field when the query is not empty.
+    pub fn open_replace(&mut self) {
+        todo!("CV-C17")
+    }
 }
 
 /// A checked item of the bar's options menu.
@@ -93,12 +105,20 @@ pub struct FindBar<'a> {
     matches: &'a mut FindMatches,
     progress: Option<(usize, usize)>,
     state: Option<&'a mut FindBarState>,
+    replace: Option<(&'a mut String, &'a mut bool)>,
 }
 
 impl<'a> FindBar<'a> {
     /// A find bar over the app's `query` and `options`, listing `matches`.
     pub fn new(query: &'a mut String, options: &'a mut FindOptions, matches: &'a mut FindMatches) -> Self {
-        FindBar { query, options, matches, progress: None, state: None }
+        FindBar { query, options, matches, progress: None, state: None, replace: None }
+    }
+
+    /// A replace row under the find field over the app's `with` text, shown while `open`.
+    #[must_use]
+    pub fn replace(mut self, with: &'a mut String, open: &'a mut bool) -> Self {
+        self.replace = Some((with, open));
+        self
     }
 
     /// The app's [`FindBarState`].
@@ -117,12 +137,13 @@ impl<'a> FindBar<'a> {
 
     /// Paints the bar and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> FindBarOutput {
-        let FindBar { query, options, matches, progress, state } = self;
+        let FindBar { query, options, matches, progress, state, replace } = self;
+        let _ = replace; // P3(pdf-canvas-w7): CV-C17
         let env = Env::of(ui);
         let (words, units) = (env.words::<FindLabels>(), env.units());
         let mut state = state;
         let opened = state.as_deref().is_some_and(|state| state.opened);
-        let mut out = FindBarOutput { search: false, stepped: false, closed: false, response: ui.response() };
+        let mut out = FindBarOutput { search: false, stepped: false, closed: false, request: None, response: ui.response() };
         let mut step: Option<bool> = None;
         let row = Row::new().show(ui, |ui, cx: &mut BodyCx<'_>| {
             while let Some((command, _)) = cx.take_command::<FindStep>() {

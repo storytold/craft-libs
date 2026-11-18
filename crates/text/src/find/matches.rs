@@ -50,6 +50,11 @@ impl FindMatches {
         FindMatches { matches: Vec::new(), current: None, from: Some(from), follow_ended: false, limited: Vec::new() }
     }
 
+    /// The page the search started from, so a refined query restarts from it.
+    pub fn from(&self) -> Option<usize> {
+        self.from
+    }
+
     /// Every match found.
     pub fn matches(&self) -> &[FindMatch] {
         &self.matches

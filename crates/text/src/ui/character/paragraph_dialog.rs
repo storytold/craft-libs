@@ -116,6 +116,8 @@ pub enum SpacingKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum LineSpacing {
+    /// The font's own line height; it replaces the `Multiple(0.0)` sentinel.
+    Auto,
     /// A multiple of single spacing: Single is 1, 1.5 lines 1.5, Double 2, Multiple any other.
     Multiple(f32),
     /// A fixed distance, points.
@@ -262,6 +264,7 @@ enum LinePreset {
 impl LinePreset {
     fn of(spacing: LineSpacing) -> Self {
         match spacing {
+            LineSpacing::Auto => LinePreset::Single, // P3(pdf-edit-w1): ED-F3
             LineSpacing::Multiple(1.0) => LinePreset::Single,
             LineSpacing::Multiple(1.5) => LinePreset::OneAndHalf,
             LineSpacing::Multiple(2.0) => LinePreset::Double,
@@ -298,7 +301,7 @@ fn spacing_bounds(kind: SpacingKind) -> (f32, f32) {
 /// The bounds of At for a line spacing, in lines or points.
 fn at_bounds(spacing: LineSpacing) -> (f32, f32) {
     match spacing {
-        LineSpacing::Multiple(_) => (MIN_MULTIPLE, MAX_MULTIPLE),
+        LineSpacing::Auto | LineSpacing::Multiple(_) => (MIN_MULTIPLE, MAX_MULTIPLE), // P3(pdf-edit-w1): ED-F3
         LineSpacing::Exactly(_) => (MIN_EXACT, MAX_POINTS),
         LineSpacing::AtLeast(_) => (0.0, MAX_POINTS),
     }
@@ -306,13 +309,14 @@ fn at_bounds(spacing: LineSpacing) -> (f32, f32) {
 
 fn at_value(spacing: LineSpacing) -> f32 {
     match spacing {
+        LineSpacing::Auto => 1.0, // P3(pdf-edit-w1): ED-F3
         LineSpacing::Multiple(x) | LineSpacing::Exactly(x) | LineSpacing::AtLeast(x) => x,
     }
 }
 
 fn with_at(spacing: LineSpacing, at: f32) -> LineSpacing {
     match spacing {
-        LineSpacing::Multiple(_) => LineSpacing::Multiple(at),
+        LineSpacing::Auto | LineSpacing::Multiple(_) => LineSpacing::Multiple(at), // P3(pdf-edit-w1): ED-F3
         LineSpacing::Exactly(_) => LineSpacing::Exactly(at),
         LineSpacing::AtLeast(_) => LineSpacing::AtLeast(at),
     }
@@ -751,6 +755,7 @@ fn sample_plan(format: &ParagraphFormat, width: f32, row_height: f32) -> SampleP
             SpecialIndent::Hanging => (0.0, by),
         };
         let pitch = match f.line_spacing.unwrap_or_default() {
+            LineSpacing::Auto => row_height, // P3(pdf-edit-w1): ED-F3
             LineSpacing::Multiple(m) => row_height * m,
             LineSpacing::Exactly(e) => e,
             LineSpacing::AtLeast(a) => row_height.max(a),

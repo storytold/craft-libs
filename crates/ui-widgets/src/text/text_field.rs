@@ -150,6 +150,14 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
+    /// With `on`, selects the whole text in this pass, so typing replaces it, unless the field is composing text; a
+    /// request made during a composition is dropped.
+    #[must_use]
+    pub fn select_all(self, on: bool) -> Self {
+        let _ = (self, on);
+        todo!("CV-C17")
+    }
+
     /// Monospace text.
     #[must_use]
     pub fn mono(mut self) -> Self {

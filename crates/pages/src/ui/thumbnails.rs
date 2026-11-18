@@ -24,22 +24,27 @@
 mod stories;
 
 use super::view::PageSource;
-use craft_behavior::{EditEvent, IconId, Selection, SelectionChange, keyed};
+use craft_behavior::{EditEvent, IconId, MiddleButton, Selection, SelectionChange, keyed};
 use craft_ui::contract::{
-    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, NoValue, OsFiles, Outcome, PendingDrop, ReorderMove, ReorderRule,
-    Show as _, ShowCollection as _,
+    Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, ReorderMove,
+    ReorderRule, Show as _, ShowCollection as _,
 };
 use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
+use craft_ui::runtime::commands::CommandRef;
+use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::DataColor;
-use craft_ui::tile_grid::{CaptionPlace, GridEvent, TailRow, ThumbnailSlider, Tile, TileGrid, TileGroup, TileMark, TileZoom, ZoomStep};
-use egui::{Pos2, Response, Ui};
+use craft_ui::tile_grid::{CaptionPlace, GridEvent, GridZoom, TailRow, ThumbnailSlider, Tile, TileGrid, TileGroup, TileMark, TileZoom, ZoomStep};
+use egui::{Id, Pos2, Response, Ui};
 
 /// The thumbnail zoom: 0.5 to 1.5 of the card thumbnail in steps of 0.25, 1 by default (PdfCraft's
 /// `THUMBNAIL_ZOOM_RANGE` and its minus and plus step). The size row's [`ThumbnailSlider`] and the grid's zoom keys
 /// step it.
 pub const THUMBNAIL_ZOOM: TileZoom = TileZoom::bounded(0.5, 1.5, 0.25, 1.0);
+
+/// The Organize grid's zoom: 0.5 to 3 of the card thumbnail in steps of 0.25, 1 by default.
+pub const ORGANIZE_ZOOM: TileZoom = TileZoom::bounded(0.5, 3.0, 0.25, 1.0);
 
 craft_ui::words! {
     /// The panel's words, English by default (PdfCraft's and DeckCraft's strings).
@@ -144,7 +149,30 @@ pub enum ThumbnailEvent {
     FilesDropped {
         /// The position the files drop at.
         insert: usize,
+        /// The files dropped.
+        files: Vec<OsFile>,
     },
+    /// A click on action `action` of [`PageThumbnails::actions`] in page `page`'s band.
+    #[non_exhaustive]
+    Action {
+        /// The page.
+        page: usize,
+        /// Index of the action in [`PageThumbnails::actions`].
+        action: usize,
+    },
+    /// A click on the insert gap at position `0`-based `insert`, before that page (the page count after the last).
+    Insert(usize),
+}
+
+/// How the thumbnails are arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ThumbnailArrangement {
+    /// The side strip: the size row over the grid.
+    #[default]
+    Strip,
+    /// The Organize grid: no size row, check boxes, actions in the band and insert gaps when editable.
+    Organize,
 }
 
 /// The panel's result.
@@ -199,6 +227,12 @@ pub struct PageThumbnails<'a> {
     sections: &'a [ThumbnailSection],
     marks: Option<&'a dyn Fn(usize) -> ThumbnailMarks>,
     new_page_row: bool,
+    arrangement: ThumbnailArrangement,
+    actions: &'a [(IconId, CommandRef)],
+    insert_label: Option<&'a dyn Fn(usize) -> Label>,
+    middle_button: Option<MiddleButton>,
+    id: IdSource,
+    reveal: Option<usize>,
 }
 
 impl<'a> PageThumbnails<'a> {
@@ -217,7 +251,61 @@ impl<'a> PageThumbnails<'a> {
             sections: &[],
             marks: None,
             new_page_row: false,
+            arrangement: ThumbnailArrangement::Strip,
+            actions: &[],
+            insert_label: None,
+            middle_button: None,
+            id: IdSource::Auto,
+            reveal: None,
         }
+    }
+
+    /// How the thumbnails are arranged: the side strip, or the Organize grid.
+    #[must_use]
+    pub fn arrangement(mut self, arrangement: ThumbnailArrangement) -> Self {
+        self.arrangement = arrangement;
+        self
+    }
+
+    /// The actions in each page's band in Organize; a click reports [`ThumbnailEvent::Action`].
+    #[must_use]
+    pub fn actions(mut self, actions: &'a [(IconId, CommandRef)]) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    /// The name of the insert gap before page `n` in Organize.
+    #[must_use]
+    pub fn insert_label(mut self, label: &'a dyn Fn(usize) -> Label) -> Self {
+        self.insert_label = Some(label);
+        self
+    }
+
+    /// What the middle button does on the grid.
+    #[must_use]
+    pub fn middle_button(mut self, button: MiddleButton) -> Self {
+        self.middle_button = Some(button);
+        self
+    }
+
+    /// Uses `id` as the grid's id, so the host can end a press open on it with [`cancel_press`](Self::cancel_press).
+    #[must_use]
+    pub fn id(mut self, id: Id) -> Self {
+        self.id = IdSource::Id(id);
+        self
+    }
+
+    /// Ends a press or page drag open on the grid with id `id`, as Escape does, for a host whose pages changed under
+    /// the drag; nothing happens with no open press.
+    pub fn cancel_press(ctx: &egui::Context, id: Id) {
+        craft_ui::primitives::cancel_press_of(ctx, id);
+    }
+
+    /// Scrolls to `page` and moves the lead there in this pass: a one-shot request, not held between passes.
+    #[must_use]
+    pub fn reveal(mut self, page: Option<usize>) -> Self {
+        self.reveal = page;
+        self
     }
 
     /// Off: no drag, no stacking keys, no Delete, no file drops (a read-only document).
@@ -269,7 +357,26 @@ impl<'a> PageThumbnails<'a> {
     // pdfcraft: crates/ui-egui/src/panels/pages.rs:90 `pages`, :36 `thumbnail_size`, :295 `page_drag`; deckcraft:
     // crates/ui-egui/src/panels/thumbs.rs:116 `list` (sections, number at the left, hidden and animation marks).
     pub fn show(self, ui: &mut Ui) -> PageThumbnailsOutput {
-        let PageThumbnails { label, source, picked, current, paper, editable, zoom, caption, sections, marks, new_page_row } = self;
+        let PageThumbnails {
+            label,
+            source,
+            picked,
+            current,
+            paper,
+            editable,
+            zoom,
+            caption,
+            sections,
+            marks,
+            new_page_row,
+            arrangement,
+            actions,
+            insert_label,
+            middle_button,
+            id,
+            reveal,
+        } = self;
+        let _ = (arrangement, actions, insert_label, middle_button, id, reveal); // P3(pdf-canvas-w6): CV-C27
         let env = Env::of(ui);
         let words = env.words::<ThumbnailWords>();
         let count = source.page_count();
@@ -299,7 +406,7 @@ impl<'a> PageThumbnails<'a> {
         let mut grid = TileGrid::<usize>::new(label)
             .selection(Bind::bound(&mut *picked))
             .aspect(aspect)
-            .zoom(scale as f32)
+            .zoom(GridZoom::Fixed(scale)) // P3(pdf-canvas-w6): CV-C27
             .caption(caption)
             .current(Some(current))
             .groups(&groups)
@@ -364,7 +471,10 @@ impl<'a> PageThumbnails<'a> {
                 }
                 CollectionEvent::Reorder(edit) if editable => events.push(ThumbnailEvent::Reorder(edit)),
                 CollectionEvent::ContextMenu(request) if request.key < count => events.push(ThumbnailEvent::ContextMenu(request)),
-                CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, .. } if editable => events.push(ThumbnailEvent::FilesDropped { insert }),
+                CollectionEvent::Dropped { at: DropAt::Gap { insert, .. }, .. } if editable => {
+                    // P3(pdf-canvas-w6): CV-C27, the files come from the drop's `OsFiles` payload
+                    events.push(ThumbnailEvent::FilesDropped { insert, files: Vec::new() });
+                }
                 CollectionEvent::Zoom { factor, .. } => {
                     if let Some(zoom) = zoom.as_deref_mut() {
                         *zoom = THUMBNAIL_ZOOM.step(*zoom, if factor > 1.0 { ZoomStep::In } else { ZoomStep::Out });

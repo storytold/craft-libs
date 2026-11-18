@@ -75,15 +75,24 @@ impl Outcome for SyncedViewsOutput {
 ///     out
 /// });
 /// ```
+#[derive(craft_ui::contract::Pattern)]
 pub struct SyncedViews<'a> {
     label: Label,
     state: &'a mut SyncedViewsState,
+    captions: Option<(Label, Label)>,
 }
 
 impl<'a> SyncedViews<'a> {
     /// A pair named `label`, with its state kept in `state`.
     pub fn new(label: impl Into<Label>, state: &'a mut SyncedViewsState) -> Self {
-        SyncedViews { label: label.into(), state }
+        SyncedViews { label: label.into(), state, captions: None }
+    }
+
+    /// A caption line over each half: `left` over the left half and `right` over the right.
+    #[must_use]
+    pub fn captions(mut self, left: impl Into<Label>, right: impl Into<Label>) -> Self {
+        self.captions = Some((left.into(), right.into()));
+        self
     }
 
     /// Splits the room in two halves (`SplitViews`, its divider and gap) and runs `half` for each, the leader first.
@@ -94,7 +103,8 @@ impl<'a> SyncedViews<'a> {
         states: (&mut PageViewState, &mut PageViewState),
         mut half: impl FnMut(&mut Ui, Rect, &mut PageViewState, Lead) -> PageViewOutput,
     ) -> SyncedViewsOutput {
-        let SyncedViews { label, state } = self;
+        let SyncedViews { label, state, captions } = self;
+        let _ = captions; // P3(pdf-workflows-w3): WF-W15
         let (left, right) = states;
         let lead = state.lead;
         let SyncedViewsState { at, last_offset, last_current, .. } = state;

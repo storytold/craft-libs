@@ -276,6 +276,23 @@ pub enum EditorEnd {
     Commit,
     /// The app undoes the session.
     Cancel,
+    /// Tab: the app keeps the text and moves to the next field.
+    Next,
+    /// Shift+Tab: the app keeps the text and moves to the previous field.
+    Previous,
+}
+
+/// What the editor is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EditorMode {
+    /// The canvas text editor.
+    #[default]
+    Canvas,
+    /// A one-line form field.
+    FieldLine,
+    /// A multi-line form field.
+    FieldLines,
 }
 
 /// What the editor did this pass.
@@ -352,6 +369,14 @@ pub struct TextEditor<'a> {
     /// Whether Esc commits (Photoshop's default) or cancels the session.
     #[prop]
     esc_commits: bool,
+    /// What the editor is: the canvas text editor, or a one-line or multi-line form field.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-forms-w2): FM-PF6
+    mode: EditorMode,
+    /// Whether the text is drawn as bullets, for a password field.
+    #[prop(flag)]
+    #[allow(dead_code)] // P3(pdf-forms-w2): FM-PF7
+    masked: bool,
     changed: bool,
     selection_changed: bool,
     character_panel: bool,
@@ -368,6 +393,8 @@ impl<'a> TextEditor<'a> {
             selection,
             smart_quotes: None,
             esc_commits: true,
+            mode: EditorMode::Canvas,
+            masked: false,
             changed: false,
             selection_changed: false,
             character_panel: false,
@@ -637,6 +664,10 @@ impl Component for TextEditor<'_> {
             Some(EditorEnd::Commit)
         } else if done.cancel {
             Some(EditorEnd::Cancel)
+        } else if done.next {
+            Some(EditorEnd::Next) // P3(pdf-forms-w2): FM-PF8
+        } else if done.previous {
+            Some(EditorEnd::Previous) // P3(pdf-forms-w2): FM-PF8
         } else {
             None
         };

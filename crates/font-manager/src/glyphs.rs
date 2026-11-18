@@ -22,7 +22,7 @@ use craft_ui::primitives::ContentPainterCx;
 use craft_ui::primitives::textures::{Priority, Revision, ThumbPaint, ThumbRender, ThumbRequest, ThumbSource, ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{DataColor, SurfaceKind};
-use craft_ui::tile_grid::{CaptionPlace, ThumbnailSlider, Tile, TileGrid, TileZoom};
+use craft_ui::tile_grid::{CaptionPlace, GridZoom, ThumbnailSlider, Tile, TileGrid, TileZoom};
 use egui::{ColorImage, Rect, Response, Ui};
 use serde::{Deserialize, Serialize};
 
@@ -382,7 +382,7 @@ impl<'a> GlyphsPanel<'a> {
             let mut activated: Option<String> = None;
             let strip = TileGrid::<usize>::new(words.recent.clone())
                 .thumb_size(ThumbSize::Medium)
-                .zoom(RECENT_ZOOM)
+                .zoom(GridZoom::Fixed(f64::from(RECENT_ZOOM))) // P3(pdf-workflows-w2): WF-W12
                 .caption(CaptionPlace::None)
                 .select(SelectMode::Single)
                 .activate(ActivateOn::Click)
@@ -409,7 +409,7 @@ impl<'a> GlyphsPanel<'a> {
             let mut marked = cx.memory::<Marked>().clone();
             let grid = TileGrid::<usize>::new(words.grid.clone())
                 .thumb_size(ThumbSize::Medium)
-                .zoom(size as f32)
+                .zoom(GridZoom::Fixed(f64::from(size as f32))) // P3(pdf-workflows-w2): WF-W12
                 .caption(CaptionPlace::None)
                 .select(SelectMode::Single)
                 .selection(Bind::bound(&mut marked.0))

@@ -16,12 +16,13 @@ use craft_ui::display::Text;
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::Menu;
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label, Message, Units};
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-use crate::range::{PageRange, PageRangeError, Subset, format_pages, parse_pages};
+use crate::range::{PageRange, PageRangeError, PageScope, Subset, format_pages, parse_pages};
 
 craft_ui::words! {
     /// The words of the page range field.
@@ -226,17 +227,68 @@ pub struct PageRangeOptions {
     label: Label,
     range: PageRange,
     count: usize,
+    choices: PageRangeChoices,
+    current: usize,
+}
+
+/// A named arrangement of the page-range rows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PageRangeChoices {
+    /// All pages, From and To, and the Subset.
+    #[default]
+    Acrobat,
+    /// Acrobat's rows with Current page; it sets the range's scope to `PageScope::Current`.
+    Current,
+    /// Acrobat's rows with Current page and Selected pages.
+    Selection,
+    /// All pages and From and To, with no Subset.
+    FromTo,
+    /// All pages, Current page and From and To, with no Subset.
+    CurrentFromTo,
 }
 
 impl PageRangeOptions {
     /// The options named `label` over `range` in a document of `count` pages.
     pub fn new(label: impl Into<Label>, range: PageRange, count: usize) -> Self {
-        PageRangeOptions { label: label.into(), range, count }
+        PageRangeOptions { label: label.into(), range, count, choices: PageRangeChoices::Acrobat, current: 0 }
+    }
+
+    /// The arrangement of the rows.
+    pub fn choices(mut self, choices: PageRangeChoices) -> Self {
+        self.choices = choices;
+        self
+    }
+
+    /// The current page (0-based), which the Current page row names.
+    pub fn current(mut self, current: usize) -> Self {
+        self.current = current;
+        self
+    }
+
+    /// The one page-range row for every `ParamDialog`: a custom row named `label` that keeps its [`PageRange`] under
+    /// `key` as JSON, in a document of `count` pages with `current` the current page.
+    pub fn param(key: impl Into<String>, label: impl Into<Label>, count: usize, current: usize, choices: PageRangeChoices) -> Param {
+        let _ = (key.into(), label.into(), count, current, choices);
+        todo!("DG-C19")
+    }
+
+    /// The range the row `key` holds in `fields`; `None` when absent or not a range.
+    pub fn value(fields: &DialogFields, key: &str) -> Option<PageRange> {
+        let _ = (fields, key);
+        todo!("DG-C19")
+    }
+
+    /// The row's stored form of `range`, for the row's `opens_with`.
+    pub fn field_value(range: &PageRange) -> FieldValue {
+        let _ = range;
+        todo!("DG-C19")
     }
 
     /// Shows the options.
     pub fn show(self, ui: &mut Ui) -> PageRangeOptionsOutput {
-        let PageRangeOptions { label, range, count } = self;
+        let PageRangeOptions { label, range, count, choices, current } = self;
+        let _ = (choices, current); // P3(pdf-dialogs-w3): DG-C18
         let env = Env::of(ui);
         let words = env.words::<PageRangeOptionsWords>();
         let numbers = NumberCodec::new(env.units().reader(None), 0);
@@ -252,14 +304,14 @@ impl PageRangeOptions {
         };
         let mut from = None;
         let mut to = None;
-        let group = RadioGroup::new(label, Bind::given(range.all)).show(ui, |ui, cx| {
+        let group = RadioGroup::new(label, Bind::given(range.scope == PageScope::All)).show(ui, |ui, cx| {
             Stack::new().show(ui, |ui, _| {
                 cx.labelled(ui, "all", words.all_pages.clone(), after.clone(), Radio::new(true));
                 // Two themed fields don't fit beside the radio in a narrow panel: "to" and its field wrap together.
                 Row::new().wrap(true).show(ui, |ui, _| {
                     cx.labelled(ui, "range", words.pages_from.clone(), after.clone(), Radio::new(false));
                     let field = |label: &Label, shown: usize| {
-                        NumberField::new(label.clone(), Bind::given(Some(shown as f64))).codec(numbers.clone()).enabled(!range.all)
+                        NumberField::new(label.clone(), Bind::given(Some(shown as f64))).codec(numbers.clone()).enabled(range.scope != PageScope::All)
                     };
                     from = whole(&field(&words.pages_from, shown_from).show(ui).edit, shown_from);
                     Row::new().show(ui, |ui, _| {
@@ -270,7 +322,7 @@ impl PageRangeOptions {
             });
         });
         if let Some(all) = group.output.value().copied() {
-            next.all = all;
+            next.scope = if all { PageScope::All } else { PageScope::Range }; // P3(pdf-dialogs-w3): DG-C17
         }
         if let Some(value) = from {
             next.from = value;

@@ -19,6 +19,7 @@ use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
+use craft_ui::fonts::FontRef;
 use craft_ui::list::{ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{EnvView, Label};
@@ -297,6 +298,64 @@ pub fn family_rows(
     rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
+/// A group of host rows listed above the catalogue families, under an optional heading.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct HostFontGroup<'a> {
+    /// The group's heading, if it has one.
+    pub heading: Option<Label>,
+    /// The group's rows, in order.
+    pub rows: &'a [HostFontRow],
+}
+
+impl<'a> HostFontGroup<'a> {
+    /// A group of `rows` under `heading`.
+    pub fn new(heading: Option<Label>, rows: &'a [HostFontRow]) -> Self {
+        HostFontGroup { heading, rows }
+    }
+}
+
+/// A row the host adds to the picker: a face, an action or a notice.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HostFontRow {
+    /// The key `host_picked` reports when the row is run.
+    pub key: String,
+    /// The row's name.
+    pub name: Label,
+    /// What the row is.
+    pub kind: HostFontKind,
+}
+
+impl HostFontRow {
+    /// A face row; it shows its sample in `face` when given.
+    pub fn face(key: impl Into<String>, name: impl Into<Label>, face: Option<FontRef>) -> Self {
+        HostFontRow { key: key.into(), name: name.into(), kind: HostFontKind::Face(face) }
+    }
+
+    /// An action row; it runs and picks no family.
+    pub fn action(key: impl Into<String>, name: impl Into<Label>) -> Self {
+        HostFontRow { key: key.into(), name: name.into(), kind: HostFontKind::Action }
+    }
+
+    /// A notice row: disabled text.
+    pub fn notice(name: impl Into<Label>) -> Self {
+        HostFontRow { key: String::new(), name: name.into(), kind: HostFontKind::Notice }
+    }
+}
+
+/// What a [`HostFontRow`] is.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum HostFontKind {
+    /// A face to pick, with the face its sample shows in.
+    Face(Option<FontRef>),
+    /// An action that runs and picks no family.
+    Action,
+    /// Disabled text.
+    Notice,
+}
+
 /// What a [`FontPicker`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -314,6 +373,8 @@ pub struct FontPickerOutput {
     /// of the open list (Photoshop previews on hover). It ends when the pointer leaves the rows, the list closes
     /// (Escape, a press outside) or a row is picked. The field's value and text stay.
     pub preview: Preview<String>,
+    /// The key of the host face or action row run in this pass; a host pick does not write the `family` binding.
+    pub host_picked: Option<String>,
 }
 
 impl Outcome for FontPickerOutput {
@@ -461,6 +522,14 @@ pub struct FontPicker<'a> {
     /// Families the host can fetch but that are not installed, listed with the served mark.
     #[prop]
     served: &'a [String],
+    /// Host groups listed above the catalogue families, in order, with a separator between groups.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-edit-w2): ED-F4
+    host: &'a [HostFontGroup<'a>],
+    /// The key of the host row shown as the field's value.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-edit-w2): ED-F4
+    current_host: Option<String>,
 }
 
 impl<'a> FontPicker<'a> {
@@ -478,6 +547,8 @@ impl<'a> FontPicker<'a> {
             preview: Preview::Unchanged,
             preview_text: None,
             served: &[],
+            host: &[],
+            current_host: None,
         }
         .label(label)
     }
@@ -620,6 +691,6 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested }
+        FontPickerOutput { edit, picked, preview: self.preview, picked_style: self.picked_style, rested: self.rested, host_picked: None }
     }
 }

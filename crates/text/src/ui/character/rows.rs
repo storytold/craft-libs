@@ -280,10 +280,16 @@ pub(crate) fn family_field(
     #[cfg(feature = "font-picker")]
     if let Some(source) = picker {
         let shown = Field::new(words.family.clone()).side(hidden_side()).show(ui, |ui, _| {
-            let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog)
-                .settings(source.settings.reborrowed())
-                .filters(source.filters.reborrowed())
-                .served(source.served);
+            let mut field = FontPicker::new(words.family.clone(), Bind::given(value.clone()), source.catalog).served(source.served).host(source.host);
+            if let Some(key) = source.current_host.clone() {
+                field = field.current_host(key);
+            }
+            if let Some(settings) = source.settings.as_mut() {
+                field = field.settings(settings.reborrowed());
+            }
+            if let Some(filters) = source.filters.as_mut() {
+                field = field.filters(filters.reborrowed());
+            }
             if let Some(text) = source.preview_text {
                 field = field.preview_text(text);
             }

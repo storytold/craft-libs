@@ -1,7 +1,7 @@
 //! Pages for stories and tests: a document of US Letter pages with generated pictures.
 
 use super::view::{PageSource, PlacedPage};
-use craft_ui::primitives::textures::{FakeThumbSource, Revision, ThumbRender, ThumbRequest, ThumbSource};
+use craft_ui::primitives::textures::{FakeThumbSource, Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Rect, Vec2, pos2};
 use kurbo::Size;
@@ -58,7 +58,13 @@ pub fn demo_placed(count: usize, origin: Pos2) -> Vec<PlacedPage> {
     (0..count)
         .map(|page| {
             let top = origin.y + page as f32 * (height + GAP);
-            PlacedPage { page, rect: Rect::from_min_size(pos2(origin.x, top), Vec2::new(width, height)), scale: 1.0, band: (0.0, height) }
+            PlacedPage {
+                page,
+                rect: Rect::from_min_size(pos2(origin.x, top), Vec2::new(width, height)),
+                scale: 1.0,
+                band: (0.0, height),
+                picture: TextureState::Missing,
+            } // P3(pdf-canvas-w4): CV-C23
         })
         .collect()
 }
