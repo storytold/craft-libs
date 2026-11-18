@@ -114,6 +114,13 @@ pub const CUSTOM_XML_ROOTS: &str = "wordcraft:customXml.roots";
 /// The original `word/settings.xml` when it holds settings the model doesn't (merged into on
 /// save by `write::settings_merge`). Not a package part: WordCraft's own bookkeeping.
 pub const SETTINGS_ORIG: &str = "wordcraft:settings.orig";
+/// The theme's East Asian, complex-script and per-script fonts (`a:ea`, `a:cs`, `a:font
+/// script="Hans"` in `a:majorFont` / `a:minorFont`), which the model doesn't hold: `major|minor
+/// \tface\tea|cs\ttypeface` and `major|minor\tscript\t<script>\ttypeface` lines (per font, at
+/// most 256 script ids of 8 characters or fewer and 256 longer ones, such as `zh-Hant-TW`). Written back into the theme on save, so the
+/// `w:eastAsiaTheme` and `w:cstheme` slots a save keeps still name a font in Word. Not a package
+/// part: WordCraft's own bookkeeping.
+pub const THEME_FONTS: &str = "wordcraft:theme.fonts";
 /// Extended properties (`docProps/app.xml`) the model doesn't hold but a save keeps
 /// ([`APP_KEPT_PROPS`]): `name\tvalue` lines. Not a package part: WordCraft's own bookkeeping.
 pub const APP_KEPT: &str = "wordcraft:app.kept";
