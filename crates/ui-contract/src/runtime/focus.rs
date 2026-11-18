@@ -339,6 +339,12 @@ pub(crate) fn targets(ctx: &Context) -> [Option<Id>; 2] {
     [focused_stop(ctx).map(|key| key.0), with(ctx, |state| state.revealed.map(|key| key.0))]
 }
 
+/// Whether the component `id` registered a stop this pass that Tab or a request can reach, its own or one of its
+/// parts': a segmented control's stops are its segments. A press-only stop (the selection of a display text) is not one.
+pub(crate) fn has_reachable_stop(ctx: &Context, id: Id) -> bool {
+    with(ctx, |state| state.stops.iter().any(|rec| rec.stop.id == id && !rec.stop.press_only))
+}
+
 /// Where a request for the component `id` goes when it has no stop of its own: the first stop registered since
 /// `from` (a `stop_count`), which a component inside it holds.
 pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<FocusTarget> {
