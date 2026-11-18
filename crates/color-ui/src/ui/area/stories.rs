@@ -1,6 +1,6 @@
-//! Stories of `ColorArea`: a hue-mode area and a web-safe one.
+//! Stories of `ColorArea`: its two shapes, a web-safe area, a refused value and a disabled one.
 
-use super::ColorArea;
+use super::{AreaShape, ColorArea};
 use crate::AreaMode;
 use craft_theme::{ColorModel, HsbModel, Srgba};
 use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
@@ -9,11 +9,19 @@ use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use craft_ui::value_drag::PointPicker;
 use egui::Ui;
 
-/// The value changes through the drag of the point picker the area shows inside itself.
+/// The compact pickers' field at plot proportions. The value changes through the drag of the point picker the area
+/// shows inside itself.
 #[story(ColorArea<'static>, covers = [Default], drive = Drive::DragChild(Grip::new(PointPicker::WELL)))]
 fn color_area(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
     ColorArea::new("Saturation and brightness", AreaMode::Hue, Bind::bound(values)).show(ui).into()
+}
+
+/// The Color Picker dialog's field: a square, `size.plot.width` on a side.
+#[story(ColorArea<'static>, covers = [], drive = Drive::Never)]
+fn color_area_square(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let values = data.value("values", HsbModel.from_srgb(Srgba::rgb(0.2, 0.5, 0.8)));
+    ColorArea::new("Saturation and brightness", AreaMode::Hue, Bind::bound(values)).shape(AreaShape::Square).show(ui).into()
 }
 
 #[story(ColorArea<'static>, covers = [], drive = Drive::Never)]

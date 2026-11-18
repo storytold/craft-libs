@@ -752,7 +752,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             let mut empty_ui = alloc::child(ui, builder);
             let installed = Env::install_for(&empty_ui, env.derive(|scoped| scoped.extend_values(values)));
             let (resolved, view) = (cx.core.resolved, cx.core.env);
-            let mut bcx = BodyCx::new(sub(id, "body"), view, resolved, rect, &mut *cx.core.memory, &mut open, None);
+            let mut bcx = BodyCx::new(sub(id, "body"), view, resolved, rect, &mut *cx.core.memory, &mut open, None, None);
             comp.empty(&mut empty_ui, &mut bcx);
             Env::restore(&ctx, installed);
         }

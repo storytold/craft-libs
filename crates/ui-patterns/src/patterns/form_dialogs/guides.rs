@@ -28,7 +28,7 @@ use crate::canvas_data::{Guide, GuideColor};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -331,7 +331,8 @@ impl<'a> GuideLayoutDialog<'a> {
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
         let number_units = env.units();
-        let mut dialog = FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview).side_buttons(true);
+        let mut dialog =
+            FormDialog::new(words.layout_title.clone(), values).outer_gesture(true).answers(answers).preview(preview).button_place(ButtonPlace::Side);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

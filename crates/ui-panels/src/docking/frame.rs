@@ -251,7 +251,7 @@ pub fn edge_bands<P: Clone + Eq + Hash>(
 
 /// Registers the bands as the dock's edge spots, for the next pass's drops; over a tab strip each reaches
 /// `strip_reach` from its edge (`DockSizes::strip_reach`).
-pub fn register_edge_bands<P: Clone + Send + 'static>(ctx: &Context, dock: Id, bands: &[EdgeBand], strip_reach: f32) {
+pub fn register_edge_bands<P: Clone + Send + Sync + 'static>(ctx: &Context, dock: Id, bands: &[EdgeBand], strip_reach: f32) {
     for band in bands {
         DockTargets::<P>::register_band(ctx, dock, DockSpot::Edge(band.side), band.band, band.line, strip_reach);
     }

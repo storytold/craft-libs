@@ -627,7 +627,7 @@ impl FooterBar {
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
-                let mut place = |ui: &mut Ui, shown: &mut Shown| {
+                let place = |ui: &mut Ui, shown: &mut Shown| {
                     for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
