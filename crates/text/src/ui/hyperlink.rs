@@ -429,7 +429,7 @@ impl HyperlinkDialog {
             .buttons(buttons)
             .initial_focus(Initial::Default)
             .opened(Bind::bound(open))
-            .refusal(|| refused.filter(|(_, answer)| current.borrow().as_ref() == Some(answer)).map(|(reason, _)| reason))
+            .refusal(|| refused.as_ref().filter(|(_, answer)| current.borrow().as_ref() == Some(answer)).map(|(reason, _)| reason.clone()))
             .settle_buttons(|_, buttons| {
                 if let Some(accept) = buttons.get_mut(OK) {
                     accept.set_enabled(current.borrow().is_some() && !waiting);
