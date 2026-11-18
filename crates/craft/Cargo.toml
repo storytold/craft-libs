@@ -432,7 +432,7 @@ heif = ["dep:craft-heif"]
 heif-decode = ["heif", "craft-heif/decode"]
 heif-metadata = ["heif", "craft-heif/metadata"]
 heif-test-support = ["heif", "craft-heif/test-support"]
-heif-testdata =["heif", "craft-heif/testdata"]
+heif-testdata = ["heif", "craft-heif/testdata"]
 
 html = ["dep:craft-html"]
 html-flow = ["html", "craft-html/flow"]
@@ -619,11 +619,11 @@ psd = ["dep:craft-psd"]
 psd-corpus = ["psd", "craft-psd/corpus"]
 psd-serde = ["psd", "craft-psd/serde"]
 psd-test-support = ["psd", "craft-psd/test-support"]
-psd-testgen =["psd", "craft-psd/testgen"]
+psd-testgen = ["psd", "craft-psd/testgen"]
 
 pst = ["dep:craft-pst"]
 pst-test-support = ["pst", "craft-pst/test-support"]
-pst-test-writer =["pst", "craft-pst/test-writer"]
+pst-test-writer = ["pst", "craft-pst/test-writer"]
 
 quit = ["dep:craft-quit"]
 
