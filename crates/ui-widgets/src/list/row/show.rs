@@ -162,16 +162,6 @@ impl Component for ListRow<'_> {
         };
         let label = label.max(self.below_width(sizes));
         let own = probe.ideal_width - sizes.min_label + label.max(sizes.min_label) + self.indent_full(sizes);
-        if !self.label_spans.is_empty() {
-            let spans = cx.layout(&self.label_run(cx.resolved.label).role(cx.style.text.role)).size().x;
-            let plain = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size().x;
-            let pieces: Vec<f32> =
-                self.label_spans.iter().map(|span| cx.layout(&TextRun::new(span.text.as_ref()).role(cx.style.text.role)).size().x).collect();
-            eprintln!(
-                "DIAG rf-widgets list_row_match_highlight: rtl {rtl} proposal {:?} room {:?} spans {spans} plain {plain} pieces {pieces:?} label {label} ideal {} min {} own {own}",
-                cx.proposal, cx.room, probe.ideal_width, probe.min_width
-            );
-        }
         if cx.proposal == Proposal::Ideal {
             self.report_cell_widths(cx, own);
         }
