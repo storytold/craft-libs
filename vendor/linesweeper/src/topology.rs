@@ -2302,6 +2302,14 @@ mod tests {
         assert_eq!(top.bounding_box(), kurbo::Rect::ZERO);
     }
 
+    // Craft patch (input rules) test.
+    #[test]
+    fn nonempty_bounding_box() {
+        let square = [[p(10.0, 20.0), p(13.0, 20.0), p(13.0, 24.0), p(10.0, 24.0)]];
+        let top = Topology::from_polylines_binary(square, EMPTY, 0.01);
+        assert_eq!(top.bounding_box(), kurbo::Rect::new(10.0, 20.0, 13.0, 24.0));
+    }
+
     #[test]
     fn diamond() {
         let segs = [[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 2.0), p(-1.0, 1.0)]];

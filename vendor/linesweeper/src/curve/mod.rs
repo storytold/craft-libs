@@ -1905,6 +1905,22 @@ mod test {
     }
 
     #[test]
+    fn curved_crossing_decreasing_in_y() {
+        // The curve runs down in y and bulges to the right across the line at
+        // x = 0.5, while its chord stays on x = 0, left of the line.
+        let down = CubicBez::new((0.0, 1.0), (2.0, 2.0 / 3.0), (2.0, 1.0 / 3.0), (0.0, 0.0));
+        let up = CubicBez::new(down.p3, down.p2, down.p1, down.p0);
+        let line = vertical(0.5, 0.0, 1.0);
+        for (c0, c1, u0, u1) in [(down, line, up, line), (line, down, line, up)] {
+            let cmp: Vec<_> = intersect_cubics(c0, c1, 1e-6, 2e-6).iter().collect();
+            let expected: Vec<_> = intersect_cubics(u0, u1, 1e-6, 2e-6).iter().collect();
+            assert_eq!(cmp, expected);
+            assert!(cmp.iter().any(|&(_, _, o)| o == Order::Left));
+            assert!(cmp.iter().any(|&(_, _, o)| o == Order::Right));
+        }
+    }
+
+    #[test]
     fn invalid_tolerances() {
         let c0 = vertical(0.0, 0.0, 1.0);
         let parallel = vertical(1.0, 0.0, 1.0);
