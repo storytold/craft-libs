@@ -161,3 +161,9 @@ Sanitization, animation fitting and numeric output policy remain caller-owned.
 ## EVM bytecode inspection
 
 `crates/evm` extracts Craft Anything `crates/formats/src/evm.rs` at `a31e995858f4312e0f1d59a007112da191ef2d26` (MIT OR Apache-2.0). Eight separate source-history ports preserve Brandon Thomas, Afloat, RRFZ and NetterSilver as primary authors with immutable source references. Synthetic EVM fixtures and deterministic mutation helpers come from the same app source; regression files retain their source provenance. Neutral errors and workspace integration are subsequent changes. No code execution or transaction behavior is imported.
+
+## XFDF field reader
+
+`crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
+
+Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
