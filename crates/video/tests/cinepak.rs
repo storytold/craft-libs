@@ -805,3 +805,43 @@ fn test_first_strip_inherits_the_last_strip_of_the_previous_frame() {
     let frame1 = decoder.decode(&f1).expect("frame 1");
     assert_eq!(frame1.pixel_rgb(0, 0).expect("px"), want_green);
 }
+
+#[test]
+fn test_grayscale_strip_uses_palette_after_color_frame() {
+    let mut palette = [0u8; 768];
+    // Palette index 1 is bright blue: R=10, G=20, B=230
+    palette[3] = 10;
+    palette[4] = 20;
+    palette[5] = 230;
+
+    let mut decoder = Decoder::with_palette(palette);
+
+    // Frame 0: color frame (red)
+    let red = ([72, 72, 72, 72], -37, 91);
+    let f0 = frame_of(0, 4, &[strip_with_codebook(0, 4, Some(red))]);
+    let frame0 = decoder.decode(&f0).expect("frame 0");
+    let px0 = frame0.pixel_rgb(0, 0).expect("px");
+    assert!(px0[0] > 200 && px0[2] == 0);
+
+    // Frame 1: grayscale/paletted codebook (subchunk 0x26) with palette index 1
+    let mut gray_body = Vec::new();
+    gray_body.push(0x26); // v1 gray full
+    gray_body.extend_from_slice(&8u32.to_be_bytes()[1..4]); // size 8 (4-byte header + 4 bytes payload)
+    gray_body.extend_from_slice(&[1, 1, 1, 1]); // palette index 1
+    gray_body.push(0x32); // v1 vector
+    gray_body.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    gray_body.push(0);
+
+    let mut strip = Vec::new();
+    strip.extend_from_slice(&0x1000u16.to_be_bytes()); // intra
+    strip.extend_from_slice(&((12 + gray_body.len()) as u16).to_be_bytes());
+    for v in [0u16, 0, 4, 4] {
+        strip.extend_from_slice(&v.to_be_bytes());
+    }
+    strip.extend_from_slice(&gray_body);
+
+    let f1 = frame_of(0, 4, &[strip]);
+    let frame1 = decoder.decode(&f1).expect("frame 1");
+    // Must be rendered with the configured palette index 1: [10, 20, 230]
+    assert_eq!(frame1.pixel_rgb(0, 0).expect("px"), [10, 20, 230]);
+}

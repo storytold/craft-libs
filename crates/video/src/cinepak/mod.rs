@@ -190,8 +190,6 @@ impl Decoder {
 
         let mut offset = 10;
         let mut prev_bottom_y = 0;
-        // Inherited codebooks keep the colour mode of the frame they came from.
-        let mut any_color = if is_key { can_inherit && self.last_frame.as_ref().is_some_and(|f| f.is_color) } else { frame.is_color };
 
         for s_idx in 0..num_strips {
             let strip_hdr_data = data.get(offset..).ok_or(Error::Truncated)?;
@@ -201,7 +199,7 @@ impl Decoder {
             let bounds = hdr.resolve_bounds(s_idx == 0, prev_bottom_y, width, height)?;
             prev_bottom_y = bounds.3;
 
-            // When codebook inheritance is enabled, a strip starts from the codebooks of the strip
+            // When codebook inheritance is enabled, a strip starts from the codebooks and mode of the strip
             // before it: the previous strip of this frame, or for the first strip the last strip
             // of the previous frame.
             if can_inherit {
@@ -237,34 +235,38 @@ impl Decoder {
                 match chunk_type {
                     0x20 => {
                         strip.v4_codebook.update_full_color(payload)?;
-                        any_color = true;
+                        strip.is_color = true;
                     }
                     0x21 => {
                         strip.v4_codebook.update_partial_color(payload)?;
-                        any_color = true;
+                        strip.is_color = true;
                     }
                     0x22 => {
                         strip.v1_codebook.update_full_color(payload)?;
-                        any_color = true;
+                        strip.is_color = true;
                     }
                     0x23 => {
                         strip.v1_codebook.update_partial_color(payload)?;
-                        any_color = true;
+                        strip.is_color = true;
                     }
                     0x24 => {
                         strip.v4_codebook.update_full_gray(payload)?;
+                        strip.is_color = false;
                     }
                     0x25 => {
                         strip.v4_codebook.update_partial_gray(payload)?;
+                        strip.is_color = false;
                     }
                     0x26 => {
                         strip.v1_codebook.update_full_gray(payload)?;
+                        strip.is_color = false;
                     }
                     0x27 => {
                         strip.v1_codebook.update_partial_gray(payload)?;
+                        strip.is_color = false;
                     }
                     0x30..=0x32 => {
-                        if any_color && frame.u.is_none() {
+                        if strip.is_color && frame.u.is_none() {
                             let cw = ((width as usize).div_ceil(2)).max(1);
                             let ch = ((height as usize).div_ceil(2)).max(1);
                             frame.u = Some(vec![128; cw * ch]);
@@ -278,7 +280,7 @@ impl Decoder {
                             u: frame.u.as_deref_mut(),
                             v: frame.v.as_deref_mut(),
                             palette: self.palette.as_ref(),
-                            is_color: any_color,
+                            is_color: strip.is_color,
                         };
                         decode_vector_chunk(&mut fb, strip, chunk_type, payload, bounds)?;
                     }
@@ -292,7 +294,7 @@ impl Decoder {
             offset = strip_end;
         }
 
-        frame.is_color = any_color;
+        frame.is_color = (!is_key && frame.is_color) || strips.iter().any(|s| s.is_color);
         // Only this frame's strips count: the next frame's first strip inherits from the last.
         strips.truncate(num_strips);
         self.strips = strips;

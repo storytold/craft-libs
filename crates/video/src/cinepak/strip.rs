@@ -10,6 +10,8 @@ pub struct StripState {
     pub v1_codebook: Codebook,
     /// 4-vector per 4×4 block codebook.
     pub v4_codebook: Codebook,
+    /// Whether this strip uses 12 bpp color codebooks (true) or grayscale/paletted (false).
+    pub is_color: bool,
 }
 
 /// Parsed header of a Cinepak strip.
