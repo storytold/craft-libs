@@ -407,12 +407,6 @@ impl Rows<'_> {
                 grid.kind = kind;
             }
             let kind = setup.grid.map_or(grid.kind, |grid| grid.kind);
-            eprintln!(
-                "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: shown {:?} picked {:?} kind {:?}",
-                grid.kind,
-                group.output.value().copied(),
-                kind
-            );
             let chars = self.count(
                 ui,
                 form,
