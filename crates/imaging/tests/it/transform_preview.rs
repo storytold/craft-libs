@@ -633,3 +633,22 @@ fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
     let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
     assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
 }
+
+#[trial]
+fn a_styled_preview_keeps_an_edge_on_the_pixel_grid_crisp_at_any_scale() {
+    // A 4 × 4 opaque frame shown over the work pixels 10..18 (twice its size): the edge at x = 10 lies on the pixel
+    // grid, so the pixel just inside is covered whole and the one just outside not at all, as the commit draws it.
+    // Measured in texels, the old fade covered three quarters of the inside pixel and a quarter of the outside one.
+    let image = ColorImage::new([4, 4], vec![Color32::WHITE; 16]);
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.0 / 8.0, 0.0, -10.0 / 8.0], [0.0, 1.0 / 8.0, -10.0 / 8.0], [0.0, 0.0, 1.0]]);
+    let rect = PixelRect::new(8, 8, 20, 20);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(14.0, 14.0), rect, false);
+    let alpha = |x: i32, y: i32| out.texels[((y - 8) * 12 + (x - 8)) as usize][3];
+    assert!((alpha(10, 14) - 1.0).abs() < 1e-6, "inside the edge: {}", alpha(10, 14));
+    assert!(alpha(9, 14).abs() < 1e-6, "outside the edge: {}", alpha(9, 14));
+    // A pixel the edge halves keeps half: the frame's right edge at x = 17.5 when the box is 7.5 wide.
+    let to_unit = craft_behavior::geometry::Homography::from_rows([[1.0 / 7.5, 0.0, -10.0 / 7.5], [0.0, 1.0 / 8.0, -10.0 / 8.0], [0.0, 0.0, 1.0]]);
+    let out = craft_imaging::ui::transform_preview::resample(&image, [1.0, 1.0], &to_unit, Point::new(14.0, 14.0), rect, false);
+    let half = out.texels[((14 - 8) * 12 + (17 - 8)) as usize][3];
+    assert!((half - 0.5).abs() < 1e-6, "half the pixel inside: {half}");
+}

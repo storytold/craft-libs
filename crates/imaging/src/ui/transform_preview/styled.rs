@@ -207,7 +207,16 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
         let (x, y) = (x.clamp(0, iw as i64 - 1) as usize, y.clamp(0, ih as i64 - 1) as usize);
         image.pixels.get(y * iw + x).map_or([0.0; 4], |c| c.to_array().map(f32::from))
     };
-    let fade = |t: f64, n: f64| (t + 0.5).min(n - t + 0.5).clamp(0.0, 1.0) as f32;
+    // The area of a pixel inside the box along one axis: `t` texels in from the near edge of `n`, whose gradient
+    // `(gx, gy)` (texels per work pixel) gives the distance in pixels and the edge's direction, so the outline is
+    // antialiased over one work pixel at any scale, as the commit draws it.
+    let cover = |t: f64, n: f64, (gx, gy): (f64, f64)| -> f32 {
+        let len = gx.hypot(gy);
+        if !(len.is_finite() && len > 1e-12) {
+            return if (0.0..=n).contains(&t) { 1.0 } else { 0.0 };
+        }
+        edge_coverage(t.min(n - t) / len, gx / len, gy / len) as f32
+    };
     let straight = |p: [f32; 4]| -> [f32; 4] {
         let c = Color32::from_rgba_premultiplied(p[0].round() as u8, p[1].round() as u8, p[2].round() as u8, p[3].round() as u8);
         let [r, g, b, _] = c.to_srgba_unmultiplied();
@@ -232,7 +241,9 @@ pub fn resample(image: &ColorImage, uv: [f32; 2], to_unit: &Homography, inside: 
                 }
                 continue;
             }
-            let cover = fade(tx, tw) * fade(ty, th);
+            // The gradient of a texel coordinate `t` (of `n`) along the work pixels: d/dx (a x + b y + c) / w.
+            let grad = |a: f64, b: f64, t: f64, n: f64| ((a - t / n * m6) / w * n, (b - t / n * m7) / w * n);
+            let cover = cover(tx, tw, grad(m0, m1, tx, tw)) * cover(ty, th, grad(m3, m4, ty, th));
             if cover <= 0.0 {
                 continue;
             }
@@ -397,4 +408,28 @@ impl StyledPreview {
         state.builds += 1;
         Some((texture.id, rect))
     }
+}
+
+/// How much of a pixel lies inside a straight edge: the exact area of the unit pixel square on the inner side, for the
+/// edge at signed distance `d` from the pixel's centre (in pixels, positive inside) with unit normal `(nx, ny)`. Linear
+/// across the middle, quadratic where the edge cuts a corner; `0.5 + d` for an edge along the pixel grid.
+pub fn edge_coverage(d: f64, nx: f64, ny: f64) -> f64 {
+    let (a, b) = if nx.abs() >= ny.abs() { (nx.abs(), ny.abs()) } else { (ny.abs(), nx.abs()) };
+    let half = (a + b) / 2.0;
+    if d.is_nan() {
+        return 0.0;
+    }
+    if d >= half {
+        return 1.0;
+    }
+    if d <= -half {
+        return 0.0;
+    }
+    if d.abs() <= (a - b) / 2.0 || b < 1e-12 {
+        return (0.5 + d / a).clamp(0.0, 1.0);
+    }
+    // The part past the edge is a right triangle cut off a corner.
+    let t = half - d.abs();
+    let corner = (t * t / (2.0 * a * b)).clamp(0.0, 0.5);
+    if d > 0.0 { 1.0 - corner } else { corner }
 }
