@@ -686,8 +686,18 @@ pub struct Reference {
     pub target: String,
 }
 
+/// Maximum caller and target string bytes retained across a reference query.
+/// A count limit alone cannot bound repeated, amplified method signatures.
+const MAX_REFERENCE_BYTES: usize = 64 << 20;
+
 /// Every instruction that refers to class `desc` (optionally only its methods named `method`).
+/// Returns a truncated prefix when the count or aggregate caller/target byte budget is exhausted.
 pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -> (Vec<Reference>, bool) {
+    references_with_byte_limit(dex, desc, method, max, MAX_REFERENCE_BYTES)
+}
+
+fn references_with_byte_limit(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize, max_bytes: usize) -> (Vec<Reference>, bool) {
+    let mut bytes_left = max_bytes;
     let mut out = Vec::new();
     for c in &dex.classes {
         let cd = dex.class_data(c);
@@ -715,7 +725,12 @@ pub fn references(dex: &Dex<'_>, desc: &str, method: Option<&str>, max: usize) -
                     if out.len() >= max {
                         return (out, true);
                     }
-                    out.push(Reference { caller: dex.method_ref(m.method_idx), offset: i.offset, instruction: i.name, kind, target });
+                    let caller = dex.method_ref(m.method_idx);
+                    let Some(left) = bytes_left.checked_sub(caller.len()).and_then(|left| left.checked_sub(target.len())) else {
+                        return (out, true);
+                    };
+                    bytes_left = left;
+                    out.push(Reference { caller, offset: i.offset, instruction: i.name, kind, target });
                 }
             }
         }
@@ -926,5 +941,53 @@ mod tests {
             static_values_off: 0,
         };
         assert!(!d.class_data(&c).complete);
+    }
+
+    #[test]
+    fn references_bound_repeated_long_signatures_before_retaining_results() {
+        let mut data = vec![0u8; 578];
+        data[4..8].copy_from_slice(&256u32.to_le_bytes());
+        // 256 parameter entries all refer to the same long descriptor.
+        // One direct method at offset 520, with code at 544 (ULEB128 A0 04).
+        data[520..528].copy_from_slice(&[0, 0, 1, 0, 0, 0, 0xa0, 4]);
+        data[556..560].copy_from_slice(&9u32.to_le_bytes());
+        for offset in [560, 566, 572] {
+            data[offset..offset + 2].copy_from_slice(&0x0071u16.to_le_bytes());
+        }
+        let desc = format!("L{};", "x".repeat(256));
+        let mut dex = bare_dex(&data, vec![desc.clone(), "run".into()], vec![0]);
+        dex.protos.push(ProtoId { shorty: 0, ret: 0, params_off: 4 });
+        dex.methods.push(MemberId { class_idx: 0, type_or_proto: 0, name_idx: 1 });
+        dex.classes.push(ClassDef {
+            class_idx: 0,
+            access: 0,
+            superclass_idx: NO_INDEX,
+            interfaces_off: 0,
+            source_file_idx: NO_INDEX,
+            annotations_off: 0,
+            class_data_off: 520,
+            static_values_off: 0,
+        });
+        let signature = dex.method_ref(0);
+        assert!(signature.len() > 256 * 256);
+        let pair_bytes = signature.len() * 2;
+        let (all, truncated) = references_with_byte_limit(&dex, &desc, Some("run"), 100, pair_bytes * 3);
+        assert!(!truncated);
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|r| r.caller == signature && r.target == signature));
+        let (bounded, truncated) = references_with_byte_limit(&dex, &desc, Some("run"), 100, pair_bytes * 2);
+        assert!(truncated);
+        assert_eq!(bounded, all[..2]);
+        assert_eq!(bounded.iter().map(|r| r.caller.len() + r.target.len()).sum::<usize>(), pair_bytes * 2);
+        let (below_one, truncated) = references_with_byte_limit(&dex, &desc, Some("run"), 100, pair_bytes - 1);
+        assert!(truncated);
+        assert!(below_one.is_empty());
+        let (count_limited, truncated) = references_with_byte_limit(&dex, &desc, Some("run"), 1, usize::MAX);
+        assert!(truncated);
+        assert_eq!(count_limited, all[..1]);
+        let (zero, truncated) = references_with_byte_limit(&dex, &desc, Some("run"), 0, usize::MAX);
+        assert!(truncated);
+        assert!(zero.is_empty());
+        assert_eq!(references(&dex, &desc, Some("run"), 100), (all, false));
     }
 }
