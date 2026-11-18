@@ -224,6 +224,7 @@ const CONTAINER: &[Forwarded] = &[
     ("end", "$ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
     ("position", "$ui::contract::SetPosition", "The component's place in its set, for assistive technology."),
     ("collection_body", "", "The body holds one collection that owns the scroll: a layer's own body scroll is off."),
+    ("least_width", "$ui::contract::LeastWidth", "The least width of the content, from a size role."),
 ];
 
 /// The builders a `#[container(a, b)]` field names; a bare `#[collection]` or `#[container]` forwards them all.

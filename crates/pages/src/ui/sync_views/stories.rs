@@ -18,7 +18,7 @@ fn pair(ui: &mut Ui, data: &mut StoryData, captions: Option<(&'static str, &'sta
     }
     let out = views.halves(ui, (left, right), |ui, rect, state, half| {
         let label = if half == Lead::Left { "Old pages" } else { "New pages" };
-        PageView::new(label, &pages, state, PAPER).show_at(ui, rect, |_, _| ())
+        Some(PageView::new(label, &pages, state, PAPER).show_at(ui, rect, |_, _| ()))
     });
     out.edit.response.into()
 }

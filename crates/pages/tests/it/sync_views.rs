@@ -23,7 +23,7 @@ fn captioned_pair(direction: Direction) -> (Fixture, Views) {
         SyncedViews::new("Compare", &mut pair).captions("Old", "New").halves(ui, (&mut left, &mut right), |ui, rect, state, half| {
             rects[usize::from(half == Lead::Right)] = Some(rect);
             let label = if half == Lead::Left { "Old pages" } else { "New pages" };
-            PageView::new(label, &pages, state, PAPER).show_at(ui, rect, |_, _| ())
+            Some(PageView::new(label, &pages, state, PAPER).show_at(ui, rect, |_, _| ()))
         });
         *seen.borrow_mut() = rects;
     });

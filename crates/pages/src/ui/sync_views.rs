@@ -61,7 +61,8 @@ impl Outcome for SyncedViewsOutput {
 }
 
 /// The pair, built per pass: the app draws each half with its own [`PageView`](super::view::PageView) inside the
-/// closure, which gets the half's rect, its state and which half it is; the pair keeps the states together.
+/// closure, which gets the half's rect, its state and which half it is, and returns the half's page view output
+/// (`None` for a half with no pages to show: a closed or empty document); the pair keeps the states together.
 ///
 /// ```ignore
 /// SyncedViews::new("Compare", &mut pair).halves(ui, (&mut old_state, &mut new_state), |ui, rect, state, half| {
@@ -79,7 +80,7 @@ impl Outcome for SyncedViewsOutput {
 ///     if let Some(view) = reply.and_then(|reply| reply.view) {
 ///         out.adopt(state, &view);
 ///     }
-///     out
+///     Some(out)
 /// });
 /// ```
 #[derive(craft_ui::contract::Pattern)]
@@ -109,7 +110,7 @@ impl<'a> SyncedViews<'a> {
         self,
         ui: &mut Ui,
         states: (&mut PageViewState, &mut PageViewState),
-        mut half: impl FnMut(&mut Ui, Rect, &mut PageViewState, Lead) -> PageViewOutput,
+        mut half: impl FnMut(&mut Ui, Rect, &mut PageViewState, Lead) -> Option<PageViewOutput>,
     ) -> SyncedViewsOutput {
         let SyncedViews { label, state, captions } = self;
         let (left, right) = states;
@@ -148,7 +149,7 @@ impl<'a> SyncedViews<'a> {
                     }
                     _ => rect,
                 };
-                views[pane] = Some(if this == lead {
+                views[pane] = if this == lead {
                     half(ui, rect, leader, this)
                 } else {
                     let mut copy = follower.clone();
@@ -157,7 +158,7 @@ impl<'a> SyncedViews<'a> {
                     let output = half(ui, rect, &mut copy, this);
                     followed = Some((copy, offset, current));
                     output
-                });
+                };
             }
             followed
         });
