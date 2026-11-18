@@ -458,3 +458,29 @@ fn a_settled_child_runs_when_the_theme_or_density_changes() {
     fixture.density(Size::Comfortable);
     assert!(frame(&mut fixture) > 0, "a density change runs it");
 }
+
+/// A child with a content version runs when the host switches the language, and settles again in it.
+#[trial]
+fn a_settled_child_runs_when_the_language_changes() {
+    let runs = std::rc::Rc::new(Cell::new(0));
+    let counted = std::rc::Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("worded", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            Button::new("Save").show(ui);
+        });
+    });
+    fixture.settle();
+    let mut frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the child settles");
+    let (i18n, problems) = craft_i18n::I18n::from_owned([("de".to_owned(), String::new(), "@id\ttrial.save\tSpeichern\n".to_owned())], &["de"]);
+    assert!(problems.is_empty(), "{problems:?}");
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(std::sync::Arc::new(i18n)).build();
+    fixture.host(std::sync::Arc::new(host));
+    assert!(frame(&mut fixture) > 0, "a new language runs it");
+    assert_eq!(frame(&mut fixture), 0, "and it settles in that language, the host kept");
+}
