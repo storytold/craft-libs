@@ -1261,6 +1261,11 @@ mod native {
                 if !missing(s, name) {
                     continue;
                 }
+                // The DWG reader keeps only 64 cell styles per table style, so a 65th would be
+                // dropped on the way back.
+                if s.modern_overrides.len() >= 64 {
+                    return Err(format!("table style {}: {name} would exceed the 64 cell styles a DWG keeps", s.name));
+                }
                 let id = if held.contains(&id) {
                     free_id(&held, max_id).ok_or_else(|| format!("table style {}: no free cell style id for {name}", s.name))?
                 } else {
@@ -1707,6 +1712,38 @@ mod native {
             }
             assert!(table_style_row_margins_up_to(&mut doc, 100).is_err());
             assert!(table_style_row_margins_up_to(&mut doc, 102).is_ok());
+        }
+
+        /// The DWG reader keeps only 64 cell styles per table style, so a row that would be the 65th
+        /// is an error and the style is left as it is: nothing is dropped on the way back. With room
+        /// for the row (63 styles) it is added.
+        #[test]
+        fn a_row_beyond_64_cell_styles_is_an_error_not_a_dropped_style() {
+            use acadrust::objects::{NamedTableCellStyle, ObjectType};
+            // `count` cell styles: _TITLE and _HEADER, then custom ones, and no _DATA.
+            let doc_with = |count: i32| {
+                let mut doc = acadrust::CadDocument::new();
+                doc.version = acadrust::DxfVersion::AC1032;
+                for o in doc.objects.values_mut() {
+                    let ObjectType::TableStyle(s) = o else { continue };
+                    let named = |id: i32, name: String| (id, NamedTableCellStyle { id, name, ..NamedTableCellStyle::default() });
+                    s.modern_overrides = vec![named(1, "_TITLE".into()), named(2, "_HEADER".into())];
+                    s.modern_overrides.extend((0..count - 2).map(|i| named(101 + i, format!("Custom{i}"))));
+                }
+                doc
+            };
+            let counts = |doc: &acadrust::CadDocument| -> Vec<usize> {
+                doc.objects.values().filter_map(|o| if let ObjectType::TableStyle(s) = o { Some(s.modern_overrides.len()) } else { None }).collect()
+            };
+            let mut full = doc_with(64);
+            let err = table_style_row_margins(&mut full).expect_err("a 65th cell style");
+            assert!(err.contains("64 cell styles"), "{err}");
+            assert!(counts(&full).iter().all(|&n| n == 64), "the style is left as it was");
+            assert!(counts(&through_dwg(&full)).iter().all(|&n| n == 64), "nothing is dropped on the round trip");
+            let mut room = doc_with(63);
+            table_style_row_margins(&mut room).expect("room for _DATA");
+            assert!(counts(&room).iter().all(|&n| n == 64));
+            assert!(counts(&through_dwg(&room)).iter().all(|&n| n == 64));
         }
 
         /// The DWG as the writer makes it from `doc`, read back.
