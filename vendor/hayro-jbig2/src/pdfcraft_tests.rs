@@ -374,6 +374,49 @@ fn jbig2_refined_text_region() -> Vec<u8> {
     text
 }
 
+/// A 1 × 65535 text region placing one instance of symbol 0 of one, refined from width 0 and
+/// height 1 to 1 × 65535, Huffman-coded.
+fn jbig2_tall_refined_text_region() -> Vec<u8> {
+    let mut text = jbig2_region_info(1, 65_535);
+    text.extend_from_slice(&[0x80, 0x13]); // Huffman, refined by template 1, top left
+    text.extend_from_slice(&[0x01, 0x40]); // table B.15 for the width and height deltas
+    text.extend_from_slice(&1u32.to_be_bytes());
+    let mut bits = Bits::default();
+    for code in 0..35 {
+        bits.put(u32::from(code == 1), 4); // only run code 1, one bit long
+    }
+    bits.put(0, 1); // symbol 0 is one bit long
+    bits.align();
+    bits.put(0, 1); // the first strip's T (B.11)
+    bits.put(0, 1); // delta T 1 (B.11)
+    bits.put(0, 9); // first S 0 (B.6)
+    bits.put(0, 1); // symbol 0
+    bits.put(1, 1); // refined
+    bits.put(0b101, 3); // width delta 1 (B.15)
+    bits.put(0b111_1111, 7); // height delta, the upper line of table B.15
+    bits.put(65_534 - 25, 32);
+    bits.put(0, 2); // no change of offset (B.14)
+    bits.table_b1(0); // no refinement data (B.1)
+    bits.align();
+    bits.put(0b01, 2); // end of the strip (B.8)
+    text.extend_from_slice(&bits.bytes);
+    text
+}
+
+/// Craft patch: a limit of 65535 pixels decodes a bitmap of 1 × 65535 coded as a refined text
+/// instance. Its refinement alone costs more than decoding the same bitmap as a generic region, and
+/// copying it into its text region and setting up the region cost more again.
+#[test]
+fn jbig2_a_low_limit_decodes_a_refined_instance_it_allows() {
+    let mut stream = black_jbig2_page_of(1, 65_535);
+    jbig2_segment(&mut stream, 1, 0, &[], &zero_width_jbig2_dictionary(1, true));
+    jbig2_segment(&mut stream, 2, 6, &[1], &jbig2_tall_refined_text_region());
+    let limits = crate::Limits::with_max_pixels(65_535);
+    let mut count = Count::default();
+    let decoded = Image::new_embedded_with_limits(&stream, None, limits).and_then(|image| image.decode(&mut count));
+    assert_eq!(decoded, Ok(()));
+}
+
 /// A generic refinement region of 1 × 1, with whatever its data decodes to.
 fn jbig2_refinement_region() -> Vec<u8> {
     let mut region = jbig2_region_info(1, 1);

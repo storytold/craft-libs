@@ -47,11 +47,16 @@ impl Limits {
     }
 
     /// The decoding work one image may ask for (see [`MAX_WORK`]). It is at least the most work
-    /// that decoding one bitmap within `max_pixels` takes (see [`decode_work`]): its pixels, and
-    /// the cost of up to 65535 rows, which a bitmap of width 0 has with no pixels. A low limit
-    /// still decodes a bitmap it allows.
+    /// that decoding one bitmap within `max_pixels` takes as a refined text instance, which costs
+    /// the most of the ways to code one: decoding it (see [`decode_work`]), which is its pixels and
+    /// the cost of up to 65535 rows that a bitmap of width 0 has with no pixels; copying it into
+    /// its text region, and a text region of the same size (see [`copy_work`]); and
+    /// [`ONE_INSTANCE_WORK`]. A low limit still decodes a bitmap it allows.
     pub(crate) fn work(&self) -> u64 {
-        let one_bitmap = self.max_pixels.saturating_add(decode_work(0, MAX_DIMENSION));
+        let decode = self.max_pixels.saturating_add(decode_work(0, MAX_DIMENSION));
+        // A copy costs at most a word for each 32 pixels and two for each row, whatever the shape.
+        let copy = (self.max_pixels / u64::from(WORD_BITS)).saturating_add(2 * u64::from(MAX_DIMENSION));
+        let one_bitmap = decode.saturating_add(copy.saturating_mul(2)).saturating_add(ONE_INSTANCE_WORK);
         self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS).max(one_bitmap)
     }
 
@@ -83,6 +88,12 @@ pub(crate) const INTEGER_WORK: u64 = 38;
 /// PdfCraft patch: the work of a line of a Huffman table built for symbols, about 50 ns (see
 /// [`MAX_WORK`]).
 pub(crate) const HUFFMAN_LINE_WORK: u64 = 10;
+
+/// Craft patch: the work of a refined text instance apart from its bitmap's decoding and copies
+/// (see [`Limits::work`]): the four integers of its refinement and the four of its placement, its
+/// text region's symbol count and Huffman line, and a dictionary of one symbol with no pixels to
+/// refine, with room to spare.
+pub(crate) const ONE_INSTANCE_WORK: u64 = 16 * INTEGER_WORK;
 
 /// PdfCraft patch: the work of decoding a bitmap pixel by pixel (see [`MAX_WORK`]). A row costs up
 /// to 21 ns however few pixels it has, about 4 pixels' worth, so one of no width isn't free: 16,384
