@@ -29,7 +29,7 @@
 //! [`Job::Create`] name is one plain file name, not a path at all. Neither is
 //! an OS path string handed to `std::fs`. Confinement happens in two layers:
 //!
-//! 1. [`confine_segment`] (every path segment) and [`confine_name`] (a
+//! 1. `confine_segment` (every path segment) and `confine_name` (a
 //!    `Create` name, stricter) reject `..`, `.`, an empty segment, an
 //!    absolute form, and anything that is not exactly one
 //!    [`std::path::Component::Normal`]. `confine_name` additionally refuses a
@@ -41,8 +41,8 @@
 //!    not itself a path separator on any platform's filesystem, so
 //!    `confine_segment` lets `list`, `read` and `write` keep such a name
 //!    reachable instead of discovering it and then refusing to open it.
-//! 2. [`open_root`] opens `root` as a [`cap_std::fs::Dir`] capability once per
-//!    job. Every [`list`], [`read`], [`write`] and [`create`] routes its
+//! 2. `open_root` opens `root` as a [`cap_std::fs::Dir`] capability once per
+//!    job. Every `list`, `read`, `write` and `create` routes its
 //!    already-segment-checked relative path through that one `Dir`, never
 //!    through an absolute OS path built by this crate. `cap_std` resolves one
 //!    component at a time against real, already-open directory handles, so a

@@ -300,7 +300,7 @@ impl CloudFiles {
 
     /// The account badge's own strings, for a localized application that
     /// would rather translate them itself than through
-    /// [`CloudApp::tr`](crate::cloud::CloudApp::tr).
+    /// [`CloudApp::tr`].
     pub fn account_menu_mut(&mut self) -> &mut crate::account::AccountMenu {
         &mut self.accounts
     }
@@ -594,7 +594,7 @@ pub fn cancel_save_as<A: CloudApp>(app: &mut A) {
 
 /// Save As: writes a new document into `folder` under `name`.
 ///
-/// Acts on [`CloudFiles::save_as_target`] when the conflict modal's "Save as
+/// Acts on `CloudFiles::save_as_target` when the conflict modal's "Save as
 /// a copy" set one, so the copy is made from the document that conflicted
 /// even if another tab is active by the time this runs. Otherwise, the
 /// active document, same as every other ordinary Save As.
