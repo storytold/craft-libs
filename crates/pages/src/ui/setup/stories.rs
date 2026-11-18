@@ -2,9 +2,11 @@
 
 use super::{PageLayoutMenus, PageSetupDialog};
 use crate::setup::PageSetup;
-use craft_ui::buttons::IconButton;
-use craft_ui::contract::{Bind, Props as _, Show as _};
-use craft_ui::runtime::env::UnitKind;
+use crate::setup::{DocumentGrid, GridKind};
+use craft_ui::buttons::{Button, IconButton};
+use craft_ui::contract::{Bind, Props as _, Show as _, clicked};
+use craft_ui::dialog::HeldAnswer;
+use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -20,6 +22,41 @@ fn document_setup(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = PageSetup { pages: Some(8), mirrored: true, ..PageSetup::default() };
     let setup = data.value("setup", start);
     PageSetupDialog::new(Bind::bound(setup)).document_setup().unit(UnitKind::Millimetres).opened(Bind::given(true)).show(ui);
+    StoryOutput::default()
+}
+
+/// A setup with a line and character grid.
+fn gridded() -> PageSetup {
+    PageSetup { grid: Some(DocumentGrid::new(GridKind::LinesAndChars, 40, 30)), ..PageSetup::default() }
+}
+
+/// The dialog over a setup with a Document grid, opened by its button; the kind radios switch which counts apply.
+#[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
+fn page_setup_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    if clicked(&Button::new("Page Setup\u{2026}").show(ui)) {
+        open = true;
+    }
+    let setup = data.value("setup", gridded());
+    PageSetupDialog::new(Bind::bound(setup)).opened(Bind::bound(&mut open)).show(ui);
+    *data.value("open", false) = open;
+    StoryOutput::default()
+}
+
+/// The host refuses every OK, so the dialog stays open with the reason under its fields.
+#[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
+fn page_setup_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut open = *data.value("open", false);
+    if clicked(&Button::new("Page Setup\u{2026}").show(ui)) {
+        open = true;
+    }
+    let state = data.note("refused", (gridded(), HeldAnswer::<PageSetup>::new()));
+    let (setup, held) = (&mut state.0, &mut state.1);
+    PageSetupDialog::new(Bind::bound(setup)).opened(Bind::bound(&mut open)).held(&mut *held).show(ui);
+    if held.take().is_some() {
+        held.answer(Err(Label::from("This document cannot take a grid.".to_owned())));
+    }
+    *data.value("open", false) = open;
     StoryOutput::default()
 }
 

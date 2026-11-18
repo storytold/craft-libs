@@ -232,12 +232,12 @@ pub enum GridKind {
 impl GridKind {
     /// Whether the characters-per-line count applies (`LinesAndChars` and `SnapToChars`).
     pub fn chars_enabled(self) -> bool {
-        todo!("dg.F18")
+        matches!(self, GridKind::LinesAndChars | GridKind::SnapToChars)
     }
 
     /// Whether the lines-per-page count applies (every kind but `None`).
     pub fn lines_enabled(self) -> bool {
-        todo!("dg.F18")
+        self != GridKind::None
     }
 }
 

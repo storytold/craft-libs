@@ -11,7 +11,8 @@ use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
-use egui::{CornerRadius, Pos2, Rect, Vec2, pos2};
+use craft_ui::style::DataColor;
+use egui::{Color32, CornerRadius, Pos2, Rect, Vec2, pos2};
 
 const EDGE: PartKey = PartKey::new("edge");
 const SQUARE: PartKey = PartKey::new("square");
@@ -196,7 +197,6 @@ pub struct EdgePicker<'a> {
     paragraph: bool,
     /// How the picture is drawn: the proxy diagram, or a sample of the borders on text, a paragraph or a page.
     #[prop]
-    #[allow(dead_code)] // P3(dialogs-w6): dg.F19
     look: EdgeLook,
 }
 
@@ -364,7 +364,7 @@ impl Component for EdgePicker<'_> {
         let lines = edge_lines(rect, inset);
         cx.part(SQUARE, rect).sense(Sense::CLICK).pointer_only("each line is a part of its own: the arrows move between them and Space toggles");
         let chosen = cx.value().copied().unwrap_or_default();
-        for key in Self::visible(self.paragraph) {
+        for key in self.keys() {
             let part = cx.part(Self::part(key), Self::band(&lines, key, inset)).sense(Sense::CLICK | Sense::FOCUS).focusable();
             if chosen.get(key) {
                 part.flags(Flags::CHECKED);
@@ -379,7 +379,7 @@ impl Component for EdgePicker<'_> {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(&current) = cx.value() else { return };
-        let keys = Self::visible(self.paragraph);
+        let keys = self.keys();
         let lines = edge_lines(cx.rect, cx.style.inset);
         // A click lands on a line's part or, off every line, on the square; the line it picks is the nearest.
         let click =
@@ -406,19 +406,47 @@ impl Component for EdgePicker<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let words = cx.words::<EdgePickerWords>();
-        let keys = Self::visible(self.paragraph);
+        let keys = self.keys();
         let lines = edge_lines(cx.rect, cx.style.inset);
         for (at, &key) in keys.iter().enumerate() {
             let node = access.node(Self::part(key), Role::CHECK_BOX);
-            node.name = Name::Text(cx.env.resolve(Self::edge_label(&words, key, self.paragraph)).as_str().to_owned());
+            node.name = Name::Text(cx.env.resolve(Self::edge_label(&words, key, self.paragraph_edges())).as_str().to_owned());
             node.position = Some(SetPosition::new(at).of(keys.len()));
             node.bounds(Self::band(&lines, key, cx.style.inset));
         }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        match self.look {
+            EdgeLook::Sample { area, fill } => self.paint_sample(ui, cx, area, fill),
+            _ => self.paint_proxy(ui, cx),
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<BorderEdges> {
+        cx.edit_response()
+    }
+}
+
+impl EdgePicker<'_> {
+    /// Whether the lines are a paragraph's: the flag, or a paragraph sample.
+    fn paragraph_edges(&self) -> bool {
+        self.paragraph || matches!(self.look, EdgeLook::Sample { area: SampleArea::Paragraph, .. })
+    }
+
+    /// The lines this picker has, for its parts, hit bands, names and paint alike: a text or page sample has only the
+    /// four outer lines, so no line exists that is not drawn.
+    fn keys(&self) -> Vec<EdgeKey> {
+        match self.look {
+            EdgeLook::Sample { area: SampleArea::Text | SampleArea::Page, .. } => OUTER.to_vec(),
+            _ => Self::visible(self.paragraph_edges()),
+        }
+    }
+
+    /// The six-line diagram.
+    fn paint_proxy(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(&edges) = cx.value() else { return };
-        let keys = Self::visible(self.paragraph);
+        let keys = self.keys();
         let lines = edge_lines(cx.rect, cx.style.inset);
         let draw = ui.draw();
         draw.fill(&PaintShape::Rect(cx.rect.shrink(cx.style.inset), CornerRadius::ZERO), cx.style.fill);
@@ -433,7 +461,46 @@ impl Component for EdgePicker<'_> {
         }
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<BorderEdges> {
-        cx.edit_response()
+    /// The chosen borders on a sample of `area`: grey bars stand for the text, and the lines sit where the hit bands
+    /// are, so the pointer and the keys act on what is drawn. A text run and a page have no inside lines; the
+    /// paragraph keeps its Between.
+    fn paint_sample(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, area: SampleArea, fill: Option<craft_theme::Srgba>) {
+        let Some(&edges) = cx.value() else { return };
+        let keys = self.keys();
+        let lines = edge_lines(cx.rect, cx.style.inset);
+        let sheet = cx.rect.shrink(cx.style.inset);
+        let draw = ui.draw();
+        draw.fill(&PaintShape::Rect(sheet, CornerRadius::ZERO), cx.style.fill);
+        if let Some(fill) = fill {
+            draw.data_fill(&PaintShape::Rect(sheet, CornerRadius::ZERO), DataColor::new(Color32::from(fill)));
+        }
+        // An even count of bars leaves the middle, where the inside line runs, between two of them.
+        let (bars, across) = match area {
+            SampleArea::Text => (1_usize, 0.5_f32),
+            SampleArea::Paragraph => (2, 0.7),
+            SampleArea::Page => (4, 0.7),
+        };
+        let slot = sheet.height() / (2 * bars + 1) as f32;
+        let width = sheet.width() * across;
+        let bar_color = cx.resolve(&cx.style.off);
+        for bar in 0..bars {
+            let top = sheet.top() + slot * (2 * bar + 1) as f32;
+            let left = sheet.center().x - width / 2.0;
+            let rect = Rect::from_min_size(pos2(left, top), Vec2::new(width, slot));
+            draw.fill(&PaintShape::Rect(rect, CornerRadius::ZERO), bar_color);
+        }
+        let hovered = cx.hover_pos(SQUARE).and_then(|p| line_at(&lines, &keys, p, cx.style.inset));
+        for key in keys {
+            let chosen = edges.get(key);
+            // A line not chosen shows only under the pointer, so the sample never looks bordered without a choice.
+            if !chosen && hovered != Some(key) {
+                continue;
+            }
+            let (a, b) = lines[key as usize];
+            let (width, color) =
+                if chosen { (StrokeWidth::Thick, cx.resolve(&cx.style.on)) } else { (StrokeWidth::Thin, cx.resolve(&cx.style.off)) };
+            let width = if hovered == Some(key) && chosen { StrokeWidth::Heavy } else { width };
+            draw.stroke(&PaintShape::Path(vec![a, b]), width, color);
+        }
     }
 }

@@ -29,7 +29,7 @@ use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
 use crate::setup::{
-    MARGIN_PRESETS, MAX_PAGE_SIDE, MIN_PAGE_SIDE, MarginPreset, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize, paper_named,
+    DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MAX_PAGE_SIDE, MIN_PAGE_SIDE, MarginPreset, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize, paper_named,
 };
 
 /// The margin and paper fields' scrub step, page points (WordCraft's 0.05 in).
@@ -75,6 +75,13 @@ craft_ui::words! {
         section_direction: "pageSetupDialog.sectionDirection" = "Section direction";
         left_to_right: "pageSetupDialog.leftToRight" = "Left-to-right";
         right_to_left: "pageSetupDialog.rightToLeft" = "Right-to-left";
+        grid: "pageSetupDialog.grid" = "Document grid";
+        grid_none: "pageSetupDialog.gridNone" = "No grid";
+        grid_lines: "pageSetupDialog.gridLines" = "Line grid only";
+        grid_lines_and_chars: "pageSetupDialog.gridLinesAndChars" = "Line and character grid";
+        grid_snap_to_chars: "pageSetupDialog.gridSnapToChars" = "Text snaps to character grid";
+        chars_per_line: "pageSetupDialog.charsPerLine" = "Characters per line";
+        lines_per_page: "pageSetupDialog.linesPerPage" = "Lines per page";
         margins_dont_fit: "pageSetupDialog.marginsDontFit" = "The margins don't fit on a page this size; make the margins smaller first.";
         /// `{name}` is the preset's name and `{size}` its margin on every side.
         uniform_preset: template "pageSetupDialog.uniformPreset" = "{name}  {size} all";
@@ -383,6 +390,77 @@ impl Rows<'_> {
         .unwrap_or(true)
     }
 
+    /// The Document grid section, shown while the setup has a grid: the kind, then the two counts the kind enables.
+    /// `false` while a count's text is not a number.
+    fn grid(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup) -> bool {
+        let Some(grid) = setup.grid else { return true };
+        let words = self.words;
+        section(ui, &words.grid, |ui| {
+            let after = SideLabel::new().layout(FieldLayout::After);
+            let group = RadioGroup::new(words.grid.clone(), Bind::given(grid.kind)).show(ui, |ui, cx| {
+                cx.labelled(ui, "none", words.grid_none.clone(), after.clone(), Radio::new(GridKind::None));
+                cx.labelled(ui, "lines", words.grid_lines.clone(), after.clone(), Radio::new(GridKind::Lines));
+                cx.labelled(ui, "linesAndChars", words.grid_lines_and_chars.clone(), after.clone(), Radio::new(GridKind::LinesAndChars));
+                cx.labelled(ui, "snapToChars", words.grid_snap_to_chars.clone(), after.clone(), Radio::new(GridKind::SnapToChars));
+            });
+            if let (Some(kind), Some(grid)) = (group.output.value().copied(), setup.grid.as_mut()) {
+                grid.kind = kind;
+            }
+            let kind = setup.grid.map_or(grid.kind, |grid| grid.kind);
+            let chars = self.count(
+                ui,
+                form,
+                setup,
+                ("chars", words.chars_per_line.clone(), kind.chars_enabled()),
+                |grid| grid.chars_per_line,
+                |grid, count| grid.chars_per_line = count,
+            );
+            let lines = self.count(
+                ui,
+                form,
+                setup,
+                ("lines", words.lines_per_page.clone(), kind.lines_enabled()),
+                |grid| grid.lines_per_page,
+                |grid, count| grid.lines_per_page = count,
+            );
+            chars && lines
+        })
+        .unwrap_or(true)
+    }
+
+    /// One count of the grid, a whole number from 1 to [`MAX_GRID_COUNT`] that `enabled` lets the user edit; `key`,
+    /// `label` and `enabled` are given as one tuple. `false` while the field's text is not a number.
+    fn count(
+        &self,
+        ui: &mut Ui,
+        form: &mut FormCx<'_, '_>,
+        setup: &mut PageSetup,
+        (key, label, enabled): (&'static str, Label, bool),
+        get: fn(&DocumentGrid) -> u32,
+        set: fn(&mut DocumentGrid, u32),
+    ) -> bool {
+        let Some(grid) = setup.grid else { return true };
+        let shown = f64::from(get(&grid));
+        let codec = NumberCodec::new(self.units.reader(None), 0);
+        let field = Field::new(label.clone())
+            .id_salt(key)
+            .show(ui, |ui, _| {
+                NumberField::new(label.clone(), Bind::given(Some(shown)))
+                    .codec(codec.clone())
+                    .range(1.0..=f64::from(MAX_GRID_COUNT))
+                    .enabled(enabled)
+                    .show(ui)
+            })
+            .inner;
+        let Some(field) = field else { return true };
+        apply(form, setup, &field.edit, |next, value| {
+            if let Some(grid) = next.grid.as_mut() {
+                set(grid, value.round().clamp(1.0, f64::from(MAX_GRID_COUNT)) as u32);
+            }
+        });
+        !field.edit.unparsed
+    }
+
     /// The Headers and footers section: vertical alignment, odd and even pages, first page.
     fn layout(&self, ui: &mut Ui, setup: &mut PageSetup) {
         let words = self.words;
@@ -445,6 +523,8 @@ fn section<R>(ui: &mut Ui, title: &Label, mut body: impl FnMut(&mut Ui) -> R) ->
 /// - Paper: a list of [`papers`](PageSetupDialog::papers) plus Custom size, and Width and Height
 ///   ([`MIN_PAGE_SIDE`] to [`MAX_PAGE_SIDE`]); Custom size stays chosen while the numbers match a name; a typed size
 ///   wider than tall turns the orientation ([`PageSetup::set_size`]).
+/// - Document grid, while the setup has a [`grid`](PageSetup::grid): its kind and the characters per line and lines per
+///   page the kind enables.
 /// - With [`layout`](PageSetupDialog::layout): Vertical alignment, Different Odd & Even Pages, Different First Page;
 ///   with [`direction`](PageSetupDialog::direction): Section direction.
 /// - A length or count gesture previews in the setup and the cancel of the gesture restores the whole setup from
@@ -476,7 +556,6 @@ pub struct PageSetupDialog<'a> {
     open: Option<Bind<'a, bool>>,
     /// OK files the setup in the held answer and the dialog stays open until the app answers it (`FormDialog::held`).
     #[prop(into)]
-    #[allow(dead_code)] // P3(dialogs-w6): dg.F18
     held: Option<&'a mut craft_ui::dialog::HeldAnswer<PageSetup>>,
 }
 
@@ -497,7 +576,7 @@ impl<'a> PageSetupDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> FormOutput<PageSetup> {
-        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open, .. } = self;
+        let PageSetupDialog { setup, papers, unit, document_setup, layout, direction, open, held } = self;
         let env = Env::of(ui);
         let words = env.words::<PageSetupDialogWords>();
         let rows = Rows { words: &words, units: env.units(), unit };
@@ -506,18 +585,22 @@ impl<'a> PageSetupDialog<'a> {
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
+        if let Some(held) = held {
+            dialog = dialog.held(held);
+        }
         dialog.show(ui, |ui, form, setup| {
             let margins = rows.margins(ui, form, setup, document_setup);
             rows.orientation(ui, setup);
             let pages = rows.pages(ui, form, setup, document_setup);
             let paper = rows.paper(ui, form, setup, papers);
+            let grid = rows.grid(ui, form, setup);
             if layout {
                 rows.layout(ui, setup);
             }
             if direction {
                 rows.direction(ui, setup);
             }
-            margins && pages && paper
+            margins && pages && paper && grid
         })
     }
 }
