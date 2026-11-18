@@ -10,7 +10,7 @@ pub use self::dialogs::{ShellDialogsCx, WindowDialogs};
 use super::canvas_shell::slots as keys;
 use super::regions::{Claim, SlotSize, layout};
 use super::reveal::{Aim, Reveal, Tracking};
-use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow};
+use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow, ScreenModeSet};
 use super::words::ShellWords;
 use crate::contract::overlay::Resize;
 use crate::contract::{
@@ -288,6 +288,12 @@ pub struct AppShell<'a, S> {
     /// The screen mode. Without a binding the shell keeps it, starting at `Standard`.
     #[prop]
     screen_mode: Bind<'a, ScreenMode>,
+    /// Which screen modes the F key cycles through. The shell publishes it to its regions.
+    #[prop]
+    mode_set: ScreenModeSet,
+    /// Whether the drop-down slot of a Focus window is shown. A body press edge or a mode change clears it.
+    #[prop]
+    dropped: Bind<'a, bool>,
     /// Whether the Tab reveal and the edge reveal work in body-only mode. Off for a presentation.
     #[prop]
     allow_reveal: bool,
@@ -320,6 +326,8 @@ impl<'a, S> AppShell<'a, S> {
             embedded: false,
             content_room: None,
             screen_mode: Bind::kept(),
+            mode_set: ScreenModeSet::default(),
+            dropped: Bind::kept(),
             allow_reveal: true,
             edge_reveal: true,
             document_tabs: true,
@@ -391,6 +399,12 @@ impl<'a, S> AppShell<'a, S> {
         self.place(PaneEdge::Start, slot, add)
     }
 
+    /// A page that, while `shown`, fills the window under a move band with the window's ends; dialogs run over it.
+    pub fn page(mut self, shown: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        let _ = (&mut self, shown, add);
+        todo!("ch.C5")
+    }
+
     /// A slot at the reading end, inside the ones added before it.
     pub fn end(self, slot: Slot, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
         self.place(PaneEdge::End, slot, add)
@@ -430,6 +444,8 @@ impl<'a, S> AppShell<'a, S> {
             embedded,
             content_room,
             mut screen_mode,
+            mode_set,
+            dropped: _dropped, // P3(chrome-w1): ch.C3
             allow_reveal,
             edge_reveal,
             document_tabs,
@@ -467,7 +483,7 @@ impl<'a, S> AppShell<'a, S> {
             let mut kept = cx.keep::<ShellState>().clone();
 
             let name: Arc<str> = words.screen_mode.as_str().into();
-            let (mode, changed) = kept.screen.follow(&ctx, cx, screen_mode.reborrow(), name, !embedded);
+            let (mode, changed) = kept.screen.follow(&ctx, cx, screen_mode.reborrow(), name, !embedded, mode_set);
             if changed {
                 kept.reveal.clear();
             }
@@ -485,7 +501,8 @@ impl<'a, S> AppShell<'a, S> {
 
             // Every shown slot's rect and the body's, before any slot runs. Slots that a reveal shows in body-only mode
             // cover the body.
-            let visible: Vec<bool> = slots.iter().map(|placed| !bare && kept.reveal.shows(&placed.slot, placed.edge, only, allow_reveal)).collect();
+            let visible: Vec<bool> =
+                slots.iter().map(|placed| !bare && kept.reveal.shows(&placed.slot, placed.edge, only, allow_reveal, mode, false)).collect();
             // A pass with no title bar has no move band: the OS moves the window from nowhere in it.
             if !embedded && !slots.iter().zip(&visible).any(|(placed, shown)| placed.title && *shown) {
                 super::title_bar::set_window_movable(&ctx, false);

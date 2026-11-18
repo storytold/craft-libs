@@ -3,7 +3,7 @@
 use crate::contract::PaneEdge;
 use crate::runtime::env::RevealEdge;
 use crate::runtime::frame::ChromeToggle;
-use crate::shell::Slot;
+use crate::shell::{ScreenMode, Slot};
 use egui::{Pos2, Rect, pos2};
 
 /// The width of the strip along a window edge where the pointer reveals the edge's hidden slots.
@@ -159,7 +159,8 @@ impl Reveal {
 
     /// Whether `slot` on `edge` shows: its `visible` flag in normal mode; in body-only mode, if it reveals and a Tab
     /// or edge reveal shows it.
-    pub(crate) fn shows(&self, slot: &Slot, edge: PaneEdge, only: bool, allow_reveal: bool) -> bool {
+    pub(crate) fn shows(&self, slot: &Slot, edge: PaneEdge, only: bool, allow_reveal: bool, mode: ScreenMode, dropped: bool) -> bool {
+        let _ = (mode, dropped); // P3(chrome-w1): ch.C3
         if !only {
             return slot.is_visible();
         }

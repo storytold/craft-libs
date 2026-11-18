@@ -3,6 +3,7 @@
 use crate::contract::{BodyCx, Props as _, WordSetCx as _};
 use crate::display::{Elide, Text};
 use crate::layout::{Placed, arrange};
+use crate::runtime::env::Label;
 use crate::shell::{ShellWords, slots};
 use craft_behavior::Arrangement;
 use egui::{Rect, Ui, Vec2, vec2};
@@ -28,6 +29,13 @@ impl Title {
     /// A title for a document with unsaved changes.
     pub fn unsaved(text: impl Into<String>) -> Self {
         Title { text: text.into(), unsaved: true }
+    }
+
+    /// Makes the title a focusable button named by the shown title, with `tooltip`. Without it the title is text.
+    #[must_use]
+    pub fn action(self, tooltip: impl Into<Label>) -> Self {
+        let _ = (self, tooltip.into());
+        todo!("ch.C6")
     }
 
     /// The text shown: the title, followed by an asterisk while the document has unsaved changes.

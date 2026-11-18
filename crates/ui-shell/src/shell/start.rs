@@ -104,6 +104,19 @@ pub enum StartAction {
     UnpinFolder(PathBuf),
     /// A template card was chosen; the string is [`Template::id`].
     UseTemplate(String),
+    /// The "more templates" link: the app shows its template gallery.
+    MoreTemplates,
+}
+
+/// How the start screen is laid out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StartLayout {
+    /// The recent files and templates as a gallery.
+    #[default]
+    Gallery,
+    /// Word's greeting start page.
+    Greeting,
 }
 
 /// What a start screen pass reports.
@@ -172,6 +185,15 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    /// How the page is laid out.
+    #[prop]
+    layout: StartLayout,
+    /// The page's heading.
+    #[prop(into)]
+    title: Option<Label>,
+    /// The text of the link that fires [`StartAction::MoreTemplates`].
+    #[prop(into)]
+    more_templates: Option<Label>,
 }
 
 /// A link on the start screen's rail.
@@ -222,6 +244,9 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            layout: StartLayout::default(),
+            title: None,
+            more_templates: None,
         }
     }
 
@@ -341,7 +366,9 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, layout, title, more_templates } =
+            self;
+        let _ = (layout, title, more_templates); // P3(chrome-w2): ch.C7
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();

@@ -35,6 +35,8 @@ pub struct TitleBarOutput {
     pub caption_clicked: Option<Caption>,
     /// The Close button was clicked. The bar never closes the window: the app runs its unsaved-documents path.
     pub close_requested: bool,
+    /// The title was activated in this pass; only a title with an action can be.
+    pub title_activated: bool,
 }
 
 impl Outcome for TitleBarOutput {
@@ -246,7 +248,7 @@ impl Component for TitleBar<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleBarOutput {
-        TitleBarOutput { response: cx.response.clone(), caption_clicked: self.clicked, close_requested: self.close }
+        TitleBarOutput { response: cx.response.clone(), caption_clicked: self.clicked, close_requested: self.close, title_activated: false }
     }
 }
 

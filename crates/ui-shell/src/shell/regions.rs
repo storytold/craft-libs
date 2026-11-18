@@ -90,6 +90,16 @@ impl Slot {
         self
     }
 
+    /// Marks the slot as the screen bar: it shows in Focus and Immersive and claims room as a non-overlay claim.
+    pub fn screen_bar(self) -> Self {
+        todo!("ch.C3")
+    }
+
+    /// Marks the slot as the drop-down slot of Focus: it shows while the shell's `dropped` flag is set.
+    pub fn drops(self) -> Self {
+        todo!("ch.C3")
+    }
+
     /// The name of the slot's AccessKit region ("Options", "Tools", "Status").
     pub fn label(mut self, label: impl Into<Label>) -> Self {
         self.label = Some(label.into());

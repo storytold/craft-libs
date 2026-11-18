@@ -70,6 +70,37 @@ pub struct TaskBar<'a> {
     label: Label,
     anchor: &'a [Point],
     place: Bind<'a, TaskBarPlace>,
+    /// Which bar this is: the task bar, or a bar over a selection.
+    #[prop]
+    kind: TaskBarKind,
+    /// The side of the anchor the bar hangs on; `None` gives the kind's side: above for `Selection`, below for `Task`.
+    #[prop]
+    side: Option<Side>,
+    /// What an outside press does to the bar.
+    #[prop]
+    dismiss: TaskBarDismiss,
+}
+
+/// Which bar a [`TaskBar`] is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarKind {
+    /// The contextual task bar, hung below its anchor.
+    #[default]
+    Task,
+    /// A bar anchored above a selection.
+    Selection,
+}
+
+/// What an outside press does to a [`TaskBar`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskBarDismiss {
+    /// An outside press closes the bar.
+    #[default]
+    Close,
+    /// The bar survives outside presses while its graphic is selected.
+    Keep,
 }
 
 /// What the task bar reports.
@@ -82,6 +113,8 @@ pub struct TaskBarOutput {
     pub hide: bool,
     /// The bar's rect on screen.
     pub rect: Rect,
+    /// The bar was closed by an outside press.
+    pub closed: bool,
 }
 
 impl Outcome for TaskBarOutput {
@@ -148,12 +181,20 @@ impl MoreMenu {
 impl<'a> TaskBar<'a> {
     /// A bar named `label` hung below the screen bounds of `anchor` (document points) until `place` moves it.
     pub fn new(label: impl Into<Label>, anchor: &'a [Point], place: Bind<'a, TaskBarPlace>) -> Self {
-        TaskBar { label: label.into(), anchor, place }
+        TaskBar { label: label.into(), anchor, place, kind: TaskBarKind::Task, side: None, dismiss: TaskBarDismiss::Close }
+    }
+
+    /// A bar named `label` anchored above or at `side` of a selection whose bounds are `anchor` (document points),
+    /// flipped and clamped to fit.
+    pub fn selection(label: impl Into<Label>, anchor: &'a [Point]) -> Self {
+        let _ = (label.into(), anchor);
+        todo!("cv.K13")
     }
 
     /// Shows the bar inside `area`; `body` fills its members.
     pub fn show<R>(self, ui: &mut Ui, area: Rect, mut body: impl FnMut(&mut Ui, &mut TaskBarCx<'_>) -> R) -> Inner<TaskBarOutput, R> {
-        let TaskBar { label, anchor, mut place } = self;
+        let TaskBar { label, anchor, mut place, kind, side, dismiss } = self;
+        let _ = (kind, side, dismiss); // P3(canvas-w8): cv.K13
         let env = Env::of(ui);
         let words = env.words::<CanvasControlWords>();
         // The anchor maps through this pass's view, so the bar follows a scroll or zoom in the same pass.
@@ -194,7 +235,7 @@ impl<'a> TaskBar<'a> {
                 let _ = shown.settle(|cx, _| place.reborrow().write(cx, &event));
             }
         }
-        let output = TaskBarOutput { response: shown.output.response, hide: pick == Some(MenuPick::Hide), rect };
+        let output = TaskBarOutput { response: shown.output.response, hide: pick == Some(MenuPick::Hide), rect, closed: false };
         match shown.inner {
             Some(bar) => Inner { output, inner: bar.inner, settle: bar.settle },
             None => Inner { output, inner: None, settle: None },

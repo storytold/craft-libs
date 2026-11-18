@@ -23,6 +23,7 @@ pub fn set_window_movable(ctx: &Context, movable: bool) {
 // The bar, its title and its two ends.
 mod bar;
 mod measure;
+mod page_band;
 mod style;
 mod title;
 

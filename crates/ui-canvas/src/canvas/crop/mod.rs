@@ -171,7 +171,24 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
+    /// What the crop is bounded by: the document, or one placed picture's source.
+    #[prop]
+    scope: CropScope,
     report: Report,
+}
+
+/// What a crop is of.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum CropScope {
+    /// The document.
+    #[default]
+    Document,
+    /// One placed picture, bounded by its source.
+    Object {
+        /// The picture's source rectangle, in document units; it bounds the drag rules.
+        source: DocRect,
+    },
 }
 
 impl<'a> CropOverlay<'a> {
@@ -192,6 +209,7 @@ impl<'a> CropOverlay<'a> {
             auto_center: false,
             fills_uncovered: false,
             hidden: false,
+            scope: CropScope::default(),
             report: Report::default(),
         }
         .label(label)

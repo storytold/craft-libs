@@ -274,6 +274,18 @@ pub struct ContextRequest {
     pub mods: Mods,
     /// The momentary tool in effect at the press (a Space-held Hand).
     pub momentary: Option<MomentaryTool>,
+    /// How the canvas menu was asked for: by the pointer or by a key.
+    pub source: ContextSource,
+}
+
+/// How the canvas menu was asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContextSource {
+    /// The secondary button was released.
+    Pointer,
+    /// The Menu key, Shift+F10 or the accessibility context-menu action.
+    Key,
 }
 
 /// A pan of the view, from [`ToolHostResponse::pan`].
@@ -1165,7 +1177,8 @@ impl<'a, 't: 'a> Run<'a, 't> {
     fn menu_key(&mut self) {
         let Some(space) = self.space else { return };
         if space.background().context_key && self.response.context.is_none() {
-            self.response.context = Some(ContextRequest { at: space.view.rect.center(), mods: self.mods, momentary: self.momentary });
+            self.response.context =
+                Some(ContextRequest { at: space.view.rect.center(), mods: self.mods, momentary: self.momentary, source: ContextSource::Key });
         }
     }
 
@@ -1257,7 +1270,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 if let (Some(asked), Some(at)) = (self.state.secondary.take(), context_click(press))
                     && (!asked.taken || press.phase.is_click())
                 {
-                    self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary });
+                    self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary, source: ContextSource::Pointer });
                 }
             }
             PressPhase::Cancel { reason, .. } => {

@@ -26,7 +26,7 @@ mod tool_groups;
 mod tool_host;
 
 pub use crate::canvas_data::{Guide, GuideColor, GuideDrag, GuideKey, GuideLine, NavigatorOptions, NavigatorSettings, ProxyColor};
-pub use crop::{CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
+pub use crop::{CropOverlay, CropOverlayOutput, CropScope, CropShield, CropStyle, ShieldColor, paint_outside};
 pub use frame_step::{FRAME_STEP_MAX, frame_step};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
@@ -37,7 +37,7 @@ pub use words::CanvasWords;
 pub use tool::tool_probe;
 pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRegion, ViewEase};
 pub use tool_groups::{PickStep, tool_pick};
-pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
+pub use tool_host::{ContextRequest, ContextSource, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
 
 mod raster_source;
 pub use raster_source::{PixelRect, RasterSource};
@@ -72,7 +72,8 @@ mod zoom_motion;
 
 pub use momentary::{Momentary, MomentaryCommands, MomentaryTool};
 pub use navigate::{
-    Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
+    Autoscroll, FlickPan, MiddleButton, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput,
+    WheelNavigation, WheelScheme, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
@@ -100,8 +101,10 @@ pub use navigator::NavigatorStyle;
 pub mod navigator_panel;
 
 use crate::contract::{
-    Bind, Common, Component, Container, ContainerProps, Cx, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, Sizing,
+    Bind, Common, Component, Container, ContainerProps, Cx, EditorHandle, Focus as _, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
+    Role, Sizing,
 };
+use crate::primitives::{EditorPurpose, ImeStamp};
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
@@ -112,10 +115,11 @@ use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState,
-    Sense, WheelNotch,
+    CanvasTransform, CanvasView, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase,
+    PressState, Sense, WheelNotch,
 };
-use egui::{Pos2, Rect, Response, Vec2};
+use egui::{Context, Pos2, Rect, Response, Vec2};
+use std::sync::Arc;
 use zoom_motion::{Steer, ViewMotion};
 
 pub(crate) const BACKGROUND: PartKey = PartKey::new("background");
@@ -196,6 +200,10 @@ pub struct Canvas<'a> {
     /// body that pages its document itself (a page view).
     #[prop]
     keys_to_body: bool,
+    /// The canvas registers one editor part of this purpose: the part's widget is the component's focus holder and the
+    /// input-method owner, and keys arrive as editor input.
+    #[prop]
+    editor: Option<EditorPurpose>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
     /// The snapping of the coordinates the pointer sets on this canvas (View > Snap To), as data over the document's
@@ -274,6 +282,7 @@ impl<'a> Canvas<'a> {
             navigation: NavigationOptions::default(),
             show_rulers: false,
             keys_to_body: false,
+            editor: None,
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
@@ -556,6 +565,8 @@ impl<'a> Canvas<'a> {
             snap: self.snapped(cx.env.shell().os),
             document: self.document_size(),
             navigation: self.navigation,
+            editor_input: Arc::from([]), // P3(canvas-w1): cv.K6
+            editor: None,                // P3(canvas-w1): cv.K6
         }
     }
 
@@ -583,6 +594,8 @@ pub struct CanvasOutput {
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
+    /// The mark of a running middle-button autoscroll, for captures.
+    pub autoscroll: Option<Pos2>,
 }
 
 impl CanvasOutput {
@@ -617,9 +630,26 @@ pub struct ToolPass {
     pub(crate) snap: Option<Snap>,
     pub(crate) document: Option<Size>,
     pub(crate) navigation: NavigationOptions,
+    /// The editor part's inputs of this pass, in the order they arrived; the body applies them to its own document.
+    pub editor_input: Arc<[EditorInput]>,
+    /// The editor part of this pass, through which the body reports its editor state; `None` without an editor.
+    pub editor: Option<EditorHandle>,
 }
 
 impl ToolPass {
+    /// Notes the input-method receipt between the stamps `before` and `after` for the canvas's editor part; true when the
+    /// stamps prove the engine applied it.
+    pub fn ime_receipt(&self, ctx: &Context, before: ImeStamp, after: ImeStamp) -> bool {
+        let _ = (ctx, before, after);
+        todo!("cv.K7")
+    }
+
+    /// Notes an input-method application change for the canvas's editor part.
+    pub fn ime_application_change(&self, ctx: &Context) {
+        let _ = ctx;
+        todo!("cv.K7")
+    }
+
     /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
@@ -723,7 +753,7 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view }
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, autoscroll: None }
     }
 }
 

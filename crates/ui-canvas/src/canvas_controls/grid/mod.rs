@@ -7,7 +7,7 @@ pub(super) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};
-use crate::primitives::{GridInk, GridLook, GridStroke, grid_lines_with};
+use crate::primitives::{GridCrowding, GridInk, GridLook, GridStroke, grid_lines_with};
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
 use crate::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
@@ -115,6 +115,9 @@ pub struct CanvasGrid {
     /// Draws nothing while the view's device zoom (1 is 100 percent) is below this (VectorCraft's pixel grid: 6).
     #[prop(quantity = "device zoom")]
     min_zoom: Option<f64>,
+    /// What the grid does when its lines come closer than the minimum step: `Thin` keeps it visible zoomed out.
+    #[prop]
+    crowding: GridCrowding,
 }
 
 impl CanvasGrid {
@@ -129,6 +132,7 @@ impl CanvasGrid {
             color: None,
             line: GridLine::Solid,
             min_zoom: None,
+            crowding: GridCrowding::default(),
         }
         .label(label)
     }
@@ -154,7 +158,7 @@ impl CanvasGrid {
         if !(extent.x0.is_finite() && extent.y0.is_finite() && extent.x1.is_finite() && extent.y1.is_finite()) {
             return GridLines::default();
         }
-        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions)
+        GridLines::document(view, extent, self.spacing, self.origin, self.subdivisions, self.crowding)
     }
 }
 

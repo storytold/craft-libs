@@ -176,12 +176,15 @@ pub struct CanvasScrollbars<'a> {
     /// horizontal bar or corner is shown.
     #[prop(flag)]
     vertical_only: bool,
+    /// While the vertical thumb drags, the bars show this tip beside the thumb on the reading-start side.
+    #[prop(into)]
+    tip: Option<Label>,
 }
 
 impl<'a> CanvasScrollbars<'a> {
     /// Scroll bars named `label` that edit `view`, a view over the document `document` (document units).
     pub fn new(label: impl Into<Label>, view: Bind<'a, CanvasView>, document: DocRect) -> Self {
-        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false }.label(label)
+        CanvasScrollbars { common: Common::new(), view, document, overscroll: false, vertical_only: false, tip: None }.label(label)
     }
 
     /// Applies overscroll off to `view` over the document `doc`: the view can't leave the document's edges, and a
@@ -312,7 +315,7 @@ impl Component for CanvasScrollbars<'_> {
                 .into_iter()
                 .any(|part| cx.part_if_declared(part).is_some_and(|result| result.hovered || result.press.phase.is_press()))
         });
-        CanvasScrollbarsOutput { view: cx.edit_response(), over }
+        CanvasScrollbarsOutput { view: cx.edit_response(), over, dragging: None }
     }
 }
 
@@ -324,6 +327,8 @@ pub struct CanvasScrollbarsOutput {
     pub view: EditResponse<CanvasView>,
     /// The pointer is over a bar or dragging one: the canvas leaves it alone.
     pub over: bool,
+    /// The thumb being dragged this pass.
+    pub dragging: Option<Axis>,
 }
 
 impl Deref for CanvasScrollbarsOutput {

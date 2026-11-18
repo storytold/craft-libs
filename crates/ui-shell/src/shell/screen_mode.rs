@@ -4,6 +4,7 @@ use crate::contract::{BindMut, BodyCx};
 use crate::runtime::commands::Commands as _;
 use crate::runtime::egui::pass;
 use crate::runtime::windows::{WindowAction, WindowHost, os_of};
+use crate::style::SurfaceKind;
 use craft_behavior::{EditEvent, Mixed};
 use craft_host::target::{Os, WindowState};
 use egui::Context;
@@ -22,9 +23,37 @@ pub enum ScreenMode {
     FullScreenWithMenuBar,
     /// The body only.
     FullScreen,
+    /// The body only, with the screen bar; the surround is black.
+    Focus,
+    /// The body only, with the screen bar, filling the pages' canvas.
+    Immersive,
+}
+
+/// Which screen modes the F key cycles through. The shell publishes its set to its regions as an env value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui_macros::EnvValue)]
+#[env(style)]
+#[non_exhaustive]
+pub enum ScreenModeSet {
+    /// Standard, Full Screen With Menu Bar and Full Screen.
+    #[default]
+    Panels,
+    /// Standard, Full Screen With Menu Bar, Focus and Immersive; F11 gives Full Screen With Menu Bar.
+    Document,
+}
+
+impl ScreenModeSet {
+    /// The modes the set cycles through, in order.
+    pub fn modes(self) -> &'static [ScreenMode] {
+        todo!("ch.C2")
+    }
 }
 
 impl ScreenMode {
+    /// The surface around the body in this mode: `Some(Scrim)` for `Focus` only, `None` for every other mode.
+    pub fn surround(self) -> Option<SurfaceKind> {
+        todo!("ch.C2")
+    }
+
     /// Whether the shell shows the body only.
     pub fn body_only(self) -> bool {
         self == Self::FullScreen
@@ -41,20 +70,24 @@ impl ScreenMode {
     }
 
     /// The mode the F key selects: Standard, Full Screen With Menu Bar, Full Screen, Standard.
-    pub fn next(self) -> Self {
+    pub fn next(self, set: ScreenModeSet) -> Self {
+        let _ = set; // P3(chrome-w1): ch.C2
         match self {
             Self::Standard => Self::FullScreenWithMenuBar,
             Self::FullScreenWithMenuBar => Self::FullScreen,
             Self::FullScreen => Self::Standard,
+            Self::Focus | Self::Immersive => todo!("ch.C2"),
         }
     }
 
     /// The mode Shift+F selects.
-    pub fn previous(self) -> Self {
+    pub fn previous(self, set: ScreenModeSet) -> Self {
+        let _ = set; // P3(chrome-w1): ch.C2
         match self {
             Self::Standard => Self::FullScreen,
             Self::FullScreenWithMenuBar => Self::Standard,
             Self::FullScreen => Self::FullScreenWithMenuBar,
+            Self::Focus | Self::Immersive => todo!("ch.C2"),
         }
     }
 }
@@ -74,6 +107,12 @@ pub enum ScreenModeCommands {
     /// The body only.
     #[command(label = "Full Screen Mode", kind = "radio", group = "screen_mode", alias = "screenMode.fullScreen")]
     FullScreen,
+    /// The body only, with the screen bar; the surround is black.
+    #[command(label = "Focus Screen Mode", kind = "radio", group = "screen_mode")]
+    Focus,
+    /// The body only, with the screen bar, filling the pages' canvas.
+    #[command(label = "Immersive Screen Mode", kind = "radio", group = "screen_mode")]
+    Immersive,
     /// The next mode.
     #[command(label = "Cycle Screen Mode", default = "F", icon = "app_window")]
     Cycle,
@@ -89,17 +128,21 @@ impl ScreenModeCommands {
             ScreenMode::Standard => ScreenModeCommands::Standard,
             ScreenMode::FullScreenWithMenuBar => ScreenModeCommands::FullScreenWithMenuBar,
             ScreenMode::FullScreen => ScreenModeCommands::FullScreen,
+            ScreenMode::Focus => ScreenModeCommands::Focus,
+            ScreenMode::Immersive => ScreenModeCommands::Immersive,
         }
     }
 
     /// The mode the command leaves a window in that is in `current`.
-    pub fn apply(self, current: ScreenMode) -> ScreenMode {
+    pub fn apply(self, current: ScreenMode, set: ScreenModeSet) -> ScreenMode {
         match self {
             ScreenModeCommands::Standard => ScreenMode::Standard,
             ScreenModeCommands::FullScreenWithMenuBar => ScreenMode::FullScreenWithMenuBar,
             ScreenModeCommands::FullScreen => ScreenMode::FullScreen,
-            ScreenModeCommands::Cycle => current.next(),
-            ScreenModeCommands::CycleBack => current.previous(),
+            ScreenModeCommands::Focus => ScreenMode::Focus,
+            ScreenModeCommands::Immersive => ScreenMode::Immersive,
+            ScreenModeCommands::Cycle => current.next(set),
+            ScreenModeCommands::CycleBack => current.previous(set),
         }
     }
 }
@@ -132,6 +175,7 @@ impl ScreenModeFollow {
         mut bind: BindMut<'_, ScreenMode>,
         name: Arc<str>,
         os: bool,
+        set: ScreenModeSet,
     ) -> (ScreenMode, bool) {
         let before = match bind.read(cx) {
             Some(Mixed::Same(held)) => held,
@@ -140,7 +184,7 @@ impl ScreenModeFollow {
         let last = self.applied;
         let mut mode = before;
         while let Some((command, _)) = cx.take_command::<ScreenModeCommands>() {
-            mode = command.apply(mode);
+            mode = command.apply(mode, set);
         }
         if os {
             mode = self.follow_window(ctx, mode);
