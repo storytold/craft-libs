@@ -214,7 +214,7 @@ impl<'a> Body<'a> {
 
     /// The compare swatch: the colour being edited over the current one, with their captions; a click on the current
     /// half sets it.
-    fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<PickedColor>, words: &ColorPickerWords, got: &mut Collected) {
+    pub(super) fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<PickedColor>, words: &ColorPickerWords, got: &mut Collected) {
         let caption = |text: &str| Text::new(text.to_owned()).role(TypeRole::Caption).shade(Shade::Muted);
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             caption(words.new_caption.as_str()).show(ui);

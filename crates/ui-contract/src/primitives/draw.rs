@@ -523,19 +523,33 @@ impl<'a> Draw<'a> {
     /// translucent, or for `None` (no colour of its own, or a mixed one) the empty well, `surface.sunken` with a
     /// `text.muted` dash. `Swatch` and swatch icons paint their wells with it and add their own edges.
     pub fn swatch_well(&self, well: Rect, radius: CornerRadius, color: Option<Srgba>) {
-        let shape = PaintShape::Rect(well, radius);
+        self.well_of(&PaintShape::Rect(well, radius), well, color, |draw| draw.checker(&super::Checker::new(), well, radius));
+    }
+
+    /// [`Self::swatch_well`] over the convex polygon `corners` (a honeycomb cell): the same parts, the checkerboard and
+    /// the dash cut to the polygon.
+    pub fn swatch_polygon_well(&self, corners: &[Pos2], color: Option<Srgba>) {
+        let bounds = Rect::from_points(corners);
+        self.well_of(&PaintShape::Polygon(corners.to_vec()), bounds, color, |draw| {
+            data_polygon_checker(draw.painter, draw.env.tokens, draw.data, &super::Checker::new(), corners, bounds.min);
+        });
+    }
+
+    /// The parts of a swatch well in `shape` within `bounds`: the colour over the checkerboard `checker` paints where it
+    /// is translucent, or the empty well with its dash.
+    fn well_of(&self, shape: &PaintShape, bounds: Rect, color: Option<Srgba>, checker: impl FnOnce(&Self)) {
         match color {
             None => {
                 let colors = &self.env.tokens.color;
-                self.paint(&shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
+                self.paint(shape, Some(crate::style::rgba_color(colors.surface.sunken)), None);
                 let dash = Stroke::new(self.width(StrokeWidth::Medium), crate::style::rgba_color(colors.text.muted));
-                self.paint(&super::glyph::dash(well), None, Some(dash));
+                self.paint(&super::glyph::dash(bounds), None, Some(dash));
             }
             Some(color) => {
                 if color.a < 1.0 {
-                    self.checker(&super::Checker::new(), well, radius);
+                    checker(self);
                 }
-                self.data_fill(&shape, DataColor::new(Color32::from(color)));
+                self.data_fill(shape, DataColor::new(Color32::from(color)));
             }
         }
     }
@@ -644,6 +658,18 @@ pub(super) fn data_checker(painter: &Painter, tokens: &UiTokens, mode: DataMode,
         painter.rect_filled(rect, radius, mode.color(tokens, Color32::TRANSPARENT));
     } else {
         let mut shape = checker.shape(painter.ctx(), tokens, super::CheckerArea::Rect(rect, radius), rect.min);
+        mode.shape(tokens, &mut shape);
+        painter.add(shape);
+    }
+}
+
+/// The checkerboard over the convex polygon `corners`, as [`data_checker`] paints a rect: for an inactive `mode` the
+/// polygon in the theme's disabled fill.
+fn data_polygon_checker(painter: &Painter, tokens: &UiTokens, mode: DataMode, checker: &super::Checker, corners: &[Pos2], origin: Pos2) {
+    if mode == DataMode::Inactive {
+        painter.add(Shape::convex_polygon(corners.to_vec(), mode.color(tokens, Color32::TRANSPARENT), Stroke::NONE));
+    } else {
+        let mut shape = checker.polygon_shape(painter.ctx(), tokens, corners, origin);
         mode.shape(tokens, &mut shape);
         painter.add(shape);
     }

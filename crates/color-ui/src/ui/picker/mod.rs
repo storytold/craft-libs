@@ -157,7 +157,7 @@ craft_ui::words! {
 /// What the picker keeps between passes.
 #[derive(Clone, Default)]
 struct Memo {
-    /// The model of the Compact rows.
+    /// The model of the Compact rows while the host binds none ([`ColorPicker::shown_model`]).
     model: Option<&'static str>,
     /// What the area and strip show while the host holds no mode.
     mode: AreaMode,
@@ -298,8 +298,8 @@ pub struct ColorPicker<'a> {
     /// Whether the Full layout focuses its hex field when it first shows; on by default.
     #[prop]
     focus_on_open: bool,
-    /// The Compact rows' model, bound by the host.
-    #[allow(dead_code)] // P3(dialogs-w2): dg.F7
+    /// The Compact rows' model, held by the host; kept per picker without it.
+    #[prop]
     shown_model: Option<Bind<'a, Option<&'static str>>>,
 }
 
@@ -349,12 +349,6 @@ impl<'a> ColorPicker<'a> {
         self
     }
 
-    /// Binds the model the Compact rows show, so the host holds the model switch; the compare swatch shows in Compact.
-    pub fn shown_model(mut self, model: Bind<'a, Option<&'static str>>) -> Self {
-        self.shown_model = Some(model);
-        self
-    }
-
     /// The warnings beside the Full layout's compare swatch (out-of-gamut and web-colour warnings); a click on one
     /// sets its nearest passing colour. The host gives this pass's warnings for the colour it shows.
     pub fn warnings(mut self, warnings: impl IntoIterator<Item = ColorWarning>) -> Self {
@@ -387,7 +381,7 @@ impl<'a> ColorPicker<'a> {
             constrain,
             sampled,
             focus_on_open,
-            shown_model: _, // P3(dialogs-w2): dg.F7
+            mut shown_model,
         } = self;
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models
@@ -410,6 +404,7 @@ impl<'a> ColorPicker<'a> {
             value: value.reborrow(),
             mode: mode.as_mut().map(|held| held.reborrow()),
             web: web_colors.as_mut().map(|held| held.reborrow()),
+            shown_model: shown_model.as_mut().map(|held| held.reborrow()),
             constrain,
             sampled,
             focus_on_open,
@@ -434,6 +429,8 @@ struct Run<'s, 'a> {
     value: BindMut<'s, PickedColor>,
     mode: Option<BindMut<'s, AreaMode>>,
     web: Option<BindMut<'s, bool>>,
+    /// The host's model of the Compact rows; without it `Memo.model` holds it.
+    shown_model: Option<BindMut<'s, Option<&'static str>>>,
     constrain: Option<ColorConstraint<'a>>,
     sampled: Option<Srgba>,
     focus_on_open: bool,
@@ -465,11 +462,15 @@ impl<'a> Run<'_, 'a> {
         }
 
         let first_show = !memo.opened;
-        let model = memo.model.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
+        let held_model = self.shown_model.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied()).flatten();
+        let wanted = if self.shown_model.is_some() { held_model } else { memo.model };
+        let model = wanted.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
         {
             let memo = body.memory::<Memo>();
             memo.mode = mode;
-            memo.model = model;
+            if self.shown_model.is_none() {
+                memo.model = model;
+            }
             memo.opened = true;
         }
         let focus_hex = self.full && self.focus_on_open && first_show && body.resolved.enabled;
@@ -510,8 +511,14 @@ impl<'a> Run<'_, 'a> {
                 }
             }
         }
-        if let Some(model) = got.model_pick {
-            body.memory::<Memo>().model = Some(model);
+        if let Some(next) = got.model_pick {
+            match self.shown_model.as_mut() {
+                Some(held) => {
+                    let event = EditEvent::set(Mixed::Same(model), Some(next), Arc::from("Color model"), None);
+                    let _ = held.write(&mut *body, &event);
+                }
+                None => body.memory::<Memo>().model = Some(next),
+            }
         }
         (std::mem::take(&mut self.events), got.screen_pick)
     }

@@ -46,7 +46,12 @@ impl<'a> Body<'a> {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let model = self.models.iter().copied().find(|m| Some(m.id()) == pass.model);
         let visible: Vec<&dyn ColorModel> = model.into_iter().chain([pass.mode.model()]).collect();
-        self.area_and_strip(ui, pass, &visible, got);
+        Row::new().show(ui, |ui, _| {
+            self.area_and_strip(ui, pass, &visible, got);
+            if let Some(current) = self.compare {
+                self.compare_swatch(ui, pass, current, &words, got);
+            }
+        });
         if let Some(model) = model {
             FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let values = pass.shown.values_in(model);

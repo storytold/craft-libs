@@ -1,6 +1,6 @@
 //! Stories of `SwatchTable`.
 
-use super::{SwatchTable, SwatchTableOutput};
+use super::{SwatchArrangement, SwatchTable, SwatchTableOutput};
 use crate::contract::Bind;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -47,6 +47,17 @@ fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
     let shown =
         SwatchTable::new("Color Table", &entries).multiple(true).selection(Bind::bound(data.value("selected", start))).per_row(16).show_all(ui);
+    with_readout(data, shown)
+}
+
+/// 127 entries, the full honeycomb of side 7.
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_honeycomb(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries().into_iter().take(127).collect::<Vec<_>>();
+    let shown = SwatchTable::new("Color Table", &entries)
+        .arrangement(SwatchArrangement::Honeycomb)
+        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
+        .show_all(ui);
     with_readout(data, shown)
 }
 

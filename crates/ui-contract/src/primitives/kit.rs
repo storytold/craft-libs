@@ -94,13 +94,30 @@ impl Checker {
         self
     }
 
-    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
-    /// with its top-left corner at `origin`. A painter's clip cuts it.
-    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+    /// The texture of the two colours and the side of a cell.
+    fn texture(&self, ctx: &Context, tokens: &UiTokens) -> (TextureId, f32) {
         let side = self.size.unwrap_or(tokens.size.checker).max(f32::EPSILON);
         let light = self.light.map_or_else(|| rgba_color(tokens.color.overlay.checker_light), |color| color.0);
         let dark = self.dark.map_or_else(|| rgba_color(tokens.color.overlay.checker_dark), |color| color.0);
-        let texture = checker_texture(ctx, light, dark);
+        (checker_texture(ctx, light, dark), side)
+    }
+
+    /// The checkerboard over the convex polygon `corners` as one textured mesh, a light cell with its top-left corner at
+    /// `origin`: the cells follow the polygon's edge, which a rect's clip cannot.
+    pub fn polygon_shape(&self, ctx: &Context, tokens: &UiTokens, corners: &[Pos2], origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
+        let mut mesh = fill_polygon(corners, UNTINTED, 0.0);
+        mesh.texture_id = texture;
+        for vertex in &mut mesh.vertices {
+            vertex.uv = ((vertex.pos - origin) / (2.0 * side)).to_pos2();
+        }
+        Shape::mesh(mesh)
+    }
+
+    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
+    /// with its top-left corner at `origin`. A painter's clip cuts it.
+    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
         // One texel per cell; the texture repeats every two cells.
         let uv = |p: Pos2| ((p - origin) / (2.0 * side)).to_pos2();
         match area {

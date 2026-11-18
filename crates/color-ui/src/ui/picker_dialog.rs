@@ -9,23 +9,27 @@
 //! }
 //! ```
 
-use craft_behavior::Mixed;
+use craft_behavior::{Mixed, Selection, SelectionChange, keyed};
 use craft_cms::convert::CmykConverter;
 use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
-use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
+use craft_ui::choice::{SwatchArrangement, SwatchTable};
+use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Props as _, Sampler as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use egui::{Context, Id, Ui};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use super::{ColorPicker, ColorPickerLayout, ColorWarning, PickedColor, ScreenPickGesture};
@@ -43,6 +47,10 @@ craft_ui::words! {
         add_to_swatches: "colorPickerDialog.addToSwatches" = "Add to Swatches";
         out_of_gamut: "colorPickerDialog.outOfGamut" = "Out of gamut for printing: click for the nearest printable color";
         not_web_color: "colorPickerDialog.notWebColor" = "Not a web color: click for the nearest web color";
+        standard_tab: "colorPickerDialog.standardTab" = "Standard";
+        custom_tab: "colorPickerDialog.customTab" = "Custom";
+        standard_colors: "colorPickerDialog.standardColors" = "Standard colors";
+        greys: "colorPickerDialog.greys" = "Shades of gray";
     }
 }
 
@@ -87,7 +95,7 @@ pub enum ColorPickerDialogLayout {
 }
 
 /// The tab a tabbed [`ColorPickerDialog`] shows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorPickerTab {
@@ -156,11 +164,94 @@ pub struct ColorPickerDialog {
     host: Option<Arc<Host>>,
     started: bool,
     open: bool,
-    #[allow(dead_code)] // P3(dialogs-w2): dg.F6
     layout: ColorPickerDialogLayout,
-    #[allow(dead_code)] // P3(dialogs-w2): dg.F6
+    /// The Standard tab's honeycomb cells and grey row.
     standard: Option<(Vec<(Label, Srgba)>, Vec<(Label, Srgba)>)>,
-    tab: ColorPickerTab,
+    /// The tab the app asked to open on; it wins over the remembered one, once.
+    tab: Option<ColorPickerTab>,
+}
+
+/// What the tabbed body shows besides the memory and the colour it edits.
+struct TabbedBody<'a> {
+    title: &'a Label,
+    words: &'a ColorPickerDialogWords,
+    standard: Option<&'a (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>)>,
+    compare: Option<Mixed<PickedColor>>,
+}
+
+/// The selection of the entry whose colour is exactly `current`.
+fn chosen(entries: &[(Label, Srgba)], current: Option<Srgba>) -> Selection<usize> {
+    current.and_then(|color| entries.iter().position(|(_, entry)| *entry == color)).map_or_else(Selection::default, Selection::single)
+}
+
+impl TabbedBody<'_> {
+    /// The tab strip over the page of `memory.tab`: the honeycomb and the greys, or the compact picker with the compare
+    /// swatch. A pick on either page sets `held`.
+    fn show(&self, ui: &mut Ui, memory: &mut ColorPickerMemory, held: &mut Mixed<PickedColor>) {
+        let words = self.words;
+        Stack::new().show(ui, |ui, _| {
+            let tabs = [(ColorPickerTab::Standard, words.standard_tab.clone()), (ColorPickerTab::Custom, words.custom_tab.clone())];
+            let source = keyed(&tabs[..], |tab: &(ColorPickerTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+            let out = TabStrip::new(self.title.clone()).kind(TabKind::Text).shown(memory.tab).natural_height(true).show_items(
+                ui,
+                &source,
+                &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone())),
+            );
+            for event in out.response.events {
+                if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                    && let Some(picked) = keys.last()
+                {
+                    memory.tab = *picked;
+                }
+            }
+            match memory.tab {
+                ColorPickerTab::Standard => self.standard_page(ui, held),
+                ColorPickerTab::Custom => self.custom_page(ui, memory, held),
+            }
+        });
+    }
+
+    /// The honeycomb over the row of greys; the selection follows the colour by exact match.
+    fn standard_page(&self, ui: &mut Ui, held: &mut Mixed<PickedColor>) {
+        let (cells, greys) = self.standard.map_or((&[][..], &[][..]), |(cells, greys)| (cells.as_slice(), greys.as_slice()));
+        let current = held.same().map(|picked| picked.color);
+        let mut pick = None;
+        Stack::new().show(ui, |ui, _| {
+            let honeycomb = SwatchTable::new(self.words.standard_colors.clone(), cells)
+                .arrangement(SwatchArrangement::Honeycomb)
+                .tips(true)
+                .selection(Bind::given(chosen(cells, current)))
+                .show_all(ui);
+            if let Some(at) = honeycomb.selected {
+                pick = cells.get(at).map(|(_, color)| *color);
+            }
+            let row = SwatchTable::new(self.words.greys.clone(), greys)
+                .per_row(greys.len().max(1))
+                .tips(true)
+                .selection(Bind::given(chosen(greys, current)))
+                .show_all(ui);
+            if let Some(at) = row.selected {
+                pick = greys.get(at).map(|(_, color)| *color);
+            }
+        });
+        if let Some(color) = pick {
+            *held = Mixed::Same(PickedColor::rgb(color));
+        }
+    }
+
+    /// The compact picker over the colour, the compare swatch beside its area; the model switch is the memory's.
+    fn custom_page(&self, ui: &mut Ui, memory: &mut ColorPickerMemory, held: &mut Mixed<PickedColor>) {
+        let models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().compact).collect();
+        let mut model: Option<&'static str> = memory.model.as_deref().and_then(|id| models.iter().map(|known| known.id()).find(|known| *known == id));
+        let mut picker = ColorPicker::new(self.title.clone(), Bind::bound_mixed(held))
+            .layout(ColorPickerLayout::Compact)
+            .shown_model(Bind::bound(&mut model));
+        if let Some(compare) = self.compare {
+            picker = picker.compare(compare);
+        }
+        let _ = picker.show(ui);
+        memory.model = model.map(str::to_owned);
+    }
 }
 
 impl ColorPickerDialog {
@@ -217,7 +308,7 @@ impl ColorPickerDialog {
             open: true,
             layout: ColorPickerDialogLayout::default(),
             standard: None,
-            tab: ColorPickerTab::default(),
+            tab: None,
         }
     }
 
@@ -238,7 +329,7 @@ impl ColorPickerDialog {
     /// Sets the tab a tabbed dialog shows.
     #[must_use]
     pub fn tab(mut self, t: ColorPickerTab) -> ColorPickerDialog {
-        self.tab = t;
+        self.tab = Some(t);
         self
     }
 
@@ -396,7 +487,11 @@ impl ColorPickerDialog {
         {
             self.memory = memory;
         }
+        if let Some(tab) = self.tab.take() {
+            self.memory.tab = tab;
+        }
         if self.memory.web_colors
+            && self.layout == ColorPickerDialogLayout::Full
             && let Some(opening) = self.opening
         {
             let [r, g, b] = web_safe([opening.color.r, opening.color.g, opening.color.b]);
@@ -407,7 +502,7 @@ impl ColorPickerDialog {
 
     /// Files or withdraws the canvas eyedropper request as the dialog gains or loses the top.
     fn follow_top(&mut self, top: bool) {
-        let sampling = self.canvas_samples && top;
+        let sampling = self.canvas_samples && top && self.layout == ColorPickerDialogLayout::Full;
         if sampling && !self.sampling {
             self.requests.request_eyedropper(EyedropperRequest::new(self.key.clone()));
         } else if !sampling && self.sampling {
@@ -439,16 +534,11 @@ impl StackDialog for ColorPickerDialog {
         self.instance
     }
 
-    /// `color` (`#rrggbb`, null when there is none yet), and the memory's own `mode` and `webColors`.
+    /// `color` (`#rrggbb`, null when there is none yet), and the memory's own `mode`, `webColors`, `tab` and `model`.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.memory)?;
         let color = self.current.map_or(serde_json::Value::Null, |picked| picked.color.to_hex().into());
-        let tab = serde_json::to_value(self.tab).ok()?;
-        let model = self.current.and_then(|picked| picked.model).map_or(serde_json::Value::Null, |values| values.model.into());
-        let object = fields.as_object_mut()?;
-        object.insert("color".to_owned(), color);
-        object.insert("tab".to_owned(), tab);
-        object.insert("model".to_owned(), model);
+        fields.as_object_mut()?.insert("color".to_owned(), color);
         Some(fields)
     }
 
@@ -501,14 +591,14 @@ impl StackDialog for ColorPickerDialog {
         let footer = ResetFooter::new(ui, None, true);
         let changed = self.current != self.opening;
         let mut buttons = footer.buttons(FooterButton::new(common.ok.clone(), DialogRole::Accept).enabled(self.current.is_some()), changed).to_vec();
-        if self.add_to_swatches {
+        if self.add_to_swatches && self.layout == ColorPickerDialogLayout::Full {
             buttons.push(FooterButton::new(words.add_to_swatches.clone(), DialogRole::Other).stays_open(true));
         }
 
         let arm = self.sampling.then_some(self.canvas).flatten();
         let keep_open = self.canvas;
-        let screen = self.eyedropper && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
-        let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, .. } = self;
+        let screen = self.eyedropper && self.layout == ColorPickerDialogLayout::Full && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
+        let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, layout, standard, .. } = self;
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
         let (sampled, busy, compare_with) = (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
         let color = current.map(|current| current.color);
@@ -526,6 +616,11 @@ impl StackDialog for ColorPickerDialog {
                 }
                 if let Some(canvas) = arm {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
+                }
+                if *layout == ColorPickerDialogLayout::Tabbed {
+                    let body = TabbedBody { title: &title, words: &words, standard: standard.as_ref(), compare: compare_with };
+                    body.show(ui, &mut *memory, &mut held);
+                    return;
                 }
                 let mut models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().full).collect();
                 models.push(&cmyk);
