@@ -24,9 +24,16 @@ pub(crate) struct Shown<V> {
 pub(crate) struct ShownState {
     pub last_state: (bool, bool),
     /// A pointer click on the control, while the pointer has stayed over it since.
-    #[allow(dead_code)] // P3(ribbon-w2): cv.K45
     pub clicked_over: bool,
     pub tweens: Option<StateTweens>,
+}
+
+impl ShownState {
+    /// The shown slot under which step 12 leaves the pass's `Hover` report of component `id`, for `Pointer::hover`:
+    /// the core that answers it cannot name the typed `Shown` record this state lives in.
+    pub(crate) fn hover_slot(id: Id) -> Id {
+        crate::runtime::memory::sub(id, "hover")
+    }
 }
 
 impl<V> Clone for Shown<V> {

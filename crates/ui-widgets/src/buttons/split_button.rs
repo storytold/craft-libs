@@ -3,7 +3,7 @@
 use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
     Access, BodyCx, Common, Component, Cx, Entry, Focus as _, Hover, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
-    Props as _, Role, ShowContainer as _, Styled as _, WordSetCx as _,
+    Pointer as _, Props, Role, ShowContainer as _, Styled as _, WordSetCx as _,
 };
 use crate::menu::{self, Menu};
 use crate::primitives::{IconSpec, PaintShape, RuleKind};
@@ -96,7 +96,9 @@ pub struct SplitButton<'a, T: Value + 'static> {
     /// A leading icon on the main part.
     #[prop(into)]
     icon: Option<IconSpec<'a>>,
-    /// How the icon and label are laid out: beside each other, or the icon over the label.
+    /// How the icon and label are laid out: beside each other with the arrow part at the end, or the icon over the
+    /// label with the arrow part (the label and its chevron) under the icon.
+    #[style_key]
     #[prop]
     arrangement: Arrangement,
     chosen: Option<T>,
@@ -105,41 +107,43 @@ pub struct SplitButton<'a, T: Value + 'static> {
 impl<'a, T: Value + 'static> SplitButton<'a, T> {
     /// A split button showing `label` whose arrow opens `entries`.
     pub fn new(label: impl Into<Label>, entries: &'a [Entry<T>]) -> Self {
-        SplitButton {
-            common: Common::new(),
-            menu: SplitMenu::Entries(entries),
-            arrow_label: None,
-            icon: None,
-            arrangement: Arrangement::default(),
-            chosen: None,
-        }
-        .label(label)
+        SplitButton::with_menu(SplitMenu::Entries(entries)).label(label)
     }
 
-    /// A split button showing `label` whose arrow opens a menu with `body` as its content.
+    /// A split button showing `label` whose arrow opens a menu with `body` as its content. A body reports no
+    /// `chosen` entry: its rows run their own commands.
     pub fn body(label: impl Into<Label>, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
-        let _ = (label.into(), body);
-        todo!("rb.R7")
+        SplitButton::with_menu(SplitMenu::Body(Box::new(body))).label(label)
     }
 
-    /// A split button bound to `command`: its main part fires the command, its arrow opens `menu`.
+    /// A split button bound to `command`: its label, enabled state and main part follow the command, which a click
+    /// on the main part fires; its arrow opens `menu`.
     pub fn command(command: impl Into<CommandRef>, menu: SplitMenu<'a, T>) -> Self {
-        let _ = (command.into(), menu);
-        todo!("rb.R7")
+        <SplitButton<'a, T> as Props>::command(SplitButton::with_menu(menu).label(Label::Empty), command)
     }
 
-    fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
+    fn with_menu(menu: SplitMenu<'a, T>) -> Self {
+        SplitButton { common: Common::new(), menu, arrow_label: None, icon: None, arrangement: Arrangement::default(), chosen: None }
+    }
+
+    /// The face: a stacked face shows the chevron after its label, so the arrow part holds both.
+    fn spec<'s>(&'s self, label: &'s str, chevron: &'s IconSpec<'s>) -> FaceSpec<'s> {
         FaceSpec {
             arrangement: self.arrangement,
             label,
             role: None,
             lead: self.icon.as_ref(),
-            trail: None,
+            trail: (self.arrangement == Arrangement::Stacked).then_some(chevron),
             loading: false,
             mnemonic: None,
             align: crate::primitives::HAlign::Center,
         }
     }
+}
+
+/// The chevron the arrow part shows.
+fn chevron() -> IconSpec<'static> {
+    crate::controls::disclosure::DisclosureGlyph::menu_button()
 }
 
 impl<T: Value + 'static> Component for SplitButton<'_, T> {
@@ -148,9 +152,9 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     type Style = SplitButtonStyle;
     type Output = SplitOutput<T>;
 
-    fn style(cx: &StyleCx<'_>, _: SplitButtonStyleKey<T>) -> SplitButtonStyle {
+    fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
         let parts = cx.variant_look();
-        let metrics = face::metrics(cx, &parts);
+        let metrics = face::metrics_of(cx, &parts, key.arrangement);
         let mut surface = face::surface(cx, &parts);
         let (fill, clear) = (parts.fill.off, cx.color(craft_theme::Rgba::TRANSPARENT));
         surface.fill = Stateful::new(fill.rest).off(States::new(fill.rest, fill.rest, fill.rest, fill.disabled));
@@ -173,10 +177,15 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         }
     }
 
-    /// The face and the arrow part, which sits in the end padding.
+    /// Inline: the face and the arrow part, which sits in the end padding. Stacked: the face, whose chevron follows
+    /// the label inside the arrow part.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let face = face::measure(cx, &self.spec(cx.resolved.label));
-        Vec2::new(face.x + cx.icon(), face.y)
+        let chevron = chevron();
+        let face = face::measure(cx, &self.spec(cx.resolved.label, &chevron));
+        match self.arrangement {
+            Arrangement::Stacked => face,
+            _ => Vec2::new(face.x + cx.icon(), face.y),
+        }
     }
 
     fn sense(&self) -> Sense {
@@ -184,7 +193,15 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let (arrow, _) = Flow::new(rect, cx.flow.is_rtl()).take_end(cx.icon());
+        let arrow = match self.arrangement {
+            Arrangement::Stacked => {
+                let chevron = chevron();
+                let (look, side) = (&cx.style.face, cx.style.icon.side);
+                let y = face::stacked_divide(cx, &self.spec(cx.resolved.label, &chevron), look, side, cx.content_rect);
+                Rect::from_min_max(egui::pos2(rect.left(), y.clamp(rect.top(), rect.bottom())), rect.max)
+            }
+            _ => Flow::new(rect, cx.flow.is_rtl()).take_end(cx.icon()).0,
+        };
         let part = cx
             .part(ARROW, arrow)
             .sense(Sense::CLICK)
@@ -210,15 +227,21 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         }
     }
 
-    /// The menu: one `MenuItem` row per entry, a rule for a separator. Running a row reports its value and closes the
-    /// menu; a disabled entry takes neither focus-run nor a pick.
+    /// The menu: one `MenuItem` row per entry, a rule for a separator, or the caller's body. Running an entry's row
+    /// reports its value and closes the menu; a disabled entry takes neither focus-run nor a pick. A body's rows run
+    /// their own commands, which close the layer as any row's run does.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("menu");
-        let entries = match &self.menu {
-            SplitMenu::Entries(entries) => *entries,
-            SplitMenu::Body(_) => todo!("rb.R7"),
-        };
         let name = cx.label();
+        let entries = match &mut self.menu {
+            SplitMenu::Entries(entries) => *entries,
+            SplitMenu::Body(body) => {
+                ui.show(popup, menu::layer(false), |ui, _| {
+                    let _ = Menu::inline(name.clone()).show(ui, |ui, cx| body(ui, cx));
+                });
+                return;
+            }
+        };
         let ran = ui.show(popup, menu::layer(false), |ui, _| {
             Menu::inline(name.clone()).values().show(ui, |ui, _| menu::entry_rows(ui, entries)).inner.flatten()
         });
@@ -237,6 +260,10 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        if self.arrangement == Arrangement::Stacked {
+            self.paint_stacked(ui, cx);
+            return;
+        }
         let (rtl, direction) = (cx.flow.is_rtl(), cx.env.direction());
         let (arrow, main) = Flow::new(cx.rect, rtl).take_end(cx.style.icon.side);
         let main = main.rect();
@@ -245,11 +272,11 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         draw.fill(&PaintShape::Rect(main, Corners::Start.apply(cx.style.radius, direction)), main_fill);
         draw.fill(&PaintShape::Rect(arrow, Corners::End.apply(cx.style.radius, direction)), cx.resolve_part(ARROW, &cx.style.part_fill));
         let area = Flow::new(main, rtl).inset(cx.style.metrics.padding);
-        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), area);
+        let chevron = chevron().color(cx.resolve(&cx.style.chevron));
+        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, &chevron), area);
         let draw = ui.draw();
         let side = cx.style.icon.side;
-        let chevron = Rect::from_center_size(arrow.center(), Vec2::splat(side));
-        draw.icon(chevron, &crate::controls::disclosure::DisclosureGlyph::menu_button().color(cx.resolve(&cx.style.chevron)));
+        draw.icon(Rect::from_center_size(arrow.center(), Vec2::splat(side)), &chevron);
         let x = if rtl { arrow.right() } else { arrow.left() };
         let inset = cx.style.divider_inset;
         let divider = RuleLook { color: cx.resolve(&cx.style.divider).egui(), width: cx.style.divider_width };
@@ -257,6 +284,28 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> SplitOutput<T> {
-        SplitOutput { response: cx.response.clone(), chosen: self.chosen, hover: Hover::default() }
+        SplitOutput { response: cx.response.clone(), chosen: self.chosen, hover: cx.hover() }
+    }
+}
+
+impl<T: Value + 'static> SplitButton<'_, T> {
+    /// Paints a stacked split button: the main part (the icon) over the arrow part (the label and its chevron), each
+    /// with its own state fill, and the divider across the button where they meet. The arrow part is the one `parts`
+    /// declared; a face, which declares none, shows the whole button as the arrow part.
+    fn paint_stacked(&self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let rect = cx.rect;
+        let arrow = cx.part_if_declared(ARROW).map_or(rect, |part| part.rect);
+        let main = Rect::from_min_max(rect.min, Pos2::new(rect.right(), arrow.top().max(rect.top())));
+        let radius = cx.style.radius;
+        let draw = ui.draw();
+        draw.fill(&PaintShape::Rect(main, CornerRadius { sw: 0, se: 0, ..radius }), cx.root_state().resolve(&cx.style.part_fill));
+        draw.fill(&PaintShape::Rect(arrow, CornerRadius { nw: 0, ne: 0, ..radius }), cx.resolve_part(ARROW, &cx.style.part_fill));
+        let chevron = chevron().color(cx.resolve(&cx.style.chevron));
+        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, &chevron), cx.content_rect);
+        if main.height() > 0.0 {
+            let inset = cx.style.divider_inset;
+            let divider = RuleLook { color: cx.resolve(&cx.style.divider).egui(), width: cx.style.divider_width };
+            ui.draw().rule_with(&divider, Pos2::new(rect.left() + inset, arrow.top()), Pos2::new(rect.right() - inset, arrow.top()));
+        }
     }
 }

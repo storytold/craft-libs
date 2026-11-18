@@ -70,6 +70,7 @@ pub struct ToggleButton<'a> {
     #[prop]
     spoken: Option<Label>,
     /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[style_key]
     #[prop]
     arrangement: Arrangement,
 }
@@ -152,7 +153,7 @@ impl Component for ToggleButton<'_> {
             (face.surface, face.metrics)
         } else {
             icon.color = icon.color.on(on.text.off);
-            (face::on_surface(cx, &off, &on), face::metrics(cx, &off))
+            (face::on_surface(cx, &off, &on), face::metrics_of(cx, &off, key.arrangement))
         };
         // A mixed value shows the off look, as Photoshop's style toggles do; the access state tells it from off.
         surface.fill = surface.fill.when(Flags::MIXED, off.fill.off.rest);

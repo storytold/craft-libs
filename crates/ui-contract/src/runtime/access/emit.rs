@@ -272,7 +272,7 @@ pub(crate) fn report(ctx: &Context, own: &Own<'_>) {
     spec.has_popup = access.has_popup.or_else(|| popup.map(|popup| popup.kind));
     spec.required = access.required;
     spec.url = access.url.clone();
-    spec.shortcut = access.shortcut.clone().or_else(|| own.shortcut.map(str::to_owned));
+    spec.shortcut = if access.no_shortcut { None } else { access.shortcut.clone().or_else(|| own.shortcut.map(str::to_owned)) };
     spec.access_key = access.access_key;
     spec.labelled_by = relations.labelled_by.clone();
     spec.described_by = relations.described_by.clone();

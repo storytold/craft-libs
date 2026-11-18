@@ -96,11 +96,19 @@ pub struct ShownRow<K> {
     pub cells: Vec<(ColumnKey, egui::Rect)>,
     /// The openers the row's item asked for (`ItemCx::part_opener`), each with the part's response this pass.
     pub openers: Vec<(crate::contract::ItemOpener, Response)>,
+    /// The pointer is over the row and the collection owns the hover (no press or layer above holds it).
+    pub hovered: bool,
 }
 
 impl<K> ShownRow<K> {
     pub(crate) fn new(key: K, rect: egui::Rect, cells: Vec<(ColumnKey, egui::Rect)>) -> Self {
-        ShownRow { key, rect, cells, openers: Vec::new() }
+        ShownRow { key, rect, cells, openers: Vec::new(), hovered: false }
+    }
+
+    /// The row with its hover fact set.
+    pub(crate) fn with_hover(mut self, hovered: bool) -> Self {
+        self.hovered = hovered;
+        self
     }
 }
 

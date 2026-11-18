@@ -115,7 +115,7 @@ impl Component for TitleFace {
         face::measure(
             cx,
             &FaceSpec {
-                arrangement: Arrangement::Inline,
+                arrangement: crate::buttons::Arrangement::Inline,
                 label: cx.resolved.label,
                 role: None,
                 lead: None,
@@ -137,7 +137,7 @@ impl Component for TitleFace {
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let spec = FaceSpec {
-            arrangement: Arrangement::Inline,
+            arrangement: crate::buttons::Arrangement::Inline,
             label: cx.resolved.label,
             role: None,
             lead: None,

@@ -91,6 +91,19 @@ impl<'a> ContentPainterCx<'a> {
         paint(&faded);
     }
 
+    /// Runs `paint` with a `ContentPainterCx` whose painting is clipped to `rect` (inside the clip it already has).
+    pub fn clipped(&self, rect: egui::Rect, paint: impl FnOnce(&ContentPainterCx<'_>)) {
+        let clipped = ContentPainterCx {
+            painter: self.painter.with_clip_rect(rect.intersect(self.painter.clip_rect())),
+            tokens: self.tokens,
+            direction: self.direction,
+            env: self.env,
+            ink: self.ink,
+            data: self.data,
+        };
+        paint(&clipped);
+    }
+
     /// The one sanctioned text layout for content painters: document runs with their own font, size and colour,
     /// laid out by the call `TextRun::layout` uses.
     pub fn layout(&self, text: &DocText<'_>) -> TextLayout {

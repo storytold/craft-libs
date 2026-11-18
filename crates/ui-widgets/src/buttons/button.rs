@@ -97,7 +97,7 @@ impl ButtonOutput {
             (true, Some(activation)) => activation.mods,
             _ => Mods::NONE,
         };
-        ButtonOutput { response: cx.response.clone(), clicks, mods, hover: Hover::default() }
+        ButtonOutput { response: cx.response.clone(), clicks, mods, hover: cx.hover() }
     }
 
     /// Whether the button was clicked this pass, by pointer or by key, by the framework's click rule. It stands in
@@ -157,6 +157,7 @@ pub struct Button<'a> {
     #[prop]
     align: HAlign,
     /// How the icon and label are laid out: beside each other, or the icon over the label.
+    #[style_key]
     #[prop]
     arrangement: Arrangement,
 }
@@ -209,6 +210,9 @@ impl Component for Button<'_> {
             Some(tint) => ButtonStyle::tinted(cx, tint),
             None => ButtonStyle::of(cx),
         };
+        if key.arrangement == Arrangement::Stacked {
+            style.metrics = face::stacked_metrics(cx, &cx.variant_look());
+        }
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
         }

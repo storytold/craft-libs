@@ -185,7 +185,7 @@ impl Segment {
 
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         FaceSpec {
-            arrangement: crate::buttons::Arrangement::Inline, // P3(ribbon-w2): rb.R6
+            arrangement: crate::buttons::Arrangement::Inline,
             label: if self.icon.is_some() { "" } else { label },
             role: None,
             lead: self.icon.as_ref(),

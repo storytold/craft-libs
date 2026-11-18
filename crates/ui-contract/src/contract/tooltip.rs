@@ -73,26 +73,33 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 /// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
 /// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
 /// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
-/// label (`shows_label`).
+/// label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a hint. A
+/// bound command's hint follows on a line of its own.
 fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
     if message.is_some() {
         return message;
     }
+    let hint = core.command.as_deref().and_then(|command| command.hint.as_deref()).filter(|hint| !hint.is_empty());
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
         Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
         None => {
             let paint = core.paint.borrow();
+            let unpainted = !shows_label || paint.label_dropped || hint.is_some();
             match paint.elided.clone() {
                 Some(full) => full,
-                None if !shows_label && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
+                None if unpainted && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
                 None => return None,
             }
         }
     };
     let platform = crate::runtime::windows::os_of(&core.ctx);
-    Some(match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
+    let text = match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
         Some(chord) => with_chord(&base, chord, platform),
         None => base,
+    };
+    Some(match hint {
+        Some(hint) => format!("{text}\n{hint}"),
+        None => text,
     })
 }
 

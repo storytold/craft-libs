@@ -1,11 +1,13 @@
 //! Stories of the buttons.
 
-use super::{Button, IconButton, Link, SplitButton, ToggleButton};
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
+use super::{Arrangement, Button, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
+use crate::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, Validity};
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
-use crate::primitives::IconSpec;
-use crate::runtime::env::Message;
+use crate::menu::MenuItem;
+use crate::primitives::{AppIcons, IconMark, IconSpec, register_app_icons};
+use crate::runtime::commands::EditCommands;
+use crate::runtime::env::{Message, with_env};
 use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnWidth, IconId, Mixed, Proposal};
@@ -107,6 +109,78 @@ fn icon_button_badge(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// Icon buttons with a data-colour bar across the bottom of the icon: the default thickness and a weighted one (a
+/// pen's width), enabled and then disabled.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Bar mark")]
+fn icon_button_bar_mark(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let color = DataColor::new(Color32::from_rgb(230, 180, 30));
+    let marks = [("Highlight", IconMark::bar(color)), ("Pen", IconMark::weighted_bar(color, 4.0))];
+    let shown = Row::new().show(ui, |ui, _| {
+        for enabled in [true, false] {
+            for (name, mark) in marks {
+                IconButton::new(IconSpec::svg(IconId::new("eyedropper")).with_mark(mark)).label(name).enabled(enabled).id_salt((name, enabled)).show(ui);
+            }
+        }
+    });
+    shown.into()
+}
+
+/// A pen drawn in the icon ink, with its tip line in the accent ink (`class="accent"`) and a cap dot in its own colour
+/// (`class="fixed"`).
+const TWO_INK_PEN: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 15 L14 6 L18 10 L9 19 L5 19 Z" fill="black"/><rect class="accent" x="3" y="21" width="18" height="2" fill="black"/><circle class="fixed" cx="18" cy="5" r="2" fill="#d04848"/></svg>"##;
+
+/// The stories' own app icon set, under a name no other story or app uses.
+static STORY_ICONS: AppIcons = AppIcons::new("ui-widgets-stories", None, &[("story_two_ink_pen", TWO_INK_PEN)]);
+
+/// An app icon in two inks and a fixed colour, enabled and then disabled: a disabled button takes the disabled ink in
+/// every layer.
+#[story(IconButton<'static>, covers = [], drive = Drive::Never, title = "Two-ink icon")]
+fn icon_button_two_ink(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    // A second registration of the same set is a no-op, so the story registers it on every run.
+    register_app_icons(&STORY_ICONS);
+    let shown = Row::new().show(ui, |ui, _| {
+        for enabled in [true, false] {
+            IconButton::new(IconId::new("story_two_ink_pen")).label("Pen").enabled(enabled).id_salt(enabled).show(ui);
+        }
+    });
+    shown.into()
+}
+
+/// Stacked buttons, the icon over the label, with a one-line and a two-line label at each size.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "Stacked")]
+fn button_stacked(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        for (size_name, size) in SIZES {
+            for label in ["Paste", "Insert page break"] {
+                Button::new(label).icon(IconId::new("copy")).arrangement(Arrangement::Stacked).size(size).id_salt((size_name, label)).show(ui);
+            }
+        }
+    });
+    shown.into()
+}
+
+/// The same inline buttons at full size and inside a compact group, where they drop their labels and keep them as
+/// their names and tooltips.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "Compact in a group")]
+fn button_compact_in_group(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let entries = presets();
+    let shown = Row::new().show(ui, |ui, _| {
+        Button::new("Save").icon(IconId::new("save")).id_salt("full").show(ui);
+        SplitButton::new("Trace", &entries).icon(IconId::new("image")).id_salt("full split").show(ui);
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(GroupLevel::Compact);
+            },
+            |ui| {
+                Button::new("Save").icon(IconId::new("save")).id_salt("compact").show(ui);
+                SplitButton::new("Trace", &entries).icon(IconId::new("image")).id_salt("compact split").show(ui);
+            },
+        );
+    });
+    shown.into()
+}
+
 /// One toggle off and one on with an icon, as the gallery card shows them.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -123,6 +197,40 @@ fn toggle_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let disabled = *data.value("disabled", false);
     let label = data.value("label", String::from("Snap to grid")).clone();
     ToggleButton::new(label, Bind::bound(data.value("on", false))).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
+}
+
+/// A stacked toggle, off and on.
+#[story(ToggleButton<'static>, covers = [], drive = Drive::Never, title = "Stacked")]
+fn toggle_button_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        ToggleButton::new("Gridlines", Bind::bound(data.value("grid", false)))
+            .icon(IconId::new("eye"))
+            .arrangement(Arrangement::Stacked)
+            .id_salt("grid")
+            .show(ui);
+        ToggleButton::new("Show rulers", Bind::bound(data.value("rulers", true)))
+            .icon(IconId::new("eye"))
+            .arrangement(Arrangement::Stacked)
+            .id_salt("rulers")
+            .show(ui);
+    });
+    shown.into()
+}
+
+/// Rests the pointer on the toggle, clicks it and stays: its output reports the click while the pointer stays.
+fn click_and_stay(fixture: &mut Fixture) {
+    if let Some(toggle) = fixture.by_label("Snap to grid") {
+        fixture.click(&toggle);
+    }
+    fixture.idle(2);
+}
+
+/// A toggle clicked with the pointer still over it: the output's `hover` is over and clicked until the pointer leaves.
+#[story(ToggleButton<'static>, covers = [], drive = Drive::Custom(click_and_stay), title = "Clicked under the pointer")]
+fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = ToggleButton::new("Snap to grid", Bind::bound(data.value("snap_hover", false))).icon(IconId::new("eye")).show(ui);
+    *data.value("clicked_over", false) = shown.hover.clicked;
+    shown.into()
 }
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -160,6 +268,42 @@ fn open_menu(fixture: &mut Fixture) {
 fn split_button_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let entries = presets();
     SplitButton::new("Trace", &entries).icon(IconId::new("image")).arrow_label("Tracing presets").show(ui).into()
+}
+
+/// A stacked split button: the icon is the main part, the label and its chevron the arrow part under it.
+#[story(SplitButton<'static, u8>, covers = [], drive = Drive::Never, title = "Stacked")]
+fn split_button_stacked(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let entries = presets();
+    SplitButton::new("Trace", &entries)
+        .icon(IconId::new("image"))
+        .arrow_label("Tracing presets")
+        .arrangement(Arrangement::Stacked)
+        .show(ui)
+        .into()
+}
+
+/// The rows a split button's body shows.
+fn paste_rows(ui: &mut Ui, _: &mut BodyCx<'_>) {
+    MenuItem::new("Keep source formatting").show(ui);
+    MenuItem::new("Merge formatting").show(ui);
+    MenuItem::new("Keep text only").show(ui);
+}
+
+/// A split button whose arrow opens a menu the caller draws, open.
+#[story(SplitButton<'static, u8>, covers = [], drive = Drive::Custom(open_menu), title = "Body")]
+fn split_button_body(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    SplitButton::<u8>::body("Paste", paste_rows).icon(IconId::new("copy")).show(ui).into()
+}
+
+/// A split button whose main part is the Paste command, stacked as a ribbon shows it, its menu the paste options.
+#[story(SplitButton<'static, u8>, covers = [], drive = Drive::Never, title = "Command")]
+fn split_button_command(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    SplitButton::<u8>::command(EditCommands::Paste, SplitMenu::Body(Box::new(paste_rows)))
+        .icon(IconId::new("copy"))
+        .arrow_label("Paste options")
+        .arrangement(Arrangement::Stacked)
+        .show(ui)
+        .into()
 }
 
 #[story(Link, covers = [Default])]

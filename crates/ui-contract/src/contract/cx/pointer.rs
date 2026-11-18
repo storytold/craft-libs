@@ -65,8 +65,13 @@ pub trait Pointer {
 }
 
 impl Pointer for CxCore<'_> {
+    /// Step 12 leaves the report; a run that stopped before it (a sizing pass) reports no stay, so its output never
+    /// repeats an `entered` or `left` the real pass reported.
     fn hover(&self) -> Hover {
-        todo!("cv.K45")
+        if !self.stated || self.face_mode {
+            return Hover::default();
+        }
+        self.memory.recall::<Hover>(crate::contract::steps::ShownState::hover_slot(self.id))
     }
 
     fn part(&self, part: impl Into<PartRef>) -> &PartResult {

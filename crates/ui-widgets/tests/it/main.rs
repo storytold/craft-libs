@@ -6,6 +6,7 @@ extern crate craft_ui_widgets as craft_ui;
 mod access;
 mod bars;
 pub(crate) mod body;
+mod buttons;
 mod commands;
 mod contract;
 mod disabled_fade;

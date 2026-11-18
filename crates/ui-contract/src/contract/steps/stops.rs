@@ -127,8 +127,11 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     after_header
 }
 
-/// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which
-/// shows its reason on keyboard focus (testing 22.4). Step 9 still drops its activations and edits.
+/// Whether the component is a focus stop: an enabled one, or a disabled one with a reason to show on keyboard focus
+/// (testing 22.4): its tooltip's `disabled_text`, or its bound command's hint, which its tooltip shows. Step 9 still
+/// drops its activations and edits.
 pub(crate) fn takes_focus(resolved: &Resolved<'_>) -> bool {
-    resolved.enabled || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+    resolved.enabled
+        || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+        || resolved.command.and_then(|command| command.hint.as_deref()).is_some_and(|hint| !hint.is_empty())
 }

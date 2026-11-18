@@ -286,6 +286,8 @@ pub struct Access {
     pub(crate) required: bool,
     pub(crate) url: Option<String>,
     pub(crate) shortcut: Option<String>,
+    /// The node lists no shortcut, not even the bound command's.
+    pub(crate) no_shortcut: bool,
     pub(crate) access_key: Option<char>,
     pub(crate) relations: Relations,
     pub(crate) custom_actions: Vec<(i32, Label)>,
@@ -384,6 +386,14 @@ impl Access {
     /// The keyboard shortcut, over the bound command's.
     pub fn shortcut(&mut self, text: impl Into<String>) -> &mut Self {
         self.shortcut = Some(text.into());
+        self.no_shortcut = false;
+        self
+    }
+
+    /// The node lists no keyboard shortcut, though a command bound to the component has a chord.
+    pub fn no_shortcut(&mut self) -> &mut Self {
+        self.shortcut = None;
+        self.no_shortcut = true;
         self
     }
 
