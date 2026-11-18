@@ -244,6 +244,18 @@ impl Document {
         };
         let params = crate::cos::security::encrypt_dict(self, &dict);
         let id0 = self.first_id();
+        if params.filter == crate::crypt::PUBSEC_FILTER {
+            // Before a certificate is asked for: one no certificate can open is refused here.
+            if crate::cos::security::public_key_filters_disagree(self, &dict) {
+                return Err(CosError::Security("public-key crypt filters with different recipients need keys of their own".into()));
+            }
+            match crate::crypt::SecurityHandler::open(params.clone(), &id0, None) {
+                Err(e @ (crate::crypt::CryptError::Unsupported(_) | crate::crypt::CryptError::UnsupportedAlgorithm(_))) => {
+                    return Err(CosError::Security(e.to_string()));
+                }
+                _ => {}
+            }
+        }
         // Read here, while nothing is decrypted yet.
         let members = self.encryption_members(enc);
         let handler = match credentials {

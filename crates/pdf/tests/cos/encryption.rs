@@ -546,13 +546,33 @@ fn needs_certificate(bytes: Vec<u8>) -> Vec<Vec<u8>> {
 
 #[test]
 fn public_key_envelopes_come_from_the_filter_that_encrypts_the_streams() {
-    // Another filter, listed first, has envelopes of its own for the embedded files.
+    // Another filter, listed first and used by nothing, has envelopes of its own.
     let file = with_encrypt(
         "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /Length 128 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
-         /EFF /AEmbedded /CF << /AEmbedded << /CFM /AESV2 /Length 128 /Recipients [<AA>] >> \
+         /CF << /AUnused << /CFM /AESV2 /Length 128 /Recipients [<AA>] >> \
          /DefaultCryptFilter << /CFM /AESV2 /Length 128 /Recipients [<BB> <CC>] >> >> >>",
     );
     assert_eq!(needs_certificate(file), vec![vec![0xBB], vec![0xCC]]);
+}
+
+#[test]
+fn a_public_key_file_no_certificate_can_open_is_refused_before_one_is_asked_for() {
+    // The streams and the embedded files use filters with different recipients: two keys.
+    let two_keys = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /StmF /Default /StrF /Default /EFF /Files \
+         /CF << /Default << /CFM /AESV2 /Recipients [<BB>] >> /Files << /CFM /AESV2 /Recipients [<AA>] >> >> >>",
+    );
+    // A method no reader has.
+    let unknown = with_encrypt(
+        "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /StmF /Default /StrF /Default \
+         /CF << /Default << /CFM /AcmeCipher /Recipients [<BB>] >> >> >>",
+    );
+    for file in [two_keys, unknown] {
+        match Document::open(Arc::new(file)) {
+            Err(CosError::Security(_)) => {}
+            other => panic!("expected a security error, got {:?}", other.map(|_| ())),
+        }
+    }
 }
 
 #[test]
