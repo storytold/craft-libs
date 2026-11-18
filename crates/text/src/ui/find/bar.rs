@@ -182,15 +182,10 @@ impl<'a> FindBar<'a> {
                     .select_all(to_query)
                     .show(ui);
                 if to_query {
-                    let taken = focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
-                    eprintln!(
-                        "DIAG asking_for_the_bar_again_selects_its_query_unless_a_composition_runs: request taken {taken} has_focus {} field {:?} egui focused {:?}",
-                        edit.response.has_focus(),
-                        edit.response.id,
-                        ui.ctx().memory(|memory| memory.focused())
-                    );
+                    focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
                     // Asking again each run until the field holds focus keeps the request across the measuring run.
-                    if edit.response.has_focus()
+                    // The field's focus sits on its text part, so the egui response of the field never reports it.
+                    if focus::is_focused(ui.ctx(), edit.response.id)
                         && let Some(state) = state.as_deref_mut()
                     {
                         state.served();

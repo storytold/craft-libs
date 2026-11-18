@@ -146,7 +146,8 @@ impl Lists<'_> {
     fn arrival(&self, group: &super::Group) -> Option<StopRec> {
         let mut group = *group;
         for _ in 0..MAX_NESTING {
-            let selected = group.selected.and_then(|key| self.stops.iter().find(|rec| rec.stop.key() == key && self.slot_in(rec, group.id).is_some()));
+            let selected =
+                group.selected.and_then(|key| self.stops.iter().find(|rec| rec.stop.key() == key && self.slot_in(rec, group.id).is_some()));
             if let Some(rec) = selected {
                 return Some(rec.clone());
             }

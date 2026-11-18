@@ -43,11 +43,6 @@ impl Bar {
         self.discard.set(rerun);
         self.state.borrow_mut().open();
         self.fixture.frame(Vec::new()).settle();
-        eprintln!(
-            "DIAG asking_for_the_bar_again_selects_its_query_unless_a_composition_runs: rerun {rerun} opening {} focused {:?}",
-            self.state.borrow().is_opening(),
-            self.fixture.focused()
-        );
         assert!(!self.state.borrow().is_opening(), "the query field took the focus request");
     }
 
