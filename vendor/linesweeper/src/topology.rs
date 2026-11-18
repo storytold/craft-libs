@@ -802,22 +802,28 @@ impl<W: WindingNumber> Topology<W> {
         limits: Option<(u64, Option<usize>)>,
     ) -> Result<Self, crate::Error> {
         let eps = segments.usable_eps(eps);
+        // Craft patch (work limit): each output segment takes at least one
+        // unit of an output limit, so the preallocation stays within it.
+        let cap = match limits {
+            Some((_, Some(output_limit))) => segments.len().min(output_limit),
+            _ => segments.len(),
+        };
         let mut ret = Self {
             eps,
             correctness,
             tag,
 
             // We have at least as many output segments as input segments, so preallocate enough for them.
-            winding: OutputSegVec::with_capacity(segments.len()),
-            points: PointVec::with_capacity(segments.len()),
-            point_idx: HalfOutputSegVec::with_capacity(segments.len()),
-            point_neighbors: HalfOutputSegVec::with_capacity(segments.len()),
-            deleted: OutputSegVec::with_capacity(segments.len()),
-            scan_west: OutputSegVec::with_capacity(segments.len()),
-            scan_east: OutputSegVec::with_capacity(segments.len()),
+            winding: OutputSegVec::with_capacity(cap),
+            points: PointVec::with_capacity(cap),
+            point_idx: HalfOutputSegVec::with_capacity(cap),
+            point_neighbors: HalfOutputSegVec::with_capacity(cap),
+            deleted: OutputSegVec::with_capacity(cap),
+            scan_west: OutputSegVec::with_capacity(cap),
+            scan_east: OutputSegVec::with_capacity(cap),
             scan_after: Vec::new(),
-            orig_seg: OutputSegVec::with_capacity(segments.len()),
-            positively_oriented: OutputSegVec::with_capacity(segments.len()),
+            orig_seg: OutputSegVec::with_capacity(cap),
+            positively_oriented: OutputSegVec::with_capacity(cap),
             segments: Segments::default(),
             folded_abnormal: SegVec::with_size(segments.len()),
             #[cfg(feature = "slow-asserts")]

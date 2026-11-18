@@ -420,12 +420,14 @@ pub struct Sweeper<'a> {
     // entries that the binary searches for a segment's position probe; each
     // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
     // `range_horizontals` counts the horizontal segments that the steps of a
-    // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`.
+    // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`,
+    // and so is `range_stopped`, which records that a range step passed the limit.
     work_limit: Option<u64>,
     stopped_at_work_limit: bool,
     position_checks: u64,
     segments_passed: u64,
     range_horizontals: Cell<u64>,
+    range_stopped: Cell<bool>,
     // Craft patch (removal scan): how many positions `scan_for_removal` looked at,
     // and how many times it started the intersection scans.
     #[cfg(test)]
@@ -471,6 +473,7 @@ impl<'segs> Sweeper<'segs> {
             position_checks: 0,
             segments_passed: 0,
             range_horizontals: Cell::new(0),
+            range_stopped: Cell::new(false),
             #[cfg(test)]
             removal_scan_steps: 0,
             #[cfg(test)]
@@ -512,7 +515,9 @@ impl<'segs> Sweeper<'segs> {
     /// Returns `true` if the sweep has done more work than the limit given to
     /// [`Sweeper::set_work_limit`], or has stopped at that limit.
     pub fn work_limit_exceeded(&self) -> bool {
-        self.stopped_at_work_limit || self.work_limit.is_some_and(|limit| self.work() > limit)
+        self.stopped_at_work_limit
+            || self.range_stopped.get()
+            || self.work_limit.is_some_and(|limit| self.work() > limit)
     }
 
     /// Returns `true`, and keeps the sweep stopped, once the work limit is exceeded.
@@ -534,10 +539,15 @@ impl<'segs> Sweeper<'segs> {
             .saturating_add(self.range_horizontals.get())
     }
 
-    /// Counts `n` horizontal segments visited by a step of a [`SweepLineRange`].
+    /// Counts `n` horizontal segments visited by a step of a [`SweepLineRange`],
+    /// and keeps the sweep stopped once that passes the work limit, so raising
+    /// the limit afterwards does not resume it.
     pub(crate) fn count_range_horizontals(&self, n: usize) {
         let total = self.range_horizontals.get().saturating_add(n as u64);
         self.range_horizontals.set(total);
+        if self.work_limit_exceeded() {
+            self.range_stopped.set(true);
+        }
     }
 
     /// Finds `seg_idx` on the sweep line, counting the entries the binary search probes.
@@ -3606,6 +3616,42 @@ mod tests {
             (area.abs() - 1.125).abs() < 1e-4,
             "intersection area {area}"
         );
+    }
+
+    // Craft patch (work limit). Overlapping horizontal segments at one height:
+    // the steps of the sweep line's range pass the limit, and the sweep stays
+    // stopped when the limit is raised afterwards.
+    #[test]
+    fn work_limit_stays_exceeded_after_a_range_passes_it() {
+        let n: u32 = 300;
+        let mut segs = Segments::default();
+        for i in 0..n {
+            let x = f64::from(i);
+            segs.add_points([Point::new(x, 0.0), Point::new(2.0 * f64::from(n) + x, 0.0)]);
+        }
+        // A vertical segment gives the sweep a second line, at y = 10.
+        segs.add_points([Point::new(-5.0, 0.0), Point::new(-5.0, 10.0)]);
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let line = sweep.next_line(&mut bufs).unwrap();
+        let line_work = line.state.work();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(line_work + 10);
+        {
+            let mut line = sweep.next_line(&mut bufs).unwrap();
+            let mut range = line.next_range(&mut range_bufs, &segs).unwrap();
+            while !range.work_limit_exceeded() {
+                assert!(range.x().is_some(), "the range ended within the limit");
+                range.increase_x();
+            }
+        }
+
+        sweep.set_work_limit(u64::MAX);
+        assert!(sweep.work_limit_exceeded());
+        assert!(sweep.next_line(&mut bufs).is_none());
     }
 
     // Craft patch (work limit). Many horizontal segments at one height and no

@@ -1314,12 +1314,12 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
 
 /// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
 /// rebuilt from its boundary as a path filled nonzero; if that fails, panics, or passes the
-/// flattener's sweep work or output limit ([`geom::MAX_SWEEP_WORK`],
-/// [`geom::MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. A subpath too small for
-/// the tolerance that the path's largest coordinate needs is rebuilt at that tolerance, and may
-/// be dropped.
+/// flattener's default sweep work or output limit ([`geom::DEFAULT_MAX_SWEEP_WORK`],
+/// [`geom::DEFAULT_MAX_TOPOLOGY_UNITS`]), it is kept closed and filled even-odd. A subpath too
+/// small for the tolerance that the path's largest coordinate needs is rebuilt at that tolerance,
+/// and may be dropped.
 fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
-    nonzero_within(path, rule, geom::MAX_SWEEP_WORK, geom::MAX_TOPOLOGY_UNITS)
+    nonzero_within(path, rule, geom::DEFAULT_MAX_SWEEP_WORK, geom::DEFAULT_MAX_TOPOLOGY_UNITS)
 }
 
 /// [`nonzero`], with the sweep stopped after `work_limit` units of work or before its topology
@@ -1433,7 +1433,7 @@ mod tests {
         for _ in 0..21 {
             path.extend(circle.iter());
         }
-        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, 1_000, geom::MAX_TOPOLOGY_UNITS);
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, 1_000, geom::DEFAULT_MAX_TOPOLOGY_UNITS);
         assert_eq!(kept.elements(), closed(&path).elements());
         assert_eq!(rule, FillRule::EvenOdd);
         assert_ne!(nonzero(&path, FillRule::EvenOdd).0.elements(), closed(&path).elements());
@@ -1444,7 +1444,7 @@ mod tests {
         // A square with a hole drawn in the same direction makes 8 output segments.
         let mut path = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.0);
         path.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.0).iter());
-        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, geom::MAX_SWEEP_WORK, 4);
+        let (kept, rule) = nonzero_within(&path, FillRule::EvenOdd, geom::DEFAULT_MAX_SWEEP_WORK, 4);
         assert_eq!(kept.elements(), closed(&path).elements());
         assert_eq!(rule, FillRule::EvenOdd);
         assert_ne!(kept.winding((50.0, 50.0).into()), 0);
