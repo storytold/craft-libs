@@ -410,7 +410,7 @@ impl<'a> Draw<'a> {
     }
 
     /// Paints the auto-scroll mark of `look` at `anchor`.
-    pub fn auto_scroll_mark(&self, look: &super::AutoScrollMarkLook, anchor: Pos2) {
+    pub fn auto_scroll_mark(&self, look: &crate::style::AutoScrollMarkLook, anchor: Pos2) {
         self.painter.extend(super::AutoScrollMark::shapes(look, anchor));
     }
 
