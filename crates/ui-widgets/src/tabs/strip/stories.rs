@@ -150,7 +150,7 @@ fn end_items(rows: &[Entry<CommandRef>]) -> [StripEnd<'_>; 2] {
 const RIBBON_NARROW_ROOM: f32 = 340.0;
 
 /// The frames the leave story lists its contextual tab for before the source drops it.
-const TABLE_FRAMES: usize = 30;
+const TABLE_FRAMES: u64 = 30;
 
 #[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
 fn tab_strip_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -174,11 +174,13 @@ fn tab_strip_ribbon_end_items_narrow(ui: &mut Ui, data: &mut StoryData) -> Story
     })
 }
 
-/// The contextual tab is listed for the first frames and then dropped by the source: it fades out at its slot.
+/// The contextual tab is listed for the first frames and then dropped by the source: it fades out at its slot. The
+/// story reads the frame it is in rather than counting its runs, so a measuring run or a second pass of one frame
+/// lists the same tabs as the frame's other runs.
 #[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
 fn tab_strip_ribbon_contextual_leaves(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let frames = data.value("frames", 0_usize);
-    *frames += 1;
-    let open: &[usize] = if *frames <= TABLE_FRAMES { &WITH_TABLE } else { &PLAIN };
+    let frame = ui.ctx().cumulative_frame_nr();
+    let first = *data.value("first_frame", frame);
+    let open: &[usize] = if frame.saturating_sub(first) < TABLE_FRAMES { &WITH_TABLE } else { &PLAIN };
     ribbon(ui, data, TabStrip::new("Ribbon"), open)
 }
