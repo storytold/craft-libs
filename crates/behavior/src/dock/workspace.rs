@@ -10,7 +10,7 @@ use super::{
     DockSide,
     action::{Action, DockPlacement, Location},
     edit::tree_panels,
-    groups::{Column, PanelPlace, Target},
+    groups::{Column, DockEdge, PanelPlace, Target},
     layout::Layout,
     limits::MAX_PANELS,
     node::Node,
@@ -285,8 +285,9 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     /// A registered panel that `permissions` says cannot close, such as a protected canvas, is
     /// always shown: at its recorded or default place, else at the outer edge of the docked
     /// area. A layout that breaks the column rights is repaired: a collapsed column holding a panel that does not
-    /// collapse ([`Permissions::collapses`]) expands, and a panel that shares no column
-    /// ([`Permissions::shares_column`]) moves to a column of its own. Pass the panels' own permissions, not
+    /// collapse ([`Permissions::collapses`]) expands, a panel that shares no column
+    /// ([`Permissions::shares_column`]) moves to a column of its own, and a panel that docks only in dock columns
+    /// ([`Permissions::docks_outside_columns`]) moves from a frame to a dock column. Pass the panels' own permissions, not
     /// [`Permissions::locked`] ones.
     /// `hidden` keeps at most [`MAX_PANELS`] entries, dropping the oldest unregistered ones first.
     pub fn reconcile(&mut self, registered: impl Fn(&P) -> bool, permissions: impl Fn(&P) -> Permissions, default: &Workspace<P>) {
@@ -347,10 +348,41 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
+    /// Moves each panel that docks only in dock columns ([`Permissions::docks_outside_columns`]) out of a frame of the
+    /// docked tree: to a new dock at the start edge, else a new dock at the end edge, else a column of its own at the
+    /// outer side of the first docked column. A move the layout refuses leaves the panel where it was.
+    fn repair_framed(&mut self, permissions: &impl Fn(&P) -> Permissions) {
+        let framed: Vec<P> = self
+            .layout
+            .panels()
+            .into_iter()
+            .filter(|p| !permissions(p).docks_outside_columns && matches!(self.layout.place(p), Some(PanelPlace::Node(_))))
+            .cloned()
+            .collect();
+        for panel in framed {
+            let column_anchor =
+                self.layout.panels().into_iter().find(|p| *p != &panel && matches!(self.layout.place(p), Some(PanelPlace::Dock { .. }))).cloned();
+            let targets = [Some(Target::NewDock { side: DockEdge::Start }), Some(Target::NewDock { side: DockEdge::End })]
+                .into_iter()
+                .chain([column_anchor.map(|anchor| Target::At { anchor, placement: DockPlacement::Column { after: false } })]);
+            for to in targets.flatten() {
+                let mut layout = self.layout.clone();
+                let moved = layout.apply_inner(Action::MovePanel { panel: panel.clone(), to }, &|p| permissions(p).is_protected()).is_ok();
+                if moved && layout.validate().is_ok() {
+                    self.layout = layout;
+                    break;
+                }
+            }
+        }
+    }
+
     /// Moves each panel that shares no column but has company to a column of its own: a new dock column beside its
     /// column, a new window over its window, or a frame beside its node of the docked tree. Then expands each
-    /// collapsed column that holds a panel that does not collapse. A repair the layout refuses leaves it as it was.
+    /// collapsed column that holds a panel that does not collapse, and moves each panel that docks only in dock
+    /// columns out of a frame of the docked tree into a dock column ([`Self::repair_framed`]). A repair the layout
+    /// refuses leaves it as it was.
     fn repair_columns(&mut self, permissions: &impl Fn(&P) -> Permissions) {
+        self.repair_framed(permissions);
         let lonely: Vec<P> = self.layout.panels().into_iter().filter(|p| !permissions(p).shares_column).cloned().collect();
         for panel in lonely {
             let Some(place) = self.layout.place(&panel) else { continue };
