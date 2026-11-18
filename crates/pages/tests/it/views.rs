@@ -299,6 +299,8 @@ fn tips_around_a_thumb_drag(hide_white_space: bool, fraction: f32) -> (Option<us
     let from = pos2(bar.rect.center().x, bar.rect.min.y + 3.0);
     let mut during = None;
     fixture.drag_at_pausing(from, vec2(0.0, bar.rect.height() * fraction), |held| during = page_tip(held, &expected.borrow()));
+    // The tip leaves through its exit fade; the fixture's clock moves only when told to.
+    fixture.advance(1.0).settle();
     let after = page_tip(&fixture, &expected.borrow());
     (during, after)
 }
