@@ -323,6 +323,9 @@ fn runs_of(story: &Story, probe: &Probe, plan: Plan) -> Runs {
             continue;
         }
         if !changed {
+            if story.name.starts_with("margin_handles") {
+                eprintln!("DIAG drives: {} {name} changed nothing: edits {kinds:?}, lent {lent}, focus {:?}", story.name, fixture.focused());
+            }
             unchanged_by.push(name);
             continue;
         }

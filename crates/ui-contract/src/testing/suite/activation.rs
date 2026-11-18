@@ -149,6 +149,15 @@ fn declared_actions_are_handled(subject: &Subject) -> Result<(), String> {
                 || signature(fixture.tree()) != before
                 || fixture.focused() != focus;
             if !acted {
+                eprintln!(
+                    "DIAG activation: {} {kind:?} on {:?} named {:?}: focus {focus:?} -> {:?}, outputs {}, disabled {:?}",
+                    story.name,
+                    fixture.tree().role_of(key),
+                    fixture.tree().name_of(key),
+                    fixture.focused(),
+                    outputs.len(),
+                    fixture.tree().data_of(key).map(|node| node.is_disabled()),
+                );
                 return Err(format!("{}: {kind:?} on {:?} did nothing", story.name, fixture.tree().role_of(key)));
             }
         }

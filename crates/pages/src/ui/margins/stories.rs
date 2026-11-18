@@ -18,8 +18,12 @@ const CENTRE: Point = Point::new(300.0, 400.0);
 const DRAG_THRESHOLDS: f32 = 12.0;
 
 fn drag_left_edge(fixture: &mut Fixture) {
-    let Some(target) = fixture.by_label("Left Margin") else { return };
+    let Some(target) = fixture.by_label("Left Margin") else {
+        eprintln!("DIAG drives: margin_handles_on_rulers: no node labelled Left Margin");
+        return;
+    };
     let travel = DRAG_THRESHOLDS * craft_ui::testing::input::slop(fixture.ctx());
+    eprintln!("DIAG drives: margin_handles_on_rulers: dragging Left Margin by {travel}");
     fixture.drag(&target, Vec2::new(travel, 0.0));
 }
 
