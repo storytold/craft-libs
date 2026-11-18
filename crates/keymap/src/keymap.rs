@@ -44,6 +44,13 @@ pub enum Lookup {
     Cycle(Vec<CommandRef>),
 }
 
+/// What a press runs, by catalog position.
+enum Winners {
+    None,
+    Run(usize),
+    Cycle(Vec<usize>),
+}
+
 /// What to do with other commands that hold a chord being assigned.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -235,6 +242,11 @@ pub struct Keymap {
     current: Vec<Vec<Bound>>,
     /// Effective trigger → (command, position in its `current` list), kept in step with `current`.
     by_trigger: HashMap<Trigger, BTreeSet<(usize, usize)>>,
+    /// Each command's [`shown_chord`](Keymap::shown_chord), kept in step with `current`. A change to one command's
+    /// bindings can shadow or free another's chord, so every change rebuilds the whole table.
+    shown: Vec<Option<Chord>>,
+    /// How many times `shown` was built ([`Keymap::shown_builds`]).
+    shown_builds: u64,
     /// The overrides entry each command reads, when it has one.
     stored: Vec<Option<String>>,
     /// Whether the overrides hold a hand-written variant of a command's key
@@ -262,6 +274,8 @@ impl Keymap {
             defaults: Vec::new(),
             current: Vec::new(),
             by_trigger: HashMap::new(),
+            shown: Vec::new(),
+            shown_builds: 0,
             stored: Vec::new(),
             variants: false,
             catalog_scopes: HashSet::new(),
@@ -376,9 +390,18 @@ impl Keymap {
 
     /// [`lookup`](Self::lookup) with the panels around the focused one in `outer` ([`Scopes::rank_nested`]).
     pub fn lookup_nested(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str]) -> Lookup {
-        let want = Trigger { chord: chord.effective(self.platform), double };
+        let command = |i: usize| self.catalog[i].command.clone();
+        match self.winners(Trigger { chord: chord.effective(self.platform), double }, active, outer) {
+            Winners::None => Lookup::None,
+            Winners::Run(i) => Lookup::Run(command(i)),
+            Winners::Cycle(cycle) => Lookup::Cycle(cycle.into_iter().map(command).collect()),
+        }
+    }
+
+    /// The commands, by catalog position, that a press of the effective trigger `want` runs with `active` focus.
+    fn winners(&self, want: Trigger, active: &Active, outer: &[&str]) -> Winners {
         let held = active.typing && !self.typing.fires(&want.chord, self.platform);
-        let Some(holders) = self.by_trigger.get(&want) else { return Lookup::None };
+        let Some(holders) = self.by_trigger.get(&want) else { return Winners::None };
         // Each command's nearest rank; `holders` is in catalog order.
         let mut ranks: Vec<(usize, u8)> = Vec::new();
         for &(i, k) in holders {
@@ -392,16 +415,16 @@ impl Keymap {
                 _ => ranks.push((i, r)),
             }
         }
-        let Some(best) = ranks.iter().map(|(_, r)| *r).min() else { return Lookup::None };
+        let Some(best) = ranks.iter().map(|(_, r)| *r).min() else { return Winners::None };
         let winners: Vec<usize> = ranks.iter().filter(|(_, r)| *r == best).map(|(i, _)| *i).collect();
         match winners.as_slice() {
-            [] => Lookup::None,
-            [i] => Lookup::Run(self.catalog[*i].command.clone()),
+            [] => Winners::None,
+            [i] => Winners::Run(*i),
             [first, rest @ ..] => {
                 if rest.iter().all(|j| self.same_group(*first, *j)) {
-                    Lookup::Cycle(winners.iter().map(|i| self.catalog[*i].command.clone()).collect())
+                    Winners::Cycle(winners)
                 } else {
-                    Lookup::Run(self.catalog[*first].command.clone())
+                    Winners::Run(*first)
                 }
             }
         }
@@ -411,9 +434,20 @@ impl Keymap {
     /// home scope first, that runs it. A binding runs the command when the lookup of its chord, where the binding
     /// applies (an application binding with no panel focused, a panel binding with its panel focused, a context
     /// binding with its context active), gives the command or a cycle that holds it. `None` when every binding is
-    /// shadowed or the command has none.
+    /// shadowed or the command has none. Read from a table the keymap builds when its bindings change.
     pub fn shown_chord(&self, command: &CommandRef) -> Option<Chord> {
-        let i = self.find(command)?;
+        self.find(command).and_then(|i| self.shown[i])
+    }
+
+    /// How many times the keymap worked out the chords it shows ([`shown_chord`](Self::shown_chord)): once when it is
+    /// built and once per change to its bindings, never per call.
+    #[doc(hidden)]
+    pub fn shown_builds(&self) -> u64 {
+        self.shown_builds
+    }
+
+    /// [`shown_chord`](Self::shown_chord) of the command at catalog position `i`, from the bindings.
+    fn shown_of(&self, i: usize) -> Option<Chord> {
         let home = &self.catalog[i].scope;
         let single = || self.current[i].iter().filter(|(trigger, _)| !trigger.double);
         let runs = |(trigger, scope): &&Bound| {
@@ -423,45 +457,19 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            self.press_runs(&trigger.chord, &active, i)
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), double: false }, &active, &[]) {
+                Winners::None => false,
+                Winners::Run(j) => j == i,
+                Winners::Cycle(cycle) => cycle.contains(&i),
+            }
         };
         single().filter(|(_, scope)| scope == home).chain(single().filter(|(_, scope)| scope != home)).find(runs).map(|(trigger, _)| trigger.chord)
     }
 
-    /// Whether a single press of `chord` with `active` focus runs catalog entry `i`, alone or in a cycle: what
-    /// [`lookup`](Self::lookup) answers, decided on catalog positions without building the answer's commands.
-    /// [`shown_chord`](Self::shown_chord) asks it for each binding of every command a frame shows.
-    fn press_runs(&self, chord: &Chord, active: &Active, i: usize) -> bool {
-        let want = Trigger { chord: chord.effective(self.platform), double: false };
-        let held = active.typing && !self.typing.fires(&want.chord, self.platform);
-        let Some(holders) = self.by_trigger.get(&want) else { return false };
-        // Each command's nearest rank, as `lookup_nested` ranks them: `holders` is in catalog order, so a command's
-        // bindings are consecutive.
-        let ranked = || {
-            let mut out: Vec<(usize, u8)> = Vec::new();
-            for &(j, k) in holders {
-                let Some(r) = self.at(j, k).and_then(|(_, s)| self.scopes.rank_nested(s, active, &[])) else { continue };
-                if held && r != 0 {
-                    continue;
-                }
-                match out.last_mut() {
-                    Some((last, best)) if *last == j => *best = (*best).min(r),
-                    _ => out.push((j, r)),
-                }
-            }
-            out
-        };
-        let ranks = ranked();
-        let Some(best) = ranks.iter().map(|(_, r)| *r).min() else { return false };
-        let mut winners = ranks.iter().filter(|(_, r)| *r == best).map(|(j, _)| *j);
-        let Some(first) = winners.next() else { return false };
-        let rest: Vec<usize> = winners.collect();
-        if rest.is_empty() || !rest.iter().all(|j| self.same_group(first, *j)) {
-            // One winner, or several of different groups: the first runs.
-            return first == i;
-        }
-        // A cycle of the winners.
-        first == i || rest.contains(&i)
+    /// Rebuilds the table of shown chords from the current bindings.
+    pub(crate) fn index_shown(&mut self) {
+        self.shown = (0..self.current.len()).map(|i| self.shown_of(i)).collect();
+        self.shown_builds += 1;
     }
 
     /// The command that holds `chord` for a surface that takes the key whatever has focus (a system menu item): the
@@ -906,6 +914,7 @@ impl Keymap {
             *c = list;
         }
         self.index_command(i);
+        self.index_shown();
     }
 
     fn index_command(&mut self, i: usize) {
@@ -933,6 +942,7 @@ impl Keymap {
         for i in 0..self.current.len() {
             self.index_command(i);
         }
+        self.index_shown();
     }
 
     /// Recomputes every command's bindings from the defaults and the overrides.
