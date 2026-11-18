@@ -4,22 +4,18 @@
 use super::radio::RadioKind;
 use super::words::ChoiceWords;
 use crate::contract::{
-    Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, PartsCx, Pointer as _, Props as _,
-    Role, Sizing, Styled as _, WordSetCx as _,
+    Access, Activation, Common, Component, Cx, DisabledLook, GroupHandle, MeasureCx, Meta as _, Outcome, PaintUi, Pointer as _, Props as _, Role,
+    Sizing, Styled as _, WordSetCx as _,
 };
-use crate::runtime::focus::FocusShape;
 use crate::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use crate::runtime::requests::ColorRequest;
 use crate::style::{ComponentStyle, DataColor, Flags, FocusLook, State, StateMix, StateSet, StyleColor, StyleCx, UiTokens, resolve_style};
-use craft_behavior::{HitShape, Metrics, Mixed, PartKey, Sense, Value};
+use craft_behavior::{Metrics, Mixed, Sense, Value};
 use craft_theme::{Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2};
 
 #[cfg(feature = "testing")]
 mod stories;
-
-/// The face of a hexagon swatch: the part whose outline the focus ring follows.
-const FACE: PartKey = PartKey::new("face");
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;
@@ -58,7 +54,8 @@ pub struct SwatchStyle {
     radius: CornerRadius,
     /// The ring on the well's outline, which separates the well from the panel.
     edge: Stateful<StyleColor>,
-    /// The ring inside the outline of a selected or checked well; clear while it is off.
+    /// The ring on the well's outline: the accent for a selected or checked well, the focus colour on the lead cell of
+    /// a table (a member runs no focus step of its own, so its outline carries the ring); clear while it is off.
     ring: Stateful<StyleColor>,
     /// The thin edge just inside the outline of a marked well.
     mark: StyleColor,
@@ -207,7 +204,7 @@ impl<T: Value + 'static> Swatch<T> {
 
 impl<T: Value + 'static> Component for Swatch<T> {
     const ROLE: Role = Role::COLOR_WELL;
-    const PARTS: bool = true;
+    const PARTS: bool = false;
     const OVERLAYS: bool = false;
     const ALT_ROLES: &'static [Role] = &[Role::RADIO_BUTTON, Role::LIST_BOX_OPTION];
     const DISABLED: DisabledLook = DisabledLook::Faded;
@@ -226,7 +223,7 @@ impl<T: Value + 'static> Component for Swatch<T> {
             side: if key.cell && !key.well { metrics.cell } else { metrics.side },
             radius: if key.cell && !key.well { CornerRadius::ZERO } else { metrics.radius },
             edge: Stateful::new(rest),
-            ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)),
+            ring: Stateful::new(clear).on(States::new(accent, accent, accent, accent)).when(Flags::LEAD, cx.color(colors.line.focus)),
             mark: cx.color(colors.text.normal),
             checker: [colors.overlay.checker_light, colors.overlay.checker_dark],
             mixed_rgba: colors.surface.sunken,
@@ -278,14 +275,6 @@ impl<T: Value + 'static> Component for Swatch<T> {
             None => {
                 access.value(cx.words::<ChoiceWords>().swatch_mixed.as_str());
             }
-        }
-    }
-
-    /// A hexagon swatch declares its face as the focus stop, so the ring follows the hexagon and not its rect.
-    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        if self.shape == SwatchShape::Hexagon {
-            let corners = hexagon(rect);
-            cx.part(FACE, HitShape::Polygon(corners.clone())).focusable().focus_shape(FocusShape::Polygon(corners));
         }
     }
 
