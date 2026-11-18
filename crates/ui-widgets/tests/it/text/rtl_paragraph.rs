@@ -89,9 +89,9 @@ fn wrapped_right_to_left_lines_align_to_the_right_edge() {
         .collect();
     let right = spans.iter().map(|(_, right)| *right).fold(f32::NEG_INFINITY, f32::max);
     for ((left, end), (top, text, glyphs)) in spans.iter().zip(&rows) {
-        let last = glyphs.last().map(|(chr, x, advance)| (*chr, *x, *advance));
+        let outer = glyphs.iter().filter(|(chr, ..)| !chr.is_whitespace()).max_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)));
         eprintln!(
-            "DIAG text::rtl_paragraph::wrapped_right_to_left_lines_align_to_the_right_edge: top {top} span {left}..{end} last glyph {last:?} text {text:?}"
+            "DIAG text::rtl_paragraph::wrapped_right_to_left_lines_align_to_the_right_edge: top {top} span {left}..{end} rightmost ink glyph {outer:?} text {text:?}"
         );
     }
     for ((left, end), (_, text, _)) in spans.iter().zip(&rows) {

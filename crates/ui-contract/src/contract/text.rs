@@ -460,7 +460,9 @@ pub(crate) fn run<C: Component>(
     if left_for_part {
         state.focused = false;
     }
-    let commit_now = step.commit_now || (was_focused && left_for_part);
+    // A window deactivation is no edit's end: the draft stays for the next Enter or a press elsewhere.
+    let window_blur = was_focused && crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost);
+    let commit_now = (step.commit_now || (was_focused && left_for_part)) && !window_blur;
     // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
     let back_from_menu = menu_held && state.held_selection.is_none();
     if out.focused && !left_for_part && !was_focused && !back_from_menu {
@@ -473,20 +475,19 @@ pub(crate) fn run<C: Component>(
     if decl.options.complete.is_some() {
         drive_completions(cx, &mut state);
     }
+    if window_blur && state.end == Some(End::Blur) {
+        state.end = None;
+    }
     if decl.options.holds_drafts {
-        // A window deactivation leaves the draft for the next Enter or a press elsewhere (L-52).
-        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost) {
-            state.end = None;
-        }
         // A press the focus service held for this part keeps focus; the draft shows as its value would.
         if state.end.is_none() && crate::runtime::focus::held_draft(&ctx) == Some(id) {
             state.end = Some(End::Rewrite { refuses: false });
         }
     }
-    if commit_now {
+    if window_blur {
         eprintln!(
-            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: commit_now step={} was_focused={was_focused} left_for_part={left_for_part} holds_drafts={} end={:?}",
-            step.commit_now, decl.options.holds_drafts, state.end
+            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: window_blur end={:?} draft={:?} focused={}",
+            state.end, state.draft, state.focused
         );
     }
     let resolved = resolve(&mut state, cx.value(), commit_now);

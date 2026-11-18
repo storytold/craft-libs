@@ -154,7 +154,18 @@ fn the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below(
     let on_page = fixture.by_label("Page 4").expect("the page shows its buttons").rect.center();
     fixture.frame(vec![pointer::moved(on_page)]);
     fixture.frame(vec![pointer::wheel(-60.0)]);
+    eprintln!(
+        "DIAG popover::popup::the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below: after the wheel Open {:?} (was {:?}) Page 4 {:?} (was {on_page:?})",
+        fixture.by_label("Open").map(|shown| shown.rect.min.y),
+        opener.min.y,
+        fixture.by_label("Page 4").map(|shown| shown.rect.center())
+    );
     fixture.settle();
+    eprintln!(
+        "DIAG popover::popup::the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below: settled Open {:?} list open {}",
+        fixture.by_label("Open").map(|shown| shown.rect.min.y),
+        open.get()
+    );
     assert!(fixture.by_label("Open").is_none_or(|shown| shown.rect.min.y < opener.min.y - 1.0), "the wheel over the page scrolls it");
 }
 
@@ -171,6 +182,18 @@ fn a_resting_pointer_leaves_the_lead_where_the_keys_moved_it() {
     let rest = fixture.by_label(&row(3)).expect("the list shows its fourth row").rect.center();
     fixture.frame(vec![pointer::moved(rest)]).settle();
     fixture.key(Key::End, Modifiers::NONE).settle();
+    eprintln!(
+        "DIAG popover::popup::a_resting_pointer_leaves_the_lead_where_the_keys_moved_it: after End focused {:?} stop {:?} last row shown {} first row shown {}",
+        fixture.focused(),
+        fixture.focused_stop(),
+        fixture.by_label(&row(ROWS - 1)).is_some(),
+        fixture.by_label(&row(0)).is_some()
+    );
     fixture.key(Key::Enter, Modifiers::NONE).settle();
+    eprintln!(
+        "DIAG popover::popup::a_resting_pointer_leaves_the_lead_where_the_keys_moved_it: after Enter open {} activated {:?}",
+        open.get(),
+        activated.borrow()
+    );
     assert_eq!(*activated.borrow(), [ROWS - 1], "Enter picks the row End went to, not the one under the resting pointer");
 }
