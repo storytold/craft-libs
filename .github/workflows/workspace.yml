@@ -25,7 +25,8 @@ concurrency:
 jobs:
   native:
     name: Workspace
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    # craft-common-actions#270 (warm-command). Back to @main once it merges.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@a24d4fc3de6488ecd028ea46aee0bf0f1834b07c
     with:
       # Pushes to next run Linux only.
       os: ${{ github.ref == 'refs/heads/next' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest","macos-latest"]' }}
@@ -44,9 +45,13 @@ jobs:
       # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
       # time. A panic still names its file and line; only backtrace frames lose theirs, and the
       # Linux and macOS legs keep line tables.
+      # rust-lld links the test binaries faster than link.exe; /OPT:NOICF skips identical-code
+      # folding and /DEBUG:NONE writes no PDB, both of which only cost link time here.
       windows-env: |
         CRAFT_PRINT_REQUIRE_QUEUE=1
         CARGO_PROFILE_DEV_DEBUG=0
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
       # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
       # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
       # count 64 cases instead of 256. nightly.yml runs them all in full.
@@ -69,6 +74,12 @@ jobs:
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # A push to main builds the gate's test binaries in their own leg and saves the cache right
+      # after, so a failing test no longer keeps the cache from being saved. The same two builds
+      # the gate's nextest runs do (all features; the two crates with default features).
+      warm-command: |
+        cargo test --workspace --no-run --all-features --locked
+        cargo test -p craft-image-codecs -p craft-text --no-run --locked
       command: |
         # The tests run once, with every feature, in parallel across test binaries; nextest skips
         # doctests, so `cargo test --doc` runs them. The default-feature compile is the lint leg's
