@@ -134,8 +134,11 @@ impl Warp {
             let rows = quilt_patches(&slice_y)?;
             if !slice_x.is_empty() || !slice_y.is_empty() {
                 // The evaluator normalizes over bounds, not stored slice coordinates.
-                // Infer a missing rectangle only when both explicit axes define it.
+                // Infer an absent rectangle only when both explicit axes define it.
                 if !(w.bounds[2] > w.bounds[0] && w.bounds[3] > w.bounds[1]) {
+                    if d.get("bounds").is_some() {
+                        return Err(PsdError::Unsupported("invalid explicit quilt bounds".into()));
+                    }
                     let (Some(&left), Some(&right), Some(&top), Some(&bottom)) = (slice_x.first(), slice_x.last(), slice_y.first(), slice_y.last())
                     else {
                         return Err(PsdError::Unsupported("quilt divisions need bounds or both axes".into()));
@@ -1074,6 +1077,17 @@ mod tests {
             .with("Rght", Value::Double(40.0))
             .with("Btom", Value::Double(10.0));
         assert!(Warp::try_from_descriptor(&equal.with("bounds", Value::Descriptor(bounds))).is_err());
+        let wrong_type = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]).with("bounds", Value::Integer(1));
+        assert!(Warp::try_from_descriptor(&wrong_type).is_err());
+        let invalid_bounds = Descriptor::new("bounds")
+            .with("Left", Value::Double(0.0))
+            .with("Top ", Value::Double(0.0))
+            .with("Rght", Value::Double(40.0))
+            .with("Btom", Value::Double(0.0));
+        let explicit_invalid = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![0.0, 10.0]).with("bounds", Value::Descriptor(invalid_bounds));
+        assert!(Warp::try_from_descriptor(&explicit_invalid).is_err());
+        let data = placed_layer_data("invalid bounds", [0.0; 8], |d| d.with("quiltWarp", Value::Descriptor(explicit_invalid)));
+        assert!(matches!(SmartObject::from_placed_layer_data(&data), Err(PsdError::Unsupported(_))));
         let missing = quilt_descriptor(vec![0.0, 10.0, 20.0], vec![]);
         assert!(Warp::try_from_descriptor(&missing).is_err());
     }

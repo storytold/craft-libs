@@ -180,7 +180,8 @@ impl SmartObject {
                 }
                 set(&mut d, "warp", Value::Descriptor(warp.to_descriptor()));
                 // The imported `quiltWarp` stays while it still says what the warp is.
-                let kept = t.get_object("quiltWarp").is_some_and(|q| Warp::from_descriptor(q).as_ref() == self.warp.as_ref());
+                let kept =
+                    t.get_object("quiltWarp").is_some_and(|q| Warp::try_from_descriptor(q).is_ok_and(|parsed| parsed.as_ref() == self.warp.as_ref()));
                 if !kept {
                     match quilt {
                         Some(q) => set_before(&mut d, "quiltWarp", Value::Descriptor(q), "warp"),
@@ -289,6 +290,33 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn templates_drop_unsupported_quilts_but_retain_valid_none() {
+        let bounds = [0.0, 0.0, 20.0, 10.0];
+        let unfl = |values| Value::UnitFloats { unit: *b"#Pxl", values };
+        let unequal =
+            Descriptor::new("warp").with("warpStyle", Value::Enumerated { type_id: Id::new("warpStyle"), value: Id::new("warpCustom") }).with(
+                "customEnvelopeWarp",
+                Value::Descriptor(
+                    Descriptor::new("customEnvelopeWarp").with("quiltSliceX", unfl(vec![0.0, 5.0, 20.0])).with("quiltSliceY", unfl(vec![0.0, 10.0])),
+                ),
+            );
+        assert!(Warp::try_from_descriptor(&unequal).is_err());
+        let valid_none = Warp::none(bounds).to_descriptor();
+        assert!(matches!(Warp::try_from_descriptor(&valid_none), Ok(None)));
+        for (quilt, keep) in [(unequal, false), (valid_none, true)] {
+            let template = Descriptor::new("null").with("quiltWarp", Value::Descriptor(quilt.clone()));
+            let bytes = placed(None).to_placed_layer_data(&PlacedLayerOptions {
+                placed: "layer",
+                resolution: 72.0,
+                filter_fx: None,
+                template: Some(&template),
+            });
+            let written = VersionedDescriptor::parse_prefix(&bytes[8..]).unwrap().0.descriptor;
+            assert_eq!(written.get_object("quiltWarp"), keep.then_some(&quilt));
+            assert!(SmartObject::from_placed_layer_data(&bytes).unwrap().warp.is_none());
+        }
+    }
     #[test]
     fn placed_layer_data_reads_back_and_passes_the_strict_check() {
         let filter = Descriptor::new("filterFX")
