@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn widthless_columns_do_not_change_cell_width_resolution() {
+    let widths = |columns: &str, cells: &str| {
+        let flow = parse(&format!("<table>{columns}<tr>{cells}</tr></table>"));
+        let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected table") };
+        table.widths.clone()
+    };
+    let partial = "<td width='400'>x</td><td>y</td>";
+    let widthless = "<colgroup><col><col></colgroup>";
+    assert!(widths("", partial).is_empty());
+    assert_eq!(widths(widthless, partial), widths("", partial));
+    let complete = "<td width='40'>x</td><td width='80'>y</td>";
+    assert_eq!(widths(widthless, complete), vec![30.0, 60.0]);
+    // An explicitly declared column still enables the existing average-fill rule.
+    assert_eq!(widths("<colgroup><col style='width:100pt'><col></colgroup>", "<td>x</td><td>y</td>"), vec![100.0, 100.0]);
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");
