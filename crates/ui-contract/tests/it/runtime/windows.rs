@@ -418,6 +418,32 @@ fn placing_a_minimized_window_below_its_minimum_restores_it_at_the_placed_size()
     assert!(lowered.x <= PLACED.width() && lowered.y <= PLACED.height(), "the minimum fits the placed size: {lowered:?}");
 }
 
+/// On a desktop of two monitors at different scales, a window whose corner lies on the second reports the second as
+/// its monitor, and, with no scale of its own from the platform, takes that monitor's scale: one rule finds both.
+#[trial]
+fn a_window_on_the_second_of_two_monitors_reports_that_monitor_and_its_scale() {
+    use craft_behavior::{Monitor, MonitorKey};
+    let system = Arc::new(FakeSystem::new());
+    let first = Monitor::new(MonitorKey::new("first", [1920, 1080]), [0, 0], [1920, 1080], 1.0);
+    let second = Monitor::new(MonitorKey::new("second", [2880, 1800]), [1920, 0], [2880, 1800], 2.0);
+    system.set_monitors(vec![first, second.clone()]);
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+        })
+    };
+    let (id, _) = builder_titled(&frame(), "tool");
+    // 2000 points is past the first monitor at its scale of 1 and, at 4000 pixels, inside the second at its scale of 2.
+    let placed = Rect::from_min_size(Pos2::new(2000.0, 100.0), Vec2::new(400.0, 300.0));
+    windows.child_info(ViewportInfo { inner_rect: Some(placed), outer_rect: Some(placed), ..ViewportInfo::default() });
+    frame();
+    frame();
+    let host = WindowHost::of(&windows.ctx);
+    assert_eq!(host.monitor_of(id).map(|monitor| monitor.key), Some(second.key), "the window is on the second monitor");
+    assert_eq!(host.facts(id).and_then(|facts| facts.scale), Some(second.scale), "the window takes the second monitor's scale");
+}
+
 /// The OS windows the runtime opens carry the app id the app installed, as its main window does: docks and Wayland
 /// compositors find the app's icon and rules by it.
 #[trial]

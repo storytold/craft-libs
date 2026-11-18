@@ -518,6 +518,7 @@ pub struct SubNode {
     pub(crate) column: Option<craft_behavior::ColumnKey>,
     pub(crate) access_key: Option<char>,
     pub(crate) shortcut: Option<String>,
+    pub(crate) url: Option<String>,
     pub(crate) has_popup: Option<PopupKind>,
     pub(crate) current: bool,
     pub(crate) part: PartRef,
@@ -550,6 +551,7 @@ impl SubNode {
             column: None,
             access_key: None,
             shortcut: None,
+            url: None,
             has_popup: None,
             current: false,
             part,
@@ -626,6 +628,13 @@ impl SubNode {
     /// component's key use, which delivers it to the focused part.
     pub fn shortcut(&mut self, text: impl Into<String>) -> &mut Self {
         self.shortcut = Some(text.into());
+        self
+    }
+
+    /// The address a link sub-node goes to (`Access::url` for the component's own node): a hyperlink a content
+    /// painter describes.
+    pub fn url(&mut self, url: impl Into<String>) -> &mut Self {
+        self.url = Some(url.into());
         self
     }
 

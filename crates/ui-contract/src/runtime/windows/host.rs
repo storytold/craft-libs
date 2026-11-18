@@ -310,6 +310,14 @@ impl WindowHost {
         monitors(&self.ctx)
     }
 
+    /// The monitor `viewport`'s window lies on: the one its top-left corner is on, the rule its scale
+    /// ([`WindowFacts::scale`]) falls back to. `None` before the window has reported its rect, or where the platform
+    /// lists no monitor under the corner.
+    pub fn monitor_of(&self, viewport: ViewportId) -> Option<Monitor> {
+        let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;
+        monitor_of(&self.ctx, &facts)
+    }
+
     /// Places `viewport`'s outer rect at `outer`: its position, and the inner size that leaves the window's
     /// decoration as it is. A minimized window is restored first, and a placement below the window's smallest inner
     /// size lowers that size to the placed one, so the window takes the place it is given. False when a command could
@@ -405,13 +413,16 @@ pub(super) fn monitors(ctx: &Context) -> Vec<Monitor> {
     system.map(|system| system.monitors()).unwrap_or_default()
 }
 
-/// The scale of a window with `facts`: the platform's report, else the scale of the monitor the window's top-left
-/// corner lies on. A corner is on a monitor when its pixel position at that monitor's scale is inside the monitor.
+/// The monitor the top-left corner of a window with `facts` lies on. A corner is on a monitor when its pixel position
+/// at that monitor's scale is inside the monitor.
+fn monitor_of(ctx: &Context, facts: &viewports::Facts) -> Option<Monitor> {
+    let corner = facts.outer.or(facts.inner)?.min;
+    monitors(ctx).into_iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale))
+}
+
+/// The scale of a window with `facts`: the platform's report, else the scale of its monitor ([`monitor_of`]).
 pub(super) fn scale_of(ctx: &Context, facts: &viewports::Facts) -> Option<f32> {
-    facts.native_scale.or_else(|| {
-        let corner = facts.outer.or(facts.inner)?.min;
-        monitors(ctx).iter().find(|monitor| monitor.rect_px().contains(corner * monitor.scale)).map(|monitor| monitor.scale)
-    })
+    facts.native_scale.or_else(|| monitor_of(ctx, facts).map(|monitor| monitor.scale))
 }
 
 /// Records the pointer of the viewport a drag runs in, `local` in that viewport's coordinates, as a desktop

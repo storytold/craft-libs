@@ -345,6 +345,16 @@ impl AccessTree {
         self.lookup(NodeId(key.0)).and_then(Node::aria_current).is_some_and(|current| current != accesskit::AriaCurrent::False)
     }
 
+    /// The level a node by key states: a heading's outline level, a list item's list level, a tree item's depth.
+    pub fn level_of(&self, key: NodeKey) -> Option<usize> {
+        self.lookup(NodeId(key.0))?.level()
+    }
+
+    /// The address a link node by key goes to.
+    pub fn url_of(&self, key: NodeKey) -> Option<&str> {
+        self.lookup(NodeId(key.0))?.url()
+    }
+
     /// The nearest ancestor of `id` that screen readers see: AccessKit's consumer drops generic containers.
     pub fn parent_of(&self, id: Id) -> Option<NodeKey> {
         self.parent_of_key(NodeKey::of(id))
