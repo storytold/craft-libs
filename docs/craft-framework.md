@@ -107,7 +107,7 @@ The gallery shows every registered story of every crate with a `ui` feature, und
 
 ```
 git switch craft-framework
-cargo run --profile gallery -p craft-ui-gallery
+cargo run --release -p craft-ui-gallery
 ```
 
 - The `gallery` profile is release optimisation with incremental builds; `cl build gallery` builds the debug gallery instead. Both are described in [development.md](development.md), with the story renderer (`cl render`), which writes one component's stories to PNG files without building the gallery.
@@ -179,7 +179,7 @@ Inside `craft-libs`, every local cargo command goes through `tools/cl`, which gi
 | Check the crate you changed | `cl check <crate>` |
 | Run its suite and trials | `cl test <crate>`, or `cl test <crate> -- <filter>` |
 | One component's stories as PNG files | `cl render <crate> <Component>` (`ui` for the library's own components) |
-| The gallery | `cl build gallery` (debug), or `cargo run --profile gallery -p craft-ui-gallery` |
+| The gallery | `cl build gallery` (debug), or `cargo run --release -p craft-ui-gallery` |
 
 Writing a component, its stories and its trials: [authoring.md](authoring.md). Moving an app's UI onto the framework: [porting.md](porting.md).
 

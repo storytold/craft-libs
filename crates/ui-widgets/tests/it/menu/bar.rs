@@ -151,3 +151,29 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
         }
     }
 }
+
+/// A menu bar that settles (in a title bar slot with a content version) still takes its keys while it replays its
+/// last run: F10 takes the focus to the bar, and Alt with a title's marked letter opens that menu.
+#[trial]
+fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
+    use craft_ui::contract::Lazy;
+    let mut fixture = Fixture::new(|ui| {
+        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
+            let titles = vec![MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            })];
+            MenuBar::new("Main menu", titles).show(ui);
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle().idle(2);
+    assert!(fixture.focused_stop().is_none(), "nothing holds the focus at the start");
+    fixture.key(Key::F10, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.focused_stop().is_some(), "F10 takes the focus to the bar");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle().idle(2);
+    fixture.key(Key::F, Modifiers::ALT);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
+}

@@ -161,8 +161,9 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
 }
 
 /// Notes, in the records open around the running code, the registration `make` builds: called again, it registers
-/// what the running code registered.
-pub(crate) fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
+/// what the running code registered. A service outside this crate that keeps registrations per pass (a dock's drop
+/// spots) notes each one here, so a settled region's replay makes it again.
+pub fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
     if recording(ctx) {
         let entry: Entry = Arc::new(make());
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.journal.push(entry));

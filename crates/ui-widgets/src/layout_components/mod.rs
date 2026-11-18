@@ -181,7 +181,7 @@ macro_rules! layout_component {
             }
 
             fn finish(self, cx: Cx<'_, Self>) -> Response {
-                cx.core.response
+                cx.response.clone()
             }
         }
 

@@ -32,8 +32,9 @@ jobs:
       # On a pull request, macOS and Windows run only when it can change platform behaviour: a
       # crate with platform cfg code or one that depends on it, the build setup, or a file outside
       # the crates (craft-common-actions' select-platforms). The full-ci label runs them anyway
-      # from the next push or manual run; pushes to main always run every leg.
-      select-os: '["windows-latest","macos-latest"]'
+      # from the next push or manual run; pushes to main always run every leg. A push to next has
+      # only the Linux leg, so it selects none.
+      select-os: ${{ github.ref == 'refs/heads/next' && '[]' || '["windows-latest","macos-latest"]' }}
       timeout-minutes: 120
       # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: cargo-nextest@0.9.150

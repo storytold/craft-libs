@@ -2,7 +2,8 @@
 
 use super::divider::{self, Divider, Drag};
 use super::dock_column::{
-    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, show_bar,
+    BarRecord, CHEVRON, ColumnArrow, ColumnBar, bar_band, bar_slots, column_grip, describe_chevron, paint_chevron, register_edges, settled_bar,
+    show_bar,
 };
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_icon_drag};
 use crate::buttons::IconButton;
@@ -190,6 +191,10 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
+    /// The version of what the column's bar shows of the host's panels and the arrangement: with one, the bar settles
+    /// (`Lazy::content`).
+    #[prop]
+    content: Option<u64>,
     open: Bind<'a, Option<P>>,
     view: Option<FlyoutView<'a, P>>,
     /// The bar's rect this pass.
@@ -246,6 +251,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
             bar: ColumnBar::Own,
             auto_collapse: false,
             within: Rect::NOTHING,
+            content: None,
             open,
             view: None,
             bar_rect: Rect::NOTHING,
@@ -701,9 +707,12 @@ impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
         if self.bar == ColumnBar::Window {
             return;
         }
-        if let Some(grip) = column_grip(self.column, self.spec, cx) {
-            let band = bar_band(ui, self.bar_rect, self.edge);
-            self.record = show_bar(ui, cx, band, false, self.auto_collapse, ColumnArrow::Collapse, grip.icons(true));
-        }
+        let (column, spec, auto_collapse) = (self.column, self.spec, self.auto_collapse);
+        let band = bar_band(ui, self.bar_rect, self.edge);
+        self.record = settled_bar(ui, band, self.content, |ui| {
+            column_grip(column, spec, cx)
+                .map(|grip| show_bar(ui, cx, band, false, auto_collapse, ColumnArrow::Collapse, grip.icons(true)))
+                .unwrap_or_default()
+        });
     }
 }

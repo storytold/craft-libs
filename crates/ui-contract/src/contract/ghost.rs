@@ -1,7 +1,8 @@
 //! The ghost layer's content (8.4, 8.5): the running drag's preview beside the pointer, the mark of the drop target that
-//! would take the payload, and the painted pointer the cursor service settled on, which goes to the window as its
-//! cursor image instead where the window takes one. They come from the drag session's data and the cursor record; the
-//! layer takes no input. Value readouts beside the pointer during a gesture paint here too, for the pass that asks.
+//! would take the payload (with the payload's name inside a region mark, for a drag that names it), and the painted
+//! pointer the cursor service settled on, which goes to the window as its cursor image instead where the window takes
+//! one. They come from the drag session's data and the cursor record; the layer takes no input. Value readouts beside
+//! the pointer during a gesture paint here too, for the pass that asks.
 
 use crate::primitives::pointer_art::{self as pointers, Art};
 
@@ -172,10 +173,13 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
     pen.art.into_inner()
 }
 
-/// The drag preview, in `env`, the source's, and the drop mark of the running drag.
+/// The drag preview, in `env`, the source's, and the drop mark of the running drag, with the payload's name in it.
 fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, session: &drag::Ghost) {
     if let Some((mark, tokens)) = &session.mark {
         paint_mark(painter, tokens, *mark);
+        if let (DropMark::Region { area, .. }, DragPreview::Named(name)) = (*mark, &session.preview) {
+            paint_region_name(painter, tokens, env, area, name);
+        }
     }
     let record = RefCell::new(PaintRecord::default());
     let draw = &Draw::new(painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });
@@ -199,6 +203,25 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, session: &drag:
         }
         _ => {}
     }
+}
+
+/// The payload's name inside the region `area` a drop would take: at the reading start of its top, inside the mark's
+/// band, on one line elided to the area's width. A region too small for the line shows no name. It paints in the mark's
+/// `tokens`, with the words and direction of `env`, the source's.
+fn paint_region_name(painter: &egui::Painter, tokens: &UiTokens, env: &Env, area: Rect, name: &Label) {
+    let name = env.view().resolve(name);
+    let inner = area.shrink(tokens.space.pad.control);
+    if inner.width() <= 0.0 {
+        return;
+    }
+    let record = RefCell::new(PaintRecord::default());
+    let draw = Draw::new(painter, &record, DrawEnv { tokens, direction: env.direction, ink: Ink::OnPanel });
+    let layout = draw.layout(&TextRun::new(name.as_str()).elide(), inner.width());
+    if layout.size().y > inner.height() {
+        return;
+    }
+    let (at, _) = Flow::new(inner, env.direction.is_rtl()).take_start(layout.size().x.min(inner.width()));
+    draw.galley(at.min, &layout);
 }
 
 fn paint_drag_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {

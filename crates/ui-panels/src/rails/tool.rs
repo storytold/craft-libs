@@ -102,7 +102,8 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// ([`dock_grid`](ToolRail::dock_grid)): it is `first` wide at one column and `step` wider for each further column,
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
-/// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short, and its
+/// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
+/// an overlay bar in the end padding that shows only under the pointer (`Scroll::overlay`), and its
 /// buttons show the rail's glyphs. The rail is exactly as tall as its rows and footer at the width it gets
 /// ([`measure_rail`](ToolRail::measure_rail)). The buttons are one roving group: arrow keys move between them by the
 /// grid. While the toolbar is edited the buttons are dragged and take drops, and report the drop in the output.
@@ -144,7 +145,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             .layout(BodyLayout::stack())
             .child_size(ControlSize::Md)
             .child_glyphs(GlyphRole::ToolRail)
-            .scroll(Scroll::vertical())
+            .scroll(Scroll::vertical().overlay())
             .footer(FooterRegion::new());
         ToolRail {
             common: Common::new(),
