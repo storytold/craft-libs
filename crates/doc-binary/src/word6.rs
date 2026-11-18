@@ -815,9 +815,13 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // too (numbering level, no line numbers, frame anchoring, wrapping, no hyphenation).
             // 0x07 and 0x09 (keep together, page break before) were matched against Word.
             0x05 | 0x07..=0x09 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
-            // Section sprms ([`SEP`]): the operand of the Word 97 sprm each stands for.
-            0x8E | 0x8F | 0x93 | 0x96 | 0x97 | 0x99 | 0x9F | 0xA2 => 1,
-            0x8C | 0x8D | 0x90 | 0x91 | 0x9A..=0x9D | 0xA1 | 0xA4..=0xAB => 2,
+            // Section sprms: the operand of the Word 97 sprm each stands for (from 0x88, the
+            // Word 97 index plus 0x85), the ones not translated too, so that the sprms after them
+            // are still read. Word 95 writes 0x8A (evenly spaced) after the page sprms, and
+            // 0x88/0x89 (a column's width and spacing: the column, then the width) after it.
+            0x83 | 0x84 | 0x8A | 0x8B | 0x8E | 0x8F | 0x92 | 0x93 | 0x96..=0x99 | 0x9E | 0x9F | 0xA2 | 0xA3 => 1,
+            0x8C | 0x8D | 0x90 | 0x91 | 0x94 | 0x95 | 0x9A..=0x9D | 0xA0 | 0xA1 | 0xA4..=0xAB => 2,
+            0x88 | 0x89 => 3,
             // 0x1A/0x1B: a frame's position; 0x65: a raised or lowered position; 0x6B: kerning in
             // half-points (H1 has 0x0024; Word shows kern=36); 0x26-0x2A: paragraph borders.
             0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65
@@ -954,7 +958,9 @@ pub(crate) fn header_stories(word: &[u8], fib: &Fib6, sections: impl IntoIterato
     let Some((fc, lcb)) = fib.pair(crate::fib::pair::PLCF_HDD) else { return Vec::new() };
     let Some(plc) = word.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else { return Vec::new() };
     let cps: Vec<u32> = plc.as_chunks::<4>().0.iter().take(MAX_HDD_CPS).map(|b| u32::from_le_bytes(*b)).collect();
-    let separators = fib.pair(PAIR_DOP).and_then(|(fc, _)| word.get((fc as usize).checked_add(1)?)).copied().unwrap_or(0);
+    // Byte 1 of the Dop itself: a Dop too short to hold it names no separators.
+    let separators =
+        fib.pair(PAIR_DOP).and_then(|(fc, lcb)| word.get(fc as usize..(fc as usize).saturating_add(lcb as usize))?.get(1)).copied().unwrap_or(0);
     let mut next = 0;
     let mut kept_to = 0;
     let mut slot = |present: bool| -> (u32, u32) {
