@@ -19,6 +19,9 @@ sgi = []
 sunraster = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
+# JPEG XL decode via craft-jxl (jxl-oxide, pure Rust). Without it JPEG XL files are still detected
+# and opening one is a clear unsupported error; export needs no feature.
+jxl = ["dep:craft-jxl"]
 # AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
 # decoder panic aborts instead of becoming an error), so wasm32 builds leave AVIF unreadable.
 avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
@@ -43,6 +46,7 @@ craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 craft-heif = { workspace = true, optional = true }
+craft-jxl = { workspace = true, optional = true, features = ["decode"] }
 ravif = { version = "0.13", default-features = false, optional = true }
 rav1e = { version = "0.8", default-features = false, optional = true }
 avif-serialize = { version = "0.8", optional = true }

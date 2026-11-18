@@ -1,7 +1,8 @@
 use serde_json::{Value, json};
 
 use crate::{
-    Contents, Effect, Info, PROTOCOL_VERSION, Reference, SUPPORTED_VERSIONS, Server, Tools, check_arguments, object, string, text_result, tool,
+    Contents, Effect, Info, Options, PROTOCOL_VERSION, Reference, SUPPORTED_VERSIONS, Server, Tools, check_arguments, object, string, text_result,
+    tool,
 };
 
 /// One app's tools: `echo` and `level`, nothing behind them (no engine, no design). `log` records
@@ -365,4 +366,132 @@ fn every_call_runs_right_after_its_listing() {
     reply(&mut s, &call("echo", json!({})));
     reply(&mut s, &json!([call("level", json!({})), call("echo", json!({"text": "b"}))]));
     assert_eq!(s.tools().log, ["list", "list", "call echo", "list", "list", "call level", "list", "call echo"]);
+}
+
+fn with(options: Options) -> Server<Echo> {
+    Server::new(info(), Echo::default()).with_options(options)
+}
+
+fn call_msg(id: u64, name: &str, args: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": args}})
+}
+
+/// `websiteUrl` is sent only when set.
+#[test]
+fn website_url_is_sent_only_when_set() {
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}});
+    let off = reply(&mut with(Options::default()), &init).unwrap();
+    assert!(off["result"]["serverInfo"].get("websiteUrl").is_none(), "{off}");
+    let on = reply(&mut with(Options { website_url: Some("https://example.org/echo".into()), ..Options::default() }), &init).unwrap();
+    assert_eq!(on["result"]["serverInfo"]["websiteUrl"], "https://example.org/echo");
+    assert_eq!(on["result"]["serverInfo"]["name"], "echo");
+}
+
+/// With `tool_errors_as_results`, argument failures and unknown tools are `isError` results that
+/// carry the message and never run the tool; other errors stay JSON-RPC errors.
+#[test]
+fn tool_errors_as_results_replaces_invalid_params() {
+    let mut s = with(Options { tool_errors_as_results: true, ..Options::default() });
+    let bad = [
+        call_msg(1, "echo", json!({})),
+        call_msg(2, "echo", json!({"text": 3})),
+        call_msg(3, "echo", json!({"text": "a", "loud": true})),
+        call_msg(4, "shout", json!({})),
+        call_msg(5, "echo", json!([])),
+        call_msg(6, "echo", json!("text")),
+        call_msg(7, "echo", json!(7)),
+    ];
+    for msg in &bad {
+        let r = reply(&mut s, msg).unwrap();
+        assert!(r.get("error").is_none(), "{r}");
+        assert_eq!(r["result"]["isError"], true, "{r}");
+        assert!(r["result"]["content"][0]["text"].as_str().is_some_and(|t| !t.is_empty()), "{r}");
+    }
+    let r = reply(&mut s, &bad[0]).unwrap();
+    assert_eq!(r["result"]["content"][0]["text"], "echo: missing required argument `text`");
+    assert!(s.tools().calls.is_empty());
+    let ok = reply(&mut s, &call_msg(8, "echo", json!({"text": "hi"}))).unwrap();
+    assert_eq!(ok["result"], json!({"content": [{"type": "text", "text": "hi"}]}));
+    let nomethod = reply(&mut s, &json!({"jsonrpc": "2.0", "id": 9, "method": "nope"})).unwrap();
+    assert_eq!(nomethod["error"]["code"], -32601);
+    let noname = reply(&mut s, &json!({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {}})).unwrap();
+    assert_eq!(noname["error"]["code"], -32602);
+    // Unchanged with the option off.
+    let mut off = with(Options::default());
+    for msg in &bad {
+        assert_eq!(reply(&mut off, msg).unwrap()["error"]["code"], -32602);
+    }
+}
+
+/// With `strict_request_ids`, an id that is not a string or number is -32600 with a null id; the
+/// tool never runs. Off, such ids are echoed as before. Notifications have no id and are unaffected.
+#[test]
+fn strict_request_ids_refuse_other_id_types() {
+    let odd = [json!(null), json!(true), json!({"a": 1}), json!([1])];
+    let mut on = with(Options { strict_request_ids: true, ..Options::default() });
+    let mut off = with(Options::default());
+    for id in &odd {
+        let msg = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "echo", "arguments": {"text": "x"}}});
+        let r = reply(&mut on, &msg).unwrap();
+        assert_eq!(r["error"]["code"], -32600, "{id}: {r}");
+        assert_eq!(r["id"], Value::Null);
+        let r = reply(&mut off, &json!({"jsonrpc": "2.0", "id": id, "method": "ping"})).unwrap();
+        assert_eq!(r["id"], *id);
+        assert_eq!(r["result"], json!({}));
+    }
+    assert!(on.tools().calls.is_empty());
+    for id in [json!("a"), json!(1), json!(1.5), json!(-3)] {
+        let r = reply(&mut on, &json!({"jsonrpc": "2.0", "id": id, "method": "ping"})).unwrap();
+        assert_eq!(r["result"], json!({}), "{id}");
+    }
+    assert!(reply(&mut on, &notification()).is_none());
+}
+
+/// The missing-`method` error follows the same id rule: strict mode echoes only string and number
+/// ids and answers with a null id for the rest; off, ids are echoed as before.
+#[test]
+fn strict_request_ids_apply_to_the_missing_method_error() {
+    let mut on = with(Options { strict_request_ids: true, ..Options::default() });
+    let mut off = with(Options::default());
+    for id in [json!(true), json!({"a": 1}), json!([1])] {
+        let msg = json!({"jsonrpc": "2.0", "id": id});
+        let r = reply(&mut on, &msg).unwrap();
+        assert_eq!((r["error"]["code"].clone(), r["id"].clone()), (json!(-32600), Value::Null), "{id}");
+        assert_eq!(reply(&mut off, &msg).unwrap()["id"], id);
+    }
+    for id in [json!("a"), json!(7)] {
+        assert_eq!(reply(&mut on, &json!({"jsonrpc": "2.0", "id": id})).unwrap()["id"], id);
+    }
+    assert_eq!(reply(&mut on, &json!({"jsonrpc": "2.0"})).unwrap()["id"], Value::Null);
+}
+
+/// Hostile input with every option on: oversized and non-UTF-8 lines, odd ids and wrongly typed
+/// arguments are answered and serving goes on, and nothing panics.
+#[test]
+fn every_option_on_survives_hostile_input() {
+    let mut input = vec![b'x'; (1 << 16) + 10];
+    input.push(b'\n');
+    input.extend_from_slice(b"\xff\xfe\n");
+    for id in ["null", "true", "{}", "[]", "\"s\"", "1e999"] {
+        input.extend_from_slice(
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{\"name\":\"echo\",\"arguments\":{{\"text\":{id}}}}}}}\n"
+            )
+            .as_bytes(),
+        );
+    }
+    for args in ["null", "1", "\"a\"", "[]", "{\"text\":[1]}", "{\"text\":{}}"] {
+        input.extend_from_slice(
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"level\",\"arguments\":{args}}}}}\n").as_bytes(),
+        );
+    }
+    input.extend_from_slice(json!({"jsonrpc": "2.0", "id": 9, "method": "ping"}).to_string().as_bytes());
+    let mut output = Vec::new();
+    let options = Options { website_url: Some("https://example.org".into()), tool_errors_as_results: true, strict_request_ids: true };
+    with(options).serve(std::io::Cursor::new(input), &mut output).unwrap();
+    let replies: Vec<Value> = String::from_utf8(output).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 2 + 6 + 6 + 1, "{replies:?}");
+    assert_eq!(replies[0]["error"]["code"], -32600);
+    assert_eq!(replies[1]["error"]["code"], -32700);
+    assert_eq!(replies.last().map(|r| &r["result"]), Some(&json!({})));
 }
