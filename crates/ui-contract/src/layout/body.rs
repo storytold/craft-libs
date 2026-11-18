@@ -364,9 +364,17 @@ pub fn levelled_unit(ui: &mut Ui, key: Id, levels: usize, mut show: impl FnMut(&
             let rtl = Env::of(ui).direction.is_rtl();
             let mut widths = Vec::with_capacity(levels);
             let mut widest = Vec2::ZERO;
+            // Each level measures at what it takes in no room: unbounded along x, in a region as wide as the row's.
+            // An infinite egui region would put right-to-left content's start edge at infinity.
+            let no_room = own_room.derive_local(|scoped| scoped.unbounded.0 = true);
+            let width = ui.max_rect().width();
             for level in 0..levels.max(1) {
-                let installed = Env::install_for(ui, own_room.clone());
-                let (_, took) = crate::runtime::egui::sizing::run_sized(ui, f32::INFINITY, child::column_layout(rtl), |ui| show(ui, level));
+                let installed = Env::install_for(ui, no_room.clone());
+                // Every level shows the same bodies under the same ids: each measures as a probe, so no level reuses a
+                // record another level left, and none serves the sweep at the levels given, which records its own.
+                let (_, took) = layout_memory::probing(&ctx, || {
+                    crate::runtime::egui::sizing::run_sized(ui, width, child::column_layout(rtl), |ui| show(ui, level))
+                });
                 Env::restore(&ctx, installed);
                 if level == 0 {
                     widest = took;
@@ -605,6 +613,9 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         } else {
             vec![0; levelled.len()]
         };
+        if !levelled.is_empty() {
+            eprintln!("DIAG groups_with_the_same_title_keep_their_own_level: row {id:?} room {room} fixed {fixed} level widths {level_widths:?} levels {levels:?}");
+        }
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
         let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(*leaf, *level)).sum();
         let widths = if room.is_finite() {
