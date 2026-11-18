@@ -622,7 +622,7 @@ pub(crate) fn is_row_child(ctx: &Context, stop: &Stop) -> bool {
 
 /// Whether the focus stop is the component `id`: the focused member or item of its arena, or a root that
 /// holds focus while none of its members is the stop. A root's own focused part counts as the root.
-pub(crate) fn is_focused(ctx: &Context, id: Id) -> bool {
+pub fn is_focused(ctx: &Context, id: Id) -> bool {
     focused_stop(ctx).is_some_and(|(focused, _)| focused == id)
 }
 

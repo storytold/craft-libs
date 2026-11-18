@@ -18,7 +18,7 @@ use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{
     DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamRows, set_color_field, set_param_field,
 };
-use craft_ui::primitives::{ContentPainterCx, TextRun, fill_polygon};
+use craft_ui::primitives::{ContentPainterCx, TextRun, Wrap, fill_polygon};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
@@ -423,7 +423,7 @@ impl Component for PrintPreview<'_> {
         // A message takes the lines it wraps to at this width, so a larger text size grows the part instead of
         // overflowing it.
         let message = match &self.sheet.content {
-            SheetContent::Message(message) => cx.layout_at(&TextRun::new(cx.env.resolve(message).as_str()), width).size().y,
+            SheetContent::Message(message) => cx.layout_at(&TextRun::new(cx.env.resolve(message).as_str()).wrap(Wrap::Wrap), width).size().y,
             _ => 0.0,
         };
         Vec2::new(width, (width * aspect).max(message))
@@ -489,7 +489,7 @@ impl Component for PrintPreview<'_> {
             let painter = ui.content_painter(cx);
             painter.surface(cx.rect, SurfaceKind::Well, Corners::None);
             let shown = cx.env.resolve(message);
-            let run = TextRun::new(shown.as_str()).color(style.ink);
+            let run = TextRun::new(shown.as_str()).wrap(Wrap::Wrap).color(style.ink);
             centred_text(&painter, &run, cx.rect.center(), cx.rect.width());
             return;
         }

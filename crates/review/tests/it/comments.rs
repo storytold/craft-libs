@@ -293,7 +293,8 @@ fn long_list() -> (Rc<RefCell<Vec<CommentThread>>>, Rc<RefCell<CommentsPanelStat
         let mut state = shown_state.borrow_mut();
         let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
     });
-    fixture.settle();
+    // A panel room is tall enough for the grown first card and the card below it to be in view together.
+    fixture.in_room(Room::Panel).settle();
     state.borrow_mut().reveal(ThreadId(100));
     fixture.settle();
     (threads, state, fixture)
