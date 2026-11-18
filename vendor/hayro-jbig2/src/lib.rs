@@ -658,12 +658,13 @@ const ENTRY_WORDS: u64 = 32;
 /// decoded takes more for a while, within its own bounds: the page bitmap isn't counted, nor is
 /// what a region or a grid uses until it is stored or freed. Craft patch: the bitmaps have
 /// `max_pixels` pixels each (see [`Limits::max_pixels`]), so the 64 MiB is the bound at the
-/// default [`Limits`]. Each row of a bitmap takes at least one word, so a bitmap counts at least
-/// as many words as the rows it may have: a narrow one within a low limit still fits.
+/// default [`Limits`], apart from row padding. Each row of a bitmap is padded to a whole word, up
+/// to 31 bits more a row, so a bitmap counts the padding of as many rows as it may have: a narrow
+/// or row-padded one within the limit still fits.
 const fn max_retained_words(max_pixels: u64) -> u64 {
+    let word_bits = bitmap::WORD_BITS as u64;
     let rows = if max_pixels < bitmap::MAX_DIMENSION as u64 { max_pixels } else { bitmap::MAX_DIMENSION as u64 };
-    let packed = max_pixels / bitmap::WORD_BITS as u64;
-    let words = if packed > rows { packed } else { rows };
+    let words = max_pixels.saturating_add(rows * (word_bits - 1)).div_ceil(word_bits);
     (words + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS).saturating_mul(2)
 }
 
@@ -1191,8 +1192,20 @@ mod tests {
         let mut page = PageState { limits: Limits::with_max_pixels(max_pixels), ..Default::default() };
         let region = Bitmap::new(1, bitmap::MAX_DIMENSION, max_pixels).unwrap();
         assert!(page.store_region(0, region).is_ok());
-        let default_words = (bitmap::MAX_PIXELS / 32 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS) * 2;
-        assert_eq!(MAX_RETAINED_WORDS, default_words);
+    }
+
+    /// Craft patch: two regions within the limit whose rows are padded to whole words can both be
+    /// stored, at a raised limit and at the default one.
+    #[test]
+    fn two_row_padded_regions_within_the_limit_can_be_stored() {
+        for (max_pixels, width, height) in [(10_000_000, 153, 65_359), (bitmap::MAX_PIXELS, 4097, 65_520)] {
+            assert!(u64::from(width) * u64::from(height) <= max_pixels);
+            let mut page = PageState { limits: Limits::with_max_pixels(max_pixels), ..Default::default() };
+            for segment in 0..2 {
+                let region = Bitmap::new(width, height, max_pixels).unwrap();
+                assert!(page.store_region(segment, region).is_ok(), "{width} x {height} within {max_pixels}");
+            }
+        }
     }
 
     /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at

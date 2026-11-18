@@ -158,7 +158,7 @@
       "path": "src/lib.rs",
       "source_sha256": "22463230cc82543ee93791b642566a308f0f4eb14d3089b24dc2e7f06d0f784c",
       "source_git_blob": "ad77a6dd17920b2db66f6bb5a0f2cb8efaafd41a",
-      "sha256": "c6ead88f29b0bd38c5a87869d8bf8700a142a2caf53a2e75d8ca8926eb5cb8b3"
+      "sha256": "41c2bc9062f9562a23855f3b10228f35476f537b3f9e67b01bb7c063d146b13d"
     },
     {
       "path": "src/page_info.rs",
