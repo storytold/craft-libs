@@ -416,7 +416,12 @@ impl Component for ReadingView<'_> {
             let along = gap + page as f32 * step - offset;
             let x = if rtl { viewport.right() - along - size.x } else { viewport.left() + along };
             let at = Rect::from_min_size(pos2(x, top), size);
-            let shown = at.intersects(viewport);
+            // A page touching the viewport's edge only (egui counts that as intersecting) is not shown: it would paint a
+            // zero-width sliver there.
+            let shown = {
+                let overlap = at.intersect(viewport);
+                overlap.width() > 0.0 && overlap.height() > 0.0
+            };
             let near = !shown && [-step, step].into_iter().any(|by| at.translate(vec2(by, 0.0)).intersects(viewport));
             if !shown && !near {
                 continue;
