@@ -72,9 +72,12 @@ fn the_switch_wakes_once_per_change() {
     let launcher = Arc::new(AtomicBool::new(false));
     let probes = Arc::new(AtomicUsize::new(0));
     let wakes = Arc::new(AtomicUsize::new(0));
+    // Held by the watch thread through its probe: gone once the thread has ended.
+    let alive = Arc::new(());
     let probe = {
-        let (launcher, probes) = (launcher.clone(), probes.clone());
+        let (launcher, probes, alive) = (launcher.clone(), probes.clone(), alive.clone());
         move || {
+            let _ = &alive;
             probes.fetch_add(1, Ordering::Relaxed);
             launcher.load(Ordering::Relaxed)
         }
@@ -101,10 +104,10 @@ fn the_switch_wakes_once_per_change() {
 
     drop(switch);
     drop(clone);
-    std::thread::sleep(Duration::from_millis(50));
-    let after_drop = probes.load(Ordering::Relaxed);
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(probes.load(Ordering::Relaxed), after_drop, "the watch ended with the last switch");
+    assert!(wait_for(|| Arc::strong_count(&alive) == 1), "the watch ended with the last switch");
+    let after_end = probes.load(Ordering::Relaxed);
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(probes.load(Ordering::Relaxed), after_end, "nothing probes after the watch ended");
 }
 
 // ---- The connection file ------------------------------------------------------------------------
@@ -425,4 +428,36 @@ fn a_started_app_takes_the_call_and_concurrent_calls_start_it_once() {
     assert_eq!(launches.load(Ordering::Relaxed), 1, "one start for every call");
     assert!(ports.windows(2).all(|p| p[0] == p[1]), "{ports:?}");
     assert_eq!(made.connects.load(Ordering::Relaxed), 1);
+}
+
+/// Calls that queued while a start was under way get its error when the app still isn't there,
+/// rather than starting it again; a call made afterwards tries again.
+#[test]
+fn calls_queued_behind_a_failed_start_share_its_error() {
+    let dir = temp_dir("launch-shared");
+    let made = Arc::new(Made::default());
+    let launches = Arc::new(AtomicUsize::new(0));
+    let mut cfg = config(dir.path(), allowed(WhenAppClosed::Launch), &made);
+    let n = launches.clone();
+    // The app is started but never accepts agents within the timeout.
+    cfg.launch = Some(Box::new(move || {
+        n.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }));
+    cfg.launch_timeout = Duration::from_millis(150);
+    let live = Arc::new(TestLive::new(cfg));
+    let calls: Vec<_> = (0..4)
+        .map(|_| {
+            let live = live.clone();
+            std::thread::spawn(move || live.resolve())
+        })
+        .collect();
+    let answers: Vec<_> = calls.into_iter().map(|c| c.join().unwrap()).collect();
+    assert_eq!(launches.load(Ordering::Relaxed), 1, "one start for the calls that came together");
+    for answer in &answers {
+        let err = answer.as_ref().err().unwrap();
+        assert!(err.starts_with("Test didn't accept agents within"), "{err}");
+    }
+    assert!(live.resolve().is_err());
+    assert_eq!(launches.load(Ordering::Relaxed), 2, "a later call starts the app again");
 }

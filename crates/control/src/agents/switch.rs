@@ -68,9 +68,10 @@ impl AgentSwitch {
                 }
             }
         });
-        // Without a thread the answer stays what it was at launch.
+        // Without a thread a later "off" in the launcher would never be seen: agents stay out.
         if let Err(e) = started {
-            log::warn!("couldn't watch the ArtCraft Launcher's agents switch: {e}");
+            log::warn!("couldn't watch the ArtCraft Launcher's agents switch, so agents stay off: {e}");
+            on.store(false, Ordering::Relaxed);
         }
         Self { mcp_flag, on }
     }

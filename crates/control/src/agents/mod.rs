@@ -32,10 +32,13 @@
 //!
 //! 1. At start, [`remove_stale_connection`] in its settings folder, then
 //!    `AgentSwitch::watch("gridcraft", wake)`, where `wake` asks the UI for a frame.
-//! 2. On each change of [`AgentSwitch::allows`]: when it allows, listen on loopback with a token,
-//!    the token in an owner-only file ([`crate::auth::App::write_token_file`]), and
-//!    [`write_connection`] with [`Connection::new`]; when it stops allowing, stop listening and
-//!    [`remove_connection`] with the app's process id. No restart, no agents switch of its own.
+//! 2. Agents may connect while `settings.allow_agent_control && switch.allows(legacy)`
+//!    ([`AgentSettings::allow_agent_control`], [`AgentSwitch::allows`]); check it again when the
+//!    launcher's switch wakes the app and when the person changes the setting. When it turns true,
+//!    listen on loopback with a token, the token in an owner-only file
+//!    ([`crate::auth::App::write_token_file`]), and [`write_connection`] with [`Connection::new`];
+//!    when it turns false, stop listening and [`remove_connection`] with the app's process id. No
+//!    restart, no agents switch of its own.
 //!
 //! Its `gridcraft-cli mcp`:
 //!

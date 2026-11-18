@@ -16,7 +16,9 @@
 //!   folders win), or an error that says what to do.
 //!
 //! Once headless, the session stays headless: documents don't move under the agent. Lookups are
-//! serialised, so concurrent calls start the app once.
+//! serialised, so concurrent calls start the app once: calls that queued while a start was under
+//! way and found no window get that start's error rather than starting the app again; a call made
+//! after it tries again.
 //!
 //! The crate has no async runtime: `resolve` blocks (file reads, a loopback probe, and while an
 //! app starts, polling), so an async MCP server calls it from its blocking pool. What a window
@@ -27,6 +29,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -171,15 +174,17 @@ type Current<W, H> = Option<(Route<W, H>, Option<WindowKey>)>;
 /// Resolves each tool call of one MCP session; see the module docs.
 pub struct Live<W, H> {
     cfg: LiveConfig<W, H>,
-    /// Serialises lookups, so concurrent calls start the app once.
-    lookup: Mutex<()>,
+    /// Serialises lookups, so concurrent calls start the app once; holds the last start's error.
+    lookup: Mutex<Option<String>>,
+    /// How many starts have finished, read before a call queues for `lookup`.
+    finished: AtomicU64,
     current: Mutex<Current<W, H>>,
 }
 
 impl<W: Clone, H: Clone> Live<W, H> {
     /// A session that has not resolved anything yet.
     pub fn new(cfg: LiveConfig<W, H>) -> Self {
-        Self { cfg, lookup: Mutex::new(()), current: Mutex::new(None) }
+        Self { cfg, lookup: Mutex::new(None), finished: AtomicU64::new(0), current: Mutex::new(None) }
     }
 
     /// The route the last [`Self::resolve`] chose, if any.
@@ -195,7 +200,8 @@ impl<W: Clone, H: Clone> Live<W, H> {
     /// Where the next tool call goes. Blocks; see the module docs. The error is the tool call's
     /// result.
     pub fn resolve(&self) -> Result<Route<W, H>, String> {
-        let _one_at_a_time = self.lookup.lock().unwrap_or_else(PoisonError::into_inner);
+        let queued_at = self.finished.load(Ordering::Acquire);
+        let mut last_failure = self.lookup.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(route @ Route::Headless(_)) = self.current() {
             return Ok(route);
         }
@@ -216,7 +222,19 @@ impl<W: Clone, H: Clone> Live<W, H> {
                 let write = self.cfg.write_root.clone().or_else(|| consent.settings.write_folder());
                 self.headless(&HeadlessFolders { read, write }, &format!("{app} isn't running and its agent folders can't be used"))
             }
-            WhenAppClosed::Launch => self.launch_and_wait(),
+            WhenAppClosed::Launch => {
+                // A start finished while this call waited and the app still isn't there: its answer
+                // is this call's too, rather than a second start of an app that may be opening.
+                if self.finished.load(Ordering::Acquire) != queued_at
+                    && let Some(failure) = last_failure.as_ref()
+                {
+                    return Err(failure.clone());
+                }
+                let started = self.launch_and_wait();
+                *last_failure = started.as_ref().err().cloned();
+                self.finished.fetch_add(1, Ordering::AcqRel);
+                started
+            }
         }
     }
 
@@ -318,8 +336,14 @@ fn read_token(path: &Path) -> Result<String, String> {
 pub fn launcher(cli: &Path, exe: &str) -> Option<LaunchFn> {
     use std::process::{Command, Stdio};
     let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
-    let (program, args) =
-        launch_command(cli, exe, Platform::current(), env("FLATPAK_ID").is_some(), env("APPIMAGE"), env("SystemRoot"), &|p| p.is_file())?;
+    let install = Install {
+        platform: Platform::current(),
+        flatpak: env("FLATPAK_ID").is_some(),
+        appimage: env("APPIMAGE"),
+        appdir: env("APPDIR"),
+        system_root: env("SystemRoot"),
+    };
+    let (program, args) = launch_command(cli, exe, &install, &|p| p.is_file())?;
     let mut command = Command::new(program);
     command.args(args);
     let command = Mutex::new(command);
@@ -327,15 +351,42 @@ pub fn launcher(cli: &Path, exe: &str) -> Option<LaunchFn> {
         let mut c = command.lock().unwrap_or_else(PoisonError::into_inner);
         c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         detach(&mut c);
-        c.spawn().map(|_| ()).map_err(|e| e.to_string())
+        let child = c.spawn().map_err(|e| e.to_string())?;
+        reap(child);
+        Ok(())
     }))
 }
 
+/// Waits for `child` on a thread of its own, so a start helper that exits (`open`, Explorer) or an
+/// app that quits before the CLI does is reaped rather than left a zombie until the MCP client
+/// ends; the app keeps running on its own either way. Without a thread the child is dropped, as
+/// before.
+fn reap(mut child: std::process::Child) {
+    let _ = std::thread::Builder::new().name("app-start-reaper".into()).spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+/// What [`launch_command`] needs to know about the install, from the environment.
+#[derive(Clone, Debug, Default)]
+struct Install {
+    platform: Platform,
+    /// Inside a Flatpak (`FLATPAK_ID`).
+    flatpak: bool,
+    /// The AppImage the running image set (`APPIMAGE`).
+    appimage: Option<OsString>,
+    /// That image's mount point (`APPDIR`).
+    appdir: Option<OsString>,
+    /// `%SystemRoot%` (Windows).
+    system_root: Option<OsString>,
+}
+
 /// The platform [`launch_command`] plans for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Platform {
     Windows,
     MacOs,
+    #[default]
     Other,
 }
 
@@ -352,19 +403,16 @@ impl Platform {
 }
 
 /// The program and arguments that start the app; see [`launcher`].
-fn launch_command(
-    cli: &Path,
-    exe: &str,
-    platform: Platform,
-    flatpak: bool,
-    appimage: Option<OsString>,
-    system_root: Option<OsString>,
-    is_file: &dyn Fn(&Path) -> bool,
-) -> Option<(PathBuf, Vec<OsString>)> {
-    if flatpak {
+fn launch_command(cli: &Path, exe: &str, install: &Install, is_file: &dyn Fn(&Path) -> bool) -> Option<(PathBuf, Vec<OsString>)> {
+    let platform = install.platform;
+    if install.flatpak {
         return None;
     }
-    if let Some(image) = appimage {
+    // Only when this CLI runs from that image's mount: a process started from another AppImage
+    // (an MCP client packaged as one) inherits its `APPIMAGE` too.
+    if let (Some(image), Some(mount)) = (&install.appimage, &install.appdir)
+        && cli.starts_with(mount)
+    {
         // The AppImage's mount point goes away with the CLI; the image itself stays.
         return Some((PathBuf::from(image), Vec::new()));
     }
@@ -380,7 +428,7 @@ fn launch_command(
     if !is_file(&app) {
         return None;
     }
-    Some(if platform == Platform::Windows { windows_launch(&app, system_root.as_deref()) } else { (app, Vec::new()) })
+    Some(if platform == Platform::Windows { windows_launch(&app, install.system_root.as_deref()) } else { (app, Vec::new()) })
 }
 
 /// How Windows starts the app at `app`: through Explorer, as a double-click would. The app is then
@@ -429,7 +477,10 @@ mod tests {
         root: Option<&str>,
         exists: bool,
     ) -> Option<(PathBuf, Vec<OsString>)> {
-        launch_command(Path::new(cli), "photocraft", platform, flatpak, appimage.map(OsString::from), root.map(OsString::from), &|_| exists)
+        // An AppImage's mount is where its CLI runs from.
+        let appdir = appimage.map(|_| OsString::from("/tmp/.mount"));
+        let install = Install { platform, flatpak, appimage: appimage.map(OsString::from), appdir, system_root: root.map(OsString::from) };
+        launch_command(Path::new(cli), "photocraft", &install, &|_| exists)
     }
 
     #[test]
@@ -455,6 +506,15 @@ mod tests {
         assert_eq!(
             plan("/tmp/.mount/usr/bin/photocraft-cli", Platform::Other, false, Some("/home/a/P.AppImage"), None, false),
             Some((PathBuf::from("/home/a/P.AppImage"), Vec::new()))
+        );
+        // Another AppImage's variables (an MCP client packaged as one): the app beside the CLI.
+        let client = plan("/opt/pc/photocraft-cli", Platform::Other, false, Some("/home/a/Client.AppImage"), None, true);
+        assert_eq!(client, Some((PathBuf::from("/opt/pc/photocraft"), Vec::new())));
+        let no_mount = Install { appimage: Some("/home/a/P.AppImage".into()), ..Install::default() };
+        assert_eq!(
+            launch_command(Path::new("/tmp/.mount/usr/bin/photocraft-cli"), "photocraft", &no_mount, &|_| false),
+            None,
+            "APPIMAGE without APPDIR"
         );
         // A macOS bundle opens through LaunchServices.
         let (program, args) = plan("/Applications/PhotoCraft.app/Contents/MacOS/photocraft-cli", Platform::MacOs, false, None, None, false).unwrap();
