@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check the Workspace workflow's pull-request-only cancellation policy.
+"""Check the Workspace workflow's cancellation policy: pull requests and pushes to main cancel the
+run they supersede; release tags, manual runs and scheduled runs are never cancelled.
 
 The policy is the top-level `concurrency` block of .github/workflows/workspace.yml. This script
 reads those fields, requires the documented expression shapes, and checks which group each event
@@ -21,16 +22,28 @@ except ImportError:
     yaml = None
 
 DEFAULT_WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "workspace.yml"
-PULL_REQUEST, PUSH, DISPATCH = "pull_request", "push", "workflow_dispatch"
+PULL_REQUEST, PUSH, DISPATCH, SCHEDULE = "pull_request", "push", "workflow_dispatch", "schedule"
 
-# The two shapes this policy may use. GitHub reads `a && b || c` as "b, or c when a is false"; these
-# patterns are the whole of that expression language this script understands, so a reworded policy
-# has to be reworded here too, on purpose. github.ref, never github.head_ref or github.sha.
+# The runs that share a group per ref and cancel the run they supersede. GitHub reads `a || b && c`
+# as `a || (b && c)`, and `x && github.ref || github.run_id` as "github.ref, or the run id when x is
+# false". This exact condition is the whole of the expression language this script understands, so
+# a reworded policy has to be reworded here too, on purpose. github.ref, never github.head_ref or
+# github.sha.
+SUPERSEDED = "github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main'"
 GROUP_SHAPE = re.compile(
-    r"(?P<prefix>[A-Za-z0-9._-]+)-\$\{\{\s*github\.event_name\s*==\s*'(?P<event>[a-z_]+)'\s*"
+    r"(?P<prefix>[A-Za-z0-9._-]+)-\$\{\{\s*\(\s*(?P<condition>[^()]+?)\s*\)\s*"
     r"&&\s*github\.ref\s*\|\|\s*github\.run_id\s*\}\}"
 )
-CANCEL_SHAPE = re.compile(r"\$\{\{\s*github\.event_name\s*==\s*'(?P<event>[a-z_]+)'\s*\}\}")
+CANCEL_SHAPE = re.compile(r"\$\{\{\s*(?P<condition>[^{}]+?)\s*\}\}")
+
+
+def normal(expression):
+    return re.sub(r"\s+", " ", expression).strip()
+
+
+def superseded(event_name, ref):
+    """SUPERSEDED, evaluated."""
+    return event_name == PULL_REQUEST or (event_name == PUSH and ref == "refs/heads/main")
 
 
 def read_concurrency(text):
@@ -72,22 +85,25 @@ def other_run(event_name, ref, run_id):
 MAIN, TAG = ("refs/heads/main", "refs/tags/v1.2.3")
 SAME_GROUP = [
     ("a newer commit on the same pull request", pull_request(1316, 43599251877), pull_request(1316, 43600899878)),
-    ("a rerun of one main run", other_run(PUSH, MAIN, 7001), other_run(PUSH, MAIN, 7001)),
+    ("two pushes to main", other_run(PUSH, MAIN, 3), other_run(PUSH, MAIN, 4)),
 ]
 DIFFERENT_GROUPS = [
     ("two pull requests", pull_request(1316, 1), pull_request(1317, 1)),
     ("the same branch name in two forks", pull_request(1316, 2), pull_request(1400, 2)),
-    ("two pushes to main", other_run(PUSH, MAIN, 3), other_run(PUSH, MAIN, 4)),
     ("two release tag runs", other_run(PUSH, TAG, 5), other_run(PUSH, TAG, 6)),
     ("two manual runs", other_run(DISPATCH, MAIN, 7), other_run(DISPATCH, MAIN, 8)),
+    ("two scheduled runs", other_run(SCHEDULE, MAIN, 15), other_run(SCHEDULE, MAIN, 16)),
+    ("a main push and a scheduled run", other_run(PUSH, MAIN, 17), other_run(SCHEDULE, MAIN, 17)),
+    ("a main push and a manual run of main", other_run(PUSH, MAIN, 18), other_run(DISPATCH, MAIN, 18)),
     ("a main push and a pull request", other_run(PUSH, MAIN, 9), pull_request(1316, 9)),
     ("a release tag and a pull request", other_run(PUSH, TAG, 10), pull_request(1316, 10)),
 ]
 CANCELLATION = [
     ("a push supersedes the previous run of its pull request", pull_request(1316, 11), True),
-    ("a push to main is never cancelled", other_run(PUSH, MAIN, 12), False),
+    ("a push to main supersedes the previous main run", other_run(PUSH, MAIN, 12), True),
     ("a release tag run is never cancelled", other_run(PUSH, TAG, 13), False),
     ("a manual run is never cancelled", other_run(DISPATCH, MAIN, 14), False),
+    ("the scheduled run that saves the caches is never cancelled", other_run(SCHEDULE, MAIN, 19), False),
 ]
 
 
@@ -103,17 +119,17 @@ class ConcurrencyTests(unittest.TestCase):
         if not cls.group_shape or not cls.cancel_shape:
             raise AssertionError(f"the concurrency fields are not the documented shapes: {cls.fields}")
 
-    def cancels(self, event_name):
-        return event_name == self.cancel_shape["event"]
+    def cancels(self, event_name, ref):
+        return superseded(event_name, ref)
 
     def group(self, event_name, ref, run_id):
-        return self.group_shape["prefix"] + "-" + (ref if event_name == self.group_shape["event"] else str(run_id))
+        return self.group_shape["prefix"] + "-" + (ref if superseded(event_name, ref) else str(run_id))
 
     def test_policy_is_the_two_documented_fields(self):
         self.assertEqual(sorted(self.fields), ["cancel-in-progress", "group"])
         self.assertEqual(self.group_shape["prefix"], "workspace")
-        self.assertEqual(self.group_shape["event"], PULL_REQUEST)
-        self.assertEqual(self.cancel_shape["event"], PULL_REQUEST)
+        self.assertEqual(normal(self.group_shape["condition"]), SUPERSEDED)
+        self.assertEqual(normal(self.cancel_shape["condition"]), SUPERSEDED)
 
     def test_a_scalar_concurrency_value_is_not_read_as_a_mapping(self):
         cases = {
@@ -133,10 +149,10 @@ class ConcurrencyTests(unittest.TestCase):
             with self.subTest(description):
                 self.assertNotEqual(self.group(*first), self.group(*second), description)
 
-    def test_only_a_pull_request_cancels(self):
+    def test_only_pull_requests_and_main_pushes_cancel(self):
         for description, context, expected in CANCELLATION:
             with self.subTest(description):
-                self.assertEqual(self.cancels(context[0]), expected, description)
+                self.assertEqual(self.cancels(context[0], context[1]), expected, description)
 
     def test_pyyaml_reads_the_same_fields(self):
         if yaml is None:
