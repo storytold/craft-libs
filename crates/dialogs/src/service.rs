@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use craft_host::{FileError, Files, PickAnswer, PickId, PickRequest, Wake};
+use craft_host::{FileError, Files, PickAnswer, PickId, PickRequest, Wake, WriteIntent};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use craft_host::{PickKind, Picked};
@@ -570,8 +570,11 @@ impl Files for FileService {
     }
 
     // pc: apps/photocraft/src/services.rs:359 write_atomic
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        craft_atomic::atomic_write(path, bytes).map_err(|e| file_error(e, path))
+    // P3(pdf-workflows-w4): L-184 the intent and the page-took-it result.
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        let _ = intent;
+        craft_atomic::atomic_write(path, bytes).map_err(|e| file_error(e, path))?;
+        Ok(false)
     }
 
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {

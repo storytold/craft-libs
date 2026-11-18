@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use craft_ui::contract::SizeLimits;
+use craft_ui::contract::overlay::PlacementKind;
 use craft_ui::runtime::env::Label;
 use egui::{Response, Ui, vec2};
 
@@ -33,7 +34,7 @@ pub struct NoteDrafts {
 }
 
 /// The smallest size of a note pop-up, in points; it has no largest size.
-pub const NOTE_POPUP_LIMITS: SizeLimits = SizeLimits::at_least(vec2(160.0, 96.0));
+pub const NOTE_POPUP_LIMITS: SizeLimits = SizeLimits::new(vec2(200.0, 120.0), vec2(800.0, 800.0));
 
 /// What a note pop-up did this pass.
 #[derive(Debug)]
@@ -41,8 +42,14 @@ pub const NOTE_POPUP_LIMITS: SizeLimits = SizeLimits::at_least(vec2(160.0, 96.0)
 pub struct NotePopupOutput {
     /// The pop-up's response.
     pub response: Response,
-    /// The window's new rectangle, reported when a move or resize commits.
-    pub placed: Option<egui::Rect>,
+    /// The pop-up was closed this pass.
+    pub closed: bool,
+    /// The note's edited text, once it is committed.
+    pub body: Option<String>,
+    /// A reply posted this pass.
+    pub reply: Option<String>,
+    /// The window's new rectangle and the gesture that made it, reported when a move or resize commits.
+    pub placed: Option<(egui::Rect, PlacementKind)>,
 }
 
 /// A modeless note pop-up window over a note's messages. It keeps its size on screen at every zoom, so it takes no
@@ -76,6 +83,16 @@ impl<'a> NotePopup<'a> {
     #[allow(dead_code)] // P3(pdf-comments-w3): CM-C18
     pub fn mark(self, mark: bool) -> Self {
         let _ = mark;
+        todo!("CM-C18")
+    }
+
+    /// The annotation's screen rect (the first quad or the icon) and whether the host's page part is hovered: the
+    /// pop-up paints the faint connector from the mark to its window while `mark_hovered`, the window is hovered or the
+    /// note is selected, and only when the two do not overlap. It replaces `mark`.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w3): CM-C18
+    pub fn anchor(self, mark: egui::Rect, mark_hovered: bool) -> Self {
+        let _ = (mark, mark_hovered);
         todo!("CM-C18")
     }
 

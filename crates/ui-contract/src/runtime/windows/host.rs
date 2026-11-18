@@ -289,6 +289,12 @@ impl WindowHost {
         shared(&self.ctx, |shared| shared.system_pointer.or(shared.source_pointer))
     }
 
+    /// The main window's native handle (the Win32 `HWND` value, read through the safe `HasWindowHandle` API), `None` on
+    /// other platforms and where no window is open. A driver dialog takes it as its owner.
+    pub fn main_window_handle(&self) -> Option<std::num::NonZeroIsize> {
+        todo!("L-178")
+    }
+
     /// Moves the system pointer to `to` in desktop points; false where the platform cannot.
     pub fn warp_pointer(&self, to: Pos2) -> bool {
         let system = shared(&self.ctx, |shared| shared.system.clone());

@@ -121,6 +121,23 @@ pub enum GoTo {
         /// Where in the viewport the point goes, as fractions of its width and height.
         view: (f64, f64),
     },
+    /// `rect` of `page` fitted into the viewport with `margin` around it and centred: the pass sets the zoom from its own
+    /// viewport and `PageSpacing.side`, clamped to `ZOOM_RANGE`.
+    Rect {
+        /// The page.
+        page: usize,
+        /// The rect on the page, in page points.
+        rect: DocRect,
+        /// The margin around the rect, in screen points.
+        margin: f64,
+    },
+    /// The point `at` on `page`, placed at the viewport's start corner with the side gap.
+    Corner {
+        /// The page.
+        page: usize,
+        /// The point on the page, in page points.
+        at: Point,
+    },
 }
 
 impl Default for PageViewState {
@@ -629,6 +646,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let asked = state.go_to.take().map(|go_to| match go_to {
         GoTo::Top { page, fraction } => (page, fraction),
         GoTo::Point { page, .. } => (page, 0.0),
+        GoTo::Rect { page, .. } | GoTo::Corner { page, .. } => (page, 0.0), // P3(pdf-canvas-w4): CV-C18
     });
     let go_to = keys.go_to.or(asked);
     let went = go_to.is_some();

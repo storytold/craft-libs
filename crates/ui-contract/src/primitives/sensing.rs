@@ -128,6 +128,9 @@ pub(crate) struct PartDecl {
     pub inactive: bool,
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
+    /// The named stacking order among parts of one priority (default 0).
+    #[allow(dead_code)] // P3(pdf-canvas-w4): CV-C31
+    pub stacking: u32,
 }
 
 impl PartDecl {
@@ -144,6 +147,7 @@ impl PartDecl {
             flags: Flags::default(),
             inactive: false,
             held: false,
+            stacking: 0,
         }
     }
 

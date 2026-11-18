@@ -132,6 +132,14 @@ impl<'a> SwatchTable<'a> {
         .label(label)
     }
 
+    /// One icon cell after the entries, at key `swatches.len()`, in the same Tab stop and arrow walk: the Other… cell
+    /// of a palette.
+    #[must_use]
+    pub fn trailing(self, label: impl Into<Label>, icon: craft_behavior::IconId) -> Self {
+        let _ = (label.into(), icon);
+        todo!("CM-C26")
+    }
+
     /// Whether Shift or Cmd adds cells to the selection.
     #[must_use]
     pub fn multiple(mut self, on: bool) -> Self {

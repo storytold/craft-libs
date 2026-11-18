@@ -179,6 +179,10 @@ pub struct Finished {
     pub token: u64,
     /// File to write the PNG to; `None` inlines it in the reply.
     pub path: Option<String>,
+    /// The part of the window to crop the image to, in points; `None` keeps the whole window.
+    pub region: Option<egui::Rect>,
+    /// The layout the image was captured from; the crop and the reply's `pixels_per_point` read it.
+    pub geometry: CaptureGeometry,
     /// Where to send the answer.
     pub reply: Option<Sender<ControlResponse>>,
     /// The captured image, or the error text for the reply.
@@ -186,9 +190,17 @@ pub struct Finished {
 }
 
 impl Finished {
-    /// A finished request for `token`: `result` answers `reply`, and an image is written to `path` when given.
-    pub fn new(token: u64, path: Option<String>, reply: Option<Sender<ControlResponse>>, result: Result<Arc<ColorImage>, String>) -> Self {
-        Self { token, path, reply, result }
+    /// A finished request for `token`: `result` answers `reply`, and an image is written to `path` when given,
+    /// cropped to `region` as `geometry` scales it.
+    pub fn new(
+        token: u64,
+        path: Option<String>,
+        region: Option<egui::Rect>,
+        geometry: CaptureGeometry,
+        reply: Option<Sender<ControlResponse>>,
+        result: Result<Arc<ColorImage>, String>,
+    ) -> Self {
+        Self { token, path, region, geometry, reply, result }
     }
 }
 
@@ -539,6 +551,8 @@ impl Captures {
             finished.push(Finished {
                 token: w.token,
                 path: w.path,
+                region: None,                                  // P3(pdf-shell-w2): SH-C18
+                geometry: CaptureGeometry::new([0.0, 0.0], 0), // P3(pdf-shell-w2): SH-C18 (a waiting request has none recorded)
                 reply: Some(w.reply),
                 result: Err(format!("screenshot {} cancelled: {reason}", w.token)),
             });
@@ -550,6 +564,8 @@ impl Captures {
             finished.push(Finished {
                 token: r.token,
                 path: r.path.take(),
+                region: None, // P3(pdf-shell-w2): SH-C18
+                geometry: r.geometry,
                 reply: r.reply.take(),
                 result: Err(format!("screenshot {} cancelled: {reason}", r.token)),
             });
@@ -598,7 +614,7 @@ fn finish(r: &mut PendingCapture, result: Result<Arc<ColorImage>, String>) -> Fi
     if let Some(slot) = r.slot.take() {
         slot.cancel();
     }
-    Finished { token: r.token, path: r.path.take(), reply: r.reply.take(), result }
+    Finished { token: r.token, path: r.path.take(), region: None, geometry: r.geometry, reply: r.reply.take(), result } // P3(pdf-shell-w2): SH-C18 (`region`)
 }
 
 /// The returned image must be the issued viewport (within a pixel) or a uniform renderer fit
@@ -712,10 +728,11 @@ pub fn screenshot_reply(
     token: u64,
     image: Arc<ColorImage>,
     region: Option<egui::Rect>,
+    geometry: CaptureGeometry,
     path: Option<&str>,
     write: &mut PngWriter<'_>,
 ) -> ControlResponse {
-    let _ = region; // P3(pdf-shell-w2): SH-C18 (the writer crops the image to it)
+    let _ = (region, geometry); // P3(pdf-shell-w2): SH-C18 (the writer crops the image to the region and replies with the geometry's scale)
     let [w, h] = image.size;
     let Some(bytes) = w.checked_mul(h).and_then(|n| n.checked_mul(4)).filter(|&n| n <= MAX_IMAGE_BYTES) else {
         return serde_json::json!({

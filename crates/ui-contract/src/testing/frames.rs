@@ -242,6 +242,13 @@ impl Frames {
         self.files.dropped = names.iter().map(|name| (*name).to_owned()).collect();
     }
 
+    /// A file the page read asynchronously (a web drop with neither path nor bytes) arrives with its `bytes`: the fixture
+    /// posts it into the file inbox as the wasm read does, and the next pass delivers it once.
+    pub fn read_dropped(&mut self, name: &str, bytes: &[u8]) {
+        let _ = (name, bytes);
+        todo!("SH-C11")
+    }
+
     /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
     /// [`advance`](Self::advance). Held-pointer repeats, hover delays and animations then wait for the test.
     pub fn still_clock(&mut self) {

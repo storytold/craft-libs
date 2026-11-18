@@ -153,6 +153,11 @@ impl HostRequests {
         self.action.take()
     }
 
+    /// The row keys an edit changed since the last take.
+    pub fn take_edited(&mut self) -> Vec<String> {
+        todo!("DG-C13")
+    }
+
     /// Files a step of the preview pager; it replaces one not taken yet.
     pub fn request_preview_step(&mut self, step: PagerStep) {
         let _ = step;

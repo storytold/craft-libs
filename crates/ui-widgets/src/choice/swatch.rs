@@ -172,6 +172,12 @@ impl Swatch<()> {
         let _ = (label, color);
         todo!("CM-C25b")
     }
+
+    /// A well with the catalogue glyph `icon` on top; its access node is an option named `label` with no colour value.
+    pub fn icon(label: impl Into<crate::runtime::env::Label>, icon: craft_behavior::IconId) -> Swatch<()> {
+        let _ = (label, icon);
+        todo!("CM-C25b")
+    }
 }
 
 /// A colour as one that may also be "no colour".

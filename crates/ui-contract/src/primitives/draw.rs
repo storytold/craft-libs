@@ -22,6 +22,8 @@ pub enum WellFill {
     Mixed,
     /// The sunken "no colour" diagonal in `status.bad`.
     None,
+    /// The sunken well with no mark: the base of a swatch icon.
+    Empty,
 }
 
 /// A shape `Draw::fill` and `Draw::stroke` paint.
@@ -520,7 +522,7 @@ impl<'a> Draw<'a> {
     pub fn swatch_well(&self, well: Rect, radius: CornerRadius, fill: WellFill) {
         let color = match fill {
             WellFill::Color(color) => Some(color),
-            WellFill::Mixed | WellFill::None => None, // P3(pdf-comments-w5): CM-C25a
+            WellFill::Mixed | WellFill::None | WellFill::Empty => None, // P3(pdf-comments-w5): CM-C25a
         };
         let shape = PaintShape::Rect(well, radius);
         match color {

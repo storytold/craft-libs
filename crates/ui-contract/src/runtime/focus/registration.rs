@@ -142,12 +142,22 @@ pub struct Group {
     pub owner: Option<Id>,
     /// The group lays out right to left: a physical Left or Right arrow moves the opposite way.
     pub rtl: bool,
+    /// The group this one is a member of: a move this group does not take passes to it, entering at its selected or
+    /// first member.
+    pub parent: Option<Id>,
 }
 
 impl Group {
     /// A group of `roving` rules.
     pub fn new(id: Id, roving: Roving) -> Group {
-        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false }
+        Group { id, roving, selected: None, lead: None, row: false, owner: None, rtl: false, parent: None }
+    }
+
+    /// Makes this group a member of the roving group `parent`.
+    #[must_use]
+    pub fn parent(mut self, parent: Id) -> Self {
+        self.parent = Some(parent);
+        self
     }
 
     /// Reads horizontal arrows in the group's direction.

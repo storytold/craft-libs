@@ -240,6 +240,8 @@ pub struct CollectionProps {
     pub notch: Option<Notch>,
     /// What a middle press does: pan or latched auto-scroll.
     pub middle_button: craft_behavior::MiddleButton,
+    /// Flip the direction of middle-button pan and auto-scroll.
+    pub invert_middle: bool,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
     /// that does not scroll along it too: a strip of tabs (`Axis::X`) sits in a page that scrolls vertically.
     pub overflow: Axis,
@@ -332,6 +334,7 @@ impl CollectionProps {
             command_click: false,
             notch: None,
             middle_button: craft_behavior::MiddleButton::Pan,
+            invert_middle: false,
             overflow: Axis::Y,
             pages: false,
             current: None,
@@ -583,6 +586,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn middle_button(mut self, button: craft_behavior::MiddleButton) -> Self {
         self.middle_button = button;
+        self
+    }
+
+    /// Flips the direction of middle-button pan and auto-scroll (see [`CollectionProps::invert_middle`]).
+    #[must_use]
+    pub const fn invert_middle(mut self, on: bool) -> Self {
+        self.invert_middle = on;
         self
     }
 

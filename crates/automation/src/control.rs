@@ -268,7 +268,7 @@ impl ControlChannel {
     pub fn finish_captures(&mut self, finished: Vec<Finished>, write: &mut crate::screenshot::PngWriter<'_>) {
         for f in finished {
             let reply = match f.result {
-                Ok(image) => screenshot_reply(f.token, image, None, f.path.as_deref(), write), // P3(pdf-shell-w2): SH-C18 (`None` until the request carries the region)
+                Ok(image) => screenshot_reply(f.token, image, f.region, f.geometry, f.path.as_deref(), write),
                 Err(e) => json!({"ok": false, "error": e}),
             };
             if let Some(tx) = f.reply {

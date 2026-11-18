@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use craft_host::{FileError, FileFilter, Files, PickId, PickRequest, Picked};
+use craft_host::{FileError, FileFilter, Files, PickId, PickRequest, Picked, WriteIntent};
 use craft_platform::watch::FileWatch;
 
 use crate::save::{SaveDocument, SaveFlow, SaveStep, SaveTarget};
@@ -55,7 +55,8 @@ impl Files for ScriptedFiles {
         Err(FileError::Unsupported)
     }
 
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    // P3(pdf-shell-w5): L-184 the intent and the page-took-it result.
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }
 

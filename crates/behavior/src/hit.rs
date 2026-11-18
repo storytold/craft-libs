@@ -220,12 +220,15 @@ pub struct Shape<O> {
     pub local: bool,
     /// The least size across the hit area has, in points.
     pub min_across: f32,
+    /// The named stacking order: stacked parts of one priority rank by it before the nearest centre, the higher order
+    /// winning.
+    pub stacking: u32,
 }
 
 impl<O> Shape<O> {
     /// A shape of `owner` at stack `position`.
     pub const fn new(shape: HitShape, sense: Sense, owner: O, part: Option<PartRef>, priority: HitPriority, position: u32) -> Self {
-        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0 }
+        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0, stacking: 0 }
     }
 
     /// The hit area is at least `across` points wide and high.

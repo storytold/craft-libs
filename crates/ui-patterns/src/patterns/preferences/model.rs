@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use craft_theme::{Rgba, Srgba};
-use egui::{Context, Response, Ui};
+use egui::{Response, Ui};
 
 use crate::contract::{Entry, NoValue, Outcome};
 use crate::runtime::env::UnitKind;
@@ -320,7 +320,7 @@ pub trait PreferencesModel {
     fn reset_page(&mut self, page: &str);
     /// Draws the dialogs the host opened from this window (a colour picker) inside the same viewport. Called last in
     /// every pass.
-    fn nested(&mut self, _ctx: &Context) {}
+    fn nested(&mut self, _ui: &mut Ui) {}
     /// Whether a nested dialog is open: the window takes no keys then, and refuses OK.
     fn nested_open(&self) -> bool {
         false

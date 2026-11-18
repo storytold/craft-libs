@@ -20,6 +20,7 @@ use crate::display::{Shade, Text};
 use crate::form::SliderFieldLayout;
 use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
+use crate::style::DataColor;
 
 use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{Env, Label};
@@ -302,6 +303,9 @@ pub struct ParamDialog<'a> {
     /// The host's drawing over the picture of a `Ready` preview.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     preview_overlay: Option<PaneOverlay<'a>>,
+    /// Multiplies the `Ready` preview picture's colours (`PreviewPane::tint`).
+    #[prop]
+    preview_tint: Option<DataColor>,
     /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
     /// preview clicks pick a colour turns it off. The default is true. While it is on and the pane shows, a primary
     /// press on the dialog's [`canvas`](ParamDialog::canvas) passes the modal layer too: the image is the pane's
@@ -398,6 +402,7 @@ impl<'a> ParamDialog<'a> {
             preview: None,
             preview_pager: None,
             preview_overlay: None,
+            preview_tint: None,
             click_centres: true,
             canvas: None,
             extra_buttons: Vec::new(),
@@ -510,6 +515,7 @@ impl<'a> ParamDialog<'a> {
             preview,
             preview_pager,
             preview_overlay,
+            preview_tint,
             click_centres,
             canvas,
             extra_buttons,
@@ -526,7 +532,7 @@ impl<'a> ParamDialog<'a> {
             preview_colors,
         } = self;
         // P3(pdf-dialogs-w1): DG-C3, DG-C12, CM-C28 — the writer draws these; the stub only reads them.
-        let _ = (tabs, shared_rows, tab, read_only, title_note, preview_pager, preview_overlay);
+        let _ = (tabs, shared_rows, tab, read_only, title_note, preview_pager, preview_overlay, preview_tint);
         let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
         // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
         let footer = ResetFooter::new(ui, cancel_label.clone(), alt_resets);
@@ -1028,6 +1034,13 @@ impl HostedParamDialog {
         todo!("DG-C13")
     }
 
+    /// Sets the tint that multiplies the `Ready` preview picture's colours from the next pass on; `None` shows it
+    /// untinted.
+    pub fn set_preview_tint(&mut self, tint: Option<DataColor>) {
+        let _ = tint;
+        todo!("DG-C13")
+    }
+
     /// The step the preview pager took, once.
     pub fn take_preview_step(&mut self) -> Option<PagerStep> {
         todo!("DG-C13")
@@ -1100,6 +1113,11 @@ impl HostedParamDialog {
     /// The id of the footer button or custom row button that was pressed, once (`ParamDialog::extra_buttons`).
     pub fn take_action(&mut self) -> Option<String> {
         self.requests.take_action()
+    }
+
+    /// The row keys an edit changed since the last take.
+    pub fn take_edited(&mut self) -> Vec<String> {
+        self.requests.take_edited()
     }
 
     /// The folder listing a files row asked for, once.

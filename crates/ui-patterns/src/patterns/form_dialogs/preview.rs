@@ -12,7 +12,7 @@ use crate::primitives::ContentPainterCx;
 use crate::runtime::access::Access;
 use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
-use crate::style::{ComponentStyle, FocusLook, StyleCx};
+use crate::style::{ComponentStyle, DataColor, FocusLook, StyleCx};
 use crate::text::NumberField;
 use craft_behavior::{
     AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense,
@@ -285,6 +285,10 @@ pub struct PreviewPane<'a> {
     /// The host's drawing over the picture of a `Ready` pane.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
+    /// Multiplies the `Ready` picture's colours, as `ThumbPaint::tint` does.
+    #[prop]
+    #[allow(dead_code)] // P3(pdf-dialogs-w2): DG-C12
+    tint: Option<DataColor>,
     /// Whether the picture overflows the well horizontally, and vertically. Set by `parts`, which runs before the
     /// root's sense is read: the wheel scrolls the pane only on an axis it pans on.
     overflow: (bool, bool),
@@ -313,6 +317,7 @@ impl PreviewPane<'_> {
             clicked: None,
             pressed: None,
             overlay: None,
+            tint: None,
             overflow: (false, false),
             fixed: view.fixed,
         }

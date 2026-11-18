@@ -806,6 +806,19 @@ impl HostedPrint {
         todo!("PO-P8")
     }
 
+    /// The destination the user picked in the panel, or a `set_json_field("printer", ..)` write, once; `State::poll`'s
+    /// replacement of an unlisted name is not reported.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn take_printer_chosen(&mut self) -> Option<super::Destination> {
+        todo!("PO-P8")
+    }
+
+    /// Withdraws a held OK: OK is enabled again, the values are kept and no refusal line shows.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn release_ok(&mut self) {
+        todo!("PO-P8")
+    }
+
     /// The dialog holds OK until the app answers it with `answer_ok`.
     #[must_use]
     #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8

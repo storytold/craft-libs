@@ -178,6 +178,12 @@ impl<K: TextureKey> Clone for TextureLoader<K> {
 }
 
 impl<K: TextureKey> TextureLoader<K> {
+    /// Seconds `key` has waited for its picture, `None` when it is not waiting.
+    pub fn waited(&self, ctx: &Context, key: &K) -> Option<f64> {
+        let _ = (ctx, key);
+        todo!("CV-C16")
+    }
+
     /// The loader of `ctx` under `salt`, made with `options` the first time; its store is
     /// `TextureStore::in_context` under the same salt. Later calls with the same salt get the same loader and
     /// ignore `options`.

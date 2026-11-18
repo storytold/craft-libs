@@ -32,12 +32,32 @@ pub struct ZoomField {
     stepper: bool,
     scrub: bool,
     enabled: bool,
+    #[allow(dead_code)] // P3(pdf-chrome-w2): L-170
+    scale: ZoomScale,
+}
+
+/// What a zoom field's 100 % means.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ZoomScale {
+    /// One view unit is one device pixel (the default).
+    #[default]
+    Device,
+    /// One view unit is one document point: 100 % is the document's actual size.
+    Points,
 }
 
 impl ZoomField {
     /// A zoom field named `label` over `view` (`None` when no view is known) of a document of `document` units.
     pub fn new(label: impl Into<Label>, view: Option<CanvasView>, document: Size) -> Self {
-        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true }
+        ZoomField { label: label.into(), view, document, stepper: false, scrub: false, enabled: true, scale: ZoomScale::Device }
+    }
+
+    /// What 100 % means: device pixels (the default) or document points.
+    #[must_use]
+    pub fn scale(mut self, scale: ZoomScale) -> Self {
+        self.scale = scale;
+        self
     }
 
     /// The arrow keys and the wheel step along the zoom ladder.

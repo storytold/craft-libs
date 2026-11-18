@@ -192,6 +192,15 @@ pub struct PickAnswer {
     pub picked: Picked,
 }
 
+/// Why a file is written: a Save to the document's own place, or a Save As to a new one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteIntent {
+    /// Save to the place the document already has.
+    Save,
+    /// Save to a new place.
+    SaveAs,
+}
+
 /// Why a read or write failed. The message reads the same in every app (F15.06).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileError {
@@ -245,8 +254,9 @@ pub trait Files: Send + Sync {
     fn pick_pending(&self) -> bool;
     /// Reads the whole file at `path`.
     fn read(&self, path: &Path) -> Result<Vec<u8>, FileError>;
-    /// Writes atomically where the platform allows (temp file and rename).
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError>;
+    /// Writes atomically where the platform allows (temp file and rename). `Ok(true)` when a host page took the bytes
+    /// (a browser embedded in a page), `Ok(false)` when they were written here.
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError>;
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
     /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
@@ -299,14 +309,16 @@ impl Files for NoPickFiles {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        let _ = intent; // P3(pdf-workflows-w4): SH-C35
         let tmp = path.with_extension(format!("{}.tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
         std::fs::write(&tmp, bytes).map_err(|e| with_path(e, path))?;
-        std::fs::rename(&tmp, path).map_err(|e| with_path(e, path))
+        std::fs::rename(&tmp, path).map_err(|e| with_path(e, path))?;
+        Ok(false)
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn write(&self, _path: &Path, _bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
     }
 
@@ -463,9 +475,10 @@ impl Files for ScriptedFiles {
         self.file(path).ok_or_else(|| FileError::NotFound(path.to_owned()))
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError> {
+        let _ = intent; // P3(pdf-workflows-w4): SH-C35
         self.state().files.insert(path.to_owned(), bytes.to_vec());
-        Ok(())
+        Ok(false)
     }
 
     fn answer_next(&self, picked: Picked) -> Result<(), FileError> {

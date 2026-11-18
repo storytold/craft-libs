@@ -59,7 +59,7 @@ pub struct SwatchPalette<'a> {
 /// What a palette binds: a colour, or a colour that may be none.
 enum PaletteColor<'a> {
     Color(Bind<'a, Srgba>),
-    Optional(Bind<'a, Mixed<Option<Srgba>>>),
+    Optional(Bind<'a, Option<Srgba>>),
 }
 
 impl<'a> SwatchPalette<'a> {
@@ -70,7 +70,7 @@ impl<'a> SwatchPalette<'a> {
 
     /// A palette over a colour that may be none, bound as `Mixed::Same(None)`: no swatch is selected for `Same(None)`
     /// or `Mixed`, and a pick writes `Mixed::Same(Some(colour))`.
-    pub fn optional(label: impl Into<Label>, color: Bind<'a, Mixed<Option<Srgba>>>, swatches: &'a [(Label, Srgba)]) -> Self {
+    pub fn optional(label: impl Into<Label>, color: Bind<'a, Option<Srgba>>, swatches: &'a [(Label, Srgba)]) -> Self {
         SwatchPalette { label: label.into(), color: PaletteColor::Optional(color), swatches }
     }
 

@@ -305,8 +305,8 @@ const _: () = {
 
 impl<K: TextureKey> Thumbnails<K> {
     /// Seconds `key` has waited for its picture, `None` when it is not waiting.
-    pub fn waited(&self, key: &K) -> Option<f64> {
-        let _ = key;
+    pub fn waited(&self, ctx: &Context, key: &K) -> Option<f64> {
+        let _ = (ctx, key);
         todo!("CV-C16")
     }
 

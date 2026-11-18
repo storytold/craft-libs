@@ -23,7 +23,7 @@ pub use selectable_text::{SelectableStyle, SelectableText};
 pub use text_field::TextField;
 pub use word_run::{RunWord, WordRun, WordRunOutput, WordState};
 pub use words::TextWords;
-pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput};
+pub use zoom_field::{InvalidZoom, ZoomField, ZoomFieldOutput, ZoomScale};
 
 use crate::contract::{Bind, EditResponse};
 use crate::primitives::TextKey;

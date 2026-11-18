@@ -3,8 +3,6 @@
 
 use crate::runtime::env::Label;
 use std::borrow::Cow;
-use std::fmt;
-use std::sync::Arc;
 
 /// A link on the About tab.
 #[derive(Clone, Debug, PartialEq)]
@@ -23,35 +21,36 @@ impl AboutLink {
     }
 }
 
-/// A picture on the About tab: the key names it, as it does for `Picture`, so a store decodes it once.
-#[derive(Clone)]
+/// A picture on the About tab: an SVG asset drawn through `Picture::svg`.
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct AboutImage {
     /// The picture's accessible name.
     pub label: Label,
-    /// The key the picture is decoded and kept under.
-    pub key: u64,
-    /// Decodes the picture.
-    pub image: Arc<dyn Fn() -> egui::ColorImage + Send + Sync>,
+    /// The SVG source.
+    pub svg: &'static [u8],
+    /// The SVG source that replaces `svg` when the theme mode is dark.
+    pub dark: Option<&'static [u8]>,
 }
 
 impl AboutImage {
-    /// The picture `image` decodes, named `label` and kept under `key`.
-    pub fn new(label: impl Into<Label>, key: u64, image: impl Fn() -> egui::ColorImage + Send + Sync + 'static) -> Self {
-        let _ = (label, key, image);
+    /// The picture `svg` draws, named `label`.
+    pub fn svg(label: impl Into<Label>, svg: &'static [u8]) -> Self {
+        let _ = (label, svg);
+        todo!("DG-C20")
+    }
+
+    /// The SVG that replaces the picture when the theme mode is dark.
+    #[must_use]
+    pub fn dark(self, svg: &'static [u8]) -> Self {
+        let _ = svg;
         todo!("DG-C20")
     }
 }
 
 impl PartialEq for AboutImage {
     fn eq(&self, other: &Self) -> bool {
-        self.label == other.label && self.key == other.key
-    }
-}
-
-impl fmt::Debug for AboutImage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AboutImage").field("label", &self.label).field("key", &self.key).finish()
+        self.label == other.label && self.svg == other.svg && self.dark == other.dark
     }
 }
 

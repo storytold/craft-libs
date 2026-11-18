@@ -45,8 +45,8 @@ impl Files for BrowserFiles {
         todo!("SH-C35")
     }
 
-    fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-        let _ = (path, bytes);
+    fn write(&self, path: &Path, bytes: &[u8], intent: craft_host::WriteIntent) -> Result<bool, FileError> {
+        let _ = (path, bytes, intent);
         todo!("SH-C35")
     }
 
