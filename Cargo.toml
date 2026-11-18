@@ -37,8 +37,11 @@ craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
+craft-agent-bridge = { path = "crates/agent-bridge" }
 craft-ai = { path = "crates/ai" }
+craft-ai-assistant-dialog = { path = "crates/ai-assistant-dialog" }
 craft-ai-core = { path = "crates/ai-core" }
+craft-ai-decomposer = { path = "crates/ai-decomposer" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-pe = { path = "crates/pe" }
@@ -57,6 +60,7 @@ bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
 craft-gzip = { path = "crates/gzip" }
+craft-guide = { path = "crates/guide" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
@@ -164,6 +168,7 @@ craft-prepress = { path = "crates/prepress" }
 craft-press-print = { path = "crates/press-print" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
+craft-proof-hybrid = { path = "crates/proof-hybrid" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
 craft-image-codecs = { path = "crates/image-codecs" }
 craft-dds = { path = "crates/dds" }
@@ -175,6 +180,7 @@ craft-raw = { path = "crates/raw" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
+craft-studio-director = { path = "crates/studio-director" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }

@@ -41,7 +41,6 @@ pub struct Tour {
 }
 
 /// Runtime controller managing active tours, spotlights, and contextual tooltips.
-#[derive(Default)]
 pub struct GuideController {
     /// Active tour currently being guided, if any.
     active_tour: Option<Tour>,
@@ -49,6 +48,19 @@ pub struct GuideController {
     current_step: usize,
     /// Registered bounding rects of UI elements marked in the current frame.
     registered_targets: HashMap<String, Rect>,
+    /// Localized hint displayed at the bottom of interactive hover tooltips.
+    hover_hint: String,
+}
+
+impl Default for GuideController {
+    fn default() -> Self {
+        Self {
+            active_tour: None,
+            current_step: 0,
+            registered_targets: HashMap::new(),
+            hover_hint: "💡 Press F1 or open the interactive guide for step-by-step walkthroughs / לחץ F1 או פתח מדריך לליווי צעד-אחר-צעד".into(),
+        }
+    }
 }
 
 impl GuideController {
@@ -81,6 +93,21 @@ impl GuideController {
         self.current_step = 0;
     }
 
+    /// Clears per-frame registered widget bounds before a UI pass.
+    pub fn begin_frame(&mut self) {
+        self.clear_targets();
+    }
+
+    /// Clears all registered spotlight target bounding rectangles.
+    pub fn clear_targets(&mut self) {
+        self.registered_targets.clear();
+    }
+
+    /// Overrides the localized hint shown in interactive hover tooltips.
+    pub fn set_hover_hint(&mut self, hint: impl Into<String>) {
+        self.hover_hint = hint.into();
+    }
+
     /// Registers the screen bounds of a target UI widget for spotlight highlighting.
     pub fn register_target(&mut self, target_id: &str, rect: Rect) {
         self.registered_targets.insert(target_id.to_string(), rect);
@@ -89,13 +116,14 @@ impl GuideController {
     /// Attaches an interactive step-by-step hover guide to an `egui::Response`.
     pub fn attach_hover_guide(&mut self, response: &Response, target_id: &str, title: &str, explanation: &str) {
         self.register_target(target_id, response.rect);
+        let hint = self.hover_hint.clone();
         response.clone().on_hover_ui(|ui| {
             ui.set_max_width(280.0);
             ui.strong(title);
             ui.add_space(2.0);
             ui.label(explanation);
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("💡 לחץ F1 או פתח מדריך לליווי צעד-אחר-צעד").size(11.0).color(Color32::from_rgb(0, 120, 212)));
+            ui.label(egui::RichText::new(hint).size(11.0).color(Color32::from_rgb(0, 120, 212)));
         });
     }
 
@@ -104,29 +132,70 @@ impl GuideController {
         let Some(tour) = &self.active_tour else { return };
         let Some(step) = tour.steps.get(self.current_step) else { return };
 
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(egui::IdSalt::new("guide_spotlight"))));
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("guide_spotlight")));
         let screen_rect = ctx.viewport_rect();
-
-        // 1. Dim background
         let dim_color = Color32::from_black_alpha(160);
-        painter.rect_filled(screen_rect, 0.0, dim_color);
 
-        // 2. Cutout target spotlight if found and valid on screen
-        if let Some(&target_rect) = self.registered_targets.get(&step.target_id) {
-            // Guard against zero-area or off-screen bounding boxes
-            if target_rect.is_positive() && screen_rect.intersects(target_rect) {
-                let clamped = target_rect.intersect(screen_rect);
-                let padded = clamped.expand(6.0);
-                painter.rect_stroke(padded, 4.0, egui::Stroke::new(2.5, Color32::from_rgb(0, 120, 212)), egui::StrokeKind::Outside);
+        // Guard against zero-area or off-screen bounding boxes before cutting a spotlight hole.
+        let valid_target = self
+            .registered_targets
+            .get(&step.target_id)
+            .copied()
+            .filter(|r| r.is_positive() && screen_rect.intersects(*r));
+        let Some(target_rect) = valid_target else {
+            painter.rect_filled(screen_rect, 0.0, dim_color);
+            return;
+        };
+
+        let clamped = target_rect.intersect(screen_rect);
+        let padded = clamped.expand(6.0);
+        let hole = padded.intersect(screen_rect);
+
+        // Dim the four non-overlapping strips around the spotlight cutout so the target stays bright.
+        for strip in [
+            Rect::from_min_max(screen_rect.min, Pos2::new(screen_rect.right(), hole.top())),
+            Rect::from_min_max(Pos2::new(screen_rect.left(), hole.bottom()), screen_rect.max),
+            Rect::from_min_max(Pos2::new(screen_rect.left(), hole.top()), Pos2::new(hole.left(), hole.bottom())),
+            Rect::from_min_max(Pos2::new(hole.right(), hole.top()), Pos2::new(screen_rect.right(), hole.bottom())),
+        ] {
+            if strip.is_positive() {
+                painter.rect_filled(strip, 0.0, dim_color);
+            }
+        }
+        painter.rect_stroke(padded, 4.0, egui::Stroke::new(2.5, Color32::from_rgb(0, 120, 212)), egui::StrokeKind::Outside);
 
                 // Popover callout card, kept inside the screen on both axes (see
                 // `callout_card_rect`): not `f32::clamp`, whose bounds cross on a viewport
                 // narrower than the card, and `clamp` panics on that.
-                let card_rect = callout_card_rect(screen_rect, padded);
+        let card_rect = callout_card_rect(screen_rect, padded);
 
-                painter.rect_filled(card_rect, 8.0, Color32::from_rgb(255, 255, 255));
-                painter.rect_stroke(card_rect, 8.0, egui::Stroke::new(1.0, Color32::from_gray(210)), egui::StrokeKind::Outside);
-            }
+        painter.rect_filled(card_rect, 8.0, Color32::from_rgb(255, 255, 255));
+        painter.rect_stroke(card_rect, 8.0, egui::Stroke::new(1.0, Color32::from_gray(210)), egui::StrokeKind::Outside);
+
+        let card_painter = painter.with_clip_rect(card_rect);
+        let text_x = card_rect.left() + 12.0;
+        card_painter.text(
+            Pos2::new(text_x, card_rect.top() + 12.0),
+            egui::Align2::LEFT_TOP,
+            &step.title,
+            egui::FontId::proportional(15.0),
+            Color32::from_rgb(24, 24, 27),
+        );
+        card_painter.text(
+            Pos2::new(text_x, card_rect.top() + 34.0),
+            egui::Align2::LEFT_TOP,
+            &step.description,
+            egui::FontId::proportional(13.0),
+            Color32::from_gray(64),
+        );
+        if let Some(tip) = &step.tip {
+            card_painter.text(
+                Pos2::new(text_x, card_rect.top() + 58.0),
+                egui::Align2::LEFT_TOP,
+                tip,
+                egui::FontId::proportional(12.0),
+                Color32::from_rgb(0, 120, 212),
+            );
         }
     }
 }
@@ -271,5 +340,58 @@ mod tests {
         // panics when one is dropped: clear it, as the ui crate's tests do.
         output.textures_delta.clear();
         assert!(rects >= 4, "dim, spotlight and card: {rects} rect shapes");
+    }
+
+    #[test]
+    fn spotlight_overlay_renders_callout_text_and_begin_frame_clears_targets() {
+        let mut controller = GuideController::new();
+        controller.set_hover_hint("Press F1");
+        assert_eq!(controller.hover_hint, "Press F1");
+
+        controller.start_tour(Tour {
+            id: "photocraft.crop_and_resize".into(),
+            title: "Crop".into(),
+            summary: String::new(),
+            steps: vec![Step {
+                target_id: "toolbar.crop".into(),
+                title: "Crop Tool".into(),
+                description: "Select crop tool".into(),
+                tip: Some("Shortcut: C".into()),
+            }],
+        });
+        let target = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(60.0, 40.0));
+        controller.register_target("toolbar.crop", target);
+        assert!(controller.registered_targets.contains_key("toolbar.crop"));
+
+        let ctx = egui::Context::default();
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ui| controller.render_spotlight_overlay(ui.ctx()),
+        );
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::epaint::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        let has_full_screen_dim = output.shapes.iter().any(|s| match &s.shape {
+            egui::epaint::Shape::Rect(r) => r.rect == screen && r.fill != Color32::TRANSPARENT,
+            _ => false,
+        });
+        output.textures_delta.clear();
+
+        assert!(!has_full_screen_dim, "spotlight hole must not be covered by a full-screen dim rect");
+        assert!(texts.iter().any(|t| t.contains("Crop Tool")));
+        assert!(texts.iter().any(|t| t.contains("Select crop tool")));
+        assert!(texts.iter().any(|t| t.contains("Shortcut: C")));
+
+        controller.begin_frame();
+        assert!(controller.registered_targets.is_empty());
     }
 }

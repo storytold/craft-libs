@@ -118,11 +118,17 @@ impl HybridProofCoordinator {
 
     /// Fast lexical check (<1ms) for real-time cursor/typing feedback.
     pub fn check_word_instant(&self, word: &str, lang: ProofLang) -> bool {
+        if !self.primary_tier.supports_lang(lang) {
+            return true;
+        }
         self.primary_tier.is_word_correct(word, lang)
     }
 
     /// Immediate suggestions for misspelled word.
     pub fn get_instant_suggestions(&self, word: &str, lang: ProofLang) -> Vec<String> {
+        if !self.primary_tier.supports_lang(lang) {
+            return Vec::new();
+        }
         self.primary_tier.suggest(word, lang)
     }
 
@@ -130,7 +136,7 @@ impl HybridProofCoordinator {
     pub fn check_text(&self, text: &str, lang: ProofLang) -> Vec<Issue> {
         let mut issues = craft_proof::check_spelling_in(text, lang);
 
-        if self.ai_enabled {
+        if self.ai_enabled && self.primary_tier.supports_lang(lang) {
             let context_issues = self.primary_tier.check_sentence_context(text, lang);
             for ci in context_issues {
                 issues.push(Issue {
@@ -192,5 +198,38 @@ mod tests {
         let issues = coordinator.check_text("אם הלכתי", ProofLang::En);
         assert!(!issues.is_empty(), "Should capture contextual issue");
         assert_eq!(issues[0].suggestions, vec!["עם"]);
+    }
+}
+
+#[cfg(test)]
+mod unsupported_lang_tests {
+    use super::*;
+
+    struct RejectAllLangsBackend;
+
+    impl PlatformProofBackend for RejectAllLangsBackend {
+        fn supports_lang(&self, _lang: ProofLang) -> bool {
+            false
+        }
+
+        fn is_word_correct(&self, _word: &str, _lang: ProofLang) -> bool {
+            panic!("is_word_correct must not be called for unsupported language");
+        }
+
+        fn suggest(&self, _word: &str, _lang: ProofLang) -> Vec<String> {
+            panic!("suggest must not be called for unsupported language");
+        }
+
+        fn check_sentence_context(&self, _sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
+            panic!("check_sentence_context must not be called for unsupported language");
+        }
+    }
+
+    #[test]
+    fn unsupported_language_bypasses_backend_calls() {
+        let coordinator = HybridProofCoordinator::new(Box::new(RejectAllLangsBackend), true);
+        assert!(coordinator.check_word_instant("zzzz", ProofLang::Other));
+        assert!(coordinator.get_instant_suggestions("zzzz", ProofLang::Other).is_empty());
+        let _issues = coordinator.check_text("hello", ProofLang::Other);
     }
 }

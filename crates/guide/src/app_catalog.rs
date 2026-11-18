@@ -42,7 +42,7 @@ pub fn tours_for_app(app_id: &str) -> Vec<Tour> {
             },
             Tour {
                 id: "wordcraft.insert_table".into(),
-                title: "הוספת טבלה".into(),
+                title: "הוספת טבלה (Insert Table)".into(),
                 summary: "יצירת טבלאות מותאמות אישית, הוספת שורות ועיצוב תאים".into(),
                 steps: vec![
                     Step {
@@ -141,23 +141,39 @@ pub fn tours_for_app(app_id: &str) -> Vec<Tour> {
                 id: "photocraft.crop_and_resize".into(),
                 title: "חיתוך ושינוי גודל תמונה".into(),
                 summary: "חיתוך גבולות, יישור קו אופק והגדרת מידות בפיקסלים".into(),
-                steps: vec![Step {
-                    target_id: "toolbar.crop".into(),
-                    title: "כלי החיתוך".into(),
-                    description: "בחר בכלי החיתוך בסרגל השמאלי או הקש C.".into(),
-                    tip: Some("קיצור דרך: C".into()),
-                }],
+                steps: vec![
+                    Step {
+                        target_id: "toolbar.crop".into(),
+                        title: "כלי החיתוך".into(),
+                        description: "בחר בכלי החיתוך בסרגל השמאלי או הקש C.".into(),
+                        tip: Some("קיצור דרך: C".into()),
+                    },
+                    Step {
+                        target_id: "panel.image_size".into(),
+                        title: "מידות והחלת חיתוך".into(),
+                        description: "הגדר מידות בפיקסלים ולחץ Enter לאישור והחלת החיתוך.".into(),
+                        tip: Some("החלה: Enter".into()),
+                    },
+                ],
             },
             Tour {
                 id: "photocraft.remove_bg".into(),
                 title: "הסרת רקע ועריכת מסיכות".into(),
                 summary: "בידוד נושא התמונה בעזרת מסיכת שכבה לא-הורסת".into(),
-                steps: vec![Step {
-                    target_id: "toolbar.select".into(),
-                    title: "בחירת הנושא".into(),
-                    description: "השתמש בכלי הבחירה המהירה לסימון האובייקט.".into(),
-                    tip: None,
-                }],
+                steps: vec![
+                    Step {
+                        target_id: "toolbar.select".into(),
+                        title: "בחירת הנושא".into(),
+                        description: "השתמש בכלי הבחירה המהירה לסימון האובייקט.".into(),
+                        tip: None,
+                    },
+                    Step {
+                        target_id: "panel.layers.add_mask".into(),
+                        title: "הוספת מסיכת שכבה".into(),
+                        description: "לחץ על הוספת מסיכת שכבה בחלונית השכבות לבידוד לא-הורס של הנושא.".into(),
+                        tip: None,
+                    },
+                ],
             },
         ],
         "pdfcraft" => vec![Tour {

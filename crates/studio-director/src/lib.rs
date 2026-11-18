@@ -239,6 +239,9 @@ impl StudioDirector {
 
     /// Synthesizes a new shot into executable cross-app instructions.
     pub fn plan_shot_across_apps(&mut self, action: &str, duration: f32) -> Option<&StoryShot> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return None;
+        }
         if self.active_project.is_none() {
             self.create_project("Default Production", "Auto-initialized studio production");
         }
@@ -297,18 +300,11 @@ impl StudioDirector {
 }
 
 impl StudioDirector {
-    /// Translates a natural language creative request into multi-app execution steps.
-
-    /// Dispatches financial model, asset budgeting and spreadsheet formulas to GridCraft.
-
-    /// Autonomous Image Generation from Scratch:
-    /// Constructs a full visual scene using native PhotoCraft, VectorCraft, and CADCraft commands.
-    /// Breaks down the prompt into:
-    /// 1. Background geometry & horizon line (CADCraft)
-    /// 2. Foreground vector shapes & subjects (VectorCraft)
-    /// 3. Shading, lighting pass, texture layers, and atmosphere (PhotoCraft)
-
-    /// Generates a realistic or stylized human character subject conforming to anatomical canon.
+    // High-level suite capabilities implemented below:
+    // - Translates a natural language creative request into multi-app execution steps.
+    // - Dispatches financial model, asset budgeting and spreadsheet formulas to GridCraft.
+    // - Autonomous Image Generation from Scratch (CADCraft -> VectorCraft -> PhotoCraft).
+    // - Generates a realistic or stylized human character subject conforming to anatomical canon.
 
     /// Plans a composite dual-style character (e.g. half photoreal, half Pixar 3D).
     pub fn plan_dual_style_split_character(
@@ -696,6 +692,12 @@ mod tests {
         let design_dispatch = director.plan_publication_artbook("The Journey Artbook", 64);
         assert_eq!(design_dispatch.target_app, "designcraft");
         assert_eq!(design_dispatch.tool_name, "create_master_page_document");
+    }
+
+    #[test]
+    fn story_director_plans_image_and_human_synthesis() {
+        let mut director = StudioDirector::new();
+        director.create_project("The Journey", "A sci-fi cinematic story in Jerusalem");
 
         // Test Image Generation from scratch
         let image_pipeline = director.generate_image_from_scratch("A golden sunset over a peaceful lake", 3840, 2160, "16:9");
@@ -723,6 +725,12 @@ mod tests {
 
         let vector_human = director.synthesize_human_subject(&anatomy, AestheticStyle::AnimatedVector, "curious", &env);
         assert_eq!(vector_human[1].target_app, "vectorcraft");
+    }
+
+    #[test]
+    fn story_director_plans_cinema_split_and_video_pipelines() {
+        let mut director = StudioDirector::new();
+        director.create_project("The Journey", "A sci-fi cinematic story in Jerusalem");
 
         // Test Cinematic 3-Point Lighting Rig MCP Dispatch
         let rig = CinematicLightingRig::default();
@@ -752,5 +760,15 @@ mod tests {
         assert_eq!(video_pipeline[1].target_app, "soundcraft");
         assert_eq!(video_pipeline[2].target_app, "effectcraft");
         assert_eq!(video_pipeline[3].target_app, "filmcraft");
+    }
+
+    #[test]
+    fn plan_shot_rejects_non_positive_or_non_finite_duration() {
+        let mut director = StudioDirector::new();
+        director.create_project("Test", "Test synopsis");
+        assert!(director.plan_shot_across_apps("zoom in", -1.0).is_none());
+        assert!(director.plan_shot_across_apps("zoom in", 0.0).is_none());
+        assert!(director.plan_shot_across_apps("zoom in", f32::NAN).is_none());
+        assert!(director.plan_shot_across_apps("zoom in", f32::INFINITY).is_none());
     }
 }
