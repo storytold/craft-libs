@@ -62,7 +62,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     common: Common,
     unit: DragUnit<P>,
     active: PanelKey,
-    /// The ghost the drag shows: its extent and its label.
+    /// The unit's extent where the drag starts and the name its drop region shows.
     #[prop]
     ghost: Option<(Vec2, Label)>,
     /// A drag on the grip drags the unit.
@@ -109,7 +109,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
             match self.ghost.clone() {
                 Some((strip, label)) if self.icons => start_icon_drag(cx, self.unit.clone(), self.active, strip, label),
                 // The ghost's extent is the group's own.
-                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost),
+                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost.map(|(_, label)| label)),
             }
             self.started = true;
         }
@@ -260,7 +260,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The host's items before the tab strip.
     #[prop(func = "FnMut(&mut egui::Ui, &mut BodyCx<'_>)")]
     extra: Option<HeaderHook<'a>>,
-    /// The size of the group this pass, for the drag ghost.
+    /// The size of the group this pass, where its drag starts.
     size: Vec2,
     reported: Reported,
 }
@@ -306,10 +306,9 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
         IconButton::new(IconId::new("more")).size(ControlSize::Sm).popup(PopupKind::Menu).label(name)
     }
 
-    /// Starts a drag of the whole group: its ghost is the group's frame with its name.
+    /// Starts a drag of the whole group: its drop region shows the group's name.
     fn start_drag(&mut self, cx: &mut Cx<'_, Self>) {
-        let ghost = (self.size, cx.label());
-        start_group_drag(cx, DragUnit::Group(self.anchor.clone()), self.active, Some(self.size), Some(ghost));
+        start_group_drag(cx, DragUnit::Group(self.anchor.clone()), self.active, Some(self.size), Some(cx.label()));
         self.reported.drag_started = true;
     }
 }

@@ -111,3 +111,11 @@ fn a_salt_inside_a_scope_closure_is_not_the_scope_builders() {
     let salted = "fn f(ui: &mut Ui) {\n    ui.scope_builder(UiBuilder::new().id_salt(\"b\"), |ui| ());\n}\n";
     assert!(rules_at(salted, "src/ui/a.rs", &scope()).contains(&"contract/memory"));
 }
+
+#[test]
+fn a_tuple_field_in_an_assert_is_not_a_literal_size() {
+    let field = "#[test]\nfn t() {\n    let fixture = Fixture::new(show);\n    assert_eq!(run(&fixture).1.0, Some(1));\n}\n";
+    assert!(!rules_at(field, "crates/x/tests/it/main.rs", &scope()).contains(&"test/literal-size"));
+    let size = "#[test]\nfn t() {\n    let fixture = Fixture::new(show);\n    assert_eq!(fixture.size().x, 1.5);\n}\n";
+    assert!(rules_at(size, "crates/x/tests/it/main.rs", &scope()).contains(&"test/literal-size"));
+}

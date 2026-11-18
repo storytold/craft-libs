@@ -17,3 +17,16 @@ crates/fonts-build/tests/fixture/craft-fonts/fonts/**/OFL.txt -text
 
 # DXF drawing goldens assert exact writer bytes, including LF on every platform.
 crates/dxf/tests/data/drawing_*.dxf -text
+
+# The generated components index is compared byte for byte with the generator's LF output (craft-ui test
+# components_index): a Windows checkout must not convert its line endings.
+docs/components-index.md text eol=lf
+
+# The built-in size files are compared byte for byte with the writer's LF output (craft-theme sizes_tests), and the
+# token dumps with the dump writer's (craft-theme dumps test): a Windows checkout must not convert their line endings.
+crates/theme/sizes/*.json text eol=lf
+crates/theme/tests/dumps/** text eol=lf
+
+# The facade's [features] table is compared with the table the craft features test writes, with LF (craft test
+# integration::features): a Windows checkout must not convert its line endings.
+crates/craft/Cargo.toml text eol=lf

@@ -262,7 +262,7 @@ pub fn float_drop<P: Clone + PartialEq>(
         DragUnit::Panel(panel) if edge.is_none() => Action::float(panel.clone(), rect),
         _ => to_target(unit, Target::float_with_edge(rect, edge)),
     };
-    DockDropped { action, mark: DropMark::Into(mark) }
+    DockDropped { action, mark: DropMark::region(mark) }
 }
 
 /// The action a release of `drag` at `at` makes in the dock `dock`, by the spots of the previous pass; `None` where
@@ -439,31 +439,28 @@ pub(crate) fn started(env: &EnvView<'_>) -> Option<Arrangement> {
 }
 
 /// Starts the drag of `unit`, whose shown panel is `active` and whose size where it starts is `source`. A group or a
-/// column drags a ghost frame; `ghost` gives its size and label. A window moves itself, so its drag has no ghost and
-/// `ghost` is `None`.
-pub fn start_group_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, source: Option<Vec2>, ghost: Option<(Vec2, Label)>)
+/// column shows `name` inside the region its drop would take ([`DragPreview::Named`]). A window moves itself, so its
+/// drag shows nothing and `name` is `None`.
+pub fn start_group_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, source: Option<Vec2>, name: Option<Label>)
 where
     P: Clone + Send + Sync + 'static,
     C: Component,
 {
-    let preview = match ghost {
-        Some((size, label)) => DragPreview::frame(size, Some(label)),
-        None => DragPreview::None,
-    };
+    let preview = name.map_or(DragPreview::None, DragPreview::Named);
     let started = started(&cx.env);
     cx.start_drag(GroupDrag { unit, active, source, strip: None, started }, preview);
 }
 
 /// Starts the drag of `unit` out of a collapsed column, from its icons of size `strip`, whose shown panel is
-/// `active`: the ghost is a frame of that size with `label`, and a float of the unit lands collapsed with its strip
-/// under the pointer ([`float_drop`]).
+/// `active`: the region its drop would take shows `label`, and a float of the unit lands collapsed with its strip under
+/// the pointer ([`float_drop`]).
 pub fn start_icon_drag<P, C>(cx: &mut Cx<'_, C>, unit: DragUnit<P>, active: PanelKey, strip: Vec2, label: Label)
 where
     P: Clone + Send + Sync + 'static,
     C: Component,
 {
     let started = started(&cx.env);
-    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::frame(strip, Some(label)));
+    cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::Named(label));
 }
 
 /// Ends a running tab or group drag that started on `shown`'s dock under another revision: another arrangement

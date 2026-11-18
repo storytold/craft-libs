@@ -88,7 +88,8 @@ fn unknown_crates(root: &Path, meta: &Metadata, maps: &LayerMaps) -> Vec<Finding
 
 fn source_sites(root: &Path, index: &Index) -> Vec<Site> {
     // Source paths come from cargo metadata, which resolves `..` and links; the root must be resolved the same way.
-    let root = &std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    // `dunce` drops the `\\?\` prefix Windows' canonical paths carry, which metadata's paths lack.
+    let root = &dunce::canonicalize(root).unwrap_or_else(|_| root.to_owned());
     let mut sites = Vec::new();
     for tree in index.trees.values() {
         let mut files: Vec<&PathBuf> = tree.modules.values().map(|m| &m.file).collect();
@@ -96,7 +97,7 @@ fn source_sites(root: &Path, index: &Index) -> Vec<Site> {
         files.dedup();
         for file in files {
             if let Some(parsed) = index.files.get(file) {
-                sites.extend(scan_parsed(&relative(root, file).to_string_lossy(), &parsed.src, Some(&parsed.file)));
+                sites.extend(scan_parsed(&relative(root, file).to_string_lossy().replace('\\', "/"), &parsed.src, Some(&parsed.file)));
             }
         }
     }

@@ -1,8 +1,10 @@
 //! Stories of `NumberField`.
 
-use super::{NumberField, NumberPick};
+use super::{NumberField, NumberPick, UnitPlacement};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::display::Text;
 use crate::form::{Field, FieldGroup};
+use crate::layout_components::Row;
 use crate::runtime::env::{Env, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{Mixed, NumberCodec, Reader};
@@ -52,6 +54,17 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .unit(units.symbol(UnitKind::Millimetres))
                 .size(size)
                 .show(ui);
+        });
+        Row::new().show(ui, |ui, _| {
+            row("Unit after").show(ui, |ui, _| {
+                NumberField::new("Angle", Bind::bound(data.value("angle", Some(120.0))))
+                    .range(0.0..=360.0)
+                    .unit_kind(UnitKind::Degrees)
+                    .unit_placement(UnitPlacement::After)
+                    .size(size)
+                    .show(ui);
+            });
+            Text::new(units.symbol(UnitKind::Degrees)).show(ui);
         });
         row("Mixed").show(ui, |ui, _| {
             NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed)))
