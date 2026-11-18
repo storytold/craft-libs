@@ -471,3 +471,73 @@ fn unsupported_chunk_without_an_output_paragraph_keeps_its_bookmarks() {
         }
     }
 }
+
+/// Moving the same marker between cells, rows or tables must change its observation.
+#[test]
+fn marker_observations_distinguish_ancestor_sibling_positions() {
+    let marked = format!("<w:tc>{}{}{}</w:tc>", start(701, "Position", false), para("marked"), end(701));
+    let plain = cell("plain");
+    let cases = [
+        (table(&row(&format!("{marked}{plain}"))), table(&row(&format!("{plain}{marked}")))),
+        (table(&format!("{}{}", row(&marked), row(&plain))), table(&format!("{}{}", row(&plain), row(&marked)))),
+        (format!("{}{}", table(&row(&marked)), table(&row(&plain))), format!("{}{}", table(&row(&plain)), table(&row(&marked)))),
+    ];
+    for (before, after) in cases {
+        let before = format!("<w:body>{before}</w:body>");
+        let after = format!("<w:body>{after}</w:body>");
+        assert_ne!(markers(&before), markers(&after), "a different ancestor sibling must be observable");
+    }
+}
+
+/// An adopted DOCX chunk keeps its own row/cell bookmark metadata through repeated saves.
+#[test]
+fn adopted_chunk_bookmarks_keep_source_ids_columns_and_containers() {
+    let marked_cell = format!("<w:tc>{}{}{}</w:tc>", start(714, "ChunkCell", false), para("chunk cell"), end(714));
+    let contents = table(&row(&format!("{}{}{marked_cell}{}{}", start(713, "ChunkRange", true), cell("one"), cell("three"), end(713))));
+    let chunk = package(&format!("{contents}{}", para("chunk after")), "");
+    let existing = format!("<w:p>{}<w:r><w:t>target</w:t></w:r>{}</w:p>", start(91, "ExistingTarget", false), end(91));
+    for inside_cell in [false, true] {
+        let insertion = r#"<w:altChunk r:id="chunk"/>"#;
+        let carrier = if inside_cell { table(&row(&format!("<w:tc>{insertion}</w:tc>"))) } else { insertion.to_string() };
+        let body = format!("{existing}{carrier}{}", para("target after"));
+        let mut doc = craft_docx::read(&package_with_chunk(&body, "", Some(&chunk))).unwrap();
+        assert_eq!(doc.bookmark_attrs.get("ChunkRange").unwrap().id, "713");
+        assert_eq!(doc.bookmark_attrs.get("ChunkCell").unwrap().id, "714");
+        for _ in 0..3 {
+            let output = craft_docx::write(&doc).unwrap();
+            let found = markers(&xml(&output, "word/document.xml"));
+            for (name, id, parent, columns) in [("ChunkRange", "713", "w:tr", true), ("ChunkCell", "714", "w:tc", false)] {
+                let begin = found.iter().find(|m| m.2 == "w:bookmarkStart" && m.3.iter().any(|(k, v)| k == "w:name" && v == name)).unwrap();
+                assert_eq!(begin.0, parent);
+                assert!(begin.3.iter().any(|(k, v)| k == "w:id" && v == id));
+                for (key, value) in [("w:colFirst", "1"), ("w:colLast", "2")] {
+                    assert_eq!(begin.3.iter().any(|(k, v)| k == key && v == value), columns);
+                }
+                let end = found.iter().find(|m| m.2 == "w:bookmarkEnd" && m.3.iter().any(|(k, v)| k == "w:id" && v == id)).unwrap();
+                assert_eq!(end.0, parent);
+            }
+            assert_eq!(doc.bookmark_attrs.get("ExistingTarget").unwrap().id, "91");
+            doc = craft_docx::read(&output).unwrap();
+        }
+    }
+}
+
+/// Adoption leaves names unchanged and gives existing target metadata priority on collision.
+#[test]
+fn adoption_keeps_target_bookmark_metadata_on_name_collision() {
+    let target_body = format!("<w:p>{}<w:r><w:t>target</w:t></w:r>{}</w:p>", start(801, "Shared", false), end(801));
+    let shared = table(&row(&format!("{}{}{}{}{}", start(802, "Shared", true), cell("source"), cell("middle"), cell("last"), end(802))));
+    let source_body = format!("{shared}<w:p>{}<w:r><w:t>new</w:t></w:r>{}</w:p>", start(803, "SourceOnly", false), end(803));
+    for keep_styles in [false, true] {
+        let mut target = craft_docx::read(&package(&target_body, "")).unwrap();
+        let source = craft_docx::read(&package(&source_body, "")).unwrap();
+        let original_target = target.bookmark_attrs.get("Shared").unwrap().clone();
+        let original_source = source.bookmark_attrs.get("SourceOnly").unwrap().clone();
+        let mut perms = 0;
+        let adopted = target.adopt_blocks(source, keep_styles, &mut perms);
+        target.body.extend(adopted.into_iter().map(std::sync::Arc::new));
+        assert!(target.plain_text(craft_wordmodel::StoryRef::Body).contains("source"));
+        assert_eq!(target.bookmark_attrs.get("Shared"), Some(&original_target), "existing target metadata must not be overwritten");
+        assert_eq!(target.bookmark_attrs.get("SourceOnly"), Some(&original_source), "a source-only name keeps all of its attributes");
+    }
+}
