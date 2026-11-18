@@ -761,7 +761,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(shown), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
     let bar_drag = bars.view.value().is_some();
     eprintln!(
-        "DIAG a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass: bar_drag {bar_drag} travel {travel} pointer_zoom {pointer_zoom} events {:?}",
+        "DIAG a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass: bar_drag {bar_drag} travel {travel} pointer_zoom {pointer_zoom} given {shown:?} events {:?}",
         bars.view.events
     );
     if let Some(moved) = bars.view.value() {
