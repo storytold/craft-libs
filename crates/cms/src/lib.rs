@@ -19,7 +19,9 @@
 //! CIE 15, and Adobe's published black point compensation paper.
 #![forbid(unsafe_code)]
 
+pub mod black;
 pub mod builtin;
+mod builtin_v2;
 pub mod clut;
 pub mod curve;
 pub mod gamut;
@@ -28,19 +30,26 @@ pub mod lut3d;
 pub mod lutfile;
 pub mod math;
 pub mod named;
+mod normalize;
 pub mod pipeline;
 pub mod profile;
+pub mod sony_lut;
+pub mod spi1d;
 pub mod synth;
 pub mod transform;
 mod write;
+pub mod write_v2;
 
+pub use black::BlackPreserving;
 pub use builtin::Builtin;
 pub use clut::Clut;
 pub use curve::Curve;
 pub use gamut::GamutCheck;
 pub use gpu_matrix_shaper::GpuMatrixShaper;
 pub use lut3d::Lut3d;
+pub use math::Mat3;
 pub use named::{NamedColor, NamedColors};
+pub use normalize::normalize_for_embedding;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
 pub use write::profile_id;
