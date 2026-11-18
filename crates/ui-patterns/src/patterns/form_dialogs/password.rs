@@ -99,43 +99,55 @@ pub enum PasswordStrength {
     Strong,
 }
 
-/// Strong: at least 12 characters and three of the four classes (lower case, upper case, ASCII digits, anything not
-/// alphanumeric); Medium: at least 8 and two classes; else Weak.
-pub(crate) fn password_strength(password: &str) -> PasswordStrength {
-    let classes = [
-        password.chars().any(char::is_lowercase),
-        password.chars().any(char::is_uppercase),
-        password.chars().any(|c| c.is_ascii_digit()),
-        password.chars().any(|c| !c.is_alphanumeric()),
-    ]
-    .into_iter()
-    .filter(|class| *class)
-    .count();
-    let length = password.chars().count();
-    if length >= 12 && classes >= 3 {
-        PasswordStrength::Strong
-    } else if length >= 8 && classes >= 2 {
-        PasswordStrength::Medium
-    } else {
-        PasswordStrength::Weak
+impl PasswordStrength {
+    /// Strong: at least 12 characters and three of the four classes (lower case, upper case, ASCII digits, anything not
+    /// alphanumeric); Medium: at least 8 and two classes; else Weak.
+    pub fn of(password: &str) -> PasswordStrength {
+        let classes = [
+            password.chars().any(char::is_lowercase),
+            password.chars().any(char::is_uppercase),
+            password.chars().any(|c| c.is_ascii_digit()),
+            password.chars().any(|c| !c.is_alphanumeric()),
+        ]
+        .into_iter()
+        .filter(|class| *class)
+        .count();
+        let length = password.chars().count();
+        if length >= 12 && classes >= 3 {
+            PasswordStrength::Strong
+        } else if length >= 8 && classes >= 2 {
+            PasswordStrength::Medium
+        } else {
+            PasswordStrength::Weak
+        }
     }
+}
+
+/// The file or files a password is asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PasswordFiles {
+    /// One file, by name.
+    One(String),
+    /// This many files.
+    Several(usize),
 }
 
 /// What the dialog asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PasswordPurpose {
-    /// The password that opens `name`; OK is Open.
+    /// The password that opens `files`; OK is Open.
     #[non_exhaustive]
     Open {
-        /// The file's name, shown in the message.
-        name: String,
+        /// The file or files, shown in the message.
+        files: PasswordFiles,
     },
-    /// The permissions (owner) password that lifts `name`'s restrictions; OK is Unlock.
+    /// The permissions (owner) password that lifts `files`' restrictions; OK is Unlock.
     #[non_exhaustive]
     Permissions {
-        /// The file's name, shown in the message.
-        name: String,
+        /// The file or files, shown in the message.
+        files: PasswordFiles,
     },
     /// A new password typed twice, with its strength under the first field; OK stays disabled until both match and
     /// are not empty.
@@ -145,12 +157,24 @@ pub enum PasswordPurpose {
 impl PasswordPurpose {
     /// The purpose of opening the file `name`.
     pub fn open(name: impl Into<String>) -> Self {
-        PasswordPurpose::Open { name: name.into() }
+        PasswordPurpose::Open { files: PasswordFiles::One(name.into()) }
     }
 
     /// The purpose of lifting the restrictions of the file `name`.
     pub fn permissions(name: impl Into<String>) -> Self {
-        PasswordPurpose::Permissions { name: name.into() }
+        PasswordPurpose::Permissions { files: PasswordFiles::One(name.into()) }
+    }
+
+    /// The purpose of opening `count` files with one password.
+    pub fn open_several(count: usize) -> Self {
+        let _ = count;
+        todo!("WF-W13")
+    }
+
+    /// The purpose of lifting the restrictions of `count` files with one password.
+    pub fn permissions_several(count: usize) -> Self {
+        let _ = count;
+        todo!("WF-W13")
     }
 }
 
@@ -206,6 +230,55 @@ impl Outcome for PasswordOutput {
     }
 }
 
+/// What a [`PasswordFields`] reports.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PasswordFieldsOutput {
+    /// The fields' response.
+    pub response: Response,
+    /// Whether the entries are valid: with a confirmation field, non-empty and equal.
+    pub valid: bool,
+}
+
+/// The password fields: the masked field with the reveal toggle that hands the focus back, the Re-type field with the
+/// mismatch help, the strength help and meter, and an error line.
+#[must_use = "show the fields with `show`"]
+#[derive(crate::contract::Pattern)]
+pub struct PasswordFields<'a> {
+    label: Label,
+    input: Bind<'a, String>,
+    confirm: Option<Bind<'a, String>>,
+    error: Option<Label>,
+}
+
+impl<'a> PasswordFields<'a> {
+    /// The masked field named `label` over `input`.
+    pub fn new(label: impl Into<Label>, input: Bind<'a, String>) -> Self {
+        PasswordFields { label: label.into(), input, confirm: None, error: None }
+    }
+
+    /// Adds the Re-type field over `confirm`, with the mismatch help and the strength help and meter.
+    #[must_use]
+    pub fn confirm(mut self, confirm: Bind<'a, String>) -> Self {
+        self.confirm = Some(confirm);
+        self
+    }
+
+    /// The line under the field, in the error colour.
+    #[must_use]
+    pub fn error(mut self, error: Option<Label>) -> Self {
+        self.error = error;
+        self
+    }
+
+    /// Shows the fields.
+    pub fn show(self, ui: &mut Ui) -> PasswordFieldsOutput {
+        let PasswordFields { label, input, confirm, error } = self;
+        let _ = (ui, label, input, confirm, error);
+        todo!("DG-C15")
+    }
+}
+
 /// What the dialog keeps while it is open: the entries and whether they show as text.
 #[derive(Clone, Default)]
 struct Entries {
@@ -239,31 +312,46 @@ pub struct PasswordDialog<'a> {
     /// The line under the field, in the error colour.
     #[prop]
     error: Option<Label>,
+    /// A muted note under the message.
+    #[prop(into)]
+    note: Option<Label>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
 }
 
+/// The name of the one file `files` holds; a count of several files has the plural message instead.
+fn single_name(files: &PasswordFiles) -> &str {
+    // P3(pdf-dialogs-w2): WF-W13 — the writer words the several-files message.
+    match files {
+        PasswordFiles::One(name) => name.as_str(),
+        PasswordFiles::Several(_) => todo!("WF-W13"),
+    }
+}
+
 impl<'a> PasswordDialog<'a> {
     /// A dialog for `purpose`, with no error line and no tag.
     pub fn new(purpose: PasswordPurpose) -> Self {
-        PasswordDialog { purpose, tag: None, error: None, open: None }
+        PasswordDialog { purpose, tag: None, error: None, note: None, open: None }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PasswordOutput {
-        let PasswordDialog { purpose, tag, error, open } = self;
+        let PasswordDialog { purpose, tag, error, note, open } = self;
+        let _ = note; // P3(pdf-dialogs-w2): WF-W13
         let env = Env::of(ui);
         let words = env.words::<PasswordWords>();
         let common = env.words::<CommonWords>();
         let setting = matches!(purpose, PasswordPurpose::Set);
         let (title, message, ok) = match &purpose {
-            PasswordPurpose::Open { name } => {
-                (words.open_title.clone(), Some(Label::from(words.open_message.fill(&[("name", name.as_str())]))), words.open.clone())
+            PasswordPurpose::Open { files } => {
+                (words.open_title.clone(), Some(Label::from(words.open_message.fill(&[("name", single_name(files))]))), words.open.clone())
             }
-            PasswordPurpose::Permissions { name } => {
-                (words.permissions_title.clone(), Some(Label::from(words.permissions_message.fill(&[("name", name.as_str())]))), words.unlock.clone())
-            }
+            PasswordPurpose::Permissions { files } => (
+                words.permissions_title.clone(),
+                Some(Label::from(words.permissions_message.fill(&[("name", single_name(files))]))),
+                words.unlock.clone(),
+            ),
             PasswordPurpose::Set => (words.set_title.clone(), None, common.ok.clone()),
         };
         let mut dialog = Dialog::new(title)
@@ -289,7 +377,7 @@ impl<'a> PasswordDialog<'a> {
                         Text::new(message.clone()).show(ui);
                     });
                 }
-                let strength = (setting && !entries.input.is_empty()).then(|| password_strength(&entries.input));
+                let strength = (setting && !entries.input.is_empty()).then(|| PasswordStrength::of(&entries.input));
                 FieldGroup::new(words.fields.clone()).show(ui, |ui, _| {
                     let first = if setting { words.type_password.clone() } else { words.password.clone() };
                     let mut field = Field::new(first.clone());

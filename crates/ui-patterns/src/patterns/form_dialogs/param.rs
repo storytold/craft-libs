@@ -421,6 +421,13 @@ impl CustomContext {
         self.request = Some(ColorRequest::new(key, color).title(self.title.clone()));
     }
 
+    /// Asks the host to act on `id`: a custom row's button. The request is reported once, in the pass of the press
+    /// (`ParamRowsOutput::action`).
+    pub fn request_action(&mut self, id: impl Into<String>) {
+        let _ = id;
+        todo!("DG-C7")
+    }
+
     /// The dropper the row armed, once.
     pub(crate) fn take_eyedropper(&mut self) -> Option<EyedropperRequest> {
         self.eyedropper.take()
@@ -511,6 +518,19 @@ struct RowTexts {
     tooltip: Option<Label>,
 }
 
+/// When a row takes input.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum Enable {
+    /// Always.
+    #[default]
+    Always,
+    /// While `fields[key]` equals one of the values.
+    When(String, Vec<FieldValue>),
+    /// Never.
+    Off,
+}
+
 /// One row of a parameter form.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -523,11 +543,11 @@ pub struct Param {
     pub kind: ParamKind,
     /// Shown after the number (`px`, `%`, `°`); formats through the locale.
     pub unit: Option<UnitKind>,
-    /// The row takes input only while `fields[key]` equals one of the values.
-    pub enabled_when: Option<(String, Vec<FieldValue>)>,
-    /// The row is shown only while `fields[key]` equals the value ([`Param::visible_when`]). A hidden row takes no
-    /// space; its value stays in the fields and in the result.
-    pub visible_when: Option<(String, FieldValue)>,
+    /// When the row takes input: always, while `fields[key]` equals one of the values, or never.
+    pub enable: Enable,
+    /// The row is shown only while every condition holds: `fields[key]` equals the value ([`Param::visible_when`]). A
+    /// hidden row takes no space; its value stays in the fields and in the result.
+    pub visible_when: Vec<(String, FieldValue)>,
     /// A Browse button after a [`ParamKind::Text`] field.
     pub browse: Option<PathKind>,
     /// The hint and tooltip, boxed so rows without them stay small.
@@ -544,8 +564,8 @@ impl Param {
             label: label.into(),
             kind,
             unit: None,
-            enabled_when: None,
-            visible_when: None,
+            enable: Enable::Always,
+            visible_when: Vec::new(),
             browse: None,
             texts: None,
             options: None,
@@ -589,6 +609,26 @@ impl Param {
         self.options.as_deref().is_none_or(|options| !options.disabled_options.iter().any(|disabled| disabled == id))
     }
 
+    /// Shows `text` as the description of the option `id` of a choice or radio row.
+    #[must_use]
+    pub fn option_description(self, id: impl Into<String>, text: impl Into<Label>) -> Self {
+        let _ = (id, text);
+        todo!("PO-P12")
+    }
+
+    /// Shows the option `id` disabled, with `reason` as its tooltip.
+    #[must_use]
+    pub fn disabled_option(self, id: impl Into<String>, reason: impl Into<Label>) -> Self {
+        let _ = (id, reason);
+        todo!("PO-P12")
+    }
+
+    /// The row never takes input: it is shown disabled.
+    #[must_use]
+    pub fn disabled(self) -> Self {
+        todo!("CM-C29")
+    }
+
     /// Gives a choice row's select a search field.
     #[must_use]
     pub fn searchable(mut self) -> Self {
@@ -619,7 +659,7 @@ impl Param {
     /// The row takes input only while `fields[key]` equals one of `values`; otherwise it is shown disabled.
     #[must_use]
     pub fn enabled_when_in(mut self, key: impl Into<String>, values: impl IntoIterator<Item = impl Into<FieldValue>>) -> Self {
-        self.enabled_when = Some((key.into(), values.into_iter().map(Into::into).collect()));
+        self.enable = Enable::When(key.into(), values.into_iter().map(Into::into).collect());
         self
     }
 
@@ -735,7 +775,7 @@ impl Param {
     /// otherwise it takes no space. Its value stays in the fields and in the result.
     #[must_use]
     pub fn visible_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.visible_when = Some((key.into(), value.into()));
+        self.visible_when.push((key.into(), value.into()));
         self
     }
 
@@ -743,7 +783,7 @@ impl Param {
     /// of [`enabled_when_in`](Param::enabled_when_in).
     #[must_use]
     pub fn enabled_when(mut self, key: impl Into<String>, value: impl Into<FieldValue>) -> Self {
-        self.enabled_when = Some((key.into(), vec![value.into()]));
+        self.enable = Enable::When(key.into(), vec![value.into()]);
         self
     }
 
@@ -934,12 +974,18 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        self.visible_when.as_ref().is_none_or(|(key, value)| fields.get(key) == Some(value))
+        // P3(pdf-dialogs-w1): PO-P13
+        self.visible_when.iter().all(|(key, value)| fields.get(key) == Some(value))
     }
 
     /// Whether the row takes input with `fields`.
     pub fn enabled(&self, fields: &DialogFields) -> bool {
-        self.enabled_when.as_ref().is_none_or(|(key, values)| fields.get(key).is_some_and(|held| values.contains(held)))
+        // P3(pdf-dialogs-w1): CM-C29
+        match &self.enable {
+            Enable::Always => true,
+            Enable::When(key, values) => fields.get(key).is_some_and(|held| values.contains(held)),
+            Enable::Off => false,
+        }
     }
 }
 

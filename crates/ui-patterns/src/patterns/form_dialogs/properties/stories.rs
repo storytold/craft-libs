@@ -26,12 +26,14 @@ fn tabs() -> Vec<PropertiesTab> {
 fn properties_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let read_only = *data.value("read_only", false);
     let values = data.value("values", DialogFields::new());
-    PropertiesDialog::new("Properties", tabs(), Bind::bound(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
+    // P3(pdf-dialogs-w1): DG-C5 — the key is the new first argument.
+    PropertiesDialog::new("properties", "Properties", tabs(), Bind::bound(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
 }
 
 #[story(PropertiesDialog<'static>, covers = [], drive = Drive::Never)]
 fn properties_dialog_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let read_only = *data.value("read_only", true);
     let values = data.value("values", DialogFields::new());
-    PropertiesDialog::new("Properties", tabs(), Bind::bound(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
+    // P3(pdf-dialogs-w1): DG-C5 — the key is the new first argument.
+    PropertiesDialog::new("properties", "Properties", tabs(), Bind::bound(values)).read_only(read_only).opened(Bind::given(true)).show(ui).into()
 }

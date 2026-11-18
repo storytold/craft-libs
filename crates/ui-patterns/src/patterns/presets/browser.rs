@@ -33,7 +33,7 @@ use crate::runtime::drag;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::Remember as _;
 use crate::text::TextField;
-use crate::tile_grid::{CaptionPlace, GridEvent, TailRow, Tile, TileGrid, TileGroup, TileZoom};
+use crate::tile_grid::{CaptionPlace, GridEvent, GridZoom, TailRow, Tile, TileGrid, TileGroup, TileZoom};
 use craft_behavior::{DisplayOrder, DropOperation, EditEvent, GesturePhase, IconId, ItemSource, Mixed, Selection, SelectionChange};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
@@ -698,11 +698,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                 let grid = match tile_size {
                     PresetTiles::Thumbnails => {
                         let captions = if has_captions(rows) { CaptionPlace::Below } else { CaptionPlace::None };
-                        grid.caption(captions).thumb_size(ThumbSize::Large).zoom(zoom as f32)
+                        grid.caption(captions).thumb_size(ThumbSize::Large).zoom(GridZoom::Fixed(zoom)) // P3(pdf-workflows-w2): L-64
                     }
                     // The zoom is a factor on the picture's width: a wide chip is the small thumbnail high.
                     PresetTiles::Chips => {
-                        grid.caption(CaptionPlace::None).thumb_size(ThumbSize::Small).zoom(aspect.max(1.0)).row_height(RowHeight::Text)
+                        grid.caption(CaptionPlace::None)
+                            .thumb_size(ThumbSize::Small)
+                            .zoom(GridZoom::Fixed(f64::from(aspect.max(1.0))))
+                            .row_height(RowHeight::Text) // P3(pdf-workflows-w2): L-64
                     }
                 };
                 let mut grid = grid

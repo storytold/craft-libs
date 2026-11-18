@@ -3,6 +3,8 @@
 
 use crate::runtime::env::Label;
 use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
 
 /// A link on the About tab.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,10 +23,46 @@ impl AboutLink {
     }
 }
 
+/// A picture on the About tab: the key names it, as it does for `Picture`, so a store decodes it once.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct AboutImage {
+    /// The picture's accessible name.
+    pub label: Label,
+    /// The key the picture is decoded and kept under.
+    pub key: u64,
+    /// Decodes the picture.
+    pub image: Arc<dyn Fn() -> egui::ColorImage + Send + Sync>,
+}
+
+impl AboutImage {
+    /// The picture `image` decodes, named `label` and kept under `key`.
+    pub fn new(label: impl Into<Label>, key: u64, image: impl Fn() -> egui::ColorImage + Send + Sync + 'static) -> Self {
+        let _ = (label, key, image);
+        todo!("DG-C20")
+    }
+}
+
+impl PartialEq for AboutImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label && self.key == other.key
+    }
+}
+
+impl fmt::Debug for AboutImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AboutImage").field("label", &self.label).field("key", &self.key).finish()
+    }
+}
+
 /// The About tab's contents.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct AboutInfo {
+    /// The application's mark, centred above the blurb.
+    pub mark: Option<AboutImage>,
+    /// The suite's logo on the centred "Part of" line above the built-with line.
+    pub part_of: Option<AboutImage>,
     /// The application's name, in the dialog title.
     pub app_name: Label,
     /// One sentence about the application.
@@ -43,6 +81,8 @@ impl AboutInfo {
     /// An About tab for `app_name` with its `blurb` and `version`, without links.
     pub fn new(app_name: impl Into<Label>, blurb: impl Into<Label>, version: impl Into<Label>) -> Self {
         AboutInfo {
+            mark: None,
+            part_of: None,
             app_name: app_name.into(),
             blurb: blurb.into(),
             version: version.into(),
@@ -50,6 +90,20 @@ impl AboutInfo {
             links: Vec::new(),
             built_with: Label::Empty,
         }
+    }
+
+    /// The application's mark, centred above the blurb.
+    #[must_use]
+    pub fn mark(self, image: AboutImage) -> Self {
+        let _ = image;
+        todo!("DG-C20")
+    }
+
+    /// The suite's logo on a centred "Part of" line above the built-with line.
+    #[must_use]
+    pub fn part_of(self, logo: AboutImage) -> Self {
+        let _ = logo;
+        todo!("DG-C20")
     }
 
     /// The prominent button under the blurb.

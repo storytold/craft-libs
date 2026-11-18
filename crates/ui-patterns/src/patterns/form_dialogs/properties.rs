@@ -1,7 +1,7 @@
 //! `PropertiesDialog`: an object's properties as tabs of label and value rows, with text, number and check rows to
 //! edit and read-only rows to read.
 
-use super::{DialogFields, FormDialog, Param, ParamRows, ParamRowsOutput, open_fields};
+use super::{DialogFields, FormDialog, Param, ParamDialog, ParamRows, ParamRowsOutput, SharedRows, open_fields};
 use crate::contract::{Bind, CollectionEvent, NoValue, Outcome, Remember as _, Show as _, ShowCollection as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use crate::display::Text;
@@ -76,6 +76,13 @@ impl PropertiesTab {
         PropertiesTab { title: title.into(), rows }
     }
 
+    /// The tab as a read-only one, with `note` above its rows.
+    #[must_use]
+    pub fn read_only(self, note: Option<Label>) -> Self {
+        let _ = note;
+        todo!("DG-C5")
+    }
+
     /// The parameters the rows are: a value is a read-only text row, a heading is a section.
     fn params(&self, at: usize) -> Vec<Param> {
         self.rows
@@ -130,6 +137,8 @@ pub struct PropertiesOutput {
     pub result: Option<DialogFields>,
     /// The rows' output of this pass; `None` when the dialog is closed.
     pub rows: Option<ParamRowsOutput>,
+    /// The id of the extra footer button pressed this pass (`PropertiesDialog::extra_buttons`).
+    pub action: Option<String>,
 }
 
 impl Outcome for PropertiesOutput {
@@ -152,6 +161,7 @@ impl Outcome for PropertiesOutput {
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct PropertiesDialog<'a> {
+    key: String,
     title: Label,
     tabs: Cow<'a, [PropertiesTab]>,
     values: Bind<'a, DialogFields>,
@@ -161,17 +171,48 @@ pub struct PropertiesDialog<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
+    /// Binds the shown tab to `tab`.
+    #[prop]
+    tab: Option<Bind<'a, usize>>,
+    /// Extra footer buttons after OK and Cancel, each an id and a label; a press comes back as
+    /// `PropertiesOutput::action`.
+    #[prop]
+    extra_buttons: Vec<(String, Label)>,
+    /// The rows shown with every tab.
+    #[prop]
+    shared: Vec<PropertyRow>,
+    /// Where the shared rows go: above the tab strip, or under the shown tab's rows.
+    #[prop]
+    shared_rows: SharedRows,
 }
 
 impl<'a> PropertiesDialog<'a> {
-    /// A dialog titled `title` over `tabs`, editing `values`.
-    pub fn new(title: impl Into<Label>, tabs: impl Into<Cow<'a, [PropertiesTab]>>, values: Bind<'a, DialogFields>) -> Self {
-        PropertiesDialog { title: title.into(), tabs: tabs.into(), values, read_only: false, open: None }
+    /// A dialog answering for `key`, titled `title` over `tabs`, editing `values`.
+    pub fn new(key: impl Into<String>, title: impl Into<Label>, tabs: impl Into<Cow<'a, [PropertiesTab]>>, values: Bind<'a, DialogFields>) -> Self {
+        PropertiesDialog {
+            key: key.into(),
+            title: title.into(),
+            tabs: tabs.into(),
+            values,
+            read_only: false,
+            open: None,
+            tab: None,
+            extra_buttons: Vec::new(),
+            shared: Vec::new(),
+            shared_rows: SharedRows::default(),
+        }
+    }
+
+    /// The dialog as a tabbed [`ParamDialog`] over the same values.
+    pub fn into_param_dialog(self) -> ParamDialog<'a> {
+        todo!("DG-C5")
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> PropertiesOutput {
-        let PropertiesDialog { title, tabs, values, read_only, open } = self;
+        // P3(pdf-dialogs-w1): DG-C5 — the writer builds `show` on `into_param_dialog`.
+        let PropertiesDialog { key, title, tabs, values, read_only, open, tab, extra_buttons, shared, shared_rows } = self;
+        let _ = (key, tab, extra_buttons, shared, shared_rows);
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let per_tab: Vec<Vec<Param>> = tabs.iter().enumerate().map(|(at, tab)| tab.params(at)).collect();
@@ -214,7 +255,13 @@ impl<'a> PropertiesDialog<'a> {
             Some(_) if read_only => Some(DialogFields::new()),
             _ => shown.accepted,
         };
-        PropertiesOutput { response: shown.response, closed: shown.closed, result, rows: rows.into_inner() }
+        PropertiesOutput {
+            response: shown.response,
+            closed: shown.closed,
+            result,
+            rows: rows.into_inner(),
+            action: None, /* P3(pdf-dialogs-w1): DG-C5 */
+        }
     }
 }
 

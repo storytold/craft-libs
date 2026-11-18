@@ -74,6 +74,8 @@ pub struct ParamRowsOutput {
     pub listing: Option<ListingRequest>,
     /// A typed value a row clamped to its range, in the pass it committed: the host shows the range alert.
     pub out_of_range: Option<RangeAlert>,
+    /// The id a custom row's button asked the host to act on this pass (`CustomContext::request_action`).
+    pub action: Option<String>,
 }
 
 impl Outcome for ParamRowsOutput {
@@ -217,7 +219,17 @@ impl<'a> ParamRows<'a> {
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
         let (pick_color, path, eyedropper, listing, out_of_range) =
             if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range) };
-        ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing, out_of_range }
+        ParamRowsOutput {
+            response: shown.output,
+            changed,
+            values,
+            pick_color,
+            path,
+            eyedropper,
+            listing,
+            out_of_range,
+            action: None, /* P3(pdf-dialogs-w1): DG-C8 */
+        }
     }
 }
 

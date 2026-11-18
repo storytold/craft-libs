@@ -8,7 +8,7 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, List
 use super::form::{FormDialog, FormDialogWords};
 use super::host_requests::HostRequests;
 use super::param::{Param, ParamKind, open_fields, set_color_field};
-use super::preview::{PreviewPane, PreviewView, PreviewZoom};
+use super::preview::{PagerStep, PaneOverlay, PanePager, PreviewPane, PreviewState, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
 
@@ -21,8 +21,10 @@ use crate::form::SliderFieldLayout;
 use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 
+use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{Env, Label};
 use crate::text::RangeAlert;
+use craft_behavior::CanvasTransform;
 
 use crate::runtime::memory::MemoryStage;
 
@@ -32,11 +34,11 @@ use crate::sections::{DialogRole, FooterButton};
 
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
-use egui::load::SizedTexture;
-use egui::{Context, Pos2, Response, Ui};
+use egui::{Context, Pos2, Rect, Response, Ui};
 use serde_json::Value;
 
 use std::borrow::Cow;
+use std::sync::Arc;
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -80,6 +82,51 @@ impl ParamLayout {
         }
     }
 }
+
+/// One tab of a tabbed [`ParamDialog`]: a title and the rows it shows.
+///
+/// A read-only tab shows its rows' values without controls; its note is an inline `Notice` (`Tone::Info`) above them.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ParamTab {
+    /// The tab's title.
+    pub title: Label,
+    /// The tab's rows.
+    pub params: Vec<Param>,
+    /// A note shown above the rows of a read-only tab.
+    pub note: Option<Label>,
+    /// Whether the rows show their values without controls.
+    pub read_only: bool,
+}
+
+impl ParamTab {
+    /// A tab titled `title` with the rows `params`.
+    pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
+        let _ = (title, params);
+        todo!("DG-C1")
+    }
+
+    /// The tab as a read-only one, with `note` above its rows.
+    #[must_use]
+    pub fn read_only(self, note: Option<Label>) -> Self {
+        let _ = note;
+        todo!("DG-C1")
+    }
+}
+
+/// Where a tabbed dialog's own `params` go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SharedRows {
+    /// Above the tab strip.
+    #[default]
+    Above,
+    /// Under the shown tab's rows.
+    Below,
+}
+
+/// The host's drawing over a hosted preview pane's picture, kept by the host between passes ([`PaneOverlay`] runs once).
+pub type SharedOverlay = Arc<dyn Fn(&ContentPainterCx, CanvasTransform, Rect) + Send + Sync>;
 
 /// What a parameter dialog answers with at OK.
 #[derive(Clone, Debug, PartialEq)]
@@ -135,8 +182,11 @@ pub struct ParamDialogOutput {
     /// The point of the preview picture a click landed on this pass (`PreviewOutput::clicked`): an eyedropper on the
     /// preview samples there.
     pub preview_click: Option<Pos2>,
-    /// The id of the extra footer button pressed this pass (`ParamDialog::extra_buttons`).
-    pub footer_action: Option<String>,
+    /// The id of the extra footer button or the custom row's button pressed this pass (`ParamDialog::extra_buttons`,
+    /// `CustomContext::request_action`).
+    pub action: Option<String>,
+    /// The step the preview pager took this pass (`ParamDialog::preview_pager`).
+    pub preview_step: Option<PagerStep>,
     /// The answer OK would have given, the pass OK was pressed on a dialog that holds its OK for the host.
     pub(crate) held: Option<ParamResult>,
     /// The picture point at the centre of the view the preview pane drew this pass; `None` without a preview.
@@ -165,7 +215,7 @@ impl Outcome for ParamDialogOutput {
 ///   (the Preview check box held down). Drag pans the picture, the zoom buttons scale it. The
 ///   [`layout`](ParamDialog::layout) places the pane and the buttons.
 /// - Footer: [`extra_buttons`](ParamDialog::extra_buttons) keep the dialog open and come back as
-///   `ParamDialogOutput::footer_action`; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
+///   `ParamDialogOutput::action`; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
 /// - A command form is a dialog with no preview and no remember key.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -173,6 +223,22 @@ pub struct ParamDialog<'a> {
     key: String,
     title: Label,
     params: Cow<'a, [Param]>,
+    /// The tabs of a tabbed dialog; `params` are then the shared rows. A `TabStrip` (`TabKind::Text`) shows the titles
+    /// and the shown tab's rows. Every tab's values open, validate and answer together.
+    #[prop]
+    tabs: Vec<ParamTab>,
+    /// Where the shared rows go: above the tab strip, or under the shown tab's rows.
+    #[prop]
+    shared_rows: SharedRows,
+    /// Binds the shown tab to `tab`.
+    #[prop]
+    tab: Option<Bind<'a, usize>>,
+    /// Whether the dialog shows the values only: an OK-only footer and no Alt reset.
+    #[prop]
+    read_only: bool,
+    /// Passed on to `Dialog::title_note`.
+    #[prop(into)]
+    title_note: Option<Label>,
     /// Binds the values to `values`.
     #[prop(name = "values")]
     bound: Option<Bind<'a, DialogFields>>,
@@ -229,7 +295,13 @@ pub struct ParamDialog<'a> {
     /// The picture the preview pane shows in a dialog that [`previews`](ParamDialog::previews); without one there is
     /// no pane.
     #[prop]
-    preview: Option<SizedTexture>,
+    preview: Option<PreviewState>,
+    /// The pager row under the preview pane; its step comes back as `ParamDialogOutput::preview_step`.
+    #[prop]
+    preview_pager: Option<PanePager>,
+    /// The host's drawing over the picture of a `Ready` preview.
+    #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
+    preview_overlay: Option<PaneOverlay<'a>>,
     /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
     /// preview clicks pick a colour turns it off. The default is true. While it is on and the pane shows, a primary
     /// press on the dialog's [`canvas`](ParamDialog::canvas) passes the modal layer too: the image is the pane's
@@ -242,7 +314,7 @@ pub struct ParamDialog<'a> {
     #[prop]
     canvas: Option<egui::Id>,
     /// Extra footer buttons after OK and Cancel (Color Table's Load… and Save…), each an id and a label. They keep the
-    /// dialog open; a press comes back as `ParamDialogOutput::footer_action`.
+    /// dialog open; a press comes back as `ParamDialogOutput::action`.
     #[prop]
     extra_buttons: Vec<(String, Label)>,
     /// The patterns the dialog's [`ParamKind::Pattern`] rows offer.
@@ -301,6 +373,11 @@ impl<'a> ParamDialog<'a> {
             key: key.into(),
             title: title.into(),
             params: params.into(),
+            tabs: Vec::new(),
+            shared_rows: SharedRows::default(),
+            tab: None,
+            read_only: false,
+            title_note: None,
             bound: None,
             open: None,
             remember: None,
@@ -319,6 +396,8 @@ impl<'a> ParamDialog<'a> {
             previews: false,
             preview_on: None,
             preview: None,
+            preview_pager: None,
+            preview_overlay: None,
             click_centres: true,
             canvas: None,
             extra_buttons: Vec::new(),
@@ -406,6 +485,11 @@ impl<'a> ParamDialog<'a> {
             key,
             title,
             params,
+            tabs,
+            shared_rows,
+            tab,
+            read_only,
+            title_note,
             bound,
             open,
             remember,
@@ -424,6 +508,8 @@ impl<'a> ParamDialog<'a> {
             previews,
             preview_on,
             preview,
+            preview_pager,
+            preview_overlay,
             click_centres,
             canvas,
             extra_buttons,
@@ -439,6 +525,8 @@ impl<'a> ParamDialog<'a> {
             centre,
             preview_colors,
         } = self;
+        // P3(pdf-dialogs-w1): DG-C3, DG-C12, CM-C28 — the writer draws these; the stub only reads them.
+        let _ = (tabs, shared_rows, tab, read_only, title_note, preview_pager, preview_overlay);
         let preview_label = Env::of(ui).words::<FormDialogWords>().preview.clone();
         // The footer `FormDialog` builds for this pass, made the same way, so its `pick` reads `FormOutput::picked`.
         let footer = ResetFooter::new(ui, cancel_label.clone(), alt_resets);
@@ -542,7 +630,8 @@ impl<'a> ParamDialog<'a> {
                 cx.request_close_as(CloseReason::Activated);
             }
             live = cx.memory::<Live>().clone();
-            if let (Some(point), Some(texture)) = (centre, &preview) {
+            // P3(pdf-dialogs-w1): DG-C12 — only a `Ready` preview has a picture to centre on.
+            if let (Some(point), Some(PreviewState::Ready(texture))) = (centre, &preview) {
                 live.view = live.view.centred_on(point, texture.size);
             }
             let mut show_rows = |ui: &mut Ui, values: &mut DialogFields| {
@@ -586,7 +675,7 @@ impl<'a> ParamDialog<'a> {
 
         // `picked` is this pass's press: a second pass of the frame has none, so a press is reported once.
         let pick = footer.pick(shown.picked);
-        let footer_action = match pick {
+        let action = match pick {
             Some(ResetPick::Extra(at)) => extra_buttons.get(at).map(|(id, _)| id.clone()),
             _ => None,
         };
@@ -604,7 +693,8 @@ impl<'a> ParamDialog<'a> {
             preview_on: shown.preview_on,
             comparing: shown.comparing,
             preview_click: shown_preview.clicked,
-            footer_action,
+            action,
+            preview_step: None, // P3(pdf-dialogs-w1): DG-C12
             held,
             preview_centre: shown_preview.centre,
         }
@@ -758,13 +848,17 @@ enum ZoomRow {
 }
 
 /// The zoom row and the pane.
-fn show_preview(ui: &mut Ui, label: &Label, texture: &SizedTexture, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
+fn show_preview(ui: &mut Ui, label: &Label, state: &PreviewState, click_centres: bool, zoom_row: ZoomRow, live: &mut Live) -> ShownPreview {
     let above = (zoom_row == ZoomRow::Above).then(|| PreviewZoom::new(&live.view).show(ui));
-    let pane = PreviewPane::new(label.clone(), *texture, &live.view).click_centres(click_centres).show(ui);
+    // P3(pdf-dialogs-w1): DG-C12 — the pane takes the state; the zoom row and the centre follow `Ready` in the writer's version.
+    let pane = PreviewPane::state(label.clone(), state.clone(), &live.view).click_centres(click_centres).show(ui);
     let below = (zoom_row == ZoomRow::Below).then(|| PreviewZoom::new(&live.view).show(ui));
-    let centre = pane.shown.centre(texture.size);
+    let centre = match state {
+        PreviewState::Ready(texture) => Some(pane.shown.centre(texture.size)),
+        PreviewState::Pending(_) | PreviewState::Failed(_) => None,
+    };
     live.view = above.or(below).and_then(|zoom| zoom.view).or(pane.view).unwrap_or(pane.shown);
-    ShownPreview { clicked: pane.clicked, centre: Some(centre) }
+    ShownPreview { clicked: pane.clicked, centre }
 }
 
 /// Builds the dialog over the host-owned values of a [`HostedParamDialog`] for one pass.
@@ -805,7 +899,7 @@ pub struct HostedParamDialog {
     /// The Preview check box's value: bound to the dialog's `preview_on` prop, so it is known before the first pass.
     preview_on: bool,
     /// The preview picture the host last gave (`set_preview`).
-    picture: Option<SizedTexture>,
+    picture: Option<PreviewState>,
     /// What the dialog showed in its last pass.
     shown: ShownState,
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedParamDialog::held_ok)).
@@ -916,9 +1010,45 @@ impl HostedParamDialog {
         self.requests.answer_eyedropper(key, color);
     }
 
-    /// Sets the picture the preview pane shows from the next pass on; `None` shows none.
-    pub fn set_preview(&mut self, picture: Option<SizedTexture>) {
-        self.picture = picture;
+    /// Sets what the preview pane shows from the next pass on: the progress line, the failure or the picture; `None`
+    /// shows none.
+    pub fn set_preview(&mut self, preview: Option<PreviewState>) {
+        self.picture = preview;
+    }
+
+    /// Sets the pager row under the preview pane from the next pass on; `None` shows none.
+    pub fn set_preview_pager(&mut self, pager: Option<PanePager>) {
+        let _ = pager;
+        todo!("DG-C13")
+    }
+
+    /// Sets the host's drawing over the preview picture from the next pass on; `None` draws none.
+    pub fn set_preview_overlay(&mut self, overlay: Option<SharedOverlay>) {
+        let _ = overlay;
+        todo!("DG-C13")
+    }
+
+    /// The step the preview pager took, once.
+    pub fn take_preview_step(&mut self) -> Option<PagerStep> {
+        todo!("DG-C13")
+    }
+
+    /// Opens the dialog on the tab `tab` of a tabbed dialog ([`ParamDialog::tabs`]).
+    #[must_use]
+    pub fn tab(self, tab: usize) -> Self {
+        let _ = tab;
+        todo!("DG-C4")
+    }
+
+    /// Shows the tab `tab` from the next pass on.
+    pub fn set_tab(&mut self, tab: usize) {
+        let _ = tab;
+        todo!("DG-C4")
+    }
+
+    /// The tab shown in the last pass.
+    pub fn shown_tab(&self) -> usize {
+        todo!("DG-C4")
     }
 
     /// Whether the dialog previews and its Preview check box is on: the host renders the preview while it is. The box
@@ -967,9 +1097,9 @@ impl HostedParamDialog {
         self.held.file(result);
     }
 
-    /// The footer button id that was pressed, once (`ParamDialog::extra_buttons`).
-    pub fn take_footer_action(&mut self) -> Option<String> {
-        self.requests.take_footer_action()
+    /// The id of the footer button or custom row button that was pressed, once (`ParamDialog::extra_buttons`).
+    pub fn take_action(&mut self) -> Option<String> {
+        self.requests.take_action()
     }
 
     /// The folder listing a files row asked for, once.
@@ -1134,7 +1264,8 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);
         }
-        if let Some(picture) = self.picture {
+        // P3(pdf-dialogs-w1): DG-C12 — the state is no longer `Copy`.
+        if let Some(picture) = self.picture.clone() {
             dialog = dialog.preview(picture);
         }
         let alert_title = dialog.alert_title.clone().unwrap_or_else(|| dialog.title.clone());
@@ -1149,8 +1280,8 @@ impl StackDialog for HostedParamDialog {
             self.requests.request_preview_click(point);
         }
         // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
-        if let Some(action) = shown.footer_action {
-            self.requests.request_footer_action(action);
+        if let Some(action) = shown.action {
+            self.requests.request_action(action);
         }
         self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
         if self.held.refusal().is_some_and(|(_, refused)| refused.fields != self.fields) {

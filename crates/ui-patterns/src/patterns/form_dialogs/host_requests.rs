@@ -1,5 +1,6 @@
 //! `HostRequests`: what a hosted dialog's rows ask of the host, kept until the host takes it.
 
+use super::preview::PagerStep;
 use super::rows::ParamRowsOutput;
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 use craft_theme::Srgba;
@@ -25,8 +26,8 @@ impl<O> PreviewRequest<O> {
 }
 
 /// The requests of parameter rows that the host answers: the colour picker, the file dialog, the eyedropper and a
-/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it) and a footer button that
-/// keeps the dialog open. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
+/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it) and a footer or row button
+/// that keeps the dialog open. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
 /// and offers the `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind
 /// replaces it. It also keeps the colours a child picker previews in the dialog's colour rows
 /// ([`preview_color`](HostRequests::preview_color)).
@@ -37,7 +38,7 @@ pub struct HostRequests {
     eyedropper: Option<EyedropperRequest>,
     listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
-    footer_action: Option<String>,
+    action: Option<String>,
     /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
     previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
@@ -129,27 +130,38 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, previews, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, action, previews, answers } = other;
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
         self.listing = listing.or(self.listing.take());
         self.preview_click = preview_click.or(self.preview_click.take());
-        self.footer_action = footer_action.or(self.footer_action.take());
+        self.action = action.or(self.action.take());
         for (key, color) in previews {
             self.preview_color(key, Some(color));
         }
         self.answers.extend(answers);
     }
 
-    /// Files a footer button's id the user pressed; it replaces one not taken yet.
-    pub fn request_footer_action(&mut self, id: String) {
-        self.footer_action = Some(id);
+    /// Files the id of a footer or row button the user pressed; it replaces one not taken yet.
+    pub fn request_action(&mut self, id: String) {
+        self.action = Some(id);
     }
 
-    /// The footer button id that was pressed, once.
-    pub fn take_footer_action(&mut self) -> Option<String> {
-        self.footer_action.take()
+    /// The id of the footer or row button that was pressed, once.
+    pub fn take_action(&mut self) -> Option<String> {
+        self.action.take()
+    }
+
+    /// Files a step of the preview pager; it replaces one not taken yet.
+    pub fn request_preview_step(&mut self, step: PagerStep) {
+        let _ = step;
+        todo!("DG-C13")
+    }
+
+    /// The step of the preview pager, once.
+    pub fn take_preview_step(&mut self) -> Option<PagerStep> {
+        todo!("DG-C13")
     }
 
     /// Files a request for the files of a folder; it replaces one not taken yet.

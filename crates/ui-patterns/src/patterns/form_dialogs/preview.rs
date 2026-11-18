@@ -54,6 +54,12 @@ craft_ui::words! {
         zoom_out: "preview.zoomOut" = "Zoom out";
         zoom: "preview.zoom" = "Zoom";
         rendering: "preview.rendering" = "Rendering preview";
+        page_of: template "preview.pageOf" = "Page {p} of {n}";
+        sheet_of: template "preview.sheetOf" = "Sheet {p} of {n}";
+        no_pages: "preview.noPages" = "No pages";
+        no_sheets: "preview.noSheets" = "No sheets";
+        previous: "preview.previous" = "Previous";
+        next: "preview.next" = "Next";
     }
 }
 
@@ -674,5 +680,59 @@ impl PreviewZoom {
             }
         });
         PreviewZoomOutput { response: row.output, view: next }
+    }
+}
+
+/// What a pager row counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PagerUnit {
+    /// Pages: "Page {p} of {n}".
+    #[default]
+    Page,
+    /// Sheets: "Sheet {p} of {n}".
+    Sheet,
+}
+
+/// Which way a pager press steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PagerStep {
+    /// To the previous page or sheet.
+    Back,
+    /// To the next page or sheet.
+    Next,
+}
+
+/// The pager row of a preview: a previous button, the caption ("Page {p} of {n}", "Sheet {p} of {n}"; "No pages" or
+/// "No sheets" for a count of 0) and a next button. A press is reported in its own pass. The row is inline: each
+/// caller places it.
+#[must_use = "show the pager with `show`"]
+#[derive(Clone, Debug, Default, PartialEq, crate::contract::Pattern)]
+pub struct PanePager {
+    /// The shown page or sheet, counted from 1.
+    pub shown: usize,
+    /// How many pages or sheets there are.
+    pub count: usize,
+    /// Stands in for the number in the caption, for a page label such as "iii".
+    pub shown_label: Option<Label>,
+    /// Whether the previous button is enabled.
+    pub back: bool,
+    /// Whether the next button is enabled.
+    pub next: bool,
+    /// What the pager counts.
+    pub unit: PagerUnit,
+}
+
+impl PanePager {
+    /// The caption: "Page {p} of {n}" or "Sheet {p} of {n}", or "No pages" or "No sheets" when `count` is 0.
+    pub fn caption(&self, env: &Env) -> Label {
+        let _ = env;
+        todo!("DG-C10")
+    }
+
+    /// Shows the row; the step a press made in this pass.
+    pub fn show(self, ui: &mut Ui) -> Option<PagerStep> {
+        let _ = ui;
+        todo!("DG-C10")
     }
 }

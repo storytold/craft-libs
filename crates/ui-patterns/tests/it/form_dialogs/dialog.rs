@@ -5,7 +5,9 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Outcome as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult, PreviewState,
+};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;
@@ -58,7 +60,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
     let out = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).show(ui);
+        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).show(ui); // P3(pdf-dialogs-w1): DG-C12
         out.set((shown.preview_on, shown.comparing));
     });
     fixture.settle();
@@ -80,7 +82,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
 fn laid_out(layout: ParamLayout) -> [egui::Rect; 4] {
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).layout(layout).show(ui);
+        ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(PreviewState::Ready(picture)).layout(layout).show(ui); // P3(pdf-dialogs-w1): DG-C12
     });
     fixture.settle();
     let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the radius row has a slider");
@@ -303,8 +305,9 @@ fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     fixture.click(&save);
     twice.set(false);
     fixture.idle(4);
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten().as_deref(), Some("save"), "the press is reported by its id");
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten(), None, "the press is reported once");
+    // P3(pdf-dialogs-w1): DG-C9
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten().as_deref(), Some("save"), "the press is reported by its id");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "the press is reported once");
     assert!(host.borrow().is_open::<HostedParamDialog>(), "the button keeps the dialog open");
 
     let ctx = fixture.ctx().clone();
@@ -319,7 +322,7 @@ fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     host.borrow_mut().set_json_field(&ctx, dialog_id("stack"), "sources", folder_value("/photos/other")).expect("the files row takes a folder");
     fixture.idle(4);
     on_dialog(&host, HostedParamDialog::cancel_requests);
-    assert_eq!(on_dialog(&host, HostedParamDialog::take_footer_action).flatten(), None, "a cancel drops the footer press");
+    assert_eq!(on_dialog(&host, HostedParamDialog::take_action).flatten(), None, "a cancel drops the footer press"); // P3(pdf-dialogs-w1): DG-C9
     assert_eq!(on_dialog(&host, HostedParamDialog::take_listing).flatten(), None, "a cancel drops the listing request");
 }
 
@@ -510,13 +513,13 @@ fn a_preview_that_centres_on_clicks_passes_a_press_on_the_canvas_under_it() {
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 0, "no pane yet: the modal layer blocks the press");
-    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture)))); // P3(pdf-dialogs-w1): DG-C12
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "with the pane shown the press reaches the canvas");
 
     host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), locating(id, false)));
-    on_dialog(&host, |dialog| dialog.set_preview(Some(picture)));
+    on_dialog(&host, |dialog| dialog.set_preview(Some(PreviewState::Ready(picture)))); // P3(pdf-dialogs-w1): DG-C12
     fixture.idle(4);
     press(&mut fixture);
     assert_eq!(presses.get(), 1, "a pane that does not centre on clicks leaves the press blocked");

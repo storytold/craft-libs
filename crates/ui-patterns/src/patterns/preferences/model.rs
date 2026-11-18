@@ -56,6 +56,13 @@ impl<'a> PageSpec<'a> {
         Self { id, title, groups: Vec::new(), footnote: None, keywords: "", custom: true }
     }
 
+    /// Adds `group` under a custom page's own part, where the search sees its rows.
+    #[must_use]
+    pub fn group(self, group: GroupSpec<'a>) -> Self {
+        let _ = group;
+        todo!("DG-C21")
+    }
+
     /// Sets the note shown under the last group.
     #[must_use]
     pub fn footnote(mut self, footnote: &'a str) -> Self {

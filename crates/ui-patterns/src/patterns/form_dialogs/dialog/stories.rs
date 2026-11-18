@@ -4,6 +4,7 @@ use super::{HostedParamDialog, ParamDialog, ParamLayout};
 use crate::contract::Bind;
 use crate::dialog::StackDialog as _;
 use crate::dialog::stories::hosted_with;
+use crate::patterns::form_dialogs::PreviewState;
 use crate::patterns::form_dialogs::{DialogFields, Param};
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
@@ -35,7 +36,8 @@ fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLay
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
     let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true).layout(layout);
-    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)) } else { dialog };
+    // P3(pdf-dialogs-w1): DG-C12 — the preview takes a `PreviewState`.
+    let dialog = if preview { dialog.previews(true).preview(PreviewState::Ready(picture(ui, comparing))) } else { dialog };
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
     shown.into()

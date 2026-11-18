@@ -7,7 +7,7 @@ mod credits;
 mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
-pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
+pub use credits::{AboutImage, AboutInfo, AboutLink, Contributor, Credits, ModelCredit};
 
 use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
@@ -53,6 +53,7 @@ craft_ui::words! {
         sort: "aboutDialog.sort" = "Sort";
         reverse: "aboutDialog.reverse" = "Reverse the order";
         view: "aboutDialog.view" = "View";
+        part_of: "aboutDialog.partOf" = "Part of";
         grab_bag: "aboutDialog.grabBag" = "Grab bag";
         table: "aboutDialog.table" = "Table";
         counts: template "aboutDialog.counts" = "Contributors: {contributors} · Commits: {commits}";
