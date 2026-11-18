@@ -1075,7 +1075,7 @@ fn prompt_id() -> craft_ui::dialog::DialogId {
     dialog_id("updateDialog.prompt")
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(any(test, feature = "screen-testing"))]
 impl Updater {
     /// Waits for the running check's answer on its channel (its thread always sends one, or ends
     /// and closes the channel), then hands it to `tick` as a pass would; then does the same for
