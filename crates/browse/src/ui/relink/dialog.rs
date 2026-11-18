@@ -8,7 +8,7 @@ use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, S
 use craft_docpath::links::{
     Candidate, CandidateProblem, Link, LinkFiles, LinkSearch, MatchCriteria, SearchEnd, SearchHit, SearchUpdate, check_candidate, derive_remap, rank,
 };
-use craft_host::queue::{JobQueue, Priority, QueueOptions, QueueOrder};
+use craft_host::queue::{JobQueue, Priority, QueueOptions};
 use craft_host::{Host, Jobs, PickId, PickRequest, Wake};
 use craft_i18n::Format;
 use craft_theme::variant::Tone;
@@ -637,7 +637,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
             let checks = JobQueue::new(
                 Arc::clone(&jobs),
                 wake.clone(),
-                QueueOptions { lanes: 1, name: "relink-check", order: QueueOrder::default() }, /* P3(pdf-shell-w4): SH-C32 */
+                QueueOptions { lanes: 1, name: "relink-check", ..QueueOptions::default() },
             );
             self.runtime = Some(Runtime { jobs, wake, checks });
         }

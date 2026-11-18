@@ -27,6 +27,10 @@ web-time = "1.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7"
 
+# `BrowserFiles`: the web build's settings in localStorage.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Storage"] }
+
 [dev-dependencies]
 craft-settings = { path = ".", features = ["testing"] }
 tempfile = "3"

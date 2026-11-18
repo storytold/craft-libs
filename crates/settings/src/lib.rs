@@ -44,13 +44,10 @@ mod names;
 pub mod presets;
 pub mod remember;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod paths;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiles;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod recovery;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 #[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
 pub mod testing;
@@ -63,11 +60,11 @@ pub use files::DiskFiles;
 pub use files::SettingsFiles;
 pub use migrate::LegacyFile;
 #[cfg(not(target_arch = "wasm32"))]
-pub use paths::{Location, Portable, Probe, Resolved, Rule};
+pub use paths::Probe;
+pub use paths::{Location, Portable, Resolved, Rule};
 #[cfg(not(target_arch = "wasm32"))]
 pub use profiles::{ProfileError, Profiles};
 pub use remember::{Remembered, RememberedSection};
-#[cfg(not(target_arch = "wasm32"))]
 pub use store::{OpenOptions, SettingsStore, SharedSettings};
 pub use toml_edit::DocumentMut;
 

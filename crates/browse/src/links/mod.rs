@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_docpath::links::{Candidate, Link, LinkFiles, LinkSearch, LinkStatus, SearchEnd, SearchUpdate};
-use craft_host::queue::{Cancel, JobQueue, Priority, QueueOptions, QueueOrder};
+use craft_host::queue::{Cancel, JobQueue, Priority, QueueOptions};
 use craft_host::{Jobs, Wake};
 use craft_platform::watch::FileWatch;
 
@@ -223,11 +223,7 @@ impl<K: Clone + Send + 'static> SearchRun<K> {
         wake: Wake,
     ) -> Self {
         // filmcraft: crates/ui-egui/src/panels/media_dialogs.rs:146 (`link_media` ran `media.search` on the UI thread).
-        let queue = JobQueue::new(
-            jobs,
-            wake.clone(),
-            QueueOptions { lanes: 1, name: "relink-search", order: QueueOrder::default() }, /* P3(pdf-shell-w4): SH-C32 */
-        );
+        let queue = JobQueue::new(jobs, wake.clone(), QueueOptions { lanes: 1, name: "relink-search", ..QueueOptions::default() });
         let updates = Arc::new(Mutex::new(Vec::new()));
         let cancel = Cancel::new();
         let inbox = Arc::clone(&updates);
