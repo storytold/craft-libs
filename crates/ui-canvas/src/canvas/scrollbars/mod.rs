@@ -262,6 +262,19 @@ impl Component for CanvasScrollbars<'_> {
         }
     }
 
+    /// The host maps a proposed centre through its own layout (a scroll offset in points) and back, so the view it
+    /// writes back differs from the proposal by rounding only; that is not a change under the drag.
+    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
+        let magnitude = proposed.center.x.abs().max(proposed.center.y.abs()).max(host.center.x.abs()).max(host.center.y.abs());
+        let mut rounded = *proposed;
+        rounded.center = host.center;
+        rounded.zoom = host.zoom;
+        rounded == *host
+            && craft_behavior::same_in_f32_at(proposed.center.x, host.center.x, magnitude)
+            && craft_behavior::same_in_f32_at(proposed.center.y, host.center.y, magnitude)
+            && craft_behavior::same_in_f32(proposed.zoom, host.zoom)
+    }
+
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
         let bars = self.bars(&view, cx.rect, cx.style.look.thickness);
