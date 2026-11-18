@@ -1,7 +1,7 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
+use craft_behavior::geometry::quad::{BoxAllow, BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
@@ -1002,4 +1002,130 @@ fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
         assert!(pivot.distance(corner) < 1e-6, "snap {snap}: onto the corner: {pivot:?} vs {corner:?}");
         assert_eq!(h.state().quad, turned.quad, "the box never moved");
     }
+}
+
+/// A box whose handle set shows only some handles takes no press, key or drag on the others: a sides-only box (a
+/// paragraph frame's width) takes its right and left edges only, a corners-only box no edge.
+#[trial]
+fn a_sides_only_box_takes_presses_on_its_side_edges_only() {
+    // Rotation refused: no outside parts and no knob, so a press off the shown handles reaches nothing of the box.
+    let no_turn = || free_rules().with_allow(BoxAllow::new(false, true, true));
+    let sides = |config: &mut Config| {
+        config.rules = no_turn().with_handles(BoxHandles::Sides);
+        config.inside_moves = false;
+        config.reference_point = false;
+    };
+    // Just off the bottom right corner: within the corner's reach, outside both side bands that meet there.
+    let off_corner = Point::new(305.0, 225.0);
+    let mut all = harness(BoxState::from_rect(RECT), |config| {
+        sides(config);
+        config.rules = no_turn();
+    });
+    hover(&mut all, off_corner);
+    assert_eq!(all.host.borrow().hovered, Some(BoxPart::Corner(2)), "with every handle the corner takes the point");
+
+    let mut h = harness(BoxState::from_rect(RECT), sides);
+    hover(&mut h, off_corner);
+    assert_eq!(h.host.borrow().hovered, None, "a hidden corner takes no press");
+    drag(&mut h, off_corner, Point::new(325.0, 245.0));
+    assert_eq!(h.state(), BoxState::from_rect(RECT), "a drag from a hidden corner moves nothing");
+    assert!(h.host.borrow().events.is_empty(), "and starts no gesture: {:?}", h.host.borrow().events);
+    for hidden in [Point::new(200.0, 80.0), Point::new(200.0, 220.0)] {
+        hover(&mut h, hidden);
+        assert_eq!(h.host.borrow().hovered, None, "the hidden edge at {hidden:?} takes no press");
+    }
+
+    drag(&mut h, Point::new(300.0, 110.0), Point::new(320.0, 110.0));
+    let quad = h.state().quad;
+    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the right side moved: {quad:?}");
+    drag(&mut h, Point::new(100.0, 110.0), Point::new(80.0, 110.0));
+    let quad = h.state().quad;
+    assert!((quad[0].x - 80.0).abs() < 1e-6 && (quad[3].x - 80.0).abs() < 1e-6, "the left side moved: {quad:?}");
+
+    let mut picks = Vec::new();
+    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    picks.extend(h.host.borrow().picked);
+    for _ in 0..3 {
+        h.fixture.key(egui::Key::PageDown, egui::Modifiers::NONE).settle();
+        picks.extend(h.host.borrow().picked);
+    }
+    assert!(picks.iter().all(|part| matches!(part, BoxPart::Edge(1) | BoxPart::Edge(3))), "the keys reach the shown sides only: {picks:?}");
+    assert!(picks.contains(&BoxPart::Edge(1)) && picks.contains(&BoxPart::Edge(3)), "and both of them: {picks:?}");
+
+    let mut corners = harness(BoxState::from_rect(RECT), |config| {
+        sides(config);
+        config.rules = no_turn().with_handles(BoxHandles::Corners);
+    });
+    for hidden in [Point::new(200.0, 80.0), Point::new(200.0, 220.0), Point::new(300.0, 150.0)] {
+        hover(&mut corners, hidden);
+        assert_eq!(corners.host.borrow().hovered, None, "a corners-only box's edge at {hidden:?} takes no press");
+    }
+    hover(&mut corners, off_corner);
+    assert_eq!(corners.host.borrow().hovered, Some(BoxPart::Corner(2)), "its corners still do");
+}
+
+/// The rotate knob stands above the box, or below it at the canvas's top edge; a ⇧ drag on it turns the box by whole
+/// rotate steps, and a click on it applies nothing. The knob is found as the app finds it, by its access-tree name.
+#[trial]
+fn a_knob_sits_below_a_box_at_the_top_turns_in_shift_steps_and_a_click_on_it_applies_nothing() {
+    let knob_of = |h: &Harness| h.fixture.by_label("Rotate").map(|target| target.center());
+    let knob_zone = |config: &mut Config| {
+        config.zone = RotateZone::Knob;
+        config.reference_point = false;
+    };
+
+    // The harness's view puts the document's origin at the canvas's top left: a box at y 0 has no room above.
+    let at_top = Rect::new(100.0, 0.0, 300.0, 140.0);
+    let h = harness(BoxState::from_rect(at_top), knob_zone);
+    let knob = knob_of(&h).expect("the knob has a node named by the box's words");
+    let bottom = h.screen(Point::new(200.0, 140.0));
+    assert!((knob.x - bottom.x).abs() < 0.5 && knob.y > bottom.y, "at the top edge the knob stands below: {knob:?} vs {bottom:?}");
+
+    let mut h = harness(BoxState::from_rect(RECT), knob_zone);
+    let knob = knob_of(&h).expect("the knob has a node");
+    let top = h.screen(Point::new(200.0, 80.0));
+    assert!((knob.x - top.x).abs() < 0.5 && knob.y < top.y, "with room above the knob stands above: {knob:?} vs {top:?}");
+
+    frame(&mut h, vec![pointer::moved(knob)]);
+    frame(&mut h, vec![pointer::press(knob)]);
+    frame(&mut h, vec![pointer::release(knob)]);
+    frame(&mut h, Vec::new());
+    assert_eq!(h.host.borrow().applied, 0, "a click on the knob is not a click outside");
+    assert_eq!(h.state(), BoxState::from_rect(RECT), "and turns nothing");
+
+    h.config.borrow_mut().mods = Some(Mods::SHIFT);
+    let centre = h.screen(RECT.center());
+    let around = |degrees: f32| {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let v = knob - centre;
+        centre + by(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+    };
+    frame(&mut h, vec![pointer::moved(knob)]);
+    frame(&mut h, vec![pointer::press(knob)]);
+    frame(&mut h, vec![pointer::moved(around(10.0))]);
+    frame(&mut h, vec![pointer::moved(around(25.0))]);
+    frame(&mut h, vec![pointer::release(around(25.0))]);
+    frame(&mut h, Vec::new());
+    let angle = h.state().angle().rem_euclid(360.0);
+    let step = BoxRules::default().rotate_step;
+    let steps = angle / step;
+    assert!(steps.round() >= 1.0 && (steps - steps.round()).abs() < 1e-6, "a ⇧ drag turns the box by whole rotate steps: {angle}");
+    assert!((angle - 25.0).abs() > 1.0, "not by the unstepped 25° of the drag: {angle}");
+    assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit));
+    assert_eq!(h.host.borrow().applied, 0, "a drag on the knob applies nothing");
+}
+
+/// A linked corner dragged inward along one axis, the other barely moving, still shrinks both sides in proportion
+/// (#4477): the box does not freeze because one axis did not shrink.
+#[trial]
+fn a_linked_corner_dragged_inward_along_one_axis_shrinks_both_sides() {
+    let mut h = upright();
+    drag(&mut h, Point::new(300.0, 220.0), Point::new(220.0, 222.0));
+    let quad = h.state().quad;
+    let (width, height) = (quad[2].x - quad[0].x, quad[2].y - quad[0].y);
+    assert_eq!(quad[0], Point::new(RECT.x0, RECT.y0), "the opposite corner stays: {quad:?}");
+    assert!(width < RECT.width() - 1.0 && height < RECT.height() - 1.0, "both sides shrink: {width} by {height}");
+    assert!((width / height - RECT.width() / RECT.height()).abs() < 1e-6, "in proportion: {width} by {height}");
+    // PLAN: the framework scales a linked corner by the drag's projection on the anchor–corner diagonal (here 0.736 of
+    // the box); production scaled by the larger axis share (0.6, the 40 % the app test asserted). The rule is left as it is.
 }

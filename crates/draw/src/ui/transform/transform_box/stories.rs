@@ -1,9 +1,10 @@
 //! Stories of the transform box: Free Transform with its reference point, the Move tool's controls, Distort, the
-//! Ellipse tool's centre mark and the Line tool's live-line controls.
+//! Ellipse tool's centre mark, the Line tool's live-line controls, the corner-only and side-only handle sets and the
+//! rotate knob.
 
 use super::{BOX, LineLook, RotateZone, TransformBox};
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, TransformMode};
-use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::geometry::quad::{BoxHandles, BoxPart, BoxRules, BoxState, TransformMode};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, paint_shapes, show_document, show_quad};
@@ -27,9 +28,20 @@ fn free_box(state: Bind<'_, BoxState>) -> TransformBox<'_> {
 
 /// Shows the box `make` builds over the story's box as the only canvas control of a canvas.
 fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
+    show_on_canvas(ui, data, false, make)
+}
+
+/// [`on_canvas`], the view centred on the picture; `at_top` scrolls it so the picture's top side lies on the
+/// canvas's top edge.
+fn show_on_canvas(ui: &mut Ui, data: &mut StoryData, at_top: bool, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
     let state = data.value("box", BoxState::from_rect(PICTURE));
     let room = craft_ui::testing::stage(ui);
-    let view = craft_ui::testing::canvas_story::story_view(room, ui.pixels_per_point(), PICTURE.center(), 100.0);
+    let ppp = ui.pixels_per_point();
+    let mut view = craft_ui::testing::canvas_story::story_view(room, ppp, PICTURE.center(), 100.0);
+    if at_top {
+        let top = view.to_doc(room.center_top());
+        view = craft_ui::testing::canvas_story::story_view(room, ppp, PICTURE.center() + DocVec::new(0.0, PICTURE.y0 - top.y), 100.0);
+    }
     let layer = layer();
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
@@ -52,6 +64,30 @@ fn move_tool_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TransformBox<'static>, covers = [Default])]
 fn distort(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| free_box(state).rules(BoxRules::in_mode(TransformMode::Distort)))
+}
+
+/// A box with handles at its corners only: a picture that scales from its corners.
+#[story(TransformBox<'static>, covers = [Default])]
+fn corners_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).rules(BoxRules::default().with_handles(BoxHandles::Corners)))
+}
+
+/// A box with handles on its right and left sides only: a paragraph frame that changes only its width.
+#[story(TransformBox<'static>, covers = [Default])]
+fn sides_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).rules(BoxRules::default().with_handles(BoxHandles::Sides)))
+}
+
+/// A box that turns by a round knob on a stem above its top side; the rest of the outside is the tool's.
+#[story(TransformBox<'static>, covers = [Default])]
+fn rotate_knob(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).rotate_zone(RotateZone::Knob).reference_point(false))
+}
+
+/// The knob of a box at the canvas's top edge, with no room above: it stands below the bottom side.
+#[story(TransformBox<'static>, covers = [Default])]
+fn rotate_knob_at_top(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show_on_canvas(ui, data, true, |state| free_box(state).rotate_zone(RotateZone::Knob).reference_point(false))
 }
 
 /// The box of an upright paragraph frame: free sides, no rotation, no reference point.

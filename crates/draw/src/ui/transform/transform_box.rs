@@ -35,6 +35,10 @@ pub const BOX: PartKey = PartKey::new("box");
 /// outside.
 const OUTSIDE: PartKey = PartKey::new("outside");
 
+/// The round rotate handle of [`RotateZone::Knob`], `KNOB.at(0)`: it stands for the outside, so a drag on it turns the
+/// box as a drag outside does.
+const KNOB: PartKey = PartKey::new("knob");
+
 /// The pointer-only part of an edge: the band along the whole side, outside it, beside the midpoint handle `BOX.at(Edge(k))` that the keyboard
 /// and the focus ring use. One part key carries one shape, so the side cannot reuse the handle's key.
 const EDGE: PartKey = PartKey::new("edge");
@@ -126,8 +130,7 @@ impl RotateZone {
     fn rotates_at(self, quad: &[Point; 4], pointer: Pos2) -> bool {
         match self {
             RotateZone::Border { points } => border_distance(quad, pointer) <= points,
-            RotateZone::Outside | RotateZone::Band => true,
-            RotateZone::Knob => todo!("ED-F7"),
+            RotateZone::Outside | RotateZone::Band | RotateZone::Knob => true,
         }
     }
 }
@@ -289,6 +292,8 @@ struct Grip {
     follows: bool,
     /// An Alt press away from the handles: a click there moves the reference point.
     moves_pivot: bool,
+    /// The press is on the rotate knob: a click there is not a click outside, so it applies nothing.
+    knob: bool,
     /// The box at the press.
     pressed: BoxState,
     /// The box the drag last produced.
@@ -298,7 +303,17 @@ struct Grip {
 impl Default for Grip {
     fn default() -> Self {
         let none = BoxState::from_rect(DocRect::ZERO);
-        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, follows: false, moves_pivot: false, pressed: none, last: none }
+        Grip {
+            part: BoxPart::Inside,
+            start: none,
+            from: Point::ZERO,
+            began: false,
+            follows: false,
+            moves_pivot: false,
+            knob: false,
+            pressed: none,
+            last: none,
+        }
     }
 }
 
@@ -451,6 +466,12 @@ impl<'a> TransformBox<'a> {
         self.move_only().filter(|&points| points > 0.0 && self.rules.allows(BoxPart::Inside))
     }
 
+    /// Whether the box declares, draws and names a rotate knob: the knob zone on a box drawn as a box, where the rules
+    /// let it turn.
+    fn has_knob(&self) -> bool {
+        matches!(self.rotate_zone, RotateZone::Knob) && self.line.is_none() && self.move_only().is_none() && self.rules.allows(BoxPart::Outside)
+    }
+
     /// The parts the keyboard walks, in order. A box whose inside does not move has no inside part, so a press or drag
     /// over its body reaches what lies beneath (a type editor under a paragraph frame). A box that offers only its
     /// move reach has none.
@@ -549,7 +570,10 @@ impl<'a> TransformBox<'a> {
         match (kind, part) {
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
-                if dragging || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. }) || away <= style.rotate_reach {
+                if dragging
+                    || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Knob | RotateZone::Border { .. })
+                    || away <= style.rotate_reach
+                {
                     turn()
                 } else {
                     CursorIcon::Alias.into()
@@ -615,8 +639,8 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The parts that take a press, with the box part each stands for. Mirrors what [`parts`](Component::parts)
-    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside; or only the
-    /// move strips.
+    /// declares: the keyboard parts, a segment per allowed edge, the centre where declared, and the outside (the knob in
+    /// [`RotateZone::Knob`]); or only the move strips.
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
         if self.move_only().is_some() {
             let parts = if self.ring_reach().is_some() { 0..8 } else { 0..0 };
@@ -635,7 +659,13 @@ impl<'a> TransformBox<'a> {
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
         }
-        parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
+        if matches!(self.rotate_zone, RotateZone::Knob) {
+            if self.has_knob() {
+                parts.push((KNOB.at(0), BoxPart::Outside));
+            }
+        } else {
+            parts.extend((0..4).map(|corner| (OUTSIDE.at(corner), BoxPart::Outside)));
+        }
         parts
     }
 
@@ -661,11 +691,13 @@ impl<'a> TransformBox<'a> {
                 PressPhase::Down { start, .. } if part == BoxPart::Outside && !self.rotate_zone.rotates_at(&screen.quad, start.origin) => {}
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = space.view.to_doc(start.origin);
-                    // The move reach only moves: an Alt press there is a move too.
-                    let moves_pivot = mods.alt && self.move_only().is_none() && matches!(part, BoxPart::Inside | BoxPart::Outside);
+                    let knob = reference.key == KNOB;
+                    // The move reach only moves: an Alt press there is a move too. The knob is a handle, so an Alt
+                    // press on it turns the box rather than moving the reference point onto it.
+                    let moves_pivot = mods.alt && self.move_only().is_none() && !knob && matches!(part, BoxPart::Inside | BoxPart::Outside);
                     let follows = follows_in_slop(part);
                     let (part, begin) = if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from)) } else { (part, *shown) };
-                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
+                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, knob, pressed: *shown, last: *shown });
                 }
                 // Inside the slop a part that follows there moves the box from the first move; the outside starts at
                 // the drag.
@@ -707,7 +739,7 @@ impl<'a> TransformBox<'a> {
                         cx.cancel(CancelReason::Unchanged);
                     } else if grip.began {
                         cx.commit();
-                    } else if grip.part == BoxPart::Outside && click && start.clicks <= 1 {
+                    } else if grip.part == BoxPart::Outside && !grip.knob && click && start.clicks <= 1 {
                         self.report.apply = Some(ApplyBy::ClickOutside { at: space.view.to_doc(start.origin) });
                     } else if grip.moves_pivot && click {
                         cx.set(grip.start);
@@ -858,6 +890,19 @@ fn outward_normals(quad: &[Pos2; 4]) -> [Vec2; 4] {
         let along = b - a;
         if along.length() > 1e-3 { Vec2::new(along.y, -along.x).normalized() * turn } else { (a.to_vec2() - centre).normalized() }
     })
+}
+
+/// The rotate knob of the box whose corners are `quad` on the screen, in the canvas body `within`: the knob and the foot
+/// of its stem. The knob stands `rotate_reach` out from the middle of the top side, along the side's outward normal so a
+/// turned box's knob turns with it; where that point is outside `within`, it stands out from the bottom side instead.
+fn knob_at(quad: &[Pos2; 4], within: Rect, style: &TransformBoxStyle) -> (Pos2, Pos2) {
+    let outward = outward_normals(quad);
+    let off = |side: usize| {
+        let foot = quad[side].lerp(quad[(side + 1) % 4], 0.5);
+        (foot + outward[side] * style.rotate_reach, foot)
+    };
+    let top = off(0);
+    if within.contains(top.0) { top } else { off(2) }
 }
 
 /// The reference point's glyph centred at `centre`: a circle crossed by two arms, over its halo. The one glyph of the
@@ -1038,7 +1083,16 @@ impl Component for TransformBox<'_> {
                 }
             }
             RotateZone::Band => {}
-            RotateZone::Knob => todo!("ED-F7"),
+            // The knob alone turns the box; the rest of the outside is the tool's.
+            RotateZone::Knob => {
+                if self.has_knob() {
+                    let (knob, _) = knob_at(&quad, rect, style);
+                    cx.part(KNOB.at(0), HitShape::circle(knob, style.handle_reach))
+                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
+                        .pointer_only(ROTATE_BY_KEY);
+                }
+            }
         }
     }
 
@@ -1074,12 +1128,17 @@ impl Component for TransformBox<'_> {
                     let centre = screen.quad.iter().fold(Vec2::ZERO, |sum, corner| sum + pos(*corner).to_vec2()) / 4.0;
                     paint_centre_glyph(&draw, centre.to_pos2(), style);
                 }
-                for i in 0..4u8 {
-                    for part in [BoxPart::Corner(i), BoxPart::Edge(i)] {
-                        let Some(at) = handle_point(&screen, part) else { continue };
-                        let enlarged = self.overflow && part == BoxPart::Corner(2);
-                        self.paint_handle(&draw, cx, part, pos(at), enlarged);
-                    }
+                // A handle the handle set hides is not drawn; one the mode refuses still draws, dimmed by
+                // `paint_handle`.
+                for part in (0..4u8).flat_map(|i| [BoxPart::Corner(i), BoxPart::Edge(i)]).filter(|part| self.rules.shows(*part)) {
+                    let Some(at) = handle_point(&screen, part) else { continue };
+                    let enlarged = self.overflow && part == BoxPart::Corner(2);
+                    self.paint_handle(&draw, cx, part, pos(at), enlarged);
+                }
+                if self.has_knob() {
+                    let (knob, foot) = knob_at(&screen.quad.map(pos), cx.rect, style);
+                    draw.stroke(&PaintShape::Path(vec![foot, knob]), StrokeWidth::Thin, style.line);
+                    paint_widget(&draw, knob, &style.widget);
                 }
             }
         }
@@ -1089,7 +1148,7 @@ impl Component for TransformBox<'_> {
     }
 
     /// One node per part: the whole box, the corners, the edges and the reference point, each described by its point
-    /// in the canvas's units.
+    /// in the canvas's units, and the rotate knob where the box has one.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value()) else { return };
         let words = cx.words::<TransformBoxWords>();
@@ -1102,6 +1161,10 @@ impl Component for TransformBox<'_> {
             if let Some(at) = self.part_point(state, part) {
                 node.description = Some(format!("{}, {}", across_x.format_value(&units, at.x, zero_x), across_y.format_value(&units, at.y, zero_y)));
             }
+        }
+        // The knob is pointer-only, so it is not among the keyboard parts; its node names it for assistive tools.
+        if self.has_knob() {
+            access.node(KNOB.at(0), Role::BUTTON).name = Name::Text(words.rotate_knob.as_str().to_owned());
         }
     }
 

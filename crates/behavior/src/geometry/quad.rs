@@ -268,10 +268,14 @@ impl BoxRules {
         self
     }
 
-    /// Whether the box shows `part`: `Corners` shows the four corners, `Sides` the right and left sides.
+    /// Whether the box shows `part`: `Corners` shows the four corners and no side, `Sides` the right and left sides
+    /// and no corner. The inside, the outside and the reference point always show.
     pub fn shows(&self, part: BoxPart) -> bool {
-        let _ = part;
-        todo!("ED-F5")
+        match (self.handles, part) {
+            (BoxHandles::Corners, BoxPart::Edge(_)) | (BoxHandles::Sides, BoxPart::Corner(_)) => false,
+            (BoxHandles::Sides, BoxPart::Edge(k)) => k % 2 == 1,
+            _ => true,
+        }
     }
 
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
@@ -287,14 +291,15 @@ impl BoxRules {
 
     /// Whether a drag of `part` changes the box: in Distort only the corners, the inside and the
     /// reference point; in Skew everything but the outside; the outside only where rotating is
-    /// allowed. A click outside a refused zone still applies the box (the overlay's rule).
+    /// allowed; and never a handle the box does not [show](Self::shows). A click outside a refused
+    /// zone still applies the box (the overlay's rule).
     pub fn allows(&self, part: BoxPart) -> bool {
         let by_mode = match self.effective_mode() {
             TransformMode::Distort => !matches!(part, BoxPart::Outside | BoxPart::Edge(_)),
             TransformMode::Skew => part != BoxPart::Outside,
             _ => true,
         };
-        by_mode && (self.allow.rotate || part != BoxPart::Outside)
+        by_mode && (self.allow.rotate || part != BoxPart::Outside) && self.shows(part)
     }
 
     /// The modifiers a drag of `part` acts on, from the keys held: ⌘ is dropped on a corner or
