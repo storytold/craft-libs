@@ -203,6 +203,14 @@ mod tests {
             Gated
         }
         static INDEX: Shared<Gated> = Shared::new(build);
+        // Own the worker in this test so its completion means every context has reloaded,
+        // not just that the index was published or the first context started drawing it.
+        *INDEX.lock() = State::Building { turned_away: false, contexts: Vec::new() };
+        let (finished, all_reloaded) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            INDEX.finish();
+            finished.send(()).unwrap();
+        });
         fn start(ctx: &egui::Context) {
             INDEX.start(Some(ctx));
         }
@@ -226,13 +234,9 @@ mod tests {
         assert!(selected(&disabled).is_none());
         super::super::install_font_providers(&disabled, None, vec![]);
         OPEN_CUSTOM.store(true, Ordering::Release);
-        let request = FallbackRequest { cluster: "ع", family: &FontFamily::Proportional };
-        assert!(Lookup::new(&INDEX, (), true).font_for(&request).is_some());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while selected(&ctx).as_deref() != Some("index:Arabic") {
-            assert!(Instant::now() < deadline, "temporary fallback must be forgotten");
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        all_reloaded.recv_timeout(Duration::from_secs(10)).expect("worker must finish reloading both contexts");
+        worker.join().unwrap();
+        assert_eq!(selected(&ctx).as_deref(), Some("index:Arabic"), "temporary fallback must be forgotten");
         assert!(selected(&disabled).is_none(), "index completion must not restore disabled providers");
     }
 
