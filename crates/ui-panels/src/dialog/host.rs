@@ -72,6 +72,13 @@ pub trait StackDialog: Any + Send {
         None
     }
 
+    /// A child the dialog asks the host to open over it, taken once after [`show`](StackDialog::show): the host opens
+    /// it with [`DialogHost::open_child`] under this dialog (a Replace prompt from a file chooser). `None` (the default)
+    /// asks for nothing.
+    fn take_child(&mut self) -> Option<ChildDialog> {
+        None
+    }
+
     /// Answers OK as a click on the default button would, without drawing: runs what OK runs
     /// (storing remembered values) and returns the answer. `None` when OK is disabled, the answer
     /// is one the dialog offers no enabled button for (a prompt's choice), or the dialog has no
@@ -184,6 +191,22 @@ pub enum StartupStage {
     Warning,
     /// The update prompt (craft-update): last, it can wait.
     Update,
+}
+
+/// A dialog one open dialog asks the host to open as its child ([`StackDialog::take_child`]).
+pub struct ChildDialog(Box<dyn AnyStackDialog>);
+
+impl ChildDialog {
+    /// Wraps `dialog` for [`StackDialog::take_child`].
+    pub fn new<D: StackDialog>(dialog: D) -> Self {
+        Self(Box::new(dialog))
+    }
+}
+
+impl std::fmt::Debug for ChildDialog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildDialog").finish_non_exhaustive()
+    }
 }
 
 /// Type-erased [`StackDialog`] the host stores.
