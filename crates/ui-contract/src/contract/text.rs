@@ -484,13 +484,19 @@ pub(crate) fn run<C: Component>(
             state.end = Some(End::Rewrite { refuses: false });
         }
     }
-    if window_blur {
+    if window_blur || state.draft.is_some() {
         eprintln!(
-            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: window_blur end={:?} draft={:?} focused={}",
-            state.end, state.draft, state.focused
+            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: before resolve window_blur={window_blur} was_focused={was_focused} out.focused={} commit_now={commit_now} end={:?} draft={:?} held={held}",
+            out.focused, state.end, state.draft
         );
     }
     let resolved = resolve(&mut state, cx.value(), commit_now);
+    if window_blur || state.draft.is_some() {
+        eprintln!(
+            "DIAG text::number::a_window_blur_mid_typing_keeps_the_typed_draft: after resolve draft={:?} rewritten={} refused={}",
+            state.draft, resolved.rewritten, resolved.refused
+        );
+    }
     if resolved.refused {
         crate::runtime::frame::refuse(&ctx);
     }

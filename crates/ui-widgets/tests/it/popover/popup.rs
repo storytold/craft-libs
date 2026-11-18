@@ -179,6 +179,11 @@ fn a_resting_pointer_leaves_the_lead_where_the_keys_moved_it() {
     let opener = fixture.by_label("Open").expect("the opener shows");
     fixture.click(&opener).settle();
     assert!(open.get(), "a click on the opener opens the list");
+    eprintln!(
+        "DIAG popover::popup::a_resting_pointer_leaves_the_lead_where_the_keys_moved_it: after the click focused {:?} stop {:?}",
+        fixture.focused(),
+        fixture.focused_stop()
+    );
     let rest = fixture.by_label(&row(3)).expect("the list shows its fourth row").rect.center();
     fixture.frame(vec![pointer::moved(rest)]).settle();
     fixture.key(Key::End, Modifiers::NONE).settle();
