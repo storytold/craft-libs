@@ -150,7 +150,7 @@ impl ShapeDragTool {
     /// when a side is under 1 px: [`box_drag`] for the box kinds under the options' constraints, ⇧
     /// toggling Square and ⌥ From Center (Rectangle with four equal radii when
     /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle filling the box (⇧: the equilateral
-    /// triangle in the square's circle), Polygon and
+    /// triangle in the square's circle) with its corners rounded by `corner_radius`, Polygon and
     /// Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
     /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
     /// [`RadialFrame::drag`] in the radial frame.
@@ -194,7 +194,7 @@ impl ShapeDragTool {
             ShapeKind::Rectangle => ShapeGeometry::Rect { rect, radii: [0.0; 4] },
             ShapeKind::RoundedRectangle => ShapeGeometry::Rect { rect, radii },
             ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-            ShapeKind::Triangle => ShapeGeometry::Triangle { rect: if rule.square { equilateral_in(rect) } else { rect } },
+            ShapeKind::Triangle => ShapeGeometry::Triangle { rect: if rule.square { equilateral_in(rect) } else { rect }, corner_radius: radii[0] },
             ShapeKind::Polygon => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: 1.0 },
             ShapeKind::Star => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: o.star_ratio },
             ShapeKind::Custom | ShapeKind::Line => ShapeGeometry::Custom { rect, keep_proportions: mods.shift },
