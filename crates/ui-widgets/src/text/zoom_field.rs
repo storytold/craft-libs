@@ -15,8 +15,8 @@ mod stories;
 /// The decimals the zoom range's ends are written with in the message, as the field shows a zoom.
 const MESSAGE_DECIMALS: usize = 2;
 
-/// A zoom field: a `NumberField` over the view's device zoom in percent, with the zoom codec and the zoom ladder's
-/// range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
+/// A zoom field: a `NumberField` over the view's zoom in percent on its [`ZoomScale`] (device pixels unless set),
+/// with the zoom codec and the zoom ladder's range. With no view it shows a disabled empty field. An edit writes the zoom about the view's centre; an empty
 /// commit keeps the view.
 ///
 /// - Typing takes digits, `/` and the decimal separator: `a/b` is the zoom `a ÷ b × 100` %, and a second separator
@@ -32,7 +32,6 @@ pub struct ZoomField {
     stepper: bool,
     scrub: bool,
     enabled: bool,
-    #[allow(dead_code)] // P3(pdf-chrome-w2): L-170
     scale: ZoomScale,
 }
 
@@ -45,6 +44,17 @@ pub enum ZoomScale {
     Device,
     /// One view unit is one document point: 100 % is the document's actual size.
     Points,
+}
+
+impl ZoomScale {
+    /// The pixels one view point counts as at `pixels_per_point`: the screen's for device pixels, one for document
+    /// points, so `zoom::device` and `zoom::with_device` read and write the zoom on this scale.
+    fn pixels_per_unit(self, pixels_per_point: f32) -> f32 {
+        match self {
+            ZoomScale::Device => pixels_per_point,
+            ZoomScale::Points => 1.0,
+        }
+    }
 }
 
 impl ZoomField {
@@ -84,7 +94,7 @@ impl ZoomField {
     /// Shows the field and reports the view changes it made.
     pub fn show(self, ui: &mut Ui) -> ZoomFieldOutput {
         let env = Env::of(ui);
-        let pixels_per_point = env.scale.0;
+        let pixels_per_point = self.scale.pixels_per_unit(env.scale.0);
         let document = self.document;
         let device = self.view.as_ref().map(|view| zoom::device(view, pixels_per_point));
         // The document's zoom range widened to the current zoom, so the field never pulls the zoom back.

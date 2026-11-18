@@ -5,6 +5,7 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Va
 use crate::display::{Shade, Text};
 use crate::layout_components::{Grid, Row};
 use crate::primitives::IconSpec;
+use crate::runtime::commands::EditCommands;
 use crate::runtime::env::Message;
 use crate::style::DataColor;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -68,6 +69,32 @@ fn button_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Loading")]
 fn button_loading(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Button::new("Saving").icon(IconId::new("save")).loading(true).show(ui).into()
+}
+
+
+/// The command-search opener: the search glyph, the placeholder and the chord of its command at the end.
+#[story(Button<'static>, covers = [], drive = Drive::Activate, group = "Playground", title = "Search")]
+fn button_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::search(EditCommands::Undo, "Search commands and settings").show(ui).into()
+}
+
+/// In a narrow room the chord keeps its width and the placeholder is cut; the tooltip shows it whole.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search, narrow")]
+fn button_search_narrow(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    ui.set_max_width(ui.available_width() * 0.3);
+    Button::search(EditCommands::Undo, "Search commands and settings").show(ui).into()
+}
+
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Playground", title = "Search, disabled")]
+fn button_search_disabled(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::search(EditCommands::Undo, "Search commands and settings").enabled(false).show(ui).into()
+}
+
+/// A right-to-left placeholder: the glyph at the reading start and the chord, which keeps its left-to-right order, at
+/// the reading end.
+#[story(Button<'static>, covers = [], drive = Drive::Never, group = "Right to left", title = "Search")]
+fn button_search_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Button::search(EditCommands::Undo, "חיפוש פקודות והגדרות").show(ui).into()
 }
 
 #[story(IconButton<'static>, covers = [Default])]

@@ -7,7 +7,8 @@ mod stories;
 
 use super::{Tab, TabStrip};
 use crate::contract::{
-    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, ReorderRule, ShowCollection as _, ShowContainer as _,
+    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, Props as _, ReorderRule, ShowCollection as _,
+    ShowContainer as _,
 };
 use crate::layout_components::Row;
 use crate::runtime::drag::OsFile;
@@ -94,17 +95,34 @@ impl<D> DocumentTab<D> {
 
     /// Whether the tab can be moved: dragged or key-moved, with no other tab dropped past it.
     #[must_use]
-    pub fn movable(self, on: bool) -> Self {
-        let _ = on;
-        todo!("CH-C6")
+    pub fn movable(mut self, on: bool) -> Self {
+        self.movable = on;
+        self
     }
 
     /// Hover text for the tab.
     #[must_use]
-    pub fn tooltip(self, text: impl Into<Label>) -> Self {
-        let _ = text;
-        todo!("CH-C6")
+    pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
+        self.tooltip = Some(text.into());
+        self
     }
+}
+
+/// Whether moving `moved` to `to`, a position among the tabs left once the moved ones are taken out, leaves every tab
+/// that does not move at the place it holds: no unmovable tab is moved, and none is passed by a moved one.
+fn keeps_fixed<D: PartialEq>(tabs: &[DocumentTab<D>], moved: &[D], to: usize) -> bool {
+    if tabs.iter().all(|tab| tab.movable) {
+        return true;
+    }
+    if tabs.iter().any(|tab| !tab.movable && moved.contains(&tab.id)) {
+        return false;
+    }
+    let mut order: Vec<&D> = tabs.iter().map(|tab| &tab.id).filter(|id| !moved.contains(id)).collect();
+    let at = to.min(order.len());
+    for (n, id) in moved.iter().enumerate() {
+        order.insert(at + n, id);
+    }
+    tabs.iter().enumerate().filter(|(_, tab)| !tab.movable).all(|(place, tab)| order.get(place) == Some(&&tab.id))
 }
 
 /// What the tabs of a group did this pass, in the order they happened.
@@ -265,7 +283,14 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
             strip = strip.shown(document);
         }
         if reorderable {
-            strip = strip.reorder(ReorderRule::new());
+            strip = strip
+                .reorder(ReorderRule::new())
+                .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
+                .accepts(move |drag: &ListDrag<D>, _, insert| {
+                    // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
+                    let passed = tabs.iter().take(insert).filter(|tab| drag.keys.contains(&tab.id)).count();
+                    keeps_fixed(tabs, &drag.keys, insert - passed)
+                });
         }
         let hovered = std::cell::RefCell::new(None);
         let show_strip = |ui: &mut Ui, strip: TabStrip<'_, D>| {
@@ -288,6 +313,9 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                 }
                 if let Some(close) = &document.close_label {
                     tab = tab.close_label(close.clone());
+                }
+                if let Some(tooltip) = &document.tooltip {
+                    tab = tab.tooltip(tooltip.clone());
                 }
                 tab
             })

@@ -679,7 +679,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// A stacking key on the lead row `at`: the rows `acted_on` names move, as a row drag takes them
     /// (`reorder::key_move`).
-    pub(super) fn key_reorder(&mut self, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
+    pub(super) fn key_reorder(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &CollectionProps, at: usize, mv: reorder::ItemMove) {
         let groups = props.reorder.is_some_and(|rule| rule.into_groups);
         let outline = Outline::new(self.source);
         let tree = groups.then_some(&outline as &dyn craft_behavior::NavOutline);
@@ -711,6 +711,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let keys = self.keys_at(&places);
         let key = self.source.key(at);
+        // The collection's own reorder rules govern a stacking key as they govern a drag.
+        if !keys.iter().all(|moved| comp.can_drag(moved)) || !comp.accepts(&ListDrag::new(cx.core.id, keys.clone(), key.clone()), None, gap.insert) {
+            return;
+        }
         let before = ReorderMove::new(key.clone(), keys.clone(), from, false).in_group(held);
         let after = ReorderMove::new(key, keys, to, false).in_group(parent);
         self.events.push(CollectionEvent::Reorder(EditEvent::set(Mixed::Same(before), after, cx.core.label_arc(), None)));

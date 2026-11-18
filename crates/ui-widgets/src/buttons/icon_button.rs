@@ -17,7 +17,6 @@ use egui::{Pos2, Vec2};
 
 /// The marker dot's look: the one reading of the tokens that `IconButton` and `Tab` paint it from.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
 pub(crate) struct MarkerStyle {
     /// The dot's diameter.
     pub(crate) side: f32,
@@ -29,18 +28,20 @@ pub(crate) struct MarkerStyle {
 
 impl MarkerStyle {
     /// The marker look from the tokens.
-    #[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
     pub(crate) fn of(cx: &StyleCx<'_>) -> MarkerStyle {
-        let _ = cx;
-        todo!("CH-C7")
+        MarkerStyle {
+            side: cx.tokens.size.handle.sm,
+            color: cx.color(cx.tokens.color.accent.solid),
+            edge: cx.color(cx.tokens.color.line.mark),
+        }
     }
 }
 
 /// Paints the marker dot centred on `center`.
-#[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
 pub(crate) fn paint_marker(draw: &Draw<'_>, center: Pos2, style: &MarkerStyle) {
-    let _ = (draw, center, style);
-    todo!("CH-C7")
+    let dot = PaintShape::Circle(center, style.side / 2.0);
+    draw.fill(&dot, style.color);
+    draw.stroke(&dot, StrokeWidth::Thin, style.edge);
 }
 
 /// The style of an icon button.
@@ -125,11 +126,10 @@ impl<'a> IconButton<'a> {
         <IconButton as Props>::command(IconButton::new(icon), command)
     }
 
-    /// Whether `command`'s marker shows: it is marked and its content is not shown.
-    #[allow(dead_code)] // P3(pdf-chrome-w2): CH-C7
+    /// Whether `command`'s marker shows: it is marked and its content is not shown. A mark tells that the command's
+    /// content has something to show, so it shows while that content is not shown: a rail's panel that is closed.
     pub fn shows_marker(command: &ResolvedCommand) -> bool {
-        let _ = command;
-        todo!("CH-C7")
+        command.marked && command.checked != Some(true)
     }
 }
 
@@ -143,14 +143,15 @@ impl Component for IconButton<'_> {
 
     fn style(cx: &StyleCx<'_>, _: IconButtonStyleKey) -> IconButtonStyle {
         let face = face::icon_face(cx);
+        let marker = MarkerStyle::of(cx);
         IconButtonStyle {
             surface: face.surface,
             metrics: face.metrics,
             focus: face::focus(cx),
             glyph: face.glyph,
-            marker: cx.tokens.size.handle.sm,
-            marker_color: cx.color(cx.tokens.color.accent.solid),
-            marker_edge: cx.color(cx.tokens.color.line.mark),
+            marker: marker.side,
+            marker_color: marker.color,
+            marker_edge: marker.edge,
             mark: cx.tokens.space.gap.tight,
             arrow: cx.tokens.size.icon.glyph_sm,
             mark_color: cx.color(cx.tokens.color.text.faint),
@@ -198,15 +199,11 @@ impl Component for IconButton<'_> {
             }
             _ => {}
         }
-        // A mark tells that the command's content has something to show, so it shows while that content is not
-        // shown: a rail's panel that is closed.
-        let marked = cx.command.as_ref().is_some_and(|command| command.marked && command.checked != Some(true));
-        if marked {
-            let radius = cx.style.marker / 2.0;
-            let x = if cx.flow.is_rtl() { glyph.left() + radius } else { glyph.right() - radius };
-            let dot = PaintShape::Circle(Pos2::new(x, glyph.bottom() - radius), radius);
-            draw.fill(&dot, cx.style.marker_color);
-            draw.stroke(&dot, StrokeWidth::Thin, cx.style.marker_edge);
+        if cx.command.as_ref().is_some_and(|command| IconButton::shows_marker(command)) {
+            let marker = MarkerStyle { side: cx.style.marker, color: cx.style.marker_color, edge: cx.style.marker_edge };
+            let radius = marker.side / 2.0;
+            let x = if rtl { glyph.left() + radius } else { glyph.right() - radius };
+            paint_marker(&draw, Pos2::new(x, glyph.bottom() - radius), &marker);
         }
     }
 

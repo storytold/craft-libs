@@ -19,7 +19,7 @@ mod list;
 mod menu;
 mod notices;
 mod overlay;
-
+mod picture;
 mod pickers;
 mod popover;
 mod runtime;

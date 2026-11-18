@@ -265,6 +265,90 @@ fn files_dropped_between_tabs_land_before_the_tab_after_the_gap() {
     assert_eq!(files_before(&seen), None, "a reorder drops no files: {seen:?}");
 }
 
+/// A pointer drag from `from` to `to` in a few steps, released at `to`.
+fn drag(frames: &mut Frames, from: Pos2, to: Pos2, show: &mut impl FnMut(&mut Ui)) {
+    frames.frame(vec![moved(from)], &mut *show);
+    frames.frame(vec![press(from)], &mut *show);
+    for step in 1..=4 {
+        frames.frame(vec![moved(from.lerp(to, step as f32 / 4.0))], &mut *show);
+    }
+    frames.frame(vec![release(to)], &mut *show);
+    frames.idle(1, &mut *show);
+}
+
+/// A document tab that does not move keeps its place: a drag of it reorders nothing, a drag of another tab past it
+/// reorders nothing, and a drag of another tab that leaves it where it is still reorders.
+#[trial]
+fn a_tab_that_does_not_move_keeps_its_place() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = RefCell::new(Vec::new());
+    let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+        seen.borrow_mut().extend(out.events);
+    };
+    frames.idle(2, &mut show);
+    let tree = frames.tree();
+    let (one, two, three, four) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"), tab_rect(&tree, "Four"));
+    let reordered = |seen: &RefCell<Vec<DocumentTabsEvent<usize>>>| -> Vec<(Vec<usize>, Option<usize>)> {
+        seen.borrow()
+            .iter()
+            .filter_map(|event| match event {
+                DocumentTabsEvent::Reordered { documents, before, .. } => Some((documents.clone(), *before)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    drag(&mut frames, two.center(), Pos2::new(four.right() - 2.0, four.center().y), &mut show);
+    assert!(reordered(&seen).is_empty(), "the fixed tab does not move: {:?}", seen.borrow());
+
+    seen.borrow_mut().clear();
+    drag(&mut frames, three.center(), Pos2::new(one.left() + 2.0, one.center().y), &mut show);
+    assert!(reordered(&seen).is_empty(), "no tab passes the fixed one: {:?}", seen.borrow());
+
+    seen.borrow_mut().clear();
+    drag(&mut frames, four.center(), Pos2::new(three.left() + 2.0, three.center().y), &mut show);
+    assert_eq!(reordered(&seen), vec![(vec![3_usize], Some(2_usize))], "a move that leaves the fixed tab in place reorders: {:?}", seen.borrow());
+}
+
+/// A stacking key moves a tab as a drag does: it does not pass a tab that does not move, and a move that leaves that
+/// tab in place still reorders.
+#[trial]
+fn a_stacking_key_does_not_move_a_tab_past_a_fixed_one() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let reordered = |seen: &RefCell<Vec<DocumentTabsEvent<usize>>>| -> Vec<(Vec<usize>, Option<usize>)> {
+        seen.borrow()
+            .iter()
+            .filter_map(|event| match event {
+                DocumentTabsEvent::Reordered { documents, before, .. } => Some((documents.clone(), *before)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let three = fixture.by_label("Three").expect("the tab's node").rect;
+    fixture.click_at(three.center()).settle();
+    seen.borrow_mut().clear();
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).settle();
+    assert!(reordered(&seen).is_empty(), "no tab passes the fixed one by key: {:?}", seen.borrow());
+
+    let four = fixture.by_label("Four").expect("the tab's node").rect;
+    fixture.click_at(four.center()).settle();
+    seen.borrow_mut().clear();
+    fixture.key(Key::OpenBracket, Modifiers::COMMAND).settle();
+    assert_eq!(reordered(&seen), vec![(vec![3_usize], Some(2_usize))], "a key move that leaves the fixed tab in place reorders: {:?}", seen.borrow());
+}
+
 /// Two text tabs both labelled "Options" have a node each, and a click on the second shows the second: the keys, not
 /// the labels, give each tab its identity.
 #[trial]

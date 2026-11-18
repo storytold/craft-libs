@@ -30,6 +30,28 @@ fn picture_thumbnail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     .into()
 }
 
+/// An original mark: a teal disc with an amber diamond, so the SVG's own colours and its fit show.
+const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#1f8a8a"/><path d="M12 4 L19 12 L12 20 L5 12 Z" fill="#f2b233"/></svg>"##;
+
+/// Bytes that are not an SVG document.
+const NOT_SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><circle";
+
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_svg(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    ui.horizontal(|ui| {
+        Picture::svg("Mark", MARK).extent(PictureSize::Icon).show(ui);
+        Picture::svg("Mark", MARK).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui);
+        Picture::svg("Mark", MARK).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui)
+    })
+    .inner
+    .into()
+}
+
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_svg_invalid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Picture::svg("Broken", NOT_SVG).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui).into()
+}
+
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]
 fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Picture::painter("Swatch", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()

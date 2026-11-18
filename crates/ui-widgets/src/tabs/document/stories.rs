@@ -22,6 +22,34 @@ fn document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.response.into()
 }
 
+/// Hover text on a tab cut to fit, which shows its full name then the text, and on a short tab, which shows the text
+/// alone. Document tabs keep whole titles, so the cut one is the shown tab, named longer than the strip is wide.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
+fn document_tabs_with_tooltips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    const LONG: &str = "Quarterly report for the board of directors, final revision with every appendix, the audit letter, the \
+                        budget tables and the minutes of each meeting held this year.pdf";
+    let tabs = [
+        DocumentTab::new(0, LONG).tooltip(format!("/home/u/Documents/Reports/{LONG}")),
+        DocumentTab::new(1, "Memo.pdf").tooltip("/home/u/Documents/Memo.pdf"),
+    ];
+    let shown = *data.value("shown", 0_usize);
+    let out = DocumentTabs::new("Documents", &tabs).selected(shown).show(ui);
+    out.response.into()
+}
+
+/// A tab that does not move: the last tab stays last, and no other tab is dragged or key-moved past it.
+#[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
+fn document_tabs_with_fixed_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tabs = [
+        DocumentTab::new(0, "Photo.psd"),
+        DocumentTab::new(1, "Poster.psd"),
+        DocumentTab::new(2, "Combine files").closable(false).movable(false),
+    ];
+    let shown = *data.value("shown", 0_usize);
+    let out = DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui);
+    out.response.into()
+}
+
 #[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
 fn large_document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tabs = tabs();

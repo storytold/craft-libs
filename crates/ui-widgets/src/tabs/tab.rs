@@ -8,6 +8,7 @@
 use super::rules::{CloseSide, TabKind, close_side};
 use super::words::TabWords;
 use crate::buttons::IconButton;
+use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
     Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
     Styled as _, WordSetCx as _,
@@ -108,6 +109,12 @@ pub struct TabStyle {
     divider: bool,
     close_side: CloseSide,
     sizes: Sizes,
+    /// The marker dot's diameter.
+    marker: f32,
+    /// The marker dot of a marked tab.
+    marker_color: StyleColor,
+    /// The ring around the marker dot.
+    marker_edge: StyleColor,
 }
 
 /// Where the parts of a tab lie in its content rect.
@@ -119,6 +126,8 @@ struct Placed {
     detail: Option<Rect>,
     /// The modified mark, right after the last text.
     mark: Option<Rect>,
+    /// The marker dot, after the mark or the last text.
+    marker: Option<Rect>,
     progress: Option<Rect>,
 }
 
@@ -263,6 +272,7 @@ impl Component for Tab<'_> {
             indicator: stroke.thick,
             text_only,
         };
+        let marker = MarkerStyle::of(cx);
         TabStyle {
             surface,
             metrics: Metrics::new().padding(Insets::new(pad_x, pad_x, 0.0, 0.0)).min_size(Vec2::new(0.0, height)).gap(sizes.gap),
@@ -274,6 +284,9 @@ impl Component for Tab<'_> {
             divider: key.kind.trailing_divider(),
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
+            marker: marker.side,
+            marker_color: marker.color,
+            marker_edge: marker.edge,
         }
     }
 
@@ -292,6 +305,9 @@ impl Component for Tab<'_> {
         }
         if self.modified {
             natural += width(&self.mark_run(cx.style));
+        }
+        if self.marked {
+            natural += sizes.gap + cx.style.marker;
         }
         if self.shows_close() {
             natural += sizes.gap + sizes.close_box;
@@ -331,9 +347,12 @@ impl Component for Tab<'_> {
         let label_natural = natural(&self.label_run(cx.style, cx.resolved.label));
         let detail_natural = self.detail_text().map_or(0.0, |text| natural(&TextRun::new(text).role(cx.style.detail.role)));
         let mark_width = if self.modified { natural(&self.mark_run(cx.style)) } else { 0.0 };
+        let marker_width = if self.marked { sizes.gap + cx.style.marker } else { 0.0 };
+        // The mark and the marker keep their room; the label is cut first, then the detail.
+        let kept = mark_width + marker_width;
         let detail_gap = if detail_natural > 0.0 { sizes.gap } else { 0.0 };
-        let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
-        let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
+        let label_width = label_natural.min((band.width() - kept - detail_gap - detail_natural).max(0.0));
+        let detail_width = detail_natural.min((band.width() - kept - label_width - detail_gap).max(0.0));
         let line = |rect: Rect, height: f32| {
             let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
             Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
@@ -345,13 +364,28 @@ impl Component for Tab<'_> {
         } else {
             (None, rest)
         };
-        let mark = self.modified.then(|| line(after.take_start(mark_width).0, sizes.label_line));
+        let (mark, after) = if self.modified {
+            let (mark, after) = after.take_start(mark_width);
+            (Some(line(mark, sizes.label_line)), after)
+        } else {
+            (None, after)
+        };
         let label = line(label, sizes.label_line);
+        let marker = self.marked.then(|| {
+            let slot = after.take_start(sizes.gap).1.take_start(cx.style.marker).0;
+            Rect::from_center_size(Pos2::new(slot.center().x, label.center().y), Vec2::splat(cx.style.marker))
+        });
         let cut = label_width < label_natural || detail_width < detail_natural;
         if cut {
             let full = match self.detail_text() {
                 Some(detail) => format!("{}, {detail}", cx.resolved.label),
                 None => cx.resolved.label.to_owned(),
+            };
+            // The text part's tooltip covers the tab's own over the text, so the tab's tooltip follows the full label
+            // there; an uncut tab shows the tab's own tooltip alone.
+            let full = match cx.resolved.tooltip_text(&cx.env) {
+                Some(tip) if !tip.is_empty() => format!("{full}\n{tip}"),
+                _ => full,
             };
             let _ = cx.part(TEXT, band).tooltip(full);
         }
@@ -372,7 +406,7 @@ impl Component for Tab<'_> {
         if let Some(bar) = progress {
             let _ = cx.part(PROGRESS, bar);
         }
-        self.placed = Some(Placed { close, icon, label, detail, mark, progress });
+        self.placed = Some(Placed { close, icon, label, detail, mark, marker, progress });
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
@@ -426,6 +460,9 @@ impl Component for Tab<'_> {
         }
         if let Some(at) = placed.mark {
             draw.text(at, &self.mark_run(style).color(cx.resolve(&style.label.color)));
+        }
+        if let Some(at) = placed.marker {
+            paint_marker(&draw, at.center(), &MarkerStyle { side: style.marker, color: style.marker_color, edge: style.marker_edge });
         }
         if let (Some(at), Some(icon)) = (placed.icon, &mut self.icon) {
             if icon.color.is_none() {

@@ -2,15 +2,16 @@
 
 use super::face::{self, FaceLook, FaceSpec};
 use crate::contract::{Common, Component, Cx, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _};
-use crate::display::Spinner;
+use crate::display::{Kbd, Spinner};
 use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
+use crate::text::FieldStyle;
+use craft_behavior::{Flow, IconId, Metrics, PartKey, PressPhase, Sense};
 use craft_keymap::Mods;
 use craft_theme::{
-    Rgba, Stateful, Variant,
+    Rgba, Stateful, States, Variant,
     variant::{Emphasis, Tone},
 };
 use egui::{Color32, Rect, Response, Vec2};
@@ -18,6 +19,8 @@ use std::ops::Deref;
 
 /// The part a loading button shows its spinner in.
 const SPINNER: PartKey = PartKey::new("spinner");
+/// The part the Search face shows its command's chord in.
+const CHORD: PartKey = PartKey::new("chord");
 
 /// The form of a button's face.
 #[non_exhaustive]
@@ -62,6 +65,23 @@ impl ButtonStyle {
             focus: face::focus(cx),
             text,
             icon,
+            face: FaceLook::of(cx),
+            overlay: cx.state_layer(),
+        }
+    }
+
+    /// The style of the command-search opener: a text field's surface, padding and glyph, and the label in the
+    /// colour a field's placeholder takes.
+    fn search(cx: &StyleCx<'_>) -> ButtonStyle {
+        let field = FieldStyle::at(cx);
+        let text = &cx.tokens.color.text;
+        let (faint, off) = (cx.color(text.faint), cx.color(text.disabled));
+        ButtonStyle {
+            surface: cx.field(),
+            metrics: field.metrics(),
+            focus: face::focus(cx),
+            text: TextLook::new(TypeRole::Body, Stateful::new(faint).off(States::new(faint, faint, faint, off))),
+            icon: field.glyph().clone(),
             face: FaceLook::of(cx),
             overlay: cx.state_layer(),
         }
@@ -167,6 +187,8 @@ pub struct Button<'a> {
     #[style_key]
     #[prop]
     form: ButtonForm,
+    /// The command whose chord the Search face shows at its end.
+    chord: Option<CommandRef>,
 }
 
 impl<'a> Button<'a> {
@@ -182,14 +204,21 @@ impl<'a> Button<'a> {
             least_width: None,
             align: HAlign::Center,
             form: ButtonForm::Push,
+            chord: None,
         }
         .label(label)
     }
 
-    /// The command-search opener: a search field's face showing `placeholder` and the chord of `command`.
+    /// The command-search opener: a search field's face showing `placeholder` and the chord of `command`. The
+    /// placeholder is the button's name; cut to fit, it shows whole in the tooltip. A click, Enter or Space fires
+    /// `command`.
     pub fn search(command: impl Into<CommandRef>, placeholder: impl Into<Label>) -> Self {
-        let _ = (command, placeholder);
-        todo!("CH-C8")
+        let command = command.into();
+        let mut button = Button::command(command.clone()).label(placeholder).form(ButtonForm::Search);
+        button.icon = Some(IconSpec::svg(IconId::new("search")));
+        button.align = HAlign::Start;
+        button.chord = Some(command);
+        button
     }
 
     /// A button bound to `command`: its label, enabled state and activation follow the command.
@@ -197,11 +226,16 @@ impl<'a> Button<'a> {
         <Button as Props>::command(Button::new(Label::Empty), command)
     }
 
+    /// The room the face's icons and label take: the content less the chord's slot, `chord` wide, and the gap before it.
+    fn face_area(content: Rect, rtl: bool, chord: f32, gap: f32) -> Rect {
+        if chord > 0.0 { Flow::new(content, rtl).take_end(chord + gap).1.rect() } else { content }
+    }
+
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         let label = self.painted.as_ref().map_or(label, Label::as_str);
         FaceSpec {
             label,
-            role: None,
+            role: (self.form == ButtonForm::Search).then_some(TypeRole::Body),
             lead: self.icon.as_ref(),
             trail: self.trailing_icon.as_ref(),
             loading: self.loading,
@@ -218,9 +252,10 @@ impl Component for Button<'_> {
     type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
-        let mut style = match key.tint {
-            Some(tint) => ButtonStyle::tinted(cx, tint),
-            None => ButtonStyle::of(cx),
+        let mut style = match (key.form, key.tint) {
+            (ButtonForm::Search, _) => ButtonStyle::search(cx),
+            (_, Some(tint)) => ButtonStyle::tinted(cx, tint),
+            (_, None) => ButtonStyle::of(cx),
         };
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
@@ -228,20 +263,30 @@ impl Component for Button<'_> {
         style
     }
 
+    /// The Search face adds the chord's room, which it keeps at its least too: the placeholder is cut first.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        face::measure(cx, &self.spec(cx.resolved.label))
+        let size = face::measure(cx, &self.spec(cx.resolved.label));
+        let chord = self.chord.as_ref().map_or(0.0, |command| cx.face(Kbd::command(command.clone())).x);
+        if chord > 0.0 { Vec2::new(size.x + cx.style.face.gap + chord, size.y) } else { size }
     }
 
     fn sense(&self) -> Sense {
         if self.loading { Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
     }
 
-    /// A loading button declares the slot of its spinner, which paints as the face of that part.
+    /// The Search face declares the slot of its chord at the reading end, taken before the placeholder's room; a
+    /// loading button declares the slot of its spinner. Each paints as the face of its part.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
+        let (content, rtl) = (cx.content_rect, cx.flow.is_rtl());
+        let chord = self.chord.as_ref().map_or(0.0, |command| cx.face(Kbd::command(command.clone())).x);
+        if chord > 0.0 {
+            let (slot, _) = Flow::new(content, rtl).take_end(chord);
+            cx.part(CHORD, slot);
+        }
         if !self.loading {
             return;
         }
-        let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
+        let area = Self::face_area(content, rtl, chord, cx.style.face.gap);
         let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl);
         if let Some(rect) = spinner {
             cx.part(SPINNER, rect);
@@ -266,7 +311,12 @@ impl Component for Button<'_> {
             ui.draw().data_fill(&shape, DataColor::new(Color32::from(craft_theme::Srgba::from(tint))));
             ui.draw().fill(&shape, cx.resolve(&cx.style.overlay));
         }
-        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), cx.content_rect);
+        let chord = cx.part_if_declared(CHORD).map_or(0.0, |part| part.rect.width());
+        let area = Self::face_area(cx.content_rect, cx.flow.is_rtl(), chord, cx.style.face.gap);
+        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), area);
+        if let (Some(command), true) = (&self.chord, chord > 0.0) {
+            ui.face(CHORD, Kbd::command(command.clone()));
+        }
         if cx.part_if_declared(SPINNER).is_some() {
             ui.face(SPINNER, Spinner::new().size(cx.resolved.size));
         }

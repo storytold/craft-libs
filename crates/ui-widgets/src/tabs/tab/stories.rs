@@ -21,6 +21,12 @@ fn tab_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tab::new("Photo").position(SetPosition::new(1).of(3)).selected(true).icon(IconId::new("image")).modified().show(ui).into()
 }
 
+/// A marked tab: the marker dot after the modified mark, a panel whose content has something new.
+#[story(Tab<'static>, covers = [], drive = Drive::Never)]
+fn tab_marked(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Tab::new("Comments").position(SetPosition::new(2).of(3)).detail("3").modified().marked(true).show(ui).into()
+}
+
 #[story(Tab<'static>, covers = [], drive = Drive::Never)]
 fn tab_opening(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Tab::new("Opening").position(SetPosition::new(1).of(3)).progress(0.4).close_label("Cancel opening").show(ui).into()
