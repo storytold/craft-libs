@@ -685,17 +685,16 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     let subsampled = opts.jpeg_chroma_subsampling && img.layout() == ChannelLayout::Rgb;
     let sampling = if subsampled { jpeg_encoder::SamplingFactor::R_4_2_0 } else { jpeg_encoder::SamplingFactor::R_4_4_4 };
     enc.set_sampling_factor(sampling);
-    // JPEG Options › Format Options. Fitted Huffman tables make a baseline scan non-interleaved
-    // (one scan per component), which zune-jpeg 0.5.15 decodes wrongly with 4:2:0 chroma
-    // (etemesi254/zune-image#419; see `web::encode_jpeg_rgb8`), so a subsampled Baseline
-    // Optimized keeps the standard tables until that decoder is updated. Progressive is fine.
+    // JPEG Options › Format Options. For Baseline Optimized we let `jpeg-encoder` emit a single
+    // interleaved baseline scan with the standard tables, then optimize the Huffman tables
+    // losslessly via `craft_jpeg::optimize_baseline_scan` so 4:2:0 stays interleaved (avoiding
+    // the non-interleaved scan bug in zune-jpeg 0.5.15).
     let progressive = opts.jpeg_format == JpegFormat::Progressive;
     enc.set_progressive(progressive);
     if progressive && let Some(scans) = opts.jpeg_progressive_scans {
         enc.set_progressive_scans(scans);
     }
-    let optimized = opts.jpeg_format == JpegFormat::Optimized && !subsampled;
-    enc.set_optimized_huffman_tables(progressive || optimized);
+    enc.set_optimized_huffman_tables(progressive);
     let e = |e: jpeg_encoder::EncodingError| CodecError::encode(F, e);
     if opts.embed_metadata {
         if img.layout() != ChannelLayout::Cmyk
@@ -731,6 +730,12 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     enc.encode(img.data(), w16, h16, ct).map_err(e)?;
     if img.layout() == ChannelLayout::Cmyk {
         strip_jfif_app0(&mut out);
+    }
+    if !progressive
+        && opts.jpeg_format == JpegFormat::Optimized
+        && let Some(opt) = craft_jpeg::optimize_baseline_scan(&out)
+    {
+        out = opt;
     }
     Ok(out)
 }
@@ -1592,5 +1597,149 @@ mod tests {
         cut[sof + 5..sof + 9].copy_from_slice(&[0x4E, 0x20, 0x4E, 0x20]);
         let e = crate::decode(&cut).unwrap_err();
         assert!(e.to_string().contains("too short for the frame it declares"), "{e}");
+    }
+
+    /// Walk `DHT` and `SOS` segments to confirm every Huffman table referenced by `SOS` uses a
+    /// single 1-bit code (`counts == [1, 0, ..., 0]`), exercising `zune-jpeg`'s degenerate-table path
+    /// directly without fallback (#2183).
+    fn assert_sos_tables_are_one_bit(jpeg: &[u8]) {
+        let mut dht_counts: [[Option<[u8; 16]>; 4]; 2] = [[None; 4]; 2];
+        let mut saw_sos = false;
+        let mut pos = 2usize;
+        while pos + 4 <= jpeg.len() {
+            assert_eq!(jpeg[pos], 0xFF, "invalid marker prefix at {pos}");
+            let marker = jpeg[pos + 1];
+            if marker == 0xFF {
+                pos += 1;
+                continue;
+            }
+            if marker == 0xD9 {
+                break;
+            }
+            let len = usize::from(u16::from_be_bytes([jpeg[pos + 2], jpeg[pos + 3]]));
+            let seg = &jpeg[pos + 4..pos + 2 + len];
+            match marker {
+                0xC4 => {
+                    let mut at = 0usize;
+                    while at < seg.len() {
+                        let tc_th = seg[at];
+                        let tc = usize::from(tc_th >> 4);
+                        let th = usize::from(tc_th & 15);
+                        let counts: [u8; 16] = seg[at + 1..at + 17].try_into().unwrap();
+                        let total: usize = counts.iter().map(|&c| usize::from(c)).sum();
+                        dht_counts[tc][th] = Some(counts);
+                        at += 17 + total;
+                    }
+                }
+                0xDA => {
+                    let ns = usize::from(seg[0]);
+                    for s in 0..ns {
+                        let tbl = seg[2 + 2 * s];
+                        let (td, ta) = (usize::from(tbl >> 4), usize::from(tbl & 15));
+                        let dc = dht_counts[0][td].expect("DC DHT present for SOS component");
+                        assert_eq!(dc[0], 1, "expected single 1-bit DC code in slot {td}: {dc:?}");
+                        assert!(dc[1..].iter().all(|&c| c == 0), "unexpected longer DC codes: {dc:?}");
+                        let ac = dht_counts[1][ta].expect("AC DHT present for SOS component");
+                        assert_eq!(ac[0], 1, "expected single 1-bit AC code in slot {ta}: {ac:?}");
+                        assert!(ac[1..].iter().all(|&c| c == 0), "unexpected longer AC codes: {ac:?}");
+                    }
+                    saw_sos = true;
+                    break;
+                }
+                _ => {}
+            }
+            pos += 2 + len;
+        }
+        assert!(saw_sos, "missing SOS marker");
+    }
+
+    /// Verify `JpegFormat::Optimized` emits a smaller single-interleaved scan (`Ns == Nf`) across
+    /// 4:2:0 RGB, 4:4:4 RGB, Grayscale, and CMYK without triggering `zune-jpeg` non-interleaved
+    /// color-shift or 1-bit Huffman bugs (#2183).
+    #[test]
+    fn optimized_subsampled_baseline_is_interleaved_and_smaller() {
+        for (w, h) in [(64u32, 48u32), (37, 23)] {
+            let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+            let mut gray = Vec::with_capacity((w * h) as usize);
+            let mut cmyk = Vec::with_capacity((w * h * 4) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    let r = ((x * 255) / w) as u8;
+                    let g = ((y * 255) / h) as u8;
+                    let b = (((x * 7 + y * 13) % 256) as u8).wrapping_add(30);
+                    let k = (((x * 3 + y * 5) % 200) as u8).wrapping_add(10);
+                    rgb.extend_from_slice(&[r, g, b]);
+                    gray.push(g);
+                    cmyk.extend_from_slice(&[r, g, b, k]);
+                }
+            }
+            let cases = [
+                (Image::from_raw(w, h, ChannelLayout::Rgb, SampleType::U8, rgb.clone()).unwrap(), true, 3u8, ColorSpace::RGB, None),
+                (Image::from_raw(w, h, ChannelLayout::Rgb, SampleType::U8, rgb).unwrap(), false, 3, ColorSpace::RGB, None),
+                (Image::from_raw(w, h, ChannelLayout::Gray, SampleType::U8, gray).unwrap(), false, 1, ColorSpace::Luma, None),
+                (Image::from_raw(w, h, ChannelLayout::Cmyk, SampleType::U8, cmyk).unwrap(), false, 4, ColorSpace::CMYK, Some(0)),
+            ];
+            for (img, subsampled, expected_ns, out_cs, adobe_transform) in cases {
+                let base = crate::encode(
+                    &img,
+                    Format::Jpeg,
+                    &EncodeOptions { jpeg_format: JpegFormat::Baseline, jpeg_chroma_subsampling: subsampled, jpeg_quality: 85, ..Default::default() },
+                )
+                .unwrap();
+                let opt = crate::encode(
+                    &img,
+                    Format::Jpeg,
+                    &EncodeOptions {
+                        jpeg_format: JpegFormat::Optimized,
+                        jpeg_chroma_subsampling: subsampled,
+                        jpeg_quality: 85,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert!(opt.len() < base.len(), "{w}x{h} ns={expected_ns} sub={subsampled}: opt {} >= base {}", opt.len(), base.len());
+
+                assert_eq!(info(&opt).unwrap().held_coefficients, 0);
+                let sos_pos = opt.windows(2).position(|p| p == [0xFF, 0xDA]).unwrap();
+                assert_eq!(opt[sos_pos + 4], expected_ns, "interleaved scan Ns");
+                assert_eq!(opt.windows(2).filter(|p| *p == [0xFF, 0xDA]).count(), 1, "single SOS marker");
+
+                // Call zune-jpeg directly instead of `crate::decode` so no `craft-jpeg` fallback
+                // masks non-interleaved or subsampled decode bugs.
+                let zune_base =
+                    zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(&base), DecoderOptions::default().jpeg_set_out_colorspace(out_cs))
+                        .decode()
+                        .unwrap();
+                let zune_opt =
+                    zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(&opt), DecoderOptions::default().jpeg_set_out_colorspace(out_cs))
+                        .decode()
+                        .unwrap();
+                assert_eq!(zune_opt, zune_base, "{w}x{h} ns={expected_ns}: zune-jpeg decoded pixels differ");
+
+                let craft_base = craft_jpeg::decode(&base, &craft_jpeg::Limits::default(), adobe_transform).unwrap();
+                let craft_opt = craft_jpeg::decode(&opt, &craft_jpeg::Limits::default(), adobe_transform).unwrap();
+                assert_eq!(craft_opt.samples, craft_base.samples, "{w}x{h} ns={expected_ns}: craft-jpeg decoded pixels differ");
+            }
+        }
+
+        // Flat 100x100 RGB at 4:2:0 and 4:4:4 with JpegFormat::Optimized (single-symbol 1-bit tables).
+        let flat_rgb = vec![128u8; 100 * 100 * 3];
+        let flat = Image::from_raw(100, 100, ChannelLayout::Rgb, SampleType::U8, flat_rgb.clone()).unwrap();
+        for subsampled in [true, false] {
+            let opt = crate::encode(
+                &flat,
+                Format::Jpeg,
+                &EncodeOptions { jpeg_format: JpegFormat::Optimized, jpeg_chroma_subsampling: subsampled, jpeg_quality: 60, ..Default::default() },
+            )
+            .unwrap();
+            assert_sos_tables_are_one_bit(&opt);
+            let decoded =
+                zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(&opt), DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB))
+                    .decode()
+                    .unwrap();
+            assert_eq!(decoded.len(), 100 * 100 * 3);
+            let max_err = decoded.iter().zip(&flat_rgb).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(max_err <= 2, "subsampled={subsampled}: max_err={max_err}");
+        }
     }
 }

@@ -214,11 +214,15 @@ impl Bits {
         self.acc &= (1 << self.n) - 1;
     }
     /// Pad with 1-bits to a byte boundary.
-    fn finish(mut self) -> Vec<u8> {
+    fn flush_pad(&mut self) {
         if self.n > 0 {
             let pad = 8 - self.n;
             self.put((1 << pad) - 1, pad);
         }
+    }
+    /// Pad with 1-bits to a byte boundary and return the coded bytes.
+    fn finish(mut self) -> Vec<u8> {
+        self.flush_pad();
         self.out
     }
 }
@@ -715,6 +719,623 @@ fn encode_impl(
     out
 }
 
+#[derive(Clone, Copy)]
+struct SofComp {
+    id: u8,
+    h: usize,
+    v: usize,
+    tq: usize,
+}
+
+struct SofInfo {
+    width: usize,
+    height: usize,
+    comps: Vec<SofComp>,
+}
+
+#[derive(Clone, Copy)]
+struct ScanComp {
+    blocks: usize,
+    td: usize,
+    ta: usize,
+}
+
+struct OptimalTable {
+    bits: [u8; 16],
+    vals: Vec<u8>,
+    huff: Huff,
+}
+
+struct BaselineHeaders {
+    /// Byte offset where the rewritten optimal `DHT` segments are emitted: the start of the first
+    /// source `DHT`, or the `SOS` marker when the stream carries no `DHT` at all.
+    dht_insert_offset: usize,
+    /// Total bytes of the segments copied verbatim into the output, so the writer can reserve
+    /// space proportional to the retained payload instead of the raw input length.
+    retained_meta_len: usize,
+    dc_dec: [Option<super::Huffman>; 4],
+    ac_dec: [Option<super::Huffman>; 4],
+    restart: usize,
+    total_mcus: usize,
+    sos_range: (usize, usize),
+    scan_comps: Vec<ScanComp>,
+    dc_used: [bool; 4],
+    ac_used: [bool; 4],
+}
+
+fn is_valid_baseline_symbol(tc: u8, sym: u8) -> bool {
+    if tc == 0 {
+        // ITU-T T.81 Table F.1: 8-bit Baseline DC categories are 0..=11.
+        sym <= 11
+    } else {
+        // ITU-T T.81 Table F.2: 8-bit Baseline AC symbols are EOB (0x00), ZRL (0xF0),
+        // or a zero-run with non-zero magnitude category SSSS in 1..=10.
+        sym == 0x00 || sym == 0xF0 || (1..=10).contains(&(sym & 0x0F))
+    }
+}
+
+type RawHuffTables<'a> = [Option<(&'a [u8], &'a [u8])>; 4];
+
+/// Validates both prefix-tree Kraft balance at every code length `1..=16` and strict unused
+/// 16-bit code space (`sum < 65536`), rejecting all-ones codewords forbidden by ITU-T T.81 §C.2
+/// without allocating a decode LUT while still permitting single-symbol 1-bit tables (`32768`).
+fn is_valid_huffman_counts(counts: &[u8]) -> bool {
+    let mut code = 0u32;
+    for (idx, &n) in counts.iter().enumerate() {
+        let l = idx + 1;
+        code += u32::from(n);
+        if code > (1u32 << l) {
+            return false;
+        }
+        code <<= 1;
+    }
+    (code >> 1) < 65_536
+}
+
+fn parse_dqt_tables(seg: &[u8], dqt_defined: &mut [bool; 4]) -> Option<()> {
+    if seg.is_empty() {
+        return None;
+    }
+    let mut at = 0usize;
+    while at < seg.len() {
+        let pq_tq = *seg.get(at)?;
+        let pq = pq_tq >> 4;
+        let tq = usize::from(pq_tq & 15);
+        // ITU-T T.81 Table B.4 restricts Baseline SOF0 quantization tables to 8-bit precision
+        // (Pq == 0) with strictly non-zero entries (1..=255).
+        if pq != 0 || tq > 3 {
+            return None;
+        }
+        let table_end = at.checked_add(1 + 64)?;
+        let entries = seg.get(at + 1..table_end)?;
+        if entries.contains(&0) {
+            return None;
+        }
+        *dqt_defined.get_mut(tq)? = true;
+        at = table_end;
+    }
+    Some(())
+}
+
+/// Validates every `DHT` definition against T.81 `SOF0` bounds while retaining only the latest
+/// validated slice per slot so `Huffman::new` (512-entry LUT build) runs at most once per active
+/// `SOS` slot rather than once per header definition.
+fn parse_dht_tables<'a>(seg: &'a [u8], dc_raw: &mut RawHuffTables<'a>, ac_raw: &mut RawHuffTables<'a>) -> Option<()> {
+    if seg.is_empty() {
+        return None;
+    }
+    let mut at = 0usize;
+    while at < seg.len() {
+        let tc_th = *seg.get(at)?;
+        let tc = tc_th >> 4;
+        let th = usize::from(tc_th & 15);
+        // ITU-T T.81 Table B.5 restricts Baseline SOF0 Huffman destinations to slots 0..=1.
+        if tc > 1 || th > 1 {
+            return None;
+        }
+        let counts = seg.get(at + 1..at + 17)?;
+        let total: usize = counts.iter().map(|&c| usize::from(c)).sum();
+        if total == 0 || total > 256 || !is_valid_huffman_counts(counts) {
+            return None;
+        }
+        let values = seg.get(at + 17..at + 17 + total)?;
+        if !values.iter().all(|&v| is_valid_baseline_symbol(tc, v)) {
+            return None;
+        }
+        // Why: libjpeg-turbo (`JERR_BAD_HUFF_TABLE`) and jpegli reject a table that assigns two
+        // distinct codewords to the same `HUFFVAL`; `optimize_baseline_scan` counts frequencies per
+        // symbol, so such a table would silently merge both codes into one.
+        let mut seen = [false; 256];
+        for &v in values {
+            if std::mem::replace(&mut seen[usize::from(v)], true) {
+                return None;
+            }
+        }
+        if tc == 0 {
+            *dc_raw.get_mut(th)? = Some((counts, values));
+        } else {
+            *ac_raw.get_mut(th)? = Some((counts, values));
+        }
+        at += 17 + total;
+    }
+    Some(())
+}
+
+fn parse_sof0(seg: &[u8]) -> Option<SofInfo> {
+    if *seg.first()? != 8 {
+        return None;
+    }
+    let height = usize::from(u16::from_be_bytes([*seg.get(1)?, *seg.get(2)?]));
+    let width = usize::from(u16::from_be_bytes([*seg.get(3)?, *seg.get(4)?]));
+    let nf = usize::from(*seg.get(5)?);
+    if height == 0 || width == 0 || !matches!(nf, 1..=4) || seg.len() != 6 + 3 * nf {
+        return None;
+    }
+    let mut comps = Vec::with_capacity(nf);
+    for c in 0..nf {
+        let id = *seg.get(6 + 3 * c)?;
+        let hv = *seg.get(6 + 3 * c + 1)?;
+        let tq = usize::from(*seg.get(6 + 3 * c + 2)?);
+        let (h, v) = (usize::from(hv >> 4), usize::from(hv & 15));
+        if !(1..=4).contains(&h) || !(1..=4).contains(&v) || tq > 3 || comps.iter().any(|existing: &SofComp| existing.id == id) {
+            return None;
+        }
+        comps.push(SofComp { id, h, v, tq });
+    }
+    Some(SofInfo { width, height, comps })
+}
+
+fn parse_interleaved_sos(
+    seg: &[u8],
+    sof: &SofInfo,
+    dc_raw: &RawHuffTables<'_>,
+    ac_raw: &RawHuffTables<'_>,
+    dqt_defined: &[bool; 4],
+) -> Option<(Vec<ScanComp>, [bool; 4], [bool; 4])> {
+    let ns = usize::from(*seg.first()?);
+    if ns == 0 || ns != sof.comps.len() || seg.len() != 1 + 2 * ns + 3 {
+        return None;
+    }
+    if seg.get(1 + 2 * ns..1 + 2 * ns + 3) != Some(&[0, 63, 0]) {
+        return None;
+    }
+    let mut scan_comps = Vec::with_capacity(ns);
+    let mut dc_used = [false; 4];
+    let mut ac_used = [false; 4];
+    let mut mcu_blocks = 0usize;
+    for (s, comp) in sof.comps.iter().enumerate() {
+        let cs = *seg.get(1 + 2 * s)?;
+        // ITU-T T.81 §B.2.3 requires components in a full-frame interleaved scan to appear in the
+        // exact order declared in SOF0; permitting permutations would emit invalid SOS headers.
+        if cs != comp.id || !*dqt_defined.get(comp.tq)? {
+            return None;
+        }
+        let tbl = *seg.get(2 + 2 * s)?;
+        let (td, ta) = (usize::from(tbl >> 4), usize::from(tbl & 15));
+        if td > 1 || ta > 1 || dc_raw.get(td)?.is_none() || ac_raw.get(ta)?.is_none() {
+            return None;
+        }
+        let blocks = if ns == 1 { 1 } else { comp.h * comp.v };
+        mcu_blocks = mcu_blocks.checked_add(blocks)?;
+        scan_comps.push(ScanComp { blocks, td, ta });
+        *dc_used.get_mut(td)? = true;
+        *ac_used.get_mut(ta)? = true;
+    }
+    // ITU-T T.81 §A.2.3 limits interleaved MCUs to at most 10 data units (8x8 blocks).
+    if ns > 1 && mcu_blocks > 10 {
+        return None;
+    }
+    Some((scan_comps, dc_used, ac_used))
+}
+
+fn parse_baseline_headers(jpeg: &[u8], body_end: usize) -> Option<BaselineHeaders> {
+    let mut pos = 2usize;
+    let mut dht_insert_pos: Option<usize> = None;
+    let mut retained_meta_len = 0usize;
+    let mut dqt_defined = [false; 4];
+    let mut dc_raw: RawHuffTables<'_> = [None, None, None, None];
+    let mut ac_raw: RawHuffTables<'_> = [None, None, None, None];
+    let mut sof_info: Option<SofInfo> = None;
+    let mut restart = 0usize;
+    let mut sos_range: Option<(usize, usize)> = None;
+    let mut scan_params: Option<(Vec<ScanComp>, [bool; 4], [bool; 4])> = None;
+
+    while pos < body_end {
+        if *jpeg.get(pos)? != 0xFF {
+            return None;
+        }
+        let marker = *jpeg.get(pos + 1)?;
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+        if matches!(marker, 0x01 | 0xD0..=0xD9) {
+            return None;
+        }
+        let len = usize::from(u16::from_be_bytes([*jpeg.get(pos + 2)?, *jpeg.get(pos + 3)?]));
+        if len < 2 {
+            return None;
+        }
+        let seg_end = pos.checked_add(2 + len)?;
+        if seg_end > body_end {
+            return None;
+        }
+        let seg = jpeg.get(pos + 4..seg_end)?;
+        match marker {
+            0xDA => {
+                let sof = sof_info.as_ref()?;
+                scan_params = Some(parse_interleaved_sos(seg, sof, &dc_raw, &ac_raw, &dqt_defined)?);
+                sos_range = Some((pos, seg_end));
+                break;
+            }
+            0xDB => parse_dqt_tables(seg, &mut dqt_defined)?,
+            0xC0 => {
+                if sof_info.is_some() {
+                    return None;
+                }
+                sof_info = Some(parse_sof0(seg)?);
+            }
+            0xC4 => {
+                if dht_insert_pos.is_none() {
+                    dht_insert_pos = Some(pos);
+                }
+                parse_dht_tables(seg, &mut dc_raw, &mut ac_raw)?;
+            }
+            0xDD => {
+                if seg.len() != 2 {
+                    return None;
+                }
+                restart = usize::from(u16::from_be_bytes([seg[0], seg[1]]));
+            }
+            // Accept only pre-scan metadata (APPn, COM); reject DNL (0xDC) and all non-baseline
+            // markers so non-conforming segments are never copied unchanged into the output. The
+            // retained bytes are re-read from the validated prefix while writing, so no per-segment
+            // range vector grows with the attacker-controlled segment count.
+            0xE0..=0xEF | 0xFE => {}
+            _ => return None,
+        }
+        if is_retained_metadata_marker(marker) {
+            retained_meta_len = retained_meta_len.saturating_add(seg_end - pos);
+        }
+        pos = seg_end;
+    }
+
+    let sof = sof_info?;
+    let sos_range = sos_range?;
+    let (scan_comps, dc_used, ac_used) = scan_params?;
+    let mut dc_dec: [Option<super::Huffman>; 4] = [None, None, None, None];
+    let mut ac_dec: [Option<super::Huffman>; 4] = [None, None, None, None];
+    for th in 0..2 {
+        if *dc_used.get(th)? {
+            let (counts, values) = (*dc_raw.get(th)?)?;
+            *dc_dec.get_mut(th)? = Some(super::Huffman::new(counts, values).ok()?);
+        }
+        if *ac_used.get(th)? {
+            let (counts, values) = (*ac_raw.get(th)?)?;
+            *ac_dec.get_mut(th)? = Some(super::Huffman::new(counts, values).ok()?);
+        }
+    }
+
+    let total_mcus = if scan_comps.len() == 1 {
+        sof.width.div_ceil(8).checked_mul(sof.height.div_ceil(8))?
+    } else {
+        let hmax = sof.comps.iter().map(|c| c.h).max()?;
+        let vmax = sof.comps.iter().map(|c| c.v).max()?;
+        sof.width.div_ceil(8 * hmax).checked_mul(sof.height.div_ceil(8 * vmax))?
+    };
+
+    Some(BaselineHeaders {
+        dht_insert_offset: dht_insert_pos.unwrap_or(sos_range.0),
+        retained_meta_len,
+        dc_dec,
+        ac_dec,
+        restart,
+        total_mcus,
+        sos_range,
+        scan_comps,
+        dc_used,
+        ac_used,
+    })
+}
+
+enum ScanEvent {
+    Sym { is_ac: bool, tbl: usize, sym: u8, extra: u32, extra_len: u32 },
+    Restart(usize),
+}
+
+fn decode_block(
+    bits: &mut super::Bits<'_>,
+    dc: &super::Huffman,
+    ac: &super::Huffman,
+    comp: ScanComp,
+    dc_pred: &mut i32,
+    on_event: &mut impl FnMut(ScanEvent),
+) -> Option<()> {
+    let s = dc.decode(bits).ok()?;
+    if bits.exhausted || s > 11 {
+        return None;
+    }
+    let s_bits = u32::from(s);
+    let extra = bits.get(s_bits);
+    if bits.exhausted {
+        return None;
+    }
+    let dc_val = dc_pred.checked_add(super::extend(extra, s_bits))?;
+    // ITU-T T.81 §F.1.1.5.1 / Table F.1 restricts reconstructed 8-bit SOF0 DC values to
+    // [-1024, 1023]; checking each diff alone would admit out-of-range cumulative predictors.
+    if !(-1024..=1023).contains(&dc_val) {
+        return None;
+    }
+    *dc_pred = dc_val;
+    on_event(ScanEvent::Sym { is_ac: false, tbl: comp.td, sym: s, extra, extra_len: s_bits });
+
+    let mut k = 1usize;
+    // Why: ITU-T T.81 §F.1.2.2.3 writes ZRL runs only when a nonzero coefficient follows, and EOB
+    // already covers every remaining zero. Holding the ZRLs lets a sloppy `ZRL, ZRL, ZRL, EOB`
+    // block be re-emitted as one EOB instead of copying the redundant run into the output.
+    let mut pending_zrls = 0usize;
+    while k < 64 {
+        let rs = ac.decode(bits).ok()?;
+        if bits.exhausted {
+            return None;
+        }
+        let r = usize::from(rs >> 4);
+        let ac_s = u32::from(rs & 15);
+        if ac_s == 0 {
+            if r != 15 {
+                on_event(ScanEvent::Sym { is_ac: true, tbl: comp.ta, sym: rs, extra: 0, extra_len: 0 });
+                break;
+            }
+            k += 16;
+            if k > 64 {
+                return None;
+            }
+            if k == 64 {
+                // A ZRL landing on index 64 covers the last sixteen coefficients; EOB is the
+                // canonical symbol for that, so any pending run collapses into it as well.
+                on_event(ScanEvent::Sym { is_ac: true, tbl: comp.ta, sym: 0x00, extra: 0, extra_len: 0 });
+                break;
+            }
+            pending_zrls += 1;
+        } else {
+            k += r;
+            if k >= 64 {
+                return None;
+            }
+            let ac_extra = bits.get(ac_s);
+            if bits.exhausted {
+                return None;
+            }
+            for _ in 0..pending_zrls {
+                on_event(ScanEvent::Sym { is_ac: true, tbl: comp.ta, sym: 0xF0, extra: 0, extra_len: 0 });
+            }
+            pending_zrls = 0;
+            on_event(ScanEvent::Sym { is_ac: true, tbl: comp.ta, sym: rs, extra: ac_extra, extra_len: ac_s });
+            k += 1;
+        }
+    }
+    Some(())
+}
+
+fn walk_interleaved_scan(scan_data: &[u8], headers: &BaselineHeaders, mut on_event: impl FnMut(ScanEvent)) -> Option<()> {
+    let mut bits = super::Bits::new(scan_data);
+    let mut rst = 0usize;
+    let mut dc_pred = [0i32; 4];
+    for m in 0..headers.total_mcus {
+        if headers.restart > 0 && m > 0 && m % headers.restart == 0 {
+            if !bits.has_valid_one_bit_padding() || bits.data_left() {
+                return None;
+            }
+            let (next_pos, found) = super::skip_restart(scan_data, bits.pos);
+            let expected = 0xD0u8.wrapping_add((rst % 8) as u8);
+            if !found || next_pos == 0 || scan_data.get(next_pos - 1).copied() != Some(expected) {
+                return None;
+            }
+            bits.restart();
+            dc_pred = [0; 4];
+            on_event(ScanEvent::Restart(rst));
+            rst += 1;
+        }
+        for (comp_idx, &comp) in headers.scan_comps.iter().enumerate() {
+            let dc = headers.dc_dec.get(comp.td)?.as_ref()?;
+            let ac = headers.ac_dec.get(comp.ta)?.as_ref()?;
+            let pred = dc_pred.get_mut(comp_idx)?;
+            for _ in 0..comp.blocks {
+                decode_block(&mut bits, dc, ac, comp, pred, &mut on_event)?;
+            }
+        }
+    }
+    if !bits.has_valid_one_bit_padding() || bits.data_left() || super::skip_restart(scan_data, bits.pos) != (scan_data.len(), false) {
+        return None;
+    }
+    Some(())
+}
+
+fn build_optimal_tables(used: &[bool; 4], freqs: &[Freq; 4]) -> Option<[Option<OptimalTable>; 4]> {
+    let mut tables: [Option<OptimalTable>; 4] = [None, None, None, None];
+    for th in 0..4 {
+        if *used.get(th)? {
+            let (bits, vals) = optimal_table(freqs.get(th)?);
+            let huff = Huff::new(&bits, &vals);
+            *tables.get_mut(th)? = Some(OptimalTable { bits, vals, huff });
+        }
+    }
+    Some(tables)
+}
+
+/// Returns the baseline entropy scan slice before trailing `0xFF` fill and `EOI` (`0xFF 0xD9`),
+/// plus the number of bytes the writer will emit for that scan. Rejects `0xFF` fill runs before
+/// `0x00` stuffed data bytes (ITU-T T.81 §B.1.1.2 permits `0xFF` fill bytes only immediately
+/// before a marker) as well as unexpected or premature markers.
+///
+/// Why the byte count: fill bytes before `RSTn` are legal input but are never copied — the writer
+/// emits the two-byte marker alone — so counting them would reserve capacity for discarded bytes.
+fn strict_baseline_scan_slice(jpeg: &[u8], sos_end: usize, body_end: usize) -> Option<(&[u8], usize)> {
+    let mut pos = sos_end;
+    let mut retained_scan_len = 0usize;
+    while pos <= body_end {
+        let b = *jpeg.get(pos)?;
+        if b != 0xFF {
+            pos += 1;
+            retained_scan_len += 1;
+            continue;
+        }
+        let next = *jpeg.get(pos + 1)?;
+        if next == 0x00 {
+            // A stuffed data byte is two source bytes and two output bytes.
+            pos += 2;
+            retained_scan_len += 2;
+            continue;
+        }
+        let mut marker_pos = pos + 1;
+        while jpeg.get(marker_pos) == Some(&0xFF) {
+            marker_pos += 1;
+        }
+        let marker = *jpeg.get(marker_pos)?;
+        match marker {
+            0xD0..=0xD7 if marker_pos < body_end => {
+                pos = marker_pos + 1;
+                retained_scan_len += 2;
+            }
+            0xD9 if marker_pos == body_end + 1 => return Some((jpeg.get(sos_end..pos)?, retained_scan_len)),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Whether a validated pre-scan marker's segment bytes are copied verbatim into optimized output.
+/// `DHT` is excluded because the tables are always rebuilt from the scan's symbol frequencies.
+fn is_retained_metadata_marker(marker: u8) -> bool {
+    matches!(marker, 0xDB | 0xC0 | 0xDD | 0xE0..=0xEF | 0xFE)
+}
+
+/// Writes the retained pre-scan metadata (`DQT`, `SOF0`, `DRI`, `APPn`, `COM`) by re-walking the
+/// already validated header prefix, emitting `new_dhts` where the first source `DHT` used to sit.
+/// Re-reading the bytes keeps auxiliary memory independent of the segment count an attacker
+/// controls with thousands of empty `COM` segments.
+fn copy_retained_metadata(jpeg: &[u8], header_end: usize, dht_offset: usize, new_dhts: &[u8], out: &mut Vec<u8>) -> Option<()> {
+    let mut pos = 2usize;
+    let mut dht_written = false;
+    while pos < header_end {
+        if !dht_written && pos >= dht_offset {
+            out.extend_from_slice(new_dhts);
+            dht_written = true;
+        }
+        if *jpeg.get(pos)? != 0xFF {
+            return None;
+        }
+        let marker = *jpeg.get(pos + 1)?;
+        if marker == 0xFF {
+            pos += 1;
+            continue;
+        }
+        let len = usize::from(u16::from_be_bytes([*jpeg.get(pos + 2)?, *jpeg.get(pos + 3)?]));
+        let seg_end = pos.checked_add(2 + len)?;
+        if len < 2 || seg_end > header_end {
+            return None;
+        }
+        if is_retained_metadata_marker(marker) {
+            out.extend_from_slice(jpeg.get(pos..seg_end)?);
+        } else if marker != 0xC4 {
+            return None;
+        }
+        pos = seg_end;
+    }
+    if !dht_written {
+        out.extend_from_slice(new_dhts);
+    }
+    Some(())
+}
+
+/// Losslessly re-encode an 8-bit single-scan interleaved baseline JPEG (`SOF0`) with per-image
+/// optimal Huffman tables (ITU-T T.81 Annex K.2), preserving the exact quantized coefficients,
+/// metadata segments, and restart intervals.
+///
+/// Returns `None` if `jpeg` is not a complete single-scan interleaved `SOF0` stream. `DNL`
+/// (`0xFF 0xDC`) streams (including `SOF0` height `0` and post-scan `DNL` markers) are
+/// unsupported and return `None`.
+pub fn optimize_baseline_scan(jpeg: &[u8]) -> Option<Vec<u8>> {
+    if jpeg.len() < 4 || !jpeg.starts_with(&[0xFF, 0xD8]) || !jpeg.ends_with(&[0xFF, 0xD9]) {
+        return None;
+    }
+    let body_end = jpeg.len() - 2;
+    let headers = parse_baseline_headers(jpeg, body_end)?;
+    let (sos_start, sos_end) = headers.sos_range;
+    let (scan_data, retained_scan_len) = strict_baseline_scan_slice(jpeg, sos_end, body_end)?;
+    let mut dc_freq: [Freq; 4] = [[0u64; 256]; 4];
+    let mut ac_freq: [Freq; 4] = [[0u64; 256]; 4];
+    walk_interleaved_scan(scan_data, &headers, |ev| {
+        if let ScanEvent::Sym { is_ac, tbl, sym, .. } = ev {
+            let row = if is_ac { ac_freq.get_mut(tbl) } else { dc_freq.get_mut(tbl) };
+            if let Some(cell) = row.and_then(|r| r.get_mut(usize::from(sym))) {
+                *cell += 1;
+            }
+        }
+    })?;
+
+    let dc_tables = build_optimal_tables(&headers.dc_used, &dc_freq)?;
+    let ac_tables = build_optimal_tables(&headers.ac_used, &ac_freq)?;
+
+    let mut new_dhts = Vec::with_capacity(4 * 273);
+    for th in 0..4 {
+        if let Some(t) = dc_tables.get(th)?.as_ref() {
+            dht(&mut new_dhts, th as u8, &t.bits, &t.vals);
+        }
+        if let Some(t) = ac_tables.get(th)?.as_ref() {
+            dht(&mut new_dhts, 0x10 | (th as u8), &t.bits, &t.vals);
+        }
+    }
+
+    // Why: size the reservation from the bytes the writer is about to produce, not from the input
+    // scan, whose tables may be far from optimal (a legal 16-bit-per-symbol input can shrink many
+    // times over). Pass one already recorded every emitted symbol, so the exact code and amplitude
+    // bits are known; padding, stuffing and restart markers get proportional slack, and the input
+    // scan length stays as an upper clamp. `Vec` still grows if the estimate is short.
+    let mut entropy_bits = 0u64;
+    for (tables, freqs, is_ac) in [(&dc_tables, &dc_freq, false), (&ac_tables, &ac_freq, true)] {
+        for (table, freq) in tables.iter().zip(freqs) {
+            let Some(table) = table.as_ref() else { continue };
+            for (sym, &count) in freq.iter().enumerate() {
+                if count > 0 {
+                    let (_, code_len) = table.huff.code[sym];
+                    let extra = if is_ac { (sym & 0x0F) as u64 } else { sym as u64 };
+                    entropy_bits = entropy_bits.saturating_add(count.saturating_mul(u64::from(code_len) + extra));
+                }
+            }
+        }
+    }
+    let restarts = headers.total_mcus.saturating_sub(1).checked_div(headers.restart).unwrap_or(0);
+    let entropy_bytes = usize::try_from(entropy_bits.div_ceil(8)).unwrap_or(usize::MAX);
+    let scan_estimate =
+        entropy_bytes.saturating_add(entropy_bytes / 16).saturating_add(restarts.saturating_mul(3)).saturating_add(64).min(retained_scan_len);
+    let retained_len =
+        headers.retained_meta_len.saturating_add(new_dhts.len()).saturating_add(scan_estimate).saturating_add(sos_end - sos_start).saturating_add(4);
+    let mut out = Vec::with_capacity(retained_len);
+    out.extend_from_slice(&[0xFF, 0xD8]);
+    copy_retained_metadata(jpeg, sos_start, headers.dht_insert_offset, &new_dhts, &mut out)?;
+    out.extend_from_slice(jpeg.get(sos_start..sos_end)?);
+
+    let mut writer = Bits { out, acc: 0, n: 0 };
+    walk_interleaved_scan(scan_data, &headers, |ev| match ev {
+        ScanEvent::Restart(rst) => {
+            writer.flush_pad();
+            writer.out.extend_from_slice(&[0xFF, 0xD0 + (rst % 8) as u8]);
+        }
+        ScanEvent::Sym { is_ac, tbl, sym, extra, extra_len } => {
+            let slot = if is_ac { ac_tables.get(tbl) } else { dc_tables.get(tbl) };
+            if let Some(Some(t)) = slot {
+                let (code, code_len) = t.huff.code[usize::from(sym)];
+                writer.put(u32::from(code), u32::from(code_len));
+                writer.put(extra, extra_len);
+            }
+        }
+    })?;
+    let mut out = writer.finish();
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    Some(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -954,6 +1575,431 @@ mod tests {
         assert!(lo.len() < hi.len());
         let px = jpeg_decoder::Decoder::new(&hi[..]).decode().unwrap();
         assert!(psnr(&src, &px) > 35.0);
+    }
+
+    /// Locate the `nth` (0-based) header marker segment before the entropy scan.
+    fn find_marker_segment(jpeg: &[u8], target_marker: u8, mut nth: usize) -> Option<(usize, usize)> {
+        let mut pos = 2usize;
+        while pos + 4 <= jpeg.len() {
+            if jpeg[pos] != 0xFF {
+                return None;
+            }
+            let marker = jpeg[pos + 1];
+            if marker == 0xFF {
+                pos += 1;
+                continue;
+            }
+            if marker == 0xD9 {
+                break;
+            }
+            let len = usize::from(u16::from_be_bytes([jpeg[pos + 2], jpeg[pos + 3]]));
+            let seg_end = pos + 2 + len;
+            if marker == target_marker {
+                if nth == 0 {
+                    return Some((pos, seg_end));
+                }
+                nth -= 1;
+            }
+            if marker == 0xDA {
+                break;
+            }
+            pos = seg_end;
+        }
+        None
+    }
+
+    /// Re-optimizing Annex K baseline streams must produce bit-exact output to encoding directly
+    /// with per-image optimal tables across 4:4:4, 4:2:2, 4:2:0, grayscale, DRI/RSTn restarts,
+    /// and legal trailing 0xFF fill bytes before EOI (#2183).
+    #[test]
+    fn optimize_baseline_scan_matches_direct_optimal_encode() {
+        for (w, h, sub) in [
+            (37, 23, ChromaSubsampling::S444),
+            (37, 23, ChromaSubsampling::S422),
+            (37, 23, ChromaSubsampling::S420),
+            (64, 1100, ChromaSubsampling::S420),
+        ] {
+            let src = test_rgb(w, h);
+            let std_jpg = encode_with(&src, w, h, 3, 85, sub, &[], false);
+            let direct_opt = encode(&src, w, h, 3, 85, sub, &[]);
+            let reopt = optimize_baseline_scan(&std_jpg).expect("valid baseline scan");
+            assert_eq!(reopt, direct_opt, "{w}x{h} {sub:?}");
+        }
+
+        // ITU-T T.81 §B.1.1.2 allows 0xFF fill bytes directly before EOI; trimming them keeps EOI
+        // validation aligned with the end of the entropy segment without corrupting the last MCU.
+        let mut padded = encode_with(&test_rgb(16, 16), 16, 16, 3, 85, ChromaSubsampling::S420, &[], false);
+        let expected_padded = optimize_baseline_scan(&padded).expect("unpadded baseline optimizes");
+        let eoi_pos = padded.len() - 2;
+        padded.splice(eoi_pos..eoi_pos, [0xFF, 0xFF]);
+        assert_eq!(optimize_baseline_scan(&padded).expect("0xFF fill before EOI optimizes"), expected_padded);
+
+        let gray: Vec<u8> = test_rgb(37, 1100).as_chunks::<3>().0.iter().map(|p| p[1]).collect();
+        let std_gray = encode_with(&gray, 37, 1100, 1, 90, ChromaSubsampling::S444, &[], false);
+        let direct_gray = encode(&gray, 37, 1100, 1, 90, ChromaSubsampling::S444, &[]);
+        assert_eq!(optimize_baseline_scan(&std_gray).expect("valid gray baseline"), direct_gray);
+    }
+
+    /// Reject non-baseline frames, non-interleaved scans, truncated entropy (with or without EOI),
+    /// missing DQT definitions, out-of-range SOF0 Huffman table slots, and illegal DHT symbols
+    /// rather than rewriting malformed or incomplete streams (#2183).
+    #[test]
+    fn optimize_baseline_scan_rejects_non_baseline_or_corrupt_streams() {
+        assert!(optimize_baseline_scan(b"not a jpeg").is_none());
+        let src = test_rgb(16, 16);
+        let valid = encode_with(&src, 16, 16, 3, 80, ChromaSubsampling::S420, &[], false);
+
+        // Truncated scan missing EOI.
+        assert!(optimize_baseline_scan(&valid[..valid.len() - 4]).is_none());
+
+        // Truncated entropy stream with EOI preserved: an incomplete MCU must still be rejected.
+        let gray8 = encode_with(&[128u8; 64], 8, 8, 1, 80, ChromaSubsampling::S444, &[], false);
+        assert!(optimize_baseline_scan(&gray8).is_some());
+        let mut truncated_entropy = gray8[..gray8.len() - 3].to_vec();
+        truncated_entropy.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&truncated_entropy).is_none());
+
+        // Non-baseline frame (SOF2).
+        let mut progressive = valid.clone();
+        let (sof, _) = find_marker_segment(&progressive, 0xC0, 0).unwrap();
+        progressive[sof + 1] = 0xC2;
+        assert!(optimize_baseline_scan(&progressive).is_none());
+
+        // Non-interleaved baseline output from jpeg-encoder (multiple SOS markers).
+        let mut non_interleaved = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut non_interleaved, 80);
+        enc.set_optimized_huffman_tables(true);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_4_4);
+        enc.encode(&src, 16, 16, jpeg_encoder::ColorType::Rgb).unwrap();
+        assert!(optimize_baseline_scan(&non_interleaved).is_none());
+
+        // ITU-T T.81 Table B.5 limits SOF0 Baseline Huffman destinations to 0..=1.
+        let mut bad_slot = valid.clone();
+        let (dht0, _) = find_marker_segment(&bad_slot, 0xC4, 0).unwrap();
+        assert_eq!(bad_slot[dht0 + 4], 0x00);
+        bad_slot[dht0 + 4] = 0x02;
+        let (sos, _) = find_marker_segment(&bad_slot, 0xDA, 0).unwrap();
+        bad_slot[sos + 6] = 0x20;
+        assert!(optimize_baseline_scan(&bad_slot).is_none());
+
+        // Illegal baseline DC category (> 11) in DHT must be rejected before decoding.
+        let mut bad_dc_sym = valid.clone();
+        let (dht_dc, _) = find_marker_segment(&bad_dc_sym, 0xC4, 0).unwrap();
+        assert_eq!(bad_dc_sym[dht_dc + 4], 0x00);
+        bad_dc_sym[dht_dc + 4 + 17] = 12;
+        assert!(optimize_baseline_scan(&bad_dc_sym).is_none());
+
+        // Illegal baseline AC symbol (0x10: SSSS == 0 with non-EOB/ZRL run 1) must be rejected.
+        let mut bad_ac_sym = valid.clone();
+        let (dht_ac, _) = find_marker_segment(&bad_ac_sym, 0xC4, 1).unwrap();
+        assert_eq!(bad_ac_sym[dht_ac + 4], 0x10);
+        bad_ac_sym[dht_ac + 4 + 17] = 0x10;
+        assert!(optimize_baseline_scan(&bad_ac_sym).is_none());
+
+        // Missing quantization table referenced by SOF0 components before SOS.
+        let mut no_chroma_dqt = valid;
+        let (dqt1, dqt1_end) = find_marker_segment(&no_chroma_dqt, 0xDB, 1).unwrap();
+        no_chroma_dqt.drain(dqt1..dqt1_end);
+        assert!(optimize_baseline_scan(&no_chroma_dqt).is_none());
+
+        // Why: ITU-T T.81 Table B.4 restricts SOF0 baseline frames to 8-bit quantization precision
+        // (Pq == 0); copying a 16-bit (Pq == 1) DQT segment would emit a non-conforming SOF0 file.
+        let mut dqt_16bit = gray8.clone();
+        let (dqt0, dqt0_end) = find_marker_segment(&dqt_16bit, 0xDB, 0).unwrap();
+        let mut dqt16_seg = vec![0xFF, 0xDB, 0x00, 131, 0x10];
+        dqt16_seg.resize(133, 1);
+        dqt_16bit.splice(dqt0..dqt0_end, dqt16_seg);
+        assert!(optimize_baseline_scan(&dqt_16bit).is_none());
+
+        // Why: Baseline quantization entries must lie in 1..=255 to avoid zero divisors on decode.
+        let mut dqt_zero = gray8.clone();
+        let (dqt0, _) = find_marker_segment(&dqt_zero, 0xDB, 0).unwrap();
+        dqt_zero[dqt0 + 5] = 0;
+        assert!(optimize_baseline_scan(&dqt_zero).is_none());
+
+        // Why: ITU-T T.81 §C.2 forbids assigning an all-ones codeword (here two 1-bit codes `0` and
+        // `1` that saturate the code space); single-symbol 1-bit code `0` remains legal and accepted.
+        let build_one_bit_gray8 = |dc_counts_0: u8, dc_vals: &[u8]| -> Vec<u8> {
+            let mut jpg = gray8[..find_marker_segment(&gray8, 0xC4, 0).unwrap().0].to_vec();
+            dht(&mut jpg, 0x00, &[dc_counts_0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dc_vals);
+            dht(&mut jpg, 0x10, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0x00]);
+            let (sos, sos_end) = find_marker_segment(&gray8, 0xDA, 0).unwrap();
+            jpg.extend_from_slice(&gray8[sos..sos_end]);
+            jpg.extend_from_slice(&[0x3F, 0xFF, 0xD9]);
+            jpg
+        };
+        assert!(optimize_baseline_scan(&build_one_bit_gray8(1, &[0])).is_some());
+        assert!(optimize_baseline_scan(&build_one_bit_gray8(2, &[0, 1])).is_none());
+
+        // Why: ITU-T T.81 §B.2.3 requires SOS components in a single full-frame scan to match the
+        // exact SOF0 component declaration order; permuting 1,2,3 -> 2,1,3 would preserve an
+        // invalid SOS header even when pixel blocks happen to decode identically.
+        let flat_rgb16 = encode_with(&vec![128u8; 16 * 16 * 3], 16, 16, 3, 80, ChromaSubsampling::S444, &[], false);
+        assert!(optimize_baseline_scan(&flat_rgb16).is_some());
+        let mut permuted_sos = flat_rgb16;
+        let (sos, _) = find_marker_segment(&permuted_sos, 0xDA, 0).unwrap();
+        permuted_sos.swap(sos + 5, sos + 7);
+        permuted_sos.swap(sos + 6, sos + 8);
+        assert!(optimize_baseline_scan(&permuted_sos).is_none());
+
+        // Why: ITU-T T.81 §A.2.3 caps interleaved MCUs at 10 data units (8x8 blocks); 4x1 + 4x1 + 3x1
+        // = 11 blocks/MCU passes individual component bounds (1..=4) and must be rejected.
+        let mut over_10_mcu = Vec::new();
+        over_10_mcu.extend_from_slice(&[0xFF, 0xD8]);
+        segment(&mut over_10_mcu, 0xDB, &[0; 1].into_iter().chain([1u8; 64]).collect::<Vec<_>>());
+        segment(&mut over_10_mcu, 0xDB, &[1; 1].into_iter().chain([1u8; 64]).collect::<Vec<_>>());
+        segment(&mut over_10_mcu, 0xC0, &[8, 0, 8, 0, 8, 3, 1, 0x41, 0, 2, 0x41, 1, 3, 0x31, 1]);
+        for tc_th in [0x00, 0x10, 0x01, 0x11] {
+            dht(&mut over_10_mcu, tc_th, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]);
+        }
+        segment(&mut over_10_mcu, 0xDA, &[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
+        // 11 blocks * (1-bit DC `0` + 1-bit EOB `0`) = 22 zero bits + `11` padding -> 0x00 0x00 0x03.
+        over_10_mcu.extend_from_slice(&[0x00, 0x00, 0x03, 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&over_10_mcu).is_none());
+
+        // Why: ITU-T T.81 §B.2.5 permits DNL (0xDC) only immediately after the first scan, and this
+        // API does not support DNL; rejecting pre-SOS DNL avoids copying illegal markers into output.
+        let mut pre_sos_dnl = gray8.clone();
+        let (sos, _) = find_marker_segment(&pre_sos_dnl, 0xDA, 0).unwrap();
+        pre_sos_dnl.splice(sos..sos, [0xFF, 0xDC, 0x00, 0x04, 0x00, 0x08]);
+        assert!(optimize_baseline_scan(&pre_sos_dnl).is_none());
+    }
+
+    /// Enforce ITU-T T.81 stream invariants during header resolution and entropy scanning:
+    /// `1`-bit padding before `EOI`/`RSTn`, overwritten `DHT` redefinitions, `[-1024, 1023]`
+    /// cumulative DC coefficients (and predictor reset at `RSTn`), and rejecting `0xFF` fill
+    /// runs before stuffed `0x00` entropy data bytes (#2183).
+    #[test]
+    fn optimize_baseline_scan_enforces_entropy_and_redefinition_invariants() {
+        let gray8 = encode_with(&[128u8; 64], 8, 8, 1, 80, ChromaSubsampling::S444, &[], false);
+
+        // Why: ITU-T T.81 §F.1.2.3 mandates `1`-bit padding to the byte boundary before EOI and RSTn;
+        // clearing those bits would otherwise pass byte-level checks and silently alter the stream.
+        let mut zero_pad_eoi = gray8.clone();
+        let last_scan_idx = zero_pad_eoi.len() - 3;
+        zero_pad_eoi[last_scan_idx] &= 0xFC;
+        assert!(optimize_baseline_scan(&zero_pad_eoi).is_none());
+
+        let mut dri_jpg = gray8[..find_marker_segment(&gray8, 0xDA, 0).unwrap().0].to_vec();
+        let (sof, _) = find_marker_segment(&dri_jpg, 0xC0, 0).unwrap();
+        dri_jpg[sof + 7..sof + 9].copy_from_slice(&16u16.to_be_bytes());
+        segment(&mut dri_jpg, 0xDD, &1u16.to_be_bytes());
+        let (sos, sos_end) = find_marker_segment(&gray8, 0xDA, 0).unwrap();
+        dri_jpg.extend_from_slice(&gray8[sos..sos_end]);
+        let rst0_pre_idx = dri_jpg.len();
+        dri_jpg.extend_from_slice(&[gray8[gray8.len() - 3], 0xFF, 0xD0, gray8[gray8.len() - 3], 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&dri_jpg).is_some());
+        dri_jpg[rst0_pre_idx] &= 0xFC;
+        assert!(optimize_baseline_scan(&dri_jpg).is_none());
+
+        // Why: ITU-T T.81 allows DHT redefinitions before SOS, and `parse_dht_tables` defers
+        // `Huffman::new` until SOS selection so duplicated header definitions still resolve to
+        // the final active slot without building intermediate decode LUTs.
+        let (dht_start, _) = find_marker_segment(&gray8, 0xC4, 0).unwrap();
+        let mut redefined_dht = gray8[..dht_start].to_vec();
+        dht(&mut redefined_dht, 0x00, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[11]);
+        dht(&mut redefined_dht, 0x10, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0]);
+        redefined_dht.extend_from_slice(&gray8[dht_start..]);
+        assert_eq!(optimize_baseline_scan(&redefined_dht), optimize_baseline_scan(&gray8));
+
+        // Why: ITU-T T.81 §F.1.1.5.1 / Table F.1 restricts reconstructed 8-bit SOF0 DC values to
+        // [-1024, 1023]; two category-10 diffs of +600 give 1200 without restart (`None`), whereas
+        // separating them with `DRI = 1` + `RST0` resets the predictor to 0 (`Some`).
+        let mut dc_range_hdr = gray8[..dht_start].to_vec();
+        let (dc_sof, _) = find_marker_segment(&dc_range_hdr, 0xC0, 0).unwrap();
+        dc_range_hdr[dc_sof + 7..dc_sof + 9].copy_from_slice(&16u16.to_be_bytes());
+        dht(&mut dc_range_hdr, 0x00, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[10]);
+        dht(&mut dc_range_hdr, 0x10, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0x00]);
+        let mut dc_overflow = dc_range_hdr.clone();
+        dc_overflow.extend_from_slice(&gray8[sos..sos_end]);
+        // Two blocks of (1-bit DC `0`, 10-bit +600 `1001011000`, 1-bit EOB `0`) = 24 bits: 0x4B 0x04 0xB0.
+        dc_overflow.extend_from_slice(&[0x4B, 0x04, 0xB0, 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&dc_overflow).is_none());
+
+        let mut dc_reset_ok = dc_range_hdr;
+        segment(&mut dc_reset_ok, 0xDD, &1u16.to_be_bytes());
+        dc_reset_ok.extend_from_slice(&gray8[sos..sos_end]);
+        dc_reset_ok.extend_from_slice(&[0x4B, 0x0F, 0xFF, 0xD0, 0x4B, 0x0F, 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&dc_reset_ok).is_some());
+
+        // Why: ITU-T T.81 §B.1.1.2 allows `0xFF` fill bytes only directly before a marker; turning
+        // stuffed `0xFF 0x00` entropy data into `0xFF 0xFF 0x00` is malformed and must return None.
+        let mut stuffed_hdr = gray8[..dht_start].to_vec();
+        dht(&mut stuffed_hdr, 0x00, &[0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]);
+        dht(&mut stuffed_hdr, 0x10, &[0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0x0A, 0x00]);
+        stuffed_hdr.extend_from_slice(&gray8[sos..sos_end]);
+        let mut stuffed_ok = stuffed_hdr.clone();
+        // 6-bit DC `0` + 2-bit AC `0x0A` (`00`) + 10-bit +1023 (`1111111111`) -> `FF 00` byte stuffing.
+        stuffed_ok.extend_from_slice(&[0x00, 0xFF, 0x00, 0xDF, 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&stuffed_ok).is_some());
+
+        let mut fill_before_stuffing = stuffed_hdr;
+        fill_before_stuffing.extend_from_slice(&[0x00, 0xFF, 0xFF, 0x00, 0xDF, 0xFF, 0xD9]);
+        assert!(optimize_baseline_scan(&fill_before_stuffing).is_none());
+
+        // Why: legal `0xFF` fill runs before `EOI` can dwarf the retained payload, so reserving
+        // `jpeg.len()` would hand back a small image pinning the whole input size in the heap.
+        let mut filled = gray8.clone();
+        let eoi = filled.len() - 2;
+        filled.splice(eoi..eoi, vec![0xFF; 1 << 20]);
+        let opt_filled = optimize_baseline_scan(&filled).expect("0xFF fill before EOI must optimize");
+        assert!(opt_filled.len() < 4096, "unexpected output size {}", opt_filled.len());
+        assert!(opt_filled.capacity() < 64 * 1024, "capacity {} for {} output bytes", opt_filled.capacity(), opt_filled.len());
+
+        // Why: libjpeg-turbo (`JERR_BAD_HUFF_TABLE`) and jpegli reject a `DHT` that assigns two
+        // distinct codewords to the same `HUFFVAL`; frequency counting per symbol would silently
+        // merge both codes, so duplicate symbols are rejected before decoding.
+        let build_dc_table = |counts: &[u8; 16], vals: &[u8]| -> Vec<u8> {
+            let mut jpg = gray8[..find_marker_segment(&gray8, 0xC4, 0).unwrap().0].to_vec();
+            dht(&mut jpg, 0x00, counts, vals);
+            dht(&mut jpg, 0x10, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0x00]);
+            let (sos, sos_end) = find_marker_segment(&gray8, 0xDA, 0).unwrap();
+            jpg.extend_from_slice(&gray8[sos..sos_end]);
+            // One block: 1-bit DC `0`, 1-bit EOB `0`, then six `1` padding bits.
+            jpg.extend_from_slice(&[0x3F, 0xFF, 0xD9]);
+            jpg
+        };
+        let two_codes = [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert!(optimize_baseline_scan(&build_dc_table(&two_codes, &[0, 0])).is_none());
+        // The same code lengths with distinct symbols stay valid.
+        assert!(optimize_baseline_scan(&build_dc_table(&two_codes, &[0, 1])).is_some());
+
+        // Why: `APPn`/`COM` segments must survive in their exact original order around the
+        // re-emitted `DHT` while the writer allocates nothing per segment, so a leading `COM` and an
+        // `APP1` placed between `SOF0` and the tables both precede the rewritten `DHT`.
+        let (meta_dht, _) = find_marker_segment(&gray8, 0xC4, 0).unwrap();
+        let mut with_meta = vec![0xFF, 0xD8, 0xFF, 0xFE, 0x00, 0x05, b'a', b'b', b'c'];
+        with_meta.extend_from_slice(&gray8[2..meta_dht]);
+        segment(&mut with_meta, 0xE1, b"metadata");
+        with_meta.extend_from_slice(&gray8[meta_dht..]);
+        let opt_meta = optimize_baseline_scan(&with_meta).expect("APPn/COM metadata stream must optimize");
+        let com = opt_meta.windows(7).position(|w| w == [0xFF, 0xFE, 0x00, 0x05, b'a', b'b', b'c']).expect("COM preserved");
+        let app =
+            opt_meta.windows(12).position(|w| w == [0xFF, 0xE1, 0x00, 0x0A, b'm', b'e', b't', b'a', b'd', b'a', b't', b'a']).expect("APP1 preserved");
+        let dht_pos = opt_meta.windows(2).position(|w| w == [0xFF, 0xC4]).expect("optimized DHT emitted");
+        assert_eq!(com, 2);
+        assert!(app < dht_pos, "APP1 must stay ahead of the rewritten DHT");
+    }
+
+    /// Legal `0xFF` fill bytes before `RSTn` are dropped by the writer, which emits only the
+    /// two-byte marker, so they must not size the output reservation either.
+    #[test]
+    fn optimize_baseline_scan_does_not_reserve_capacity_for_fill_before_restart() {
+        let gray8 = encode_with(&[128u8; 64], 8, 8, 1, 80, ChromaSubsampling::S444, &[], false);
+        let mut dri = gray8[..find_marker_segment(&gray8, 0xDA, 0).unwrap().0].to_vec();
+        let (sof, _) = find_marker_segment(&dri, 0xC0, 0).unwrap();
+        dri[sof + 7..sof + 9].copy_from_slice(&16u16.to_be_bytes());
+        segment(&mut dri, 0xDD, &1u16.to_be_bytes());
+        let (sos, sos_end) = find_marker_segment(&gray8, 0xDA, 0).unwrap();
+        dri.extend_from_slice(&gray8[sos..sos_end]);
+        // Two identical MCUs with `RST0` between them, so `DRI = 1` splits the single scan byte.
+        let block = gray8[gray8.len() - 3];
+        dri.extend_from_slice(&[block, 0xFF, 0xD0, block, 0xFF, 0xD9]);
+        let expected = optimize_baseline_scan(&dri).expect("DRI = 1 stream must optimize");
+
+        let rst0 = dri.windows(2).position(|w| w == [0xFF, 0xD0]).expect("RST0 marker");
+        let mut filled = dri[..rst0].to_vec();
+        filled.resize(filled.len() + (1 << 20), 0xFF);
+        filled.extend_from_slice(&dri[rst0..]);
+
+        let optimized = optimize_baseline_scan(&filled).expect("fill before RST0 must still optimize");
+        assert_eq!(optimized, expected, "fill bytes must not change the output");
+        assert!(optimized.len() < 4096, "unexpected output size {}", optimized.len());
+        assert!(optimized.capacity() < 64 * 1024, "capacity {} for {} output bytes", optimized.capacity(), optimized.len());
+    }
+
+    /// Sloppy encoders may pad a block with ZRL runs before EOB. EOB already covers those zeros, so
+    /// the optimizer must emit one EOB instead of copying the redundant run, while ZRLs that are
+    /// followed by a nonzero coefficient still have to be written.
+    #[test]
+    fn repeated_zrl_before_eob_is_rewritten_as_a_single_eob() {
+        let dc = crate::Huffman::new(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]).unwrap();
+        let ac = crate::Huffman::new(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0, 0x00]).unwrap();
+        // DC `0`, then ZRL `0` three times, then EOB `10` and two `1` padding bits.
+        let mut bits = crate::Bits::new(&[0x0B]);
+        let mut pred = 0;
+        let mut syms = Vec::new();
+        decode_block(&mut bits, &dc, &ac, ScanComp { blocks: 1, td: 0, ta: 0 }, &mut pred, &mut |ev| {
+            if let ScanEvent::Sym { is_ac: true, sym, .. } = ev {
+                syms.push(sym);
+            }
+        })
+        .expect("three ZRLs followed by EOB");
+        assert_eq!(syms, [0x00]);
+
+        // ZRL `0`, a coefficient `10` with amplitude `1`, then EOB `110`: the ZRL must survive.
+        let ac = crate::Huffman::new(&[1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0, 0x01, 0x00]).unwrap();
+        let mut bits = crate::Bits::new(&[0x2E]);
+        let mut pred = 0;
+        let mut syms = Vec::new();
+        decode_block(&mut bits, &dc, &ac, ScanComp { blocks: 1, td: 0, ta: 0 }, &mut pred, &mut |ev| {
+            if let ScanEvent::Sym { is_ac: true, sym, .. } = ev {
+                syms.push(sym);
+            }
+        })
+        .expect("ZRL followed by a coefficient");
+        assert_eq!(syms, [0xF0, 0x01, 0x00]);
+    }
+
+    /// A legal but wasteful input table can spend 16 bits on each of DC and EOB, so the input scan
+    /// is many times the optimized one; the reservation must follow the optimized size.
+    #[test]
+    fn optimize_baseline_scan_reserves_capacity_from_the_optimized_scan() {
+        let mut jpg = vec![0xFF, 0xD8];
+        segment(&mut jpg, 0xDB, &[0u8].into_iter().chain([1u8; 64]).collect::<Vec<_>>());
+        // 256x256 gray is 1024 blocks, so a 16-bit-per-symbol table costs 4 KiB of scan.
+        segment(&mut jpg, 0xC0, &[8, 1, 0, 1, 0, 1, 1, 0x11, 0]);
+        let one_long_code = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        dht(&mut jpg, 0x00, &one_long_code, &[0]);
+        dht(&mut jpg, 0x10, &one_long_code, &[0x00]);
+        segment(&mut jpg, 0xDA, &[1, 1, 0x00, 0, 63, 0]);
+        jpg.extend_from_slice(&[0u8; 4 * 1024]);
+        jpg.extend_from_slice(&[0xFF, 0xD9]);
+
+        let optimized = optimize_baseline_scan(&jpg).expect("legal long-code stream must optimize");
+        assert!(optimized.len() < 1024, "unexpected output size {}", optimized.len());
+        assert!(optimized.capacity() < 1024, "capacity {} for {} output bytes", optimized.capacity(), optimized.len());
+        let decoded = crate::decode(&optimized, &crate::Limits::default(), None).expect("optimized output decodes");
+        assert_eq!(decoded.samples, crate::Samples::U8(vec![128u8; 256 * 256]));
+    }
+
+    /// A `ZRL` that covers exactly the last 16 coefficients drives `k` to `64` and ends the block
+    /// without an `EOB`. libjpeg, zune-jpeg and `craft_jpeg::decode` all accept that input, while
+    /// T.81 §F.1.2.2.3 requires the encoder to write `EOB` when the last coefficient is zero, so
+    /// the optimizer accepts the block and emits the canonical `EOB` instead of the trailing `ZRL`.
+    #[test]
+    fn trailing_zrl_that_exactly_fills_the_block_is_accepted_and_rewritten_as_eob() {
+        let mut jpg = vec![0xFF, 0xD8];
+        segment(&mut jpg, 0xDB, &[0u8].into_iter().chain([1u8; 64]).collect::<Vec<_>>());
+        segment(&mut jpg, 0xC0, &[8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        // DC `0` is a single 1-bit code; the AC table gives `0` to ZRL and `10` to `E1` (run 14, size 1).
+        dht(&mut jpg, 0x00, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]);
+        dht(&mut jpg, 0x10, &[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0, 0xE1]);
+        segment(&mut jpg, 0xDA, &[1, 1, 0x00, 0, 63, 0]);
+        // DC `0`, ZRL (k 1..=16), ZRL (k 17..=32), `E1` + amplitude `1` (index 47), then ZRL over
+        // indices 48..=63 and one `1` padding bit: the block ends with `k == 64` and no `EOB`.
+        jpg.extend_from_slice(&[0x15, 0xFF, 0xD9]);
+
+        let limits = crate::Limits::default();
+        let original = crate::decode(&jpg, &limits, None).expect("craft-jpeg decodes a trailing ZRL");
+        let optimized = optimize_baseline_scan(&jpg).expect("a trailing ZRL still optimizes");
+        let round_trip = crate::decode(&optimized, &limits, None).expect("re-encoded output decodes");
+        assert_eq!(original.samples, round_trip.samples);
+        assert_eq!(jpeg_decoder::Decoder::new(&jpg[..]).decode().expect("libjpeg accepts a trailing ZRL").len(), 64);
+
+        // The redundant trailing ZRL becomes EOB in the input event stream the writer re-encodes.
+        let dc = crate::Huffman::new(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]).unwrap();
+        let ac = crate::Huffman::new(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0, 0xE1]).unwrap();
+        let mut bits = crate::Bits::new(&[0x15]);
+        let mut pred = 0;
+        let mut ac_syms = Vec::new();
+        decode_block(&mut bits, &dc, &ac, ScanComp { blocks: 1, td: 0, ta: 0 }, &mut pred, &mut |ev| {
+            if let ScanEvent::Sym { is_ac: true, sym, .. } = ev {
+                ac_syms.push(sym);
+            }
+        })
+        .expect("single block with a trailing ZRL");
+        assert_eq!(ac_syms, [0xF0, 0xF0, 0xE1, 0x00]);
     }
 }
 
