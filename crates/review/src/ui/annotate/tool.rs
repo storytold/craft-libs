@@ -1,7 +1,7 @@
 //! The canvas tool: presses, drags, the "New Annotation..." form and the [`CanvasTool`] implementation.
 
 use craft_behavior::geometry::turn_to_45;
-use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed, PointerButton, SelectionChange};
+use craft_behavior::{CancelReason, CanvasView, Cursor, CursorIcon, EditEvent, GestureId, Mixed, PointerButton, SelectionChange};
 use craft_keymap::Mods;
 use craft_theme::Srgba;
 use craft_ui::canvas::{CanvasTool, NUDGE, NUDGE_FAR, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
@@ -10,14 +10,14 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2};
-use kurbo::{Point, Rect};
+use kurbo::{Point, Rect, Vec2};
 use std::sync::Arc;
 
 use super::AnnotateWords;
 use super::overlay::ellipse_points;
 use crate::annotate::{
-    Annotation, AnnotationEdit, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, ShiftLock, hit, reshaped,
-    resized,
+    Annotation, AnnotationEdit, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, MIN_SHAPE, Placement,
+    SLIP_MOVE, SLIP_RESIZE, ShiftLock, callout_reshaped, corner_aspect, hit, reshaped, resized,
 };
 
 /// The page text between two page points as quads (four corners each).
@@ -37,19 +37,32 @@ const HIGHLIGHT_OPACITY: f32 = 0.4;
 const NOTE_SIDE: f64 = 16.0;
 /// The key of the "New Annotation..." command form.
 pub const NEW_ANNOTATION_FORM: &str = "newAnnotation";
+/// A text box drag shorter than this on either side, in screen points, is a click: the host fits the box to its text.
+const PLACE_DRAG_MIN: f32 = 6.0;
+/// The shortest leader a callout drag places, in page units; a shorter drag places nothing.
+const CALLOUT_MIN_LEADER: f64 = 8.0;
+/// A polygon click this close to the last point, in screen points, adds none: a second press of the same spot.
+const REPEAT_POINT: f32 = 2.0;
+
+
+/// The app's caret snap: the snapped tip and the caret's side for a click, or `None` away from text.
+type CaretSnap = Box<dyn Fn(Point) -> Option<(Point, f64)> + Send>;
 
 /// What a press began and the drag or release continues.
 #[derive(Clone, Debug)]
 enum Drag {
-    /// Moving, resizing or reshaping selected annotations; `begun` once the pointer has moved.
-    Edit { id: GestureId, begun: bool, origin: Point, change: Change },
+    /// Moving, resizing or reshaping selected annotations; `begun` once the pointer has moved. `mods` are the
+    /// latest the gesture saw, so the value in flight can be read between its events.
+    Edit { id: GestureId, begun: bool, origin: Point, change: Change, mods: Mods },
     /// A selection rectangle on empty page.
     Marquee { origin: Point, current: Point, additive: bool },
     /// A box, oval or straight line drawn by dragging.
     Shape { kind: AnnotationKind, origin: Point, current: Point },
+    /// A text box or callout placed by dragging (a callout from its tip to its box).
+    Place { kind: AnnotationKind, origin: Point, current: Point },
     /// Page text selected for a markup kind.
     Markup { kind: AnnotationKind, origin: Point, current: Point },
-    /// One Ink stroke in progress.
+    /// One Ink or freehand highlight stroke in progress.
     Stroke(Vec<Point>),
     /// The Eraser's path and the strokes it crossed.
     Erase { path: Vec<Point>, crossed: Vec<(AnnotationId, usize)> },
@@ -58,18 +71,23 @@ enum Drag {
 #[derive(Clone, Debug)]
 enum Change {
     Move { ids: Vec<AnnotationId> },
-    Resize { target: AnnotationId, handle: (i8, i8), from: Rect },
-    Reshape { target: AnnotationId, index: usize, from: Vec<Point> },
+    /// `from` is the annotation as the press found it: its box and its own aspect.
+    Resize { target: AnnotationId, handle: (i8, i8), from: Annotation },
+    /// `callout` is the box of a callout, whose points move by the callout's rule.
+    Reshape { target: AnnotationId, index: usize, from: Vec<Point>, callout: Option<Rect> },
 }
 
 /// What a call knows when it reads a pointer: the pointer in page units, the page-unit sizes of the screen
-/// distances the tool tests with, the host's gesture id and the tool's words.
+/// distances the tool tests with, the host's gesture id, the tool's words, the view and the page box.
 struct Reading {
     at: Point,
     tolerance: f64,
     icon_side: f64,
     gesture: Option<GestureId>,
     words: Arc<AnnotateWords>,
+    view: CanvasView,
+    /// The page box, when the canvas knows the document's size.
+    page: Option<Rect>,
 }
 
 fn read(cx: &ToolContext<'_>, pos: Pos2) -> Option<Reading> {
@@ -80,7 +98,35 @@ fn read(cx: &ToolContext<'_>, pos: Pos2) -> Option<Reading> {
         icon_side: space.view.doc_len(cx.icon_side()),
         gesture: cx.gesture_id(),
         words: cx.words::<AnnotateWords>(),
+        view: space.view,
+        page: space.document().map(|size| Rect::from_origin_size(Point::ORIGIN, size)),
     })
+}
+
+/// `p` held inside the page box, when there is one.
+fn clamp_to(page: Option<Rect>, p: Point) -> Point {
+    page.map_or(p, |page| Point::new(p.x.clamp(page.x0, page.x1), p.y.clamp(page.y0, page.y1)))
+}
+
+/// Whether two boxes touch; a box of no width (a straight stroke) still counts.
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1
+}
+
+/// Whether the Eraser reaches `a`, in either mode: an unlocked Ink or freehand highlight.
+fn erasable(a: &Annotation) -> bool {
+    matches!(a.kind, AnnotationKind::Ink | AnnotationKind::FreehandHighlight) && !a.locked
+}
+
+/// The cursor over a handle: the resize arrow of a box handle, a crosshair over a point.
+fn handle_icon(handle: AnnotationHandle) -> CursorIcon {
+    match handle {
+        AnnotationHandle::Box(0, _) => CursorIcon::ResizeVertical,
+        AnnotationHandle::Box(_, 0) => CursorIcon::ResizeHorizontal,
+        AnnotationHandle::Box(-1, -1) | AnnotationHandle::Box(1, 1) => CursorIcon::ResizeNwSe,
+        AnnotationHandle::Box(..) => CursorIcon::ResizeNeSw,
+        AnnotationHandle::Point(_) => CursorIcon::Crosshair,
+    }
 }
 
 fn bounds(points: impl IntoIterator<Item = Point>) -> Rect {
@@ -124,20 +170,24 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point, reach: f64) -> bool {
 /// Acrobat's annotation tools as one canvas tool on craft-ui's tool host.
 ///
 /// - Select: a press on an annotation selects it (Shift adds), a drag moves the selection, a
-///   drag on a handle resizes (box kinds; Shift keeps the aspect on a corner) or reshapes
-///   (pointwise kinds; Shift snaps to 45 degrees); a press on empty page starts a marquee. Moves,
-///   resizes and reshapes are `EditEvent<AnnotationEdit>` gestures; Esc cancels and the release
-///   after it is ignored.
-/// - A drawing tool: a drag draws the kind (Shift: squares, circles, 45 degree lines); PolyLine and
-///   Polygon add a point per click and end with a double click or Enter; Ink records strokes until
-///   the tool changes; Note and Text box place at the click and report `Create`, the app opens
-///   the composer. Markup kinds select page text through the app's text hit test
-///   ([`text_quads`](Self::text_quads)) and report the quads.
-/// - Eraser: a drag reports one `Erase` per Ink annotation it crosses, with the strokes in
-///   ascending order.
+///   drag on a handle of the primary (last) selected annotation resizes (box kinds; an annotation's own
+///   aspect, or Shift on a corner, keeps the ratio) or reshapes (pointwise kinds; Shift holds the segment by
+///   [`SelectOptions::shift_lock`]); a press on empty page starts a marquee. Moves, resizes and reshapes are
+///   `EditEvent<AnnotationEdit>` gestures; a move within [`SLIP_MOVE`] or a resize within [`SLIP_RESIZE`] ends
+///   as a cancel, Esc cancels and the release after it is ignored. [`SelectOptions`] names the variations.
+/// - A drawing tool: a drag draws the kind (Shift: squares, circles, 45 degree lines), and a shape smaller
+///   than [`MIN_SHAPE`] makes none; PolyLine, Polygon and Cloud add a point per click, close on a click at
+///   their first point (not PolyLine), take back their last point with Backspace and end with a double click
+///   or Enter; Ink and freehand highlight record strokes until the tool changes, or make one annotation per
+///   stroke ([`DrawOptions::ink`]). Note, Attach and Caret report `Place` at the click; Text box and Callout
+///   report `Place` for their drag; the app opens the composer. Markup kinds select page text through the
+///   app's text hit test ([`text_quads`](Self::text_quads)) and report the quads.
+/// - Eraser: a drag reports one `Erase` per Ink or freehand highlight it crosses, with the strokes in
+///   ascending order, or one `EraseAlong` with its path ([`DrawOptions::erase`]).
 /// - Keys: Delete and Backspace remove the selection, arrows nudge it (one point, Shift ten) as `Move`s.
 /// - A double click on a note or text box reports `Open`; the app's page text and selection reach the tool
-///   in [`CanvasTool::each_pass`] through the public fields.
+///   in [`CanvasTool::each_pass`] through the public fields. A click on a comment part the host shows reaches
+///   the tool through [`click`](Self::click), by the same rule.
 /// - New annotations take the tool's [`color`](Self::color) and [`width`](Self::width) (a
 ///   highlight its [`highlight_color`](Self::highlight_color)); the toolbar's controls set them.
 ///   Notes, attachments and carets are created with an icon-sized rect and keep that size on
@@ -171,6 +221,9 @@ pub struct AnnotateTool {
     strokes: Vec<Vec<Point>>,
     hover: Option<Point>,
     last_tool: AnnotationTool,
+    select_options: SelectOptions,
+    draw_options: DrawOptions,
+    caret_snap: Option<CaretSnap>,
 }
 
 impl AnnotateTool {
@@ -191,6 +244,9 @@ impl AnnotateTool {
             strokes: Vec::new(),
             hover: None,
             last_tool: tool,
+            select_options: SelectOptions::default(),
+            draw_options: DrawOptions::default(),
+            caret_snap: None,
         }
     }
 
@@ -396,72 +452,98 @@ impl Default for AnnotateTool {
 
 impl AnnotateTool {
     /// A click on a comment part handed from the page: selects (with the toggle modifiers of [`SelectOptions`]) and, on
-    /// the open count, opens.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C9
+    /// the open count, opens. The host calls it once from the part's click, never again on a later pass; the rule is
+    /// the one a press on the annotation's body runs.
     pub fn click(&mut self, id: AnnotationId, mods: Mods, clicks: u32, words: &AnnotateWords) {
-        let _ = (id, mods, clicks, words);
-        todo!("CM-C9")
+        self.select_part(id, mods, clicks, words);
     }
 
     /// The cursor over page point `at`, with the page-unit `tolerance` and `icon_side` the tool's reading holds.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C10
     pub fn cursor_at(&self, at: Point, tolerance: f64, icon_side: f64) -> Cursor {
-        let _ = (at, tolerance, icon_side);
-        todo!("CM-C10")
+        let icon = match self.tool {
+            AnnotationTool::Select => match hit(&self.annotations, self.primary(), at, tolerance, icon_side) {
+                Some(AnnotationHit::Handle(_, handle)) => handle_icon(handle),
+                // A locked annotation or a markup does not move: the press only selects it.
+                Some(AnnotationHit::Body(id)) if self.annotations.iter().any(|a| a.id == id && (a.locked || a.kind.is_markup())) => {
+                    CursorIcon::PointingHand
+                }
+                Some(AnnotationHit::Body(_)) => CursorIcon::Move,
+                None => CursorIcon::Default,
+            },
+            AnnotationTool::Draw(kind) => match self.handle_while_drawing(kind, at, tolerance, icon_side) {
+                Some((_, handle)) => handle_icon(handle),
+                None if kind == AnnotationKind::Caret => CursorIcon::Text,
+                None => CursorIcon::Crosshair,
+            },
+            AnnotationTool::Eraser => CursorIcon::Crosshair,
+        };
+        Cursor::System(icon)
     }
 
-    /// The edit the gesture in flight would report, for the host's live paint.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    /// The edit the gesture in flight would report, for the host's live paint: a move, resize or reshape once the
+    /// pointer has moved; `None` otherwise.
     pub fn in_flight(&self) -> Option<AnnotationEdit> {
-        todo!("CM-C11")
+        match &self.gesture {
+            Some(Drag::Edit { begun: true, origin, change, mods, .. }) => {
+                Some(edit_value(change, *origin, self.hover?, *mods, self.select_options.shift_lock))
+            }
+            _ => None,
+        }
     }
 
-    /// The points of the shape being drawn.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    /// The points of the PolyLine, Polygon or Cloud being clicked out; empty when none is.
     pub fn drawing(&self) -> &[Point] {
-        todo!("CM-C11")
+        &self.poly
     }
 
-    /// Ends the shape being drawn.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
-    pub fn finish_drawing(&mut self) {
-        todo!("CM-C11")
+    /// Ends the shape being drawn as Enter does: the clicked-out points, or the pending strokes, become an annotation,
+    /// reported at once.
+    pub fn finish_drawing(&mut self, words: &AnnotateWords) {
+        if let AnnotationTool::Draw(kind) = self.tool
+            && self.is_poly()
+        {
+            self.finish_poly(kind, words);
+        }
+        self.flush_ink(words);
     }
 
-    /// Takes back the last point of the shape being drawn; whether there was one.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    /// Takes back the last point of the shape being drawn; whether there was one. Taking back the last one ends the
+    /// drawing.
     pub fn undo_point(&mut self) -> bool {
-        todo!("CM-C11")
+        self.poly.pop().is_some()
     }
 
-    /// Drops the shape being drawn.
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    /// Drops the shape being drawn, the pending strokes and the gesture in flight; a move, resize or reshape that
+    /// had begun reports its cancel.
     pub fn cancel_drawing(&mut self) {
-        todo!("CM-C11")
+        self.poly.clear();
+        self.strokes.clear();
+        if let Some(Drag::Edit { id, begun: true, .. }) = self.gesture.take() {
+            // The host ended the gesture for the user (a view change, a dialog), not the user's Escape.
+            self.edits.push(EditEvent::cancel(id, CancelReason::Dismissed, None));
+        }
     }
 
-    /// Snaps a caret to the page text through `snap`: the snapped point and its size.
+    /// Snaps a caret to the page text through `snap`: the snapped tip and the caret's side, or `None` away from text,
+    /// where the caret goes at the click.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
-    pub fn caret_snap(self, snap: impl Fn(Point) -> Option<(Point, f64)> + Send + 'static) -> Self {
-        let _ = snap;
-        todo!("CM-C11")
+    pub fn caret_snap(mut self, snap: impl Fn(Point) -> Option<(Point, f64)> + Send + 'static) -> Self {
+        self.caret_snap = Some(Box::new(snap));
+        self
     }
 
     /// The tool's selection options.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C12
-    pub fn select_options(self, options: SelectOptions) -> Self {
-        let _ = options;
-        todo!("CM-C12")
+    pub fn select_options(mut self, options: SelectOptions) -> Self {
+        self.select_options = options;
+        self
     }
 
     /// The tool's drawing options.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C14
-    pub fn draw_options(self, options: DrawOptions) -> Self {
-        let _ = options;
-        todo!("CM-C14")
+    pub fn draw_options(mut self, options: DrawOptions) -> Self {
+        self.draw_options = options;
+        self
     }
 }
 
@@ -518,8 +600,118 @@ impl AnnotateTool {
         self.select(change, words);
     }
 
+    /// The primary selection, the last selected: the annotation whose handles the overlay draws and a press can take.
+    fn primary(&self) -> &[AnnotationId] {
+        let n = self.selected.len();
+        &self.selected[n.saturating_sub(1)..]
+    }
+
+    fn toggles(&self, mods: Mods) -> bool {
+        match self.select_options.toggle {
+            ToggleMods::Shift => mods.shift,
+            ToggleMods::ShiftOrCommand => mods.shift || mods.cmd,
+        }
+    }
+
+    fn opens(&self, target: AnnotationId) -> bool {
+        self.annotations.iter().any(|a| {
+            a.id == target
+                && match self.select_options.open {
+                    OpenOn::NotesAndTextBoxes => matches!(a.kind, AnnotationKind::Note | AnnotationKind::TextBox),
+                    OpenOn::Every => true,
+                }
+        })
+    }
+
+    /// The selection rule of a press on an annotation's body and of a click on its part: a second click opens it (by
+    /// [`OpenOn`]), the toggle modifiers toggle it, and a plain press on an unselected one selects only it. Returns
+    /// whether it opened.
+    fn select_part(&mut self, target: AnnotationId, mods: Mods, clicks: u32, words: &AnnotateWords) -> bool {
+        let selected = self.selected.contains(&target);
+        if clicks >= 2 && self.opens(target) {
+            if !selected {
+                self.select(SelectionChange::Set(vec![target]), words);
+            }
+            self.push(AnnotationEdit::Open(target), words.edit_open.as_str());
+            return true;
+        }
+        if self.toggles(mods) {
+            self.select(SelectionChange::Toggle(target), words);
+        } else if !selected {
+            self.select(SelectionChange::Set(vec![target]), words);
+        }
+        false
+    }
+
+    /// The handle of the primary selection under `at` that a press of the drawing tool of `kind` edits: only under
+    /// [`HandlesWhileDrawing::Edit`], for a shape or point kind, and never while a polygon is being clicked out, which
+    /// keeps its clicks.
+    fn handle_while_drawing(&self, kind: AnnotationKind, at: Point, tolerance: f64, icon_side: f64) -> Option<(AnnotationId, AnnotationHandle)> {
+        use AnnotationKind as K;
+        let edits = self.select_options.handles_while_drawing == HandlesWhileDrawing::Edit
+            && self.poly.is_empty()
+            && !matches!(kind, K::Ink | K::FreehandHighlight | K::Note | K::Attach | K::Caret)
+            && !kind.is_markup();
+        if !edits {
+            return None;
+        }
+        match hit(&self.annotations, self.primary(), at, tolerance, icon_side) {
+            Some(AnnotationHit::Handle(target, handle)) => Some((target, handle)),
+            _ => None,
+        }
+    }
+
+    /// Starts the resize or reshape of `target` through `handle`; whether the annotation was there to start it.
+    fn grab_handle(&mut self, id: GestureId, target: AnnotationId, handle: AnnotationHandle, origin: Point, mods: Mods) -> bool {
+        let Some(annotation) = self.annotations.iter().find(|a| a.id == target) else { return false };
+        let change = match handle {
+            AnnotationHandle::Box(hx, hy) => Change::Resize { target, handle: (hx, hy), from: annotation.clone() },
+            AnnotationHandle::Point(index) => Change::Reshape {
+                target,
+                index,
+                from: annotation.points.clone(),
+                callout: (annotation.kind == AnnotationKind::Callout).then_some(annotation.rect),
+            },
+        };
+        self.gesture = Some(Drag::Edit { id, begun: false, origin, change, mods });
+        true
+    }
+
+    /// Reports the placement of a new `kind`, after clearing the selection.
+    fn place(&mut self, kind: AnnotationKind, at: Point, size: Option<Vec2>, from: Option<Point>, words: &AnnotateWords) {
+        if !self.selected.is_empty() {
+            self.replace_selection(Vec::new(), words);
+        }
+        self.push(AnnotationEdit::Place(Placement { kind, page: self.page, at, size, from }), words.edit_create.as_str());
+    }
+
+    /// The end of a text box or callout drag from `origin` to `current`, both on the page.
+    fn release_place(&mut self, kind: AnnotationKind, origin: Point, current: Point, reading: &Reading) {
+        if kind == AnnotationKind::Callout {
+            // The tip is where the drag began and the box where it ended; a click or a short drag places nothing.
+            if (current - origin).hypot() >= CALLOUT_MIN_LEADER {
+                self.place(kind, current, None, Some(origin), &reading.words);
+            }
+            return;
+        }
+        let on_screen = egui::Rect::from_two_pos(reading.view.to_screen(origin), reading.view.to_screen(current));
+        if on_screen.width() >= PLACE_DRAG_MIN && on_screen.height() >= PLACE_DRAG_MIN {
+            let rect = Rect::from_points(origin, current);
+            self.place(kind, rect.origin(), Some(rect.size().to_vec2()), None, &reading.words);
+        } else {
+            // A click, or a drag of a few points: the host fits the box to its text.
+            self.place(kind, origin, None, None, &reading.words);
+        }
+    }
+
+    /// The kind the pending strokes make: that of the tool they were drawn with. [`CanvasTool::each_pass`] moves
+    /// `last_tool` on only after it has flushed them.
+    fn ink_kind(&self) -> AnnotationKind {
+        if self.last_tool == AnnotationTool::Draw(AnnotationKind::FreehandHighlight) { AnnotationKind::FreehandHighlight } else { AnnotationKind::Ink }
+    }
+
     fn fresh(&self, kind: AnnotationKind, rect: Rect) -> Annotation {
-        let markup = kind == AnnotationKind::Highlight;
+        let markup = matches!(kind, AnnotationKind::Highlight | AnnotationKind::FreehandHighlight);
         Annotation {
             id: AnnotationId::default(),
             page: self.page,
@@ -541,13 +733,13 @@ impl AnnotateTool {
         self.push(AnnotationEdit::Create(annotation), words.edit_create.as_str());
     }
 
-    /// Ends the pending Ink strokes as one annotation.
+    /// Ends the pending Ink or freehand highlight strokes as one annotation.
     fn flush_ink(&mut self, words: &AnnotateWords) {
         if self.strokes.is_empty() {
             return;
         }
         let strokes = std::mem::take(&mut self.strokes);
-        let mut annotation = self.fresh(AnnotationKind::Ink, bounds(strokes.iter().flatten().copied()));
+        let mut annotation = self.fresh(self.ink_kind(), bounds(strokes.iter().flatten().copied()));
         annotation.strokes = strokes;
         self.create(annotation, words);
     }
@@ -568,46 +760,33 @@ impl AnnotateTool {
     }
 
     fn press_select(&mut self, pointer: &ToolPointer, reading: &Reading) -> ToolAction {
-        let shift = pointer.mods.shift;
-        let found = hit(&self.annotations, &self.selected, reading.at, reading.tolerance, reading.icon_side);
-        let locked = |id: AnnotationId, list: &[Annotation]| list.iter().any(|a| a.id == id && a.locked);
         let Some(id) = reading.gesture else { return ToolAction::Ignored };
-        let edit = |change: Change| Drag::Edit { id, begun: false, origin: reading.at, change };
-        match found {
-            Some(AnnotationHit::Handle(target, AnnotationHandle::Box(hx, hy))) => {
-                let from = self.annotations.iter().find(|a| a.id == target).map_or(Rect::ZERO, |a| a.rect);
-                self.gesture = Some(edit(Change::Resize { target, handle: (hx, hy), from }));
-            }
-            Some(AnnotationHit::Handle(target, AnnotationHandle::Point(index))) => {
-                let from = self.annotations.iter().find(|a| a.id == target).map(|a| a.points.clone()).unwrap_or_default();
-                self.gesture = Some(edit(Change::Reshape { target, index, from }));
+        match hit(&self.annotations, self.primary(), reading.at, reading.tolerance, reading.icon_side) {
+            Some(AnnotationHit::Handle(target, handle)) => {
+                if !self.grab_handle(id, target, handle, reading.at, pointer.mods) {
+                    return ToolAction::Ignored;
+                }
             }
             Some(AnnotationHit::Body(target)) => {
-                let selected = self.selected.contains(&target);
-                if pointer.clicks >= 2 {
-                    // A second click on a note or text box asks the app to open its text.
-                    let opens = self.annotations.iter().any(|a| a.id == target && matches!(a.kind, AnnotationKind::Note | AnnotationKind::TextBox));
-                    if opens {
-                        if !selected {
-                            self.select(SelectionChange::Set(vec![target]), &reading.words);
-                        }
-                        self.push(AnnotationEdit::Open(target), reading.words.edit_open.as_str());
-                        return ToolAction::Done;
-                    }
+                let markup = self.annotations.iter().any(|a| a.id == target && a.kind.is_markup());
+                if markup && self.select_options.markup_press == MarkupPress::ClickOnly {
+                    // The host's text selection takes the drag; the click reaches the tool through `click`.
+                    return ToolAction::Ignored;
                 }
-                if shift {
-                    self.select(SelectionChange::Toggle(target), &reading.words);
-                } else if !selected {
-                    self.select(SelectionChange::Set(vec![target]), &reading.words);
+                if self.select_part(target, pointer.mods, pointer.clicks, &reading.words) {
+                    return ToolAction::Done;
                 }
-                let ids: Vec<AnnotationId> = self.selected.iter().copied().filter(|s| !locked(*s, &self.annotations)).collect();
+                let ids = self.editable();
                 if !ids.is_empty() {
-                    self.gesture = Some(edit(Change::Move { ids }));
+                    self.gesture = Some(Drag::Edit { id, begun: false, origin: reading.at, change: Change::Move { ids }, mods: pointer.mods });
                 }
             }
-            None => {
-                self.gesture = Some(Drag::Marquee { origin: reading.at, current: reading.at, additive: shift });
-            }
+            None => match self.select_options.empty_press {
+                EmptyPress::Marquee => {
+                    self.gesture = Some(Drag::Marquee { origin: reading.at, current: reading.at, additive: self.toggles(pointer.mods) });
+                }
+                EmptyPress::PassThrough => return ToolAction::Ignored,
+            },
         }
         ToolAction::Claimed
     }
@@ -615,23 +794,46 @@ impl AnnotateTool {
     fn press_draw(&mut self, kind: AnnotationKind, pointer: &ToolPointer, reading: &Reading) -> ToolAction {
         use AnnotationKind as K;
         let at = reading.at;
+        if let Some((target, handle)) = self.handle_while_drawing(kind, at, reading.tolerance, reading.icon_side)
+            && let Some(id) = reading.gesture
+            && self.grab_handle(id, target, handle, at, pointer.mods)
+        {
+            return ToolAction::Claimed;
+        }
+        // A placement off the page places nothing; the annotations under it do not matter.
+        let on_page = reading.page.is_none_or(|page| page.contains(at));
         match kind {
             K::Note | K::Attach | K::Caret => {
-                let mut annotation = self.fresh(kind, Rect::from_origin_size(at, (reading.icon_side, reading.icon_side)));
-                annotation.points = vec![at];
-                self.create(annotation, &reading.words);
+                if !on_page {
+                    return ToolAction::Ignored;
+                }
+                let snapped = if kind == K::Caret { self.caret_snap.as_ref().and_then(|snap| snap(at)) } else { None };
+                let (at, size) = snapped.map_or((at, None), |(tip, side)| (tip, Some(Vec2::new(side, side))));
+                self.place(kind, at, size, None, &reading.words);
                 ToolAction::Done
             }
+            K::TextBox | K::Callout => {
+                if !on_page {
+                    return ToolAction::Ignored;
+                }
+                self.gesture = Some(Drag::Place { kind, origin: at, current: at });
+                ToolAction::Claimed
+            }
             K::PolyLine | K::Polygon | K::Cloud => {
-                if pointer.clicks >= 2 {
-                    // The double click's first press already added its point.
+                let closes = kind != K::PolyLine && self.poly.len() >= 3 && self.poly.first().is_some_and(|&first| (first - at).hypot() <= reading.tolerance);
+                if pointer.clicks >= 2 || closes {
+                    // The double click's first press already added its point; a click on the first point closes the
+                    // shape without adding one.
                     self.finish_poly(kind, &reading.words);
                 } else {
-                    self.poly.push(at);
+                    let repeat = reading.view.doc_len(REPEAT_POINT);
+                    if !self.poly.last().is_some_and(|&last| (last - at).hypot() < repeat) {
+                        self.poly.push(at);
+                    }
                 }
                 ToolAction::Done
             }
-            K::Ink => {
+            K::Ink | K::FreehandHighlight => {
                 self.gesture = Some(Drag::Stroke(vec![at]));
                 ToolAction::Claimed
             }
@@ -651,7 +853,7 @@ impl AnnotateTool {
         match kind {
             K::Line | K::Arrow => {
                 let end = if shift { turn_to_45(origin, current) } else { current };
-                if end == origin {
+                if (end - origin).hypot() < MIN_SHAPE {
                     return None;
                 }
                 let mut annotation = self.fresh(kind, bounds([origin, end]));
@@ -661,7 +863,7 @@ impl AnnotateTool {
             _ => {
                 let end = if shift { squared(origin, current) } else { current };
                 let rect = Rect::from_points(origin, end);
-                (rect.width() > 0.0 && rect.height() > 0.0).then(|| self.fresh(kind, rect))
+                (rect.width() >= MIN_SHAPE && rect.height() >= MIN_SHAPE).then(|| self.fresh(kind, rect))
             }
         }
     }
@@ -682,17 +884,35 @@ impl AnnotateTool {
     }
 }
 
-/// The value a move, resize or reshape gesture reports with the pointer at `at`.
-fn edit_value(change: &Change, origin: Point, at: Point, mods: Mods) -> AnnotationEdit {
+/// The value a move, resize or reshape gesture reports with the pointer at `at`; `lock` is the Shift rule of a point
+/// drag ([`SelectOptions::shift_lock`]).
+fn edit_value(change: &Change, origin: Point, at: Point, mods: Mods, lock: ShiftLock) -> AnnotationEdit {
     match change {
         Change::Move { ids } => AnnotationEdit::Move { ids: ids.clone(), delta: at - origin },
         Change::Resize { target, handle, from } => {
-            let aspect = (mods.shift && from.height() > 0.0).then(|| from.width() / from.height());
-            AnnotationEdit::Resize { id: *target, rect: resized(*from, *handle, at - origin, aspect) }
+            let aspect = corner_aspect(from, from.rect, mods.shift);
+            AnnotationEdit::Resize { id: *target, rect: resized(from.rect, *handle, at - origin, aspect) }
         }
-        Change::Reshape { target, index, from } => {
-            AnnotationEdit::Reshape { id: *target, points: reshaped(from, *index, at, mods.shift.then_some(ShiftLock::Angle45)) }
-        } // P3(pdf-comments-w2): CM-C5
+        Change::Reshape { target, index, from, callout } => {
+            let lock = mods.shift.then_some(lock);
+            let points = match callout {
+                Some(rect) => callout_reshaped(*rect, from, *index, at, lock),
+                None => reshaped(from, *index, at, lock),
+            };
+            AnnotationEdit::Reshape { id: *target, points }
+        }
+    }
+}
+
+/// Whether a released move or resize came to rest within its slip of where it began: a move of at most
+/// [`SLIP_MOVE`], a resize whose corners each moved at most [`SLIP_RESIZE`]. A reshape always counts.
+fn slipped(change: &Change, value: &AnnotationEdit) -> bool {
+    match (change, value) {
+        (Change::Move { .. }, AnnotationEdit::Move { delta, .. }) => delta.hypot() <= SLIP_MOVE,
+        (Change::Resize { from, .. }, AnnotationEdit::Resize { rect, .. }) => {
+            corners(from.rect.abs()).into_iter().zip(corners(rect.abs())).all(|(was, now)| (now - was).hypot() <= SLIP_RESIZE)
+        }
+        _ => false,
     }
 }
 
@@ -713,10 +933,11 @@ impl CanvasTool for AnnotateTool {
         }
     }
 
-    fn cursor(&self, _cx: &ToolContext<'_>) -> Cursor {
-        match self.tool {
-            AnnotationTool::Select => Cursor::System(CursorIcon::Default),
-            AnnotationTool::Draw(_) | AnnotationTool::Eraser => Cursor::System(CursorIcon::Crosshair),
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        match cx.pointer.as_ref().and_then(|pointer| read(cx, pointer.pos)) {
+            Some(reading) => self.cursor_at(reading.at, reading.tolerance, reading.icon_side),
+            None if self.tool == AnnotationTool::Select => Cursor::System(CursorIcon::Default),
+            None => Cursor::System(CursorIcon::Crosshair),
         }
     }
 
@@ -735,21 +956,26 @@ impl CanvasTool for AnnotateTool {
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some(reading) = read(cx, pointer.pos) else { return };
+        let lock = self.select_options.shift_lock;
+        let by_strokes = self.draw_options.erase == EraseMode::Strokes;
         let Some(gesture) = self.gesture.as_mut() else { return };
         let mut events = Vec::new();
         match gesture {
-            Drag::Edit { id, begun, origin, change } => {
+            Drag::Edit { id, begun, origin, change, mods } => {
+                *mods = pointer.mods;
                 if !*begun {
                     *begun = true;
                     events.push(EditEvent::begin(*id, Mixed::Mixed, Arc::from(edit_label(change, &reading.words)), None));
                 }
-                events.push(EditEvent::update(*id, edit_value(change, *origin, reading.at, pointer.mods)));
+                events.push(EditEvent::update(*id, edit_value(change, *origin, reading.at, *mods, lock)));
             }
             Drag::Marquee { current, .. } | Drag::Shape { current, .. } | Drag::Markup { current, .. } => *current = reading.at,
+            Drag::Place { current, .. } => *current = clamp_to(reading.page, reading.at),
             Drag::Stroke(points) => points.push(reading.at),
+            Drag::Erase { path, .. } if !by_strokes => path.push(reading.at),
             Drag::Erase { path, crossed } => {
                 let last = path.last().copied().unwrap_or(reading.at);
-                for a in self.annotations.iter().filter(|a| a.kind == AnnotationKind::Ink && !a.locked) {
+                for a in self.annotations.iter().filter(|a| erasable(a)) {
                     for (i, stroke) in a.strokes.iter().enumerate() {
                         let reach = reading.tolerance + a.stroke_width / 2.0;
                         let hits = stroke.windows(2).any(|w| segments_cross(last, reading.at, w[0], w[1], reach))
@@ -773,10 +999,22 @@ impl CanvasTool for AnnotateTool {
         let words = Arc::clone(&reading.words);
         let mods = pointer.mods;
         match gesture {
-            Drag::Edit { id, begun, origin, change } => {
+            Drag::Edit { id, begun, origin, change, .. } => {
+                // A press that never moved (a click) began no gesture and reports nothing. One that moved and came to
+                // rest within its slip ends as a cancel: the annotation stays where it was.
                 if begun {
-                    self.edits.push(EditEvent::commit(id, Mixed::Mixed, edit_value(&change, origin, reading.at, mods)));
+                    let value = edit_value(&change, origin, reading.at, mods, self.select_options.shift_lock);
+                    if slipped(&change, &value) {
+                        self.edits.push(EditEvent::cancel(id, CancelReason::Unchanged, None));
+                    } else {
+                        self.edits.push(EditEvent::commit(id, Mixed::Mixed, value));
+                    }
                 }
+            }
+            Drag::Place { kind, origin, .. } => {
+                // The release point rather than the last drag sample, so a click (no drag) places at the press.
+                let current = clamp_to(reading.page, reading.at);
+                self.release_place(kind, origin, current, &reading);
             }
             Drag::Marquee { origin, additive, .. } => {
                 let area = Rect::from_points(origin, reading.at);
@@ -810,7 +1048,23 @@ impl CanvasTool for AnnotateTool {
                     self.create(annotation, &words);
                 }
             }
-            Drag::Stroke(points) => self.strokes.push(points),
+            Drag::Stroke(points) => match self.draw_options.ink {
+                InkStrokes::Session => self.strokes.push(points),
+                InkStrokes::PerStroke => {
+                    // A click leaves a one-point stroke: a dot, which MIN_SHAPE does not drop.
+                    let mut annotation = self.fresh(self.ink_kind(), bounds(points.iter().copied()));
+                    annotation.strokes = vec![points];
+                    self.create(annotation, &words);
+                }
+            },
+            Drag::Erase { path, .. } if self.draw_options.erase == EraseMode::Path => {
+                let radius = reading.view.doc_len(self.draw_options.eraser_radius);
+                let reach = bounds(path.iter().copied()).inflate(radius, radius);
+                let ids: Vec<AnnotationId> = self.annotations.iter().filter(|a| erasable(a) && overlaps(a.rect, reach)).map(|a| a.id).collect();
+                if !ids.is_empty() {
+                    self.push(AnnotationEdit::EraseAlong { ids, path, radius }, words.edit_erase.as_str());
+                }
+            }
             Drag::Erase { crossed, .. } => {
                 // One event per annotation, in the order the Eraser met them: an app that removes
                 // strokes by index must not see the same annotation twice.
@@ -857,6 +1111,8 @@ impl CanvasTool for AnnotateTool {
                 self.flush_ink(&words);
                 true
             }
+            // While a shape is being clicked out, Backspace and Delete take back its last point, not the selection.
+            ToolKey::Delete { .. } if self.is_poly() && !self.poly.is_empty() => self.undo_point(),
             ToolKey::Delete { .. } if self.tool == AnnotationTool::Select => {
                 let ids = self.editable();
                 if ids.is_empty() {
@@ -868,10 +1124,14 @@ impl CanvasTool for AnnotateTool {
             ToolKey::Nudge { direction, mods, .. } if self.tool == AnnotationTool::Select => {
                 let ids = self.editable();
                 let Some(space) = cx.space() else { return false };
-                if ids.is_empty() || !(mods.is_none() || *mods == Mods::SHIFT) {
+                // Shift, and Command under `FarNudge::ShiftOrCommand`, take the far step; any other modifier (Alt)
+                // leaves the arrow to the app.
+                let command = self.select_options.far_nudge == FarNudge::ShiftOrCommand;
+                let others = Mods { shift: false, cmd: mods.cmd && !command, ..*mods };
+                if ids.is_empty() || !others.is_none() {
                     return false;
                 }
-                let step = if mods.shift { NUDGE_FAR } else { NUDGE };
+                let step = if mods.shift || (command && mods.cmd) { NUDGE_FAR } else { NUDGE };
                 let along = space.view.unmap_vec(*direction);
                 if along.hypot() == 0.0 {
                     return false;
@@ -884,7 +1144,13 @@ impl CanvasTool for AnnotateTool {
     }
 
     fn claims(&self) -> ToolClaims {
-        if self.tool == AnnotationTool::Select && !self.editable().is_empty() { ToolClaims::NONE.deletes().nudges() } else { ToolClaims::NONE }
+        if self.is_poly() && !self.poly.is_empty() {
+            ToolClaims::NONE.deletes()
+        } else if self.tool == AnnotationTool::Select && !self.editable().is_empty() {
+            ToolClaims::NONE.deletes().nudges()
+        } else {
+            ToolClaims::NONE
+        }
     }
 
     /// In Select, the annotations the arrows move: their kinds and the bounds round them.
@@ -934,6 +1200,10 @@ impl CanvasTool for AnnotateTool {
                     }
                 }
             }
+            Some(Drag::Place { kind: AnnotationKind::Callout, origin, current }) => {
+                outline(screen(&[*origin, *current]), false, drawn(AnnotationKind::Callout));
+            }
+            Some(Drag::Place { kind, origin, current }) => outline(screen(&corners(Rect::from_points(*origin, *current))), true, drawn(*kind)),
             Some(Drag::Markup { kind, origin, current }) => {
                 if let Some(quads) = self.text_quads.as_ref() {
                     for quad in quads(*origin, *current) {
@@ -941,12 +1211,16 @@ impl CanvasTool for AnnotateTool {
                     }
                 }
             }
-            Some(Drag::Stroke(points)) => outline(screen(points), false, drawn(AnnotationKind::Ink)),
+            Some(Drag::Stroke(points)) => outline(screen(points), false, drawn(self.ink_kind())),
+            Some(Drag::Erase { path, .. }) if self.draw_options.erase == EraseMode::Path => {
+                // The swath the eraser rubs, as wide on screen as its reach at any zoom.
+                cx.swath(&screen(path), 2.0 * self.draw_options.eraser_radius);
+            }
             Some(Drag::Erase { path, .. }) => cx.marching_ants(&screen(path), false),
             Some(Drag::Edit { .. }) | None => {}
         }
         for stroke in &self.strokes {
-            outline(screen(stroke), false, drawn(AnnotationKind::Ink));
+            outline(screen(stroke), false, drawn(self.ink_kind()));
         }
         if let AnnotationTool::Draw(kind) = self.tool
             && self.is_poly()
@@ -968,7 +1242,7 @@ impl CanvasTool for AnnotateTool {
                 ToolPath::Command("the arrow keys nudge and Delete removes the selection; the New Annotation... command places shapes")
             }
             AnnotationTool::Eraser => ToolPath::Freehand("none; Delete removes the selected annotation"),
-            AnnotationTool::Draw(AnnotationKind::Ink) => ToolPath::Freehand("none; a pen stroke has no numeric form"),
+            AnnotationTool::Draw(AnnotationKind::Ink | AnnotationKind::FreehandHighlight) => ToolPath::Freehand("none; a pen stroke has no numeric form"),
             AnnotationTool::Draw(kind) if kind.is_markup() => ToolPath::Freehand("none; a markup stroke follows the pointer over the text"),
             AnnotationTool::Draw(_) => ToolPath::Command("the New Annotation... command"),
         }

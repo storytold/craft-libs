@@ -43,7 +43,7 @@ pub use icon::{Glyph, IconSet, IconSource, IconSpec, Mirror, has_icon, icon_name
 pub use ime_surface::ImeSurface;
 pub use kit::{
     Checker, CheckerArea, GridAxis, GridInk, GridLines, GridLook, GridStroke, MAX_LINES, Tick, TickEdge, TickRank, dashed, drop_mark, ellipse,
-    fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
+    fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, swath, ticks,
 };
 pub use marker::{Marker, MarkerSize};
 pub use paint_slot::PaintSlot;

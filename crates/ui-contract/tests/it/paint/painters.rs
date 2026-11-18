@@ -130,6 +130,25 @@ fn an_edge_rule_lies_on_the_pixels_just_inside_its_side_at_any_scale() {
     }
 }
 
+/// A swath is painted in the theme's text-selection fill, line and dots alike.
+#[trial]
+fn a_swath_takes_the_text_selection_fill() {
+    use craft_theme::{Contrast, Mode};
+    use egui::Shape;
+
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let want = craft_ui::style::rgba_color(tokens.color.state.text_selection);
+    let shapes = craft_ui::primitives::swath(&tokens, &[pos2(10.0, 10.0), pos2(50.0, 20.0)], 8.0);
+    assert_eq!(shapes.len(), 3, "a line and a dot at each of its two points: {shapes:?}");
+    for shape in &shapes {
+        match shape {
+            Shape::Path(path) => assert_eq!(path.stroke.color, egui::epaint::ColorMode::Solid(want)),
+            Shape::Circle(dot) => assert_eq!(dot.fill, want),
+            other => panic!("unexpected shape {other:?}"),
+        }
+    }
+}
+
 #[trial]
 fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
     use craft_theme::{Contrast, Mode};
