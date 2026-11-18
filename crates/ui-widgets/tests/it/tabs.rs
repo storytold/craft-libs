@@ -581,21 +581,26 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     discard.set(false);
     assert_eq!(fixture.passes(), 2, "the frame the tab leaves in runs two passes");
     let painted = |fixture: &Fixture| fixture.texts().iter().any(|text| text.text == RIBBON[TABLE]);
+    // Checked only in frames that paint the fade: the fade is the Open motion, so the clicks below may outlast it.
+    let still = |fixture: &Fixture| hidden.iter().all(|name| tab_rects(fixture.tree(), name).is_empty());
     assert!(painted(&fixture), "the departed tab fades at its slot after a frame of two passes");
     assert!(fixture.by_label(RIBBON[TABLE]).is_none(), "the departed tab has no node");
+    assert!(still(&fixture), "no plain tab moves into the slot while the departed tab fades: {hidden:?}");
 
     fixture.key(Key::ArrowDown, Modifiers::ALT);
     assert!(hidden.iter().all(|name| fixture.by_label(name).is_some()), "the overflow menu is open and lists the plain tabs: {hidden:?}");
     assert!(fixture.by_label(RIBBON[TABLE]).is_none(), "the overflow menu does not list the departed tab");
     assert!(painted(&fixture), "the departed tab is still fading");
     fixture.key(Key::Escape, Modifiers::NONE);
+    assert!(painted(&fixture) && still(&fixture), "no plain tab moves into the slot while the departed tab fades: {hidden:?}");
 
     picked.borrow_mut().clear();
     fixture.click_at(table.center());
     assert!(picked.borrow().is_empty(), "a click on the departed tab's slot selects nothing: {:?}", picked.borrow());
-    assert!(
-        hidden.iter().all(|name| tab_rects(fixture.tree(), name).is_empty()),
-        "no plain tab moves into the slot while the departed tab fades: {hidden:?}"
+    eprintln!(
+        "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: after the click painted={} tabs back={:?}",
+        painted(&fixture),
+        hidden.iter().filter(|name| !tab_rects(fixture.tree(), name).is_empty()).collect::<Vec<_>>()
     );
     fixture.idle(30);
     assert!(!painted(&fixture), "the departed tab is gone once the fade ends");
