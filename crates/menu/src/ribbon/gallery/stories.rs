@@ -26,7 +26,7 @@ fn name(at: usize) -> Label {
 }
 
 /// A gallery of pictures from `Picture`'s store, one of the stories' photos each.
-fn pictured(ui: &mut Ui, more: GalleryMore<'_>) -> StoryOutput {
+fn pictured(ui: &mut Ui) -> StoryOutput {
     let images: Vec<Box<dyn Fn() -> egui::ColorImage>> =
         (0..COUNT).map(|at| Box::new(move || sample_picture(at as u64, [48, 48])) as Box<dyn Fn() -> egui::ColorImage>).collect();
     let items: Vec<GalleryItem<'_, usize>> = images
@@ -35,12 +35,12 @@ fn pictured(ui: &mut Ui, more: GalleryMore<'_>) -> StoryOutput {
         .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
         .collect();
     let current = 2;
-    Gallery::new("Styles", &items, Some(&current)).tiles(6, 3).more(more).show(ui).into()
+    Gallery::new("Styles", &items, Some(&current)).tiles(6, 3).more(GalleryMore::Grid).show(ui).into()
 }
 
 #[story(Gallery<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn gallery(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    pictured(ui, GalleryMore::Grid)
+    pictured(ui)
 }
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
@@ -50,7 +50,7 @@ fn gallery_compact(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         |set| {
             set.values.set(GroupLevel::Compact);
         },
-        |ui| pictured(ui, GalleryMore::Grid),
+        |ui| pictured(ui),
     )
 }
 
@@ -64,7 +64,7 @@ fn step_down(fixture: &mut Fixture) {
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Custom(step_down))]
 fn gallery_stepped(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    pictured(ui, GalleryMore::Grid)
+    pictured(ui)
 }
 
 /// Clicks More: the popover with the whole list opens.
@@ -77,7 +77,7 @@ fn open_more(fixture: &mut Fixture) {
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Custom(open_more))]
 fn gallery_more_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    pictured(ui, GalleryMore::Grid)
+    pictured(ui)
 }
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
@@ -112,6 +112,6 @@ fn gallery_rtl(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     with_env(
         ui,
         |set| set.direction = Some(craft_i18n::Direction::Rtl),
-        |ui| pictured(ui, GalleryMore::Grid),
+        |ui| pictured(ui),
     )
 }
