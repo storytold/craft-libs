@@ -1,6 +1,5 @@
 //! The synced pair: the caption band over each half and the room left to its view.
 
-
 use craft_i18n::Direction;
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{Lead, PageView, PageViewState, SyncedViews, SyncedViewsState};
@@ -45,7 +44,10 @@ fn captions_sit_over_each_half_and_the_view_takes_the_rest() {
 
         // The left half reads first: on the left, or on the right in a right-to-left interface.
         let ((first, first_view), (second, second_view)) = if rtl { ((new, new_view), (old, old_view)) } else { ((old, old_view), (new, new_view)) };
-        assert!(first_view.max.x < second_view.min.x, "the divider lies between the views ({direction:?}): {first_view:?} {second_view:?}");
+        assert!(
+            (first_view.max.x - second_view.min.x).abs() < 0.5,
+            "the divider sits at the boundary of the two contiguous views ({direction:?}): {first_view:?} {second_view:?}"
+        );
         assert!(first.max.x <= second_view.min.x && second.min.x >= first_view.max.x, "the captions lie either side of the divider ({direction:?})");
 
         for (name, caption, view) in [("Old", old, old_view), ("New", new, new_view)] {
@@ -53,7 +55,10 @@ fn captions_sit_over_each_half_and_the_view_takes_the_rest() {
             assert!(caption.min.y >= room.min.y && caption.max.y <= view.min.y, "{name}'s caption sits above its view, clear of it ({direction:?})");
             let band = view.min.y - room.min.y;
             assert!(band > caption.height(), "{name}'s band pads its caption ({direction:?}): band {band}, caption {caption:?}");
-            assert!((band + view.height() - room.height()).abs() < 0.5, "{name}'s band and view share the room ({direction:?}): {view:?} in {room:?}");
+            assert!(
+                (band + view.height() - room.height()).abs() < 0.5,
+                "{name}'s band and view share the room ({direction:?}): {view:?} in {room:?}"
+            );
         }
     }
 }

@@ -102,7 +102,7 @@ impl<'a> SyncedViews<'a> {
         self
     }
 
-    /// Splits the room in two halves (`SplitViews`, its divider and gap) and runs `half` for each, the leader first.
+    /// Splits the room in two halves (`SplitViews`, its divider on the boundary of the two panes) and runs `half` for each, the leader first.
     /// With [`captions`](Self::captions) each half shows its caption band at its top and `half` gets the rect under it.
     // pdfcraft: crates/ui-egui/src/workflows/compare_ui.rs:344 `compare_area`.
     pub fn halves(
