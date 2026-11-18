@@ -297,8 +297,11 @@ pub struct ConnectorGeom {
 impl ConnectorGeom {
     /// Every adjust value's default (the middle).
     pub const DEFAULT_ADJ: i32 = 50_000;
-    /// Adjust values further out than a hundred frames are clamped: a file can hold anything.
-    pub const MAX_ADJ: i64 = 10_000_000;
+    /// The furthest an adjust value is kept from 0. The file's value is kept as it is up to what
+    /// an `i32` holds: a connector Word draws in a frame a fraction of a point wide routes its legs
+    /// with values far outside 0..100000, so a tighter limit would move them (review). A file can
+    /// hold larger numbers still, which are clamped here.
+    pub const MAX_ADJ: i64 = i32::MAX as i64;
 
     /// How many adjust values `preset` takes.
     pub fn adj_count(preset: u8) -> usize {
@@ -560,7 +563,8 @@ mod tests {
         let raw = |preset, adj: Vec<i32>| ConnectorGeom { preset, adj };
         assert_eq!(raw(2, vec![25000]).normalized(), Some(raw(2, vec![])));
         assert_eq!(raw(9, vec![1, 2, 3, 4]).normalized(), Some(raw(5, vec![1, 2, 3])));
-        assert_eq!(raw(4, vec![i32::MAX]).normalized(), Some(raw(4, vec![10_000_000, 50000])));
+        assert_eq!(raw(4, vec![i32::MAX]).normalized(), Some(raw(4, vec![i32::MAX, 50000])), "every i32 value is kept");
+        assert_eq!(raw(3, vec![i32::MIN]).normalized(), Some(raw(3, vec![-i32::MAX])));
         assert_eq!(raw(3, vec![50000]).normalized(), None, "the default");
     }
 
@@ -571,7 +575,8 @@ mod tests {
         assert_eq!(ConnectorGeom::new(3, [None, Some(1)]), None, "an extra value is dropped");
         assert_eq!(ConnectorGeom::new(4, [None, Some(1)]), Some(ConnectorGeom { preset: 4, adj: vec![50000, 1] }));
         assert_eq!(ConnectorGeom::new(9, []).map(|g| g.preset), Some(5), "clamped to 2..=5");
-        assert_eq!(ConnectorGeom::new(3, [Some(i64::MIN)]).unwrap().adj, [-10_000_000]);
+        assert_eq!(ConnectorGeom::new(3, [Some(i64::MIN)]).unwrap().adj, [-i32::MAX]);
+        assert_eq!(ConnectorGeom::new(3, [Some(15_000_000)]).unwrap().adj, [15_000_000], "a narrow frame's far leg");
     }
     use crate::para::{Float, GroupChild};
 

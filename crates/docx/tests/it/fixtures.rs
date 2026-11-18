@@ -2901,6 +2901,7 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
         geom("bentConnector5", &format!("{}{}{}", gd(1, 25000), gd(2, 75000), gd(3, 60000))),
         geom("curvedConnector4", ""),
         geom("bentConnector4", &gd(1, 9_000_000_000)),
+        geom("bentConnector3", &gd(1, 15_000_000)),
     ]
     .iter()
     .map(|sppr| anchored_wsp("Connector", 2540000, 1270000, sppr, "", "<wps:cNvCnPr/>"))
@@ -2926,7 +2927,9 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
         (elbow, Some((4, vec![50000, 80000]))),
         (elbow, Some((5, vec![25000, 75000, 60000]))),
         (curved, Some((4, vec![50000, 50000]))),
-        (elbow, Some((4, vec![10_000_000, 50000]))),
+        (elbow, Some((4, vec![i32::MAX, 50000]))),
+        // a leg far outside the frame, as Word routes one in a frame a fraction of a point wide
+        (elbow, Some((3, vec![15_000_000]))),
     ];
     let d = read_body(&format!("<w:p>{body}</w:p>"));
     assert_eq!(geoms(&d), expected);
@@ -2939,6 +2942,9 @@ fn connector_presets_and_adjust_values_are_read_and_saved() {
         "{xml}"
     );
     assert!(xml.contains(r#"<a:prstGeom prst="bentConnector2"><a:avLst/></a:prstGeom>"#), "{xml}");
+    // The two default elbows are written with no guides, not with adj1 50000 (review).
+    assert_eq!(xml.matches(r#"<a:prstGeom prst="bentConnector3"><a:avLst/></a:prstGeom>"#).count(), 2, "{xml}");
+    assert!(xml.contains(r#"<a:prstGeom prst="bentConnector3"><a:avLst><a:gd name="adj1" fmla="val 15000000"/></a:avLst></a:prstGeom>"#), "{xml}");
     assert_eq!(geoms(&craft_docx::read(&bytes).unwrap()), expected);
     // Geometry from a document's JSON skips ConnectorGeom::new; the writer normalizes it, so a
     // preset that takes no adjust values gets none, and an out-of-range preset its nearest
