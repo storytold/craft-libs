@@ -590,3 +590,55 @@ fn a_part_a_chunk_could_not_read_is_listed_with_the_chunk() {
     let d = read_with(&bytes, &ReadOptions { chunks: Some(&import), ..Default::default() }).unwrap();
     assert_eq!(d.skipped_parts, vec!["word/afchunk.htm > word/media/image1.png".to_string()]);
 }
+
+/// Shading and text effects our style gives and the chunk's doesn't are taken off the chunk's last
+/// paragraph, as Word takes them off (Word for Windows, these documents: an automatic `w:shd`, a
+/// glow of radius 0, and so on); a paragraph of ours in the style keeps them.
+#[test]
+fn a_match_src_chunks_last_paragraph_takes_off_the_shading_and_effects_only_our_style_gives() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let ours = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="0000FF"/><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow><w14:textFill {W14}><w14:solidFill><w14:srgbClr w14:val="FF0000"/></w14:solidFill></w14:textFill></w:rPr></w:style>"#
+    );
+    let theirs = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/></w:style>"#;
+    let chunk = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>ChunkLast</w:t></w:r></w:p>"#;
+    let inner = package_styled(chunk, None, Some(theirs));
+    let sub = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>HostSub</w:t></w:r></w:p>"#;
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>{sub}"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(&ours))).unwrap();
+    let look = |i: usize| {
+        let Block::Para(p) = &*d.body[i] else { panic!("{:?}", d.body[i]) };
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        (p.props.style.clone(), c.shading, c.text_effects.is_some())
+    };
+    assert_eq!(look(1), (Some("Subtitle".into()), None, false), "the chunk's last paragraph");
+    assert_eq!(look(2), (Some("Subtitle".into()), Some(craft_wordmodel::Rgb(0, 0, 0xFF)), true), "ours");
+    // Saved and read back, the same.
+    let again = read(&craft_docx::write(&d).unwrap()).unwrap();
+    let Block::Para(p) = &*again.body[1] else { panic!() };
+    let c = again.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((c.shading, c.text_effects.is_some()), (None, false));
+}
+
+/// What Word writes to take a style's shading and effects off a run (this XML is Word's, from such
+/// a chunk's last paragraph) draws none of them, and survives a save.
+#[test]
+fn words_own_way_of_taking_a_styles_shading_and_effects_off_draws_none() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let styles = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Fx"><w:name w:val="Fx"/><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="0000FF"/><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow><w14:shadow {W14} w14:blurRad="38100" w14:dist="19050" w14:dir="2700000" w14:sx="100000" w14:sy="100000" w14:kx="0" w14:ky="0" w14:algn="tl"><w14:srgbClr w14:val="000000"/></w14:shadow><w14:reflection {W14} w14:blurRad="6350" w14:stA="55000" w14:stPos="0" w14:endA="300" w14:endPos="45500" w14:dist="0" w14:dir="5400000" w14:fadeDir="5400000" w14:sx="100000" w14:sy="-100000" w14:kx="0" w14:ky="0" w14:algn="bl"/><w14:textOutline {W14} w14:w="9525" w14:cap="rnd" w14:cmpd="sng" w14:algn="ctr"><w14:solidFill><w14:srgbClr w14:val="00B050"/></w14:solidFill></w14:textOutline></w:rPr></w:style>"#
+    );
+    let run = format!(
+        r#"<w:p><w:pPr><w:pStyle w:val="Fx"/></w:pPr><w:r><w:rPr><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w14:glow {W14} w14:rad="0"><w14:srgbClr w14:val="000000"/></w14:glow><w14:shadow {W14} w14:blurRad="0" w14:dist="0" w14:dir="0" w14:sx="0" w14:sy="0" w14:kx="0" w14:ky="0" w14:algn="none"><w14:srgbClr w14:val="000000"/></w14:shadow><w14:reflection {W14} w14:blurRad="0" w14:stA="0" w14:stPos="0" w14:endA="0" w14:endPos="0" w14:dist="0" w14:dir="0" w14:fadeDir="0" w14:sx="0" w14:sy="0" w14:kx="0" w14:ky="0" w14:algn="none"/><w14:textOutline {W14} w14:w="0" w14:cap="rnd" w14:cmpd="sng" w14:algn="ctr"><w14:noFill/></w14:textOutline></w:rPr><w:t>Plain</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Fx"/></w:pPr><w:r><w:t>Styled</w:t></w:r></w:p>"#
+    );
+    let d = read(&package_styled(&run, None, Some(&styles))).unwrap();
+    for (when, d) in [("read", d.clone()), ("after a save", read(&craft_docx::write(&d).unwrap()).unwrap())] {
+        let look = |i: usize| {
+            let Block::Para(p) = &*d.body[i] else { panic!() };
+            let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+            (c.shading.is_some(), c.text_effects.map(|t| (t.glow.is_some(), t.shadow.is_some(), t.reflection.is_some(), t.outline.is_some())))
+        };
+        assert_eq!(look(0), (false, None), "{when}: the run that takes them off");
+        assert_eq!(look(1), (true, Some((true, true, true, true))), "{when}: the style's own");
+    }
+}

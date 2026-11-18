@@ -332,6 +332,10 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// `Some(true)`: no shading, over any the styles give (`w:shd` with an automatic fill, as
+    /// Word writes to take a style's shading off a run). Overlaid, it clears the shading below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shading_auto: Option<bool>,
     /// Character border (`w:bdr`); `style: None` = explicitly no border.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border: Option<Border>,
@@ -583,6 +587,7 @@ impl CharProps {
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         let font = self.font.clone();
         self.minus_text_style(base);
+        self.minus_shading(base);
         self.minus_latin_theme(base, font);
         self.minus_run_visibility(base);
         self.minus_script_style(base);
@@ -601,7 +606,40 @@ impl CharProps {
         out.style = None;
         self.unset_text_as_default(base, &mut out);
         self.unset_layout_as_default(base, &mut out);
+        self.unset_look_as_none(base, &mut out);
         out
+    }
+
+    /// For [`CharProps::against`]: shading and text effects `base` gives and `self` doesn't,
+    /// taken off as Word takes them off the text of a chunk's last paragraph (measured: an
+    /// automatic `w:shd`, each effect at nothing, and a text fill by the text's own colour, which
+    /// Word draws over a fill its styles give).
+    fn unset_look_as_none(&self, base: &CharProps, out: &mut CharProps) {
+        if self.shading.is_none() && self.shading_auto.is_none() && base.shading.is_some() {
+            out.shading_auto = Some(true);
+        }
+        let Some(b) = base.text_effects.as_deref() else { return };
+        let own = self.text_effects.as_deref().cloned().unwrap_or_default();
+        let none = crate::wordart::TextEffects::none();
+        let fx = out.text_effects.get_or_insert_with(Default::default);
+        if b.glow.is_some() && own.glow.is_none() {
+            fx.glow = none.glow;
+        }
+        if b.shadow.is_some() && own.shadow.is_none() {
+            fx.shadow = none.shadow;
+        }
+        if b.reflection.is_some() && own.reflection.is_none() {
+            fx.reflection = none.reflection;
+        }
+        if b.outline.is_some() && own.outline.is_none() {
+            fx.outline = none.outline;
+        }
+        if fx.is_empty() {
+            out.text_effects = None;
+        }
+        if b.fill.is_some() && own.fill.is_none() {
+            out.color = Some(self.color.unwrap_or(TextColor::Auto));
+        }
     }
 
     /// For [`CharProps::against`]: each text field `base` sets and `self` leaves unset, at the
@@ -674,6 +712,10 @@ impl CharProps {
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
     }
 
+    fn minus_shading(&mut self, base: &CharProps) {
+        drop_same_fields!(self, base; shading_auto);
+    }
+
     fn minus_run_visibility(&mut self, base: &CharProps) {
         drop_same_fields!(self, base; web_hidden, snap_to_grid, emphasis);
     }
@@ -708,12 +750,25 @@ impl CharProps {
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         self.overlay_text_style(patch);
+        self.overlay_shading(patch);
         self.overlay_latin_theme(patch);
         self.overlay_run_visibility(patch);
         self.overlay_script_style(patch);
         self.overlay_document_marks(patch);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
+        }
+        // Word draws a run's own colour over a text fill its styles give (measured: a style's red
+        // `w14:textFill` under the run's blue or automatic `w:color`): a colour set without a fill
+        // takes the fill below off.
+        if patch.color.is_some()
+            && patch.text_effects.as_deref().is_none_or(|fx| fx.fill.is_none())
+            && let Some(fx) = self.text_effects.as_deref_mut()
+        {
+            fx.fill = None;
+            if fx.is_empty() {
+                self.text_effects = None;
+            }
         }
     }
 
@@ -730,6 +785,16 @@ impl CharProps {
     fn overlay_text_style(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
+    }
+
+    /// A shading and "no shading" replace each other.
+    fn overlay_shading(&mut self, patch: &CharProps) {
+        if patch.shading.is_some() {
+            self.shading_auto = None;
+        } else if patch.shading_auto == Some(true) {
+            self.shading = None;
+            self.shading_auto = Some(true);
+        }
     }
 
     fn overlay_run_visibility(&mut self, patch: &CharProps) {

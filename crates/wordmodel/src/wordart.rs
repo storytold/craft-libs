@@ -147,7 +147,30 @@ impl TextEffects {
     pub fn is_empty(&self) -> bool {
         *self == TextEffects::default()
     }
-    /// Finite, in range; zero-size glows dropped.
+    /// Each effect at nothing, as Word writes them to take a style's effects off a run (measured:
+    /// a glow of radius 0; a shadow and a reflection with every value 0, which here are fully
+    /// transparent; an outline 0 wide without fill). Overlaid, they replace the effects below;
+    /// [`TextEffects::visible`] leaves them out of what is drawn. Not the text fill: Word takes
+    /// that off with the text's colour.
+    pub fn none() -> TextEffects {
+        TextEffects {
+            fill: None,
+            outline: Some(TextOutline { color: None, width: 0.0, transparency: 0.0 }),
+            shadow: Some(Shadow { color: Rgb::BLACK, transparency: 100.0, blur: 0.0, distance: 0.0, angle: 0.0, rot_with_shape: false }),
+            glow: Some(Glow { color: Rgb::BLACK, size: 0.0, transparency: 0.0 }),
+            reflection: Some(Reflection { transparency: 100.0, size: 0.0, distance: 0.0, blur: 0.0 }),
+        }
+    }
+    /// The effects that draw anything: without a zero-size glow, a fully transparent shadow or
+    /// reflection, an empty reflection, or an outline without colour or width.
+    pub fn visible(mut self) -> TextEffects {
+        self.glow = self.glow.filter(|g| g.size > 0.0);
+        self.shadow = self.shadow.filter(|s| s.transparency < 100.0);
+        self.reflection = self.reflection.filter(|r| r.transparency < 100.0 && r.size > 0.0);
+        self.outline = self.outline.filter(|o| o.color.is_some() && o.width > 0.0);
+        self
+    }
+    /// Finite, in range. Effects at nothing are kept (they take a style's effects off).
     pub fn sanitized(&self) -> TextEffects {
         TextEffects {
             fill: self.fill.as_ref().and_then(TextFill::sanitized),
@@ -157,7 +180,7 @@ impl TextEffects {
                 transparency: clamp(o.transparency, 0.0, 100.0, 0.0),
             }),
             shadow: self.shadow.map(Shadow::sanitized),
-            glow: self.glow.map(Glow::sanitized).filter(|g| g.size > 0.0),
+            glow: self.glow.map(Glow::sanitized),
             reflection: self.reflection.map(|r| Reflection {
                 transparency: clamp(r.transparency, 0.0, 100.0, 50.0),
                 size: clamp(r.size, 0.0, 100.0, 50.0),

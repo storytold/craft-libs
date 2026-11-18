@@ -146,6 +146,8 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
+    } else if c.shading_auto == Some(true) {
+        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", "auto")]);
     }
     if let Some(v) = c.vert_align {
         w.val(

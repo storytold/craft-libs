@@ -297,4 +297,53 @@ mod tests {
         let out = CharProps::default().against(&quiet);
         assert_eq!((out.web_hidden, out.snap_to_grid), (None, None));
     }
+
+    /// Shading and text effects the base gives and the run doesn't are taken off, as Word takes
+    /// them off a chunk's last paragraph: overlaid on the base, nothing of them is drawn.
+    #[test]
+    fn against_takes_off_the_shading_and_effects_only_the_base_gives() {
+        use crate::effects::{Glow, Shadow};
+        use crate::wordart::{Reflection, TextEffects, TextFill, TextOutline};
+        let fx = TextEffects {
+            fill: Some(TextFill::Solid { color: Rgb(0xFF, 0, 0), transparency: 0.0 }),
+            outline: Some(TextOutline::default()),
+            shadow: Some(Shadow::default()),
+            glow: Some(Glow::default()),
+            reflection: Some(Reflection::default()),
+        };
+        let base = CharProps { shading: Some(Rgb(0, 0, 0xFF)), text_effects: Some(Box::new(fx)), ..Default::default() };
+        let out = CharProps::default().against(&base);
+        assert_eq!(out.shading_auto, Some(true));
+        assert_eq!(out.color, Some(TextColor::Auto), "the text fill goes by the text's colour");
+        let look = base.clone().overlaid(&out);
+        assert_eq!((look.shading, look.shading_auto), (None, Some(true)));
+        assert!(look.text_effects.as_deref().is_none_or(|t| t.sanitized().visible().is_empty()), "{:?}", look.text_effects);
+        // What the run gives itself stays.
+        let own = CharProps {
+            shading: Some(Rgb(0, 0xFF, 0)),
+            text_effects: Some(Box::new(TextEffects { glow: Some(Glow::default()), ..Default::default() })),
+            ..Default::default()
+        };
+        let look = base.clone().overlaid(&own.against(&base));
+        assert_eq!(look.shading, Some(Rgb(0, 0xFF, 0)));
+        assert_eq!(look.text_effects.as_deref().map(|t| t.sanitized().visible().glow.is_some()), Some(true));
+    }
+
+    /// A run's own colour takes a text fill its styles give off, as Word draws it; a colour and a
+    /// fill set together keep the fill.
+    #[test]
+    fn a_colour_takes_off_the_text_fill_below() {
+        use crate::wordart::{TextEffects, TextFill};
+        let red = TextEffects { fill: Some(TextFill::Solid { color: Rgb(0xFF, 0, 0), transparency: 0.0 }), ..Default::default() };
+        let style = CharProps { text_effects: Some(Box::new(red.clone())), ..Default::default() };
+        let blue = CharProps { color: Some(TextColor::Rgb(Rgb(0, 0, 0xFF))), ..Default::default() };
+        assert_eq!(style.clone().overlaid(&blue).text_effects, None);
+        let both = CharProps { text_effects: Some(Box::new(red.clone())), ..blue };
+        assert_eq!(style.overlaid(&both).text_effects.map(|t| t.fill), Some(red.fill));
+        // A shading and "no shading" replace each other.
+        let shaded = CharProps { shading: Some(Rgb(1, 2, 3)), ..Default::default() };
+        let none = CharProps { shading_auto: Some(true), ..Default::default() };
+        assert_eq!(shaded.clone().overlaid(&none).shading, None);
+        assert_eq!(none.overlaid(&shaded).shading_auto, None);
+    }
 }
