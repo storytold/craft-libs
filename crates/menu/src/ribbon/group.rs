@@ -60,7 +60,7 @@ impl<'a> RibbonGroup<'a> {
                 if let Some(command) = &self.launcher {
                     let words = Env::of(ui).words::<GroupWords>();
                     let name = words.launcher.fill(&[("title", self.title.as_str())]);
-                    IconButton::command(IconId::new("launcher"), command.clone()).label(name).show(ui);
+                    IconButton::command(IconId::new("maximize_2"), command.clone()).label(name).show(ui);
                 }
             });
         });

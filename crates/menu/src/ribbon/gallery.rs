@@ -537,8 +537,8 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
                 ui.face(TILE.at(at as u64), GalleryTile::of(item.face.picture(), current == Some(start + at)));
             }
         }
-        ui.face(UP, IconButton::new(IconId::new("chevronUp")).label(words.up.clone()).enabled(start > 0));
-        ui.face(DOWN, IconButton::new(IconId::new("chevronDown")).label(words.down.clone()).enabled(start < last));
+        ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));
+        ui.face(DOWN, IconButton::new(IconId::new("chevron_down")).label(words.down.clone()).enabled(start < last));
         ui.face(MORE, IconButton::new(IconId::new("more")).label(words.more.clone()));
     }
 
