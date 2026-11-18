@@ -406,14 +406,12 @@ impl Header {
             flow = rest;
             let hash = hash_of(&spec.key);
             let hosted = self.hosted.contains(&spec.key);
-            let mut sense = Sense::CLICK;
-            if !hosted {
-                sense |= Sense::FOCUS;
-            }
-            if spec.movable {
+            // A hosted cell is covered by its component, which takes every press and is the cell's keyboard stop (it
+            // joins this group where it is shown): the cell's own part only hovers, so it has no pointer path to name.
+            let mut sense = if hosted { Sense::empty() } else { Sense::CLICK | Sense::FOCUS };
+            if spec.movable && !hosted {
                 sense |= Sense::DRAG;
             }
-            // A hosted cell's stop is the hosted component's own, which joins this group where it is shown.
             let part = pcx.part(HEADER.at(hash), shown(rect)).sense(sense);
             let part = if hosted { part } else { part.focusable() };
             part.priority(HitPriority::new(HitLevel::Body, 0))
