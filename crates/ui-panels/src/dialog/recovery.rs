@@ -5,10 +5,12 @@ use super::host::{DialogResult, StackDialog};
 use super::prompt::{Prompt, Reply, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
-use crate::contract::{Bind, NoValue, Outcome};
+use crate::choice::Checkbox;
+use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _};
 use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use crate::sections::DialogRole;
+use craft_behavior::Mixed;
 use craft_i18n::AgeStyle;
 use egui::{Context, Response, Ui};
 use std::time::Duration;
@@ -37,8 +39,9 @@ impl RecoveredDocument {
 
     /// Marks the copy password-protected.
     #[must_use]
-    pub fn protected(self) -> Self {
-        todo!("SH-C34")
+    pub fn protected(mut self) -> Self {
+        self.protected = true;
+        self
     }
 
     /// Disables Recover for `reason`.
@@ -102,10 +105,8 @@ pub struct RecoveryDialog {
     document: RecoveredDocument,
     open: bool,
     /// The documents still waiting, this one included: the Apply to All box shows while it is above 1.
-    #[allow(dead_code)] // P3(pdf-shell-w5): SH-C34
     remaining: usize,
     /// The state of the Apply to All box.
-    #[allow(dead_code)] // P3(pdf-shell-w5): SH-C34
     apply_to_all: bool,
 }
 
@@ -117,9 +118,9 @@ impl RecoveryDialog {
 
     /// The documents still waiting, this one included; the Apply to All box shows while it is above 1.
     #[must_use]
-    pub fn remaining(self, n: usize) -> Self {
-        let _ = n;
-        todo!("SH-C34")
+    pub fn remaining(mut self, n: usize) -> Self {
+        self.remaining = n;
+        self
     }
 
     /// The document asked about; the app reads its key with the answer.
@@ -129,7 +130,18 @@ impl RecoveryDialog {
 }
 
 impl RecoveryDialog {
-    /// Shows the offer; `hosted` holds the open state in the dialog's own field, else in memory.
+    /// Whether the Apply to All box shows: more documents wait after this one.
+    fn offers_apply_to_all(&self) -> bool {
+        self.remaining > 1
+    }
+
+    /// The choice for `answer`; the box counts only while it shows.
+    fn choice(&self, answer: RecoveryAnswer, ticked: bool) -> RecoveryChoice {
+        RecoveryChoice { answer, apply_to_all: ticked && self.offers_apply_to_all() }
+    }
+
+    /// Shows the offer; `hosted` holds the open state and the Apply to All box in the dialog's own fields, else in
+    /// memory.
     fn present(&mut self, ui: &mut Ui, hosted: bool) -> RecoveryOutput {
         let env = Env::of(ui);
         let words = env.words::<DialogWords>();
@@ -141,6 +153,22 @@ impl RecoveryDialog {
             Reply::plain(words.recovery_recover.clone(), DialogRole::Accept).enabled(reason.is_none(), reason),
         ];
         let mut prompt = Prompt::new(words.recovery_title.clone(), message).answers(buttons(&env, replies));
+        if self.document.protected {
+            prompt = prompt.paragraph(words.recovery_protected.clone());
+        }
+        let mut ticked = hosted && self.apply_to_all;
+        if self.offers_apply_to_all() {
+            let label = words.unsaved_apply_to_all.clone();
+            let tick = &mut ticked;
+            let mut value = hosted.then_some(&mut self.apply_to_all);
+            prompt = prompt.extras(move |ui| {
+                if let Some(Mixed::Same(shown)) =
+                    Checkbox::new(value.as_mut().map_or_else(Bind::kept, |value| Bind::bound(&mut **value))).label(label.clone()).show(ui).shown
+                {
+                    *tick = *shown;
+                }
+            });
+        }
         if hosted {
             prompt = prompt.opened(Bind::bound(&mut self.open));
         }
@@ -150,8 +178,7 @@ impl RecoveryDialog {
             (Some(CloseReason::Activated | CloseReason::Enter), Some(_)) => Some(RecoveryAnswer::Recover),
             _ => None,
         };
-        // P3(pdf-shell-w5): SH-C34: the Apply to All box is not shown yet.
-        let answer = answer.map(|answer| RecoveryChoice { answer, apply_to_all: false });
+        let answer = answer.map(|answer| self.choice(answer, ticked));
         RecoveryOutput { response: shown.response, closed: shown.closed, answer }
     }
 
@@ -177,7 +204,6 @@ impl StackDialog for RecoveryDialog {
 
     /// Recover, the accepting answer; `None` while recovery is blocked.
     fn confirm(&mut self, _: &Context) -> Option<RecoveryChoice> {
-        // P3(pdf-shell-w5): SH-C34
-        self.document.blocked.is_none().then_some(RecoveryChoice { answer: RecoveryAnswer::Recover, apply_to_all: self.apply_to_all })
+        self.document.blocked.is_none().then(|| self.choice(RecoveryAnswer::Recover, self.apply_to_all))
     }
 }

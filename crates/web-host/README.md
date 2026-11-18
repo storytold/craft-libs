@@ -2,10 +2,11 @@
 
 The host messages between a Craft app's web build and the page that hosts it, as one contract and one bridge for every app (storytold/craft-libs#358). A page frames the app with `?host=parent`, or runs it directly with `data-host="page"` on its canvas; either way the same messages pass files in, saves out, and unsaved-changes state, so a page can host any of the apps the same way.
 
-The crate has two parts:
+The crate has three parts:
 
 - **The contract** (all targets): the message kinds and their `<app>:<kind>` types, the contract version, how the hosting mode is read from the URL and the canvas, and the clean-up of file names a host passes in. Pure, tested natively.
 - **The bridge** (`web`, wasm32 only): `Host::connect(app, canvas)` finds the host, `listen` hears its messages, and `post_ready`, `post_save`, `post_dirty`, `post_failed` and `post_handoff` answer it. Only the same-origin parent window is heard and answered; with a parent on another origin the app runs as if unframed.
+- **The file service** (`files`, wasm32 only): `BrowserFiles::new(wake, max_read)` is the app's `craft_host::Files`. Open picks go through a file input and answer the files' contents (a file over `max_read` bytes is not copied in), and a finished read wakes the app; a Save pick answers the suggested name at once; Folder picks are unavailable. `write` posts the bytes to the page through the connection `Host::connect` made, or downloads them when no page hosts the app.
 
 ## Messages
 

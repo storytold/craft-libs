@@ -25,7 +25,9 @@
 //! The app is hosted when its URL has `?host=parent` (framed by a same-origin page: messages go
 //! through `postMessage`) or its canvas has `data-host="page"` (the page runs it directly:
 //! messages are `CustomEvent`s on the canvas, the fields in `detail`). This module is the contract
-//! itself and builds everywhere; `web` (wasm32 only) is the bridge an app's web shell calls.
+//! itself and builds everywhere; `web` (wasm32 only) is the bridge an app's web shell calls, and
+//! `files` (wasm32 only) is the `craft_host::Files` service of a web build, whose writes go to the
+//! page through that bridge when one hosts the app and download otherwise.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
