@@ -11,7 +11,9 @@ use craft_ui::contract::{
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormDialog, HostRequests, Param, ParamRows, set_color_field, set_param_field};
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamRows, set_color_field, set_param_field,
+};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
@@ -19,9 +21,9 @@ use craft_ui::runtime::requests::HostAnswer;
 use craft_ui::sections::{DialogRole, FooterButton, Section};
 use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleCx, SurfaceKind};
 use egui::load::SizedTexture;
-use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
+use egui::{Pos2, Rect, Response, TextureId, Ui, Vec2, pos2, vec2};
 
-use super::panel::{MOST_COPIES, PrintPanel};
+use super::panel::{DriverControls, MOST_COPIES, PrintPanel};
 use super::{Duplex, Printer, Settings, State};
 
 craft_ui::words! {
@@ -62,6 +64,64 @@ pub struct PrintMarks {
     pub labels: bool,
 }
 
+/// How the print dialog is arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrintLayout {
+    /// The preview at the start edge, the printer panel and the sections at the end edge.
+    #[default]
+    Image,
+    /// Printer Setup and the app's sections in a scrolling column, then the sheet preview, its pager, the readout and
+    /// the notes at the end edge; no Done button.
+    Document,
+}
+
+/// What the sheet preview shows on the paper.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum SheetContent {
+    /// One image box holding a picture; the box can be dragged.
+    Image {
+        /// The image box on the paper.
+        image: egui::Rect,
+        /// The picture of the document.
+        picture: SizedTexture,
+    },
+    /// The pages placed on the sheet, clipped to the paper.
+    Pages(Vec<SheetPage>),
+    /// A message centred in the preview, with no paper.
+    Message(Label),
+}
+
+/// One page placed on a sheet.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct SheetPage {
+    /// The page's corners on the paper, in paper points.
+    pub corners: [Pos2; 4],
+    /// The page's picture; none draws a muted stand-in with `number` centred.
+    pub picture: Option<TextureId>,
+    /// The part of the picture to draw.
+    pub uv: egui::Rect,
+    /// The page's number, shown on the stand-in.
+    pub number: String,
+}
+
+impl SheetPage {
+    /// A page at `corners` with no picture, numbered `number`.
+    pub fn new(corners: [Pos2; 4], number: impl Into<String>) -> Self {
+        SheetPage { corners, picture: None, uv: Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), number: number.into() }
+    }
+
+    /// The page's picture `id` and the part `uv` of it to draw.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn picture(self, id: TextureId, uv: egui::Rect) -> Self {
+        let _ = (id, uv);
+        todo!("PO-P6")
+    }
+}
+
 /// What the app's layout says for this pass, in points.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -78,13 +138,71 @@ pub struct PrintSheet {
     pub marks: PrintMarks,
     /// The readout under the preview.
     pub readout: Label,
+    /// What the sheet shows on the paper.
+    pub content: SheetContent,
+    /// The borders drawn around the pages, in paper points.
+    pub borders: Vec<egui::Rect>,
+    /// The cut lines, in paper points.
+    pub cuts: Vec<[Pos2; 2]>,
+    /// The notes under the readout.
+    pub notes: Vec<Label>,
 }
 
 impl PrintSheet {
     /// A sheet of `paper` with the image box `image` holding `picture`, `readout` under the preview, no printable area
     /// and no marks.
     pub fn new(paper: egui::Vec2, image: egui::Rect, picture: SizedTexture, readout: Label) -> Self {
-        PrintSheet { paper, printable: None, image, picture, marks: PrintMarks::default(), readout }
+        let content = SheetContent::Image { image, picture };
+        PrintSheet {
+            paper,
+            printable: None,
+            image,
+            picture,
+            marks: PrintMarks::default(),
+            readout,
+            content,
+            borders: Vec::new(),
+            cuts: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    /// A sheet of `paper` holding `pages`, with `readout` under the preview.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn pages(paper: Vec2, pages: Vec<SheetPage>, readout: Label) -> Self {
+        let _ = (paper, pages, readout);
+        todo!("PO-P6")
+    }
+
+    /// A preview showing `message` instead of a sheet, with `readout` under it.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn message(paper: Vec2, message: Label, readout: Label) -> Self {
+        let _ = (paper, message, readout);
+        todo!("PO-P6")
+    }
+
+    /// The borders drawn around the pages.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn borders(self, borders: Vec<egui::Rect>) -> Self {
+        let _ = borders;
+        todo!("PO-P6")
+    }
+
+    /// The cut lines.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn cuts(self, cuts: Vec<[Pos2; 2]>) -> Self {
+        let _ = cuts;
+        todo!("PO-P6")
+    }
+
+    /// The notes under the readout.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P6
+    pub fn notes(self, notes: Vec<Label>) -> Self {
+        let _ = notes;
+        todo!("PO-P6")
     }
 
     /// The printable area of the paper.
@@ -116,6 +234,22 @@ impl PrintSection {
     /// The section titled `title` with its `params` rows.
     pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
         Self { title: title.into(), params }
+    }
+
+    /// Collapses the section when `open` is false, through `Section::initially_open`.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P7
+    pub fn folded(self, open: bool) -> Self {
+        let _ = open;
+        todo!("PO-P7")
+    }
+
+    /// A title-row button; a press is filed as `HostRequests::request_action(id)`.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P7
+    pub fn button(self, id: impl Into<String>, label: impl Into<Label>, enabled: bool) -> Self {
+        let _ = (id.into(), label.into(), enabled);
+        todo!("PO-P7")
     }
 }
 
@@ -378,6 +512,18 @@ pub struct PrintDialog<'a> {
     /// The host's answers to the dialog's requests.
     #[prop]
     answers: Vec<HostAnswer>,
+    /// How the dialog is arranged.
+    #[prop]
+    layout: PrintLayout,
+    /// The printer-driver controls the panel offers.
+    #[prop]
+    driver: DriverControls,
+    /// The layout sets two-sided printing: the Two-sided row is left out.
+    #[prop]
+    duplex_by_layout: bool,
+    /// The pager under the sheet preview in the `Document` layout.
+    #[prop]
+    preview_pager: Option<PanePager>,
 }
 
 /// What [`PrintDialog::show`] returns.
@@ -397,6 +543,8 @@ pub struct PrintDialogOutput {
     pub refresh: bool,
     /// The dialog's requests of the host.
     pub requests: HostRequests,
+    /// The pager press made this pass.
+    pub preview_step: Option<PagerStep>,
 }
 
 impl Outcome for PrintDialogOutput {
@@ -422,13 +570,33 @@ impl<'a> PrintDialog<'a> {
             discovering: false,
             ready: false,
             answers: Vec::new(),
+            layout: PrintLayout::Image,
+            driver: DriverControls::None,
+            duplex_by_layout: false,
+            preview_pager: None,
         }
     }
 
     /// Draws the dialog. The body reports the drag events and the Refresh press of its last run only, so a measuring run
     /// adds none; a second pass of a frame has no new input and reports none.
     pub fn show(self, ui: &mut Ui) -> PrintDialogOutput {
-        let PrintDialog { mut settings, printers, fields, sheet, sections, opened, busy, discovering, ready, answers } = self;
+        let PrintDialog {
+            mut settings,
+            printers,
+            fields,
+            sheet,
+            sections,
+            opened,
+            busy,
+            discovering,
+            ready,
+            answers,
+            layout,
+            driver,
+            duplex_by_layout,
+            preview_pager,
+        } = self;
+        let _ = (layout, driver, duplex_by_layout, preview_pager); // P3(pdf-print-ocr-w1): PO-P5
         let env = Env::of(ui);
         let words = env.words::<PrintDialogWords>();
         let mut form = FormDialog::new(words.title.clone(), fields)
@@ -483,7 +651,7 @@ impl<'a> PrintDialog<'a> {
         } else {
             None
         };
-        PrintDialogOutput { response: shown.response, closed: shown.closed, finish, moved, refresh, requests: shown.requests }
+        PrintDialogOutput { response: shown.response, closed: shown.closed, finish, moved, refresh, requests: shown.requests, preview_step: None }
     }
 }
 
@@ -578,6 +746,92 @@ impl HostedPrint {
         &mut self.requests
     }
 
+    /// The dialog's arrangement.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn layout(self, layout: PrintLayout) -> Self {
+        let _ = layout;
+        todo!("PO-P8")
+    }
+
+    /// Replaces the app's sections.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn set_sections(&mut self, sections: Vec<PrintSection>) {
+        let _ = sections;
+        todo!("PO-P8")
+    }
+
+    /// The printer state.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn state(&self) -> &State {
+        todo!("PO-P8")
+    }
+
+    /// The printer state, for the app to change.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn state_mut(&mut self) -> &mut State {
+        todo!("PO-P8")
+    }
+
+    /// The printer-driver controls the panel offers.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn set_driver(&mut self, driver: DriverControls) {
+        let _ = driver;
+        todo!("PO-P8")
+    }
+
+    /// Whether the layout sets two-sided printing, leaving out the Two-sided row.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn set_duplex_by_layout(&mut self, on: bool) {
+        let _ = on;
+        todo!("PO-P8")
+    }
+
+    /// The pager under the sheet preview in the `Document` layout.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn set_preview_pager(&mut self, pager: Option<PanePager>) {
+        let _ = pager;
+        todo!("PO-P8")
+    }
+
+    /// The pager press since the last call.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn take_preview_step(&mut self) -> Option<PagerStep> {
+        todo!("PO-P8")
+    }
+
+    /// The id of the section button pressed since the last call.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn take_action(&mut self) -> Option<String> {
+        todo!("PO-P8")
+    }
+
+    /// The dialog holds OK until the app answers it with `answer_ok`.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn held_ok(self) -> Self {
+        todo!("PO-P8")
+    }
+
+    /// Holds OK until the app answers it with `answer_ok`.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn hold_ok(&mut self) {
+        todo!("PO-P8")
+    }
+
+    /// The held OK's answer when OK was pressed, once.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn take_ok(&mut self) -> Option<PrintAnswer> {
+        todo!("PO-P8")
+    }
+
+    /// Answers the held OK: `Ok` closes the dialog, `Err` keeps it open and shows the refusal.
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P8
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        let _ = answer;
+        todo!("PO-P8")
+    }
+
     /// The answer of the dialog as it stands.
     fn answer(&self, finish: PrintFinish) -> PrintAnswer {
         PrintAnswer { finish, settings: self.state.settings.clone(), fields: self.fields.clone() }
@@ -668,6 +922,7 @@ impl StackDialog for HostedPrint {
         map.insert("copies".to_owned(), settings.copies.into());
         map.insert("duplex".to_owned(), duplex_json(settings.duplex));
         map.insert("grayscale".to_owned(), settings.grayscale.into());
+        map.insert("collate".to_owned(), settings.collate.into());
         if let Some(form) = &self.json_form {
             form(&self.fields, &mut map);
         }
@@ -688,6 +943,7 @@ impl StackDialog for HostedPrint {
             }
             "duplex" => self.state.settings.duplex = duplex_from_json(&value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "grayscale" => self.state.settings.grayscale = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
+            "collate" => self.state.settings.collate = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             _ => {
                 let section =
                     self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));

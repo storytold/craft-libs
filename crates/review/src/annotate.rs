@@ -24,6 +24,8 @@ pub enum AnnotationKind {
     Attach,
     #[allow(missing_docs)]
     Highlight,
+    /// A highlight drawn freehand.
+    FreehandHighlight,
     #[allow(missing_docs)]
     Underline,
     #[allow(missing_docs)]
@@ -154,6 +156,88 @@ pub struct Annotation {
     pub text: String,
     /// A locked annotation shows no handles.
     pub locked: bool,
+    /// The width over height a corner resize keeps; `None` for a flat box.
+    #[serde(default)]
+    pub aspect: Option<f64>,
+    /// Whether the host lets the annotation be reshaped.
+    #[serde(default)]
+    pub handle_rule: HandleRule,
+}
+
+/// A named option for an annotation the host cannot reshape: under `FixedPoints` and `NoResize` the overlay shows no
+/// handle that would do nothing; the body still moves and selects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum HandleRule {
+    /// The kind's own rule decides.
+    #[default]
+    Free,
+    /// The host keeps the points (dimension lines and polygons): no point handles and no box handles.
+    FixedPoints,
+    /// The host cannot resize the box (a callout with no readable box): no handles.
+    NoResize,
+}
+
+/// The knee of a callout stays at least this far from its box, in page units.
+pub const CALLOUT_KNEE_GAP: f64 = 12.0;
+
+/// A move of at most this many page units is a slip, not a move.
+pub const SLIP_MOVE: f64 = 2.0;
+
+/// A resize of at most this many page units is a slip, not a resize.
+pub const SLIP_RESIZE: f64 = 4.0;
+
+/// The smallest side of a shape the tool keeps, in page units.
+pub const MIN_SHAPE: f64 = 2.0;
+
+/// The Shift rule of a point drag, held from the neighbouring point.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShiftLock {
+    /// The segment snaps to 45 degree steps.
+    #[default]
+    Angle45,
+    /// The segment stays level or plumb.
+    LevelOrPlumb,
+}
+
+/// `points` with the callout's point `i` moved to `to`: the knee (`i == 1`) moves along its knee line only and never
+/// nearer the box than [`CALLOUT_KNEE_GAP`]; every other point moves freely through [`reshaped`].
+#[allow(dead_code)] // P3(pdf-comments-w1): CM-C2
+pub fn callout_reshaped(rect: Rect, points: &[Point], i: usize, to: Point, lock: Option<ShiftLock>) -> Vec<Point> {
+    let _ = (rect, points, i, to, lock);
+    todo!("CM-C2")
+}
+
+/// The width over height a corner resize of `annotation` keeps from `from` (with Shift); `None` for a flat box.
+#[allow(dead_code)] // P3(pdf-comments-w1): CM-C3
+pub fn corner_aspect(annotation: &Annotation, from: Rect, shift: bool) -> Option<f64> {
+    let _ = (annotation, from, shift);
+    todo!("CM-C3")
+}
+
+/// The box of `annotation`'s marker on `page`, clamped to the page; `None` when it has none.
+#[allow(dead_code)] // P3(pdf-comments-w1): CM-C6
+pub fn marker_rect(annotation: &Annotation, page: Rect, icon_side: f64) -> Option<Rect> {
+    let _ = (annotation, page, icon_side);
+    todo!("CM-C6")
+}
+
+/// The annotation the comment part, the hover outline and the marker hit at `at`, within `tolerance` page units.
+#[allow(dead_code)] // P3(pdf-comments-w1): CM-C6
+pub fn pick_at(annotations: &[Annotation], at: Point, tolerance: f64, icon_side: f64, markers: &[(AnnotationId, Rect)]) -> Option<AnnotationId> {
+    let _ = (annotations, at, tolerance, icon_side, markers);
+    todo!("CM-C6")
+}
+
+impl Annotation {
+    /// The annotation as the in-flight `edit` leaves it, for the overlay's live paint.
+    #[cfg(feature = "ui")]
+    #[allow(dead_code)] // P3(pdf-comments-w1): CM-C4
+    pub fn edited(&self, edit: &AnnotationEdit) -> Option<Annotation> {
+        let _ = edit;
+        todo!("CM-C4")
+    }
 }
 
 impl Annotation {
@@ -308,14 +392,13 @@ pub fn resized(rect: Rect, handle: (i8, i8), delta: Vec2, aspect: Option<f64>) -
     r.abs()
 }
 
-/// `points` with point `i` moved to `to`; with `shift` the segment from its neighbour snaps to
-/// 45° steps.
+/// `points` with point `i` moved to `to`; with `lock` the segment from its neighbour is held to the rule.
 // pdfcraft: crates/ui-egui/src/tools/comments/geometry.rs:37 `reshaped`.
-pub fn reshaped(points: &[Point], i: usize, to: Point, shift: bool) -> Vec<Point> {
+pub fn reshaped(points: &[Point], i: usize, to: Point, lock: Option<ShiftLock>) -> Vec<Point> {
     let mut out = points.to_vec();
     let anchor = if i == 0 { points.get(1) } else { points.get(i - 1) };
     let to = match anchor {
-        Some(&a) if shift => turn_to_45(a, to),
+        Some(&a) if lock.is_some() => turn_to_45(a, to), // P3(pdf-comments-w1): CM-C5 (`LevelOrPlumb` is the writer's)
         _ => to,
     };
     if let Some(p) = out.get_mut(i) {
@@ -368,4 +451,33 @@ pub enum AnnotationEdit {
     Selection(craft_behavior::SelectionChange<AnnotationId>),
     /// A double-click on a note or text box: the app opens its text for editing.
     Open(AnnotationId),
+    /// A click or drag placement of a new annotation.
+    Place(Placement),
+    /// The Eraser erased along `path` with `radius` through these annotations.
+    EraseAlong {
+        /// The annotations the eraser reached.
+        ids: Vec<AnnotationId>,
+        /// The eraser's path, in page units.
+        path: Vec<Point>,
+        /// The eraser's radius, in page units.
+        radius: f64,
+    },
+}
+
+/// Where a click or drag placed a new annotation: a Note, Attach or Caret at `at`; a TextBox with `size`; a Callout
+/// with its tip at `from` and its box at `at`.
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct Placement {
+    /// The kind placed.
+    pub kind: AnnotationKind,
+    /// The page index.
+    pub page: usize,
+    /// The click point, or the box's corner.
+    pub at: Point,
+    /// The box's size, when the placement dragged one.
+    pub size: Option<Vec2>,
+    /// A callout's tip.
+    pub from: Option<Point>,
 }

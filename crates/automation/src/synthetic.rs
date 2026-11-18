@@ -24,6 +24,7 @@ use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
 
+use crate::access::NodeTarget;
 use crate::protocol::{BUTTONS, KEY_MODIFIERS, Params};
 
 /// Most clicks one `ui.click` may ask for (`count`).
@@ -117,12 +118,42 @@ fn key(p: &Params<'_>) -> Result<Option<Key>, String> {
     p.choice("key", "key", &[])?.map(|name| Key::parse(name).ok_or_else(|| format!("unknown key `{name}`"))).transpose()
 }
 
+/// Where a `ui.click` goes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClickTarget {
+    /// A position.
+    At(At),
+    /// A node of the access tree.
+    Node(NodeTarget),
+}
+
+/// A validated `ui.focus`: moves the focus to a node of the access tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Focus {
+    /// The node that takes the focus.
+    pub target: NodeTarget,
+}
+
+impl Focus {
+    /// `{id | label}`: the node to focus.
+    pub fn from_params(params: &Value) -> Result<Focus, String> {
+        let _ = params;
+        todo!("SH-C16")
+    }
+
+    /// Sends the focus request for the node to `viewport`.
+    pub fn inject(&self, host: &WindowHost, viewport: ViewportId) -> Result<(), String> {
+        let _ = (host, viewport);
+        todo!("SH-C16")
+    }
+}
+
 /// A validated `ui.click`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Click {
-    /// Target position.
-    pub at: At,
+    /// Where the click goes: a position or a node of the access tree.
+    pub target: ClickTarget,
     /// The button pressed.
     pub button: PointerButton,
     /// Number of clicks (2 is a double click).
@@ -145,7 +176,7 @@ impl Click {
             return Err(format!("`count` must be at most {MAX_CLICKS} (got {count})"));
         }
         Ok(Self {
-            at: At::from_params(&p)?,
+            target: ClickTarget::At(At::from_params(&p)?), // P3(pdf-shell-w2): SH-C16
             button: button(&p)?.unwrap_or(PointerButton::Primary),
             count,
             mods: p.modifiers(&KEY_MODIFIERS)?,
@@ -156,7 +187,8 @@ impl Click {
     /// Queues a move to the target, then `count` presses and releases of the button, in `viewport`.
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
         let count = u32::try_from(self.count).unwrap_or(u32::MAX);
-        host.inject_click(viewport, self.at.resolve(map)?, self.button, count, self.mods, self.hold);
+        let ClickTarget::At(at) = &self.target else { todo!("SH-C16") }; // P3(pdf-shell-w2): SH-C16
+        host.inject_click(viewport, at.resolve(map)?, self.button, count, self.mods, self.hold);
         Ok(())
     }
 }

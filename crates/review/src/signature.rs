@@ -10,6 +10,18 @@ pub const MAX_IMAGE_BYTES: usize = 4 << 20;
 /// JPEG decodes to about 48 MB; the limit keeps the decode job bounded).
 pub const MAX_IMAGE_SIDE: u32 = 8192;
 
+/// The longest side a saved signature image keeps, in pixels.
+pub const MAX_SAVED_SIDE: u32 = 4096;
+
+/// The most pixels a saved signature image keeps.
+pub const MAX_SAVED_PIXELS: u64 = 4 << 20;
+
+/// The lightness (0 to 255) from which [`SignatureImage::remove_white_background`] treats a pixel as paper.
+pub const PAPER_CUTOFF: u8 = 245;
+
+/// The width of the feathered edge below [`PAPER_CUTOFF`].
+pub const PAPER_FEATHER: u8 = 35;
+
 /// The longest typed signature, in characters (PdfCraft `pdfcraft_fonts::MAX_SIGNATURE_CHARS`,
 /// `crates/fonts/src/script.rs:17`).
 pub const MAX_SIGNATURE_CHARS: usize = 256;
@@ -70,6 +82,13 @@ impl SignatureImage {
     /// Straight RGBA bytes, 4 per pixel, row by row.
     pub fn rgba(&self) -> &[u8] {
         &self.rgba
+    }
+
+    /// The image with paper white made transparent, with a feathered edge of `feather` below `cutoff`.
+    #[allow(dead_code)] // P3(pdf-forms-w1): FM-PF4
+    pub fn remove_white_background(&self, cutoff: u8, feather: u8) -> SignatureImage {
+        let _ = (cutoff, feather);
+        todo!("FM-PF4")
     }
 
     /// The content key computed by [`new`](Self::new); equal images have equal keys.

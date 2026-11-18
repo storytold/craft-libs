@@ -200,6 +200,9 @@ struct Inner {
     last_folder: HashMap<String, PathBuf>,
     /// A panel is on screen or queued (mirrored from the panels each pump).
     panel_busy: bool,
+    /// The answers `Files::answer_next` gave, which the panels answer the next requests with.
+    #[allow(dead_code)] // P3(pdf-workflows-w4): WF-W16
+    forced: VecDeque<Answer>,
 }
 
 impl FileService {
@@ -213,6 +216,7 @@ impl FileService {
             answered: VecDeque::new(),
             last_folder: HashMap::new(),
             panel_busy: false,
+            forced: VecDeque::new(),
         }));
         let (to_panels, requests) = std::sync::mpsc::channel();
         let panels = FilePanels {
@@ -539,6 +543,13 @@ impl Files for FileService {
         let mut inner = lock(&self.inner);
         let at = inner.answered.iter().position(|a| a.id == id)?;
         inner.answered.remove(at).map(|a| a.picked)
+    }
+
+    /// Answers the next pick with `picked` instead of showing a panel, through the settling a native answer passes.
+    /// `Picked::Contents` has no `Answer` form: it is `Err(FileError::Unsupported)`.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let _ = picked;
+        todo!("WF-W16")
     }
 
     // A ticket still pending leaves `pending`, so the answer the panel gives later is dropped by `finish`.

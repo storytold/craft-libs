@@ -21,12 +21,18 @@ pub mod agents;
 #[cfg(feature = "ui")]
 pub mod ui;
 
+#[cfg(feature = "ui")]
+pub mod access; // P3(pdf-shell-w2): SH-C15
 #[cfg(not(target_arch = "wasm32"))]
 pub mod args;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod control;
 #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
 pub mod dialogs;
+#[cfg(feature = "ui")]
+pub mod dock; // P3(pdf-shell-w2): CH-C22
+#[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
+pub mod files; // P3(pdf-shell-w2): WF-W17
 #[cfg(not(target_arch = "wasm32"))]
 pub mod profiler;
 #[cfg(not(target_arch = "wasm32"))]
@@ -39,6 +45,8 @@ pub mod security;
 pub mod synthetic;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace;
+#[cfg(feature = "ui")]
+pub mod window; // P3(pdf-shell-w2): CH-C23
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod client;

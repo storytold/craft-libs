@@ -19,6 +19,7 @@ use craft_ui::fonts::FontRef;
 use craft_ui::layout_components::Row;
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::primitives::{DocRun, DocText, Draw, HAlign, PaintShape, StrokeWidth, TextureCache};
+use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::focus::{ActivateKeys, EditSet, KeyUse};
 use craft_ui::sections::{DialogRole, FooterButton};
@@ -65,6 +66,8 @@ craft_ui::words! {
         cancel: "signature.cancel" = "Cancel";
         image_failed: "signature.imageFailed" = "That image could not be read.";
         image_too_large: "signature.imageTooLarge" = "That image is too large: up to 4 MiB and 8192 × 8192 pixels.";
+        drop_image: "signature.dropImage" = "Drop an image here";
+        drop_photo: "signature.dropPhoto" = "Drop a photo of a signature here";
     }
 }
 
@@ -140,13 +143,13 @@ fn paint_typed(ctx: &egui::Context, draw: &Draw<'_>, rect: Rect, label: &str, co
     let tall = rect.height() * TYPED_HEIGHT_SHARE;
     let width = rect.width() * TYPED_WIDTH_SHARE;
     // A name too wide at the height's size shrinks to the width, so it stays on one line.
-    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::proportional(), tall, color)])
+    let wide = DocText::new(&[DocRun::new(label.to_owned(), FontRef::signature(), tall, color)])
         .layout(ctx, &Env::of_root(ctx).tokens, craft_i18n::Direction::Ltr)
         .size()
         .x;
     let size = if wide > width { tall * width / wide } else { tall };
     let room = Vec2::new(width, size);
-    let run = [DocRun::new(label.to_owned(), FontRef::proportional(), size, color)];
+    let run = [DocRun::new(label.to_owned(), FontRef::signature(), size, color)];
     let mut text = DocText::new(&run);
     text.align = HAlign::Center;
     draw.doc(Rect::from_center_size(rect.center(), room), &text);
@@ -395,7 +398,9 @@ fn pop_stroke(strokes: &mut Vec<Vec<[f32; 2]>>) -> bool {
 }
 
 /// The Scan tab's content, the app's.
-pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft) + Send>;
+///
+/// It is handed the file dropped on the tab this pass.
+pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send>;
 
 /// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field over
 /// the pad that shows the typed signature), Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to
@@ -433,7 +438,7 @@ impl SignaturePadDialog {
 
     /// The Scan tab's content: it fills `draft.image`.
     #[must_use]
-    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft) + Send + 'static) -> Self {
+    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send + 'static) -> Self {
         self.scan = Some(Box::new(tab));
         self
     }
@@ -554,7 +559,7 @@ impl StackDialog for SignaturePadDialog {
                 }
                 SignatureTab::Scan => {
                     if let Some(tab) = scan.as_mut() {
-                        tab(ui, draft);
+                        tab(ui, draft, None); // P3(pdf-forms-w1): FM-PF3 (the writer hands over the dropped file)
                     }
                 }
             }

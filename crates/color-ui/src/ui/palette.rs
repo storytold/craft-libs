@@ -7,6 +7,7 @@ use craft_ui::choice::SwatchTable;
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::Label;
+use craft_ui::runtime::requests::ColorRequest;
 use egui::{Response, Ui};
 use std::sync::Arc;
 
@@ -23,6 +24,10 @@ pub struct SwatchPaletteOutput {
     /// The pick of this pass as one `Set` of the swatch's colour; `None` when nothing was picked. The palette has
     /// already written it to its binding.
     pub edit: Option<EditEvent<Srgba>>,
+    /// The request of the Other… row for the host's colour picker, when it was pressed this pass.
+    pub pick_color: Option<ColorRequest>,
+    /// Every swatch click of this pass, also a click on the colour already bound, which files no `edit`.
+    pub picked: Option<Srgba>,
 }
 
 impl Outcome for SwatchPaletteOutput {
@@ -47,19 +52,55 @@ impl Outcome for SwatchPaletteOutput {
 #[derive(Pattern)]
 pub struct SwatchPalette<'a> {
     label: Label,
-    color: Bind<'a, Srgba>,
+    color: PaletteColor<'a>,
     swatches: &'a [(Label, Srgba)],
+}
+
+/// What a palette binds: a colour, or a colour that may be none.
+enum PaletteColor<'a> {
+    Color(Bind<'a, Srgba>),
+    Optional(Bind<'a, Mixed<Option<Srgba>>>),
 }
 
 impl<'a> SwatchPalette<'a> {
     /// A palette named `label` of `swatches`, each a name and a colour, choosing the colour bound to `color`.
     pub fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, swatches: &'a [(Label, Srgba)]) -> Self {
-        SwatchPalette { label: label.into(), color, swatches }
+        SwatchPalette { label: label.into(), color: PaletteColor::Color(color), swatches }
+    }
+
+    /// A palette over a colour that may be none, bound as `Mixed::Same(None)`: no swatch is selected for `Same(None)`
+    /// or `Mixed`, and a pick writes `Mixed::Same(Some(colour))`.
+    pub fn optional(label: impl Into<Label>, color: Bind<'a, Mixed<Option<Srgba>>>, swatches: &'a [(Label, Srgba)]) -> Self {
+        SwatchPalette { label: label.into(), color: PaletteColor::Optional(color), swatches }
+    }
+
+    /// An Other… row, keyed `key` and named `label`, that asks the host's colour picker.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w5): CM-C26
+    pub fn other(self, key: impl Into<String>, label: impl Into<Label>) -> Self {
+        let _ = (key.into(), label.into());
+        todo!("CM-C26")
+    }
+
+    /// A row of recent `colors` under `caption`.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w5): CM-C26
+    pub fn recent(self, caption: impl Into<Label>, colors: &'a [Srgba]) -> Self {
+        let _ = (caption.into(), colors);
+        todo!("CM-C26")
     }
 
     /// Shows the palette.
     pub fn show(self, ui: &mut Ui) -> SwatchPaletteOutput {
         let SwatchPalette { label, color, swatches } = self;
+        // P3(pdf-comments-w5): CM-C26 (the optional binding)
+        let color = match color {
+            PaletteColor::Color(color) => color,
+            PaletteColor::Optional(optional) => {
+                let _ = optional;
+                todo!("CM-C26")
+            }
+        };
         let mut held = Held::new(color);
         let name = label.clone();
         let mut shown = Stack::new().show(ui, |ui, cx| {
@@ -82,6 +123,6 @@ impl<'a> SwatchPalette<'a> {
                 Some(EditEvent::set(Mixed::Same(before), after, Arc::from(name.as_str()), None))
             })
             .flatten();
-        SwatchPaletteOutput { response: shown.output, edit }
+        SwatchPaletteOutput { response: shown.output, edit, pick_color: None, picked: None }
     }
 }

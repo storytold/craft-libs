@@ -11,7 +11,7 @@ use egui::{CornerRadius, Pos2, Response};
 use kurbo::{Point, Rect};
 
 use super::tool::{color32, corners};
-use crate::annotate::{Annotation, AnnotationHandle, AnnotationId, AnnotationKind, handles};
+use crate::annotate::{Annotation, AnnotationEdit, AnnotationHandle, AnnotationId, AnnotationKind, handles};
 
 /// The ellipse inscribed in `rect`, as a closed run of page points.
 pub(super) fn ellipse_points(rect: Rect) -> Vec<Point> {
@@ -98,6 +98,7 @@ fn paint_annotation(draw: &Draw<'_>, a: &Annotation, to_screen: &impl Fn(Point) 
                 draw.data_fill(&PaintShape::Rect(r, CornerRadius::ZERO), color);
             }
         }
+        K::FreehandHighlight => todo!("CM-C1"),
         K::Underline | K::StrikeOut | K::Squiggly | K::ReplaceText => {
             for r in quads() {
                 let y = if matches!(a.kind, K::StrikeOut | K::ReplaceText) { r.center().y } else { r.bottom() };
@@ -188,12 +189,27 @@ pub struct AnnotationOverlay<'a> {
     common: Common,
     annotations: &'a [Annotation],
     selected: &'a [AnnotationId],
+    /// Which bodies the overlay paints; the host paints the rest with the page.
+    #[prop]
+    bodies: BodyPaint<'a>,
+    /// The in-flight edit, painted live.
+    #[prop]
+    live: Option<&'a AnnotationEdit>,
+}
+
+/// Which bodies the overlay paints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BodyPaint<'a> {
+    /// Every body.
+    All,
+    /// Only these annotations' bodies.
+    Only(&'a [AnnotationId]),
 }
 
 impl<'a> AnnotationOverlay<'a> {
     /// An overlay named `label` for `annotations`, with `selected` drawing handles.
     pub fn new(label: impl Into<Label>, annotations: &'a [Annotation], selected: &'a [AnnotationId]) -> Self {
-        AnnotationOverlay { common: Common::new(), annotations, selected }.label(label)
+        AnnotationOverlay { common: Common::new(), annotations, selected, bodies: BodyPaint::All, live: None }.label(label)
     }
 }
 
@@ -227,6 +243,7 @@ impl Component for AnnotationOverlay<'_> {
         let painter = ui.content_painter(cx);
         let draw = ui.draw();
         let hairline = 1.0 / cx.response.ctx.pixels_per_point();
+        let _ = (self.bodies, self.live); // P3(pdf-comments-w1): CM-C7, CM-C8
         for a in self.annotations {
             paint_annotation(&draw, a, &to_screen, (cx.style.text_size, cx.style.icon_side), hairline);
         }

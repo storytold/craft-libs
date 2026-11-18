@@ -34,6 +34,8 @@ fn annotation(id: u64, kind: AnnotationKind, rect: Rect) -> Annotation {
         stroke_width: 1.0,
         text: String::new(),
         locked: false,
+        aspect: None,                                               // P3(pdf-comments-w2): CM-C3
+        handle_rule: craft_review::annotate::HandleRule::default(), // P3(pdf-comments-w2): CM-C30
     }
 }
 

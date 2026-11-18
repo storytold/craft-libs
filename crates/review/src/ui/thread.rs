@@ -6,14 +6,16 @@
 //! ```
 
 mod mention;
+mod note_popup;
 mod pins;
 mod popover;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};
+pub use note_popup::{NOTE_POPUP_LIMITS, NoteDrafts, NotePopup, NotePopupMessage, NotePopupOutput};
 pub use pins::{CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, cluster};
-pub use popover::{CommentComposer, CommentComposerOutput, REACTIONS, ThreadPopover, ThreadPopoverOutput};
+pub use popover::{CommentComposer, CommentComposerOutput, ComposerClose, ComposerDraft, REACTIONS, ThreadPopover, ThreadPopoverOutput};
 
 craft_ui::words! {
     /// The thread popover's and composer's words, English by default.
@@ -36,5 +38,6 @@ craft_ui::words! {
         pin: template "thread.pin" = "Comment by {author}";
         pin_text: template "thread.pinText" = "Comment by {author}: {words}";
         cluster: template "thread.cluster" = "{n} comments";
+        note_title: "thread.noteTitle" = "Note";
     }
 }

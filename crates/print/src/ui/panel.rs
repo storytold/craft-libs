@@ -1,6 +1,6 @@
 //! `PrintPanel`: the printer, copies, two-sided and grayscale choices of one print job.
 
-use super::{Duplex, Printer, Settings, shown_names};
+use super::{Destination, Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
@@ -34,7 +34,36 @@ craft_ui::words! {
         portrait: "printPanel.portrait" = "Portrait";
         landscape: "printPanel.landscape" = "Landscape";
         page_in_driver: "printPanel.pageInDriver" = "set in Print Settings…";
+        collate: "printPanel.collate" = "Collate";
+        properties: "printPanel.properties" = "Properties…";
+        save_as_pdf: "printPanel.saveAsPdf" = "Save as PDF";
+        default_mark: "printPanel.defaultMark" = "(default)";
+        finding: "printPanel.finding" = "Finding printers…";
     }
+}
+
+/// Which printer-driver controls the panel offers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DriverControls {
+    /// None.
+    #[default]
+    None,
+    /// Properties… after Refresh; its press is `settings_clicked`.
+    Properties,
+    /// Print Settings…, Portrait and Landscape and the page line.
+    Page,
+}
+
+/// Which destinations the printer list offers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Destinations {
+    /// The printers only.
+    #[default]
+    Printers,
+    /// The printers, then Save as PDF at the end of the list.
+    PrintersAndFile,
 }
 
 /// What the print panel reports.
@@ -46,7 +75,7 @@ pub struct PrintPanelOutput {
     /// The Refresh button was pressed this pass: the caller starts printer discovery again.
     pub refresh: bool,
     /// A printer was chosen this pass: its name. The caller takes the paper from the new printer's driver.
-    pub printer_chosen: Option<String>,
+    pub printer_chosen: Option<Destination>,
     /// Print Settings… was pressed this pass: the caller opens the driver's own dialog.
     pub settings_clicked: bool,
     /// Portrait (`false`) or Landscape (`true`) was pressed this pass: the caller turns the driver settings.
@@ -83,7 +112,13 @@ pub struct PrintPanel<'a> {
     /// The driver controls (Print Settings…, Portrait and Landscape, the page line) are shown: the caller can ask a
     /// printer driver for its page.
     #[prop]
-    driver: bool,
+    driver: DriverControls,
+    /// Which destinations the list offers.
+    #[prop]
+    destinations: Destinations,
+    /// The layout sets two-sided printing: the Two-sided row is left out.
+    #[prop]
+    duplex_by_layout: bool,
     /// The driver's paper in points, as the caller last took it.
     #[prop(quantity = "paper size the printer driver reports, in points")]
     page: Option<egui::Vec2>,
@@ -95,12 +130,24 @@ pub struct PrintPanel<'a> {
 impl<'a> PrintPanel<'a> {
     /// The panel over `settings`, offering `printers`.
     pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer]) -> Self {
-        PrintPanel { settings, printers, discovering: false, busy: false, driver: false, page: None, page_error: None }
+        PrintPanel {
+            settings,
+            printers,
+            discovering: false,
+            busy: false,
+            driver: DriverControls::None,
+            destinations: Destinations::Printers,
+            duplex_by_layout: false,
+            page: None,
+            page_error: None,
+        }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, destinations, duplex_by_layout, page, page_error } = self;
+        let _ = (destinations, duplex_by_layout); // P3(pdf-print-ocr-w1): PO-P4
+        let driver = driver == DriverControls::Page; // P3(pdf-print-ocr-w1): PO-P4
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let queues: Vec<Entry<String>> =
@@ -127,7 +174,7 @@ impl<'a> PrintPanel<'a> {
                         .show(ui);
                     if let Some(name) = picked.value() {
                         if *name != now.printer {
-                            printer_chosen = Some(name.clone());
+                            printer_chosen = Some(Destination::Printer(name.clone())); // P3(pdf-print-ocr-w1): PO-P4
                         }
                         now.printer.clone_from(name);
                     }

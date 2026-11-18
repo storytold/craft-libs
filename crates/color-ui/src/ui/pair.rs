@@ -496,7 +496,12 @@ impl Component for SwatchPair<'_> {
                 match shown.color.same() {
                     Some(color) if shown.ring => paint_ring(&draw, at, *color, style),
                     color => {
-                        draw.swatch_well(at, style.radius, color.copied());
+                        // P3(pdf-comments-w5): CM-C25 (`swatch_well` takes a `WellFill`)
+                        draw.swatch_well(
+                            at,
+                            style.radius,
+                            color.copied().map_or(craft_ui::primitives::WellFill::Mixed, craft_ui::primitives::WellFill::Color),
+                        );
                         draw.stroke(&PaintShape::Rect(at, style.radius), StrokeWidth::Thin, style.mark);
                         draw.stroke(&outline(at, style), StrokeWidth::Thin, style.edge);
                     }

@@ -86,6 +86,17 @@ impl ReviewStatus {
         [ReviewStatus::None, ReviewStatus::Accepted, ReviewStatus::Rejected, ReviewStatus::Cancelled, ReviewStatus::Completed];
 }
 
+/// One reviewer's latest status on a thread.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReviewerStatus {
+    /// The reviewer's name.
+    pub reviewer: String,
+    /// The status the reviewer set.
+    pub status: ReviewStatus,
+    /// The text of the status reply.
+    pub text: String,
+}
+
 /// An emoji reaction and who gave it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reaction {
@@ -128,6 +139,8 @@ pub struct CommentThread {
     pub messages: Vec<CommentMessage>,
     /// The thread's review status.
     pub status: ReviewStatus,
+    /// Each reviewer's latest status, oldest first.
+    pub statuses: Vec<ReviewerStatus>,
     /// Acrobat's per-comment checkmark.
     pub marked: bool,
     /// A locked thread can't be edited.
@@ -140,6 +153,12 @@ impl CommentThread {
     /// Replies, not counting the comment itself.
     pub fn replies(&self) -> usize {
         self.messages.len().saturating_sub(1)
+    }
+
+    /// The latest status set by anyone; [`ReviewStatus::None`] when no reviewer set one.
+    #[allow(dead_code)] // P3(pdf-comments-w4): CM-C19
+    pub fn status(&self) -> ReviewStatus {
+        todo!("CM-C19")
     }
 }
 
@@ -197,12 +216,24 @@ pub enum CommentSort {
     Color,
 }
 
+/// How threads on one page are ordered under the Page sort.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PageOrder {
+    /// By position on the page.
+    #[default]
+    Position,
+    /// In document order.
+    Document,
+}
+
 /// The order of `threads` by `sort`, as indices: page then position on the page (top to bottom),
 /// author A–Z, newest first, kind (by `kind_name`, the reader's name of a kind), colour; ties keep
 /// document order. A plain comment sorts before every kind.
 // pdfcraft: crates/ui-egui/src/panels/comments_panel.rs:115 `show` (sorting),
 // `tools/comments/state.rs:297` `SortBy`.
-pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, kind_name: impl Fn(AnnotationKind) -> String) -> Vec<usize> {
+pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, page_order: PageOrder, kind_name: impl Fn(AnnotationKind) -> String) -> Vec<usize> {
+    let _ = page_order; // P3(pdf-comments-w4): CM-C20
     let mut order: Vec<usize> = (0..threads.len()).collect();
     fn first(thread: &CommentThread) -> Option<&CommentMessage> {
         thread.messages.first()

@@ -26,6 +26,7 @@ fn thread(id: u64, page: usize, text: &str, replies: usize) -> CommentThread {
         color: Some([255, 200, 0]),
         messages,
         status: if id == 1 { ReviewStatus::Accepted } else { ReviewStatus::None },
+        statuses: Vec::new(), // P3(pdf-comments-w4): CM-C19
         marked: id == 3,
         locked: false,
         resolved: false,
@@ -44,7 +45,8 @@ fn threads() -> Vec<CommentThread> {
 #[story(CommentsPanel<'static>, covers = [Default], drive = Drive::Never)]
 fn comments_panel_two_pages_one_selected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let threads = threads();
-    let state = data.value("state", CommentsPanelState { selected: Some(ThreadId(2)), ..CommentsPanelState::default() });
+    // P3(pdf-comments-w4): CM-C21
+    let state = data.value("state", CommentsPanelState { selected: craft_behavior::Selection::single(ThreadId(2)), ..CommentsPanelState::default() });
     CommentsPanel::new("Comments", &threads, state).now(NOW).show(ui).into()
 }
 

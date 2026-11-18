@@ -16,6 +16,7 @@ fn thread(id: u64, text: &str) -> CommentThread {
         color: None,
         messages: vec![CommentMessage { author: "Ana".into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true }],
         status: ReviewStatus::None,
+        statuses: Vec::new(), // P3(pdf-comments-w4): CM-C19
         marked: false,
         locked: false,
         resolved: false,
@@ -26,7 +27,10 @@ fn thread(id: u64, text: &str) -> CommentThread {
 /// where Cmd+Enter posts the reply to that card's thread.
 #[trial]
 fn enter_posts_a_comment_and_enter_on_a_card_opens_its_reply_box() {
-    let state = Rc::new(RefCell::new(CommentsPanelState { selected: Some(ThreadId(2)), ..CommentsPanelState::default() }));
+    // P3(pdf-comments-w4): CM-C21
+    let mut initial = CommentsPanelState::default();
+    initial.selected = craft_behavior::Selection::single(ThreadId(2));
+    let state = Rc::new(RefCell::new(initial));
     let edits = Rc::new(RefCell::new(Vec::new()));
     let (shown_state, shown_edits) = (state.clone(), edits.clone());
     let threads = vec![thread(1, "The margin is too narrow."), thread(2, "Use the brand colour.")];
@@ -47,7 +51,7 @@ fn enter_posts_a_comment_and_enter_on_a_card_opens_its_reply_box() {
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     fixture.type_text("Thanks").key(Key::Enter, Modifiers::COMMAND).settle();
-    let selected = state.borrow().selected.expect("a card is selected");
+    let selected = state.borrow().selected.lead.expect("a card is selected"); // P3(pdf-comments-w4): CM-C21
     assert!(
         edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Reply { thread, text, .. } if *thread == selected && text == "Thanks")),
         "Enter on the card put the focus in its reply box, where Cmd+Enter posts: {:?}",

@@ -10,7 +10,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
 use craft_ui::primitives::IconSpec;
-use craft_ui::runtime::env::Env;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::style::TypeRole;
 use craft_ui::text::TextField;
@@ -248,6 +248,54 @@ impl<'a> CommentComposer<'a> {
     pub fn new(anchor: Option<Pos2>, draft: &'a mut String) -> Self {
         CommentComposer { anchor, draft }
     }
+
+    /// A header of `title` and the `author` above the field.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w3): CM-C16
+    pub fn header(self, title: impl Into<Label>, author: &'a str) -> Self {
+        let _ = (title.into(), author);
+        todo!("CM-C16")
+    }
+
+    /// The rule the post applies to the draft.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w3): CM-C16
+    pub fn draft_kind(self, kind: ComposerDraft) -> Self {
+        let _ = kind;
+        todo!("CM-C16")
+    }
+
+    /// When the composer closes.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w3): CM-C16
+    pub fn close(self, close: ComposerClose) -> Self {
+        let _ = close;
+        todo!("CM-C16")
+    }
+}
+
+/// The rule a composer applies to its draft at the post.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ComposerDraft {
+    /// A new comment: trailing whitespace trimmed; Post needs text.
+    #[default]
+    New,
+    /// An edit: trailing whitespace trimmed; empty text clears the comment.
+    Edit,
+    /// An edit posted as typed (a typewriter comment); empty text clears the comment.
+    EditVerbatim,
+}
+
+/// When a composer closes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ComposerClose {
+    /// On a press outside, as well as Post and Cancel.
+    #[default]
+    OnOutsidePress,
+    /// Only on Post or Cancel.
+    OnPostOrCancel,
 }
 
 /// What the composer did this pass.

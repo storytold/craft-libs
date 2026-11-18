@@ -16,7 +16,8 @@ use std::sync::Arc;
 use super::AnnotateWords;
 use super::overlay::ellipse_points;
 use crate::annotate::{
-    Annotation, AnnotationEdit, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, AnnotationTool, hit, reshaped, resized,
+    Annotation, AnnotationEdit, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, ShiftLock, hit, reshaped,
+    resized,
 };
 
 /// The page text between two page points as quads (four corners each).
@@ -267,6 +268,203 @@ impl AnnotateTool {
     }
 }
 
+/// What a press on empty page does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EmptyPress {
+    /// A selection rectangle.
+    #[default]
+    Marquee,
+    /// The press is ignored (`ToolAction::Ignored`).
+    PassThrough,
+}
+
+/// The modifiers that toggle a selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ToggleMods {
+    /// Shift.
+    #[default]
+    Shift,
+    /// Shift or Command.
+    ShiftOrCommand,
+}
+
+/// What opens a note or text box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenOn {
+    /// A double click on a note or text box.
+    #[default]
+    NotesAndTextBoxes,
+    /// A double click on any annotation.
+    Every,
+}
+
+/// The modifiers that nudge a selection by the far step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FarNudge {
+    /// Shift.
+    #[default]
+    Shift,
+    /// Shift or Command.
+    ShiftOrCommand,
+}
+
+/// What a press on a handle does while a shape is being drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HandlesWhileDrawing {
+    /// The press continues the drawing.
+    #[default]
+    Draw,
+    /// The press edits through the handle.
+    Edit,
+}
+
+/// What a press on a text markup does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarkupPress {
+    /// The press selects the markup.
+    #[default]
+    Select,
+    /// Only a click reports (`ToolAction::Ignored` otherwise).
+    ClickOnly,
+}
+
+/// The tool's named selection options; `Default` is today's behaviour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SelectOptions {
+    /// What a press on empty page does.
+    pub empty_press: EmptyPress,
+    /// The modifiers that toggle a selection.
+    pub toggle: ToggleMods,
+    /// What opens a note or text box.
+    pub open: OpenOn,
+    /// The Shift rule of a point drag.
+    pub shift_lock: ShiftLock,
+    /// The modifiers that nudge by the far step.
+    pub far_nudge: FarNudge,
+    /// What a press on a handle does while drawing.
+    pub handles_while_drawing: HandlesWhileDrawing,
+    /// What a press on a text markup does.
+    pub markup_press: MarkupPress,
+}
+
+/// Whether ink strokes gather into one annotation per session or one per stroke.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InkStrokes {
+    /// One annotation per session.
+    #[default]
+    Session,
+    /// One annotation per stroke.
+    PerStroke,
+}
+
+/// What the eraser removes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EraseMode {
+    /// Whole strokes.
+    #[default]
+    Strokes,
+    /// Along its path (`EraseAlong`).
+    Path,
+}
+
+/// The tool's named drawing options.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct DrawOptions {
+    /// How ink strokes gather.
+    pub ink: InkStrokes,
+    /// What the eraser removes.
+    pub erase: EraseMode,
+    /// The eraser's radius, in screen points.
+    pub eraser_radius: f32,
+}
+
+impl Default for AnnotateTool {
+    fn default() -> Self {
+        Self::new(AnnotationTool::Select, 0)
+    }
+}
+
+impl AnnotateTool {
+    /// A click on a comment part handed from the page: selects (with the toggle modifiers of [`SelectOptions`]) and, on
+    /// the open count, opens.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C9
+    pub fn click(&mut self, id: AnnotationId, mods: Mods, clicks: u32, words: &AnnotateWords) {
+        let _ = (id, mods, clicks, words);
+        todo!("CM-C9")
+    }
+
+    /// The cursor over page point `at`, with the page-unit `tolerance` and `icon_side` the tool's reading holds.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C10
+    pub fn cursor_at(&self, at: Point, tolerance: f64, icon_side: f64) -> Cursor {
+        let _ = (at, tolerance, icon_side);
+        todo!("CM-C10")
+    }
+
+    /// The edit the gesture in flight would report, for the host's live paint.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn in_flight(&self) -> Option<AnnotationEdit> {
+        todo!("CM-C11")
+    }
+
+    /// The points of the shape being drawn.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn drawing(&self) -> &[Point] {
+        todo!("CM-C11")
+    }
+
+    /// Ends the shape being drawn.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn finish_drawing(&mut self) {
+        todo!("CM-C11")
+    }
+
+    /// Takes back the last point of the shape being drawn; whether there was one.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn undo_point(&mut self) -> bool {
+        todo!("CM-C11")
+    }
+
+    /// Drops the shape being drawn.
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn cancel_drawing(&mut self) {
+        todo!("CM-C11")
+    }
+
+    /// Snaps a caret to the page text through `snap`: the snapped point and its size.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C11
+    pub fn caret_snap(self, snap: impl Fn(Point) -> Option<(Point, f64)> + Send + 'static) -> Self {
+        let _ = snap;
+        todo!("CM-C11")
+    }
+
+    /// The tool's selection options.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C12
+    pub fn select_options(self, options: SelectOptions) -> Self {
+        let _ = options;
+        todo!("CM-C12")
+    }
+
+    /// The tool's drawing options.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-comments-w2): CM-C14
+    pub fn draw_options(self, options: DrawOptions) -> Self {
+        let _ = options;
+        todo!("CM-C14")
+    }
+}
+
 /// The kinds the "New Annotation..." form places.
 const FORM_KINDS: [AnnotationKind; 8] = [
     AnnotationKind::Rectangle,
@@ -334,6 +532,8 @@ impl AnnotateTool {
             stroke_width: self.width,
             text: String::new(),
             locked: false,
+            aspect: None,
+            handle_rule: HandleRule::default(),
         }
     }
 
@@ -490,7 +690,9 @@ fn edit_value(change: &Change, origin: Point, at: Point, mods: Mods) -> Annotati
             let aspect = (mods.shift && from.height() > 0.0).then(|| from.width() / from.height());
             AnnotationEdit::Resize { id: *target, rect: resized(*from, *handle, at - origin, aspect) }
         }
-        Change::Reshape { target, index, from } => AnnotationEdit::Reshape { id: *target, points: reshaped(from, *index, at, mods.shift) },
+        Change::Reshape { target, index, from } => {
+            AnnotationEdit::Reshape { id: *target, points: reshaped(from, *index, at, mods.shift.then_some(ShiftLock::Angle45)) }
+        } // P3(pdf-comments-w2): CM-C5
     }
 }
 

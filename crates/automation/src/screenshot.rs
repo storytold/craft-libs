@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use craft_ui::runtime::windows::{ScreenshotFacts, ScreenshotSlot, WindowHost};
 use egui::{ColorImage, ViewportId};
+use serde_json::Value;
 
 use crate::control::ControlResponse;
 
@@ -678,6 +679,24 @@ pub fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, S
 /// authorized workspace. `Err` is the reply's error text.
 pub type PngWriter<'a> = dyn FnMut(&str, &[u8]) -> Result<(), String> + 'a;
 
+/// A validated `ui.screenshot`: where the PNG goes and which part of the window it shows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScreenshotParams {
+    /// File to write the PNG to, or `None` to inline it.
+    pub path: Option<String>,
+    /// The part of the window to capture as `[x0, y0, x1, y1]` in points, finite and ordered; `None` captures the
+    /// whole window.
+    pub region: Option<egui::Rect>,
+}
+
+impl ScreenshotParams {
+    /// `{path?, region?}`, no other fields.
+    pub fn from_params(params: &Value) -> Result<ScreenshotParams, String> {
+        let _ = params;
+        todo!("SH-C18")
+    }
+}
+
 /// The reply for a finished image:
 /// - an image over [`MAX_IMAGE_BYTES`] as RGBA (or whose size overflows):
 ///   `{"ok": false, "error": "screenshot {token} failed: the image exceeds the {MAX_IMAGE_BYTES / 1 MiB} MiB encode budget"}`;
@@ -689,7 +708,14 @@ pub type PngWriter<'a> = dyn FnMut(&str, &[u8]) -> Result<(), String> + 'a;
 /// - an encode or write error `e`: `{"ok": false, "error": e}`.
 ///
 /// Flatten the pixels to RGBA and drop the image before encoding, so the two copies don't overlap.
-pub fn screenshot_reply(token: u64, image: Arc<ColorImage>, path: Option<&str>, write: &mut PngWriter<'_>) -> ControlResponse {
+pub fn screenshot_reply(
+    token: u64,
+    image: Arc<ColorImage>,
+    region: Option<egui::Rect>,
+    path: Option<&str>,
+    write: &mut PngWriter<'_>,
+) -> ControlResponse {
+    let _ = region; // P3(pdf-shell-w2): SH-C18 (the writer crops the image to it)
     let [w, h] = image.size;
     let Some(bytes) = w.checked_mul(h).and_then(|n| n.checked_mul(4)).filter(|&n| n <= MAX_IMAGE_BYTES) else {
         return serde_json::json!({

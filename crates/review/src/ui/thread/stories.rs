@@ -27,6 +27,7 @@ fn thread() -> CommentThread {
         color: None,
         messages: vec![message("Ana", "Check @Bo before we ship.", NOW - 7_200), message("Bo", "On it.", NOW - 600)],
         status: ReviewStatus::None,
+        statuses: Vec::new(), // P3(pdf-comments-w3): CM-C19
         marked: false,
         locked: false,
         resolved: false,

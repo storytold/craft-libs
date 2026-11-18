@@ -6,8 +6,11 @@ mod panel;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-pub use dialog::{HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintMarks, PrintSection, PrintSheet};
-pub use panel::{PrintPanel, PrintPanelOutput, PrintWords};
+pub use dialog::{
+    HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintLayout, PrintMarks, PrintSection, PrintSheet,
+    SheetContent, SheetPage,
+};
+pub use panel::{Destinations, DriverControls, PrintPanel, PrintPanelOutput, PrintWords};
 
 use craft_ui::contract::Bind;
 use craft_ui::runtime::frame::request_repaint_after;
@@ -29,12 +32,14 @@ pub struct Printer {
     pub label: String,
     /// Whether it is the system's default printer.
     pub default: bool,
+    /// The note shown when the printer's own dialog decides copies, collate, two-sided and colour.
+    pub own_dialog: Option<String>,
 }
 
 impl Printer {
     /// A printer queue named `name`, with no label, not the default.
     pub fn new(name: impl Into<String>) -> Self {
-        Printer { name: name.into(), label: String::new(), default: false }
+        Printer { name: name.into(), label: String::new(), default: false, own_dialog: None }
     }
 
     /// The text the dialog shows for the printer.
@@ -49,6 +54,15 @@ impl Printer {
     pub fn is_default(mut self, default: bool) -> Self {
         self.default = default;
         self
+    }
+
+    /// Marks the printer's own dialog as deciding copies, collate, two-sided and colour; the panel disables those
+    /// controls and shows `note` under them while the printer is chosen.
+    #[must_use]
+    #[allow(dead_code)] // P3(pdf-print-ocr-w1): PO-P3
+    pub fn own_dialog(self, note: impl Into<String>) -> Self {
+        let _ = note;
+        todo!("PO-P3")
     }
 }
 
@@ -112,6 +126,16 @@ pub enum Duplex {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+/// Where a print job goes.
+pub enum Destination {
+    /// The printer with this name.
+    Printer(String),
+    /// Save as PDF.
+    File,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 /// What the user chose for one print job.
 pub struct Settings {
     /// The chosen printer's [`Printer::name`].
@@ -122,11 +146,15 @@ pub struct Settings {
     pub duplex: Option<Duplex>,
     /// Print in grayscale.
     pub grayscale: bool,
+    /// Where the job goes.
+    pub destination: Destination,
+    /// Collate the copies.
+    pub collate: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { printer: String::new(), copies: 1, duplex: None, grayscale: false }
+        Self { printer: String::new(), copies: 1, duplex: None, grayscale: false, destination: Destination::Printer(String::new()), collate: true }
     }
 }
 
