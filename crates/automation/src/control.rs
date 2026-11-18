@@ -188,9 +188,18 @@ struct InputWaiter {
     request: Option<u64>,
     refusals: Vec<String>,
     truncated: bool,
+    /// A step of its request was seen running.
+    started: bool,
+    /// Its request's input has run: it started and none of its steps is still queued.
+    ran: bool,
 }
 
 impl InputWaiter {
+    /// A waiter for `request`.
+    fn new(reply: Sender<ControlResponse>, request: Option<u64>) -> Self {
+        Self { reply, request, refusals: Vec::new(), truncated: false, started: false, ran: false }
+    }
+
     /// Its reply once its input was processed.
     fn processed(&self) -> ControlResponse {
         input_reply(&self.refusals, self.truncated)
@@ -207,9 +216,6 @@ impl InputWaiter {
 pub struct ControlChannel {
     rx: Receiver<ControlRequest>,
     input_waiters: Vec<InputWaiter>,
-    /// The highest request number seen in a pass ([`WindowHost::injected_running_request`]): the
-    /// input of every request numbered below it has run.
-    ran: Option<u64>,
     job_waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// The screenshot queue; the app calls its `issue` and `drain` from its UI and logic phases.
     pub captures: Captures,
@@ -218,7 +224,7 @@ pub struct ControlChannel {
 impl ControlChannel {
     /// Attach a transport's receiver (TCP, stdin, tests).
     pub fn new(rx: Receiver<ControlRequest>) -> Self {
-        Self { rx, input_waiters: Vec::new(), ran: None, job_waiters: Vec::new(), captures: Captures::default() }
+        Self { rx, input_waiters: Vec::new(), job_waiters: Vec::new(), captures: Captures::default() }
     }
 
     /// The next request to run, claimed through [`Dispatch::start`]. Expired or abandoned
@@ -244,10 +250,8 @@ impl ControlChannel {
             Reply::Done(v) => {
                 let _ = reply.send(v);
             }
-            Reply::AfterInput => self.input_waiters.push(InputWaiter { reply, request: None, refusals: Vec::new(), truncated: false }),
-            Reply::AfterInputRequest { request } => {
-                self.input_waiters.push(InputWaiter { reply, request: Some(request), refusals: Vec::new(), truncated: false });
-            }
+            Reply::AfterInput => self.input_waiters.push(InputWaiter::new(reply, None)),
+            Reply::AfterInputRequest { request } => self.input_waiters.push(InputWaiter::new(reply, Some(request))),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::Screenshot { token, path, viewport } => {
                 if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
@@ -263,7 +267,7 @@ impl ControlChannel {
     /// [`Reply::AfterInputRequest`] reply. A blank error is ignored; past [`MAX_INPUT_REFUSALS`]
     /// the reply is marked truncated. True when a waiter took it.
     pub fn input_refused(&mut self, request: u64, error: &str) -> bool {
-        self.note_ran(request);
+        self.note_started(request);
         let error = error.trim();
         let Some(waiter) = self.input_waiters.iter_mut().find(|waiter| waiter.request == Some(request)) else { return false };
         if error.is_empty() {
@@ -277,9 +281,23 @@ impl ControlChannel {
         true
     }
 
-    /// Request `request`'s step is running: every request numbered below it has run.
-    fn note_ran(&mut self, request: u64) {
-        self.ran = Some(self.ran.map_or(request, |ran| ran.max(request)));
+    /// A step of request `request` is running.
+    fn note_started(&mut self, request: u64) {
+        for waiter in self.input_waiters.iter_mut().filter(|waiter| waiter.request == Some(request)) {
+            waiter.started = true;
+        }
+    }
+
+    /// At the end of a pass: the waiters whose request started and has no step left queued have
+    /// run. Read before a withdrawal or cancel drops queued steps, so a dropped request never
+    /// counts as run.
+    fn note_ran(&mut self, host: &WindowHost) {
+        if let Some(request) = host.injected_running_request() {
+            self.note_started(request);
+        }
+        for waiter in self.input_waiters.iter_mut().filter(|waiter| waiter.started && !waiter.ran) {
+            waiter.ran = waiter.request.is_some_and(|request| !host.injected_request_queued(request));
+        }
     }
 
     /// The pass that consumed the injected input ended: reply to every input waiter,
@@ -294,30 +312,38 @@ impl ControlChannel {
 
     /// The injected input was dropped (the window lost it, a modal took over): reply
     /// `{"ok": false, "error": "input cancelled: {reason}"}` to every input waiter, except a
-    /// [`Reply::AfterInputRequest`] whose input had already run (a later request's step was seen
-    /// running), which gets its own reply as [`Self::input_processed`] gives it.
+    /// [`Reply::AfterInputRequest`] whose input had already run (as [`Self::poll_input`] saw at
+    /// the end of a pass), which gets its own reply as [`Self::input_processed`] gives it.
     pub fn input_cancelled(&mut self, reason: &str) {
-        let ran = self.ran;
         for waiter in self.input_waiters.drain(..) {
-            let reply = match (waiter.request, ran) {
-                (Some(request), Some(ran)) if request < ran => waiter.processed(),
-                _ => json!({"ok": false, "error": format!("input cancelled: {reason}")}),
-            };
+            let reply = if waiter.ran { waiter.processed() } else { json!({"ok": false, "error": format!("input cancelled: {reason}")}) };
             let _ = waiter.reply.send(reply);
         }
     }
 
+    /// The host withdrew queued input ([`TARGET_CHANGED`]): a [`Reply::AfterInputRequest`] whose
+    /// request still has steps queued (input of a viewport the withdrawal did not cover) keeps
+    /// waiting; the others are answered as [`Self::input_cancelled`] answers them.
+    fn input_withdrawn(&mut self, host: &WindowHost) {
+        let (waiting, answered): (Vec<_>, Vec<_>) = std::mem::take(&mut self.input_waiters)
+            .into_iter()
+            .partition(|waiter| !waiter.ran && waiter.request.is_some_and(|request| host.injected_request_queued(request)));
+        self.input_waiters = answered;
+        self.input_cancelled(TARGET_CHANGED);
+        self.input_waiters = waiting;
+    }
+
     /// Answers the [`Reply::AfterInput`] waiters from the window host's input state: with
-    /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]), with success
-    /// once nothing is queued or in flight. Call it once per pass, after the pass that consumed the
-    /// input.
+    /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]) (a request whose
+    /// input ran, or whose input the withdrawal did not cover, is not cancelled), with success
+    /// once nothing is queued or in flight. Call it once per pass, at the end of the pass: it also
+    /// notes which requests' input has run.
     pub fn poll_input(&mut self, host: &WindowHost) {
-        if let Some(request) = host.injected_running_request() {
-            self.note_ran(request);
-        }
         if host.take_injected_withdrawn() {
-            self.input_cancelled(TARGET_CHANGED);
-        } else if host.injected_idle() {
+            self.input_withdrawn(host);
+        }
+        self.note_ran(host);
+        if host.injected_idle() {
             self.input_processed();
         }
     }

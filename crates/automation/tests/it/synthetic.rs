@@ -368,11 +368,21 @@ fn refusing_rig(channel: &Rc<RefCell<craft_automation::control::ControlChannel>>
     (Rig { fx, passes: Rc::default() }, running)
 }
 
-/// Queues `ui.key` for `key` and parks its reply on the request's own number.
+/// Queues `ui.key` for `key` in the main window and parks its reply on the request's own number.
 fn queue_key(rig: &Rig, channel: &Rc<RefCell<craft_automation::control::ControlChannel>>, key: &str) -> std::sync::mpsc::Receiver<Value> {
+    queue_key_in(rig, channel, key, ViewportId::ROOT)
+}
+
+/// [`queue_key`] for the window `viewport`.
+fn queue_key_in(
+    rig: &Rig,
+    channel: &Rc<RefCell<craft_automation::control::ControlChannel>>,
+    key: &str,
+    viewport: ViewportId,
+) -> std::sync::mpsc::Receiver<Value> {
     use craft_automation::control::{ControlRequest, Reply};
     let host = rig.host();
-    input_method("ui.key", &json!({"key": key}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    input_method("ui.key", &json!({"key": key}), &host, viewport, &map).expect("a method").expect("valid");
     let (req, reply) = ControlRequest::new("ui.key", json!({"key": key}));
     channel.borrow_mut().settle(req, Reply::after_input_request(host.injected_last_request()), None, 0.0);
     reply
@@ -465,4 +475,55 @@ fn a_reply_with_too_many_refusals_is_truncated_and_idle_passes_report_nothing() 
     assert_eq!(answer["truncated"], true, "{answer}");
     assert_eq!(answer["errors"].as_array().map(Vec::len), Some(MAX_INPUT_REFUSALS));
     assert_eq!(answer["error"], "refusal 0");
+}
+
+/// A window the rig never runs a pass of: input queued there stays queued.
+fn idle_window() -> ViewportId {
+    ViewportId::from_hash_of("a window with no passes")
+}
+
+/// Request numbers count across windows, but each window runs its own queue: input still queued in
+/// one window has not run because a later request ran in another, so a cancel cancels it.
+#[trial]
+fn input_queued_in_another_window_is_not_taken_for_run() {
+    use craft_automation::control::ControlChannel;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, _) = refusing_rig(&channel, &[Key::B]);
+    rig.fx.settle();
+    let elsewhere = queue_key_in(&rig, &channel, "A", idle_window());
+    let main = queue_key(&rig, &channel, "B");
+    let host = rig.host();
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        if !host.injected_request_queued(host.injected_last_request()) {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+    assert!(main.try_recv().is_err() && elsewhere.try_recv().is_err(), "the other window's input keeps both waiting");
+    assert!(channel.borrow_mut().cancel_input(&host, "the test cancelled it"));
+    assert_eq!(elsewhere.try_recv().expect("A is answered"), json!({"ok": false, "error": "input cancelled: the test cancelled it"}));
+    assert_eq!(main.try_recv().expect("B is answered"), json!({"ok": false, "error": "B is not available", "errors": ["B is not available"]}));
+}
+
+/// Withdrawing one window's input cancels the requests it dropped; a request queued in another
+/// window keeps waiting, and is answered once its own input has run.
+#[trial]
+fn a_withdrawal_keeps_the_waiters_of_input_it_did_not_drop() {
+    use craft_automation::control::ControlChannel;
+    use craft_automation::synthetic::TARGET_CHANGED;
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (mut rig, _) = refusing_rig(&channel, &[]);
+    rig.fx.settle();
+    let dropped = queue_key(&rig, &channel, "A");
+    let elsewhere = queue_key_in(&rig, &channel, "B", idle_window());
+    let host = rig.host();
+    host.withdraw_injected(ViewportId::ROOT);
+    rig.fx.frame(Vec::new());
+    let answer = dropped.try_recv().expect("the withdrawn request is answered");
+    assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");
+    assert!(elsewhere.try_recv().is_err(), "the other window's request still waits on its input");
+    assert!(host.injected_request_queued(host.injected_last_request()), "its input is still queued");
 }

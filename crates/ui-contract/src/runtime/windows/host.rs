@@ -201,6 +201,13 @@ impl WindowHost {
         injected::running_request(&self.ctx)
     }
 
+    /// Whether a step of request `request` ([`injected_last_request`](Self::injected_last_request)) is still queued,
+    /// in any viewport. A step handed to the input is no longer queued: at the end of the pass that ran a request's
+    /// last step, the request is not queued. A withdrawal or cancel drops the queued steps it covers.
+    pub fn injected_request_queued(&self, request: u64) -> bool {
+        injected::request_queued(&self.ctx, request)
+    }
+
     /// Adds `equivalent` to the next input of `viewport`: a key equivalent the platform's menu took from the window
     /// reaches the application as the key press the user made.
     pub fn key_equivalent(&self, viewport: ViewportId, equivalent: KeyEquivalent) {

@@ -689,6 +689,12 @@ pub(crate) fn running_request(ctx: &Context) -> Option<u64> {
     with_running(ctx, |step| step.map(|step| step.request))
 }
 
+/// Whether a step of request `request` is still queued in any viewport: a step handed to the input is not, so at the end
+/// of a pass whose step was its request's last the request has run.
+pub(crate) fn request_queued(ctx: &Context, request: u64) -> bool {
+    Service::<Injected>::run(ctx, |injected| injected.lanes.values().any(|lane| lane.queue.iter().any(|step| step.request == request)))
+}
+
 /// The number of the latest request queued: a request queued after it gets a higher one. Requests are numbered in
 /// the order they are queued, across viewports; a request that queues no step still takes its number.
 pub(crate) fn last_request(ctx: &Context) -> u64 {
