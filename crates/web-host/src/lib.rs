@@ -33,6 +33,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 #[cfg(target_arch = "wasm32")]
+pub mod files;
+#[cfg(target_arch = "wasm32")]
 pub mod web;
 
 /// The contract version an app reports in `ready` and a host in `host`. It changes only when a

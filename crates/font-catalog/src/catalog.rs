@@ -345,6 +345,12 @@ impl Catalog {
         }
     }
 
+    /// A catalog of exactly `files`, built on the existing scan with no font folders and no store.
+    pub fn of_files(files: Vec<PathBuf>) -> Catalog {
+        let _ = files;
+        todo!("ED-F4b")
+    }
+
     /// The process's catalog, for [`FontEnv::from_process`].
     pub fn global() -> &'static Arc<Catalog> {
         static GLOBAL: OnceLock<Arc<Catalog>> = OnceLock::new();

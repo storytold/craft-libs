@@ -59,6 +59,13 @@ pub trait AtomicFs {
     /// request mode `0600` for `Private` or `0666` for `PlatformDefault`; the OS applies its
     /// umask/default ACL. Other platforms keep their native creation behavior.
     fn create_new(&self, path: &Path, permissions: NewFilePermissions) -> io::Result<File>;
+    /// Create the stage like [`AtomicFs::create_new`], carrying over the attributes of the file it
+    /// replaces. `keep` is the destination's `symlink_metadata`, so a replaced link keeps its own
+    /// attributes, not its target's. The default ignores `keep` and calls `create_new`.
+    fn create_new_keeping(&self, path: &Path, permissions: NewFilePermissions, keep: Option<&std::fs::Metadata>) -> io::Result<File> {
+        let _ = keep;
+        self.create_new(path, permissions)
+    }
     /// Flush a written file to durable storage.
     fn sync(&self, file: &File) -> io::Result<()>;
     /// Rename `from` over `to`, replacing it atomically.
@@ -97,6 +104,11 @@ impl AtomicFs for RealFs {
         #[cfg(not(unix))]
         let _ = permissions;
         options.open(path)
+    }
+
+    fn create_new_keeping(&self, path: &Path, permissions: NewFilePermissions, keep: Option<&std::fs::Metadata>) -> io::Result<File> {
+        let _ = (path, permissions, keep);
+        todo!("SH-C33")
     }
 
     fn sync(&self, file: &File) -> io::Result<()> {

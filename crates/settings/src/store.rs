@@ -2,9 +2,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use toml_edit::DocumentMut;
+use web_time::Instant;
 
 use crate::Settings;
 use crate::document::{self, merge_changes, merge_into, set_schema_version};

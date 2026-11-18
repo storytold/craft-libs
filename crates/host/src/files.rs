@@ -249,6 +249,12 @@ pub trait Files: Send + Sync {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError>;
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
+    /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
+    /// picker; the answer arrives through [`take_answer`](Files::take_answer) on a later pass.
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let _ = picked;
+        Err(FileError::Unsupported)
+    }
 }
 
 /// No pickers (every pick answers `Cancelled`); reads and writes go to the file system. The
@@ -460,6 +466,11 @@ impl Files for ScriptedFiles {
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FileError> {
         self.state().files.insert(path.to_owned(), bytes.to_vec());
         Ok(())
+    }
+
+    fn answer_next(&self, picked: Picked) -> Result<(), FileError> {
+        let _ = picked;
+        todo!("WF-W16")
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {

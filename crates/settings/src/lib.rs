@@ -56,6 +56,8 @@ pub mod store;
 pub mod testing;
 
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
+#[cfg(target_arch = "wasm32")]
+pub use files::BrowserFiles;
 #[cfg(not(target_arch = "wasm32"))]
 pub use files::DiskFiles;
 pub use files::SettingsFiles;

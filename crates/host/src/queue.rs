@@ -73,6 +73,19 @@ pub struct QueueOptions {
     pub lanes: usize,
     /// The name each lane's job is spawned with (a thread name with `ThreadJobs`).
     pub name: &'static str,
+    /// Which of two jobs of equal priority runs first.
+    pub order: QueueOrder,
+}
+
+/// Which job runs first among jobs of equal priority: the one that arrived last or first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum QueueOrder {
+    /// The newest job runs first.
+    #[default]
+    NewestFirst,
+    /// The oldest job runs first.
+    OldestFirst,
 }
 
 impl QueueOptions {
@@ -92,7 +105,7 @@ impl Default for QueueOptions {
     /// [`default_lanes`](QueueOptions::default_lanes) lanes named `"craft-queue"`.
     fn default() -> Self {
         // new: the default every library queue starts from.
-        Self { lanes: Self::default_lanes(), name: "craft-queue" }
+        Self { lanes: Self::default_lanes(), name: "craft-queue", order: QueueOrder::default() }
     }
 }
 

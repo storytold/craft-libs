@@ -71,6 +71,39 @@ impl SettingsFiles for DiskFiles {
     }
 }
 
+/// Settings kept in the browser's localStorage, keyed by path: the files of a web build.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BrowserFiles;
+
+#[cfg(target_arch = "wasm32")]
+impl SettingsFiles for BrowserFiles {
+    fn read(&self, path: &Path) -> io::Result<Option<String>> {
+        let _ = path;
+        todo!("SH-C29")
+    }
+
+    fn write(&self, path: &Path, text: &str) -> io::Result<()> {
+        let _ = (path, text);
+        todo!("SH-C29")
+    }
+
+    fn move_aside(&self, path: &Path) -> io::Result<PathBuf> {
+        let _ = path;
+        todo!("SH-C29")
+    }
+
+    fn write_backup(&self, path: &Path, text: &str) -> io::Result<()> {
+        let _ = (path, text);
+        todo!("SH-C29")
+    }
+
+    fn check_writable(&self, dir: &Path) -> io::Result<()> {
+        let _ = dir;
+        todo!("SH-C29")
+    }
+}
+
 /// New files are owner-only; on a replace `craft-atomic` keeps the existing file's mode.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn restrict_permissions(file: &std::fs::File) -> io::Result<()> {

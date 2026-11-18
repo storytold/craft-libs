@@ -5,7 +5,7 @@ use crate::fold::{Folded, Folder};
 use std::ops::Range;
 
 /// How well a text matches, best first: the derived order puts `Whole` before `Prefix` before `WordStart` before
-/// `Contains`.
+/// `Contains` before `AllWords`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Rank {
@@ -17,6 +17,8 @@ pub enum Rank {
     WordStart,
     /// The query occurs inside a word.
     Contains,
+    /// Every word of a multi-word query occurs in the text, in any order (right-to-left locales only).
+    AllWords,
 }
 
 /// A text that matches the query.

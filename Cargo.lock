@@ -3626,6 +3626,7 @@ dependencies = [
  "tempfile",
  "toml",
  "toml_edit",
+ "web-time",
 ]
 
 [[package]]
@@ -4221,6 +4222,7 @@ dependencies = [
 name = "craft-web-host"
 version = "0.1.0"
 dependencies = [
+ "craft-host",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",

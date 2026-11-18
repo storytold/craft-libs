@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions};
+use crate::queue::{Cancel, Finished, JobQueue, Priority, QueueOptions, QueueOrder};
 use crate::{ManualJobs, Wake};
 
 fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>, Arc<AtomicUsize>) {
@@ -15,7 +15,8 @@ fn queue(lanes: usize) -> (JobQueue<&'static str, &'static str>, Arc<ManualJobs>
     let wake = Wake::new(move || {
         counter.fetch_add(1, Ordering::Relaxed);
     });
-    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test" });
+    // P3(pdf-shell-w4): SH-C32
+    let queue = JobQueue::new(jobs.clone(), wake, QueueOptions { lanes, name: "test", order: QueueOrder::default() });
     (queue, jobs, wakes)
 }
 
@@ -88,7 +89,12 @@ fn queue_gives_back_a_lane_the_host_dropped() {
         }
     }
     let jobs = Arc::new(Refusing(AtomicUsize::new(0), ManualJobs::new()));
-    let queue = JobQueue::<&'static str, &'static str>::new(jobs.clone(), Wake::new(|| {}), QueueOptions { lanes: 1, name: "test" });
+    // P3(pdf-shell-w4): SH-C32
+    let queue = JobQueue::<&'static str, &'static str>::new(
+        jobs.clone(),
+        Wake::new(|| {}),
+        QueueOptions { lanes: 1, name: "test", order: QueueOrder::default() },
+    );
     queue.submit("a", Priority::VISIBLE, |_| "a");
     jobs.0.store(1, Ordering::Relaxed);
     queue.submit("b", Priority::VISIBLE, |_| "b");
