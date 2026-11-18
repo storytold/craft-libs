@@ -101,8 +101,13 @@ impl<'a> Name<'a> {
     /// Create a new name from bytes that may contain escape sequences.
     #[inline]
     pub fn new_escaped(data: &'a [u8]) -> Option<Self> {
+        Self::new_escaped_controlled(data, None)
+    }
+
+    fn new_escaped_controlled(data: &'a [u8], control: Option<&crate::cancel::Control>) -> Option<Self> {
         let mut result = SmallVec::new();
         let mut r = Reader::new(data);
+        r.set_control(control.cloned());
 
         while let Some(b) = r.read_byte() {
             if b == b'#' {
@@ -113,6 +118,7 @@ impl<'a> Name<'a> {
             }
         }
 
+        crate::cancel::check(control)?;
         Some(Self(NameInner::Owned(result)))
     }
 
@@ -149,7 +155,17 @@ impl<'a> Readable<'a> for Name<'a> {
 
         // Exclude leading solidus.
         let data = r.range(start + 1..end)?;
-        Self::new(data)
+        if let Some(control) = r.control() {
+            for chunk in data.chunks(64 * 1024) {
+                control.check()?;
+                if chunk.contains(&b'#') {
+                    return Self::new_escaped_controlled(data, Some(control));
+                }
+            }
+            Some(Self::new_unescaped(data))
+        } else {
+            Self::new(data)
+        }
     }
 }
 

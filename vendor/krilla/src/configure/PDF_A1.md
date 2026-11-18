@@ -54,16 +54,21 @@ with an even number of characters and without whitespaces. 🟢
 - krilla does check the maximum entries of a dictionary. 🟢
 - krilla fails export if more than 8388607 indirect objects exist. 🟢
 - krilla fails export if a higher nesting-level than 28 exists. 🔵
-- krilla does not use the DeviceN color space. 🟢
+- krilla fails export if a DeviceN color space is used (see 6.2.3.4), so the limit of 8
+  DeviceN colorants is never reached. 🟢
 - krilla only uses u16 for CIDs. 🟢
 
-6.1.13: krilla does not support optional content. 🔵
+6.1.13: krilla fails export if an optional content group is added
+(`ValidationError::OptionalContent`), so the catalog never has `OCProperties`. 🟢
 
 ## 6.2 Graphics
 
 6.2.2:
 - krilla always writes a valid output intent. 🟢
-- krilla always only writes one output intent. 🟢
+- krilla writes one output intent, or with `SerializeSettings::output_intent` two
+  (`GTS_PDFA1` and `GTS_PDFX`) that name the same destination profile object. 🟢
+- krilla checks only that a profile given in `SerializeSettings::output_intent` has four
+  components; that it is an output (`prtr`) profile is up to the caller. 🟣
 
 6.2.3.1: krilla overrides the `no_device_cs` property if PDF/A is selected, and
 in case CMYK is used but no profile was provided, export fails. 🟢
@@ -72,7 +77,8 @@ in case CMYK is used but no profile was provided, export fails. 🟢
 - sRGB/sGrey ICC profiles conform to ICC v2 specification. 🟢
 
 6.2.4.3: 
-- krilla always uses sRGB for RGB, and in addition also embeds an sRGB output intent. 🟢
+- krilla always uses sRGB for RGB, with an sRGB output intent unless
+  `SerializeSettings::output_intent` gives a CMYK one. 🟢
 - krilla always uses sGrey (except for encoding the alpha channel in images, where DeviceGray
   is required), and in addition always embeds an output intent. 🟢
 - krilla always uses an CMYK ICC profile, and always sets CMYK as the output intent. 🟢
@@ -81,7 +87,8 @@ in case CMYK is used but no profile was provided, export fails. 🟢
 6.2.3.4:
 - krilla ensures the Alternate space in Separation color spaces obeys the restrictions
   in the applicable clauses 🟢
-- krilla does not support DeviceN color spaces. 🔵
+- krilla fails export if a DeviceN color space is used: its tint transform is a PostScript
+  calculator function (`ValidationError::ContainsPostScript`). 🟢
 
 6.2.4: 
 - krilla does not use the `Alternates`/`Intent` keys for images. 🔵
@@ -179,7 +186,9 @@ when a PostScript function is used. 🟢
 6.7.7: krilla writes a minimal `xmpMM:History` entry when a creation date is
 provided. 🟢
 
-6.7.8: krilla writes the extension schemas. 🟢
+6.7.8: krilla writes the extension schemas. `SerializeSettings::pdfx_version` would need one
+for `pdfxid:GTS_PDFXVersion`, which krilla does not write, so it is a validation error
+(`ValidationError::PdfxVersionWithoutExtensionSchema`). 🟢
 
 6.7.9: `xmp-writer` always produces valid XMP packets. 🟢
 

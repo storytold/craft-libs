@@ -1,0 +1,672 @@
+use super::*;
+use craft_flow::FBlock;
+
+fn paras(src: &str) -> Vec<Para> {
+    parse(src).blocks.into_iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
+}
+
+fn texts(src: &str) -> Vec<String> {
+    paras(src).iter().map(|p| p.text()).collect()
+}
+
+#[test]
+fn empty_accent_group_is_plain_character() {
+    let t = texts("\\begin{document}x\\^{}y \\~{}z 2\\^{}10 \\texttt{\\~{}/dir}\\end{document}");
+    assert_eq!(t, vec!["x^y ~z 2^10 ~/dir".to_string()]);
+    // The acute and the diaeresis alone are accents, not an apostrophe or a quotation mark.
+    assert_eq!(texts("\\begin{document}\\'{} \\\"{}\\end{document}"), vec!["\u{B4} \u{A8}".to_string()]);
+}
+
+#[test]
+fn unclosed_begin_keeps_its_brace() {
+    // `env_name` used to consume the `{` before giving up on a missing `}`.
+    let toks = tokenize("\\begin{ x");
+    assert_eq!(toks.first(), Some(&Tok::Cmd("begin".into())), "{toks:?}");
+    assert!(toks.contains(&Tok::Open), "{toks:?}");
+    let toks = tokenize(&format!("\\end{{{}}}", "n".repeat(100)));
+    assert!(toks.contains(&Tok::Open), "{toks:?}");
+}
+
+#[test]
+fn spec_widths_repeats_are_bounded() {
+    assert_eq!(spec_widths("*{3}{p{1cm}}").0, 3);
+    assert_eq!(spec_widths("*{2}{*{2}{l}}").0, 4);
+    let deep = format!("{}l{}", "*{1}{".repeat(MAX_NEST + 5), "}".repeat(MAX_NEST + 5));
+    let (cols, widths) = spec_widths(&deep);
+    assert!(cols <= craft_wordmodel::table::MAX_COLS && widths.is_empty());
+    let wide = format!("{}p{{1cm}}{}", "*{64}{".repeat(30), "}".repeat(30));
+    let (cols, widths) = spec_widths(&wide);
+    assert_eq!(cols, craft_wordmodel::table::MAX_COLS);
+    assert!(widths.len() <= craft_wordmodel::table::MAX_COLS);
+}
+
+#[test]
+fn latex_length_pt_case_and_plus() {
+    assert_eq!(length_pt("12pt"), Some(12.0));
+    assert_eq!(length_pt("12PT"), Some(12.0));
+    assert_eq!(length_pt("+12pt"), Some(12.0));
+    assert_eq!(length_pt("1IN"), Some(72.27));
+    assert_eq!(length_pt("+2cm"), Some(56.9));
+}
+
+const ARTICLE: &str = r#"\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath} % maths
+\newcommand{\R}{\mathbb{R}}
+\title{On \emph{Sample} Documents}
+\author{Ada Lovelace \and Charles Babbage}
+\date{\today}
+\begin{document}
+\maketitle
+
+\section{Introduction}\label{sec:intro}
+This is \textbf{bold}, \textit{italic}, \underline{underlined} and \texttt{code}.
+TeX quotes ``like this'' and dashes -- or --- with 50\% and \$5 \& more~text.
+
+A second paragraph with a footnote\footnote{The note.} and a
+\href{https://example.com}{link}. % a comment
+See Section~\ref{sec:intro}.
+
+\subsection*{Lists}
+\begin{itemize}
+  \item First
+  \item Second
+  \begin{enumerate}
+    \item Nested one
+    \item[b)] Nested two
+  \end{enumerate}
+\end{itemize}
+
+\begin{quote}
+Quoted text.
+\end{quote}
+
+\begin{center}
+Centered.
+\end{center}
+
+\begin{verbatim}
+fn main() {
+    println!("{}", 1 % 2);
+}
+\end{verbatim}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|p{2cm}|l|}
+\hline
+\textbf{Name} & Value \\
+\hline
+\multicolumn{2}{|c|}{Wide} \\
+alpha & $x^2$ \\
+\hline
+\end{tabular}
+\caption{A table.}
+\end{table}
+
+Energy: $E = mc^2$ and
+\[ \frac{a+b}{2} \leq \sqrt{\alpha} \]
+\begin{equation}
+  \sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+\end{equation}
+
+\newpage
+Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
+{\color{red} red text} \textcolor[HTML]{00FF00}{green}.
+\end{document}
+"#;
+
+#[test]
+fn alignment_declarations_end_with_their_group() {
+    // #440: `{\centering …\par}` centres only inside the group; the outer alignment returns.
+    let align = |body: &str| -> Vec<(String, Option<Align>)> {
+        paras(&format!("\\documentclass{{article}}\\begin{{document}}{body}\\end{{document}}")).iter().map(|p| (p.text(), p.align)).collect()
+    };
+    let a = |t: &str, al: Option<Align>| (t.to_string(), al);
+    assert_eq!(align(r"{\centering Center\par}After\par"), vec![a("Center", Some(Align::Center)), a("After", None)]);
+    assert_eq!(
+        align(r"\raggedleft Outer\par{\centering Inner\par}Restored\par"),
+        vec![a("Outer", Some(Align::Right)), a("Inner", Some(Align::Center)), a("Restored", Some(Align::Right))]
+    );
+    assert_eq!(align(r"\centering One\par Two\par"), vec![a("One", Some(Align::Center)), a("Two", Some(Align::Center))]);
+}
+
+#[test]
+fn article_structure() {
+    let flow = parse(ARTICLE);
+    assert_article_metadata(&flow);
+    let ps = paras(ARTICLE);
+    assert_article_blocks(&ps);
+    assert_article_formatting(&ps);
+    assert_article_preamble_is_not_text();
+}
+
+fn assert_article_metadata(flow: &Flow) {
+    assert_eq!(flow.meta.title, "On Sample Documents");
+    assert_eq!(flow.meta.author, "Ada Lovelace Charles Babbage");
+}
+
+fn assert_article_blocks(ps: &[Para]) {
+    let find = |t: &str| ps.iter().find(|p| p.text().trim() == t).unwrap_or_else(|| panic!("no {t:?} in {:?}", texts(ARTICLE)));
+    assert_eq!(find("On Sample Documents").kind, Kind::Title);
+    assert_eq!(find("Introduction").kind, Kind::Heading(1));
+    assert_eq!(find("Lists").kind, Kind::Heading(2));
+    assert_eq!(find("First").list, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }));
+    assert_eq!(find("Nested one").list, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() }));
+    assert!(ps.iter().any(|p| p.text().trim() == "b) Nested two" && p.list.is_some()), "{:?}", texts(ARTICLE));
+    assert_eq!(find("Quoted text.").kind, Kind::Quote);
+    assert_eq!(find("Centered.").align, Some(Align::Center));
+    assert_eq!(find("fn main() {").kind, Kind::Code);
+    assert_eq!(find("println!(\"{}\", 1 % 2);").kind, Kind::Code, "verbatim keeps % and indentation");
+    assert!(ps.iter().any(|p| p.text() == "    println!(\"{}\", 1 % 2);"));
+    assert_eq!(find("A table.").align, Some(Align::Center));
+    let second = ps.iter().find(|p| p.text().starts_with("A second")).unwrap();
+    assert!(second.text().contains("footnote (The note.) and a link."), "{}", second.text());
+    assert!(second.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.com"))));
+    assert!(!second.text().contains("comment"));
+}
+
+fn assert_article_formatting(ps: &[Para]) {
+    let body = ps.iter().find(|p| p.text().starts_with("This is")).unwrap();
+    let has = |t: &str, f: &dyn Fn(&Fmt) -> bool| body.inlines.iter().any(|i| matches!(i, Inline::Text(x, fm) if x == t && f(fm)));
+    assert!(has("bold", &|f| f.bold));
+    assert!(has("italic", &|f| f.italic));
+    assert!(has("underlined", &|f| f.underline));
+    assert!(has("code", &|f| f.code));
+    assert!(body.text().contains("“like this” and dashes – or — with 50% and $5 & more\u{A0}text."), "{}", body.text());
+    let accents = ps.iter().find(|p| p.text().starts_with("Café")).unwrap();
+    assert!(accents.page_break, "\\newpage");
+    assert!(accents.text().starts_with("Café naïve ça šé and grouped bold after."), "{}", accents.text());
+    assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "grouped bold" && f.bold)));
+    assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.starts_with(" after.") && !f.bold)), "{:?}", accents.inlines);
+    assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.contains("red text") && f.color == Some(Rgb(255, 0, 0)))));
+    assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "green" && f.color == Some(Rgb(0, 255, 0)))));
+}
+
+fn assert_article_preamble_is_not_text() {
+    let all = texts(ARTICLE).join("\n");
+    for gone in ["mathbb", "utf8", "11pt", "today", "sec:intro}", "amsmath", "maths"] {
+        assert!(!all.contains(gone), "{gone:?} leaked: {all}");
+    }
+}
+
+#[test]
+fn tables_and_math() {
+    let flow = parse(ARTICLE);
+    let t = flow.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).expect("table");
+    assert_eq!(t.rows.len(), 3, "{t:?}");
+    assert_eq!(t.rows[0].iter().map(Cell::text).collect::<Vec<_>>(), ["Name", "Value"]);
+    assert_eq!(t.rows[1].len(), 1);
+    assert_eq!(t.rows[1][0].colspan, 2);
+    assert_eq!(t.rows[1][0].text(), "Wide");
+    assert!(t.widths.is_empty(), "the l column has no width");
+    let eq =
+        |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Equation { linear, display } = i { Some((linear.clone(), *display)) } else { None });
+    let ps = paras(ARTICLE);
+    let energy = ps.iter().find(|p| p.text().starts_with("Energy")).unwrap();
+    assert_eq!(eq(energy), Some(("E = mc^2".to_string(), false)));
+    let displays: Vec<_> = ps.iter().filter_map(eq).filter(|(_, d)| *d).map(|(l, _)| l).collect();
+    assert_eq!(displays, ["(a+b)/2 ≤ √(α)", "∑_(i=1)^n i = (n(n+1))/2"]);
+    let cell = &t.rows[2][1];
+    let FBlock::Para(p) = &cell.blocks[0] else { panic!() };
+    assert_eq!(eq(p), Some(("x^2".to_string(), false)));
+}
+
+#[test]
+fn multirow_cells_and_widths() {
+    let src = r"\begin{tabular}{p{1in}p{2cm}}
+\multirow{2}{*}{Tall} & a \\
+ & b \\
+\end{tabular}";
+    let flow = parse(src);
+    let FBlock::Table(t) = &flow.blocks[0] else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 2);
+    assert_eq!(t.rows[0][0].rowspan, 2);
+    assert!(t.rows[1][0].covered);
+    assert_eq!(t.rows[1][1].text(), "b");
+    assert_eq!(t.widths.len(), 2);
+    assert!((t.widths[0] - (72.27 + 12.0)).abs() < 0.1, "{:?}", t.widths);
+}
+
+#[test]
+fn fragments_without_a_document_environment() {
+    assert_eq!(texts("Just \\textbf{text}.\n\nTwo."), ["Just text.", "Two."]);
+    assert_eq!(texts(""), Vec::<String>::new());
+    assert_eq!(texts("\\unknown{kept} \\unknownopt[dropped]{kept too}"), ["kept kept too"]);
+    assert_eq!(texts("a\\\\b\\newline c"), ["a\nb\nc"]);
+    assert_eq!(texts("\\verb|\\x{}| y"), ["\\x{} y"]);
+    assert_eq!(texts("\\chapter{C}\\section{S}").len(), 2);
+    let ps = paras("\\chapter{C}\\section{S}");
+    assert_eq!((ps[0].kind, ps[1].kind), (Kind::Heading(1), Kind::Heading(2)));
+}
+
+#[test]
+fn a_blank_line_after_a_comment_ends_the_paragraph() {
+    // The comment took its line end with it, so the blank line after it read as a single line
+    // end: the paragraphs ran together with two spaces between them.
+    let two = ["first", "second"];
+    assert_eq!(texts("\\begin{document}first % note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n  \t\n\nsecond\\end{document}"), two);
+    // A comment still joins its line to a next line that is not blank.
+    assert_eq!(texts("\\begin{document}first%\nsecond\\end{document}"), ["firstsecond"]);
+    assert_eq!(texts("\\begin{document}first % note\n   second\\end{document}"), ["first second"]);
+}
+
+#[test]
+fn a_blank_line_after_a_control_word_at_a_line_end_ends_the_paragraph() {
+    // The control word took the line end after it, so the blank line read as a single line end.
+    assert_eq!(texts("\\begin{document}first \\relax\n\nsecond\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax  \n \n second\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax\nsecond\\end{document}"), ["first second"]);
+}
+
+/// Wraps `body` in a document whose line ends are all `nl`.
+fn with_line_ends(body: &str, nl: &str) -> String {
+    format!("\\begin{{document}}{nl}{}{nl}\\end{{document}}{nl}", body.replace('\n', nl))
+}
+
+#[test]
+fn a_blank_line_ends_the_paragraph_with_cr_and_crlf_line_ends() {
+    // #6365: only LF counted as a line end, so with CR line ends every paragraph break was lost.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\nsecond", nl)), ["first second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first \\relax\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_comment_ends_at_a_cr_line_end() {
+    // #6373: a comment ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n% note\nsecond\n\nthird", nl)), ["first second", "third"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\n% note\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_verbatim_environment_starts_after_a_cr_line_end() {
+    // #6374: the rest of the `\begin{verbatim}` line ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(
+            texts(&with_line_ends("before\n\n\\begin{verbatim}\ncode one\ncode two\n\\end{verbatim}\n\nafter", nl)),
+            ["before", "code one", "code two", "after"],
+            "{nl:?}"
+        );
+    }
+}
+
+#[test]
+fn the_line_end_after_a_control_word_reads_as_nothing_with_cr_and_crlf_line_ends() {
+    // #6375: the control word took only an LF after it, so a CR there read as a space.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first \\TeX\nis", nl)), ["first TeXis"], "{nl:?}");
+    }
+}
+
+#[test]
+fn equations_survive_a_round_trip() {
+    let mut d = Document::new();
+    let mut p = craft_wordmodel::Paragraph::with_text("Area ", Default::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        craft_wordmodel::para::InlineObject::Equation { linear: "π r^2".into(), display: false, math: Default::default() },
+        &Default::default(),
+    )
+    .unwrap();
+    d.body = vec![craft_wordmodel::para_block(p)];
+    let tex = export(&d);
+    assert!(tex.contains("$\\pi r^2$") && tex.contains("\\usepackage{amsmath}"), "{tex}");
+    let back = import(tex.as_bytes());
+    let craft_wordmodel::Block::Para(bp) = &*back.body[0] else { panic!() };
+    assert!(
+        bp.objects.iter().any(|o| matches!(o, craft_wordmodel::para::InlineObject::Equation { linear, .. } if linear == "π r^2")),
+        "{:?}",
+        bp.objects
+    );
+    // Formats without equations keep the text.
+    let md = craft_markdown::export(&d);
+    assert!(md.contains("π r^2"), "{md}");
+}
+
+#[test]
+fn leading_brackets_stay_text() {
+    // `\item [x]` and `\\ [1]` would read the bracket as an optional argument.
+    assert_eq!(escape_text("[x] a\n [1] b [c]"), "{[}x] a\\\\\n {[}1] b [c]");
+    let doc = craft_markdown::import("- [x] done");
+    let back = import(export(&doc).as_bytes());
+    assert_eq!(back.plain_text(Default::default()), "[x] done");
+}
+
+#[test]
+fn a_second_optional_argument_is_not_text() {
+    // Both optional arguments sit in one token (`[3cm][l]`), and the second was left over as text.
+    for src in ["a\\makebox[3cm][l]{x}b", "a\\framebox[3cm][r]{x}b", "a\\makebox[3cm] [l]{x}b"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+    let t = texts("\\begin{document}\\begin{minipage}[t][2cm][c]{3cm}x\\end{minipage}\\end{document}");
+    assert_eq!(t, vec!["x".to_string()]);
+}
+
+#[test]
+fn an_optional_argument_after_a_space_is_not_text() {
+    // A space before the `[` kept the whole argument as text.
+    for src in ["\\begin{figure} [h]x\\end{figure}", "\\begin{minipage} [t]{3cm}x\\end{minipage}"] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["x".to_string()], "{src}");
+    }
+    assert_eq!(texts("a\\\\ [2pt]b"), ["a\nb"]);
+}
+
+#[test]
+fn a_definition_with_a_default_argument_shows_nothing() {
+    // `[2][x]`: the default was left over as text, and the definition's body with it.
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2][x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+    assert_eq!(texts("\\begin{document}\\newcommand{\\foo}[2] [x]{#1 and #2}word\\end{document}"), vec!["word".to_string()]);
+}
+
+#[test]
+fn a_box_shows_only_its_text() {
+    // The box's position, size, scale or angle showed before its text.
+    for src in [
+        "a\\parbox{3cm}{x}b",
+        "a\\parbox[t][2cm][s]{3cm}{x}b",
+        "a\\raisebox{2pt}{x}b",
+        "a\\raisebox{2pt}[0pt][0pt]{x}b",
+        "a\\raisebox{2pt} [0pt] [0pt]{x}b",
+        "a\\scalebox{2}{x}b",
+        "a\\scalebox{2}[1]{x}b",
+        "a\\scalebox{2} [1]{x}b",
+        "a\\resizebox{2cm}{!}{x}b",
+        "a\\resizebox*{2cm}{1cm}{x}b",
+        "a\\rotatebox{90}{x}b",
+        "a\\rotatebox[origin=c]{90}{x}b",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+}
+
+#[test]
+fn settings_that_are_not_text_show_nothing() {
+    for src in [
+        "\\hyphenation{ta-ble}word",
+        "\\addvspace{1ex}word",
+        "\\enlargethispage{2\\baselineskip}word",
+        "\\enlargethispage*{1cm}word",
+        "\\selectlanguage{german}word",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}word",
+        "\\newcounter{step}word",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
+/// A dropped command takes only its own arguments: `\settowidth{\gap}{wide}{Visible}` keeps `Visible`.
+#[test]
+fn dropped_commands_keep_the_text_after_their_arguments() {
+    for src in [
+        "\\hyphenation{ta-ble}{word}",
+        "\\addvspace{1ex}{word}",
+        "\\enlargethispage{2\\baselineskip}{word}",
+        "\\enlargethispage*{1cm}{word}",
+        "\\selectlanguage{german}{word}",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}{word}",
+        "\\settoheight{\\gap}{tall}{word}",
+        "\\settodepth{\\gap}{deep}{word}",
+        "\\newcounter{step}[section]{word}",
+        "\\date{today}{word}",
+        "\\thanks{A note}{word}",
+        "\\captionsetup[figure]{font=it}{word}",
+        "\\fancyhf[LH]{Hidden}word",
+        "\\setlength{\\parskip}{1em}{word}",
+        "\\setlength\\parindent{0pt}word",
+        "\\newcommand\\foo[1][x]{body}{word}",
+        "\\newenvironment{note}[1]{begin}{end}{word}",
+        "\\def\\foo#1{body}{word}",
+        "\\newtheorem{thm}{Theorem}[section]{word}",
+        "\\addcontentsline{toc}{section}{Intro}{word}",
+        "\\bigskip{word}",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+    for (name, args) in crate::parser::DROP_WITH_ARGS {
+        let given: String = args.chars().map(|k| if k == 'o' { "[a]" } else { "{a}" }).collect();
+        let src = format!("\\{name}{given}{{word}}");
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
+#[test]
+fn special_characters_round_trip() {
+    let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
+    let d = Document::from_text(text);
+    let tex = export(&d);
+    let back = import(tex.as_bytes());
+    assert_eq!(back.plain_text(Default::default()).trim(), text.replace('\t', "\u{2003}"), "{tex}");
+}
+
+#[test]
+fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
+    // The control symbol took the line end with it and read as nothing: the two words ran
+    // together, and a blank line after it no longer ended the paragraph.
+    assert_eq!(texts("\\begin{document}mid\\\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}mid\\\r\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}tab\\\there\\end{document}"), vec!["tab here".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+}
+
+#[test]
+fn a_control_space_at_a_line_end_adds_no_second_space() {
+    // The line end after it was read as a space of its own, so text taken as written (a
+    // reference, a URL) had two spaces where `\ ` gives one.
+    assert_eq!(tokenize("a\\\nb"), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
+}
+
+#[test]
+fn blanks_after_a_control_space_add_no_second_space() {
+    // TeX skips the blanks after `\ ` and after `\` and a tab, but they were read as a space of
+    // their own, so text taken as written had two spaces.
+    for cs in ["\\ ", "\\\t"] {
+        assert_eq!(tokenize(&format!("a{cs} \tb")), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}\n  two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        assert_eq!(texts(&format!("\\begin{{document}}\\ref{{one{cs}   two}}\\end{{document}}")), vec!["one two".to_string()], "{cs:?}");
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[one{cs}  two] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{cs:?}");
+        // A blank line after it still ends the paragraph.
+        assert_eq!(
+            texts(&format!("\\begin{{document}}first{cs}\n\nsecond\\end{{document}}")),
+            vec!["first".to_string(), "second".to_string()],
+            "{cs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_control_space_in_an_item_label_is_a_space() {
+    // The optional argument kept a control symbol as written, so the label read `one\ two`.
+    for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[{src}] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{src:?}");
+    }
+}
+
+#[test]
+fn a_paragraph_that_ends_in_spaces_stays_apart_on_the_way_back() {
+    // Export writes the last of the spaces as a control space at the line end (`a \`), which
+    // import read as nothing, so the paragraph ran into the next one.
+    let tex = export(&Document::from_text("a  \nb"));
+    let t: Vec<String> = texts(&tex).iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    assert_eq!(t, vec!["a".to_string(), "b".to_string()], "{tex}");
+}
+
+#[test]
+fn exported_tables_size_their_columns() {
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, extra: None, kept: None, wrap: None };
+    let cell = |s: &str| Cell {
+        blocks: vec![FBlock::Para({
+            let mut p = Para::default();
+            p.push_text(s, &Fmt::default());
+            p
+        })],
+        ..Default::default()
+    };
+    t.rows.push(vec![cell("a"), cell("b")]);
+    t.rows.push(vec![Cell { colspan: 2, ..cell("wide") }]);
+    let mut w = Writer::default();
+    w.table(&t);
+    assert!(w.out.contains("\\begin{tabular}{|p{88pt}|p{188pt}|}"), "{}", w.out);
+    assert!(w.out.contains("\\multicolumn{2}{|p{288pt}|}{wide}"), "{}", w.out);
+    let back = parse(&w.out);
+    let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
+    assert_eq!(bt.widths, vec![100.0, 200.0]);
+    assert_eq!(bt.rows[1][0].colspan, 2);
+}
+
+#[test]
+fn urls_preserve_tildes() {
+    let tex = r"\href{https://example.com/~user/page}{Homepage} and \url{https://example.com/~user/page}";
+    let flow = parse(tex);
+    let FBlock::Para(p) = &flow.blocks[0] else { panic!() };
+    assert_eq!(p.inlines[0], Inline::Text("Homepage".to_string(), Fmt { link: Some("https://example.com/~user/page".into()), ..Default::default() }));
+    assert_eq!(
+        p.inlines[2],
+        Inline::Text("https://example.com/~user/page".to_string(), Fmt { link: Some("https://example.com/~user/page".into()), ..Default::default() })
+    );
+}
+
+#[test]
+fn exported_borderless_tables_omit_rules() {
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true, extra: None, kept: None, wrap: None };
+    let cell = |s: &str| Cell {
+        blocks: vec![FBlock::Para({
+            let mut p = Para::default();
+            p.push_text(s, &Fmt::default());
+            p
+        })],
+        ..Default::default()
+    };
+    t.rows.push(vec![cell("a"), cell("b")]);
+    t.rows.push(vec![Cell { colspan: 2, ..cell("wide") }]);
+    let mut w = Writer::default();
+    w.table(&t);
+    assert!(w.out.contains("\\begin{tabular}{p{88pt} p{188pt}}"), "{}", w.out);
+    assert!(!w.out.contains("\\hline"), "{}", w.out);
+    assert!(w.out.contains("\\multicolumn{2}{p{288pt}}{wide}"), "{}", w.out);
+    let back = parse(&w.out);
+    let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
+    assert!(bt.borderless, "parsed table should be borderless");
+    assert_eq!(bt.widths, vec![100.0, 200.0]);
+    assert_eq!(bt.rows[1][0].colspan, 2);
+}
+
+#[test]
+fn table_borders_and_borderless_round_trip() {
+    use craft_wordmodel::{Block, CharProps, Paragraph, Table, para_block};
+    use std::sync::Arc;
+
+    // 1. Borderless table.
+    let mut doc = Document::new();
+    let mut t_borderless = Table::new(2, 2, 400.0);
+    t_borderless.props.style = None;
+    for row in &mut t_borderless.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+        }
+    }
+    doc.body = vec![Arc::new(Block::Table(t_borderless))];
+    let tex = export(&doc);
+    assert!(!tex.contains("\\hline"));
+    let back = import(tex.as_bytes());
+    let Some(Block::Table(bt)) = back.body.first().map(|b| &**b) else { panic!() };
+    assert!(bt.props.style.is_none(), "imported table should remain borderless");
+
+    // 2. Bordered table.
+    let mut doc_bordered = Document::new();
+    let mut t_bordered = Table::new(2, 2, 400.0);
+    t_bordered.props.style = Some("TableGrid".to_string());
+    for row in &mut t_bordered.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+        }
+    }
+    doc_bordered.body = vec![Arc::new(Block::Table(t_bordered))];
+    let tex_bordered = export(&doc_bordered);
+    assert!(tex_bordered.contains("\\hline"));
+    let back_bordered = import(tex_bordered.as_bytes());
+    let Some(Block::Table(bt_bordered)) = back_bordered.body.first().map(|b| &**b) else { panic!() };
+    assert!(bt_bordered.props.style.is_some(), "imported table should remain bordered");
+}
+
+#[test]
+fn verbatim_end_is_kept_out_after_control_characters_go() {
+    // A control character inside `\end{verbatim}` was removed after the check for it, so
+    // the code line closed the environment and the rest ran as TeX.
+    let mut d = Document::new();
+    let line = "\\end{verb\u{E}atim}\\input{/etc/passwd}";
+    d.body = vec![craft_wordmodel::para_block(craft_wordmodel::Paragraph::with_text(line, Default::default()).styled(model::CODE_STYLE))];
+    let out = export(&d);
+    assert_eq!(out.matches("\\end{verbatim}").count(), 1, "{out}");
+    assert!(out.contains("\\end {verbatim}\\input"), "{out}");
+}
+
+#[test]
+fn nested_multicolumn_wrappers_are_bounded() {
+    // Each `\multicolumn` unwrapped rescanned the rest of the cell; nested ones were all
+    // unwrapped, quadratic in the nesting.
+    let n = 50_000;
+    let src = format!("\\begin{{tabular}}{{l}}{}x{}\\\\\\end{{tabular}}", "\\multicolumn{1}{c}{".repeat(n), "}".repeat(n));
+    let t = std::time::Instant::now();
+    let f = parse(&src);
+    // Under a second on a loaded machine; unwrapping every wrapper took 213 s.
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    assert!(f.blocks.iter().any(|b| matches!(b, FBlock::Table(_))));
+    // One or two wrappers, as written in real tables, are still read.
+    let f = parse("\\begin{tabular}{ll}\\multicolumn{2}{c}{\\multirow{2}{*}{Both}}\\\\\\end{tabular}");
+    let Some(FBlock::Table(t)) = f.blocks.first() else { panic!("{:?}", f.blocks) };
+    assert_eq!((t.rows[0][0].colspan, t.rows[0][0].rowspan), (2, 2));
+    assert_eq!(t.rows[0][0].text(), "Both");
+}
+
+#[test]
+fn ligature_characters_split_across_runs_stay_apart() {
+    // Three runs in different fonts (as HTML with font-family spans gives them).
+    let font = |f: &str| Fmt { font: Some(f.into()), ..Default::default() };
+    let mut p = Para::default();
+    p.push_text("a-", &font("Arial"));
+    p.push_text("-b '", &font("Georgia"));
+    p.push_text("'x", &font("Arial"));
+    let d = model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], ..Default::default() });
+    let tex = export(&d);
+    assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
+    let back = import(tex.as_bytes());
+    assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
+}
+
+#[test]
+fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
+    // A 5,000-cell row with spans widened the multirow tracking every later row walks; the
+    // document keeps MAX_COLS cells a row, so the rest are left out while parsing.
+    let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
+    let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
+    let t = table::table(&toks, "", 0);
+    assert_eq!(t.rows.first().map(Vec::len), Some(craft_wordmodel::table::MAX_COLS));
+    assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
+}
+
+#[test]
+fn a_starred_line_break_shows_no_star() {
+    // `\\*` (a line break with no page break after it) left its `*` in the text.
+    for src in ["a\\\\*b", "a\\\\*[3pt]b", "a\\\\b"] {
+        let p = paras(&format!("\\begin{{document}}{src}\\end{{document}}"));
+        assert_eq!(p.len(), 1, "{src}");
+        assert_eq!(p[0].text().replace(['\n', '\u{B}'], "|"), "a|b", "{src}");
+    }
+    let flow = parse("\\begin{document}\\begin{tabular}{ll}a & b \\\\* c & d\\end{tabular}\\end{document}");
+    let Some(FBlock::Table(t)) = flow.blocks.first() else { panic!("{:?}", flow.blocks) };
+    assert_eq!(t.rows.len(), 2, "{t:?}");
+    assert_eq!(t.rows[1].iter().map(|c| c.text().trim().to_string()).collect::<Vec<_>>(), ["c", "d"]);
+}

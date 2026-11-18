@@ -1,0 +1,51 @@
+{
+  "docking": {
+    "layout": {
+      "root": {
+        "Split": {
+          "axis": "Horizontal",
+          "size": {
+            "FixedFirst": 272.0
+          },
+          "first": {
+            "Tabs": {
+              "panels": [
+                "tools"
+              ],
+              "active": 0
+            }
+          },
+          "second": {
+            "Split": {
+              "axis": "Horizontal",
+              "size": {
+                "FixedSecond": 330.0
+              },
+              "first": {
+                "Tabs": {
+                  "panels": [
+                    "canvas"
+                  ],
+                  "active": 0
+                }
+              },
+              "second": {
+                "Tabs": {
+                  "panels": [
+                    "inspector"
+                  ],
+                  "active": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "floating": []
+    },
+    "hidden": []
+  },
+  "docking_left_open": true,
+  "docking_right": null,
+  "recent": []
+}

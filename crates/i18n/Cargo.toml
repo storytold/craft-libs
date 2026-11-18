@@ -1,6 +1,6 @@
 [package]
 name = "craft-i18n"
-description = "Translations for the Craft apps: the embedded craft-i18n catalogs, lookup with fallback, plurals, language names and the system locale."
+description = "Translations for the Craft apps: the embedded craft-i18n catalogs, lookup with fallback, plurals, numbers for a region, language names, the system locale, search folding and locale sorting."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,12 +8,39 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-intl_pluralrules = "=7.0.2"
-unic-langid = "0.9"
+# Numbers and plural rules, on CLDR data (data/numbers.postcard) generated for one ICU4X minor
+# version, hence `~2.3`.
+fixed_decimal = { version = "0.7.2", default-features = false }
+icu_decimal = { version = "~2.3", default-features = false, features = ["serde"] }
+icu_locale_core = { version = "~2.3", default-features = false }
+icu_locale_fallback = { version = "~2.3", default-features = false, features = ["compiled_data"] }
+icu_plurals = { version = "~2.3", default-features = false, features = ["serde"] }
+icu_provider = { version = "~2.3", default-features = false, features = ["sync"] }
+icu_provider_adapters = { version = "~2.3", default-features = false }
+icu_provider_blob = { version = "~2.3", default-features = false }
+writeable = "0.6"
+log = "0.4"
 sys-locale = "0.3"
+icu_normalizer = "~2.3"
+icu_properties = "~2.3"
+# Generated data fits one ICU4X minor version; data/generate-collation.sh names its datagen.
+icu_collator = { version = "~2.3.1", default-features = false, features = ["serde"], optional = true }
+unicode-bidi = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 sys-locale = { version = "0.3", features = ["js"] }
+
+# The regional format (Region::system); safe registry reads, MIT OR Apache-2.0.
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+
+# The current locale (Region::system); already in the apps' Cargo.lock through eframe.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDateFormatter", "NSFormatter", "NSLocale", "NSString"] }
+
+[features]
+# Locale sorting (`collate`), with ICU4X collation data for the suite's locales embedded.
+collate = ["dep:icu_collator", "icu_provider/serde", "icu_provider_blob/alloc"]
 
 [lints]
 workspace = true

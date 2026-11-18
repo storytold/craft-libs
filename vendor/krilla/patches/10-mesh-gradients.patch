@@ -1,0 +1,397 @@
+diff --git a/src/content.rs b/src/content.rs
+index f723f20..26ad665 100644
+--- a/src/content.rs
++++ b/src/content.rs
+@@ -1122,6 +1122,16 @@ impl ContentBuilder {
+                 let (gradient_props, transform) = sg.clone().gradient_properties(bounds);
+                 write_gradient(gradient_props, sc, chunk_container, transform, self);
+             }
++            InnerPaint::MeshGradient(mg) => {
++                let transform = mg.transform;
++                write_gradient(
++                    GradientProperties::MeshGradient(mg.clone()),
++                    sc,
++                    chunk_container,
++                    transform,
++                    self,
++                );
++            }
+             InnerPaint::Pattern(pat) => {
+                 let mut pat = Arc::unwrap_or_clone(pat.clone());
+                 pat.transform = pattern_transform(pat.transform);
+diff --git a/src/error.rs b/src/error.rs
+index 1807ac3..4c582ae 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -29,6 +29,11 @@ pub enum KrillaError {
+     ///
+     /// [`GroupColorSpace::Cmyk`]: crate::GroupColorSpace::Cmyk
+     MissingGroupCmykProfile,
++    /// A mesh gradient's corner colors are in color spaces that can't be written as one
++    /// (see [`MeshGradient`]), for example RGB with CMYK.
++    ///
++    /// [`MeshGradient`]: crate::paint::MeshGradient
++    MixedMeshColorSpaces(Option<Location>),
+     /// An error while attempting to embed a font.
+     Font(Font, String),
+     /// A list of validation errors. Can only occur if you set the `validator` in
+@@ -70,6 +75,10 @@ impl Display for KrillaError {
+             KrillaError::MissingGroupCmykProfile => {
+                 f.write_str("a CMYK group color space with no_device_cs needs a CMYK profile")
+             }
++            KrillaError::MixedMeshColorSpaces(location) => {
++                f.write_str("a mesh gradient mixes color spaces that can't be written as one")?;
++                write_location(f, *location)
++            }
+             KrillaError::Font(_, message) => write!(f, "failed to embed font: {message}"),
+             KrillaError::Validation(errors) => {
+                 let count = errors.len();
+diff --git a/src/graphics/mask.rs b/src/graphics/mask.rs
+index 2763a27..b526db9 100644
+--- a/src/graphics/mask.rs
++++ b/src/graphics/mask.rs
+@@ -99,6 +99,15 @@ impl Mask {
+                     return None;
+                 }
+             }
++            GradientProperties::MeshGradient(mg) => {
++                if mg
++                    .patches
++                    .iter()
++                    .all(|p| p.opacities.iter().all(|o| o.get() == 1.0))
++                {
++                    return None;
++                }
++            }
+         }
+ 
+         let shading_function = ShadingFunction::new(gradient_properties, true);
+diff --git a/src/graphics/paint.rs b/src/graphics/paint.rs
+index d4b9efb..abe8892 100644
+--- a/src/graphics/paint.rs
++++ b/src/graphics/paint.rs
+@@ -52,6 +52,65 @@ impl Hash for LinearGradient {
+     }
+ }
+ 
++/// One Coons patch of a [`MeshGradient`].
++#[derive(Debug, Clone, PartialEq)]
++pub struct MeshPatch {
++    /// The twelve boundary control points, in the order a PDF Type 6 shading lists them
++    /// (ISO 32000-1, 8.7.4.5.7): starting at a corner, three cubic Bézier edges' worth of points
++    /// going one way round the patch, so the corners are `points[0]`, `[3]`, `[6]` and `[9]`.
++    pub points: [(f32, f32); 12],
++    /// The colors at the corners `points[0]`, `[3]`, `[6]` and `[9]`.
++    ///
++    /// Corner colors of a mesh in different color spaces built from inks (CMYK, luma as
++    /// black, spots with a CMYK fallback, DeviceN) are written in one space: Separation for a
++    /// single spot, DeviceCMYK for process colors alone, DeviceN otherwise. Other colors need
++    /// to share one color space across the whole mesh, or [`Document::finish`] fails with
++    /// [`KrillaError::MixedMeshColorSpaces`].
++    ///
++    /// [`Document::finish`]: crate::Document::finish
++    /// [`KrillaError::MixedMeshColorSpaces`]: crate::error::KrillaError::MixedMeshColorSpaces
++    pub colors: [Color; 4],
++    /// The opacities at the same corners.
++    pub opacities: [NormalizedF32; 4],
++}
++
++impl Eq for MeshPatch {}
++
++impl Hash for MeshPatch {
++    fn hash<H: Hasher>(&self, state: &mut H) {
++        for (x, y) in &self.points {
++            x.to_bits().hash(state);
++            y.to_bits().hash(state);
++        }
++        self.colors.hash(state);
++        self.opacities.hash(state);
++    }
++}
++
++/// A mesh gradient: Coons patches, each blending its four corner colors across its curved
++/// shape, written as one PDF Type 6 shading so the viewer or RIP blends them smoothly at its
++/// own resolution. Corner opacities below 1 add a soft mask, as for the other gradients.
++/// Patches paint in order (a later one over an earlier one); a fill paints only where they lie.
++#[derive(Debug, Clone, PartialEq)]
++pub struct MeshGradient {
++    /// The patches.
++    pub patches: Vec<MeshPatch>,
++    /// A transform that should be applied to the mesh gradient.
++    pub transform: Transform,
++    /// Whether the gradient should be anti-aliased.
++    pub anti_alias: bool,
++}
++
++impl Eq for MeshGradient {}
++
++impl Hash for MeshGradient {
++    fn hash<H: Hasher>(&self, state: &mut H) {
++        self.patches.hash(state);
++        self.transform.hash(state);
++        self.anti_alias.hash(state);
++    }
++}
++
+ /// A radial gradient.
+ #[derive(Debug, Clone, PartialEq)]
+ pub struct RadialGradient {
+@@ -178,6 +237,7 @@ pub(crate) enum InnerPaint {
+     LinearGradient(LinearGradient),
+     RadialGradient(RadialGradient),
+     SweepGradient(SweepGradient),
++    MeshGradient(Arc<MeshGradient>),
+     Pattern(Arc<Pattern>),
+ }
+ 
+@@ -220,6 +280,12 @@ impl From<cmyk::Color> for Paint {
+     }
+ }
+ 
++impl From<MeshGradient> for Paint {
++    fn from(value: MeshGradient) -> Self {
++        Paint(InnerPaint::MeshGradient(Arc::new(value)))
++    }
++}
++
+ impl From<Color> for Paint {
+     fn from(value: Color) -> Self {
+         Paint(InnerPaint::Color(value))
+diff --git a/src/graphics/shading_function.rs b/src/graphics/shading_function.rs
+index ad0e783..74c56f3 100644
+--- a/src/graphics/shading_function.rs
++++ b/src/graphics/shading_function.rs
+@@ -4,6 +4,7 @@ use std::sync::Arc;
+ 
+ use bumpalo::Bump;
+ use pdf_writer::types::{FunctionShadingType, PostScriptOp};
++use pdf_writer::writers::StreamShadingType;
+ use pdf_writer::{Chunk, Finish, Ref};
+ use tiny_skia_path::Point;
+ 
+@@ -14,7 +15,7 @@ use crate::graphics::color::device_n::{self, Colorant, DeviceNSpace, Process};
+ use crate::graphics::color::separation::{self, SeparationColorant, SeparationSpace};
+ use crate::graphics::color::{cmyk, luma};
+ use crate::graphics::color::{Color, ColorSpace, RegularColor, SpecialColor};
+-use crate::graphics::paint::{LinearGradient, RadialGradient, SweepGradient};
++use crate::graphics::paint::{LinearGradient, MeshGradient, RadialGradient, SweepGradient};
+ use crate::graphics::paint::{SpreadMethod, Stop};
+ use crate::num::NormalizedF32;
+ use crate::resource;
+@@ -84,6 +85,7 @@ impl Hash for PostScriptGradient {
+ pub(crate) enum GradientProperties {
+     RadialAxialGradient(RadialAxialGradient),
+     PostScriptGradient(PostScriptGradient),
++    MeshGradient(Arc<MeshGradient>),
+ }
+ 
+ impl GradientProperties {
+@@ -100,6 +102,7 @@ impl GradientProperties {
+                     return Some((&psg.stops[0].color, psg.stops[0].opacity));
+                 }
+             }
++            GradientProperties::MeshGradient(_) => {}
+         }
+ 
+         None
+@@ -233,8 +236,8 @@ impl ShadingFunction {
+ }
+ 
+ impl GradientProperties {
+-    /// Rewrite stops in different ink-based color spaces into one space (see
+-    /// [`common_color_space`]); other gradients are returned unchanged.
++    /// Rewrite stops, or mesh corner colors, in different ink-based color spaces into one
++    /// space (see [`common_color_space`]); other gradients are returned unchanged.
+     fn with_common_color_space(self) -> Self {
+         fn convert(stops: &mut [Stop]) {
+             let colors: Vec<Color> = stops.iter().map(|s| s.color.clone()).collect();
+@@ -254,6 +257,22 @@ impl GradientProperties {
+                 convert(&mut psg.stops);
+                 GradientProperties::PostScriptGradient(psg)
+             }
++            GradientProperties::MeshGradient(mesh) => {
++                let colors: Vec<Color> = mesh
++                    .patches
++                    .iter()
++                    .flat_map(|p| p.colors.iter().cloned())
++                    .collect();
++                let Some(colors) = common_color_space(&colors) else {
++                    return GradientProperties::MeshGradient(mesh);
++                };
++                let mut mesh = Arc::unwrap_or_clone(mesh);
++                let corners = mesh.patches.iter_mut().flat_map(|p| p.colors.iter_mut());
++                for (corner, color) in corners.zip(colors) {
++                    *corner = color;
++                }
++                GradientProperties::MeshGradient(Arc::new(mesh))
++            }
+         }
+     }
+ }
+@@ -478,6 +497,35 @@ impl Cacheable for ShadingFunction {
+                     registered_cs,
+                 )
+             }
++            GradientProperties::MeshGradient(mg) => {
++                // No patches paints nothing; the shading is still written, as it is referenced.
++                let first = mg
++                    .patches
++                    .first()
++                    .map_or_else(|| luma::Color::black().into(), |p| p.colors[0].clone());
++                // `ShadingFunction::new` has brought ink-based colors into one space; any
++                // others left can't share the stream's one color space.
++                if !self.0.use_opacities
++                    && sc.mixed_mesh_colors.is_none()
++                    && !mg
++                        .patches
++                        .iter()
++                        .flat_map(|p| p.colors.iter())
++                        .all(|c| same_color_space(&first, c))
++                {
++                    sc.mixed_mesh_colors = Some(sc.location);
++                }
++                let shading_cs = shading_color_space(sc, first, self.0.use_opacities);
++                let registered_cs = sc.register_colorspace(chunk_container, shading_cs);
++                serialize_mesh_shading(
++                    sc,
++                    &mut stream_chunk,
++                    root_ref,
++                    mg,
++                    self.0.use_opacities,
++                    registered_cs,
++                );
++            }
+         }
+ 
+         // Note: The stream chunk might be empty.
+@@ -497,6 +545,83 @@ fn shading_color_space(sc: &mut SerializeContext, color: Color, use_opacities: b
+     }
+ }
+ 
++/// A mesh gradient as a Type 6 (Coons patch mesh) shading: per patch an 8-bit edge flag (0, no
++/// shared edge), the twelve points as 32-bit coordinates over the mesh's bounds (`Decode`), and
++/// the four corner colors (with `use_opacities`, the opacities as gray) at 8 bits a component,
++/// Flate-compressed. 32-bit coordinates keep the patches where they are to well under a printer
++/// dot, as Illustrator writes its meshes.
++fn serialize_mesh_shading(
++    sc: &mut SerializeContext,
++    chunk: &mut Chunk,
++    root_ref: Ref,
++    mesh: &MeshGradient,
++    use_opacities: bool,
++    cs: MaybeDeviceColorSpace,
++) {
++    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
++    for (x, y) in mesh.patches.iter().flat_map(|p| p.points.iter()) {
++        (x0, y0, x1, y1) = (x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y));
++    }
++    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
++        (x0, y0, x1, y1) = (0.0, 0.0, 1.0, 1.0);
++    }
++    // A zero-size range would divide by zero: widen it by a point either way.
++    if x1 - x0 < f32::EPSILON {
++        (x0, x1) = (x0 - 1.0, x1 + 1.0);
++    }
++    if y1 - y0 < f32::EPSILON {
++        (y0, y1) = (y0 - 1.0, y1 + 1.0);
++    }
++    let components = if use_opacities {
++        1
++    } else {
++        mesh.patches
++            .first()
++            .map_or(1, |p| p.colors[0].to_pdf_color().len())
++    };
++    let coord = |v: f32, lo: f32, hi: f32| {
++        (((f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo))).clamp(0.0, 1.0)
++            * f64::from(u32::MAX))
++        .round() as u32
++    };
++    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
++    let mut data = Vec::with_capacity(mesh.patches.len() * (1 + 12 * 8 + 4 * components));
++    for patch in &mesh.patches {
++        data.push(0u8);
++        for (x, y) in &patch.points {
++            data.extend(coord(*x, x0, x1).to_be_bytes());
++            data.extend(coord(*y, y0, y1).to_be_bytes());
++        }
++        for (color, opacity) in patch.colors.iter().zip(patch.opacities.iter()) {
++            if use_opacities {
++                data.push(byte(opacity.get()));
++            } else {
++                let values = color.to_pdf_color();
++                // Mixed spaces fail the document (`mixed_mesh_colors`); still never misread bytes.
++                for i in 0..components {
++                    data.push(byte(values.get(i).copied().unwrap_or(0.0)));
++                }
++            }
++        }
++    }
++    let filter_stream =
++        FilterStreamBuilder::new_from_binary_data(&data).finish(&sc.serialize_settings());
++    let mut shading = chunk.stream_shading(root_ref, filter_stream.encoded_data());
++    filter_stream.write_filters(shading.deref_mut().deref_mut());
++    shading.shading_type(StreamShadingType::CoonsPatch);
++    set_colorspace(cs, shading.deref_mut().deref_mut());
++    shading.bits_per_coordinate(32);
++    shading.bits_per_component(8);
++    shading.bits_per_flag(8);
++    let mut decode = vec![x0, x1, y0, y1];
++    for _ in 0..components {
++        decode.extend([0.0, 1.0]);
++    }
++    shading.decode(decode);
++    shading.anti_alias(mesh.anti_alias);
++    shading.finish();
++}
++
+ fn serialize_postscript_shading(
+     sc: &mut SerializeContext,
+     chunk: &mut Chunk,
+diff --git a/src/serialize.rs b/src/serialize.rs
+index 9b22240..587e2c6 100644
+--- a/src/serialize.rs
++++ b/src/serialize.rs
+@@ -353,6 +353,9 @@ pub(crate) enum MaybeDeviceColorSpace {
+ pub(crate) struct SerializeContext {
+     /// An unfinished or failed page/surface must never serialize as a complete document.
+     pub(crate) poisoned: bool,
++    /// Where the first mesh gradient whose corner colors share no color space was drawn;
++    /// [`SerializeContext::finish`] fails with [`KrillaError::MixedMeshColorSpaces`].
++    pub(crate) mixed_mesh_colors: Option<Option<Location>>,
+     /// The ref of the page tree.
+     page_tree_ref: Ref,
+     /// PDF 2.0 namespaces.
+@@ -413,6 +416,7 @@ impl SerializeContext {
+ 
+         Self {
+             poisoned: false,
++            mixed_mesh_colors: None,
+             cached_mappings: HashMap::new(),
+             pdf2_ns,
+             global_objects: GlobalObjects::default(),
+@@ -624,6 +628,9 @@ impl SerializeContext {
+         if self.serialize_settings.pdfx_version.is_some() {
+             self.register_validation_error(ValidationError::PdfxVersionWithoutExtensionSchema);
+         }
++        if let Some(location) = self.mixed_mesh_colors {
++            return Err(KrillaError::MixedMeshColorSpaces(location));
++        }
+ 
+         // We need to be careful here that we serialize the objects in the right order,
+         // as in some cases we use MaybeTake::take to remove an object, which means that
+diff --git a/src/surface.rs b/src/surface.rs
+index 0cbbc4b..15a728d 100644
+--- a/src/surface.rs
++++ b/src/surface.rs
+@@ -615,6 +615,10 @@ impl<'a> Surface<'a> {
+                 r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE)
+             }
+             InnerPaint::SweepGradient(r) => r.stops.iter().any(|s| s.opacity != NormalizedF32::ONE),
++            InnerPaint::MeshGradient(m) => m
++                .patches
++                .iter()
++                .any(|p| p.opacities.iter().any(|o| *o != NormalizedF32::ONE)),
+             InnerPaint::Pattern(_) => false,
+         };
+ 

@@ -1,0 +1,84 @@
+---
+source: src/sweep/sweep_line.rs
+expression: "snapshot_outputs(segs, 0.01)"
+---
+[
+  Output(
+    y: 0.0,
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          seg: SegIdx(3),
+          exit: false,
+          enter: true,
+          lower_bound: -0.01,
+          upper_bound: 0.01,
+          in_changed_interval: true,
+          old_idx: Some(0),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(1),
+          exit: false,
+          enter: true,
+          lower_bound: 0.99,
+          upper_bound: 1.01,
+          in_changed_interval: true,
+          old_idx: Some(1),
+          old_seg: None,
+        ),
+      ],
+    ),
+    changed: [
+      ChangedInterval(
+        segs: Range(
+          start: 0,
+          end: 2,
+        ),
+        horizontals: Some(Range(
+          start: 0,
+          end: 1,
+        )),
+      ),
+    ],
+  ),
+  Output(
+    y: 1.0,
+    order: SegmentOrder(
+      segs: [
+        SegmentOrderEntry(
+          seg: SegIdx(3),
+          exit: true,
+          enter: false,
+          lower_bound: -0.01,
+          upper_bound: 0.01,
+          in_changed_interval: true,
+          old_idx: Some(0),
+          old_seg: None,
+        ),
+        SegmentOrderEntry(
+          seg: SegIdx(1),
+          exit: true,
+          enter: false,
+          lower_bound: 0.99,
+          upper_bound: 1.01,
+          in_changed_interval: true,
+          old_idx: Some(1),
+          old_seg: None,
+        ),
+      ],
+    ),
+    changed: [
+      ChangedInterval(
+        segs: Range(
+          start: 0,
+          end: 2,
+        ),
+        horizontals: Some(Range(
+          start: 0,
+          end: 1,
+        )),
+      ),
+    ],
+  ),
+]

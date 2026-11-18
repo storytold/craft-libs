@@ -1,0 +1,39 @@
+---
+source: src/lib.rs
+expression: output
+---
+Contours(
+  contours: [
+    Contour(
+      path: BezPath([
+        MoveTo(Point(
+          x: 0.0,
+          y: 10.0,
+        )),
+        LineTo(Point(
+          x: 0.0,
+          y: 0.0,
+        )),
+        LineTo(Point(
+          x: 10.0,
+          y: 0.0,
+        )),
+        LineTo(Point(
+          x: 10.0,
+          y: 1.0,
+        )),
+        LineTo(Point(
+          x: 10.0,
+          y: 10.0,
+        )),
+        LineTo(Point(
+          x: 0.0,
+          y: 10.0,
+        )),
+        ClosePath,
+      ]),
+      parent: None,
+      outer: true,
+    ),
+  ],
+)

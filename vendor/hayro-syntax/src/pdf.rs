@@ -6,7 +6,7 @@ use crate::page::Pages;
 use crate::page::cached::CachedPages;
 use crate::reader::Reader;
 use crate::sync::Arc;
-use crate::xref::{XRef, XRefError, fallback, root_xref};
+use crate::xref::{XRef, XRefError};
 
 pub use crate::crypto::DecryptionError;
 use crate::metadata::Metadata;
@@ -20,25 +20,62 @@ use crate::metadata::Metadata;
 /// budget, not this ordinary materialization limit. `Page::page_stream` materializes that
 /// same stream and does use this limit, so the two paths can produce different lengths.
 /// These limits do not impose a total document memory or execution-time limit.
+///
+/// The image limits bound one image `XObject` or mask of known size: the bytes its last Flate,
+/// LZW or RunLength filter may produce, and the pixels the interpreter decodes, whatever its
+/// filters. Their defaults are 1 GiB and 2^28 pixels. A caller that can hold larger images
+/// raises them; where pointers are narrower than 64 bits, a raise is clamped to the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DecodeLimits {
     max_decoded_stream: usize,
+    max_decoded_image: u64,
+    max_image_pixels: u64,
 }
 
 impl DecodeLimits {
-    /// The existing ordinary stream limit, 256 MiB.
-    pub const DEFAULT: Self = Self { max_decoded_stream: crate::filter::MAX_DECODED_STREAM };
+    /// The existing limits: 256 MiB for an ordinary stream, 1 GiB and 2^28 pixels for an image.
+    pub const DEFAULT: Self = Self {
+        max_decoded_stream: crate::filter::MAX_DECODED_STREAM,
+        max_decoded_image: crate::filter::MAX_DECODED_IMAGE,
+        max_image_pixels: crate::filter::MAX_IMAGE_PIXELS,
+    };
 
     /// Lower the maximum expanded bytes per ordinary stream. Requests above the existing
     /// 256 MiB ceiling are clamped; zero permits no ordinary materialized expansion.
     /// This does not lower the separate incremental page-content budget.
     pub const fn with_max_decoded_stream(self, max: usize) -> Self {
-        Self { max_decoded_stream: if max < self.max_decoded_stream { max } else { self.max_decoded_stream } }
+        Self { max_decoded_stream: if max < self.max_decoded_stream { max } else { self.max_decoded_stream }, ..self }
     }
 
     /// The maximum expanded bytes per ordinary stream.
     pub const fn max_decoded_stream(self) -> usize {
         self.max_decoded_stream
+    }
+
+    /// Set the most bytes the last Flate, LZW or RunLength filter of an image of known size may
+    /// produce, lower or (with 64-bit pointers) higher than the 1 GiB default. The filter also
+    /// stops at twice the image's own pixel bytes.
+    pub const fn with_max_decoded_image(self, max: u64) -> Self {
+        Self { max_decoded_image: narrow_clamp(max, crate::filter::MAX_DECODED_IMAGE), ..self }
+    }
+
+    /// The most bytes the last Flate, LZW or RunLength filter of an image of known size may
+    /// produce.
+    pub const fn max_decoded_image(self) -> u64 {
+        self.max_decoded_image
+    }
+
+    /// Set the most pixels an image or mask may have for the interpreter to decode it, lower or
+    /// (with 64-bit pointers) higher than the 2^28 default, up to 2^32. A larger image is
+    /// skipped with an image decode warning.
+    pub const fn with_max_image_pixels(self, max: u64) -> Self {
+        let max = if max > MAX_RAISED_IMAGE_PIXELS { MAX_RAISED_IMAGE_PIXELS } else { max };
+        Self { max_image_pixels: narrow_clamp(max, crate::filter::MAX_IMAGE_PIXELS), ..self }
+    }
+
+    /// The most pixels an image or mask may have for the interpreter to decode it.
+    pub const fn max_image_pixels(self) -> u64 {
+        self.max_image_pixels
     }
 }
 
@@ -46,6 +83,16 @@ impl Default for DecodeLimits {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// The most pixels [`DecodeLimits::with_max_image_pixels`] sets: the sample and byte counts of
+/// such an image (up to 32 components of 4 bytes) fit a 64-bit `usize`.
+const MAX_RAISED_IMAGE_PIXELS: u64 = 1 << 32;
+
+/// `max`, or `default` when `max` is higher and pointers are narrower than 64 bits: the sizes
+/// derived from a larger image overflow `usize` there.
+const fn narrow_clamp(max: u64, default: u64) -> u64 {
+    if usize::BITS < 64 && max > default { default } else { max }
 }
 
 /// A PDF file.
@@ -63,6 +110,15 @@ pub enum LoadPdfError {
     Decryption(DecryptionError),
     /// The PDF was invalid or could not be parsed due to some other unknown reason.
     Invalid,
+}
+
+/// Failure of a cancellable open. Existing loading errors retain their original type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CancellableLoadError {
+    /// The caller requested cancellation while opening the document.
+    Cancelled,
+    /// The document could not be loaded.
+    Load(LoadPdfError),
 }
 
 #[allow(clippy::len_without_is_empty)]
@@ -89,18 +145,47 @@ impl Pdf {
     /// Try to read a PDF with a password and document-local stream expansion limits.
     /// The same immutable limits apply during initial xref parsing, repair and later reads.
     pub fn new_with_password_and_limits(data: impl Into<PdfData>, password: &str, limits: DecodeLimits) -> Result<Self, LoadPdfError> {
-        let data = data.into();
+        Self::load(data.into(), password, limits, None)
+    }
+
+    /// Open with cooperative cancellation, retaining the existing password and decode policies.
+    /// The callback is owned by `cancel`, runs on this thread, and is not retained by a loaded
+    /// PDF. A true result stays latched for this open and never starts a repair pass.
+    pub fn new_with_password_limits_and_cancel(
+        data: impl Into<PdfData>,
+        password: &str,
+        limits: DecodeLimits,
+        cancel: &crate::Cancellation,
+    ) -> Result<Self, CancellableLoadError> {
+        let control = crate::cancel::Control::new(cancel);
+        let _scope = crate::cancel::Scope(control.clone());
+        if control.check().is_none() {
+            return Err(CancellableLoadError::Cancelled);
+        }
+        let result = Self::load(data.into(), password, limits, Some(control.clone()));
+        if control.check().is_none() {
+            Err(CancellableLoadError::Cancelled)
+        } else {
+            result.map_err(CancellableLoadError::Load)
+        }
+    }
+
+    fn load(data: PdfData, password: &str, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, LoadPdfError> {
         let password = password.as_bytes();
         let version = find_version(data.as_ref()).unwrap_or(PdfVersion::Pdf10);
-        let xref = match root_xref(data.clone(), password, limits) {
+        let xref = match crate::xref::root_xref_controlled(data.clone(), password, limits, control.clone()) {
             Ok(x) => x,
             Err(e) => match e {
-                XRefError::Unknown => fallback(data.clone(), password, limits).ok_or(LoadPdfError::Invalid)?,
+                XRefError::Unknown => {
+                    crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
+                    crate::xref::fallback_controlled(data.clone(), password, limits, control.clone()).ok_or(LoadPdfError::Invalid)?
+                }
                 XRefError::Encryption(e) => return Err(LoadPdfError::Decryption(e)),
             },
         };
         let xref = Arc::new(xref);
 
+        crate::cancel::check(control.as_ref()).ok_or(LoadPdfError::Invalid)?;
         let pages = CachedPages::new(xref.clone()).ok_or(LoadPdfError::Invalid)?;
 
         Ok(Self { xref, header_version: version, pages, data })
@@ -147,6 +232,16 @@ impl Pdf {
     /// Return the metadata in the document information dictionary of the document.
     pub fn metadata(&self) -> &Metadata {
         self.xref.metadata()
+    }
+
+    /// Return the document information dictionary resolved through the final trailer and xref.
+    pub fn info(&self) -> Option<crate::object::Dict<'_>> {
+        self.xref.info_id().and_then(|id| self.xref.get(id))
+    }
+
+    /// Whether the resolved trailer declares the document encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.xref.is_encrypted()
     }
 }
 

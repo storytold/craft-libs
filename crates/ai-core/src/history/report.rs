@@ -22,17 +22,18 @@ pub struct Day {
 }
 
 impl Day {
-    /// Days since 1970-01-01 (negative before it).
+    /// Days since 1970-01-01 (negative before it); a day that doesn't exist (2025-02-30) reads as 0.
     pub fn to_days(self) -> i64 {
-        let (y, m, d) = (i64::from(self.year), i64::from(self.month), i64::from(self.day));
-        let y = if m <= 2 { y - 1 } else { y };
-        let era = y.div_euclid(400);
-        let yoe = y.rem_euclid(400);
-        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        era * 146_097 + doe - 719_468
+        use chrono::Datelike;
+        // chrono covers years up to about ±262143, but `Day` holds any `i32` year. The Gregorian
+        // calendar repeats every 400 years, so chrono handles the year within its cycle and
+        // whole cycles are added back.
+        let cycles = i64::from(self.year.div_euclid(400));
+        chrono::NaiveDate::from_ymd_opt(self.year.rem_euclid(400), u32::from(self.month), u32::from(self.day))
+            .map_or(0, |d| i64::from(d.num_days_from_ce()) - UNIX_EPOCH_DAYS_FROM_CE + cycles * DAYS_PER_400_YEARS)
     }
 
+    /// The calendar day at `days` since 1970-01-01; a day whose year doesn't fit `i32` reads as 0000-01-01.
     pub fn from_days(days: i64) -> Day {
         civil_from_days(days)
     }
@@ -61,18 +62,24 @@ impl fmt::Display for Month {
     }
 }
 
-/// Days since 1970-01-01 to a calendar day (proleptic Gregorian).
+/// `NaiveDate::num_days_from_ce` of 1970-01-01, so the count can be rebased onto the Unix epoch.
+const UNIX_EPOCH_DAYS_FROM_CE: i64 = 719_163;
+
+/// Days in one 400-year Gregorian cycle (the calendar repeats after it).
+const DAYS_PER_400_YEARS: i64 = 146_097;
+
+/// Days since 1970-01-01 to a calendar day (proleptic Gregorian). chrono converts the day
+/// within its 400-year cycle and whole cycles are added back as years, so every `i64` count
+/// works; a year that doesn't fit `i32` reads as 0000-01-01.
 fn civil_from_days(days: i64) -> Day {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    Day { year: i32::try_from(y).unwrap_or(0), month: u8::try_from(m).unwrap_or(1), day: u8::try_from(d).unwrap_or(1) }
+    use chrono::Datelike;
+    let (cycles, rest) = (days.div_euclid(DAYS_PER_400_YEARS), days.rem_euclid(DAYS_PER_400_YEARS));
+    let date = i32::try_from(rest + UNIX_EPOCH_DAYS_FROM_CE).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt);
+    let year = date.and_then(|d| i32::try_from(i64::from(d.year()) + cycles * 400).ok());
+    match (date, year) {
+        (Some(d), Some(year)) => Day { year, month: u8::try_from(d.month()).unwrap_or(1), day: u8::try_from(d.day()).unwrap_or(1) },
+        _ => Day { year: 0, month: 1, day: 1 },
+    }
 }
 
 /// The calendar day of a Unix-millisecond time, at a fixed offset from UTC in minutes (east is

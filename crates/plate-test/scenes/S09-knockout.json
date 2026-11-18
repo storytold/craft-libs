@@ -1,0 +1,60 @@
+{
+  "id": "S09",
+  "title": "Knockout group of a 50% cyan and a 50% magenta circle over yellow",
+  "source": "research S9, DesignCraft DC05",
+  "page": [360, 216],
+  "settings": {"group_cs": "cmyk"},
+  "objects": [
+    {"type": "rect", "rect": [20, 20, 320, 176], "fill": {"cmyk": [0, 0, 100, 0]}},
+    {
+      "type": "group",
+      "knockout": true,
+      "objects": [
+        {
+          "type": "ellipse",
+          "rect": [60, 38, 140, 140],
+          "fill": {"cmyk": [100, 0, 0, 0]},
+          "opacity": 0.5
+        },
+        {
+          "type": "ellipse",
+          "rect": [160, 38, 140, 140],
+          "fill": {"cmyk": [0, 100, 0, 0]},
+          "opacity": 0.5
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "plates": ["Cyan", "Magenta", "Yellow", "Black"],
+    "points": [
+      {"at": [30, 108], "inks": {"Yellow": 100}, "tol": 2, "note": "yellow only"},
+      {
+        "at": [100, 108],
+        "inks": {"Yellow": 50, "Cyan": 50},
+        "tol": 6,
+        "note": "cyan 50% over yellow"
+      },
+      {
+        "at": [180, 108],
+        "inks": {"Yellow": 50, "Magenta": 50},
+        "tol": 6,
+        "note": "overlap: only the top circle over the backdrop (without knockout C25 M50 Y25)"
+      },
+      {
+        "at": [260, 108],
+        "inks": {"Yellow": 50, "Magenta": 50},
+        "tol": 6,
+        "note": "magenta 50% over yellow"
+      }
+    ]
+  },
+  "structure": {
+    "page_group": "DeviceCMYK",
+    "knockout": true,
+    "group_cs": ["none"],
+    "color_spaces": ["DeviceCMYK"],
+    "device_rgb": false,
+    "output_intents": []
+  }
+}

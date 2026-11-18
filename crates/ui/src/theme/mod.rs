@@ -1,7 +1,7 @@
 //! Theme mechanisms for egui widgets, with palettes and theme selection owned by applications.
 //!
-//! This module does not install fonts, store a theme, or change global visuals. Applications
-//! decide their colors, borders, typography, spacing and saved preferences independently.
+//! This module does not store a theme or change global visuals; [`crate::fonts`] installs fonts.
+//! Applications decide their colors, borders, typography, spacing and saved preferences independently.
 
 use egui::{Color32, CornerRadius, Stroke, style::Widgets};
 

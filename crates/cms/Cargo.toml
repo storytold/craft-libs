@@ -13,6 +13,7 @@ exclude = ["tests/data", "tests/fogra39.rs"]
 workspace = true
 
 [dependencies]
+md5 = { workspace = true }
 serde = { workspace = true, optional = true }
 
 [features]
