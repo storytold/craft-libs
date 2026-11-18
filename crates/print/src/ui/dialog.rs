@@ -265,11 +265,12 @@ impl PrintSection {
 
     /// Shows the section with its rows over `values`. Its rows' requests and a title button's press go into `requests`.
     fn show(&self, ui: &mut Ui, at: usize, values: &mut DialogFields, requests: &mut HostRequests) {
+        // Declared before `section`, whose controls closure borrows it.
+        let mut pressed = None;
         let mut section = match self.folded {
             Some(open) => Section::new(self.title.clone()).initially_open(open),
             None => Section::fixed(self.title.clone()),
         };
-        let mut pressed = None;
         if !self.buttons.is_empty() {
             let buttons = &self.buttons;
             let pressed = &mut pressed;
