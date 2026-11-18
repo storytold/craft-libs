@@ -1277,21 +1277,37 @@ fn a_border_without_a_size_is_width_0() {
     assert_eq!(widths(&craft_docx::read(&saved).unwrap()), [Some(0.0); 3]);
 }
 
-/// storytold/wordcraft#5065: a table, cell or table-style border without `w:sz` keeps the half
-/// point it has always been read at, so splitting the paragraph default off leaves them alone
-/// (storytold/wordcraft#5764 covers them).
+/// storytold/wordcraft#5764: a table, cell or table-style border without `w:sz` is width 0 too, as
+/// `w:sz="0"`. Word gives neither any room (`w:sz="1"` takes an eighth of a point), so read as half
+/// a point it moved every row below a pandoc table's header rule. Saving writes `w:sz="0"`.
 #[test]
-fn a_table_border_without_a_size_stays_half_a_point() {
+fn a_table_border_without_a_size_is_width_0() {
     let styles = format!(
-        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Ruled"><w:name w:val="Ruled"/><w:tblPr><w:tblBorders><w:top w:val="single"/></w:tblBorders></w:tblPr></w:style></w:styles>"#
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Ruled"><w:name w:val="Ruled"/><w:tblPr><w:tblBorders><w:top w:val="single"/></w:tblBorders></w:tblPr><w:tblStylePr w:type="firstRow"><w:tcPr><w:tcBorders><w:bottom w:val="single"/></w:tcBorders></w:tcPr></w:tblStylePr></w:style></w:styles>"#
     );
-    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Ruled"/><w:tblBorders><w:bottom w:val="single"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#;
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Ruled"/><w:tblBorders><w:bottom w:val="single"/></w:tblBorders><w:tblLook w:firstRow="1" w:val="0020"/></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#;
+    let widths = |d: &Document| {
+        let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+        let parts = d.styles.get("Ruled").and_then(|s| s.table.clone()).expect("the style's parts");
+        [
+            t.props.borders.and_then(|b| b.bottom).map(|b| b.width),
+            t.rows[0].cells[0].props.borders.and_then(|b| b.left).map(|b| b.width),
+            parts.borders.and_then(|b| b.top).map(|b| b.width),
+            parts.header_borders.and_then(|b| b.bottom).map(|b| b.width),
+        ]
+    };
     let d = craft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
-    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
-    assert_eq!(t.props.borders.and_then(|b| b.bottom).map(|b| b.width), Some(0.5));
-    assert_eq!(t.rows[0].cells[0].props.borders.and_then(|b| b.left).map(|b| b.width), Some(0.5));
-    let parts = d.styles.get("Ruled").and_then(|s| s.table.clone()).expect("the style's parts");
-    assert_eq!(parts.borders.and_then(|b| b.top).map(|b| b.width), Some(0.5));
+    assert_eq!(widths(&d), [Some(0.0); 4]);
+    let rule = d.styles.get("Ruled").and_then(|s| s.table.clone()).and_then(|p| p.header_borders).and_then(|b| b.bottom).expect("the header rule");
+    assert!(rule.is_drawn() && !rule.is_visible(), "drawn, taking no room: {rule:?}");
+    let saved = craft_docx::write(&d).unwrap();
+    let parts = unzip(&saved);
+    let styles = text(&parts, "word/styles.xml");
+    let ruled = styles.split("<w:style ").find(|s| s.contains(r#"w:styleId="Ruled""#)).expect("the style is saved");
+    for xml in [text(&parts, "word/document.xml").as_str(), ruled] {
+        assert!(xml.contains(r#"w:val="single" w:sz="0""#) && !xml.contains(r#"w:sz="4""#), "{xml}");
+    }
+    assert_eq!(widths(&craft_docx::read(&saved).unwrap()), [Some(0.0); 4]);
 }
 
 #[test]

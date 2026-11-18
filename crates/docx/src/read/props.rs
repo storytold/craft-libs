@@ -544,9 +544,12 @@ impl PropCtx {
         self.borders_or(e, 0.0)
     }
 
-    /// `w:tblBorders`, `w:tcBorders`: a border without `w:sz` stays half a point here.
+    /// `w:tblBorders`, `w:tcBorders`, and a table style's. A border without `w:sz` is width 0 here
+    /// too, as `w:sz="0"`: Word gives neither any room, where `w:sz="1"` takes an eighth of a
+    /// point (storytold/wordcraft#5764). Read as half a point, every row below a pandoc table's
+    /// header rule moved down half a point.
     pub fn table_borders(&self, e: &El) -> Borders {
-        self.borders_or(e, 0.5)
+        self.borders_or(e, 0.0)
     }
 
     fn borders_or(&self, e: &El, missing: f32) -> Borders {

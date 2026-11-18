@@ -343,9 +343,11 @@ pub(in crate::text) fn border_attrs(b: Option<Borders>) -> String {
     p
 }
 
-/// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
+/// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line. A drawn line of width 0
+/// (a DOCX table border without `w:sz`) goes out at [`Border::THINNEST`]: ODF has no border that
+/// is drawn and takes no room.
 pub(in crate::text) fn odf_border(b: Option<Border>) -> String {
-    let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
+    let Some(b) = b.filter(Border::is_drawn).map(|b| b.as_drawn()) else { return "none".into() };
     let style = match b.style {
         BorderStyle::Double | BorderStyle::Triple => "double",
         BorderStyle::Dotted => "dotted",
