@@ -270,8 +270,8 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with the document
-/// canvas or a canvas control focused, the Escape that stop, the canvas's sessions, its tool and every scope around
-/// it left. A component or a
+/// canvas or a canvas control focused, the Escape and the Enter that stop, the canvas's sessions, its tool and every
+/// scope around it left. A component or a
 /// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
 /// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
 /// component took. `rtl` reads horizontal moves in the window's direction.
@@ -282,19 +282,26 @@ pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Inte
         None => None,
     };
     let mut window = intents_of(ctx, None, rtl);
-    // The focused canvas's or canvas control's leftover Escape is offered as the window's; it stays in that stop's
-    // slot until taken.
-    let lent_cancel = canvas
-        .filter(|canvas| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*canvas), &Intent::Cancel))
-        .map(|canvas| {
-            window.items.push((Intent::Cancel, false));
-            (canvas, window.items.len() - 1)
-        });
+    // The focused canvas's or canvas control's leftover Escape and Enter are offered as the window's, so the canvas's
+    // tool still gets them (a warp point picked by a drag leaves Enter to the transform that applies it); each stays
+    // in that stop's slot until taken.
+    let mut lent = Vec::new();
+    if let Some(canvas) = canvas {
+        for intent in [Intent::Cancel, Intent::Submit] {
+            if !window.items.iter().any(|(item, _)| *item == intent) && holds(ctx, Some(canvas), &intent) {
+                window.items.push((intent.clone(), false));
+                lent.push((intent, window.items.len() - 1));
+            }
+        }
+    }
     let taken = take(&mut window);
-    if let Some((canvas, at)) = lent_cancel {
-        let (_, cancel_taken) = window.items.remove(at);
-        if cancel_taken && !crate::runtime::measure::active(ctx) {
-            current(ctx, |stage| take_from(stage, Some(canvas), &Intent::Cancel));
+    for (intent, at) in lent.into_iter().rev() {
+        let (_, lent_taken) = window.items.remove(at);
+        if lent_taken
+            && !crate::runtime::measure::active(ctx)
+            && let Some(canvas) = canvas
+        {
+            current(ctx, |stage| take_from(stage, Some(canvas), &intent));
         }
     }
     if taken {
