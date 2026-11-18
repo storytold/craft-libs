@@ -175,10 +175,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
-        let scx = &scx.measured_by(ui);
+        let env = Env::of(ui);
+        // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
+        // its room until its exit ends.
+        let scx = &scx.measured_by(ui).owned_by(id, env.motion);
         self.room = room;
         self.indent_step = scx.control().icon;
-        let env = Env::of(ui);
         let room = Self::inner_room(comp, &env.tokens, room);
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
