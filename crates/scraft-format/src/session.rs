@@ -898,8 +898,12 @@ impl Session {
     /// `u64::MAX` and repeat itself.
     fn validate(&self) -> Result<(), SessionError> {
         // Input names are routing keys. Truncating them can orphan or alias assignments.
-        if self.inputs.iter().any(|input| input.name.chars().nth(MAX_NAME_CHARS).is_some()) {
-            return Err(SessionError::Invalid(format!("an input path name exceeds {MAX_NAME_CHARS} characters")));
+        let assignments = self.tracks.iter().filter_map(|track| match &track.mixer.input {
+            crate::Route::Input(name) => Some(name),
+            _ => None,
+        });
+        if self.inputs.iter().map(|input| &input.name).chain(assignments).any(|name| name.chars().nth(MAX_NAME_CHARS).is_some()) {
+            return Err(SessionError::Invalid(format!("a named input routing key exceeds {MAX_NAME_CHARS} characters")));
         }
         if self.next_id == u64::MAX {
             return Err(SessionError::Invalid("the session id space is exhausted".into()));

@@ -134,9 +134,21 @@ mod session_io_tests {
             if size == MAX_NAME_CHARS {
                 assert_eq!(Session::from_json(&json).unwrap(), session);
             } else {
-                assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("input path name")));
+                assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("named input routing key")));
+                session.track_mut(id).unwrap().mixer.input = Route::None;
+                let json = session.to_json().unwrap();
+                assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("named input routing key")));
             }
         }
+    }
+
+    #[test]
+    fn rejects_an_oversized_named_input_assignment_without_a_path_definition() {
+        let mut session = Session::default();
+        let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        session.track_mut(id).unwrap().mixer.input = Route::Input("琴".repeat(MAX_NAME_CHARS + 1));
+        let json = session.to_json().unwrap();
+        assert!(matches!(Session::from_json(&json), Err(SessionError::Invalid(message)) if message.contains("named input routing key")));
     }
 
     #[test]
