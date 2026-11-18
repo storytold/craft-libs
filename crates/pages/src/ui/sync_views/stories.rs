@@ -9,7 +9,7 @@ use egui::Ui;
 /// Pages in each half's document: enough to scroll.
 const PAGES: usize = 4;
 
-fn pair(ui: &mut Ui, data: &mut StoryData, captions: Option<(&str, &str)>) -> StoryOutput {
+fn pair(ui: &mut Ui, data: &mut StoryData, captions: Option<(&'static str, &'static str)>) -> StoryOutput {
     let (state, left, right) = data.value("pair", (SyncedViewsState::default(), PageViewState::default(), PageViewState::default()));
     let pages = DemoPages::new(PAGES);
     let mut views = SyncedViews::new("Compare", state);
