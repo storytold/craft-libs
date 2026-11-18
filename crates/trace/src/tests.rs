@@ -4193,3 +4193,21 @@ fn alpha_rejects_oversized_png_before_decoding() {
     deep.splice(8..33, ihdr);
     assert!(matches!(decode_alpha(&deep), Err(TraceError::TooLarge { .. })));
 }
+
+/// A comb-shaped region expands to one crack per pixel of the image: past the per-loop crack cap
+/// the trace is refused instead of holding gigabytes of crack storage while placing the outline.
+#[test]
+fn a_comb_past_the_crack_cap_is_refused() {
+    let comb = |w: u32, h: u32| Raster::from_fn(w, h, |x, y| if y == h - 1 || x % 2 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] });
+    let params = TraceParams { noise: 0, ..TraceParams::default() };
+    // 256 x 128: about 32,000 cracks on the comb's one outline, past the test cap of 16,384.
+    match trace_within(&comb(256, 128), &params, usize::MAX) {
+        Err(TraceError::TooComplex { .. }) => {}
+        other => panic!("a comb past the crack cap must be refused, got {other:?}"),
+    }
+    // A smaller comb fits the cap and still traces.
+    match trace_within(&comb(64, 32), &params, usize::MAX) {
+        Ok(res) => assert!(!res.paths.is_empty()),
+        Err(e) => panic!("{e}"),
+    }
+}

@@ -37,6 +37,11 @@ pub const MAX_FLATTEN_PER_CURVE: f64 = 4096.0;
 /// overflows to infinity and it reserves a buffer no machine has. (Far beyond any drawing.)
 pub const MAX_FLATTEN_LENGTH: f64 = 1e60;
 
+/// The least tolerance [`flatten`] asks kurbo for. kurbo squares its scaled tolerance when it
+/// sizes a cubic's subdivision; below this the square underflows to zero, the subdivision count
+/// saturates to `usize::MAX` and the buffer reservation panics. (Far below any drawing.)
+pub const MIN_FLATTEN_TOLERANCE: f64 = 1e-100;
+
 /// [`kurbo::flatten`], each curve's tolerance raised so that it makes at most about
 /// [`MAX_FLATTEN_PER_CURVE`] segments. kurbo sizes its work and a buffer from the curve's
 /// coordinates before producing anything, so a small curve with far-out handles (from a file, or
@@ -79,7 +84,7 @@ pub fn flatten(path: impl IntoIterator<Item = PathEl>, tolerance: f64, mut callb
             callback(PathEl::LineTo(to));
             continue;
         }
-        let tol = tolerance.max(length / (MAX_FLATTEN_PER_CURVE * MAX_FLATTEN_PER_CURVE));
+        let tol = tolerance.max(length / (MAX_FLATTEN_PER_CURVE * MAX_FLATTEN_PER_CURVE)).max(MIN_FLATTEN_TOLERANCE);
         kurbo::flatten([PathEl::MoveTo(from), el], tol, |e| {
             if !matches!(e, PathEl::MoveTo(_)) {
                 callback(e);
@@ -298,5 +303,23 @@ mod tests {
         assert_eq!(union_opt(Some(a), Some(b)), Some(Rect::new(0.0, 0.0, 3.0, 3.0)));
         assert_eq!(union_opt(None, Some(b)), Some(b));
         assert_eq!(union_opt(None, None), None);
+    }
+
+    /// A tiny curve must not panic however small the tolerance: kurbo's subdivision count
+    /// saturates when its scaled tolerance underflows, and the buffer reservation would overflow.
+    #[test]
+    fn flatten_survives_underflowing_tolerances() {
+        let tiny = [
+            PathEl::MoveTo(Point::new(1e-160, 0.0)),
+            PathEl::CurveTo(Point::new(2e-160, 1e-160), Point::new(3e-160, -1e-160), Point::new(4e-160, 0.0)),
+        ];
+        for tol in [0.0, f64::NAN, f64::MIN_POSITIVE, 1e-167] {
+            let mut n = 0usize;
+            flatten(tiny.iter().copied(), tol, |e| {
+                n += 1;
+                assert!(matches!(e, PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) if p.is_finite()));
+            });
+            assert!(n >= 2 && n < 3 * MAX_FLATTEN_PER_CURVE as usize, "{n} at {tol}");
+        }
     }
 }

@@ -5,7 +5,9 @@ use super::rare::RARE_ISLAND;
 /// The merge order does not depend on `min_area`: a higher threshold continues the same sequence
 /// instead of splitting a region already merged at a lower threshold. Transparency is a barrier.
 /// It reads only the labels. A trace also reads the image, and a speck far from the color around
-/// it joins the color beside it nearest its pixels instead.
+/// it joins the color beside it nearest its pixels instead. An image of more regions than the
+/// region storage is allowed to hold (8M; a 64-megapixel checkerboard is one region per pixel) is
+/// left as it is, like an oversized one.
 pub fn denoise(labels: &mut [u16], w: usize, h: usize, min_area: usize) {
     denoise_keeping(labels, w, h, min_area, &[]);
 }
@@ -24,6 +26,11 @@ pub(crate) const NEAREST_BORDER: f64 = 0.1;
 /// holds a mix of the colors on both sides, and joining the nearer one can cut the corner off a
 /// shape.
 pub(crate) const NEAREST_PIXELS: u32 = 2;
+
+/// The most regions noise removal holds at once (about 26 bytes each with its queue entry). The
+/// test cap is small enough for a test image to cross and large enough that no ordinary test
+/// image does.
+pub(crate) const MAX_REGIONS: usize = if cfg!(test) { 1 << 17 } else { 8 << 20 };
 
 /// The colors [`denoise_nearest`] compares a small region with.
 pub(crate) struct Source<'a> {
@@ -78,6 +85,12 @@ pub(crate) fn denoise_nearest(labels: &mut [u16], w: usize, h: usize, min_area: 
     for start in 0..labels.len() {
         if at[start] != NONE || labels[start] == TRANSPARENT {
             continue;
+        }
+        // A checkerboard of the decoder's 64 megapixels is one region per pixel, which the region
+        // storage would hold gigabytes for: past this many regions the labels are left as they
+        // are, like the oversized image above. The labels are only read up to here.
+        if head.len() >= MAX_REGIONS {
+            return;
         }
         let id = head.len() as u32;
         let label = labels[start];
@@ -561,5 +574,27 @@ mod tests {
         denoise_reference(&mut a, w, h, 50_000, &[]);
         denoise_keeping(&mut b, w, h, 50_000, &[]);
         assert_eq!(a, b);
+    }
+
+    /// Past the region cap the labels are left as they are, like an oversized image: a
+    /// checkerboard is one region per pixel, and the region storage would hold gigabytes at the
+    /// decoder's full size.
+    #[test]
+    fn a_checkerboard_past_the_region_cap_is_left_unchanged() {
+        const W: usize = 512;
+        const H: usize = 512;
+        const { assert!(W * H > MAX_REGIONS) }; // the test image must cross the test cap
+        let (w, h) = (W, H);
+        let labels: Vec<u16> = (0..w * h).map(|i| ((i % w + i / w) % 2) as u16).collect();
+        let mut out = labels.clone();
+        denoise(&mut out, w, h, 2);
+        assert_eq!(out, labels);
+        // Under the cap a speck still merges.
+        let mut small = vec![0u16; 64];
+        if let Some(p) = small.get_mut(27) {
+            *p = 1;
+        }
+        denoise(&mut small, 8, 8, 2);
+        assert_eq!(small, vec![0u16; 64]);
     }
 }

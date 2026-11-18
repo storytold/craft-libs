@@ -268,3 +268,17 @@ fn follow_names_round_trip() {
     }
     assert_eq!(Follow::parse("up"), None);
 }
+
+/// A plan made before the path was edited must be refused, never wrapped: an open subpath has no
+/// way on past its last segment, and the splice would edit the wrong anchors.
+#[test]
+fn a_stale_plan_for_a_shortened_open_path_is_refused() {
+    let shortened = single(SubPath::polyline(&[pt(0.0, 0.0), pt(10.0, 0.0), pt(20.0, 0.0)], false));
+    let b = single(SubPath::polyline(&[pt(0.0, -1.0), pt(10.0, -1.0), pt(20.0, -1.0)], false));
+    let plan = MergePlan::Edge {
+        a: Stretch { subpath: 0, start: 1, segments: 2, reversed: false },
+        b: Stretch { subpath: 0, start: 0, segments: 2, reversed: true },
+    };
+    assert!(merge_preview(&shortened, &b, &plan, Follow::Average).is_none());
+    assert!(apply_merge(&shortened, &b, &plan, Follow::Average).is_none());
+}

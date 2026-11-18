@@ -17,10 +17,17 @@ struct Outer {
     /// Where something can: for each pixel row from `bbox.y0 - NEAR` down, the edges (each from
     /// the point of that index to the next) that pass through it or within [`NEAR`] of it. A
     /// point is tested against the edges of its row, not all of a long outline's.
+    /// Empty past the shared row budget: then [`inside_or_near`] tests `every` edge instead.
     rows: Vec<Vec<u32>>,
+    every: Vec<u32>,
 }
 
-fn outer(tp: &TracedPath) -> Option<Outer> {
+/// The most row vectors all contours together may hold (about 44 bytes each): tall contours of a
+/// large image would otherwise hold gigabytes of row headers at once. The test cap is small so a
+/// test image can cross it.
+const MAX_ROWS: usize = if cfg!(test) { 1 << 12 } else { 8 << 20 };
+
+fn outer(tp: &TracedPath, budget: &mut usize) -> Option<Outer> {
     let (mut pts, mut subpaths, mut closed) = (vec![], 0, false);
     kurbo::flatten(tp.path.to_bezpath(), 0.2, |el| match el {
         PathEl::MoveTo(p) => {
@@ -41,23 +48,34 @@ fn outer(tp: &TracedPath) -> Option<Outer> {
     let holds = closed && tp.stroke.is_none();
     // (Traced paths lie in the image: a box taller than any image is nothing to hold things.)
     let holds = holds && bbox.height() < 1e6 && u32::try_from(pts.len()).is_ok();
-    let mut rows = vec![];
-    if holds {
-        rows = vec![vec![]; (bbox.height() + 2.0 * NEAR) as usize + 1];
+    let (mut rows, mut every) = (vec![], vec![]);
+    let wanted = (bbox.height() + 2.0 * NEAR) as usize + 1;
+    if holds && wanted <= *budget {
+        *budget -= wanted;
+        rows = vec![vec![]; wanted];
         for (i, (a, b)) in pts.iter().zip(pts.iter().cycle().skip(1)).enumerate() {
             let (top, bottom) = (a.y.min(b.y) - bbox.y0, a.y.max(b.y) - bbox.y0 + 2.0 * NEAR);
             for row in rows.iter_mut().take(bottom as usize + 1).skip(top.max(0.0) as usize) {
                 row.push(i as u32);
             }
         }
+    } else if holds {
+        every = (0..pts.len() as u32).collect();
     }
-    Some(Outer { pts, bbox, holds, rows })
+    Some(Outer { pts, bbox, holds, rows, every })
 }
 
 /// Whether `p` lies inside the closed outline of `o`, or within [`NEAR`] of its edge.
 fn inside_or_near(p: Point, o: &Outer) -> bool {
     let row = p.y - (o.bbox.y0 - NEAR);
-    let Some(edges) = (row >= 0.0).then(|| o.rows.get(row as usize)).flatten() else { return false };
+    let edges: &[u32] = if o.rows.is_empty() && !o.every.is_empty() {
+        &o.every
+    } else {
+        match (row >= 0.0).then(|| o.rows.get(row as usize)).flatten() {
+            Some(edges) => edges,
+            None => return false,
+        }
+    };
     let mut inside = false;
     for &i in edges {
         let (Some(a), Some(b)) = (o.pts.get(i as usize), o.pts.get((i as usize + 1) % o.pts.len().max(1))) else { continue };
@@ -88,7 +106,8 @@ pub(crate) fn parents(paths: &[TracedPath], w: usize, h: usize, stacked: bool) -
     if paths.len() > MAX_GROUPED_PATHS {
         return vec![None; paths.len()];
     }
-    let outers: Vec<Option<Outer>> = paths.iter().map(outer).collect();
+    let mut budget = MAX_ROWS;
+    let outers: Vec<Option<Outer>> = paths.iter().map(|tp| outer(tp, &mut budget)).collect();
     let paper = Rect::new(1.0, 1.0, w as f64 - 1.0, h as f64 - 1.0);
     let mut parent: Vec<Option<usize>> = vec![None; paths.len()];
     // How many paths each is inside of.
@@ -355,7 +374,8 @@ mod tests {
 
     /// [`parents`] comparing the box of every path with every other's.
     fn parents_by_pairs(paths: &[TracedPath], w: usize, h: usize, stacked: bool) -> Vec<Option<usize>> {
-        let outers: Vec<Option<Outer>> = paths.iter().map(outer).collect();
+        let mut budget = MAX_ROWS;
+        let outers: Vec<Option<Outer>> = paths.iter().map(|tp| outer(tp, &mut budget)).collect();
         let paper = Rect::new(1.0, 1.0, w as f64 - 1.0, h as f64 - 1.0);
         let mut parent: Vec<Option<usize>> = vec![None; paths.len()];
         let mut depth = vec![0usize; paths.len()];
@@ -467,5 +487,23 @@ mod tests {
             (0..1000).map(|i| (i, Rect::new(0.0, 0.0, 2.0, 2.0) + kurbo::Vec2::new((i % 40) as f64 * 25.0, (i / 40) as f64 * 40.0))).collect();
         let grid = Grid::new(1000, 1000, boxes.iter().map(|&(_, r)| r));
         assert!(grid.cols * grid.rows >= 900, "{} x {}", grid.cols, grid.rows);
+    }
+
+    /// Past the shared row budget, late contours keep grouping through the every-edge fallback:
+    /// the parents are the ones an unlimited budget finds.
+    #[test]
+    fn grouping_survives_the_row_budget() {
+        let mut paths = vec![];
+        for i in 0..80 {
+            let (cx, cy) = (40.0 + 80.0 * f64::from(i % 10), 40.0 + 80.0 * f64::from(i / 10));
+            paths.push(disc((cx, cy), 30.0, 0));
+        }
+        // 80 discs about 62 rows each want about 4,960 row vectors, past the test cap of 4,096:
+        // the last discs get no row index. A dot in the last disc still finds its parent.
+        const { assert!(80 * 62 > MAX_ROWS) }; // the test shapes must cross the test cap
+        paths.push(disc((760.0, 600.0), 3.0, 100));
+        let found = parents(&paths, 810, 650, false);
+        assert_eq!(found.last().copied().flatten(), Some(79));
+        assert_eq!(found, parents_by_pairs(&paths, 810, 650, false));
     }
 }

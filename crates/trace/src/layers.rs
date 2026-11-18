@@ -612,11 +612,17 @@ impl Layers<'_> {
         };
         // One component's paths: a pure function of its loops and the shared read-only state, so components are fitted in
         // parallel and then added in order.
+        // A loop past the crack cap refuses the whole layer: skipping it would silently drop art.
+        let too_many_cracks = AtomicBool::new(false);
         let fit_comp = |comp: &contour::Component| -> Option<(PathData, Option<TracedShape>)> {
             // (`hard`: some of the outline has no anti-aliasing, and is known less exactly.)
             let hard = std::cell::Cell::new(false);
             // (Each loop fitted, and whether its own outline is hard.)
             let fit = |l: &Loop| {
+                if cracks_of(l) > MAX_LOOP_CRACKS {
+                    too_many_cracks.store(true, Ordering::Relaxed);
+                    return None;
+                }
                 let (sp, is_hard) =
                     fit::fit_loop(l, w, h, &|c| (self.shift(c), self.neighbour(c), self.step(c)), &|x, y| self.junction(x, y), &self.style)?;
                 // Every trace straightens the pieces of an outline that lie close to a line (Snap
@@ -688,7 +694,7 @@ impl Layers<'_> {
             let Some((path, shape)) = fitted else { return true };
             add(path, comp.pixels, area_stroke, shape, false)
         });
-        if !accepted {
+        if !accepted || too_many_cracks.load(Ordering::Relaxed) {
             return None;
         }
         for line in lines {
@@ -1328,6 +1334,21 @@ fn shapes_in_hole(hole: &Loop) -> Vec<contour::Component> {
     comps
 }
 
+/// The most cracks (pixel edges) one loop's outline may have: `subpixel::outline` holds about
+/// 90 bytes a crack while it places the points, and a comb-shaped region of a large image has
+/// one crack per pixel, gigabytes in all. A loop above this refuses the layer instead. The
+/// test cap is small so a test image can cross it.
+const MAX_LOOP_CRACKS: usize = if cfg!(test) { 1 << 14 } else { 4 << 20 };
+
+/// How many cracks `l` expands into: its edge lengths in pixels (its vertices are only its
+/// turns, so the vertex count says nothing about the storage the outline takes).
+fn cracks_of(l: &Loop) -> usize {
+    l.pts
+        .iter()
+        .zip(l.pts.iter().cycle().skip(1))
+        .fold(0usize, |s, (a, b)| s.saturating_add((b.0 - a.0).unsigned_abs().max((b.1 - a.1).unsigned_abs()) as usize))
+}
+
 /// The pixel at the top left of the area a loop goes around: its topmost row's leftmost.
 fn first_pixel(l: &Loop) -> Option<(usize, usize)> {
     let &(x, y) = l.pts.iter().min_by_key(|p| (p.1, p.0))?;
@@ -1357,10 +1378,19 @@ pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + 
     parallel_map_at_most(usize::MAX, items, f)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+std::thread_local! {
+    /// Whether this thread is already a worker of a group: a group started inside each worker
+    /// would ask for `available_parallelism` threads again (cores² in all), and `Scope::spawn`
+    /// panics when the host refuses a thread. A layer that runs inline (the outer call found one
+    /// core's worth of work) still gets a full group for its components.
+    static IN_WORKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// `f` of each of `items`, in order, spread over the available cores, at most `at_a_time` at once.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn parallel_map_at_most<T: Sync, R: Send>(at_a_time: usize, items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(items.len()).min(at_a_time);
+    let threads = if IN_WORKER.get() { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).min(items.len()).min(at_a_time) };
     if threads <= 1 {
         return items.iter().map(f).collect();
     }
@@ -1369,6 +1399,7 @@ pub(crate) fn parallel_map_at_most<T: Sync, R: Send>(at_a_time: usize, items: &[
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 s.spawn(|| {
+                    IN_WORKER.set(true);
                     let mut mine = vec![];
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
@@ -1746,5 +1777,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A group started inside a worker runs inline: one worker budget for the whole trace, never
+    /// cores² threads. Thread ids are never reused, so counting the distinct ids seen is exact.
+    #[test]
+    fn a_worker_does_not_start_its_own_worker_group() {
+        let ids = Mutex::new(std::collections::HashSet::new());
+        let note = || {
+            if let Ok(mut seen) = ids.lock() {
+                seen.insert(std::thread::current().id());
+            }
+        };
+        let items: Vec<usize> = (0..32).collect();
+        let out = parallel_map(&items, |i| {
+            note();
+            let inner: Vec<usize> = (0..32).collect();
+            parallel_map(&inner, |x| {
+                note();
+                x + i
+            })
+            .into_iter()
+            .sum::<usize>()
+        });
+        assert_eq!(out.len(), 32);
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let seen = ids.lock().map(|s| s.len()).unwrap_or(0);
+        assert!(seen >= 1 && seen <= cores + 1, "{seen} threads for {cores} cores");
     }
 }

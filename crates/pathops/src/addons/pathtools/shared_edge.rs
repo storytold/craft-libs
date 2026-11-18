@@ -114,7 +114,12 @@ impl Stretch {
     fn chain(&self, path: &PathData) -> Option<Vec<CubicBez>> {
         let sp = path.subpaths.get(self.subpath)?;
         let count = sp.segment_count();
-        if count == 0 || self.segments == 0 || self.segments > count {
+        if count == 0 || self.segments == 0 || self.segments > count || self.start >= sp.anchors.len() {
+            return None;
+        }
+        // Only a closed subpath runs on past its last segment: a plan made for a longer open
+        // subpath (the path was edited since) would wrap and splice the wrong anchors.
+        if !sp.closed && self.start + self.segments > count {
             return None;
         }
         let forward: Vec<CubicBez> = (0..self.segments).map(|k| sp.segment((self.start + k) % count)).collect();

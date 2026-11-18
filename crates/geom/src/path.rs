@@ -214,13 +214,22 @@ std::thread_local! {
 /// together; reading more fails. A compressed file of repeated anchors stays small while its paths
 /// take gigabytes once read, past what the web build can address.
 pub fn with_anchor_budget<T>(max: usize, f: impl FnOnce() -> T) -> T {
-    struct Restore(Option<usize>);
+    // A nested scope reads within what the scope around it has left, and what it reads counts
+    // against that scope too, so nesting cannot raise the limit.
+    struct Restore {
+        outer: Option<usize>,
+        budget: usize,
+    }
     impl Drop for Restore {
         fn drop(&mut self) {
-            ANCHORS_LEFT.set(self.0);
+            let used = self.budget.saturating_sub(ANCHORS_LEFT.get().unwrap_or(self.budget));
+            ANCHORS_LEFT.set(self.outer.map(|left| left.saturating_sub(used)));
         }
     }
-    let _restore = Restore(ANCHORS_LEFT.replace(Some(max)));
+    let outer = ANCHORS_LEFT.get();
+    let budget = outer.map_or(max, |left| left.min(max));
+    ANCHORS_LEFT.set(Some(budget));
+    let _restore = Restore { outer, budget };
     f()
 }
 
@@ -351,10 +360,12 @@ impl SubPath {
     }
     /// Bend segment `seg` so its point at `t` moves by `dv`: both inner control points move by
     /// dv / 3t(1-t), since B(t) moves by 3t(1-t) times that. A smooth anchor stays smooth: its other
-    /// handle turns with the moved one. False when there is no such segment.
+    /// handle turns with the moved one. False when there is no such segment, and at `t` of 0 or 1
+    /// (or not a number): at an end the inner control points cannot move the point, so the handles
+    /// would grow without bound.
     pub fn bend_segment(&mut self, seg: usize, t: f64, dv: kurbo::Vec2) -> bool {
         let n = self.anchors.len();
-        if seg >= self.segment_count() || n == 0 {
+        if seg >= self.segment_count() || n == 0 || !(t > 0.0 && t < 1.0) {
             return false;
         }
         let v = dv / (3.0 * t * (1.0 - t));
@@ -370,10 +381,11 @@ impl SubPath {
     /// line between its anchors, on the same side and at the same length, so that its point at `t`
     /// lies as far from that line as the old point at `t` moved by `dv` does. A smooth anchor stays
     /// smooth, as with [`Self::bend_segment`]. A segment whose anchors coincide bends as
-    /// [`Self::bend_segment`] bends it. False when there is no such segment.
+    /// [`Self::bend_segment`] bends it. False when there is no such segment, and at `t` of 0 or 1
+    /// (or not a number), as with [`Self::bend_segment`].
     pub fn bend_segment_perpendicular(&mut self, seg: usize, t: f64, dv: kurbo::Vec2) -> bool {
         let n = self.anchors.len();
-        if seg >= self.segment_count() || n == 0 {
+        if seg >= self.segment_count() || n == 0 || !(t > 0.0 && t < 1.0) {
             return false;
         }
         let c = self.segment(seg);
@@ -536,8 +548,9 @@ impl PathData {
                 }
                 PathEl::ClosePath => {
                     if let Some(mut sp) = cur.take() {
-                        // Merge a closing anchor that duplicates the start.
-                        if sp.anchors.len() > 1
+                        // Merge a closing anchor that duplicates the start. A loop of one curve has
+                        // only two anchors: merging it would leave no segment, erasing the loop.
+                        if sp.anchors.len() > 2
                             && let (Some(first), Some(lastp)) = (sp.anchors.first().map(|a| a.p), sp.anchors.last().map(|a| a.p))
                             && first.distance(lastp) < 1e-7
                             && let Some(l) = sp.anchors.pop()
@@ -1102,5 +1115,62 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         let back: PathData = serde_json::from_str(&s).unwrap();
         assert_eq!(p, back);
+    }
+
+    /// A nested budget reads within the outer scope's balance, and what it reads counts against
+    /// the outer scope: without both, nested scopes multiply the document limit.
+    #[test]
+    fn nested_anchor_budgets_share_the_outer_balance() {
+        let path = |n: usize| {
+            let anchors: Vec<String> = (0..n).map(|i| format!("{{\"p\":[{i},0]}}")).collect();
+            format!("{{\"subpaths\":[{{\"anchors\":[{}]}}]}}", anchors.join(","))
+        };
+        let read = |n: usize| serde_json::from_str::<PathData>(&path(n)).is_ok();
+        with_anchor_budget(3, || {
+            assert!(read(1));
+            with_anchor_budget(10, || {
+                // The nested scope has the outer balance, not its own max.
+                assert!(read(2));
+                assert!(!read(1));
+            });
+            // What the nested scope read is spent from the outer scope too.
+            assert!(!read(1));
+        });
+        // A single scope reads exactly its budget, and no scope is no limit.
+        with_anchor_budget(2, || {
+            assert!(read(2));
+            assert!(!read(1));
+        });
+        assert!(read(4));
+    }
+
+    /// At an end the inner control points cannot move the point at `t`: the bend reports false
+    /// and writes nothing, rather than dividing by zero into non-finite handles.
+    #[test]
+    fn bends_at_an_endpoint_change_nothing_and_report_false() {
+        let mut sp = SubPath::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)], false);
+        let old = sp.clone();
+        for t in [0.0, 1.0, f64::NAN] {
+            assert!(!sp.bend_segment(0, t, kurbo::Vec2::new(0.0, 30.0)), "{t}");
+            assert!(!sp.bend_segment_perpendicular(0, t, kurbo::Vec2::new(0.0, 30.0)), "{t}");
+            assert_eq!(sp, old);
+        }
+        assert!(sp.bend_segment(0, 0.5, kurbo::Vec2::new(0.0, 30.0)));
+        assert!(sp.anchors.iter().all(|a| a.h_out.is_finite() && a.h_in.is_finite()));
+    }
+
+    /// A closed loop drawn by one curve has only two anchors: merging its closing duplicate
+    /// would leave no segment, erasing the loop on import.
+    #[test]
+    fn a_closed_loop_of_one_curve_keeps_its_geometry() {
+        use kurbo::Shape as _;
+        let bp = kurbo::BezPath::from_svg("M 0 0 C 10 0 10 10 0 0 Z").unwrap();
+        let pd = PathData::from_bezpath(&bp);
+        let sp = pd.subpaths.first().unwrap();
+        assert_eq!((sp.anchors.len(), sp.segment_count()), (2, 2));
+        assert!((pd.to_bezpath().area().abs() - bp.area().abs()).abs() < 1e-9);
+        // An explicit closing duplicate of a polygon still merges.
+        let poly = kurbo::BezPath::from_svg("M 0 0 L 10 0 L 10 10 L 0 0 Z").unwrap();
+        assert_eq!(PathData::from_bezpath(&poly).subpaths.first().unwrap().anchors.len(), 3);
     }
 }

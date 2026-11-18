@@ -58,11 +58,14 @@ pub enum PathfinderOp {
     Outline,
     /// Front-most minus everything behind; keeps the front-most key.
     MinusBack,
-    /// Effect only: split into faces like Divide; overlapping faces take the highest of each CMYK
-    /// channel from every shape covering them (Illustrator Effect → Pathfinder → Hard Mix).
+    /// Effect only: the faces of Divide, each keyed by its front-most shape. Hard Mix takes the
+    /// highest of each CMYK channel of the shapes covering a face (Illustrator Effect → Pathfinder
+    /// → Hard Mix); this crate holds no paint, so the caller mixes it from [`regions`], whose
+    /// [`Region::sources`] lists those shapes back to front.
     HardMix,
-    /// Effect only: split into faces like Divide; overlapping faces blend fills in CMYK bottom to
-    /// top by a mixing rate (Illustrator Effect → Pathfinder → Soft Mix).
+    /// Effect only: the faces of Divide, each keyed by its front-most shape. Soft Mix blends fills
+    /// in CMYK bottom to top by a mixing rate the caller holds (Illustrator Effect → Pathfinder →
+    /// Soft Mix), mixed from [`regions`] as with [`PathfinderOp::HardMix`].
     SoftMix,
 }
 

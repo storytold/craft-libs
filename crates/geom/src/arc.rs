@@ -18,6 +18,10 @@ pub struct ArcPath {
 }
 
 impl ArcPath {
+    /// Distances run end to end over every subpath, with nothing marking where one ends: on a
+    /// compound path a position exactly on a seam names the next subpath's start, so `at` need not
+    /// return the point `nearest` or `topmost` found. Use one subpath per `ArcPath` where that
+    /// matters.
     pub fn new(path: &PathData) -> Self {
         let mut segs = Vec::new();
         let mut cum = 0.0;
