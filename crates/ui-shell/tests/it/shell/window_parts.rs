@@ -103,8 +103,10 @@ fn a_settled_bar_keeps_its_caption_record() {
         ran.get()
     };
     assert!(frame(), "the bar runs in its first frame");
-    let settled = (0..4).map(|_| frame()).next_back();
-    assert_eq!(settled, Some(false), "the bar settles");
+    for _ in 0..3 {
+        frame();
+    }
+    assert!(!frame(), "the bar settles");
     let regions = host.caption_regions(ViewportId::ROOT).expect("the settled bar keeps its parts");
     assert_eq!(regions.buttons.len() + regions.edges.len() + regions.moves.len(), 3, "every part stays: {regions:?}");
 }

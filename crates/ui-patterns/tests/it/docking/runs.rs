@@ -148,9 +148,17 @@ impl DockPanels<usize> for Settling {
     }
 }
 
-/// A settled dock over `layout` whose panels are [`Settling`]: the fixture, the spec version it reads and the
-/// workspace it shows.
-fn settling(layout: Layout<usize>, plain: Option<usize>) -> (Fixture, Rc<Cell<u64>>, Rc<RefCell<Workspace<usize>>>) {
+/// A settled dock whose panels are [`Settling`].
+struct SettledDock {
+    fixture: Fixture,
+    /// The spec version the panels report.
+    spec: Rc<Cell<u64>>,
+    /// The workspace the dock shows.
+    workspace: Rc<RefCell<Workspace<usize>>>,
+}
+
+/// A settled dock over `layout` whose panels are [`Settling`].
+fn settling(layout: Layout<usize>, plain: Option<usize>) -> SettledDock {
     let spec = Rc::new(Cell::new(1));
     let workspace = Rc::new(RefCell::new(Workspace::new(layout)));
     let mut panels = Settling { spec: Rc::clone(&spec), plain };
@@ -159,7 +167,7 @@ fn settling(layout: Layout<usize>, plain: Option<usize>) -> (Fixture, Rc<Cell<u6
         DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
-    (fixture, spec, workspace)
+    SettledDock { fixture, spec, workspace }
 }
 
 /// `groups` groups side by side, two tabs each.
@@ -181,7 +189,7 @@ const CHROME: &[&str] = &["DockGroup", "TabStrip", "Tab", "GroupGrip"];
 #[trial]
 fn a_settled_dock_runs_no_group_chrome_at_rest() {
     for groups in 1..=3 {
-        let (mut fixture, _, _) = settling(side_by_side(groups), None);
+        let SettledDock { mut fixture, .. } = settling(side_by_side(groups), None);
         fixture.frame(Vec::new());
         assert_eq!(runs_of(&fixture, CHROME), 0, "{groups} settled groups ran chrome: {:?}", last_pass_runs(fixture.ctx()));
         let painted = |title: &str| fixture.texts().iter().any(|text| text.text == title);
@@ -192,7 +200,7 @@ fn a_settled_dock_runs_no_group_chrome_at_rest() {
 /// The pointer over one group's tab runs that group alone; the others replay.
 #[trial]
 fn hovering_a_tab_runs_only_its_group() {
-    let (mut fixture, _, _) = settling(side_by_side(3), None);
+    let SettledDock { mut fixture, .. } = settling(side_by_side(3), None);
     let tab = fixture.by_label("Panel 4").expect("the third group's tab");
     fixture.frame(vec![egui::Event::PointerMoved(tab.center())]);
     assert_eq!(runs_of(&fixture, &["DockGroup"]), 1, "{:?}", last_pass_runs(fixture.ctx()));
@@ -202,7 +210,7 @@ fn hovering_a_tab_runs_only_its_group() {
 /// a change of the host's spec version does too; the frame after settles again.
 #[trial]
 fn an_arrangement_or_spec_change_runs_every_group() {
-    let (mut fixture, spec, workspace) = settling(side_by_side(3), None);
+    let SettledDock { mut fixture, spec, workspace } = settling(side_by_side(3), None);
     workspace.borrow_mut().apply(Action::activate(1), false, |_| Permissions::ALL).expect("panel 1 is shown");
     fixture.frame(Vec::new());
     assert!(runs_of(&fixture, &["DockGroup"]) >= 3, "the edit runs every group: {:?}", last_pass_runs(fixture.ctx()));
@@ -218,7 +226,7 @@ fn an_arrangement_or_spec_change_runs_every_group() {
 /// A group whose shown body has no content version runs every pass, as its body does; the others settle.
 #[trial]
 fn a_group_whose_body_has_no_version_keeps_running() {
-    let (mut fixture, _, _) = settling(side_by_side(2), Some(0));
+    let SettledDock { mut fixture, .. } = settling(side_by_side(2), Some(0));
     fixture.frame(Vec::new());
     assert_eq!(runs_of(&fixture, &["DockGroup"]), 1, "{:?}", last_pass_runs(fixture.ctx()));
 }
@@ -227,7 +235,7 @@ fn a_group_whose_body_has_no_version_keeps_running() {
 #[trial]
 fn a_settled_floating_window_runs_no_group_chrome() {
     let window = Floating::single(vec![9], 0, Rect::from_min_size(Pos2::new(600.0, 100.0), Vec2::new(300.0, 300.0)));
-    let (mut fixture, _, _) = settling(Layout::new(Some(Node::tabs(vec![0], 0)), vec![window]), None);
+    let SettledDock { mut fixture, .. } = settling(Layout::new(Some(Node::tabs(vec![0], 0)), vec![window]), None);
     fixture.frame(Vec::new());
     assert_eq!(runs_of(&fixture, CHROME), 0, "{:?}", last_pass_runs(fixture.ctx()));
 }
@@ -236,7 +244,7 @@ fn a_settled_floating_window_runs_no_group_chrome() {
 /// frame it arrives: the replay registered the spots again.
 #[trial]
 fn a_tab_dropped_on_a_settled_group_lands_there() {
-    let (mut fixture, _, workspace) = settling(side_by_side(3), None);
+    let SettledDock { mut fixture, workspace, .. } = settling(side_by_side(3), None);
     let (from, to) = (fixture.by_label("Panel 0").expect("a tab").center(), fixture.by_label("Panel 4").expect("a tab").center());
     fixture.frame(vec![moved(from)]).frame(vec![press(from)]).frame(vec![moved(from + Vec2::new(0.0, 12.0))]);
     assert!(drag::active::<PanelDrag>(fixture.ctx()).is_some(), "the tab drag started");
@@ -252,7 +260,7 @@ fn a_tab_dropped_on_a_settled_group_lands_there() {
 /// group: the command the menu queued for the group reaches it.
 #[trial]
 fn close_in_a_settled_groups_panel_menu_closes_the_panel() {
-    let (mut fixture, _, workspace) = settling(side_by_side(2), None);
+    let SettledDock { mut fixture, workspace, .. } = settling(side_by_side(2), None);
     let buttons: Vec<_> =
         fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
     assert_eq!(buttons.len(), 2, "each group shows its panel menu button");
