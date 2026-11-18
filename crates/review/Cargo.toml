@@ -21,7 +21,7 @@ default = []
 # The review widgets (`craft_review::ui`).
 ui = ["dep:craft-keymap", "dep:craft-pages", "craft-pages/ui", "dep:craft-ui", "dep:craft-host", "dep:craft-theme", "dep:egui", "dep:image"]
 # The stories and the integration tests (`tests/it`).
-screen-testing = ["ui", "craft-ui/testing"]
+screen-testing = ["ui", "craft-ui/testing", "craft-pages/screen-testing"]
 
 [dependencies]
 craft-behavior = { workspace = true }

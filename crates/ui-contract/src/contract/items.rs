@@ -10,14 +10,54 @@ use egui::{Pos2, Rect, Ui, Vec2};
 use std::ops::Range;
 use std::sync::Arc;
 
-/// Shows `item` in `rect` as the item at `at` of a set, with the item facts a collection installs: the one path the
-/// item step, `show_as_only_item` and the comment balloons place an item through.
+/// Runs `body` with the item facts of the item at `at` of a set installed and the id that position gives the item, so
+/// measuring and showing an item see one id and one environment.
+fn with_item_facts<R>(ui: &mut Ui, at: crate::runtime::access::SetPosition, body: impl FnOnce(&mut Ui, egui::Id) -> R) -> R {
+    use crate::runtime::env::{Env, ItemFacts};
+    // The id comes from the position so two items of one set never share one, and an item keeps its id while its
+    // position holds.
+    let id = ui.scope_id().with(("shown item", at.index));
+    let facts = ItemFacts {
+        item: id,
+        flags: crate::style::Flags::empty(),
+        position: at,
+        columns: Vec::new(),
+        toggles: Vec::new(),
+        toggle_keys: Vec::new(),
+        aligns: Vec::new(),
+        pressed: None,
+        menu_open: false,
+    };
+    let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(Arc::new(facts))));
+    let shown = body(ui, id);
+    Env::restore(ui.ctx(), installed);
+    shown
+}
+
+/// Measures `item` as the item at `at` of a set, under the id and the item facts [`show_item`] shows it with.
+pub fn measure_item<C>(ui: &mut Ui, item: &mut C, at: crate::runtime::access::SetPosition, proposal: craft_behavior::Proposal) -> Vec2
+where
+    C: super::Component + super::Props + super::Show,
+{
+    with_item_facts(ui, at, |ui, id| super::run::measure_under(item, ui, Some(id), proposal, None))
+}
+
+/// Shows `item` in `rect` as the item at `at` of a set, with the item facts a collection installs.
 pub fn show_item<C>(ui: &mut Ui, rect: Rect, item: C, at: crate::runtime::access::SetPosition) -> C::Output
 where
     C: super::Component + super::Props + super::Show,
 {
-    let _ = (ui, rect, item, at);
-    todo!("cv.K39")
+    use super::Show as _;
+    with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show_at(ui, rect))
+}
+
+/// Shows `item` in the flow of `ui` as the item at `at` of a set, taking the room the flow gives it.
+pub fn show_item_in_flow<C>(ui: &mut Ui, item: C, at: crate::runtime::access::SetPosition) -> C::Output
+where
+    C: super::Component + super::Props + super::Show,
+{
+    use super::Show as _;
+    with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show(ui))
 }
 
 mod drag;

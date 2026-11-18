@@ -34,9 +34,12 @@ use super::annotate::{AnnotateWords, PALETTE};
 use crate::annotate::AnnotationKind;
 use crate::comments::{CommentFilter, CommentSort, CommentThread, ReviewStatus, ThreadId, matches, sort_threads};
 
-use list::{CardEvent, CardKey, CommentList, RowEntry, Rows};
+use list::{CardKey, CommentList, RowEntry, Rows};
 use menus::{card_menu, filter_menu, pages_menu, sort_menu};
-use row::{CommentRow, MORE};
+use row::MORE;
+
+pub(super) use list::CardEvent;
+pub(super) use row::{CardActions, CommentRow};
 
 /// Ages under this many seconds (one week) read relative; older ones read as a date.
 pub(crate) const AGE_SHOWN_AS_DATE: u64 = 7 * 24 * 60 * 60;
@@ -68,6 +71,9 @@ craft_ui::words! {
         edit: "comments.edit" = "Edit";
         set_status: "comments.setStatus" = "Set status";
         delete: "comments.delete" = "Delete";
+        reply_button: "comments.replyButton" = "Reply";
+        resolve: "comments.resolve" = "Resolve";
+        reopen: "comments.reopen" = "Reopen";
         copy_text: "comments.copyText" = "Copy text";
         mark: "comments.mark" = "Mark with checkmark";
         unmark: "comments.unmark" = "Remove checkmark";
@@ -576,10 +582,12 @@ impl CommentsPanel<'_> {
 }
 
 /// Applies what a card reported.
-fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
+pub(super) fn apply(event: CardEvent, state: &mut CommentsPanelState, edits: &mut Vec<CommentEdit>) {
     match event {
         CardEvent::Mark { thread, marked } => edits.push(CommentEdit::Mark { thread, marked }),
-        CardEvent::Resolve { .. } => todo!("cv.K43"),
+        CardEvent::Resolve { thread, resolved } => edits.push(CommentEdit::Resolve { thread, resolved }),
+        // Index 0 deletes the whole thread.
+        CardEvent::Delete { thread } => edits.push(CommentEdit::Delete { thread, index: 0 }),
         CardEvent::EditText(text) => {
             if let Some((_, _, draft)) = state.editing.as_mut() {
                 *draft = text;
