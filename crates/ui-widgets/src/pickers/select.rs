@@ -341,7 +341,7 @@ impl<T: Value + 'static> Component for Select<'_, T> {
                 .empty(words.no_matches.clone())
                 .selection(Bind::given(selection))
                 .lead_on_open(lead)
-                .filter(&query, |at| vec![labels[*at].clone()]) // P3(pdf-forms-w3): CH-C24
+                .filter(&query, |at| vec![labels[*at].clone()])
                 .show_items(ui, &rows, &mut |at, _| rows.row(*at, held, dress, picture))
                 .events
         });

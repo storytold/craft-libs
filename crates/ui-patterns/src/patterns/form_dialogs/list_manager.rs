@@ -390,7 +390,6 @@ impl<'a> ListManager<'a> {
                         list = list.empty(empty.clone());
                     }
                     if searchable {
-                        // P3(pdf-forms-w3): L-70 — the closure gives several texts.
                         list = list.filter(&session.name, |at| vec![Label::from(entries[*at].name.clone())]);
                     }
                     let events = list

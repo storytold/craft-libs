@@ -208,7 +208,7 @@ impl Component for ComboBox<'_> {
             let selection = current.filter(|_| query.trim().is_empty()).map_or_else(Selection::default, Selection::single);
             List::<usize>::options(name.clone())
                 .selection(Bind::given(selection))
-                .filter(&query, |key| vec![labels[*key].clone()]) // P3(pdf-forms-w3): CH-C24
+                .filter(&query, |key| vec![labels[*key].clone()])
                 .ranked(true)
                 .show_items(ui, &rows, &mut |key, _| rows.row(*key, current, decorate, None))
                 .events

@@ -50,20 +50,19 @@ impl<'a> PopupList<'a> {
     /// Changes the popup's overlay as `Popover::overlay` does; callers hang the list from a part with
     /// `Overlay::opener_anchor(Anchor::Rect(..))`.
     #[must_use]
-    pub fn overlay(self, change: impl FnOnce(Overlay) -> Overlay) -> Self {
-        let _ = change;
-        todo!("FM-PF12")
-    }
-
-    /// The field the popup hangs from. The popup closes when the opener is no longer shown.
-    #[must_use]
-    pub fn opened_by(mut self, opener: &Response) -> Self {
+    pub fn overlay(mut self, change: impl FnOnce(Overlay) -> Overlay) -> Self {
         let overlay = match std::mem::take(&mut self.props.mount) {
             Mount::Layer(overlay) => overlay,
             _ => Overlay::dropdown(),
         };
-        self.props = self.props.mount(Mount::Layer(overlay.opened_by(opener, Trigger::Manual)));
+        self.props = self.props.mount(Mount::Layer(change(overlay)));
         self
+    }
+
+    /// The field the popup hangs from. The popup closes when the opener is no longer shown.
+    #[must_use]
+    pub fn opened_by(self, opener: &Response) -> Self {
+        self.overlay(|overlay| overlay.opened_by(opener, Trigger::Manual))
     }
 }
 
