@@ -124,7 +124,6 @@ impl Strip<'_> {
             }
             KeyEvent::Text(text) => {
                 alt.other_key = true;
-
                 let mut claimed = false;
                 if let Some(last) = batch.last_press.take() {
                     if let Some(physical) = last.input.physical.filter(|_| !alt.right) {
@@ -134,9 +133,6 @@ impl Strip<'_> {
                     if let Some(press) = last.pressed.and_then(|at| batch.presses.get_mut(at)) {
                         press.text = Some(batch.texts.len());
                     }
-                }
-                if text == "й" {
-                    eprintln!("DIAG an_alt_numpad_code_types_its_character_once: text {text:?} claimed {claimed}");
                 }
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
                 batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts) });
