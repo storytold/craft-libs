@@ -2928,6 +2928,7 @@ dependencies = [
 name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
+ "kurbo 0.13.1",
  "serde",
  "thiserror 2.0.21",
 ]
