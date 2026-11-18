@@ -260,6 +260,85 @@ fn detect_magic_jpeg_ls() {
     assert!(decode_as(Format::JpegLs, &[0xFF, 0xD8, 0xFF, 0xF7]).is_err());
 }
 
+/// `file` with `count` marker segments of `body` bytes each inserted right after its SOI.
+fn with_segments(file: &[u8], marker: u8, count: usize, body: usize) -> Vec<u8> {
+    let mut out = file[..2].to_vec();
+    for i in 0..count {
+        out.extend_from_slice(&[0xFF, marker]);
+        out.extend_from_slice(&u16::try_from(body + 2).unwrap().to_be_bytes());
+        out.extend((0..body).map(|j| (i + j) as u8));
+    }
+    out.extend_from_slice(&file[2..]);
+    out
+}
+
+fn jpeg_ls_file() -> (Image, Vec<u8>) {
+    let img = Image::from_u8(5, 3, ChannelLayout::Gray, (0..15).collect()).unwrap();
+    let bytes = encode(&img, Format::JpegLs, &EncodeOptions::default()).unwrap();
+    (img, bytes)
+}
+
+/// Grows a prefix of `bytes` as [`detect_prefix`] asks, starting from `first` bytes.
+fn detect_by_prefix(bytes: &[u8], first: usize) -> Detection {
+    let mut len = first.min(bytes.len());
+    loop {
+        match detect_prefix(&bytes[..len]) {
+            Detection::NeedBytes(more) if len < bytes.len() => {
+                assert!(more > len, "{more} bytes asked for after {len}");
+                len = more.min(bytes.len());
+            }
+            answer => return answer,
+        }
+    }
+}
+
+#[test]
+fn jpeg_ls_after_a_long_comment_needs_the_frame_header() {
+    let (img, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xFE, 1, 100);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    // The first 64 bytes end inside the comment: `detect` says JPEG, `detect_prefix` asks for
+    // the bytes up to the next marker.
+    assert_eq!(detect(&bytes[..64]), Some(Format::Jpeg));
+    assert_eq!(detect_prefix(&bytes[..64]), Detection::NeedBytes(2 + 2 + 102 + 2));
+    assert_eq!(detect_by_prefix(&bytes, 64), Detection::Format(Format::JpegLs));
+    assert_eq!(detect_prefix(&bytes), Detection::Format(Format::JpegLs));
+}
+
+#[test]
+fn jpeg_ls_after_many_segments_is_still_jpeg_ls() {
+    // An ICC profile can span 255 APP2 segments.
+    let (img, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xE2, 255, 14);
+    assert_eq!(detect(&bytes), Some(Format::JpegLs));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert_eq!(detect_by_prefix(&bytes, 64), Detection::Format(Format::JpegLs));
+    // A plain JPEG with as many segments before its baseline frame header stays JPEG.
+    let jpeg = with_segments(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0], 0xE2, 255, 14);
+    assert_eq!(detect(&jpeg), Some(Format::Jpeg));
+    assert_eq!(detect_by_prefix(&jpeg, 64), Detection::Format(Format::Jpeg));
+}
+
+#[test]
+fn a_cut_off_jpeg_asks_for_more_bytes() {
+    let (_, plain) = jpeg_ls_file();
+    let bytes = with_segments(&plain, 0xFE, 1, 100);
+    // Cut inside the comment, inside its length field, and right after the SOI.
+    assert_eq!(detect_prefix(&bytes[..50]), Detection::NeedBytes(108));
+    assert_eq!(detect_prefix(&bytes[..5]), Detection::NeedBytes(6));
+    assert_eq!(detect_prefix(&bytes[..3]), Detection::NeedBytes(4));
+    assert_eq!(detect_prefix(&[0xFF, 0xD8]), Detection::NeedBytes(4));
+    assert_eq!(detect(&bytes[..50]), Some(Format::Jpeg));
+    assert!(decode_as(Format::JpegLs, &bytes[..50]).is_err());
+    // A byte that is not a marker where one should be ends the walk: no frame header follows.
+    assert_eq!(detect_prefix(&[0xFF, 0xD8, 0xFF, 0xFE, 0, 2, 0x12, 0x34]), Detection::Format(Format::Jpeg));
+    // Formats other than JPEG answer as `detect` does.
+    assert_eq!(detect_prefix(b"\x89PNG\r\n\x1a\n\0\0"), Detection::Format(Format::Png));
+    assert_eq!(detect_prefix(&[0u8; 64]), Detection::Unknown);
+    assert_eq!(detect_prefix(&[]), Detection::Unknown);
+}
+
 #[cfg(feature = "sunraster")]
 #[test]
 fn detect_magic_sun_raster() {

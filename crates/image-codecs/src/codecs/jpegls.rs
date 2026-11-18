@@ -32,26 +32,52 @@ fn bad(reason: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, reason)
 }
 
-/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
-pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
+/// What the marker segments after a JPEG SOI lead to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JpegFrame {
+    /// An SOF55 frame header: JPEG-LS.
+    Ls,
+    /// Another frame header, a scan header, an EOI, or a byte that is not a marker where one
+    /// should be.
+    Other,
+    /// The bytes end before a frame or scan header. The next step reads the bytes up to this
+    /// length.
+    Short(usize),
+}
+
+/// Walks the marker segments of `b` from its SOI up to the first frame or scan header. `None`
+/// when `b` does not start with an SOI. Each step moves forward at least one byte, so the walk
+/// takes at most `b.len()` steps and reaches the frame header after any number of segments.
+pub(crate) fn jpeg_frame(b: &[u8]) -> Option<JpegFrame> {
     if !b.starts_with(&[0xFF, 0xD8]) {
-        return false;
+        return None;
     }
     let mut pos = 2;
-    for _ in 0..64 {
-        let (Some(&0xFF), Some(&marker)) = (b.get(pos), b.get(pos + 1)) else { return false };
+    loop {
+        let (Some(&prefix), Some(&marker)) = (b.get(pos), b.get(pos + 1)) else {
+            return Some(if b.get(pos).is_none_or(|&p| p == 0xFF) { JpegFrame::Short(pos + 2) } else { JpegFrame::Other });
+        };
+        if prefix != 0xFF {
+            return Some(JpegFrame::Other);
+        }
         match marker {
-            SOF55 => return true,
-            0xDA | 0xD9 => return false,
-            0xC0..=0xCF | 0xDB..=0xDF => return false,
+            SOF55 => return Some(JpegFrame::Ls),
+            0xDA | 0xD9 => return Some(JpegFrame::Other),
+            0xC0..=0xCF | 0xDB..=0xDF => return Some(JpegFrame::Other),
             0x01 | 0xD0..=0xD7 | 0xFF => pos += if marker == 0xFF { 1 } else { 2 },
             _ => {
-                let Some(len) = b.get(pos + 2..pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
+                let Some(len) = b.get(pos + 2..pos + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else {
+                    return Some(JpegFrame::Short(pos + 4));
+                };
                 pos += 2 + len;
             }
         }
     }
-    false
+}
+
+/// Whether `b` is a JPEG-LS file: an SOI followed by marker segments up to an SOF55 frame header.
+pub(crate) fn looks_like_jpegls(b: &[u8]) -> bool {
+    jpeg_frame(b) == Some(JpegFrame::Ls)
 }
 
 /// The coding parameters of one scan, derived as T.87 section C.2 specifies.

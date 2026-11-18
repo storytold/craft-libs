@@ -349,8 +349,35 @@ pub fn caps(format: Format) -> FormatCaps {
     }
 }
 
+/// What [`detect_prefix`] makes of the first bytes of a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detection {
+    /// The bytes identify this format, as [`detect`] reports it.
+    Format(Format),
+    /// The bytes start with a JPEG SOI and end before the frame header that tells JPEG from
+    /// JPEG-LS. Read the file up to at least this many bytes and call [`detect_prefix`] again.
+    NeedBytes(usize),
+    /// The bytes match no format.
+    Unknown,
+}
+
+/// Identify a format from the first bytes of a file, which may be all of it or only its start.
+/// A JPEG and a JPEG-LS file both start with an SOI, and only the frame header after their marker
+/// segments tells them apart. When `bytes` ends before that header, the answer is
+/// [`Detection::NeedBytes`]; every other answer is the one [`detect`] gives.
+pub fn detect_prefix(bytes: &[u8]) -> Detection {
+    if let Some(crate::codecs::jpegls::JpegFrame::Short(len)) = crate::codecs::jpegls::jpeg_frame(bytes) {
+        return Detection::NeedBytes(len);
+    }
+    detect(bytes).map_or(Detection::Unknown, Detection::Format)
+}
+
 /// Identify a format from its leading bytes (magic numbers). TGA has no
 /// magic and is recognized last, by header plausibility.
+///
+/// JPEG-LS is told from JPEG by the frame header that follows the marker segments, so `bytes`
+/// must reach that header; a buffer that ends before it is reported as [`Format::Jpeg`]. Use
+/// [`detect_prefix`] on a buffer that may hold only the start of a file.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
