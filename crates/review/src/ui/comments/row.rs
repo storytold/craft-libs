@@ -79,18 +79,19 @@ struct Spec {
     tone: Tone,
     wrap: Wrap,
     end: bool,
-    /// The most rows the text takes, if limited; the text layout cuts what is beyond, so a long body never pushes
-    /// the next card out of view.
-    max_rows: Option<usize>,
 }
 
 impl Spec {
     const fn new(role: TypeRole, tone: Tone, wrap: Wrap) -> Self {
-        Spec { role, tone, wrap, end: false, max_rows: None }
+        Spec { role, tone, wrap, end: false }
     }
 
-    const fn max_rows(mut self, rows: Option<usize>) -> Self {
-        self.max_rows = rows;
+    /// Limits the text to `rows` rows, if any: the text layout cuts what is beyond (`Wrap::Clamp`, S-L173), so a long
+    /// body never pushes the next card out of view.
+    fn max_rows(mut self, rows: Option<usize>) -> Self {
+        if let Some(rows) = rows {
+            self.wrap = Wrap::Clamp(u8::try_from(rows).unwrap_or(u8::MAX));
+        }
         self
     }
 
@@ -439,8 +440,7 @@ struct Measure<'a, 'b, 'r> {
 
 impl Sink for Measure<'_, '_, '_> {
     fn text(&mut self, at: Rect, spec: Spec, text: &str) -> Vec2 {
-        // PLAN: assumed `TextRun::max_rows(self, Option<usize>) -> Self` (chrome-w5), measured by the text layout.
-        self.cx.layout_at(&TextRun::new(text).role(spec.role).wrap(spec.wrap).max_rows(spec.max_rows), at.width()).size()
+        self.cx.layout_at(&TextRun::new(text).role(spec.role).wrap(spec.wrap), at.width()).size()
     }
 
     fn size(&mut self, spec: Spec, text: &str) -> Vec2 {
@@ -547,8 +547,7 @@ impl Sink for Paint<'_, '_> {
     }
 
     fn text(&mut self, at: Rect, spec: Spec, text: &str) -> Vec2 {
-        // PLAN: assumed `TextRun::max_rows(self, Option<usize>) -> Self` (chrome-w5), painted by the text layout.
-        let mut run = TextRun::new(text).role(spec.role).wrap(spec.wrap).max_rows(spec.max_rows).color(self.color(spec.tone));
+        let mut run = TextRun::new(text).role(spec.role).wrap(spec.wrap).color(self.color(spec.tone));
         if spec.end {
             run = run.align(HAlign::End);
         }
