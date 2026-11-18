@@ -414,6 +414,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn element_ranges_slice_original_input_with_utf8_bom() {
+        for prefix in ["", "\u{feff}", "\u{feff}<?xml version='1.0'?>"] {
+            for child_xml in ["<é/>", "<é>text</é>"] {
+                let root_xml = format!("<r>{child_xml}</r>");
+                let input = format!("{prefix}{root_xml}");
+                let doc = Document::parse(&input).unwrap();
+                let root = doc.root_element();
+                let child = root.children().next().unwrap();
+                assert_eq!(input.get(root.range()), Some(root_xml.as_str()));
+                assert_eq!(input.get(child.range()), Some(child_xml));
+                assert_eq!(root.range(), prefix.len()..input.len());
+                assert_eq!(child.range(), prefix.len() + 3..prefix.len() + 3 + child_xml.len());
+            }
+        }
+    }
+
+    #[test]
     fn inherited_namespace_copies_obey_aggregate_byte_admission() {
         let uri = format!("urn:{}", "x".repeat(124));
         let snapshot = std::mem::size_of::<(String, String)>() + 1 + uri.len();
