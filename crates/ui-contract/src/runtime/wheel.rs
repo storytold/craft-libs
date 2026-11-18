@@ -145,8 +145,12 @@ impl State {
     }
 }
 
-/// Registers a taker for next pass's split.
+/// Registers a taker for next pass's split. A layer that fades out takes no input, so a taker in its body registers
+/// none: it would hold the wheel over what already shows through it.
 pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
+    if crate::runtime::overlay::drawing_exiting(ctx) {
+        return;
+    }
     crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, taker));
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
 }
@@ -195,7 +199,6 @@ pub(crate) fn begin(ctx: &Context) {
         .map(|at| pointer::press_winner(ctx, at, pass_pointer.press_targets).map(|(winner, _)| winner.owner));
     // A modal layer holds the wheel, except over the canvas it keeps open and inside its own family.
     let blocked = hover.is_some_and(|at| !sampler::wheel_allowed(ctx, at));
-    let had_wheel = wheel_in.is_some();
     let wake = PerViewport::<State>::with(ctx, viewport, |state| {
         state.last = std::mem::take(&mut state.this);
         state.shares.clear();
@@ -276,14 +279,6 @@ pub(crate) fn begin(ctx: &Context) {
         }
         // A value control that owns the running gesture hears its end without a timer of its own: a pass at the gap.
         // An owed ease pays in the passes that follow.
-        if had_wheel {
-            eprintln!(
-                "DIAG popover::popup::the_wheel_over_an_open_popup_list_scrolls_the_list_and_not_the_surface_below: wheel hover {hover:?} blocked {blocked} by_position {by_position} gesture owner {:?} shares {:?} under {:?}",
-                state.gesture.owner,
-                state.shares.iter().map(|(owner, share)| (*owner, share.scroll)).collect::<Vec<_>>(),
-                state.last.iter().filter(|taker| hover.is_some_and(|at| taker.rect.contains(at))).collect::<Vec<_>>()
-            );
-        }
         state.wake(now)
     });
     if let Some(seconds) = wake {

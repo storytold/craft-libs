@@ -22,6 +22,8 @@ pub use board::focus_within;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::keymap_builds;
+#[cfg(feature = "testing")]
+pub(crate) use board::observe_fired;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{

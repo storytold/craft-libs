@@ -189,11 +189,14 @@ impl Fixture {
         let mut fixture = Fixture::new(move |ui| {
             let number = shared_pass.get() + 1;
             shared_pass.set(number);
-            let output = if shared_probed.get() {
+            // What fired before the story's code ran (a shortcut the input hook took) is not the story's.
+            crate::runtime::commands::observe_fired(ui.ctx());
+            let mut output = if shared_probed.get() {
                 probed_pass(ui, number, scope, show, &shared_data, &shared_delivers, &shared_impure)
             } else {
                 shown(ui, scope, show, &shared_data)
             };
+            output.fired = crate::runtime::commands::observe_fired(ui.ctx());
             shared_root.set(output.id);
             shared_outputs.borrow_mut().push(output);
         });

@@ -112,6 +112,9 @@ pub(crate) struct Board {
     shown: ShownMap,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
+    /// The commands fired since the testing kit last took them (`observe_fired`); `None` until it first does.
+    #[cfg(feature = "testing")]
+    observed: Option<Vec<CommandRef>>,
 }
 
 /// What `set_input` changed for the readers of command states, which each pass of the frame notes before any component
@@ -679,6 +682,13 @@ pub(crate) fn take_fired(ctx: &Context) -> Vec<Fired> {
     with(ctx, |board| std::mem::take(&mut board.out))
 }
 
+/// The commands fired since the last call, whatever they were routed to, and from now on records them: the testing
+/// kit's story observer takes them around each pass of a story. Nothing is recorded before the first call.
+#[cfg(feature = "testing")]
+pub(crate) fn observe_fired(ctx: &Context) -> Vec<CommandRef> {
+    with(ctx, |board| board.observed.replace(Vec::new()).unwrap_or_default())
+}
+
 /// The app-scope commands a key press fired while only the app's own command state disabled them, since the last
 /// call.
 pub(crate) fn take_declined(ctx: &Context) -> Vec<Fired> {
@@ -940,6 +950,12 @@ pub(crate) fn resolve_scoped(ctx: &Context, chain: &CommandChain, command: &Comm
 }
 
 fn queue(ctx: &Context, fired: Fired) {
+    #[cfg(feature = "testing")]
+    with(ctx, |board| {
+        if let Some(observed) = &mut board.observed {
+            observed.push(fired.command.clone());
+        }
+    });
     // An edit command goes to the focused component that lists it; otherwise it goes to the instance that declared
     // it or, with none, stays an app command.
     if fired.phase != FirePhase::Release

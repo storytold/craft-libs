@@ -22,17 +22,17 @@ pub(super) const CASES: &[Case] = &[
     Case::new("language", ANY, a_language_change_keeps_the_ids),
 ];
 
-/// Whether the drive changed a value, reported an edit or reported a click.
+/// Whether the drive changed a value, reported an edit or activated the story: a click or a fired command.
 fn acted(fixture: &mut Fixture, before: &crate::testing::story::StorySnapshot) -> bool {
     let changed = !fixture.data().changed_since(before).is_empty();
     let outputs = fixture.take_outputs();
-    changed || outputs.iter().any(|output| output.clicked || !output.edits.is_empty())
+    changed || outputs.iter().any(|output| output.activated() || !output.edits.is_empty())
 }
 
 /// A disabled component changes no value, fires no command and takes no focus unless it explains itself: a node
 /// with a description stands for the tooltip of `disabled_text`, and then its tooltip shows on focus. A description
 /// also comes from an invalid state, so a disabled story that takes no focus is not read as lacking `disabled_text`.
-/// A story with `disabled_text` is reached by Tab and shows that reason. A story binds no command, so a fired command is read as the pass's click, which a bound command follows.
+/// A story with `disabled_text` is reached by Tab and shows that reason.
 fn disabled_changes_nothing(subject: &Subject) -> Result<(), String> {
     for story in &subject.stories {
         let plan = subject.base(story).plan;
