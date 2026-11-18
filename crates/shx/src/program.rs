@@ -85,10 +85,10 @@ pub struct Glyph {
 const MAX_DEPTH: usize = 16;
 /// Location stack (the format promises four).
 const MAX_STACK: usize = 64;
-/// Bytes run per glyph, subshapes included.
-const MAX_STEPS: usize = 200_000;
-/// Points per glyph.
-const MAX_POINTS: usize = 50_000;
+/// Bytes run per glyph, subshapes included (16 shapes of the format's 2,000 bytes).
+const MAX_STEPS: usize = 32_768;
+/// Points per glyph (128 full circles): every character of a text may draw this many.
+const MAX_POINTS: usize = 8_192;
 /// Coordinates in font units.
 const MAX_COORD: f64 = 1.0e7;
 /// Arc segments per full turn.
@@ -461,6 +461,23 @@ mod tests {
         let font = crate::parse::parse(&crate::compile(&src).unwrap()).unwrap();
         assert!(outline(&font, 0x82A0, false).is_err());
         assert_eq!(outline(&font, 0x82A1, false).unwrap().advance, Point::new(255.0, 0.0));
+    }
+    #[test]
+    fn subshape_fan_out_past_the_point_and_step_bounds_is_cut_off() {
+        // Hostile: a few hundred bytes of fan-out drew 48,000 points per character (1.7 GB for a
+        // 1,000-character text) or ran 200,000 steps per character with the pen up.
+        let src = format!(
+            "*1,1,TOO_MANY_POINTS\n{a}0\n*2,1,HUNDRED\n{b}0\n*3,3,V\n011,019,0\n*4,1,ENOUGH\n{c}0\n*5,1,TOO_MANY_STEPS\n{d}0\n*6,1,UP\n{e}0\n*7,3,U\n2,010,0\n",
+            a = "7,2,".repeat(41),
+            b = "7,3,".repeat(100),
+            c = "7,2,".repeat(40),
+            d = "7,6,".repeat(100),
+            e = "7,7,".repeat(100),
+        );
+        let font = crate::parse::parse(&crate::compile(&src).unwrap()).unwrap();
+        assert!(outline(&font, 1, false).is_err() && outline(&font, 5, false).is_err());
+        assert_eq!(outline(&font, 4, false).unwrap().strokes.iter().map(Vec::len).sum::<usize>(), 8001);
+        assert!(outline(&font, 6, false).is_ok());
     }
 }
 
