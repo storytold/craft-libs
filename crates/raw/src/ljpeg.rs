@@ -244,7 +244,7 @@ impl<'a> BitReader<'a> {
         v
     }
     /// Discard buffered bits and skip to just after the next `RSTn` marker. Returns false if none found.
-    fn restart(&mut self) -> bool {
+    pub(crate) fn restart(&mut self) -> bool {
         self.buf = 0;
         self.bits = 0;
         self.marker = None;
