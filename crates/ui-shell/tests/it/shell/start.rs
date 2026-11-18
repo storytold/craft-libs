@@ -103,8 +103,6 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
 
     for (key, modifiers) in [(Key::Menu, Modifiers::NONE), (Key::F10, Modifiers::SHIFT)] {
         fixture.key(Key::Escape, Modifiers::NONE).idle(3);
-        let remove = fixture.by_label("Remove from Recent").map(|found| fixture.tree().role_of(found.node));
-        eprintln!("DIAG the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal: {key:?} after Escape: remove {remove:?}");
         assert!(fixture.by_label(MENU_ONLY).is_none(), "Escape closes the menu before {key:?}");
         let card = fixture.by_label("Poster.psd").expect("the card shows");
         fixture.click(&card).idle(2);
@@ -259,7 +257,9 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
     assert!(log.borrow().contains(&StartAction::OpenPinnedFile(work.join(file_name(count - 1)))), "a file row opens its file: {:?}", log.borrow());
 
     // Left on the open heading is the disclosure's close.
-    let heading = target(&fixture, "Work");
+    // A folder row is named by its name and its path.
+    let heading_name = format!("Work, {}", work.display());
+    let heading = target(&fixture, &heading_name);
     fixture.click(&heading).idle(2);
     log.borrow_mut().clear();
     fixture.key(Key::ArrowLeft, Modifiers::NONE).idle(2);
@@ -269,5 +269,5 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
     fixture.settle();
     assert!((0..count).all(|n| fixture.by_label(&file_name(n)).is_none()), "a folded folder shows no file row");
     assert!(fixture.by_label("Show less").is_none(), "a folded folder shows no More row");
-    assert!(fixture.by_label("Work").is_some(), "a folded folder keeps its heading");
+    assert!(fixture.by_label(&heading_name).is_some(), "a folded folder keeps its heading");
 }

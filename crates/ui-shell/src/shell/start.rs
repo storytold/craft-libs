@@ -507,6 +507,9 @@ impl StartScreen<'_> {
             link_items(ui, links);
         };
         let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
+        // The page stack fills its room, so its own measure is the room. The least width is that of the same body in a
+        // content-sized column, where a fill-width child only follows the column.
+        let page_content = || Stack::new().gap(Gap::Section).pad(Pad::Regular);
         // The host's sections at `place`, each one child of the page, so they stand one section gap apart.
         let host_sections = |ui: &mut Ui, place: StartPlace| {
             for (_, body) in sections.iter().filter(|(held, _)| *held == place) {
@@ -547,7 +550,7 @@ impl StartScreen<'_> {
         // narrower page keeps New and Open in its row and lists the links after the sections.
         let rail = !links.is_empty() && {
             let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
-            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true)).x;
+            let sections_least = page_content().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true)).x;
             eprintln!(
                 "DIAG host_sections_sit_at_their_place_and_count_in_the_rail_decision: rail {rail_width} least {sections_least} room {} gap {}",
                 ui.available_width(),
