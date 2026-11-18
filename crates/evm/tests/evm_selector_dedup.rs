@@ -82,3 +82,34 @@ fn repeated_comparisons_keep_fallback_scan_after_the_last_dispatch() {
         assert_eq!(report.fallback, expected);
     }
 }
+
+#[test]
+fn selector_cap_leaves_fallback_unknown() {
+    for ending in [&[0x5f, 0x5f, 0xfd][..], &[0x00][..]] {
+        let mut code = prefix();
+        for selector in 0..4097 {
+            comparison(&mut code, selector, 4, 0);
+        }
+        code.extend_from_slice(ending);
+        let report = evm::analyze(&code).unwrap();
+        assert_eq!(report.functions.len(), 4096);
+        assert_eq!(report.fallback, "unknown");
+    }
+}
+
+#[test]
+fn payability_only_follows_jumps_to_jumpdest() {
+    for (target, expected) in [(&[0x5b, 0x00][..], "payable"), (&[0x00][..], "unknown")] {
+        let mut code = prefix();
+        let entry = u8::try_from(code.len() + 10).unwrap();
+        comparison(&mut code, 0xfeed0001, 4, entry);
+        code.push(0x00);
+        assert_eq!(code.len(), usize::from(entry));
+        code.extend([0x5b, 0x60, entry + 4, 0x56]);
+        code.extend_from_slice(target);
+        let report = evm::analyze(&code).unwrap();
+        assert_eq!(report.functions.len(), 1);
+        assert!(report.functions[0].jumpdest_valid);
+        assert_eq!(report.functions[0].mutability, expected);
+    }
+}

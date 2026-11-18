@@ -628,7 +628,10 @@ pub fn analyze(code: &[u8]) -> Result<EvmInterface, FormatError> {
 
     let (short_calldata, receive) = short_calldata_path(body, &ins, disp_start);
     let mut fallback = "unknown";
+    // At the selector cap the remaining dispatcher has not been scanned.
+    // Its next comparison is not evidence that a fallback body exists.
     if let Some(j) = last_jumpi
+        && functions.len() < MAX_FUNCTIONS
         && solc_like > 0
     {
         fallback = if reverts_soon(body, &ins, j + 1, &index_of) { "absent" } else { "present" };
@@ -694,7 +697,7 @@ fn payability(code: &[u8], ins: &[Ins], start: usize, index_of: &dyn Fn(usize) -
         match i.op {
             0x34 if rejects_value(code, ins, k, index_of) => return ("nonpayable", format!("rejects nonzero CALLVALUE at {:#x}", i.off)),
             0x56 => match jump_destination(code, ins, k, index_of) {
-                Some(t) if hops < 2 => {
+                Some(t) if hops < 2 && ins.get(t).is_some_and(|target| target.op == 0x5b) => {
                     hops += 1;
                     k = t;
                     continue;
