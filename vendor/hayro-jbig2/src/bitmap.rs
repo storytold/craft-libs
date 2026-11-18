@@ -241,14 +241,19 @@ impl Bitmap {
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
+        let len = stride as usize * height as usize;
+        // Craft patch: the words are reserved before the bitmap changes, and memory that cannot
+        // be reserved is refused (see `try_filled`).
+        if self.data.try_reserve_exact(len.saturating_sub(self.data.len())).is_err() {
+            bail!(OverflowError::BitmapLimit);
+        }
         self.width = width;
         self.height = height;
         self.stride = stride;
         self.x_location = 0;
         self.y_location = 0;
         self.data.clear();
-        self.data
-            .resize(stride as usize * height as usize, default_word);
+        self.data.resize(len, default_word);
         if default_pixel {
             self.clear_padding();
         }

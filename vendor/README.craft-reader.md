@@ -469,22 +469,24 @@ A craft-libs patch, labeled `Craft patch` in `hayro-jbig2`, derives these bounds
 the decoding work of one image (4 × the pixels, 2^30 by default, and never less than the work of
 decoding one bitmap within the limit), a dictionary's symbol pixels, the cells of a halftone grid
 (an eighth of the pixels rounded up, 2^25 by default) and the words a page's
-segments may hold (two bitmaps of the pixels, 64 MiB by default). `Image::new_embedded_with_limits`
+segments may hold (two bitmaps of the pixels, 64 MiB by default, and at least two bitmaps of one
+word a row, so a narrow region within a low limit can be stored). `Image::new_embedded_with_limits`
 opens and decodes an image within a caller's `Limits`; `Image::new` and `Image::new_embedded`
 keep the defaults. hayro-syntax's JBIG2 filter passes the document's
 `DecodeLimits::max_image_pixels`, and its manifest takes `hayro-jbig2` from `../hayro-jbig2`, so
 `cargo test --manifest-path vendor/hayro-syntax/Cargo.toml` builds against the patched decoder.
 Each side of a bitmap is still at most 65535. A halftone grid whose array of gray-scale values
 would take more than `isize::MAX` bytes is refused with `OverflowError::BitmapLimit` before the
-array is allocated; with 32-bit pointers a raised `Limits` can reach that size. A bitmap's words
-and a gray-scale image's values are reserved fallibly, and memory that cannot be reserved is
-refused with `OverflowError::BitmapLimit`. Tests:
+array is allocated; with 32-bit pointers a raised `Limits` can reach that size. The words of a
+bitmap (the page included), a gray-scale image's values and a halftone's skip mask are reserved
+fallibly, and memory that cannot be reserved is refused with `OverflowError::BitmapLimit`. Tests:
 `bitmap::pdfcraft_limit_tests::the_pixel_bound_follows_the_limits`,
 `bitmap::pdfcraft_limit_tests::memory_that_cannot_be_reserved_is_refused`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_pays_for_a_bitmap_it_allows`,
 `bitmap::pdfcraft_limit_tests::a_low_limit_allows_a_grid_of_one_cell`,
 `gray_scale::pdfcraft_limit_tests::gray_scale_values_past_one_allocation_are_refused_by_a_limit`,
-`tests::the_page_and_its_regions_follow_the_limits` and
+`tests::the_page_and_its_regions_follow_the_limits`,
+`tests::a_narrow_region_within_a_low_limit_can_be_stored` and
 `tests::a_page_past_the_bounds_is_refused_when_opened` in hayro-jbig2;
 `filter::jbig2::tests::the_pixel_limit_given_is_the_one_applied` and
 `decode_limits_tests::a_documents_pixel_limit_reaches_the_jbig2_decoder` in hayro-syntax.

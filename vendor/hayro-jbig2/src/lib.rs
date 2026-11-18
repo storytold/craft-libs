@@ -658,9 +658,13 @@ const ENTRY_WORDS: u64 = 32;
 /// decoded takes more for a while, within its own bounds: the page bitmap isn't counted, nor is
 /// what a region or a grid uses until it is stored or freed. Craft patch: the bitmaps have
 /// `max_pixels` pixels each (see [`Limits::max_pixels`]), so the 64 MiB is the bound at the
-/// default [`Limits`].
+/// default [`Limits`]. Each row of a bitmap takes at least one word, so a bitmap counts at least
+/// as many words as the rows it may have: a narrow one within a low limit still fits.
 const fn max_retained_words(max_pixels: u64) -> u64 {
-    (max_pixels / bitmap::WORD_BITS as u64 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS).saturating_mul(2)
+    let rows = if max_pixels < bitmap::MAX_DIMENSION as u64 { max_pixels } else { bitmap::MAX_DIMENSION as u64 };
+    let packed = max_pixels / bitmap::WORD_BITS as u64;
+    let words = if packed > rows { packed } else { rows };
+    (words + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS).saturating_mul(2)
 }
 
 /// Craft patch: [`max_retained_words`] at the default [`Limits`].
@@ -1177,6 +1181,18 @@ mod tests {
         page.limits = Limits::with_max_pixels(1 << 30);
         assert_eq!(page.retained_room(), max_retained_words(1 << 30) - MAX_RETAINED_WORDS);
         assert!(max_retained_words(1 << 30) > 4 * ((1 << 28) / 32));
+    }
+
+    /// Craft patch: a region of one column within a low limit takes a word a row, and the page
+    /// can still store it.
+    #[test]
+    fn a_narrow_region_within_a_low_limit_can_be_stored() {
+        let max_pixels = u64::from(bitmap::MAX_DIMENSION);
+        let mut page = PageState { limits: Limits::with_max_pixels(max_pixels), ..Default::default() };
+        let region = Bitmap::new(1, bitmap::MAX_DIMENSION, max_pixels).unwrap();
+        assert!(page.store_region(0, region).is_ok());
+        let default_words = (bitmap::MAX_PIXELS / 32 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS) * 2;
+        assert_eq!(MAX_RETAINED_WORDS, default_words);
     }
 
     /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at

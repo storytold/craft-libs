@@ -1,13 +1,12 @@
 //! Halftone region segment parsing and decoding (7.4.5, 6.6).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use super::RegionBitmap;
 use super::pattern::PatternDictionary;
 use super::{CombinationOperator, RegionSegmentInfo, Template, parse_region_segment_info};
 use crate::ScratchBuffers;
-use crate::bitmap::{Bitmap, Limits, MAX_DIMENSION, WORD_BITS, copy_work, decode_work};
+use crate::bitmap::{Bitmap, Limits, MAX_DIMENSION, WORD_BITS, copy_work, decode_work, try_filled};
 use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
 use crate::gray_scale::{GrayScaleParams, decode_gray_scale_image};
 use crate::reader::Reader;
@@ -253,7 +252,7 @@ fn compute_skip_bitmap(
     let len = stride
         .checked_mul(grid.height)
         .ok_or(OverflowError::BitmapDimension)? as usize;
-    let mut hskip = vec![0_u32; len];
+    let mut hskip = try_filled(0_u32, len)?;
     let mut coords = GridCoords::new(grid, &header.grid_vector);
 
     for m_g in 0..grid.height {
