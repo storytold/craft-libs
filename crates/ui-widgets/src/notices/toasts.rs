@@ -2,12 +2,15 @@
 
 use crate::contract::toast::{CardOutcome, ToastHost};
 use crate::contract::{Props as _, Show as _};
+use crate::display::{Progress, Shade, Text};
 use crate::notices::{Notice, NoticeAction, NoticeLayout};
-use crate::runtime::env::WindowKey;
+use crate::runtime::env::{Env, WindowKey};
 use crate::runtime::toast::ToastEnd;
+use crate::style::TypeRole;
 use egui::{Rect, Ui};
 
-/// The cards of a window's toast queue. Whoever owns the window root calls `show` once per pass.
+/// The cards of a window's toast queue. Whoever owns the window root calls `show` once per pass. A card with progress
+/// shows a progress bar named by its title (else its message) and the percentage under its text, before its actions.
 #[derive(Clone, Copy, Debug, Default, crate::contract::Pattern)]
 pub struct ToastStack;
 
@@ -20,6 +23,14 @@ impl ToastStack {
                 Notice::new(toast.tone, toast.message.clone()).layout(NoticeLayout::Card).lines(toast.lines.clone()).dismiss().id_salt(salt);
             if let Some(title) = &toast.title {
                 notice = notice.title(title.clone());
+            }
+            if let Some(fraction) = toast.progress {
+                // The bar and the percentage read as `StatusProgress` shows a task's progress.
+                let name = toast.title.clone().unwrap_or_else(|| toast.message.clone());
+                let percent = Env::of(ui).format().percent(f64::from(Progress::clamped(fraction)), 0);
+                notice = notice
+                    .content(Progress::new(fraction).label(name), |_| {})
+                    .content(Text::new(percent).role(TypeRole::Mono).shade(Shade::Muted), |_| {});
             }
             for action in &toast.actions {
                 notice = notice.action(NoticeAction::new(action.label.clone()));

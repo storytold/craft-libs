@@ -205,7 +205,8 @@ pub struct Notice<'a> {
     announce: Option<Politeness>,
     actions: Vec<NoticeAction>,
     lines: Vec<Label>,
-    /// The host's leaves under the actions of a centred notice, and their sizes in this pass.
+    /// The host's leaves: under the actions of a centred notice, between the bullet lines and the actions of an inline
+    /// or card notice; and their sizes in this pass.
     content: Vec<Box<dyn for<'r> Hosted<Notice<'r>> + 'a>>,
     content_sizes: Vec<Vec2>,
     placed: Option<Placed>,
@@ -304,22 +305,18 @@ impl<'a> Notice<'a> {
         self
     }
 
-    /// Hosts `component` under the actions of a centred notice, after the leaves added before it; its output goes to
-    /// `output` in the pass it is shown. Other layouts show no hosted leaves.
+    /// Hosts `component` after the leaves added before it: under the actions of a centred notice, and in an inline or
+    /// card notice under the message and its bullet lines, before the actions, across the whole width. Its output goes
+    /// to `output` in the pass it is shown.
     #[must_use]
     pub fn content<C: Show + 'a>(mut self, component: C, output: impl FnOnce(C::Output) + 'a) -> Self {
         self.content.push(Box::new(Hosting::new(component, output)));
         self
     }
 
-    /// Measures the hosted leaves for this pass; only a centred notice shows them.
+    /// Measures the hosted leaves for this pass.
     fn measure_content(&mut self, cx: &MeasureCx<'_, Self>) {
-        let centred = !self.row();
-        self.content_sizes = if centred {
-            self.content.iter_mut().enumerate().map(|(at, item)| item.measure(cx, (CONTENT, at), Proposal::Ideal)).collect()
-        } else {
-            Vec::new()
-        };
+        self.content_sizes = self.content.iter_mut().enumerate().map(|(at, item)| item.measure(cx, (CONTENT, at), Proposal::Ideal)).collect();
     }
 
     fn texts<'t>(&self, env: &EnvView<'_>, words: &NoticeWords, format: &Format, message: &'t str) -> Texts<'t> {
@@ -420,18 +417,20 @@ impl<'a> Notice<'a> {
         let more = texts.more.as_deref().map(|more| cx.layout_at(&self.run(more, cx.style.more.role), width).size());
         let stack = cx.style.stack;
         let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
-        // In a row layout the lines and the actions run from the content's start edge, under the icon.
-        let below_width = if row { actions_width } else { 0.0 };
+        let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
+        // In a row layout the lines, the hosted leaves and the actions run from the content's start edge, under the icon.
+        let below_width = if row { actions_width.max(content_width) } else { 0.0 };
         let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(below_width, |size| size.x.max(below_width)), f32::max);
         let lines_height = line_sizes.iter().chain(more.iter()).map(|size| stack + size.y).sum::<f32>();
+        let leaves_height = self.content_sizes.iter().map(|size| stack + size.y).sum::<f32>();
         let stacked = !row && column.is_finite() && actions_width > column;
         let actions_height = if stacked {
             actions.iter().map(|size| size.y).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32
         } else {
             actions.iter().map(|size| size.y).fold(0.0, f32::max)
         };
-        let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
-        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(actions_width - below_width).max(content_width);
+        let column_width = if row { 0.0 } else { actions_width.max(content_width) };
+        let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(column_width);
         // The head line: the icon, the first line of the text and the dismiss button share its centre line.
         let first_role = match (&texts.title, texts.message.is_empty()) {
             (Some(_), _) => Some(title_role),
@@ -443,7 +442,7 @@ impl<'a> Notice<'a> {
         let text_offset = (line - first) / 2.0;
         // Lines and actions start under the head line.
         let head = (text_offset + title.map_or(0.0, |size| size.y) + message.y).max(line);
-        let with_actions = head + lines_height + if actions.is_empty() { 0.0 } else { stack.max(gap) + actions_height };
+        let with_actions = head + lines_height + leaves_height + if actions.is_empty() { 0.0 } else { stack.max(gap) + actions_height };
         let (needs, height) = if row {
             ((icon_width + text_width + dismiss_width).max(lines_width), with_actions)
         } else {
@@ -622,6 +621,11 @@ impl Component for Notice<'_> {
                 y += stack;
                 placed.more = Some(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), height)));
                 y += height;
+            }
+            for size in &self.content_sizes {
+                y += stack;
+                placed.content.push(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), size.y)));
+                y += size.y;
             }
             y += stack.max(gap);
             let mut line = Flow::new(Rect::from_min_size(Pos2::new(rect.left(), y), Vec2::new(rect.width(), (rect.bottom() - y).max(0.0))), rtl);
