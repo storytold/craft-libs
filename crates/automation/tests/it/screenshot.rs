@@ -1,5 +1,6 @@
 //! `Captures`: admission budgets, settling, deadlines, cancellation, document identity, the
-//! geometry epoch per viewport, the window a capture names, and the image checks.
+//! geometry epoch per viewport, the window a capture names, the image checks, and the region a
+//! reply is cropped to.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -394,6 +395,98 @@ fn the_image_must_match_the_issued_viewport() {
             Err(text) => assert!(error(&finished[0]).contains(text), "{size:?}: {}", error(&finished[0])),
         }
     }
+}
+
+/// The first pixel of a PNG, decoded.
+fn first_pixel(png: &[u8]) -> [u8; 4] {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(png)).read_info().expect("a PNG");
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    reader.next_frame(&mut pixels).expect("a frame");
+    [pixels[0], pixels[1], pixels[2], pixels[3]]
+}
+
+/// A region is checked against the window at admission (and again when the layout changed before issue) and refused
+/// when it does not lie inside; the whole window is reserved for it. The reply crops it at the image's own scale to
+/// the window, so a fitted image is cropped at its fit, and both reply shapes carry the window's point scale.
+#[trial]
+fn a_region_is_cropped_at_the_image_scale_and_one_outside_the_window_is_refused() {
+    use craft_automation::control::ControlChannel;
+    use craft_automation::screenshot::ScreenshotParams;
+    use serde_json::json;
+
+    let params = |value| ScreenshotParams::from_params(&value);
+    let region = Rect::from_min_max(Pos2::new(10.0, 5.0), Pos2::new(60.0, 30.0));
+    assert_eq!(params(json!({"path": "a.png", "region": [10, 5, 60, 30]})).map(|p| (p.path, p.region)), Ok((Some("a.png".to_owned()), Some(region))));
+    for bad in [json!({"region": [60, 5, 10, 30]}), json!({"region": [10, 5, 60]}), json!({"region": [10, 5, 60, "30"]}), json!({"zoom": 2})] {
+        assert!(params(bad.clone()).is_err(), "{bad} is refused");
+    }
+
+    let ctx = Context::default();
+    let now = motion::now();
+    let (_transport, requests) = channel();
+    let mut control = ControlChannel::new(requests);
+    let mut g = geometry(100.0, 50.0);
+    g.pixels_per_point = 2.0;
+    control.captures.note_geometry(ViewportId::ROOT, g);
+    let request = |token: u64, region: Rect| {
+        let (tx, rx) = channel();
+        let mut request = ScreenshotRequest::new(token, ViewportId::ROOT, tx);
+        request.region = Some(region);
+        (request, rx)
+    };
+
+    let (outside, _) = request(1, Rect::from_min_max(Pos2::new(90.0, 40.0), Pos2::new(110.0, 60.0)));
+    let e = control.captures.admit(outside, now).map_err(|(_, e)| e).expect_err("outside the window");
+    assert!(e.contains("inside"), "{e}");
+    assert_eq!(control.captures.pending(), 0);
+
+    let (inside, rx) = request(2, region);
+    control.captures.admit(inside, now).map_err(|(_, e)| e).expect("inside the window");
+    assert_eq!(control.captures.reserved_bytes(), 200 * 100 * 4, "the whole window is reserved");
+    let mut picture = ColorImage::filled([200, 100], Color32::BLUE);
+    picture.pixels[10 * 200 + 20] = Color32::RED;
+    issue_one(&mut control.captures, &ctx, now).complete(Arc::new(picture));
+    let finished = control.captures.drain(now, None);
+    let mut written = Vec::new();
+    control.finish_captures(finished, &mut |_, bytes| {
+        written = bytes.to_vec();
+        Ok(())
+    });
+    let reply = rx.try_recv().expect("a reply");
+    assert_eq!((reply["result"]["width"].clone(), reply["result"]["height"].clone()), (json!(100), json!(50)), "{reply}");
+    assert_eq!(reply["result"]["pixels_per_point"], 2.0);
+    assert!(written.is_empty(), "no path, no file");
+    use base64::Engine as _;
+    let png = base64::engine::general_purpose::STANDARD.decode(reply["result"]["base64"].as_str().expect("an inline PNG")).expect("base64");
+    assert_eq!(first_pixel(&png), Color32::RED.to_array(), "the crop starts at the region's corner at two pixels per point");
+
+    // A fitted surface: 600×300 points through a 400-pixel texture side come back as 400×200.
+    let mut fitted = geometry(600.0, 300.0);
+    fitted.max_texture_side = 400;
+    control.captures.note_geometry(ViewportId::ROOT, fitted);
+    let (mut half, rx) = request(3, Rect::from_min_max(Pos2::new(300.0, 150.0), Pos2::new(600.0, 300.0)));
+    half.path = Some("half.png".into());
+    control.captures.admit(half, now).map_err(|(_, e)| e).expect("inside the window");
+    issue_one(&mut control.captures, &ctx, now).complete(filled([400, 200], Color32::WHITE));
+    let finished = control.captures.drain(now, None);
+    control.finish_captures(finished, &mut |path, bytes| {
+        assert_eq!(path, "half.png");
+        written = bytes.to_vec();
+        Ok(())
+    });
+    let reply = rx.try_recv().expect("a reply");
+    assert_eq!((reply["result"]["width"].clone(), reply["result"]["height"].clone()), (json!(200), json!(100)), "{reply}");
+    assert_eq!(reply["result"]["pixels_per_point"], 1.0);
+    assert!(!written.is_empty(), "the PNG went to the writer");
+
+    // A region that a shrink before issue leaves outside is refused then, not cut to a smaller picture.
+    let (late, _reply) = request(4, region);
+    control.captures.admit(late, now).map_err(|(_, e)| e).expect("inside the window");
+    control.captures.note_geometry(ViewportId::ROOT, geometry(40.0, 20.0));
+    let (finished, callbacks) = settle_and_issue(&mut control.captures, &ctx, now, None);
+    assert!(callbacks.is_empty(), "nothing is captured for it");
+    assert!(finished.len() == 1 && error(&finished[0]).contains("inside"), "refused at issue");
+    assert_eq!(control.captures.pending(), 0);
 }
 
 const ROOT_SIZE: Vec2 = Vec2::new(800.0, 600.0);

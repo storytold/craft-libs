@@ -1,10 +1,11 @@
-//! Synthetic pointer, keyboard and input-method input: `ui.click`, `ui.move`, `ui.wheel`, `ui.key`, `ui.release`,
-//! `ui.type`, `ui.ime` and `ui.capsLock`.
+//! Synthetic pointer, keyboard, input-method, file-drop and access-tree input: `ui.click`, `ui.focus`, `ui.move`,
+//! `ui.wheel`, `ui.key`, `ui.release`, `ui.type`, `ui.ime`, `ui.drop` and `ui.capsLock`.
 //!
 //! This module reads and validates the protocol's parameters; the window host queues the input
 //! ([`WindowHost::inject_move`], [`WindowHost::inject_click`], [`WindowHost::inject_wheel`],
 //! [`WindowHost::inject_key`], [`WindowHost::inject_release`], [`WindowHost::inject_text`],
-//! [`WindowHost::inject_ime`]), one step per pass, so a move, a press, a release, a key's down and up and each
+//! [`WindowHost::inject_ime`], [`WindowHost::inject_files`], [`WindowHost::inject_access`]), one step per pass, so a
+//! move, a press, a release, a key's down and up and each
 //! composition step land on separate passes as real input does. A request is validated whole before anything of it is
 //! queued, so a refused one leaves no half-queued press. The host answers the
 //! waiting replies once [`WindowHost::injected_idle`] turns true ([`crate::control::ControlChannel::poll_input`]), and
@@ -17,14 +18,22 @@
 //! Points are screen points (egui points), or document points with `coordinates: "document"`, which the application
 //! maps to the screen through its canvas ([`DocumentMap`]). Document-coordinate `ui.pointer` events are the
 //! application's own method: they drive its tool host, not the window.
+//!
+//! A node of the access tree (`id` or `label`, [`NodeTarget`]) is clicked or focused through the node's own action
+//! instead of a point: [`crate::access::resolve`] finds it in the window's kept tree when the request arrives, so a
+//! missing, ambiguous, disabled or undeclared node is refused before anything is queued. There is no `ui.drag`: a
+//! drag is `ui.click {hold}`, `ui.move` and `ui.release`.
+
+use std::path::PathBuf;
 
 use craft_behavior::PointerButton;
 use craft_keymap::{Key, Mods};
+use craft_ui::runtime::egui::access::Declared;
 use craft_ui::runtime::windows::{Released, WindowHost};
 use egui::{Pos2, Vec2, ViewportId, pos2, vec2};
 use serde_json::Value;
 
-use crate::access::NodeTarget;
+use crate::access::{NO_TREE, NodeTarget, resolve};
 use crate::protocol::{BUTTONS, KEY_MODIFIERS, Params};
 
 /// Most clicks one `ui.click` may ask for (`count`).
@@ -135,17 +144,25 @@ pub struct Focus {
 }
 
 impl Focus {
-    /// `{id | label}`: the node to focus.
+    /// `{id | label}`: the node to focus, exactly one of the two, no other fields (``"missing `id` or `label`"``).
     pub fn from_params(params: &Value) -> Result<Focus, String> {
-        let _ = params;
-        todo!("SH-C16")
+        let p = Params(params).only(None, &["id", "label"])?;
+        NodeTarget::from_params(&p)?.map(|target| Focus { target }).ok_or_else(|| "missing `id` or `label`".into())
     }
 
-    /// Sends the focus request for the node to `viewport`.
+    /// Queues the focus request for the node in `viewport`; a node the kept tree does not have as one reported,
+    /// enabled, focusable node is refused ([`resolve`]).
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId) -> Result<(), String> {
-        let _ = (host, viewport);
-        todo!("SH-C16")
+        inject_node(host, viewport, &self.target, Declared::Focus)
     }
+}
+
+/// Queues `action` on the node `target` names in `viewport`'s kept access tree.
+fn inject_node(host: &WindowHost, viewport: ViewportId, target: &NodeTarget, action: Declared) -> Result<(), String> {
+    let tree = host.access_tree(viewport).ok_or_else(|| NO_TREE.to_owned())?;
+    let node = resolve(&tree, target, action)?;
+    host.inject_access(viewport, node, action);
+    Ok(())
 }
 
 /// A validated `ui.click`.
@@ -165,31 +182,60 @@ pub struct Click {
 }
 
 impl Click {
-    /// `{x?, y?, coordinates?, button?, count?, hold?, modifiers…}`, no other fields (`Params::only`). `button`
-    /// defaults to `left`. `count` is an unsigned integer, default 1; over [`MAX_CLICKS`] is
-    /// ``"`count` must be at most 256 (got {count})"``. Other errors are the `Params` validators'.
+    /// `{x?, y?, coordinates?, button?, count?, hold?, modifiers…}` for a point, or `{id | label, button?}` for a node
+    /// of the access tree ([`NodeTarget::from_params`]); no other fields (`Params::only`). `button` defaults to
+    /// `left`. `count` is an unsigned integer, default 1; over [`MAX_CLICKS`] is
+    /// ``"`count` must be at most 256 (got {count})"``. A node is clicked by its own action, so with one only the
+    /// primary button (its click) and the secondary one (its context menu) are allowed, and a point, `count` above 1,
+    /// `hold` and held modifiers are refused. Other errors are the `Params` validators'.
     pub fn from_params(params: &Value) -> Result<Self, String> {
-        let p = only(params, &["button", "count", "hold"])?;
+        let p = only(params, &["button", "count", "hold", "id", "label"])?;
         let p = Params(&p);
         let count = p.uint_field("count")?.unwrap_or(1);
         if count > MAX_CLICKS {
             return Err(format!("`count` must be at most {MAX_CLICKS} (got {count})"));
         }
-        Ok(Self {
-            target: ClickTarget::At(At::from_params(&p)?), // P3(pdf-shell-w2): SH-C16
-            button: button(&p)?.unwrap_or(PointerButton::Primary),
-            count,
-            mods: p.modifiers(&KEY_MODIFIERS)?,
-            hold: p.bool_field("hold")?.unwrap_or(false),
-        })
+        let pressed = button(&p)?;
+        let mods = p.modifiers(&KEY_MODIFIERS)?;
+        let hold = p.bool_field("hold")?.unwrap_or(false);
+        if let Some(node) = NodeTarget::from_params(p.0)? {
+            if POINT.iter().any(|field| p.0.get(field).is_some()) {
+                return Err("a click names a node (`id` or `label`) or a point (`x`, `y`), not both".into());
+            }
+            if count > 1 {
+                return Err("`count` goes with a point, not a node".into());
+            }
+            if hold {
+                return Err("`hold` goes with a point, not a node".into());
+            }
+            if !mods.is_none() {
+                return Err("modifiers go with a point, not a node".into());
+            }
+            let button = match pressed {
+                None | Some(PointerButton::Primary) => PointerButton::Primary,
+                Some(PointerButton::Secondary) => PointerButton::Secondary,
+                Some(_) => return Err("a node takes a primary or a secondary click, not the middle button".into()),
+            };
+            return Ok(Self { target: ClickTarget::Node(node), button, count: 1, mods, hold: false });
+        }
+        Ok(Self { target: ClickTarget::At(At::from_params(&p)?), button: pressed.unwrap_or(PointerButton::Primary), count, mods, hold })
     }
 
-    /// Queues a move to the target, then `count` presses and releases of the button, in `viewport`.
+    /// Queues a move to the point, then `count` presses and releases of the button, in `viewport`; for a node, its
+    /// click, or its context menu for the secondary button, once the kept tree has it as one reported, enabled node
+    /// that declares the action ([`resolve`]).
     pub fn inject(&self, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
-        let count = u32::try_from(self.count).unwrap_or(u32::MAX);
-        let ClickTarget::At(at) = &self.target else { todo!("SH-C16") }; // P3(pdf-shell-w2): SH-C16
-        host.inject_click(viewport, at.resolve(map)?, self.button, count, self.mods, self.hold);
-        Ok(())
+        match &self.target {
+            ClickTarget::At(at) => {
+                let count = u32::try_from(self.count).unwrap_or(u32::MAX);
+                host.inject_click(viewport, at.resolve(map)?, self.button, count, self.mods, self.hold);
+                Ok(())
+            }
+            ClickTarget::Node(node) => {
+                let action = if matches!(self.button, PointerButton::Secondary) { Declared::ContextMenu } else { Declared::Click };
+                inject_node(host, viewport, node, action)
+            }
+        }
     }
 }
 
@@ -335,6 +381,8 @@ pub fn caps_lock_from_params(params: &Value) -> Result<Option<bool>, String> {
 pub fn input_method(method: &str, params: &Value, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Option<Result<(), String>> {
     Some(match method {
         "ui.click" => Click::from_params(params).and_then(|click| click.inject(host, viewport, map)),
+        "ui.focus" => Focus::from_params(params).and_then(|focus| focus.inject(host, viewport)),
+        "ui.drop" => drop_files(params, host, viewport, map),
         "ui.move" => Move::from_params(params).and_then(|step| step.inject(host, viewport, map)),
         "ui.wheel" => Wheel::from_params(params).and_then(|wheel| wheel.inject(host, viewport, map)),
         "ui.key" => KeyPress::from_params(params).map(|key| key.inject(host, viewport)),
@@ -344,6 +392,32 @@ pub fn input_method(method: &str, params: &Value, host: &WindowHost, viewport: V
         "ui.capsLock" => caps_lock_from_params(params).map(|on| host.set_caps_lock(on)),
         _ => return None,
     })
+}
+
+/// `ui.drop {paths, hover_only?, x?, y?, coordinates?}`: hovers the files `paths` names (a non-empty array of
+/// strings) over the point, where the pointer is when neither `x` nor `y` is given, and drops them in the following
+/// step unless `hover_only`. The point is mapped as every request's is; a drop carries no modifiers, so a held one is
+/// refused.
+fn drop_files(params: &Value, host: &WindowHost, viewport: ViewportId, map: DocumentMap<'_>) -> Result<(), String> {
+    const PATHS: &str = "paths must be a non-empty array of strings";
+    let p = only(params, &["paths", "hover_only"])?;
+    let p = Params(&p);
+    if !p.modifiers(&KEY_MODIFIERS)?.is_none() {
+        return Err("`ui.drop` takes no modifiers".into());
+    }
+    let paths: Vec<PathBuf> = match p.0.get("paths") {
+        None => return Err("missing `paths`".into()),
+        Some(Value::Array(items)) => items.iter().map(|item| item.as_str().map(PathBuf::from)).collect::<Option<_>>().ok_or(PATHS)?,
+        Some(_) => return Err(PATHS.into()),
+    };
+    if paths.is_empty() {
+        return Err(PATHS.into());
+    }
+    let hover_only = p.bool_field("hover_only")?.unwrap_or(false);
+    let at = (p.0.get("x").is_some() || p.0.get("y").is_some()).then(|| At::from_params(&p)).transpose()?;
+    let at = at.map(|at| at.resolve(map)).transpose()?;
+    host.inject_files(viewport, at, paths, !hover_only);
+    Ok(())
 }
 
 /// A validated `ui.type`: `{text}`, a string.

@@ -1,6 +1,6 @@
 [package]
 name = "craft-automation"
-description = "Drive a running Craft app from tests, agents and the CLI (control channel, screenshot queue, frame profiler and frame trace; native only), and recorded actions with the Actions panel (every target)."
+description = "Drive a running Craft app from tests, agents and the CLI (control channel, screenshot queue and synthetic input on every target; server, client, frame profiler and frame trace native only), and recorded actions with the Actions panel (every target)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -21,7 +21,7 @@ default = []
 # The egui parts: the Actions panel, the control channel's server side (screenshots, synthetic
 # input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
 # `Params` and the recorded actions' model and files.
-ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-host"] # P3(pdf-shell-w2): WF-W17
+ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui", "dep:craft-host"]
 # The Actions panel's and the Agents page's stories and mock, and the integration binary `tests/it`.
 screen-testing = ["ui", "agents", "craft-ui/testing"]
 # Agents in the open window (desktop): the ArtCraft Launcher's switch, the connection file an
@@ -30,26 +30,29 @@ screen-testing = ["ui", "agents", "craft-ui/testing"]
 agents = ["dep:craft-ai-agents", "dep:craft-flags", "dep:craft-atomic", "dep:craft-host"]
 
 [dependencies]
+# The screenshot reply's PNG and its inline base64 (the control channel builds on every target with `ui`).
+base64 = "0.22"
 craft-behavior = { workspace = true, optional = true }
+craft-host = { workspace = true, optional = true }
 craft-keymap = { workspace = true, optional = true }
 craft-theme = { workspace = true }
 craft-ui = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
+png = "0.17"
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `std::time::Instant` panics on wasm; this is the same type on native.
+web-time = "1.1"
 
-# The control channel, its server and client, screenshots, the profiler and the trace.
+# The server and client, the token files, the profiler and the trace.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-base64 = "0.22"
 craft-platform = { workspace = true }
 craft-ai-agents = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }
 craft-flags = { workspace = true, optional = true }
-craft-host = { workspace = true, optional = true }
 getrandom = "0.3"
 hmac = "0.12"
 log = "0.4"
-png = "0.17"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 

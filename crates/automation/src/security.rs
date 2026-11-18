@@ -271,11 +271,15 @@ fn token_conflict() -> AutomationError {
     AutomationError::BadRequest("use either a control token or a control token file, not both".into())
 }
 
+/// The most a Windows token file read takes: a token, its newline and room for stray whitespace.
+#[cfg(windows)]
+const TOKEN_FILE_MAX_BYTES: u64 = 4096;
+
 /// Validates what was opened, not just the name: the file must be a regular file that no other
 /// local principal can read, so a group- or world-readable token is refused rather than trusted.
 fn read_token_file(path: &Path) -> Result<String, AutomationError> {
     let io = |e: std::io::Error| AutomationError::Io(format!("{}: {e}", path.display()));
-    let mut file = std::fs::File::open(path).map_err(io)?;
+    let file = std::fs::File::open(path).map_err(io)?;
     let meta = file.metadata().map_err(io)?;
     if !meta.is_file() {
         return Err(AutomationError::Io(format!("{}: control token file is not a regular file", path.display())));
@@ -291,7 +295,25 @@ fn read_token_file(path: &Path) -> Result<String, AutomationError> {
             )));
         }
     }
-    let token = std::io::read_to_string(&mut file).map_err(io)?;
+    // A Windows file inherits its folder's access list, so the owner and the access list are read with the contents
+    // through one handle: nothing swapped in at the path between the check and the read gets through.
+
+    #[cfg(windows)]
+    let token = {
+        use craft_platform::owner_only;
+        drop(file);
+        let me = owner_only::current_user_sid().map_err(io)?;
+        let (sddl, bytes) = owner_only::read_with_sddl(path, TOKEN_FILE_MAX_BYTES).map_err(io)?;
+        if let Some(problem) = owner_only::foreign_access(&sddl, &me) {
+            return Err(AutomationError::Io(format!(
+                "{}: control token file can be reached by others: {problem}; restrict it to its owner",
+                path.display()
+            )));
+        }
+        String::from_utf8(bytes).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?
+    };
+    #[cfg(not(windows))]
+    let token = std::io::read_to_string(&file).map_err(io)?;
     let token = token.trim().to_owned();
     validate_token(&token)?;
     Ok(token)
@@ -309,6 +331,17 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
         options.mode(0o600);
     }
     let mut file = options.open(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
+    // On Windows the new file has its folder's access list: it is restricted to its user and SYSTEM before the token
+    // is written, and a file that cannot be restricted is removed rather than left for the token to go into later.
+    #[cfg(windows)]
+    {
+        use craft_platform::owner_only;
+        if let Err(e) = owner_only::current_user_sid().and_then(|me| owner_only::restrict_to_owner(path, &me)) {
+            drop(file);
+            let _ = std::fs::remove_file(path);
+            return Err(AutomationError::Io(format!("{}: cannot restrict the control token file to its owner: {e}", path.display())));
+        }
+    }
     writeln!(file, "{token}").map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))
 }
 
@@ -317,10 +350,12 @@ fn create_token_file(path: &Path, token: &str) -> Result<(), AutomationError> {
 /// validated. Neither given: a generated token. A `token_file` that exists is read: it must be a
 /// regular file (`I/O: <path>: control token file is not a regular file`) and on Unix have no
 /// group or other permission bits (`I/O: <path>: control token file is readable by group or
-/// others (mode {mode & 0o777:o}); restrict it to its owner (e.g. chmod 600)`), and its trimmed
-/// content is validated. A missing one is created with a generated token (parent directories
-/// created, `create_new`, mode 0600 on Unix, the token and a newline); losing that create race to
-/// another process reads the winner's file instead.
+/// others (mode {mode & 0o777:o}); restrict it to its owner (e.g. chmod 600)`), on Windows be
+/// owned by the user with an access list of the user and SYSTEM only (`I/O: <path>: control token
+/// file can be reached by others: <why>; restrict it to its owner`), and its trimmed content is
+/// validated. A missing one is created with a generated token (parent directories created,
+/// `create_new`, mode 0600 on Unix, the user and SYSTEM only on Windows, the token and a
+/// newline); losing that create race to another process reads the winner's file instead.
 pub fn server_token(supplied: Option<&str>, token_file: Option<&Path>) -> Result<String, AutomationError> {
     if supplied.is_some() && token_file.is_some() {
         return Err(token_conflict());

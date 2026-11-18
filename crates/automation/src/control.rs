@@ -14,11 +14,11 @@
 //! two happened, once, between the UI thread and the transport.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Instant;
 
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
+use web_time::Instant;
 
 use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotParams, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
@@ -112,7 +112,8 @@ pub enum Reply {
     /// Reply with this JSON now.
     Done(Value),
     /// A `ui.screenshot`: admit `token` to the queue; `path` is where the app's write authority
-    /// puts the PNG, `None` inlines it as base64 in the reply.
+    /// puts the PNG, `None` inlines it as base64 in the reply; `region` is refused at admission
+    /// when it lies outside the window.
     #[non_exhaustive]
     Screenshot {
         /// Identifies the capture; must differ from every pending token.
@@ -132,8 +133,8 @@ pub enum Reply {
 }
 
 impl Reply {
-    /// A `ui.screenshot` reply for `token` of `viewport`, writing the PNG to `path` or inlining it
-    /// when `None`.
+    /// A `ui.screenshot` reply for `token` of `viewport` with what [`ScreenshotParams::from_params`] read: the PNG
+    /// goes to `params.path` or is inlined when `None`, and shows `params.region` or the whole window.
     pub fn screenshot(token: u64, params: ScreenshotParams, viewport: egui::ViewportId) -> Self {
         Self::Screenshot { token, path: params.path, region: params.region, viewport }
     }
@@ -199,9 +200,9 @@ impl ControlChannel {
             }
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
-            Reply::Screenshot { token, path, region: _, viewport } => {
-                // P3(pdf-shell-w2): SH-C18 (the request carries the region)
-                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
+            Reply::Screenshot { token, path, region, viewport } => {
+                let request = ScreenshotRequest { token, path, region, viewport, reply, document, settle_ms };
+                if let Err((reply, e)) = self.captures.admit(request, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }

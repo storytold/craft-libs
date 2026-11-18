@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::synthetic::{At, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
+use craft_automation::synthetic::{At, Click, Focus, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;
@@ -264,7 +264,8 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
 }
 
 /// An unknown field, a wrong type, an unknown name, too many clicks or a point too far out refuses the whole request
-/// before any of it is queued: no half-queued press or held key is left behind.
+/// before any of it is queued: no half-queued press or held key is left behind. A node target takes no point, repeat,
+/// hold, modifier or button but the secondary one, and names exactly one of `id` and `label`.
 #[trial]
 fn bad_input_params_are_refused_before_anything_is_queued() {
     let mut rig = Rig::new();
@@ -285,13 +286,84 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
         ("ui.key", json!({"key": 5})),
         ("ui.key", json!({"key": "NoSuchKey", "hold": true})),
         ("ui.ime", json!({"preedit": "ab", "cursor": [1, 9]})),
+        ("ui.click", json!({"x": 10, "y": 10, "label": "Save"})),
+        ("ui.click", json!({"label": "Save", "count": 2})),
+        ("ui.click", json!({"label": "Save", "hold": true})),
+        ("ui.click", json!({"label": "Save", "shift": true})),
+        ("ui.click", json!({"label": "Save", "button": "middle"})),
+        ("ui.click", json!({"id": "12", "button": "middle"})),
+        ("ui.click", json!({"id": "twelve"})),
+        ("ui.focus", json!({"id": "12", "label": "Save"})),
+        ("ui.focus", json!({})),
+        ("ui.drop", json!({"paths": []})),
+        ("ui.drop", json!({"paths": ["a.pdf"], "alt": true})),
     ];
-    for (method, params) in refused {
-        let answer = input_method(method, &params, &host, ViewportId::ROOT, &map);
+    for (method, params) in &refused {
+        let answer = input_method(method, params, &host, ViewportId::ROOT, &map);
         assert!(matches!(answer, Some(Err(_))), "{method} {params} is refused: {answer:?}");
         assert!(host.injected_idle(), "{method} {params} left nothing waiting");
         assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "{method} {params} queued nothing");
     }
+    // This window keeps no access tree, so a node request is refused there whatever it says; its parameters alone
+    // refuse the node rows, and the secondary button, a node's context menu, is allowed.
+    for (method, params) in refused.iter().filter(|(_, params)| params.get("id").is_some() || params.get("label").is_some() || params == &json!({})) {
+        let by_params = if *method == "ui.focus" { Focus::from_params(params).is_err() } else { Click::from_params(params).is_err() };
+        assert!(by_params, "{method} {params} is refused by its parameters");
+    }
+    assert!(Click::from_params(&json!({"label": "Save", "button": "secondary"})).is_ok());
+}
+
+/// A key whose press moves the focus (Tab from one field to the next) still has its release reach egui in a pass of
+/// its own: the release is not withdrawn as input whose focus changed, no key stays down, and the waiter is answered
+/// as processed, not cancelled.
+#[trial]
+fn a_key_release_reaches_egui_after_its_press_moves_focus() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let passes: Rc<RefCell<Vec<Seen>>> = Rc::default();
+    let rects = Rc::new(Cell::new([Rect::NOTHING; 2]));
+    let (seen, shown) = (passes.clone(), rects.clone());
+    let (first, second) = (Rc::new(RefCell::new(String::new())), Rc::new(RefCell::new(String::new())));
+    let fx = Fixture::new(move |ui| {
+        let a = TextField::new("First", Bind::bound(&mut *first.borrow_mut())).show(ui).response.rect;
+        let b = TextField::new("Second", Bind::bound(&mut *second.borrow_mut())).show(ui).response.rect;
+        shown.set([a, b]);
+        seen.borrow_mut().push(ui.input(|i| Seen { any_key_down: !i.keys_down.is_empty(), events: i.events.clone(), ..Seen::default() }));
+    });
+    let mut rig = Rig { fx, passes };
+    rig.fx.settle();
+    let at = rects.get()[0].center();
+    rig.send("ui.click", json!({"x": at.x, "y": at.y}));
+    let before = rig.fx.focused();
+    assert!(before.is_some(), "the click focused the first field");
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let mut channel = ControlChannel::new(requests);
+    let host = rig.host();
+    rig.take();
+    input_method("ui.key", &json!({"key": "Tab"}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    let (req, reply) = ControlRequest::new("ui.key", json!({"key": "Tab"}));
+    channel.settle(req, Reply::AfterInput, None, 0.0);
+    let mut answer = None;
+    for _ in 0..32 {
+        rig.fx.frame(Vec::new());
+        channel.poll_input(&host);
+        answer = reply.try_recv().ok();
+        if answer.is_some() {
+            break;
+        }
+    }
+    rig.fx.frame(Vec::new());
+
+    let answer = answer.expect("the waiter is answered");
+    assert_eq!(answer["ok"], true, "processed, not cancelled: {answer}");
+    assert!(rig.fx.focused().is_some() && rig.fx.focused() != before, "the press moved the focus");
+    let passes = rig.take();
+    let tab = |pressed: bool| move |event: &Event| matches!(event, Event::Key { key: Key::Tab, pressed: p, .. } if *p == pressed);
+    let press = passes.iter().position(|pass| pass.events.iter().any(tab(true))).expect("a pass saw the press");
+    let release = passes.iter().position(|pass| pass.events.iter().any(tab(false))).expect("a pass saw the release");
+    assert!(press < release, "the release has a pass of its own, after the press's");
+    assert!(passes.last().is_some_and(|pass| !pass.any_key_down), "no key stays down");
 }
 
 /// `ui.ime` queues behind the input before it: typed text, then the composition with its converted segment, then

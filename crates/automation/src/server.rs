@@ -56,7 +56,8 @@ pub fn listen(port: u16, token: String, host: WindowHost) -> std::io::Result<(Re
 
 /// Serves a listener bound earlier (an app's `--control`, bound before its window opens) until the
 /// returned [`Listening`] is dropped: authenticates each connection with `token`, forwards its
-/// requests to the receiver and wakes the root window through `host`. The app prints
+/// requests to the receiver and wakes the root window through `host`, which keeps each window's access tree
+/// ([`WindowHost::keep_access_tree`]) for [`crate::access`]. The app prints
 /// `control server listening on <addr>`.
 pub fn serve(listener: TcpListener, token: String, host: WindowHost) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
     serve_with_deadline(listener, token, host, AUTH_DEADLINE)
@@ -73,6 +74,9 @@ pub fn serve_with_deadline(
 ) -> std::io::Result<(Receiver<ControlRequest>, Listening)> {
     let (tx, rx) = channel::<ControlRequest>();
     let addr = listener.local_addr()?;
+    // `ui.inspect`, `ui.click {label}` and `ui.focus` read the kept tree of the last presented frame; it is kept
+    // from before the first connection, so the first request already finds it.
+    host.keep_access_tree();
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = Arc::clone(&stop);
     let accept = std::thread::Builder::new().name("control server".into()).spawn(move || {
