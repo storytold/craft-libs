@@ -170,3 +170,17 @@ fn a_latin_slot_naming_another_face_is_not_written() {
     let run = doc.iter().find(|f| f.contains("Verdana")).unwrap_or_else(|| panic!("{doc:?}"));
     assert!(run.contains(r#"w:asciiTheme="minorHAnsi""#) && !run.contains("w:hAnsiTheme"), "{run}");
 }
+
+/// A long script id (a language tag, which DrawingML allows) doesn't use up a place the
+/// mappings font resolution takes need: the last of 256 short ones is still saved.
+#[test]
+fn a_language_tag_script_doesnt_push_out_a_short_one() {
+    let short: String = (0..255).map(|i| format!(r#"<a:font script="S{i}" typeface="F{i}"/>"#)).collect();
+    let theme = THEME.replace(
+        r#"<a:font script="Jpan" typeface="MS Mincho"/><a:font script="Hans" typeface="DengXian"/>"#,
+        &format!(r#"<a:font script="zh-Hant-TW" typeface="PMingLiU"/>{short}<a:font script="Arab" typeface="Times New Roman"/>"#),
+    );
+    let minor = minor_font(&craft_docx::write(&craft_docx::read(&docx_with_theme(BODY, STYLES, &theme)).unwrap()).unwrap());
+    assert!(minor.contains(r#"<a:font script="Arab" typeface="Times New Roman"/>"#), "{minor}");
+    assert!(minor.contains(r#"<a:font script="zh-Hant-TW" typeface="PMingLiU"/>"#), "{minor}");
+}

@@ -235,14 +235,20 @@ impl Reader<'_> {
                 // The default faces and the per-script ones are told apart by their kind, so an
                 // `a:font script="cs"` is not taken for the `a:cs` face.
                 let faces = ["a:ea", "a:cs"].into_iter().filter_map(|n| Some(("face", &n[2..], f.child(n)?.attr("typeface")?)));
-                let per_script = f
-                    .els()
-                    .filter(|e| e.name == "a:font")
-                    .filter_map(|e| Some(("script", e.attr("script")?, e.attr("typeface")?)))
-                    .filter(|(_, script, face)| clean(script) && clean(face))
-                    .take(256);
-                for (kind, which, face) in faces.filter(|(_, _, face)| clean(face)).chain(per_script) {
+                for (kind, which, face) in faces.filter(|(_, _, face)| clean(face)) {
                     kept.push_str(&format!("{key}\t{kind}\t{which}\t{face}\n"));
+                }
+                // At most 256 of the script ids font resolution takes (8 characters or fewer, as
+                // above) and 256 longer ones (a language tag such as `zh-Hant-TW`), counted apart
+                // so the longer ones never push out a mapping resolution uses.
+                let mut counts = (0usize, 0usize);
+                let per_script = f.els().filter(|e| e.name == "a:font").filter_map(|e| Some((e.attr("script")?, e.attr("typeface")?)));
+                for (script, face) in per_script.filter(|(script, face)| clean(script) && clean(face)) {
+                    let n = if script.len() <= 8 { &mut counts.0 } else { &mut counts.1 };
+                    if *n < 256 {
+                        *n += 1;
+                        kept.push_str(&format!("{key}\tscript\t{script}\t{face}\n"));
+                    }
                 }
             }
             if !kept.is_empty() {
