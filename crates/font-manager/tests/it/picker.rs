@@ -5,16 +5,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use craft_behavior::Preview;
+use craft_behavior::{PartKey, Preview};
 use craft_font_manager::craft_font_catalog::{Limits, Os, Source};
 use craft_font_manager::missing::MissingFontsWords;
 use craft_font_manager::picker::{
     FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
+use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Event, Key, Modifiers};
 
@@ -261,7 +263,14 @@ fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_n
     let note = format!("{} {}", words.shown_as.fill(&[("family", "Gotham"), ("face", "Inter")]), words.add_font.as_str());
     let note = note.as_str();
     let (mut fx, seen) = plain_rig(catalog_of(&[INTER_REGULAR]), "Gotham", &[], vec![Label::from("Add Font…")], Some("Inter"));
-    assert!(present(&fx, note), "the field carries the note while the family is not installed");
+    // The note is the tooltip of the field's warning mark, so it shows once the pointer rests on the mark.
+    let picker = fx.root_id().expect("the picker");
+    let mark = fx.part_rect(picker, PartKey::new("missing")).expect("the field carries a mark while the family is not installed");
+    assert!(!present(&fx, note), "the note waits for a rest on the mark");
+    fx.frame(vec![moved(mark.center())]);
+    fx.advance(DELAY);
+    fx.settle();
+    assert!(present(&fx, note), "a rest on the mark shows the note");
     open(&mut fx);
     let action = fx.by_label("Add Font…").expect("the action row");
     fx.click(&action);
@@ -271,7 +280,8 @@ fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_n
     assert!(seen.borrow().picks.is_empty(), "and picks nothing");
 
     let (fx, _) = plain_rig(catalog_of(&[INTER_REGULAR]), "Inter", &[], vec![Label::from("Add Font…")], Some("Inter"));
-    assert!(!present(&fx, note), "an installed family has no note");
+    let picker = fx.root_id().expect("the picker");
+    assert!(fx.part_rect(picker, PartKey::new("missing")).is_none(), "an installed family has no mark");
 }
 
 
