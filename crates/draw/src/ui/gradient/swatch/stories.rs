@@ -74,8 +74,8 @@ fn gradient_swatch_tiles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     Stack::new().show(ui, |ui, _| {
         for (name, tile) in &tiles {
             Row::new().show(ui, |ui, _| {
-                GradientSwatch::new(name.as_str(), &stops).tile(*tile).show(ui);
-                Text::new(name.as_str()).shade(Shade::Muted).show(ui);
+                GradientSwatch::new(name.clone(), &stops).tile(*tile).show(ui);
+                Text::new(name.clone()).shade(Shade::Muted).show(ui);
             });
         }
     });
