@@ -249,11 +249,10 @@ impl Document {
             if crate::cos::security::public_key_filters_disagree(self, &dict) {
                 return Err(CosError::Security("public-key crypt filters with different recipients need keys of their own".into()));
             }
-            match crate::crypt::SecurityHandler::open(params.clone(), &id0, None) {
-                Err(e @ (crate::crypt::CryptError::Unsupported(_) | crate::crypt::CryptError::UnsupportedAlgorithm(_))) => {
-                    return Err(CosError::Security(e.to_string()));
-                }
-                _ => {}
+            if let Err(e @ (crate::crypt::CryptError::Unsupported(_) | crate::crypt::CryptError::UnsupportedAlgorithm(_))) =
+                crate::crypt::SecurityHandler::open(params.clone(), &id0, None)
+            {
+                return Err(CosError::Security(e.to_string()));
             }
         }
         // Read here, while nothing is decrypted yet.
