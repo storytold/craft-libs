@@ -563,6 +563,44 @@ impl GridLayout {
         }
     }
 
+    /// How many tiles the layout places, not counting group headers and tail rows.
+    pub(super) fn tiles(&self) -> usize {
+        match &self.kind {
+            Kind::Equal { tiles, .. } => tiles.count,
+            Kind::Arranged { arrangement, .. } => arrangement.tiles.len(),
+        }
+    }
+
+    /// The tile's display position at layout position `at`; `None` for a group header or a tail row.
+    pub(super) fn tile_at(&self, at: usize) -> Option<usize> {
+        match &self.kind {
+            Kind::Equal { .. } => Some(at),
+            Kind::Arranged { arrangement, starts, .. } => match slot_at(starts, arrangement.tiles.len(), at) {
+                Slot::Tile(tile) => Some(tile),
+                Slot::Header(_) | Slot::Tail(_) => None,
+            },
+        }
+    }
+
+    /// The insert gap before display position `at`, at `offset`, `width` wide and as high as the card it borders,
+    /// left to right as `rect` places the cards: on the left edge of tile `at`, and for `at` = the tile count on the
+    /// right edge of the last tile. Every row is cut the same way, so a gap names its position whichever rows are in
+    /// view. `None` past the end and beside a tile the layout does not show (in a closed group).
+    pub fn gap(&self, at: usize, offset: ScrollPos, width: f32) -> Option<Rect> {
+        let count = self.tiles();
+        let (tile, at_end) = if at < count { (at, false) } else if at == count { (count.checked_sub(1)?, true) } else { return None };
+        let position = match &self.kind {
+            Kind::Equal { .. } => tile,
+            Kind::Arranged { starts, .. } => outline_position(starts, tile),
+        };
+        let card = self.rect(position, offset);
+        if card == Rect::NOTHING {
+            return None;
+        }
+        let x = if at_end { card.right() } else { card.left() };
+        Some(Rect::from_center_size(pos2(x, card.center().y), vec2(width, card.height())))
+    }
+
     /// The card of tile `at` in the arrangement: its picture and what the tile adds around it.
     fn card(arrangement: &TileArrangement, around: Around, at: usize) -> Rect {
         let picture = arrangement.tiles.get(at).copied().unwrap_or(Rect::NOTHING);

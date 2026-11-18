@@ -172,7 +172,7 @@ const RECENT_LIMIT: usize = 25;
 /// The cell size of the grid and its zoom: factors of the medium thumbnail.
 pub const ZOOM: TileZoom = TileZoom::bounded(1.0, 2.625, 0.125, 1.25);
 /// The cells of the recents strip, as a factor of the medium thumbnail.
-const RECENT_ZOOM: f32 = 0.75;
+const RECENT_ZOOM: f64 = 0.75;
 /// The room round a glyph in its cell, as a fraction of the cell.
 const GLYPH_INSET_RATIO: f32 = 0.1;
 
@@ -382,7 +382,7 @@ impl<'a> GlyphsPanel<'a> {
             let mut activated: Option<String> = None;
             let strip = TileGrid::<usize>::new(words.recent.clone())
                 .thumb_size(ThumbSize::Medium)
-                .zoom(GridZoom::Fixed(f64::from(RECENT_ZOOM))) // P3(pdf-workflows-w2): WF-W12
+                .zoom(GridZoom::Fixed(RECENT_ZOOM))
                 .caption(CaptionPlace::None)
                 .select(SelectMode::Single)
                 .activate(ActivateOn::Click)
@@ -409,7 +409,7 @@ impl<'a> GlyphsPanel<'a> {
             let mut marked = cx.memory::<Marked>().clone();
             let grid = TileGrid::<usize>::new(words.grid.clone())
                 .thumb_size(ThumbSize::Medium)
-                .zoom(GridZoom::Fixed(f64::from(size as f32))) // P3(pdf-workflows-w2): WF-W12
+                .zoom(GridZoom::Fixed(size))
                 .caption(CaptionPlace::None)
                 .select(SelectMode::Single)
                 .selection(Bind::bound(&mut marked.0))

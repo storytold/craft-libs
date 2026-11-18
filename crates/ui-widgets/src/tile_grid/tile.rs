@@ -46,15 +46,13 @@ pub enum TilePartEvent {
     },
     /// The pointer is over the picture: how far across it, from the reading start, 0 to 1.
     Scrub(f32),
-    /// An activation of the corner action ([`Tile::corner_action`]).
-    CornerAction,
     /// An activation of the `i`-th hover action ([`Tile::action`]), counted from 0 in the order added.
     Action(usize),
 }
 
 /// Where a tile's hover actions sit.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TileActionPlace {
     /// In the picture's end-top corner.
     #[default]
@@ -111,7 +109,7 @@ const RATING: PartKey = PartKey::new("rating");
 const PILL: PartKey = PartKey::new("pill");
 const MARK: PartKey = PartKey::new("mark");
 const PICTURE: PartKey = PartKey::new("picture");
-const CORNER: PartKey = PartKey::new("corner");
+const ACTION: PartKey = PartKey::new("action");
 
 const CHECK_REASON: &str = "In a tile grid with checks, Space toggles the lead tile's check";
 const RATING_REASON: &str = "In a tile grid with rating keys, the digits rate the selected tiles";
@@ -133,6 +131,10 @@ struct Sizes {
     start: f32,
     /// The picture width of a tile measured on its own: least, and ideal (a grid's card thumbnail at zoom 1).
     thumbs: [f32; 2],
+    /// How far each sheet of a stack shown as sheets lies from the one in front of it.
+    sheet: f32,
+    /// What the picture gives up at its reading end and bottom for the two sheets behind it.
+    sheet_room: f32,
 }
 
 /// What a tile adds around its picture for each caption arrangement, from the sizes: the grid sizes its cards with it.
@@ -192,6 +194,8 @@ impl Sizes {
             detail_line: line,
             start: control.height,
             thumbs: [tokens.size.thumb.sm, tokens.size.thumb.card],
+            sheet: tokens.space.gap.tight,
+            sheet_room: 2.0 * tokens.space.gap.tight,
         }
     }
 
@@ -276,6 +280,10 @@ pub struct TileStyle {
     range: StyleColor,
     scrub: StyleColor,
     dot_edge: StyleColor,
+    /// The fill of the sheets behind a stack shown as sheets.
+    sheet: StyleColor,
+    /// The edge of those sheets: the frame a picture has.
+    sheet_edge: StyleColor,
     pill_radius: CornerRadius,
     plate_radius: CornerRadius,
     sizes: Sizes,
@@ -292,12 +300,15 @@ struct Faces {
     check: Vec2,
     stars: Vec2,
     pill: f32,
-    corner: Vec2,
+    /// The largest face of the hover actions.
+    action: Vec2,
 }
 
 /// Where the parts of a tile lie in its content rect.
 struct Placed {
     picture: Rect,
+    /// The sheets behind a stack shown as sheets, farthest first.
+    sheets: Vec<Rect>,
     caption: Rect,
     name: Rect,
     detail: Option<Rect>,
@@ -309,7 +320,8 @@ struct Placed {
     dot: Option<Rect>,
     check: Option<(Rect, Rect)>,
     pills: Vec<Rect>,
-    corner: Option<Rect>,
+    /// The hover actions, in the order added; empty while they are hidden.
+    actions: Vec<Rect>,
 }
 
 /// One tile of a tile grid.
@@ -360,9 +372,12 @@ pub struct Tile<'a> {
     /// When the badge bar shows.
     #[prop]
     bar: BadgeVisibility,
-    /// The size of the stack this tile stands for: a "×N" badge in the end-top corner.
+    /// The size of the stack this tile stands for: a "×N" badge in the end-top corner, or sheets behind the picture
+    /// (`stack_look`).
     #[prop]
     stack: Option<usize>,
+    /// How the stack shows.
+    stack_look: StackLook,
     /// The picture under a veil, still selectable.
     #[prop(flag)]
     dimmed: bool,
@@ -382,11 +397,9 @@ pub struct Tile<'a> {
     #[prop]
     check: Option<ToggleState>,
     /// Where the hover actions sit: the grid's, applied to its tiles.
-    #[allow(dead_code)] // P3(pdf-workflows-w2): CV-C25
     #[prop]
     action_place: TileActionPlace,
     /// The icon face reads in this colour from data in place of the face colour.
-    #[allow(dead_code)] // P3(pdf-workflows-w2): CH-C10b
     #[prop]
     hue: Option<DataColor>,
     aspect: ThumbAspect,
@@ -395,7 +408,7 @@ pub struct Tile<'a> {
     badges: Vec<TileBadge>,
     marks: Vec<TileMark>,
     pills: Vec<TileBadge>,
-    corner: Option<(IconId, CommandRef)>,
+    actions: Vec<(IconId, CommandRef)>,
     placed: Option<Placed>,
     event: Option<TilePartEvent>,
     caption_rect: Option<Rect>,
@@ -420,6 +433,7 @@ impl<'a> Tile<'a> {
             scrub: None,
             bar: BadgeVisibility::Auto,
             stack: None,
+            stack_look: StackLook::Badge,
             dimmed: false,
             rejected: false,
             hidden: false,
@@ -434,7 +448,7 @@ impl<'a> Tile<'a> {
             badges: Vec::new(),
             marks: Vec::new(),
             pills: Vec::new(),
-            corner: None,
+            actions: Vec::new(),
             placed: None,
             event: None,
             caption_rect: None,
@@ -461,19 +475,22 @@ impl<'a> Tile<'a> {
         self
     }
 
-    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile or it has visible focus;
-    /// repeatable. Its activation is [`TilePartEvent::Action`] with its index.
+    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile or it has visible focus,
+    /// where `action_place` puts it, and reached by the keys as a part of the tile; repeatable. Its activation is
+    /// [`TilePartEvent::Action`] with its index; `command` gives its label, tooltip and enabled state, and the tile
+    /// does not fire it.
     #[must_use]
-    pub fn action(self, icon: IconId, command: impl Into<CommandRef>) -> Self {
-        let _ = (icon, command);
-        todo!("CV-C25")
+    pub fn action(mut self, icon: IconId, command: impl Into<CommandRef>) -> Self {
+        self.actions.push((icon, command.into()));
+        self
     }
 
-    /// How the stack of a stacked tile shows.
+    /// How the stack of a stacked tile shows: the "×N" badge, or two sheets behind a picture that shrinks inside its
+    /// cell to make room for them. The count stays in the accessible name either way.
     #[must_use]
-    pub fn stack_look(self, look: StackLook) -> Self {
-        let _ = look;
-        todo!("WF-W11")
+    pub fn stack_look(mut self, look: StackLook) -> Self {
+        self.stack_look = look;
+        self
     }
 
     /// A corner badge.
@@ -487,16 +504,6 @@ impl<'a> Tile<'a> {
     #[must_use]
     pub fn mark(mut self, mark: TileMark) -> Self {
         self.marks.push(mark);
-        self
-    }
-
-    /// A button in the picture's end-top corner that shows while the pointer is over the tile or the tile has the
-    /// keyboard focus, and is reached by the keys as a part of the tile. Its activation is
-    /// [`TilePartEvent::CornerAction`]; `command` gives its label, tooltip and enabled state, and the tile does not
-    /// fire it.
-    #[must_use]
-    pub fn corner_action(mut self, icon: IconId, command: impl Into<CommandRef>) -> Self {
-        self.corner = Some((icon, command.into()));
         self
     }
 
@@ -524,10 +531,10 @@ impl<'a> Tile<'a> {
         self.rating.is_some_and(|rating| rating > 0) || self.flag.is_some() || self.label_color.is_some()
     }
 
-    /// The corner badges: the app's, the stack badge and the file status badge.
+    /// The corner badges: the app's, the stack badge unless the stack shows as sheets, and the file status badge.
     fn corner_badges(&self, words: &TileWords, units: &Units) -> Vec<TileBadge> {
         let mut all = self.badges.clone();
-        if let Some(n) = self.stack {
+        if let Some(n) = self.stack.filter(|_| self.stack_look == StackLook::Badge) {
             all.push(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text(Label::from(units.times(n as f64))), Tone::Neutral, None));
         }
         let failure = |text: &Label| TileBadge::new(BadgeSlot::StartBottom, BadgeKind::Text(text.clone()), Tone::Bad, None);
@@ -573,6 +580,8 @@ impl<'a> Tile<'a> {
             }
             CaptionPlace::None => (Rect::NOTHING, Rect::NOTHING, None, Vec::new()),
         };
+        // The sheets fit inside the cell the grid sizes, so the grid's card sizes stay those of a tile without them.
+        let (picture, sheets) = self.stacked(picture, sizes, rtl);
         let pictures = Flow::new(picture, rtl);
         let mut floor = picture.bottom();
         let band_rect = matches!(self.status, TileStatus::Offline(_)).then(|| {
@@ -613,10 +622,29 @@ impl<'a> Tile<'a> {
             let at = Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin), faces.check);
             (at, at.expand(sizes.tight))
         });
-        let corner = self.corner.as_ref().map(|_| {
-            let across = Flow::new(picture, rtl).span((picture.width() - margin - faces.corner.x).max(0.0), faces.corner.x);
-            Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin), faces.corner)
-        });
+        let face = faces.action;
+        let actions: Vec<Rect> = match self.action_place {
+            // Stacked down from the end-top corner, `tight` apart, as the badges stack.
+            TileActionPlace::Corner => (0..self.actions.len())
+                .map(|at| {
+                    let across = pictures.span((picture.width() - margin - face.x).max(0.0), face.x);
+                    Rect::from_min_size(egui::pos2(across.min.x, picture.top() + margin + at as f32 * (face.y + sizes.tight)), face)
+                })
+                .collect(),
+            // A row centred over the picture's lower edge, above the badge bar and the offline band.
+            TileActionPlace::Band => {
+                let count = self.actions.len() as f32;
+                let row = count * face.x + (count - 1.0).max(0.0) * sizes.tight;
+                let lead = (picture.width() - row) / 2.0;
+                (0..self.actions.len())
+                    .map(|at| {
+                        let across = pictures.span(lead + at as f32 * (face.x + sizes.tight), face.x);
+                        Rect::from_min_size(egui::pos2(across.min.x, floor - margin - face.y), face)
+                    })
+                    .collect()
+            }
+        };
+        let action_plate = actions.iter().copied().reduce(|all, rect| all.union(rect)).map(|all| all.expand(sizes.tight));
         let corners = Rect::from_min_max(picture.min, egui::pos2(picture.right(), floor));
         let mut pills = vec![Rect::NOTHING; self.pills.len()];
         for slot in [BadgeSlot::StartTop, BadgeSlot::EndTop, BadgeSlot::StartBottom, BadgeSlot::EndBottom] {
@@ -628,13 +656,30 @@ impl<'a> Tile<'a> {
             };
             let members: Vec<usize> = (0..self.pills.len()).filter(|&at| self.pills[at].slot == slot).collect();
             let widths: Vec<f32> = members.iter().map(|&at| pill_widths[at]).collect();
-            let plate = if is_start { check.map(|(_, plate)| plate) } else { corner.map(|at| at.expand(sizes.tight)) };
+            let plate = match (is_start, top, self.action_place) {
+                (_, false, TileActionPlace::Band) | (false, _, TileActionPlace::Corner) => action_plate,
+                (true, _, _) => check.map(|(_, plate)| plate),
+                _ => None,
+            };
             let rects = badge_rects(Flow::new(corners, rtl), &widths, faces.pill, sizes, plate, (is_start, top));
             for (at, rect) in members.into_iter().zip(rects) {
                 pills[at] = rect;
             }
         }
-        Placed { picture, caption, name, detail, marks, band: band_rect, bar, stars, flag, dot, check, pills, corner }
+        Placed { picture, sheets, caption, name, detail, marks, band: band_rect, bar, stars, flag, dot, check, pills, actions }
+    }
+
+    /// The picture and the sheets behind it: with `StackLook::Sheets` on a stack the picture gives up `sheet_room` at
+    /// its reading end and bottom, and the sheets sit one and two `sheet` steps toward them, farthest first.
+    fn stacked(&self, picture: Rect, sizes: &Sizes, rtl: bool) -> (Rect, Vec<Rect>) {
+        if self.stack.is_none() || self.stack_look != StackLook::Sheets {
+            return (picture, Vec::new());
+        }
+        let (front, _) = Flow::new(picture, rtl).take_start((picture.width() - sizes.sheet_room).max(0.0));
+        let front = Rect::from_min_max(front.min, egui::pos2(front.max.x, (front.max.y - sizes.sheet_room).max(front.min.y)));
+        let toward_end = if rtl { -1.0 } else { 1.0 };
+        let sheets = [sizes.sheet_room, sizes.sheet].into_iter().map(|by| front.translate(Vec2::new(toward_end * by, by))).collect();
+        (front, sheets)
     }
 }
 
@@ -735,6 +780,8 @@ impl Component for Tile<'_> {
             range: c(colors.accent.solid),
             scrub: c(colors.accent.solid),
             dot_edge: c(colors.line.mark),
+            sheet: c(colors.surface.raised),
+            sheet_edge: c(colors.line.frame),
             pill_radius: UiTokens::corner(tokens.shape.radius.pill),
             plate_radius: UiTokens::corner(tokens.shape.radius.sm),
             sizes,
@@ -770,7 +817,10 @@ impl Component for Tile<'_> {
             check: cx.face(Checkbox::new(Bind::given(Mixed::Same(false)))),
             stars: cx.face(Rating::new(Bind::given(0u8), STARS).compact(true)),
             pill: cx.face(Badge::new("0")).y,
-            corner: self.corner.as_ref().map_or(Vec2::ZERO, |(icon, command)| cx.face(IconButton::command(icon.clone(), command.clone()))),
+            action: self
+                .actions
+                .iter()
+                .fold(Vec2::ZERO, |most, (icon, command)| most.max(cx.face(IconButton::command(icon.clone(), command.clone())))),
         };
         let pill_widths: Vec<f32> = self.pills.iter().map(|badge| Self::badge_face(badge).map_or(faces.pill, |face| cx.face(face).x)).collect();
         let bar_shown = self.has_bar_content()
@@ -800,11 +850,13 @@ impl Component for Tile<'_> {
         for (at, (mark, rect)) in self.marks.iter().zip(&placed.marks).enumerate() {
             let _ = cx.part(MARK.at(at as u64), *rect).tooltip(mark.tip.clone());
         }
-        if let Some(at) = placed.corner.filter(|_| cx.hovered() || cx.focus_visible()) {
-            cx.part(CORNER, at).sense(Sense::CLICK | Sense::FOCUS).focusable();
+        if !placed.actions.is_empty() && (cx.hovered() || cx.focus_visible()) {
+            for (at, rect) in placed.actions.iter().enumerate() {
+                cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
+            }
             cx.roving(Roving::new(NavShape::Flat));
         } else {
-            placed.corner = None;
+            placed.actions.clear();
         }
         self.placed = Some(placed);
     }
@@ -828,8 +880,10 @@ impl Component for Tile<'_> {
         if cx.part_activated(CHECK).is_some() {
             self.event = Some(TilePartEvent::Check { mods: cx.part(CHECK).press.mods });
         }
-        if cx.part_activated(CORNER).is_some() {
-            self.event = Some(TilePartEvent::CornerAction);
+        for at in 0..self.actions.len() {
+            if cx.part_activated(ACTION.at(at as u64)).is_some() {
+                self.event = Some(TilePartEvent::Action(at));
+            }
         }
         let current = self.rating.unwrap_or(0);
         while let Some(request) = cx.intents().take_access() {
@@ -861,6 +915,13 @@ impl Component for Tile<'_> {
         let picture = placed.picture;
         let flat = CornerRadius::ZERO;
         {
+            let draw = ui.draw();
+            for sheet in &placed.sheets {
+                draw.fill(&PaintShape::Rect(*sheet, flat), style.sheet);
+                draw.stroke(&PaintShape::Rect(*sheet, flat), StrokeWidth::Thin, style.sheet_edge);
+            }
+        }
+        {
             // Filled from the outside in, under the picture, so the rings sit outside its edge.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
             let draw = ui.draw();
@@ -871,21 +932,26 @@ impl Component for Tile<'_> {
                 draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
             }
         }
+        // A card's picture is the sunken surface, which the placeholder's fill matches.
+        let placeholder = if !style.sizes.card && cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
         if style.sizes.card {
             ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
         } else {
-            let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
             ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
         }
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
+        let face_ink = match self.hue {
+            Some(hue) => ui.with_style(cx.resolved.variant, |scx| scx.ink_of(hue, Rgba::from(placeholder.egui()))),
+            None => cx.resolve(&style.face.color),
+        };
         {
             let draw = ui.draw();
             let face = self.icon.take().or_else(|| self.folder.then(|| IconSpec::svg(IconId::new("folder"))));
             if let Some(face) = face {
                 let icon = Rect::from_center_size(picture.center(), Vec2::splat(style.face.side));
-                draw.icon(icon, &face.color(cx.resolve(&style.face.color)));
+                draw.icon(icon, &face.color(face_ink));
             }
             if self.dimmed || self.rejected || self.hidden {
                 draw.fill(&PaintShape::Rect(picture, flat), style.dim);
@@ -895,8 +961,8 @@ impl Component for Tile<'_> {
         self.paint_band(ui, cx, &placed);
         self.paint_bar(ui, cx, &placed);
         self.paint_pills(ui, cx, &placed);
-        if let (Some((icon, command)), Some(_)) = (&self.corner, placed.corner) {
-            ui.face(CORNER, IconButton::command(icon.clone(), command.clone()));
+        for (at, ((icon, command), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
+            ui.face(ACTION.at(at as u64), IconButton::command(icon.clone(), command.clone()));
         }
         if let (Some(state), Some((_, plate))) = (self.check, placed.check) {
             ui.draw().fill(&PaintShape::Rect(plate, style.plate_radius), style.plate);

@@ -2,8 +2,8 @@
 //! does the work: virtualisation, lead and selection rules, arrow, Home, End and page keys over the layout, type-ahead,
 //! drag with drop marks, OS file drops, the rename lifecycle and the context-menu request. The grid adds the layout,
 //! the pinned group headers and the tail rows after the tiles, which are rows of the grid's outline (section rows of
-//! the item step that hold the lead), and the rating keys. It owns what its cards have in common: where the
-//! caption goes, whether a detail line is reserved, and the zoom.
+//! the item step that hold the lead), the insert gaps between tiles and the rating keys. It owns what its cards have
+//! in common: where the caption goes, whether a detail line is reserved, where the hover actions sit, and the zoom.
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -18,23 +18,27 @@ use crate::contract::{
     Role, RowHeight, RowState, SelectMode, Sizing, SpaceAction, SweepApply, SweepStep, ToggleColumn, section_part,
 };
 use crate::controls::disclosure::Disclosure;
-use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize};
-use crate::primitives::{IconSpec, PaintShape, RectSide};
+use crate::list::{DropTest, ListRow, ListRowStyle, RowTest, ThumbSize, ToggleState};
+use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth};
 use crate::runtime::access::Name;
 use crate::runtime::commands::FireSource;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, RuleKind, StyleColor, StyleCx};
 use craft_behavior::{
-    ColumnKey, ColumnWidth, HitLevel, HitPriority, Intent, ItemSource, Metrics, Mixed, PartKey, PointerButton, PressPhase, Selection, Sense,
+    ColumnKey, ColumnWidth, EditEvent, HitLevel, HitPriority, Intent, ItemLayout as _, ItemSource, Metrics, Mixed, NavShape, PartKey, PointerButton,
+    PressPhase, Roving, Selection, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// The heading level of a group header: the grid's groups are its top-level sections.
 const GROUP_LEVEL: usize = 1;
 const TOGGLE: PartKey = PartKey::new("group_toggle");
+/// An insert gap, indexed by the display position it inserts before.
+const GAP: PartKey = PartKey::new("insert_gap");
 /// The keyboard path of the header parts: the header is a row of the outline, and the lead on it takes these keys.
 const HEADER_KEYS: &str = "Up and Down move to a group header; Enter picks it and Left and Right close and open it";
 /// The keyboard path of a tail row's part: the row is a row of the outline, and the lead on it takes Enter.
@@ -58,10 +62,12 @@ pub enum RatingKeys {
 /// The size of a grid's tiles.
 #[non_exhaustive]
 pub enum GridZoom<'a> {
-    /// A picture side factor the host holds.
+    /// A picture side factor the host holds; the grid takes no zoom keys or wheel.
     Fixed(f64),
-    /// A factor the grid steps itself: Cmd/Ctrl `=`, `-` and `0` and Ctrl/Cmd with the wheel or a pinch, through
-    /// `TileZoom::step`, keeping the tile under the pointer in place.
+    /// A factor the grid steps itself: Cmd/Ctrl `=` and `+`, `-` and `0` through `TileZoom::step`, and Ctrl/Cmd with
+    /// the wheel or a pinch by the gesture's factor, inside the zoom's range, keeping the tile under the pointer in
+    /// place. Cmd/Ctrl+0 is a rating key under `RatingKeys::CommandDigits`, so it clears the rating there instead of
+    /// resetting the size. A binding that holds no single value reads as the zoom's default.
     Bound(Bind<'a, f64>, TileZoom),
 }
 
@@ -100,9 +106,6 @@ pub enum GridEvent<K> {
         /// The state asked for.
         open: bool,
     },
-    /// Cmd/Ctrl with `=` or `+`, `-` or `0` on a grid that `zooms`: a step of the tile size. Cmd/Ctrl+0 is a rating key
-    /// under `RatingKeys::CommandDigits`, so it clears the rating there instead of resetting the size.
-    Zoom(ZoomStep),
     /// The insert gap before display position `at` was activated ([`TileGrid::insert_gaps`]).
     #[non_exhaustive]
     Insert {
@@ -153,6 +156,10 @@ pub struct TileGridStyle {
     pinned: StyleColor,
     /// The look of a group header: a heading row, which places the disclosure the grid declares.
     header: ListRowStyle,
+    /// The line down the middle of an insert gap under the pointer.
+    insert: StyleColor,
+    /// The width of an insert gap, centred on the edge of the tile it precedes.
+    insert_width: f32,
 }
 
 /// The sizes the grid lays its tiles out with.
@@ -208,7 +215,8 @@ const WHEEL_SHARE: f32 = 1.0 / 3.0;
 /// menu. A double click on the background reports `CollectionEvent::EmptyActivated` (an import, in FilmCraft). One wheel
 /// notch scrolls a third of the grid's view.
 ///
-/// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): the factor the app's zoom control holds. A card is the
+/// The picture side is `zoom` times the thumbnail side (the card thumbnail unless `thumb_size` names one): a factor the
+/// app holds, or one the grid steps itself through a binding (`GridZoom`). A card is the
 /// picture plus what the tile adds around it, whatever the layout. Pictures are `aspect` wide over high; with
 /// `justified` the tiles keep their own aspects (the source's `ItemSource::size_hint` as `SizeHint::Aspect`) and fill
 /// rows. `groups` put headers over runs of tiles; a header stays pinned at the top while its group scrolls. The grid
@@ -240,10 +248,16 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     aspect: f32,
     /// The picture side as a multiple of the thumbnail side the grid sizes from; 1 is that side.
     zoom: GridZoom<'a>,
+    /// The zoom's factor as this pass was built with it: the layout of the pass reads it, and a step the pass takes
+    /// shows in the next pass's layout, so the anchor is named against the layout the step changes from.
+    factor: f64,
+    /// Where the pointer was when `update` took a zoom chord in this pass: the point a key zoom keeps in place.
+    chord_at: Option<Pos2>,
     /// Where every tile's hover actions sit.
-    #[allow(dead_code)] // P3(pdf-workflows-w2): CV-C25
     #[prop]
     action_place: TileActionPlace,
+    /// The names of the insert gaps, by the display position each inserts before; `None` shows no gaps.
+    insert_gaps: Option<&'a dyn Fn(usize) -> Label>,
     /// The thumbnail size the zoom is a factor of; `None` is the card thumbnail.
     #[prop]
     thumb_size: Option<ThumbSize>,
@@ -276,10 +290,6 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     tail: &'a [TailRow<K>],
     /// Which keys rate the selected tiles.
     rating_keys: RatingKeys,
-    /// The grid reports zoom steps: Cmd/Ctrl with `=`, `-` and `0` as `GridEvent::Zoom`, and Ctrl/Cmd with the wheel or a
-    /// pinch as `CollectionEvent::Zoom`.
-    #[prop(flag)]
-    zooms: bool,
     /// Tiles show a check box and Space toggles the lead tile's check.
     checks: bool,
     /// Which tiles may be renamed; a rename request on another tile does nothing.
@@ -300,6 +310,8 @@ pub struct TileGrid<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     placed: Vec<Placed>,
     /// The tail rows this pass shows, in the grid's layer space: the row's index and its rect.
     placed_tail: Vec<(usize, Rect)>,
+    /// The insert gaps this pass shows, in the grid's layer space: the display position and the gap's rect.
+    placed_gaps: Vec<(usize, Rect)>,
     /// The tail rows clicked this pass, in order.
     tail_clicked: Vec<K>,
     events: Vec<GridEvent<K>>,
@@ -318,7 +330,7 @@ struct Placed {
 impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     /// A grid named `label`, with multiple selection and equal square cards of the card thumbnail. Space picks the lead and
     /// no key rates or zooms; Bridge's keys are `rating_keys(RatingKeys::CommandDigits)`, `space(SpaceAction::Preview)`
-    /// and `zooms()`.
+    /// and a `GridZoom::Bound` zoom.
     pub fn new(label: impl Into<Label>) -> Self {
         TileGrid {
             common: Common::new(),
@@ -330,7 +342,10 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             fill_row: false,
             aspect: 1.0,
             zoom: GridZoom::Fixed(1.0),
+            factor: 1.0,
+            chord_at: None,
             action_place: TileActionPlace::Corner,
+            insert_gaps: None,
             thumb_size: None,
             content_cells: false,
             card_columns: 0,
@@ -341,7 +356,6 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             collapsible: false,
             tail: &[],
             rating_keys: RatingKeys::None,
-            zooms: false,
             checks: false,
             can_rename: None,
             can_drag: None,
@@ -350,6 +364,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
             laid: RefCell::new(None),
             placed: Vec::new(),
             placed_tail: Vec::new(),
+            placed_gaps: Vec::new(),
             tail_clicked: Vec::new(),
             events: Vec::new(),
         }
@@ -358,17 +373,47 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
 
     /// The size of the tiles: a factor the host holds, or one the grid steps itself through a binding.
     #[must_use]
-    pub fn zoom(self, zoom: GridZoom<'a>) -> Self {
-        let _ = zoom;
-        todo!("WF-W12")
+    pub fn zoom(mut self, mut zoom: GridZoom<'a>) -> Self {
+        self.factor = match &mut zoom {
+            GridZoom::Fixed(factor) => *factor,
+            GridZoom::Bound(bind, steps) => Self::bound_factor(bind, *steps),
+        };
+        self.zoom = zoom;
+        self
     }
 
     /// Insert gaps between tiles, keyed by display position; `label` names the gap before a position. None show
     /// while a drag is held. A press on one reports [`GridEvent::Insert`].
+    ///
+    /// The gap before position `at` sits on the reading-start edge of tile `at`, between tiles `at - 1` and `at`; the
+    /// gap `at` = the tile count sits on the end edge of the last tile. A gap shows while its tile is in view, so the
+    /// end gap shows only with the last tile in view.
     #[must_use]
-    pub fn insert_gaps(self, label: &'a dyn Fn(usize) -> Label) -> Self {
-        let _ = label;
-        todo!("CV-C26")
+    pub fn insert_gaps(mut self, label: &'a dyn Fn(usize) -> Label) -> Self {
+        self.insert_gaps = Some(label);
+        self
+    }
+
+    /// The value a bound zoom holds; the zoom's default while the binding holds no single value.
+    fn bound_factor(bind: &mut Bind<'_, f64>, steps: TileZoom) -> f64 {
+        match bind.reborrow().get() {
+            Some(Mixed::Same(factor)) if factor.is_finite() => factor,
+            _ => steps.default_value(),
+        }
+    }
+
+    /// Writes a bound zoom's next factor, `to` of its value and the zoom, inside the zoom's range, as a `Set` named
+    /// `label`. A fixed zoom is the host's: it takes nothing. Several steps in one pass chain on the written value.
+    fn step_zoom(&mut self, label: &Arc<str>, to: impl FnOnce(f64, TileZoom) -> f64) {
+        let GridZoom::Bound(bind, steps) = &mut self.zoom else { return };
+        let steps = *steps;
+        let before = Self::bound_factor(bind, steps);
+        let range = steps.range();
+        let after = to(before, steps).clamp(*range.start(), *range.end());
+        if !after.is_finite() || after == before {
+            return;
+        }
+        bind.reborrow().apply(&EditEvent::set(Mixed::Same(before), after, label.clone(), None));
     }
 
     /// Which keys rate the selected tiles. Digit keys reach the grid as digits only while this is on.
@@ -488,14 +533,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
     fn picture_side(&self, style: &GridSizes, item: Option<Vec2>, around: Around) -> f32 {
         match item.filter(|_| self.content_cells) {
             Some(item) => (item.x - around.size().x).max(1.0),
-            None => {
-                // P3(pdf-workflows-w2): CV-C27: a bound zoom reads its binding's value.
-                let zoom = match &self.zoom {
-                    GridZoom::Fixed(factor) => *factor as f32,
-                    _ => 1.0,
-                };
-                style.picture_side(zoom, self.thumb_size)
-            }
+            None => style.picture_side(self.factor as f32, self.thumb_size),
         }
     }
 
@@ -521,6 +559,42 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> TileGrid<'a, K> {
         } else {
             rect
         }
+    }
+
+    /// Declares the insert gaps of the tiles in view, none while the grid's own drag is held: the gap before each tile
+    /// in view, and the end gap with the last tile in view. The gaps are named by display position, so rows scrolled
+    /// out of view change no position.
+    fn place_gaps(&mut self, clip: Rect, cx: &mut PartsCx<'_, Self>) {
+        let dragging = crate::runtime::drag::active::<ListDrag<K>>(cx.ui.ctx()).is_some_and(|drag| drag.list == cx.id);
+        if self.insert_gaps.is_none() || dragging {
+            return;
+        }
+        let gaps = {
+            let laid = self.laid.borrow();
+            let Some(layout) = laid.as_ref() else { return };
+            let (view, offset) = (cx.content_rect, cx.offset());
+            let mut shown = Vec::new();
+            layout.visible(offset, view.size(), &mut shown);
+            let tiles: Vec<usize> = shown.into_iter().filter_map(|at| layout.tile_at(at)).collect();
+            let count = layout.tiles();
+            let end = (count > 0 && tiles.last() == Some(&(count - 1))).then_some(count);
+            let width = cx.style.insert_width;
+            let rtl = cx.flow.is_rtl();
+            tiles
+                .into_iter()
+                .chain(end)
+                .filter_map(|at| layout.gap(at, offset, width).map(|gap| (at, Self::group_rect(gap.translate(view.min.to_vec2()), view, rtl))))
+                .filter(|(_, rect)| rect.intersects(clip))
+                .collect::<Vec<_>>()
+        };
+        let priority = HitPriority::new(HitLevel::Edge, 0);
+        for &(at, rect) in &gaps {
+            cx.part(GAP.at(at as u64), rect).sense(Sense::CLICK | Sense::FOCUS).priority(priority).over().focusable().state_layer();
+        }
+        if !gaps.is_empty() {
+            cx.roving(Roving::new(NavShape::Flat));
+        }
+        self.placed_gaps = gaps;
     }
 
     /// The header row of `group`: a heading at the group's depth, with its icon and its detail at the end, and a
@@ -551,14 +625,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             metrics: Metrics::new(),
             pinned: cx.color(cx.tokens.color.surface.panel),
             header: ListRow::style(cx, ListRow::new(Label::default()).heading().style_key()),
+            insert: cx.color(cx.tokens.color.accent.solid),
+            insert_width: cx.tokens.space.gap.stack,
         }
     }
 
     /// One pointer part per header in view, over the tiles, and a disclosure part in it when headers collapse; one
-    /// pointer part per tail row in view.
+    /// pointer part per tail row in view; one focusable part per insert gap in view.
     fn parts(&mut self, area: Rect, cx: &mut PartsCx<'_, Self>) {
         self.placed.clear();
         self.placed_tail.clear();
+        self.placed_gaps.clear();
+        self.place_gaps(area, cx);
         let Some(arrangement) = self.laid.borrow().as_ref().and_then(|layout| layout.arrangement().cloned()) else { return };
         let (view, offset, rtl) = (cx.content_rect, cx.offset(), cx.flow.is_rtl());
         let pinned = arrangement.pinned(offset.y as f32);
@@ -621,14 +699,22 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 }
             }
         }
-        if self.zooms {
+        if matches!(self.zoom, GridZoom::Bound(..)) {
+            // A chord is input: a second pass of the frame takes none, so it neither steps again nor names a point.
             let reset = (self.rating_keys != RatingKeys::CommandDigits).then_some((Key::Num0, ZoomStep::Reset));
+            let label = cx.core.label_arc();
             for (key, step) in [(Key::Equals, ZoomStep::In), (Key::Plus, ZoomStep::In), (Key::Minus, ZoomStep::Out)].into_iter().chain(reset) {
                 let chord = Chord::new(Mods::CMD, key);
                 cx.claim(chord);
                 while cx.take_claimed(chord) {
-                    self.events.push(GridEvent::Zoom(step));
+                    self.step_zoom(&label, |value, steps| steps.step(value, step));
+                    self.chord_at = crate::runtime::pointer::frame(&cx.core.ctx).pos;
                 }
+            }
+        }
+        for (at, _) in self.placed_gaps.clone() {
+            if cx.part_activated(GAP.at(at as u64)).is_some() {
+                self.events.push(GridEvent::Insert { at });
             }
         }
         let placed = self.placed.clone();
@@ -684,8 +770,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
         }
     }
 
-    /// A heading node per header and a list item node per tail row in view.
+    /// A heading node per header, a list item node per tail row and a button per insert gap in view.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let Some(label) = self.insert_gaps {
+            for &(at, _) in &self.placed_gaps {
+                access.node(GAP.at(at as u64), Role::BUTTON).name = Name::Text(cx.env.resolve(&label(at)).as_str().to_owned());
+            }
+        }
         let headers = self.placed.iter().map(|placed| Slot::Header(placed.group));
         let tails = self.placed_tail.iter().map(|&(at, _)| Slot::Tail(at));
         for slot in headers.chain(tails) {
@@ -734,15 +825,33 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
             let state = RowState { emphasized: lead == Some(Slot::Tail(at)), ..RowState::default() };
             ui.face(section_part(&row.key), ListRow::new(row.label.clone()).rows(self.items.row_height).node(false).state(state));
         }
+        // The gap under the pointer shows where an insertion lands; the part's state layer shows hover and focus.
+        for &(at, rect) in &self.placed_gaps {
+            if cx.hover_pos(GAP.at(at as u64)).is_some() {
+                let line = PaintShape::Path(vec![rect.center_top(), rect.center_bottom()]);
+                ui.draw().stroke(&line, StrokeWidth::Thick, style.insert);
+            }
+        }
     }
 
     /// The grid's events are the digits' and the stars' ratings, in that order, besides the collection's own. The
     /// collection's events on a header row are the group events instead: Enter picks the group, the context-menu
     /// key asks for its menu, Left and Right open and close it, and the lead on it is not reported. A tail row keeps its
-    /// Enter and the lead on it, and adds its click as `CollectionEvent::Activate`; it has no menu.
+    /// Enter and the lead on it, and adds its click as `CollectionEvent::Activate`; it has no menu. A bound zoom takes
+    /// the wheel's and the pinch's `CollectionEvent::Zoom` here, after `content` named the point it keeps in place, and
+    /// the event is not reported.
     fn finish(mut self, mut cx: Cx<'_, Self>) -> TileGridOutput<K> {
         let selected = self.rated(&cx);
         let mut response = cx.collection_response();
+        let label = cx.core.label_arc();
+        for event in &response.events {
+            if let CollectionEvent::Zoom { factor, .. } = event {
+                self.step_zoom(&label, |value, _| value * f64::from(*factor));
+            }
+        }
+        if matches!(self.zoom, GridZoom::Bound(..)) {
+            response.events.retain(|event| !matches!(event, CollectionEvent::Zoom { .. }));
+        }
         let mut events = self.events;
         let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
         let group_of = |key: &K| self.groups.iter().position(|group| group.key == *key);
@@ -818,13 +927,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         self.reveal.as_ref()
     }
 
+    /// A bound zoom takes the wheel's zoom share; a fixed one is the host's.
     fn zooms(&self) -> bool {
-        self.zooms
+        matches!(self.zoom, GridZoom::Bound(..))
     }
 
+    /// While the zoom is bound: the point of this pass's wheel or pinch zoom, else the pointer a zoom chord was taken
+    /// at in this pass's `update`; `None` keeps the first row in view.
     fn zoom_anchor(&self, wheel: Option<Pos2>) -> Option<Pos2> {
-        let _ = wheel;
-        todo!("WF-W12")
+        match self.zoom {
+            GridZoom::Bound(..) => wheel.or(self.chord_at),
+            GridZoom::Fixed(_) => None,
+        }
     }
 
     /// The tiles with a header row before each group, then the tail rows: the rows the item step walks and the layout
@@ -842,11 +956,12 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         self.content_cells
     }
 
-    /// The caption place, the detail line and the card look, which `dress` gives every tile.
+    /// The caption place, the detail line, the card look, the actions' place and whether checks show, which `dress`
+    /// gives every tile.
     fn dress_inputs(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        (self.caption, self.detail_line, self.card).hash(&mut hasher);
+        (self.caption, self.detail_line, self.card, self.action_place, self.checks).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -876,9 +991,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
         self.laid_out(previous, source, width, item, cx)
     }
 
-    /// Every tile gets the grid's caption place and detail line, the card look, and its row's rename state.
+    /// Every tile gets the grid's caption place, detail line and actions' place, the card look, and its row's rename
+    /// state. Under `checks` a tile's check is its own selection, so the app keeps no second copy of it.
     fn dress<'r>(&self, tile: Self::Item<'r>, row: &RowState) -> Self::Item<'r> {
-        let tile = tile.caption(self.caption).detail_line(self.detail_line).renaming(row.renaming);
+        let tile = tile.caption(self.caption).detail_line(self.detail_line).action_place(self.action_place).renaming(row.renaming);
+        let tile = if self.checks { tile.check(if row.selected { ToggleState::On } else { ToggleState::Off }) } else { tile };
         if self.card { tile.card() } else { tile }
     }
 

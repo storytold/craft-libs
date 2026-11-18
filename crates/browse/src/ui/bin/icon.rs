@@ -172,7 +172,7 @@ where
         .caption(CaptionPlace::Below)
         .detail_line()
         .aspect(ASPECT)
-        .zoom(GridZoom::Fixed(f64::from(state.settings.zoom))) // P3(pdf-workflows-w2): WF-W12
+        .zoom(GridZoom::Fixed(state.settings.zoom))
         .rename(true)
         .deletable(true)
         .rows_stamp(stamp_of(state.shown.as_ref(), &state.search, state.settings.icon_sort.as_ref()))
