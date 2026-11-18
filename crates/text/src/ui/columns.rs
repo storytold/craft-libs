@@ -10,7 +10,7 @@ use craft_ui::contract::{
     Bind, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _, SideLabel, Sizing,
     Validity, clicked,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
@@ -144,6 +144,9 @@ pub struct TextColumnsDialog {
     unit: DocUnit,
     /// The edited columns from before the running gesture: Escape restores them.
     draft: Option<TextColumns>,
+    /// Whether OK files its result for the app to judge instead of closing.
+    hold: bool,
+    held: HeldAnswer<Option<TextColumns>>,
 }
 
 impl TextColumnsDialog {
@@ -157,6 +160,8 @@ impl TextColumnsDialog {
             apply_choices: Vec::new(),
             unit: DocUnit::default(),
             draft: None,
+            hold: false,
+            held: HeldAnswer::new(),
         }
     }
 
@@ -596,19 +601,30 @@ fn bare(caption: &str) -> &str {
 impl TextColumnsDialog {
     /// OK files its result for the app to accept or refuse before the dialog closes.
     #[must_use]
-    pub fn held_ok(self) -> Self {
-        todo!("dg.F12")
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
     }
 
     /// The result OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<Option<TextColumns>> {
-        todo!("dg.F12")
+        self.held.take()
     }
 
     /// The app's answer to the filed result: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        let _ = answer;
-        todo!("dg.F12")
+        self.held.answer(answer);
+    }
+
+    /// Files `changes` and keeps the dialog open when OK is held; a plain dialog closes with them.
+    fn settle(&mut self, changes: Option<TextColumns>) -> Option<Option<TextColumns>> {
+        if !self.hold {
+            return Some(changes);
+        }
+        if !self.held.is_waiting() {
+            self.held.file(changes);
+        }
+        None
     }
 }
 
@@ -621,25 +637,58 @@ impl StackDialog for TextColumnsDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Option<TextColumns>>> {
+        if let Some(changes) = self.held.finish() {
+            return Some(DialogResult::Ok(changes));
+        }
         let env = Env::of(ui);
         let words = env.words::<TextColumnsWords>();
         let common = env.words::<CommonWords>();
         let units = env.units();
         let valid = Cell::new(self.is_valid());
-        let buttons = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let waiting = self.held.is_waiting();
+        let refused = self.held.refusal().map(|(reason, changes)| (reason.clone(), changes.clone()));
+        let unchanged = Cell::new(true);
+        let buttons = [
+            FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
+            FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
+        ];
         let shown = Dialog::new(words.title.clone())
             .buttons(buttons)
             .settle_buttons(|_, buttons| {
                 if let Some(ok) = buttons.first_mut() {
-                    ok.set_enabled(valid.get());
+                    ok.set_enabled(valid.get() && !waiting);
                 }
             })
-            .show(ui, |ui, _| self.body(ui, &words, &units, &valid));
+            .refusal(|| refused.as_ref().filter(|_| unchanged.get()).map(|(reason, _)| reason.clone()))
+            .show(ui, |ui, _| {
+                self.body(ui, &words, &units, &valid);
+                if let Some((_, changes)) = &refused {
+                    unchanged.set(self.changes() == *changes);
+                }
+            });
+        if refused.is_some() && !unchanged.get() {
+            self.held.clear_refusal();
+        }
         match shown.output.result(|| self.changes()) {
-            Some(DialogResult::Ok(changes)) if valid.get() => Some(DialogResult::Ok(changes)),
+            Some(DialogResult::Ok(changes)) if valid.get() => self.settle(changes).map(DialogResult::Ok),
             Some(DialogResult::Cancel) => Some(DialogResult::Cancel),
             _ => None,
         }
+    }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<Option<TextColumns>> {
+        if let Some(changes) = self.held.finish() {
+            return Some(changes);
+        }
+        if !self.is_valid() {
+            return None;
+        }
+        let changes = self.changes();
+        self.settle(changes)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 }
 

@@ -12,20 +12,28 @@
 //! }
 //! ```
 
+use std::borrow::Cow;
 use std::cell::Cell;
 
 use crate::ui::length::{DocUnit, length_field, shown};
-use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec};
+use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, SelectionChange, keyed};
 use craft_theme::variant::Tone;
-use craft_ui::contract::{Bind, Common, Component, Cx, Entry, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _};
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::choice::{Checkbox, Radio, RadioGroup};
+use craft_ui::contract::{
+    Bind, CollectionEvent, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowCollection as _,
+    ShowContainer as _, SideLabel,
+};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
+use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup, Help};
+use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton, GroupBox};
 use craft_ui::style::{ComponentStyle, Corners, StyleColor, StyleCx, SurfaceKind, TypeRole};
+use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::NumberField;
 use egui::{Rect, Response, Ui, Vec2, pos2, vec2};
 
@@ -65,11 +73,35 @@ craft_ui::words! {
         at_least: "paragraphDialog.atLeast" = "At least";
         sample: "paragraphDialog.sample" = "Sample Text";
         out_of_range: template "paragraphDialog.outOfRange" = "{field} must be from {min} to {max}";
+        indents_and_spacing: "paragraphDialog.tabIndents" = "Indents and Spacing";
+        line_and_page_breaks: "paragraphDialog.tabBreaks" = "Line and Page Breaks";
+        asian_typography: "paragraphDialog.tabAsian" = "Asian Typography";
+        direction: "paragraphDialog.direction" = "Direction:";
+        left_to_right: "paragraphDialog.leftToRight" = "Left-to-right";
+        right_to_left: "paragraphDialog.rightToLeft" = "Right-to-left";
+        mirror_indents: "paragraphDialog.mirrorIndents" = "Mirror indents";
+        inside: "paragraphDialog.inside" = "Inside";
+        outside: "paragraphDialog.outside" = "Outside";
+        exceptions: "paragraphDialog.exceptions" = "Formatting exceptions";
+        widow_control: "paragraphDialog.widowControl" = "Widow/Orphan control";
+        keep_with_next: "paragraphDialog.keepWithNext" = "Keep with next";
+        keep_lines_together: "paragraphDialog.keepLinesTogether" = "Keep lines together";
+        page_break_before: "paragraphDialog.pageBreakBefore" = "Page break before";
+        suppress_line_numbers: "paragraphDialog.suppressLineNumbers" = "Suppress line numbers";
+        dont_hyphenate: "paragraphDialog.dontHyphenate" = "Don't hyphenate";
+        line_breaking: "paragraphDialog.lineBreaking" = "Line breaking";
+        character_spacing: "paragraphDialog.characterSpacing" = "Character Spacing";
+        kinsoku: "paragraphDialog.kinsoku" = "Apply Asian line-breaking rules (kinsoku)";
+        word_wrap: "paragraphDialog.wordWrap" = "Allow Latin text to wrap in the middle of a word";
+        overflow_punct: "paragraphDialog.overflowPunct" = "Allow hanging punctuation";
+        top_line_punct: "paragraphDialog.topLinePunct" = "Compress punctuation at the start of a line";
+        auto_space_de: "paragraphDialog.autoSpaceDe" = "Add space between Asian and Latin text";
+        auto_space_dn: "paragraphDialog.autoSpaceDn" = "Add space between Asian text and numbers";
     }
 }
 
 /// PowerPoint's alignments (Word has the first four).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ParagraphAlign {
     /// Left.
@@ -88,7 +120,7 @@ pub enum ParagraphAlign {
 }
 
 /// The first line against the others.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum SpecialIndent {
     /// None.
@@ -102,7 +134,7 @@ pub enum SpecialIndent {
 
 /// What a paragraph's spacing before or after counts, as DeckCraft keeps it (`spaceBeforeKind`
 /// and `spaceAfterKind`, `pts` or `pct`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum SpacingKind {
     /// A distance in points.
@@ -113,7 +145,7 @@ pub enum SpacingKind {
 }
 
 /// Line spacing.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum LineSpacing {
     /// A multiple of single spacing: Single is 1, 1.5 lines 1.5, Double 2, Multiple any other.
@@ -130,9 +162,26 @@ impl Default for LineSpacing {
     }
 }
 
+/// Serde form of a row that is hidden (outer `None`), shown empty (`Some(None)`) or shown with a value: a hidden row has
+/// no key and an empty one is `null`, so a round trip through JSON keeps the two apart.
+mod shown_or_hidden {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(super) fn serialize<T: Serialize, S: Serializer>(value: &Option<Option<T>>, serializer: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(shown) => shown.serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Option<T>>, D::Error> {
+        Option::<T>::deserialize(deserializer).map(Some)
+    }
+}
+
 /// What the dialog edits; `None` where the selected paragraphs differ (the field starts empty
 /// and a field left empty is left as it was).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ParagraphFormat {
     /// The align.
@@ -141,6 +190,7 @@ pub struct ParagraphFormat {
     pub before_text: Option<f32>,
     /// Word's right indent ("After text"). The outer `None` hides the field (PowerPoint has
     /// none); `Some(None)` shows it empty, for paragraphs that differ.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
     pub after_text: Option<Option<f32>>,
     /// The special first-line indent: none, first line or hanging.
     pub special: Option<SpecialIndent>,
@@ -160,8 +210,10 @@ pub struct ParagraphFormat {
     pub line_spacing: Option<LineSpacing>,
     /// The paragraph's direction. The outer `None` hides the row; `Some(None)` shows it empty, for paragraphs that
     /// differ.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
     pub direction: Option<Option<super::ParagraphDirection>>,
     /// Mirror indents: Left and Right read Inside and Outside when on. The outer `None` hides it; `Some(None)` is mixed.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "shown_or_hidden")]
     pub mirror_indents: Option<Option<bool>>,
     /// The Line and Page Breaks check boxes. `None` hides the page.
     pub breaks: Option<LineBreakOptions>,
@@ -205,7 +257,7 @@ pub struct AsianTypography {
 }
 
 /// The page of Word's Paragraph dialog the dialog opens on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ParagraphTab {
     /// Indents and Spacing.
     #[default]
@@ -249,8 +301,10 @@ pub struct ParagraphDialog {
     word: bool,
     /// The format the dialog opened with: a spacing that returns to its value takes its kind back.
     opened: ParagraphFormat,
-    #[allow(dead_code)] // P3(dialogs-w3): dg.F9
     tab: ParagraphTab,
+    /// Whether OK files its answer for the app to judge instead of closing.
+    hold: bool,
+    held: HeldAnswer<ParagraphAnswer>,
 }
 
 impl ParagraphDialog {
@@ -262,6 +316,8 @@ impl ParagraphDialog {
             unit: DocUnit::new(UnitKind::Inches, UnitKind::POINTS_PER_INCH),
             word: false,
             tab: ParagraphTab::default(),
+            hold: false,
+            held: HeldAnswer::new(),
         }
     }
 
@@ -549,20 +605,123 @@ impl ParagraphDialog {
         }
     }
 
+    /// Whether the dialog shows Word's three pages.
+    fn paged(&self) -> bool {
+        self.word && self.format.breaks.is_some() && self.format.asian.is_some()
+    }
+
     fn body(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>) {
         let words = scope.words;
         valid.set(true);
+        let paged = self.paged();
+        if paged {
+            self.tab_strip(ui, words);
+        }
+        match self.tab {
+            ParagraphTab::LineAndPageBreaks if paged => self.breaks_page(ui, words),
+            ParagraphTab::AsianTypography if paged => self.asian_page(ui, words),
+            _ => self.indents_page(ui, scope, valid),
+        }
+        if !self.out_of_range().is_empty() {
+            valid.set(false);
+        }
+    }
+
+    fn indents_page(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>) {
+        let words = scope.words;
         FieldGroup::new(words.title.clone()).show(ui, |ui, _| {
-            GroupBox::new(words.general.clone(), None).show(ui, |ui, _| self.alignment(ui, words));
-            GroupBox::new(words.indentation.clone(), None).show(ui, |ui, _| self.indentation(ui, scope, valid));
+            GroupBox::new(words.general.clone(), None).show(ui, |ui, _| {
+                self.direction(ui, words);
+                self.alignment(ui, words);
+            });
+            GroupBox::new(words.indentation.clone(), None).show(ui, |ui, _| {
+                self.indentation(ui, scope, valid);
+                self.mirror(ui, words);
+            });
             GroupBox::new(words.spacing.clone(), None).show(ui, |ui, _| self.spacing(ui, scope, valid));
             GroupBox::new(words.preview.clone(), None).show(ui, |ui, _| {
                 ParagraphPreview::new(words.preview.clone(), &self.format, words.sample.as_str()).show(ui);
             });
         });
-        if !self.out_of_range().is_empty() {
-            valid.set(false);
+    }
+
+    fn tab_strip(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
+        let tabs = [
+            (ParagraphTab::IndentsAndSpacing, words.indents_and_spacing.as_str().to_owned()),
+            (ParagraphTab::LineAndPageBreaks, words.line_and_page_breaks.as_str().to_owned()),
+            (ParagraphTab::AsianTypography, words.asian_typography.as_str().to_owned()),
+        ];
+        let source = keyed(&tabs[..], |tab: &(ParagraphTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
+        let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(self.tab).natural_height(true);
+        let out = strip.show_items(ui, &source, &mut |key, _| {
+            Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
+        });
+        for event in out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(chosen) = keys.last()
+            {
+                self.tab = *chosen;
+            }
         }
+    }
+
+    /// Left to right and Right to left; a paragraph with another or differing direction leaves both unchecked.
+    fn direction(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
+        let Some(current) = self.format.direction else { return };
+        let before = current.filter(|direction| matches!(direction, super::ParagraphDirection::LeftToRight | super::ParagraphDirection::RightToLeft));
+        let mut picked = before;
+        RadioGroup::new(words.direction.clone(), Bind::bound(&mut picked)).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, cx| {
+                Text::new(words.direction.clone()).show(ui);
+                let options = [
+                    (super::ParagraphDirection::LeftToRight, &words.left_to_right),
+                    (super::ParagraphDirection::RightToLeft, &words.right_to_left),
+                ];
+                for (at, (direction, label)) in options.into_iter().enumerate() {
+                    cx.labelled(ui, at, label.clone(), SideLabel::new().layout(FieldLayout::After), Radio::new(Some(direction)));
+                }
+            });
+        });
+        if picked != before
+            && let Some(direction) = picked
+        {
+            self.format.direction = Some(Some(direction));
+        }
+    }
+
+    fn mirror(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
+        let Some(current) = self.format.mirror_indents else { return };
+        if let Some(on) = check(ui, &words.mirror_indents, current) {
+            self.format.mirror_indents = Some(Some(on));
+        }
+    }
+
+    fn breaks_page(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
+        let Some(breaks) = self.format.breaks.as_mut() else { return };
+        GroupBox::new(words.line_and_page_breaks.clone(), None).show(ui, |ui, _| {
+            toggle(ui, &words.widow_control, &mut breaks.widow_control);
+            toggle(ui, &words.keep_with_next, &mut breaks.keep_with_next);
+            toggle(ui, &words.keep_lines_together, &mut breaks.keep_lines_together);
+            toggle(ui, &words.page_break_before, &mut breaks.page_break_before);
+        });
+        GroupBox::new(words.exceptions.clone(), None).show(ui, |ui, _| {
+            toggle(ui, &words.suppress_line_numbers, &mut breaks.suppress_line_numbers);
+            toggle(ui, &words.dont_hyphenate, &mut breaks.dont_hyphenate);
+        });
+    }
+
+    fn asian_page(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
+        let Some(asian) = self.format.asian.as_mut() else { return };
+        GroupBox::new(words.line_breaking.clone(), None).show(ui, |ui, _| {
+            toggle(ui, &words.kinsoku, &mut asian.kinsoku);
+            toggle(ui, &words.word_wrap, &mut asian.word_wrap);
+            toggle(ui, &words.overflow_punct, &mut asian.overflow_punct);
+        });
+        GroupBox::new(words.character_spacing.clone(), None).show(ui, |ui, _| {
+            toggle(ui, &words.top_line_punct, &mut asian.top_line_punct);
+            toggle(ui, &words.auto_space_de, &mut asian.auto_space_de);
+            toggle(ui, &words.auto_space_dn, &mut asian.auto_space_dn);
+        });
     }
 
     fn alignment(&mut self, ui: &mut Ui, words: &ParagraphDialogWords) {
@@ -594,9 +753,13 @@ impl ParagraphDialog {
 
     fn indentation(&mut self, ui: &mut Ui, scope: &Scope<'_>, valid: &Cell<bool>) {
         let words = scope.words;
-        self.field(ui, scope, Row::BeforeText, &words.before_text, valid);
+        // Mirrored indents are measured from the inside and outside edges.
+        let mirrored = self.format.mirror_indents == Some(Some(true));
+        let before = if mirrored { &words.inside } else { &words.before_text };
+        self.field(ui, scope, Row::BeforeText, before, valid);
         if self.format.after_text.is_some() {
-            self.field(ui, scope, Row::AfterText, &words.after_text, valid);
+            let after = if mirrored { &words.outside } else { &words.after_text };
+            self.field(ui, scope, Row::AfterText, after, valid);
         }
         let entries = [
             Entry::new(SpecialIndent::None, words.special_none.clone()),
@@ -651,22 +814,55 @@ impl ParagraphDialog {
     }
 }
 
+/// A check box over a value that may differ between paragraphs: it shows mixed while `None`, and a click makes it
+/// `Some`. Returns the click's value.
+fn check(ui: &mut Ui, label: &Label, value: Option<bool>) -> Option<bool> {
+    let shown = value.map_or(Mixed::Mixed, Mixed::Same);
+    Checkbox::new(Bind::given(shown)).label(label.clone()).show(ui).value().copied()
+}
+
+/// [`check`] writing a click into `slot`.
+fn toggle(ui: &mut Ui, label: &Label, slot: &mut Option<bool>) {
+    if let Some(on) = check(ui, label, *slot) {
+        *slot = Some(on);
+    }
+}
+
+/// The dialog's values as automation sees them: the format's fields and the page shown.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct JsonFields {
+    #[serde(flatten)]
+    format: ParagraphFormat,
+    tab: ParagraphTab,
+}
+
 impl ParagraphDialog {
     /// OK files its answer for the app to accept or refuse before the dialog closes.
     #[must_use]
-    pub fn held_ok(self) -> Self {
-        todo!("dg.F12")
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
     }
 
     /// The answer OK filed, once, for the app to judge.
     pub fn take_ok(&mut self) -> Option<ParagraphAnswer> {
-        todo!("dg.F12")
+        self.held.take()
     }
 
     /// The app's answer to the filed answer: `Ok` closes the dialog with it, `Err` shows the reason and enables OK.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        let _ = answer;
-        todo!("dg.F12")
+        self.held.answer(answer);
+    }
+
+    /// Files `answer` and keeps the dialog open when OK is held; a plain dialog closes with it.
+    fn settle(&mut self, answer: ParagraphAnswer) -> Option<ParagraphAnswer> {
+        if !self.hold {
+            return Some(answer);
+        }
+        if !self.held.is_waiting() {
+            self.held.file(answer);
+        }
+        None
     }
 }
 
@@ -678,16 +874,22 @@ impl StackDialog for ParagraphDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ParagraphAnswer>> {
+        if let Some(answer) = self.held.finish() {
+            return Some(DialogResult::Ok(answer));
+        }
         let env = Env::of(ui);
         let words = env.words::<ParagraphDialogWords>();
         let common = env.words::<CommonWords>();
         let units = env.units();
         let scope = Scope { words: &words, units: &units };
         let valid = Cell::new(self.out_of_range().is_empty());
+        let waiting = self.held.is_waiting();
+        let refused = self.held.refusal().map(|(reason, answer)| (reason.clone(), answer.format.clone()));
+        let unchanged = Cell::new(true);
         let buttons = [
-            FooterButton::new(common.ok.clone(), DialogRole::Accept),
+            FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(self.hold),
             FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
-            FooterButton::new(words.tabs.clone(), DialogRole::Other),
+            FooterButton::new(words.tabs.clone(), DialogRole::Other).stays_open(self.hold),
         ];
         let shown = Dialog::new(words.title.clone())
             .side_buttons(true)
@@ -695,21 +897,57 @@ impl StackDialog for ParagraphDialog {
             .settle_buttons(|_, buttons| {
                 for (at, button) in buttons.iter_mut().enumerate() {
                     if at != CANCEL {
-                        button.set_enabled(valid.get());
+                        button.set_enabled(valid.get() && !waiting);
                     }
                 }
             })
-            .show(ui, |ui, _| self.body(ui, &scope, &valid));
+            .refusal(|| refused.as_ref().filter(|_| unchanged.get()).map(|(reason, _)| reason.clone()))
+            .show(ui, |ui, _| {
+                self.body(ui, &scope, &valid);
+                if let Some((_, format)) = &refused {
+                    unchanged.set(*format == self.format);
+                }
+            });
+        if refused.is_some() && !unchanged.get() {
+            self.held.clear_refusal();
+        }
         let tabs = shown.output.picked == Some(TABS);
         match shown.output.result(|| tabs) {
-            Some(DialogResult::Ok(open_tabs)) if valid.get() => Some(DialogResult::Ok(self.answer(open_tabs))),
+            Some(DialogResult::Ok(open_tabs)) if valid.get() => {
+                let answer = self.answer(open_tabs);
+                self.settle(answer).map(DialogResult::Ok)
+            }
             Some(DialogResult::Cancel) => Some(DialogResult::Cancel),
             _ => None,
         }
     }
 
     fn confirm(&mut self, _: &egui::Context) -> Option<ParagraphAnswer> {
-        self.out_of_range().is_empty().then(|| self.answer(false))
+        if let Some(answer) = self.held.finish() {
+            return Some(answer);
+        }
+        if !self.out_of_range().is_empty() {
+            return None;
+        }
+        let answer = self.answer(false);
+        self.settle(answer)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
+    }
+
+    fn json_fields(&self) -> Option<serde_json::Value> {
+        serde_fields(&JsonFields { format: self.format.clone(), tab: self.tab })
+    }
+
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let mut fields = JsonFields { format: self.format.clone(), tab: self.tab };
+        set_serde_field(&mut fields, field, value)?;
+        self.format = fields.format;
+        self.tab = fields.tab;
+        self.held.clear_refusal();
+        Ok(())
     }
 }
 
