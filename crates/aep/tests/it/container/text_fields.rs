@@ -208,3 +208,58 @@ fn hostile_documents_never_panic() {
     let deep = [b"/1 ".as_slice(), &b"<< /0 ".repeat(10_000), &b">> ".repeat(10_000)].concat();
     assert!(TextDocument::parse(&deep).is_none());
 }
+
+/// `text` and a carriage return as a `btdk` string: UTF-16BE after its byte order mark.
+fn utf16_string(text: &str) -> Vec<u8> {
+    let mut out = b"(".to_vec();
+    out.extend_from_slice(&[0xfe, 0xff]);
+    out.extend(text.encode_utf16().chain([u16::from(b'\r')]).flat_map(u16::to_be_bytes));
+    out.push(b')');
+    out
+}
+
+/// A run of the `/1/1` list: `text` in one style of `size` and fill `rgb`, font index 0.
+fn keyed_run(text: &str, size: f64, rgb: [f64; 3]) -> Vec<u8> {
+    let [r, g, b] = rgb;
+    let style = format!(
+        " /6 << /0 [ << /0 << /0 << /6 << /0 0 /1 {size:.1} /53 << /99 /SimplePaint /0 << /0 1 /1 [ 1.0 {r:.1} {g:.1} {b:.1} ] >> >> >> >> >> /1 {} >> ] >> >> >>",
+        text.len() + 1
+    );
+    [b"<< /0 << /0 ".as_slice(), &utf16_string(text), style.as_bytes()].concat()
+}
+
+#[test]
+fn every_document_of_keyed_source_text_is_read_in_key_order() {
+    // Lab sample (After Effects 2026): a Source Text with three keys ("Alpha" 60 px red, "Beta two"
+    // 90 px green, three lines 40 px blue) stores one `btdk` whose `/1/1` holds the three documents
+    // in key order, with one frame per document in `/0/8/0`. `parse` reads only the first.
+    let body = |runs: &[Vec<u8>]| {
+        [
+            b"/0 << /1 << /0 [ << /0 << /0 << /0 ".as_slice(),
+            &utf16_string("Sans"),
+            b" >> >> >> ] >> /8 << /0 [ << /0 << /2 << /1 0 >> >> >> << /0 << /2 << /1 1 >> >> >> << /0 << /2 << /1 0 >> >> >> ] >> >> /1 << /1 [ ",
+            &runs.join(&b' '),
+            b" ] >>",
+        ]
+        .concat()
+    };
+    let runs = [keyed_run("Alpha", 60.0, [1.0, 0.0, 0.0]), keyed_run("Beta two", 90.0, [0.0, 1.0, 0.0]), keyed_run("Gamma", 40.0, [0.0, 0.0, 1.0])];
+    let all = body(&runs);
+    let docs = TextDocument::parse_all(&all);
+    let seen: Vec<(String, f64, [f64; 3], Option<i64>)> =
+        docs.iter().map(|d| d.as_ref().map(|d| (d.text.clone(), d.font_size, d.fill_rgb(), d.line_orientation)).unwrap()).collect();
+    assert_eq!(
+        seen,
+        [
+            ("Alpha".into(), 60.0, [1.0, 0.0, 0.0], Some(0)),
+            ("Beta two".into(), 90.0, [0.0, 1.0, 0.0], Some(1)),
+            ("Gamma".into(), 40.0, [0.0, 0.0, 1.0], Some(0)),
+        ]
+    );
+    assert_eq!(TextDocument::parse(&all), docs[0]);
+    // An entry that can't be read keeps its place; a body without documents has none.
+    let broken = [runs[0].clone(), b"<< /7 1 >>".to_vec(), runs[2].clone()];
+    let docs = TextDocument::parse_all(&body(&broken));
+    assert_eq!(docs.iter().map(Option::is_some).collect::<Vec<_>>(), [true, false, true]);
+    assert!(TextDocument::parse_all(b"/0 1 /1 2").is_empty());
+}

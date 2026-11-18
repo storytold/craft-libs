@@ -493,6 +493,9 @@ pub const NEUTRAL_STYLE_VALUES: &[(&str, &[i64])] = &[("68", &[0, 1])];
 /// the duplicate check quadratic nor the line unbounded.
 pub const MAX_UNDECODED_FIELDS: usize = 64;
 
+/// The most text documents [`TextDocument::parse_all`] reads from one body.
+pub const MAX_TEXT_DOCUMENTS: usize = 65_536;
+
 /// Adds to `out` the slots of `actual` that are not decoded and differ from `sampled`, each once
 /// and at most [`MAX_UNDECODED_FIELDS`] in all.
 fn undecoded_fields(actual: &V<'_>, sampled: Option<&V<'_>>, decoded: &[&str], neutral: &[(&str, &[i64])], out: &mut Vec<String>) {
@@ -938,10 +941,17 @@ fn style_runs(run: &V<'_>, notes: &mut RunNotes) -> Vec<StyleRun> {
     out
 }
 
-/// The box of paragraph text from the frame dictionary `/0/8/0[0]/0`: key `/1/0` holds 16 x, y pairs
+/// The frame dictionary of text document `index`, `/0/8/0[index]/0`: a keyed Source Text stores one
+/// frame per document (lab sample, After Effects 2026); a body with fewer frames shares the first.
+fn frame_of<'v, 'b>(top: &'v V<'b>, index: usize) -> Option<&'v V<'b>> {
+    let frames = top.get("0")?.get("8")?.get("0")?;
+    frames.at(index).or_else(|| frames.at(0))?.get("0")
+}
+
+/// The box of paragraph text from the frame dictionary `/0/8/0[i]/0`: key `/1/0` holds 16 x, y pairs
 /// that trace the rectangle, and `/2/0` is 1; both keys are absent for point text.
-fn text_box(top: &V<'_>) -> Option<TextBox> {
-    let frame = top.get("0")?.get("8")?.get("0")?.at(0)?.get("0")?;
+fn text_box(top: &V<'_>, index: usize) -> Option<TextBox> {
+    let frame = frame_of(top, index)?;
     if frame.get("2")?.get("0")?.as_i64()? != 1 {
         return None;
     }
@@ -958,10 +968,28 @@ fn text_box(top: &V<'_>) -> Option<TextBox> {
 }
 
 impl TextDocument {
-    /// Decodes the body of a `btdk` list.
+    /// Decodes the body of a `btdk` list: its first text document.
     pub fn parse(body: &[u8]) -> Option<Self> {
+        Self::from_top(&parse_dict(body), 0)
+    }
+
+    /// Decodes every text document of the body of a `btdk` list, in order: the entries of `/1/1`.
+    /// A keyed Source Text stores one document per keyframe there, key `i` showing document `i`
+    /// (lab sample, After Effects 2026: three keys, three entries; a layer with one key, one). An
+    /// entry that can't be decoded is `None`, so the places still match the keys. At most
+    /// [`MAX_TEXT_DOCUMENTS`] are read.
+    pub fn parse_all(body: &[u8]) -> Vec<Option<Self>> {
         let top = parse_dict(body);
-        let run = top.get("1")?.get("1")?.at(0)?.get("0")?;
+        let count = match top.get("1").and_then(|v| v.get("1")) {
+            Some(V::Array(runs)) => runs.len().min(MAX_TEXT_DOCUMENTS),
+            _ => 0,
+        };
+        (0..count).map(|i| Self::from_top(&top, i)).collect()
+    }
+
+    /// Text document `index` of a parsed `btdk` body.
+    fn from_top(top: &V<'_>, index: usize) -> Option<Self> {
+        let run = top.get("1")?.get("1")?.at(index)?.get("0")?;
         let raw_text = run.get("0")?.string()?;
         let style = run.get("6")?.get("0")?.at(0)?.get("0")?.get("0")?.get("6")?;
         let fill_argb = colour_of(style, "53")?;
@@ -984,20 +1012,12 @@ impl TextDocument {
             fonts,
             paragraphs,
             style_runs,
-            text_box: text_box(&top),
+            text_box: text_box(top, index),
             incomplete_runs: notes.incomplete,
             undecoded_style_fields: notes.style_fields,
             undecoded_paragraph_fields: notes.paragraph_fields,
             kerning: kern_runs(run),
-            line_orientation: top
-                .get("0")
-                .and_then(|v| v.get("8"))
-                .and_then(|v| v.get("0"))
-                .and_then(|v| v.at(0))
-                .and_then(|v| v.get("0"))
-                .and_then(|v| v.get("2"))
-                .and_then(|v| v.get("1"))
-                .and_then(V::as_i64),
+            line_orientation: frame_of(top, index).and_then(|v| v.get("2")).and_then(|v| v.get("1")).and_then(V::as_i64),
         })
     }
 
@@ -1036,15 +1056,22 @@ impl<'f, 'a> Layer<'f, 'a> {
         TextDocument::parse(self.source_text_record()?.find_list(b"btdk")?.bytes()?)
     }
 
-    /// The Source Text property record: the `tdbs` in `btds[ADBE Text Document]` (a placeholder
-    /// in every sample: no keys, no expression). Source Text keyframes and expressions were not
-    /// sampled; a `list` (keys) or an expression in it marks them.
+    /// Every text document of a text layer, in order ([`TextDocument::parse_all`] of the first
+    /// `LIST btdk`): one per Source Text keyframe when the property is keyed, key `i` showing
+    /// document `i`; one for static text.
+    pub fn text_documents(&self) -> Vec<Option<TextDocument>> {
+        self.source_text_record().and_then(|r| r.find_list(b"btdk")).and_then(|b| b.bytes()).map_or_else(Vec::new, TextDocument::parse_all)
+    }
+
+    /// The Source Text property record: the `tdbs` in `btds[ADBE Text Document]`. When Source Text
+    /// is keyed, its key list holds the key times, and the documents are
+    /// [`Layer::text_documents`].
     pub fn source_text_property(&self) -> Option<Property<'f, 'a>> {
         Property::from_chunk(self.source_text_record()?.child_list(b"tdbs")?)
     }
 
-    /// The number of text documents (`LIST btdk`) in the Source Text record: 1 in every sample;
-    /// more would be one per Source Text keyframe (not sampled).
+    /// The number of `LIST btdk` in the Source Text record: 1 in every sample, keyed or not (the
+    /// documents of the keys are entries of that one list, see [`Layer::text_documents`]).
     pub fn text_document_count(&self) -> usize {
         self.source_text_record().map_or(0, |btds| btds.descendants().filter(|(_, c)| c.is_list(b"btdk")).count())
     }
