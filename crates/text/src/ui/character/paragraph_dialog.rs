@@ -370,6 +370,8 @@ const AT_DECIMALS: usize = 2;
 const SAMPLE_LINES: usize = 3;
 /// How many samples wide the preview is when its room is not known.
 const PREVIEW_SAMPLES: f32 = 6.0;
+/// The index of the OK button among the dialog's buttons.
+const OK: usize = 0;
 /// The index of the Tabs… button among the dialog's buttons.
 const TABS: usize = 2;
 /// The index of the Cancel button among the dialog's buttons.
@@ -912,6 +914,14 @@ impl StackDialog for ParagraphDialog {
             self.held.clear_refusal();
         }
         let tabs = shown.output.picked == Some(TABS);
+        // A held OK (or Tabs…) stays open: its pick files the answer, and only Cancel closes.
+        if self.hold && matches!(shown.output.picked, Some(OK | TABS)) {
+            if !valid.get() {
+                return None;
+            }
+            let answer = self.answer(tabs);
+            return self.settle(answer).map(DialogResult::Ok);
+        }
         match shown.output.result(|| tabs) {
             Some(DialogResult::Ok(open_tabs)) if valid.get() => {
                 let answer = self.answer(open_tabs);
