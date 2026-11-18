@@ -245,6 +245,7 @@ impl<C: Component> Edit for Cx<'_, C> {
         response.caret = self.core.texts.as_ref().and_then(|(_, text)| text.caret());
         response.unparsed = self.core.text_invalid;
         response.value_text = self.core.value_text.borrow().clone();
+        response.hover = self.core.hover();
         response.shown = match (&self.shown, self.mixed) {
             (_, true) => Some(Mixed::Mixed),
             (Some(value), false) => Some(Mixed::Same(Arc::clone(value))),
