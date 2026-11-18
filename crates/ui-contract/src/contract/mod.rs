@@ -80,7 +80,7 @@ pub use hosted::{Hosted, HostedKey, Hosting};
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
-pub use items::show_item;
+pub use items::{measure_item, show_item, show_item_in_flow};
 pub use items::{ColumnCommands, SweepApply, SweepStep, item_part_open, request_rename, section_part};
 #[doc(hidden)]
 pub use label::colon_of;
