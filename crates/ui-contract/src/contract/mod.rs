@@ -7,6 +7,7 @@ mod cx;
 pub(crate) mod editor;
 mod entry;
 mod faces;
+pub(crate) mod footer_slot;
 pub mod ghost;
 mod group;
 mod held;
@@ -72,10 +73,11 @@ pub use cx::{
     Accessible, Activation, BodyCx, Cx, CxCore, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
 };
 pub use entry::{Entry, step_stop, step_stops};
+#[doc(hidden)]
+pub use footer_slot::FooterSlot;
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
-#[doc(hidden)]
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;

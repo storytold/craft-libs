@@ -426,12 +426,17 @@ pub enum FooterPlace {
     EndBottom,
     /// At the top of the end region, above its content; otherwise as `EndBottom`.
     EndTop,
+    /// In the body, at the cell where the body shows a [`FooterSlot`](crate::contract::FooterSlot): the footer takes no
+    /// band of its own, and the slot is as large as the footer measured. The container still runs the footer, so its
+    /// controls stay the container's (a dialog's buttons, their keys and their order); the body only chooses where
+    /// they stand. The body shows exactly one slot.
+    Body,
 }
 
 impl FooterPlace {
     /// Whether the footer sits in the end region.
     pub const fn in_end(self) -> bool {
-        !matches!(self, FooterPlace::Across)
+        matches!(self, FooterPlace::EndBottom | FooterPlace::EndTop)
     }
 }
 
