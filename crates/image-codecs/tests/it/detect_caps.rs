@@ -278,11 +278,15 @@ fn jpeg_ls_file() -> (Image, Vec<u8>) {
     (img, bytes)
 }
 
-/// Grows a prefix of `bytes` as [`detect_prefix`] asks, starting from `first` bytes.
+/// Grows a prefix of `bytes` as a [`PrefixDetector`] asks, starting from `first` bytes, and checks
+/// each answer against [`detect_prefix`].
 fn detect_by_prefix(bytes: &[u8], first: usize) -> Detection {
+    let mut detector = PrefixDetector::new();
     let mut len = first.min(bytes.len());
     loop {
-        match detect_prefix(&bytes[..len]) {
+        let answer = detector.detect(&bytes[..len]);
+        assert_eq!(answer, detect_prefix(&bytes[..len]), "after {len} bytes");
+        match answer {
             Detection::NeedBytes(more) if len < bytes.len() => {
                 assert!(more > len, "{more} bytes asked for after {len}");
                 len = more.min(bytes.len());
