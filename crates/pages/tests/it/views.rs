@@ -12,6 +12,7 @@ use craft_pages::ui::{
 use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Role, Show as _};
 
+use craft_ui::primitives::textures::TextureStoreOptions;
 use craft_ui::primitives::{Draw, EditorPurpose};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -62,6 +63,39 @@ fn a_changed_zoom_keeps_the_page_at_the_top_in_place() {
     let third = rects.borrow()[2];
     let offset = state.borrow().offset.1;
     assert!((offset - (third.y0 + 0.4 * third.height())).abs() < 1.0, "offset {offset}, page {third:?}");
+}
+
+#[trial]
+fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
+    let budget = TextureStoreOptions::pages().budget.max_entries;
+    let count = 4 * budget;
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.continuous = true;
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+    })));
+    // The most pictures held and the most pages drawn in one pass.
+    let most = Rc::new(Cell::new((0_usize, 0_usize)));
+    let (kept, seen) = (Rc::clone(&state), Rc::clone(&most));
+    let pages = DemoPages::new(count);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let out = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT).show(ui, |_, _| ());
+        let (held, drawn) = seen.get();
+        seen.set((held.max(out.resident_pictures()), drawn.max(out.pages.len())));
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    for page in 0..count {
+        state.borrow_mut().go_to(page);
+        fixture.idle(2);
+    }
+    let (held, drawn) = most.get();
+    assert!(drawn > 0, "the view drew pages");
+    // The pages of the last two passes, in view and one row either side, are never evicted.
+    let bound = budget + 2 * (drawn + 2);
+    assert!(held > 0 && held <= bound, "{held} pictures held over {count} pages scrolled through, at most {bound} expected");
 }
 
 /// A wheel step of `lines` over the middle of the room.
