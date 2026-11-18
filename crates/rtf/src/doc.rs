@@ -27,9 +27,13 @@
 //! `\fldlock` locking it, and `\chpgn` is a `PAGE` field; otherwise a field is its result's text),
 //! bookmarks, pictures and
 //! tables, footnotes, endnotes (`\footnote` with `\ftnalt`) and comments (author, initials, date,
-//! text, the commented range). Group nesting, picture sizes and the number of notes and comments
-//! are capped. Not kept: custom note marks, comment replies (`\atnparent`), notes inside
-//! headers, footers and other notes, tables inside note and comment texts (flattened).
+//! text, the commented range), drawing shapes and text boxes (`\shp`: rectangles, ellipses,
+//! triangles, diamonds, block arrows and text boxes from `\shpinst`, with their place, wrapping,
+//! fill, outline and text; their `\shprslt` copy and the `\defshp` picture after them are
+//! skipped). Group nesting, picture sizes and the number of notes and comments are capped. Not
+//! kept: custom note marks, comment replies (`\atnparent`), notes inside headers, footers, text
+//! boxes and other notes, tables inside note and comment texts (flattened). Pictures, lines and
+//! shapes in a group (`\shpgrp`) are read from their `\shprslt` copy.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -44,6 +48,7 @@ mod export;
 mod field;
 mod parse;
 mod reader;
+mod shape;
 mod state;
 mod styles;
 mod text;
@@ -64,3 +69,5 @@ use word::hyperlink;
 mod tests;
 #[cfg(test)]
 mod tests_fields;
+#[cfg(test)]
+mod tests_shapes;
