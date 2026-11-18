@@ -1121,6 +1121,14 @@ mod native {
         !s.modern_overrides.iter().any(|(_, o)| o.name.eq_ignore_ascii_case(name))
     }
 
+    /// Whether a table style gets row cell styles: it lacks some and they all fit. The DWG reader
+    /// keeps only 64 cell styles per table style, so a style with no room for every missing row is
+    /// left exactly as it is (nothing added, nothing dropped) and the drawing still converts.
+    fn gets_rows(s: &acadrust::objects::TableStyle) -> bool {
+        let missing_rows = ROW_NAMES.iter().filter(|n| missing(s, n)).count();
+        missing_rows > 0 && s.modern_overrides.len().saturating_add(missing_rows) <= 64
+    }
+
     /// The lowest cell style id from 101 up to `max` that nothing in `held` holds; `None` when
     /// they are all held.
     fn free_id(held: &std::collections::HashSet<i32>, max: i32) -> Option<i32> {
@@ -1142,7 +1150,8 @@ mod native {
     /// HANDLING 0): it is numbered here, as the writer would number it later, so the row finds
     /// its style as it would there rather than falling to Standard. Other table entries without
     /// a handle are left for the writer, so the drawing's handle numbering stays the writer's
-    /// own. An `Err` means a style has no free cell style id (not possible short of two
+    /// own. A style with no room for all its missing rows (64 cell styles at most) is left as it
+    /// is. An `Err` means a style has no free cell style id (not possible short of two
     /// billion cell styles).
     fn table_style_row_margins(doc: &mut acadrust::CadDocument) -> Result<(), String> {
         table_style_row_margins_up_to(doc, i32::MAX)
@@ -1162,6 +1171,9 @@ mod native {
         let mut unnumbered: Vec<String> = Vec::new();
         for o in doc.objects.values() {
             let ObjectType::TableStyle(s) = o else { continue };
+            if !gets_rows(s) {
+                continue;
+            }
             let rows = [&s.title_row_style, &s.header_row_style, &s.data_row_style];
             for (name, row) in ROW_NAMES.iter().zip(rows) {
                 if !missing(s, name) {
@@ -1193,7 +1205,7 @@ mod native {
         };
         for o in doc.objects.values_mut() {
             let ObjectType::TableStyle(s) = o else { continue };
-            if !ROW_NAMES.iter().any(|n| missing(s, n)) {
+            if !gets_rows(s) {
                 continue;
             }
             let (v, hz) = (s.vertical_margin, s.horizontal_margin);
@@ -1260,11 +1272,6 @@ mod native {
             for (name, (id, style_type, merge_flags, row)) in ROW_NAMES.iter().zip(rows) {
                 if !missing(s, name) {
                     continue;
-                }
-                // The DWG reader keeps only 64 cell styles per table style, so a 65th would be
-                // dropped on the way back.
-                if s.modern_overrides.len() >= 64 {
-                    return Err(format!("table style {}: {name} would exceed the 64 cell styles a DWG keeps", s.name));
                 }
                 let id = if held.contains(&id) {
                     free_id(&held, max_id).ok_or_else(|| format!("table style {}: no free cell style id for {name}", s.name))?
@@ -1714,36 +1721,74 @@ mod native {
             assert!(table_style_row_margins_up_to(&mut doc, 102).is_ok());
         }
 
-        /// The DWG reader keeps only 64 cell styles per table style, so a row that would be the 65th
-        /// is an error and the style is left as it is: nothing is dropped on the way back. With room
-        /// for the row (63 styles) it is added.
+        /// The DWG reader keeps only 64 cell styles per table style, so a style with no room for
+        /// every missing row is left exactly as it is (no error, nothing added or dropped) and the
+        /// drawing still converts; one with room gets its rows. The decoded cell styles (ids and
+        /// names) are those expected, not only as many.
         #[test]
-        fn a_row_beyond_64_cell_styles_is_an_error_not_a_dropped_style() {
+        fn a_style_with_no_room_for_its_rows_is_left_as_it_is() {
             use acadrust::objects::{NamedTableCellStyle, ObjectType};
-            // `count` cell styles: _TITLE and _HEADER, then custom ones, and no _DATA.
-            let doc_with = |count: i32| {
+            // `names` as the style's cell styles, ids as given.
+            let doc_with = |names: &[(i32, String)]| {
                 let mut doc = acadrust::CadDocument::new();
                 doc.version = acadrust::DxfVersion::AC1032;
                 for o in doc.objects.values_mut() {
                     let ObjectType::TableStyle(s) = o else { continue };
-                    let named = |id: i32, name: String| (id, NamedTableCellStyle { id, name, ..NamedTableCellStyle::default() });
-                    s.modern_overrides = vec![named(1, "_TITLE".into()), named(2, "_HEADER".into())];
-                    s.modern_overrides.extend((0..count - 2).map(|i| named(101 + i, format!("Custom{i}"))));
+                    s.modern_overrides = names
+                        .iter()
+                        .map(|(id, name)| (*id, NamedTableCellStyle { id: *id, name: name.clone(), ..NamedTableCellStyle::default() }))
+                        .collect();
                 }
                 doc
             };
-            let counts = |doc: &acadrust::CadDocument| -> Vec<usize> {
-                doc.objects.values().filter_map(|o| if let ObjectType::TableStyle(s) = o { Some(s.modern_overrides.len()) } else { None }).collect()
+            // Every table style's cell styles as (id, name), sorted by id.
+            let styles = |doc: &acadrust::CadDocument| -> Vec<Vec<(i32, String)>> {
+                let mut all: Vec<Vec<(i32, String)>> = doc
+                    .objects
+                    .values()
+                    .filter_map(|o| if let ObjectType::TableStyle(s) = o { Some(s) } else { None })
+                    .map(|s| {
+                        let mut v: Vec<(i32, String)> = s.modern_overrides.iter().map(|(_, o)| (o.id, o.name.clone())).collect();
+                        v.sort();
+                        v
+                    })
+                    .collect();
+                all.sort();
+                all
             };
-            let mut full = doc_with(64);
-            let err = table_style_row_margins(&mut full).expect_err("a 65th cell style");
-            assert!(err.contains("64 cell styles"), "{err}");
-            assert!(counts(&full).iter().all(|&n| n == 64), "the style is left as it was");
-            assert!(counts(&through_dwg(&full)).iter().all(|&n| n == 64), "nothing is dropped on the round trip");
-            let mut room = doc_with(63);
-            table_style_row_margins(&mut room).expect("room for _DATA");
-            assert!(counts(&room).iter().all(|&n| n == 64));
-            assert!(counts(&through_dwg(&room)).iter().all(|&n| n == 64));
+            // _TITLE and _HEADER, then custom styles up to `count`; no _DATA.
+            let names = |count: i32| -> Vec<(i32, String)> {
+                let mut v = vec![(1, "_TITLE".to_string()), (2, "_HEADER".to_string())];
+                v.extend((0..count - 2).map(|i| (101 + i, format!("Custom{i}"))));
+                v
+            };
+            for (given, gets_data) in [(names(64), false), (names(63), true)] {
+                let mut doc = doc_with(&given);
+                let before = styles(&doc);
+                assert!(!before.is_empty(), "the drawing has a table style");
+                table_style_row_margins(&mut doc).expect("converts");
+                let mut expected = given.clone();
+                if gets_data {
+                    expected.push((3, "_DATA".to_string()));
+                }
+                expected.sort();
+                let after = styles(&doc);
+                assert!(after.iter().all(|s| *s == expected), "{} cell styles in: {after:?}", given.len());
+                if !gets_data {
+                    assert_eq!(after, before, "left as it is");
+                }
+                // The DWG keeps the same cell styles.
+                let decoded = styles(&through_dwg(&doc));
+                assert!(!decoded.is_empty() && decoded.iter().all(|s| *s == expected), "{} cell styles round trip: {decoded:?}", given.len());
+            }
+            // Two missing rows and room for one: all or nothing.
+            let mut given = names(64);
+            given.remove(1);
+            let mut doc = doc_with(&given);
+            table_style_row_margins(&mut doc).expect("converts");
+            let mut expected = given.clone();
+            expected.sort();
+            assert!(styles(&doc).iter().all(|s| *s == expected));
         }
 
         /// The DWG as the writer makes it from `doc`, read back.
