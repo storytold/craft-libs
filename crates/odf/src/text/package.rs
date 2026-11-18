@@ -1058,6 +1058,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     // Paragraphs kept as read name their own automatic styles: WordCraft's take another prefix.
     let kept = doc.kept.of("odt");
     let mut w = if kept.is_some() { Writer::with_prefix(KEPT_PREFIX) } else { Writer::default() };
+    w.stacking = super::frames::stacking(doc)?;
     w.note_numbers = Some([false, true].map(|endnote| {
         let o = doc.note_options(&doc.last_section, endnote);
         (o.num_fmt, o.num_start)
@@ -1186,6 +1187,7 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
     hw.reserved = std::sync::Arc::clone(&w.reserved);
+    hw.stacking = w.stacking;
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
     let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
@@ -1275,10 +1277,16 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         None => styles,
     };
     let (content, styles) = with_kept_defs(content, styles, &w.kept_used, &w.kept_defs);
+    // Choose the gap from everything actually written, including unknown retained
+    // drawings and master pages. Remapping modeled frames alone can alias an order
+    // present only in retained XML. Values are spliced without reserializing XML.
+    let orders = super::frames::read_orders(content.as_bytes(), Some(styles.as_bytes()))?;
+    let content = super::xml::remap_orders(content.as_bytes(), |raw| orders.file_order(raw))?;
+    let styles = super::xml::remap_orders(styles.as_bytes(), |raw| orders.file_order(raw))?;
     // The manifest lists every file already: the writer adds the files only.
     for (name, data) in [
-        ("content.xml", content.as_bytes()),
-        ("styles.xml", styles.as_bytes()),
+        ("content.xml", content.as_ref()),
+        ("styles.xml", styles.as_ref()),
         ("meta.xml", meta.as_bytes()),
         ("settings.xml", settings_xml(doc).as_bytes()),
     ] {
@@ -1583,32 +1591,8 @@ fn with_font_faces(xml: &str) -> String {
 /// A font family's generic family and pitch (§20.270, §20.271), from its name: monospaced
 /// families are `modern` and fixed, serif ones `roman`, the rest `swiss`.
 fn font_kind(family: &str) -> (&'static str, &'static str) {
-    let f = family.to_ascii_lowercase();
-    if model::is_mono(family) {
-        return ("modern", "fixed");
-    }
-    const SERIF: [&str; 16] = [
-        "serif",
-        "times",
-        "georgia",
-        "cambria",
-        "caladea",
-        "garamond",
-        "palatino",
-        "book",
-        "roman",
-        "libertine",
-        "minion",
-        "baskerville",
-        "bodoni",
-        "didot",
-        "charter",
-        "constantia",
-    ];
-    if SERIF.iter().any(|s| f.contains(s)) && !f.contains("sans") {
-        return ("roman", "variable");
-    }
-    ("swiss", "variable")
+    let generic = craft_wordmodel::font_kind::GenericFamily::of(family);
+    (generic.name(), if generic.fixed_pitch() { "fixed" } else { "variable" })
 }
 
 #[cfg(test)]

@@ -18,11 +18,7 @@ pub(super) fn uses_kind(blocks: &[FBlock], k: Kind, depth: usize) -> bool {
 // ---------------------------------------------------------------------------------------------
 // Document → Flow
 
-/// Is this a monospace family name?
-pub fn is_mono(font: &str) -> bool {
-    let f = font.to_ascii_lowercase();
-    f.contains("courier") || f.contains("mono") || f.contains("consolas") || f.contains("menlo") || f.contains("code") || f == "monaco"
-}
+pub use craft_wordmodel::font_kind::is_mono;
 
 fn is_code_style(doc: &Document, id: &str) -> bool {
     let names = |s: &str| {
@@ -201,7 +197,7 @@ fn para_extra(doc: &Document, p: &craft_wordmodel::props::ParaProps) -> Option<B
     let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = craft_wordmodel::props::ParaProps {
         tabs,
-        shading: p.shading,
+        shading: doc.styles.resolve_para(p).shading,
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),
@@ -436,10 +432,11 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
     }
 }
 
-/// The placement a flow keeps for a drawing: when it floats, or turns or mirrors it in line.
+/// Keep placement, transforms, and explicit stacking metadata even for inline drawings.
+/// Presence alone does not imply anchoring: the retained Float keeps its original wrap.
 fn kept_float(f: &craft_wordmodel::para::Float) -> Option<Box<craft_wordmodel::para::Float>> {
     let turned = f.rot.is_finite() && f.rot.rem_euclid(360.0) > 0.001 && f.rot.rem_euclid(360.0) < 359.999;
-    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v).then(|| Box::new(f.clone()))
+    (f.wrap != craft_wordmodel::para::Wrap::Inline || turned || f.flip_h || f.flip_v || f.z != 0).then(|| Box::new(f.clone()))
 }
 
 fn flow_comment(doc: &Document, c: &craft_wordmodel::Comment, parent: Option<u32>, opts: FlowOpts) -> FComment {
@@ -552,6 +549,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             if c == PAGE_BREAK {
                 if !hidden {
                     out.push_text(&std::mem::take(&mut buf), &f);
+                    let extra = out.extra.as_ref().and_then(|x| {
+                        let mut x = (**x).clone();
+                        x.drop_cap = None;
+                        x.drop_cap_distance = None;
+                        (x != craft_wordmodel::props::ParaProps::default()).then(|| Box::new(x))
+                    });
                     let next = Para {
                         kind,
                         list: None,
@@ -566,7 +569,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
-                        extra: None,
+                        extra,
                         mark: None,
                         kept: None,
                         wrap: None,
@@ -764,9 +767,14 @@ fn graphic_group(
         .iter()
         .take(10_000)
         .filter_map(|item| match item {
-            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width } if finite(rect) => {
+            GraphicItem::Shape { rect, kind, fill, stroke, stroke_width, alpha } if finite(rect) => {
                 let look = BoxLook {
-                    fill: fill.map(craft_wordmodel::fill::Fill::solid).filter(|_| *kind != ShapeKind::Line),
+                    fill: fill
+                        .map(|color| craft_wordmodel::fill::Fill::Solid {
+                            color,
+                            transparency: (1.0 - if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }) * 100.0,
+                        })
+                        .filter(|_| *kind != ShapeKind::Line),
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };
@@ -1106,6 +1114,9 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
         // Word. Only Repeat as header row makes it one then.
         let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
+        for _ in 0..r.first_grid() {
+            cells.push(Cell::default());
+        }
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
@@ -1151,6 +1162,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     Some(Box::new(crate::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
                 width: None,
+                vmerge_restart: c.props.vmerge == VMerge::Restart,
+                synthetic_covered: false,
             });
         }
         rows.push(cells);
@@ -1273,5 +1286,20 @@ impl ListCounter {
             1 => format!("{}.", craft_wordmodel::section::letters(n)),
             _ => format!("{}.", craft_wordmodel::section::roman(n)),
         }
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    #[test]
+    fn explicit_inline_stacking_preserves_wrap_without_creating_an_anchor() {
+        use craft_wordmodel::para::{Float, Wrap};
+        let f = Float { z: u32::MAX, ..Float::default() };
+        assert_eq!(f.wrap, Wrap::Inline);
+        let kept = super::kept_float(&f).unwrap();
+        assert_eq!(kept.wrap, Wrap::Inline);
+        assert_eq!(kept.z, u32::MAX);
+        assert_eq!(kept.rot, f.rot);
+        assert!(super::kept_float(&Float::default()).is_none());
     }
 }

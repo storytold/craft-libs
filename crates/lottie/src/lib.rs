@@ -30,7 +30,7 @@ mod prop;
 mod value;
 pub mod zip;
 
-pub use gradient::Gradient;
+pub use gradient::{Gradient, flat_gradient_values};
 pub use model::{Animated, Animation, Layer, LayerContent, Limits, Shape, ShapeKind};
 pub use path::Bezier;
 pub use prop::{Ease, Key, KeyOut, Prop, PropValue, Tangents, is_animated, read_prop, tangent, write_keys, write_prop};
