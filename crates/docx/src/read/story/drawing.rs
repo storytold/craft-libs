@@ -26,7 +26,7 @@ impl Reader<'_> {
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
             float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
-            let (px, py) = float.spin_pad(w, h);
+            let (px, py) = float.effect_spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
                     *e = (*e - p).clamp(0.0, 1584.0);
@@ -100,7 +100,7 @@ impl Reader<'_> {
         if let Some(f) = obj.float_mut() {
             // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
             f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
-            let (px, py) = f.spin_pad(w, h);
+            let (px, py) = f.effect_spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
                 if *e != 0.0 {
