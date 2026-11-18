@@ -224,7 +224,8 @@ pub struct Profile {
     pub b2a: [Option<Lut>; 3],
     /// The bytes this profile was parsed from (or encoded to), kept for byte-exact embedding.
     pub(crate) bytes: Option<Arc<Vec<u8>>>,
-    pub(crate) hash: std::sync::OnceLock<u64>,
+    /// Lazily computed content hash: a cache, not part of the profile's identity.
+    pub(crate) hash: HashCache,
 }
 
 impl Profile {
@@ -385,7 +386,7 @@ impl Profile {
     /// fixed-key 64-bit hash, so a crafted profile can share another's: equal hashes only narrow
     /// the search, [`Profile::same_bytes`] decides.
     pub fn content_hash(&self) -> u64 {
-        *self.hash.get_or_init(|| {
+        *self.hash.0.get_or_init(|| {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             self.to_bytes().hash(&mut h);
@@ -594,7 +595,7 @@ mod tests {
     /// `p` with the content hash of `other`: the hash is a fixed-key 64-bit SipHash, so a
     /// crafted profile can have another's (#8613). Setting it stands in for finding one.
     fn with_hash_of(p: &Profile, other: &Profile) -> Profile {
-        let p = Profile { hash: std::sync::OnceLock::from(other.content_hash()), ..p.clone() };
+        let p = Profile { hash: HashCache(std::sync::OnceLock::from(other.content_hash())), ..p.clone() };
         assert_eq!(p.content_hash(), other.content_hash());
         p
     }
@@ -631,5 +632,17 @@ mod tests {
         assert_eq!(eval(&cached(&p3, lab, opts).unwrap()), want);
         // Control: sRGB still gets its own transform after the colliding lookup.
         assert_eq!(eval(&cached(srgb, lab, opts).unwrap()), sr);
+    }
+}
+
+/// A profile's lazily computed content hash. Whether it has been computed yet depends on who asked
+/// first (a shared built-in profile is hashed by whichever caller runs first), so it never takes part
+/// in a profile's equality.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HashCache(std::sync::OnceLock<u64>);
+
+impl PartialEq for HashCache {
+    fn eq(&self, _: &Self) -> bool {
+        true
     }
 }
