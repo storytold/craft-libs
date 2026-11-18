@@ -684,6 +684,24 @@ fn spanning_cells_size_a_gridless_table_as_in_word() {
     );
     let Block::Table(t) = &*d.body[0] else { panic!() };
     assert_eq!(t.grid, vec![72.0, 72.0]);
+    // An empty `w:tblGrid` is a grid all the same: the columns keep their inch.
+    let d =
+        read_body(r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#);
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid, vec![72.0]);
+    // The narrowest column counts before a span shares out what it lacks: the span keeps its width.
+    let d = read_body(
+        r#"<w:tbl><w:tblPr/><w:tr><w:tc><w:tcPr><w:tcW w:w="10" w:type="dxa"/></w:tcPr><w:p/></w:tc><w:tc><w:p/></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>"#,
+    );
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid[0], 1.3);
+    assert!((t.grid.iter().sum::<f32>() - 100.0).abs() < 0.01, "{:?}", t.grid);
+    // A span cut off at the last column kept gives the rest to no other column.
+    let ones = tc(20, 1).repeat(62);
+    let d = read_body(&format!("<w:tbl><w:tblPr/><w:tr>{ones}{}</w:tr><w:tr>{ones}{}</w:tr></w:tbl><w:p/>", tc(50, 1), tc(300, 2)));
+    let Block::Table(t) = &*d.body[0] else { panic!() };
+    assert_eq!(t.grid.len(), 63);
+    assert_eq!(t.grid[62], 50.0);
 }
 
 #[test]

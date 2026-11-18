@@ -416,7 +416,8 @@ impl Reader<'_> {
             return None;
         }
         if table.grid.is_empty() {
-            table.grid = grid_from_cells(&table);
+            // A file with an empty `w:tblGrid` keeps the inch per column it always had.
+            table.grid = if t.child("w:tblGrid").is_none() { grid_from_cells(&table) } else { vec![72.0; table.cols().clamp(1, MAX_COLS)] };
         }
         // The cells' paragraphs, with the run formatting the table style gives each cell (a
         // table inside has marked its own).
@@ -458,6 +459,8 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
         for cell in &row.cells {
             let span = cell.span();
             if let Some(w) = cell.props.width.filter(|w| w.is_finite() && *w > 0.0) {
+                // The narrowest column counts before a span shares out what it lacks.
+                let w = w.max(MIN_GRID_COL);
                 if span == 1 {
                     if let Some(slot) = grid.get_mut(g) {
                         *slot = Some(slot.map_or(w, |cur| cur.max(w)));
@@ -471,7 +474,12 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
     }
     spanning.sort_by(|a: &(usize, usize, f32), b| (a.0 + a.1, a.0).cmp(&(b.0 + b.1, b.0)).then(a.2.total_cmp(&b.2)));
     for (g, span, w) in spanning {
-        let Some(cs) = grid.get_mut(g..(g + span).min(cols)) else { continue };
+        let end = (g + span).min(cols);
+        let Some(cs) = grid.get_mut(g..end) else { continue };
+        // A span cut off at the last column the reader keeps sizes only its kept columns, by
+        // their share of it, and has no last column to give the rest to.
+        let clipped = end < g + span;
+        let w = if clipped { w * cs.len() as f32 / span as f32 } else { w };
         let known: f32 = cs.iter().flatten().sum();
         let unknown = cs.iter().filter(|c| c.is_none()).count();
         if unknown > 0 {
@@ -482,6 +490,7 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
         }
         let lacking = w - cs.iter().flatten().sum::<f32>();
         if lacking > 0.0
+            && !clipped
             && let Some(Some(last)) = cs.last_mut()
         {
             *last += lacking;
