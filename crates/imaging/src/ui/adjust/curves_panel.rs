@@ -12,6 +12,7 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed};
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
     Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _,
     ShowContainer as _, Sizing, clicked,
@@ -24,8 +25,8 @@ use craft_ui::style::TypeRole;
 use egui::{Id, Response, Ui};
 
 use super::context::{read_shown, write_shown};
-use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
-use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveRules};
+use super::{AdjustContext, AdjustWords, LevelsClip, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
+use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveEnd, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
 /// The levels of a Curves value (8-bit tones) and the most points Photoshop allows.
@@ -118,6 +119,10 @@ pub struct CurvesPanelOutput {
     pub picker: Option<Option<TonePicker>>,
     /// The selected point of the shown curve after the pass.
     pub selected: Option<usize>,
+    /// Which end an Alt (Option) press or drag moves now (any press or drag with Show Clipping on), by its end point
+    /// or its input slider, for the host's clipping display: the one Levels reports for its input thumbs. `None`
+    /// otherwise.
+    pub clipping: Option<LevelsClip>,
 }
 
 impl Outcome for CurvesPanelOutput {
@@ -128,11 +133,13 @@ impl Outcome for CurvesPanelOutput {
     }
 }
 
-/// The panel's own state: the selected point of the shown channel and the channel it belongs to.
+/// The panel's own state: the selected point of the shown channel, the channel it belongs to, and the Show Clipping
+/// check box.
 #[derive(Clone, Debug, Default)]
 struct Shown {
     channel: usize,
     selected: Option<usize>,
+    show_clipping: bool,
 }
 
 type SamplerFn<'a> = Box<dyn Fn(&[[f32; 2]]) -> Vec<f32> + 'a>;
@@ -193,6 +200,10 @@ impl Fit {
 /// - **Smooth** replaces the shown map with its moving average over 7 levels (radius 3, shrunk at the ends so the
 ///   first and last levels keep their values: PhotoCraft's `smooth_curve_map`), as one `Set`.
 /// - **Mode icons** report [`CurvesPanelOutput::mode`]; the current mode's icon reports nothing.
+/// - **Clipping**: Alt held on the press or drag of the black or white end point, or of its input slider, reports
+///   [`CurvesPanelOutput::clipping`] for the host's clipping display, from the press on; it ends with the release or
+///   with Alt. With the **Show Clipping** check box on (the panel keeps it), the press or drag reports without Alt.
+///   Points mode only.
 /// - **Selection**: the selected point is the panel's own state ([`CurvesPanelOutput::selected`]); the host sets
 ///   it with [`select`](Self::select), after [`add_point_from_sample`](Self::add_point_from_sample).
 /// - **Sampling under the dialog**: with a [`canvas`](Self::canvas) the panel lets the ⌘/Ctrl-click on the image
@@ -357,6 +368,7 @@ impl<'a> CurvesPanel<'a> {
         let curve_channels: Vec<CurveChannel> = channels.as_slice().iter().map(|c| CurveChannel::new(c.label(&words), c.color())).collect();
         let (mut edit, mut mode, mut picker) = (EditEvents::new(), None, None);
         let mut selected = None;
+        let mut clipping = None;
         let mut shown_channel = 0;
         let fit = Fit::read(ui, fill_height);
         let stack = Stack::new().label(label).enabled(enabled);
@@ -421,6 +433,7 @@ impl<'a> CurvesPanel<'a> {
                 });
             }
             let mut smooth = false;
+            let mut show_clipping = state.show_clipping;
             Row::new().show(ui, |ui, _| {
                 for (target, icon, name) in
                     [(CurvesMode::Points, "spline", words.edit_points.clone()), (CurvesMode::Pencil, "pencil", words.draw_curve.clone())]
@@ -433,6 +446,11 @@ impl<'a> CurvesPanel<'a> {
                 }
                 let can_smooth = pencil && matches!(curve, Curve::Map(_));
                 smooth = clicked(&Button::new(words.smooth.clone()).enabled(can_smooth).tooltip(words.smooth_tip.clone()).show(ui));
+                Checkbox::new(Bind::bound(&mut show_clipping))
+                    .label(words.show_clipping.clone())
+                    .tooltip(words.show_clipping_tip.clone())
+                    .enabled(!pencil)
+                    .show(ui);
             });
 
             let selection = if picked == channel { select.or(kept_selection) } else { None };
@@ -445,6 +463,7 @@ impl<'a> CurvesPanel<'a> {
                 .levels(255)
                 .max_points(RULES.max_points)
                 .selection(selection)
+                .show_clipping(show_clipping)
                 .input_sliders();
             if pencil {
                 editor = editor.pencil();
@@ -460,6 +479,10 @@ impl<'a> CurvesPanel<'a> {
             }
             let shown = editor.show(ui);
             selected = shown.selected;
+            clipping = shown.clipping.map(|end| match end {
+                CurveEnd::Black => LevelsClip::Shadows,
+                _ => LevelsClip::Highlights,
+            });
             let mapped = |one: Curve| {
                 let mut next = value.clone();
                 if let Some(slot) = next.curves.get_mut(channel) {
@@ -480,9 +503,9 @@ impl<'a> CurvesPanel<'a> {
             shown_channel = if picked == channel || !edit.is_empty() { channel } else { picked };
             write_shown(&mut channel_bind, cx, stored, shown_channel);
             let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
-            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None } };
+            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None }, show_clipping };
         });
         fit.keep(ui, &group.output);
-        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
+        CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected, clipping }
     }
 }

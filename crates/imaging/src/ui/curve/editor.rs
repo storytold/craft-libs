@@ -1,7 +1,7 @@
 //! `CurveEditor`: a tone curve's graph with its points, the host's rows, the Input and Output fields of the selected
 //! point, the Corner check box and a hint line.
 
-use super::graph::{CurveChannel, CurveGraph, CurveGraphOutput, CurveSampler};
+use super::graph::{CurveChannel, CurveEnd, CurveGraph, CurveGraphOutput, CurveSampler};
 use super::model::{Curve, CurveRules};
 use super::words::CurveWords;
 use crate::ui::histogram::HistogramData;
@@ -36,6 +36,9 @@ pub struct CurveEditorOutput {
     pub edit: EditResponse<Curve>,
     /// The selected point after the pass; the host that keeps the selection stores it.
     pub selected: Option<usize>,
+    /// The end point an Alt (Option) press or drag moves this pass (any press or drag of it with Show Clipping on), by
+    /// its point or its input slider, for the host's clipping display; `None` otherwise.
+    pub clipping: Option<CurveEnd>,
 }
 
 impl Outcome for CurveEditorOutput {
@@ -150,6 +153,9 @@ pub struct CurveEditor<'a> {
     /// The selected point, kept by the host: the editor shows it and reports changes in the output.
     #[prop]
     selection: Option<Option<usize>>,
+    /// The clipping display shows while an end point moves without Alt held too: the Show Clipping check box.
+    #[prop]
+    show_clipping: bool,
     /// The host's rows between the graph and the fields.
     #[prop(func = "FnMut(&mut Ui, &mut BodyCx<'_>)")]
     between: Option<CurveRows<'a>>,
@@ -177,6 +183,7 @@ impl<'a> CurveEditor<'a> {
             histogram: None,
             overlays: &[],
             selection: None,
+            show_clipping: false,
             between: None,
         }
     }
@@ -208,11 +215,12 @@ impl<'a> CurveEditor<'a> {
             histogram,
             overlays,
             selection: host_selection,
+            show_clipping,
             mut between,
         } = self;
         let words = craft_ui::runtime::env::Env::of(ui).words::<CurveWords>();
         let rules = CurveRules { levels: levels as f32, max_points: max_points.max(2) };
-        let mut out: Option<(EditResponse<Curve>, Option<usize>)> = None;
+        let mut out: Option<(EditResponse<Curve>, Option<usize>, Option<CurveEnd>)> = None;
         let name = label.clone();
         let stack = Stack::new().label(label);
         // A graph whose height is set takes the width the editor's room has: the editor passes it on.
@@ -235,6 +243,7 @@ impl<'a> CurveEditor<'a> {
                 .levels(levels)
                 .max_points(max_points)
                 .bars(bars)
+                .show_clipping(show_clipping)
                 .overlays(overlays);
             if let Some(data) = histogram {
                 graph = graph.histogram(data);
@@ -260,7 +269,7 @@ impl<'a> CurveEditor<'a> {
             if percent {
                 graph = graph.percent();
             }
-            let CurveGraphOutput { mut edit, selected } = graph.show(ui);
+            let CurveGraphOutput { mut edit, selected, clipping } = graph.show(ui);
             if let Some(rows) = between.as_mut() {
                 (rows.0)(ui, root);
             }
@@ -280,11 +289,11 @@ impl<'a> CurveEditor<'a> {
             if let Some(hint) = &hint {
                 Text::new(hint.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
             }
-            out = Some((edit, selected));
+            out = Some((edit, selected, clipping));
         });
         // A parent's measuring run reuses what it measured and does not run the body.
-        let (edit, selected) = out.unwrap_or_else(|| (EditResponse::lifted(shown.output, EditEvents::new(), None), None));
-        CurveEditorOutput { edit, selected }
+        let (edit, selected, clipping) = out.unwrap_or_else(|| (EditResponse::lifted(shown.output, EditEvents::new(), None), None, None));
+        CurveEditorOutput { edit, selected, clipping }
     }
 }
 

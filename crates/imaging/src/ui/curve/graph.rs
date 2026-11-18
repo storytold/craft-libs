@@ -7,8 +7,8 @@ use crate::ui::histogram::{ChannelColor, HistogramData, HistogramInks, Histogram
 use craft_behavior::{HitLevel, HitPriority, Input, Metrics, Mixed, NavMove, PartKey, PointerButton, PressPhase, Sense};
 use craft_keymap::{Chord, Key, Mods};
 use craft_ui::contract::{
-    Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi, PartsCx,
-    Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
+    Access, Animate as _, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome, PaintUi,
+    PartsCx, Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::primitives::{ContentPainterCx, Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::access::Name;
@@ -19,6 +19,10 @@ use craft_ui::value_drag::{Thumb, ThumbRow, thumb_size};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 use std::ops::Deref;
 use std::rc::Rc;
+
+/// How long the clipping display stays after the last wheel turn on an end's input slider, in seconds: a turn of the
+/// wheel or a trackpad swipe arrives as a burst of events with short gaps, and the display holds across them.
+const WHEEL_CLIP_HOLD: f64 = 0.4;
 
 /// The plot of the graph: the area inside the border, where levels `0..=levels` map to.
 pub(super) const PLOT: PartKey = PartKey::new("plot");
@@ -353,6 +357,9 @@ pub struct CurveGraphOutput {
     pub edit: EditResponse<Curve>,
     /// The selected point after the pass.
     pub selected: Option<usize>,
+    /// The end point an Alt (Option) press or drag moves this pass (any press or drag of it with Show Clipping on), by
+    /// its point or its input slider, for the host's clipping display; `None` otherwise.
+    pub clipping: Option<CurveEnd>,
 }
 
 impl Outcome for CurveGraphOutput {
@@ -427,8 +434,13 @@ pub struct CurveGraph<'a> {
     /// The selected point.
     #[prop]
     selection: Option<usize>,
+    /// The clipping display shows while an end point moves without Alt held too: the Show Clipping check box.
+    #[prop]
+    show_clipping: bool,
     /// The selection after `update`, for the output.
     chosen: Option<usize>,
+    /// The end point an Alt press or drag moves this pass, for the output.
+    clip: Option<CurveEnd>,
 }
 
 impl<'a> CurveGraph<'a> {
@@ -451,7 +463,9 @@ impl<'a> CurveGraph<'a> {
             histogram: None,
             overlays: &[],
             selection: None,
+            show_clipping: false,
             chosen: None,
+            clip: None,
         }
         .label(label)
     }
@@ -637,6 +651,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        self.clip = None;
         let Some(mut curve) = cx.value().cloned() else {
             self.chosen = None;
             return;
@@ -741,6 +756,14 @@ impl Component for CurveGraph<'_> {
         if !dragging {
             selected = self.keys(cx, &rules, &mut curve, selected);
         }
+        // Alt (or Show Clipping) on the press or drag of an end point: the host shows what that end clips.
+        let last = curve.points().map_or(0, <[_]>::len).saturating_sub(1);
+        let clips = press.mods.alt || self.show_clipping;
+        self.clip = match held.drag.and_then(|drag| drag.index) {
+            Some(0) if clips => Some(CurveEnd::Black),
+            Some(i) if clips && i == last => Some(CurveEnd::White),
+            _ => None,
+        };
         *cx.memory::<Held>() = held;
         for chord in PLUS.into_iter().chain([MINUS]).chain(INSERT).chain(DELETE) {
             cx.claim(chord);
@@ -817,7 +840,7 @@ impl Component for CurveGraph<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CurveGraphOutput {
-        CurveGraphOutput { selected: self.chosen, edit: cx.edit_response() }
+        CurveGraphOutput { selected: self.chosen, clipping: self.clip, edit: cx.edit_response() }
     }
 }
 
@@ -839,7 +862,8 @@ fn point(draw: &Draw<'_>, style: &CurveGraphStyle, center: Pos2, smooth: bool, s
 
 impl CurveGraph<'_> {
     /// The black and white input sliders in `row`, at the inputs of `curve`'s end points: a slider's drag or key moves
-    /// its end point's input (the outputs stay) as the graph's own edit and selects that point.
+    /// its end point's input (the outputs stay) as the graph's own edit and selects that point; Alt (or Show Clipping) on a
+    /// slider's press or drag reports its end for the clipping display.
     fn input_sliders_row(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, row: Rect, curve: &Curve) {
         let Some(points) = curve.points() else { return };
         let (Some(first), Some(last)) = (points.first(), points.last()) else { return };
@@ -847,7 +871,8 @@ impl CurveGraph<'_> {
         let words = cx.words::<CurveWords>();
         let black = DataColor::new(Color32::from_gray(0));
         let white = DataColor::new(Color32::from_gray(u8::MAX));
-        let thumbs = [Thumb::new(words.black_input.clone()).face(black), Thumb::new(words.white_input.clone()).face(white)];
+        let thumbs =
+            [Thumb::new(words.black_input.clone()).face(black).alt_reports(), Thumb::new(words.white_input.clone()).face(white).alt_reports()];
         let sliders = ThumbRow::new(Bind::given(ends.map(Mixed::Same)), 0.0..=f64::from(self.levels))
             .step(1.0)
             .thumbs(thumbs)
@@ -870,6 +895,25 @@ impl CurveGraph<'_> {
         });
         if let Some(thumb) = shown.held.map(|held| held.thumb).or(moved) {
             self.chosen = Some(end(thumb));
+        }
+        if let Some(held) = shown.held.filter(|held| held.mods.alt || self.show_clipping) {
+            self.clip = Some(if held.thumb == 0 { CurveEnd::Black } else { CurveEnd::White });
+        }
+        // The wheel moves an end too. With Alt held (or Show Clipping on) its end reports while the wheel turns and
+        // for WHEEL_CLIP_HOLD after the last turn; letting Alt go ends it at once.
+        let wheel_key = cx.id.with(("wheel-clip", self.channel));
+        let now = cx.now();
+        if let Some(wheeled) = shown.wheeled {
+            cx.ctx.data_mut(|d| d.insert_temp(wheel_key, (now, wheeled.thumb)));
+        }
+        let alt = cx.ctx.input(|i| i.modifiers.alt);
+        if self.clip.is_none()
+            && (alt || self.show_clipping)
+            && let Some((at, thumb)) = cx.ctx.data(|d| d.get_temp::<(f64, usize)>(wheel_key))
+            && now - at < WHEEL_CLIP_HOLD
+        {
+            self.clip = Some(if thumb == 0 { CurveEnd::Black } else { CurveEnd::White });
+            cx.wake_at(at + WHEEL_CLIP_HOLD);
         }
     }
 
