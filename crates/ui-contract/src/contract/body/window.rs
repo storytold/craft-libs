@@ -449,6 +449,10 @@ impl BodyHooks<'_> {
             _ => return,
         };
         let Some(began) = self.mode.began else { return };
+        eprintln!(
+            "DIAG escape_during_a_pane_title_drag_cancels_it_and_reaches_nothing_else: began={began:?} core_rect={rect:?} current={:?}/{:?}",
+            current.pos, current.size
+        );
         let (dx, dy, _) = grip.map_or((0, 0, CursorIcon::Grab), |index| GRIPS[index]);
         let kind = if grip.is_some() { PlacementKind::Size(edge_of(dx, dy)) } else { PlacementKind::Move };
         let next = match pos {

@@ -794,6 +794,7 @@ fn show_floating<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(ui: &mut 
     // A cancelled move or resize (Escape) reports the rect from before the gesture: the app takes it back, as the
     // steps of the gesture moved its kept rect. A click on the title with no drag reports nothing.
     if let Some(change) = shown.placed {
+        eprintln!("DIAG escape_during_a_pane_title_drag_cancels_it_and_reaches_nothing_else: placed {:?} kind {:?} given {rect:?}", change.rect, change.kind);
         pass.sink.borrow_mut().push(PaneRequest::FloatRect(pane.pane.clone(), change.rect));
     }
     if shown.minimized_toggled {
