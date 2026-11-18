@@ -242,69 +242,87 @@ fn the_full_picker_keeps_photoshops_arrangement_in_every_room_density_and_theme(
     for look in LOOKS {
         let wide = full_picker(600.0, look, 2);
         let parts = FullParts::of(&wide, 2);
-        assert_eq!(FullParts::of(&full_picker(1200.0, look, 2), 2), parts, "{look:?}: the same arrangement in a room 1200 wide");
-        // A room narrower than the picker clips it: every part it shows stands where it stands in a wide room.
-        let inside = |rects: Vec<Rect>| rects.into_iter().filter(|r| r.right() <= 320.0).collect::<Vec<_>>();
-        let narrow = inside(fixture_parts(&full_picker(320.0, look, 2)));
-        assert!(!narrow.is_empty(), "{look:?}: a narrow room shows the picker's start");
-        assert_eq!(narrow, inside(fixture_parts(&wide)), "{look:?}: the same arrangement in a room 320 wide, clipped");
-        let FullParts { area, strip, block, current, new_caption, ref radios, ref fields, hex, hash, web, sample, ref warnings, ref units } = parts;
-
-        assert!(near(area.width(), area.height()), "{look:?}: the area is square: {area:?}");
-        assert!(near(strip.top(), area.top()) && near(strip.height(), area.height()), "{look:?}: the strip is as tall as the area: {strip:?}");
-        assert!(strip.left() >= area.right() - SLACK, "{look:?}: the strip stands after the area");
-
-        // The compare block: the current half is the lower of two halves of one block, wider than a control is high.
-        let control = fields[0].height();
-        assert!(current.width() > control, "{look:?}: the block is wider than one control: {current:?}");
-        assert!(2.0 * current.height() > current.width(), "{look:?}: two halves make it taller than wide: {current:?}");
-        assert!(near(block.top(), area.top()), "{look:?}: the new caption stands level with the area's top: {block:?} {area:?}");
-        assert!(new_caption.bottom() <= current.top() - current.height() + SLACK, "{look:?}: the new caption is over the new half");
-        let new_top = current.top() - current.height();
-        assert!(near(warnings[0].top(), new_top), "{look:?}: the first warning is level with the block's top: {:?}", warnings[0]);
-        assert!(warnings.iter().all(|w| w.left() >= current.right() - SLACK), "{look:?}: the warnings stand after the block");
-        assert!(warnings[0].bottom() <= warnings[1].top() + SLACK, "{look:?}: one warning under the other");
-        let without = FullParts::of(&full_picker(600.0, look, 0), 0);
-        assert_eq!(FullParts { warnings: warnings.clone(), ..without }, parts, "{look:?}: the warnings move no other part");
-
-        // Two groups: HSB and RGB at one x, Lab and OKLCH at another, starting on one row under the compare block.
-        let mut starts: Vec<f32> = Vec::new();
-        for field in fields {
-            if !starts.iter().any(|start| near(*start, field.left())) {
-                starts.push(field.left());
-            }
-        }
-        starts.sort_by(f32::total_cmp);
-        assert_eq!(starts.len(), 2, "{look:?}: the fields start in two groups: {fields:?}");
-        let group = |at: usize| fields.iter().filter(|f| near(f.left(), starts[at])).copied().collect::<Vec<_>>();
-        let (first, second) = (group(0), group(1));
-        let top = |rects: &[Rect]| rects.iter().map(|r| r.top()).fold(f32::MAX, f32::min);
-        assert!(near(top(&first), top(&second)), "{look:?}: the second group starts on the first group's first row");
-        assert!(top(fields) >= current.bottom(), "{look:?}: the groups start under the compare block");
-        for group in [&first, &second] {
-            assert!(group.iter().all(|f| near(f.width(), group[0].width())), "{look:?}: a group's fields share a width: {group:?}");
-            assert!(group[0].width() < hex.width(), "{look:?}: the fields are narrower than the hex field");
-        }
-        for unit in units {
-            assert!(
-                fields.iter().any(|f| near(f.center().y, unit.center().y) && unit.left() >= f.right() - SLACK),
-                "{look:?}: a unit stands after its field, outside it: {unit:?}"
-            );
-        }
-        let first_radio = radios.iter().map(|r| r.left()).fold(f32::MAX, f32::min);
-        assert!(hash.left() >= first_radio - SLACK && hash.right() <= first[0].left(), "{look:?}: the # stands in the radio column: {hash:?}");
-        assert!(hex.left() > hash.right() && hex.left() < first[0].left(), "{look:?}: the hex field starts in the letter column: {hex:?}");
-
-        assert!(web.top() >= area.bottom() && near(web.left(), area.left()), "{look:?}: Only Web Colors stands under the area at its start");
-        assert!(sample.left() > web.right() && near(sample.center().y, web.center().y), "{look:?}: the screen-pick button ends Only Web Colors' row");
-
-        let all = parts.all();
-        for (i, a) in all.iter().enumerate() {
-            for b in &all[i + 1..] {
+        the_arrangement_holds_in_other_rooms(look, &wide, &parts);
+        the_area_strip_and_compare_block_stand_as_in_photoshop(look, &parts);
+        the_field_groups_stand_under_the_compare_block(look, &parts);
+        the_hex_field_and_the_rows_under_the_area_stand_as_in_photoshop(look, &parts);
+        for (i, a) in parts.all().iter().enumerate() {
+            for b in &parts.all()[i + 1..] {
                 assert!(!overlap(*a, *b), "{look:?}: no two parts overlap: {a:?} {b:?}");
             }
         }
     }
+}
+
+type Look = (Size, &'static str);
+
+/// Wider and narrower rooms leave the arrangement alone, and the warnings move no other part.
+fn the_arrangement_holds_in_other_rooms(look: Look, wide: &Fixture, parts: &FullParts) {
+    assert_eq!(&FullParts::of(&full_picker(1200.0, look, 2), 2), parts, "{look:?}: the same arrangement in a room 1200 wide");
+    // A room narrower than the picker clips it: every part it shows stands where it stands in a wide room.
+    let inside = |rects: Vec<Rect>| rects.into_iter().filter(|r| r.right() <= 320.0).collect::<Vec<_>>();
+    let narrow = inside(fixture_parts(&full_picker(320.0, look, 2)));
+    assert!(!narrow.is_empty(), "{look:?}: a narrow room shows the picker's start");
+    assert_eq!(narrow, inside(fixture_parts(wide)), "{look:?}: the same arrangement in a room 320 wide, clipped");
+    let without = FullParts::of(&full_picker(600.0, look, 0), 0);
+    assert_eq!(&FullParts { warnings: parts.warnings.clone(), ..without }, parts, "{look:?}: the warnings move no other part");
+}
+
+fn the_area_strip_and_compare_block_stand_as_in_photoshop(look: Look, parts: &FullParts) {
+    let FullParts { area, strip, block, current, new_caption, ref fields, ref warnings, .. } = *parts;
+    assert!(near(area.width(), area.height()), "{look:?}: the area is square: {area:?}");
+    assert!(near(strip.top(), area.top()) && near(strip.height(), area.height()), "{look:?}: the strip is as tall as the area: {strip:?}");
+    assert!(strip.left() >= area.right() - SLACK, "{look:?}: the strip stands after the area");
+
+    // The compare block: the current half is the lower of two halves of one block, wider than a control is high.
+    let control = fields[0].height();
+    assert!(current.width() > control, "{look:?}: the block is wider than one control: {current:?}");
+    assert!(2.0 * current.height() > current.width(), "{look:?}: two halves make it taller than wide: {current:?}");
+    assert!(near(block.top(), area.top()), "{look:?}: the new caption stands level with the area's top: {block:?} {area:?}");
+    assert!(new_caption.bottom() <= current.top() - current.height() + SLACK, "{look:?}: the new caption is over the new half");
+    let new_top = current.top() - current.height();
+    assert!(near(warnings[0].top(), new_top), "{look:?}: the first warning is level with the block's top: {:?}", warnings[0]);
+    assert!(warnings.iter().all(|w| w.left() >= current.right() - SLACK), "{look:?}: the warnings stand after the block");
+    assert!(warnings[0].bottom() <= warnings[1].top() + SLACK, "{look:?}: one warning under the other");
+}
+
+/// Two groups: HSB and RGB at one x, Lab and OKLCH at another, starting on one row under the compare block.
+fn the_field_groups_stand_under_the_compare_block(look: Look, parts: &FullParts) {
+    let FullParts { current, ref fields, ref units, .. } = *parts;
+    let mut starts: Vec<f32> = Vec::new();
+    for field in fields {
+        if !starts.iter().any(|start| near(*start, field.left())) {
+            starts.push(field.left());
+        }
+    }
+    starts.sort_by(f32::total_cmp);
+    assert_eq!(starts.len(), 2, "{look:?}: the fields start in two groups: {fields:?}");
+    let group = |at: usize| fields.iter().filter(|f| near(f.left(), starts[at])).copied().collect::<Vec<_>>();
+    let (first, second) = (group(0), group(1));
+    let top = |rects: &[Rect]| rects.iter().map(|r| r.top()).fold(f32::MAX, f32::min);
+    assert!(near(top(&first), top(&second)), "{look:?}: the second group starts on the first group's first row");
+    assert!(top(fields) >= current.bottom(), "{look:?}: the groups start under the compare block");
+    for group in [&first, &second] {
+        assert!(group.iter().all(|f| near(f.width(), group[0].width())), "{look:?}: a group's fields share a width: {group:?}");
+        assert!(group[0].width() < parts.hex.width(), "{look:?}: the fields are narrower than the hex field");
+    }
+    for unit in units {
+        assert!(
+            fields.iter().any(|f| near(f.center().y, unit.center().y) && unit.left() >= f.right() - SLACK),
+            "{look:?}: a unit stands after its field, outside it: {unit:?}"
+        );
+    }
+}
+
+fn the_hex_field_and_the_rows_under_the_area_stand_as_in_photoshop(look: Look, parts: &FullParts) {
+    let FullParts { area, ref radios, ref fields, hex, hash, web, sample, .. } = *parts;
+    let first_left = fields.iter().map(|f| f.left()).fold(f32::MAX, f32::min);
+    let first_radio = radios.iter().map(|r| r.left()).fold(f32::MAX, f32::min);
+    assert!(hash.left() >= first_radio - SLACK && hash.right() <= first_left, "{look:?}: the # stands in the radio column: {hash:?}");
+    assert!(hex.left() > hash.right() && hex.left() < first_left, "{look:?}: the hex field starts in the letter column: {hex:?}");
+
+    assert!(web.top() >= area.bottom() && near(web.left(), area.left()), "{look:?}: Only Web Colors stands under the area at its start");
+    assert!(sample.left() > web.right() && near(sample.center().y, web.center().y), "{look:?}: the screen-pick button ends Only Web Colors' row");
 }
 
 /// The Color Picker dialog takes the picker's size, its buttons in the picker's actions cell over the second field

@@ -12,7 +12,7 @@ use crate::layout_components::Row;
 use crate::runtime::overlay::CloseReason;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::input::key_press;
-use crate::testing::relations::{apart_above, grows_with, inside, off_foot, same_column};
+use crate::testing::relations::{aligned_left, apart_above, grows_with, inside, off_foot, same_column};
 use crate::testing::{Fixture, Frames, trial};
 use crate::text::TextField;
 use craft_behavior::ColumnWidth;
@@ -320,9 +320,10 @@ fn body_buttons_stand_in_the_slot_the_body_keeps_and_keep_their_keys() {
         assert!(same_column(ok, button), "one column, one width: {ok:?} {button:?}");
     }
     assert!(ok.min.x >= snap.max.x, "the buttons head the second column, past the first: {ok:?} {snap:?}");
-    assert!((ok.min.x - rulers.min.x).abs() < 0.5, "the buttons start at the second column's edge: {ok:?} {rulers:?}");
+    assert!(aligned_left(ok, rulers), "the buttons start at the second column's edge: {ok:?} {rulers:?}");
     assert!(other.max.y <= rulers.min.y, "the buttons stand over the second column's controls: {other:?} {rulers:?}");
     assert!(inside(ok, dialog) && inside(other, dialog), "the buttons are inside the dialog");
     assert_eq!(run(Some(Key::Enter)).1, (Some(CloseReason::Activated), Some(2)), "Enter picks OK");
-    assert_eq!(run(Some(Key::Escape)).1.0, Some(CloseReason::Escape), "Escape cancels");
+    let (escaped, _) = run(Some(Key::Escape)).1;
+    assert_eq!(escaped, Some(CloseReason::Escape), "Escape cancels");
 }
