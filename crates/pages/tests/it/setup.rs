@@ -69,7 +69,21 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     assert!(!disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines and characters: both counts");
 
     let field = fixture.by_label("Characters per line").expect("the characters field");
+    let before = fixture.focused();
     fixture.click(&field).settle();
+    eprintln!(
+        "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: field rect={:?} role={:?} focus {before:?} -> {:?}",
+        field.rect,
+        fixture.tree().role_of(field.node),
+        fixture.focused()
+    );
+    for spin in fixture.by_role(craft_ui::runtime::access::Role::SPIN_BUTTON) {
+        eprintln!(
+            "DIAG the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason: spin {:?} name={:?}",
+            spin.rect,
+            fixture.tree().name_of(spin.node)
+        );
+    }
     fixture.key(Key::A, Modifiers::COMMAND).type_text("5000");
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     let ok = fixture.by_label("OK").expect("the OK button");
