@@ -228,6 +228,13 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         }
         shown
     };
+    // A multi-line text taller than its part scrolls inside it: the part is the view, and the text, which the clip
+    // above cuts to the view, the content (S-L186: the text adapter owns the offset).
+    if multiline && galley.is_none() && output.response.rect.height() > rect.height() {
+        let text_rect = egui::Rect::from_min_size(output.galley_pos, output.galley.rect.size());
+        let content = placed.union(output.response.rect).union(text_rect);
+        super::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
+    }
     let focused = output.response.has_focus();
     let caret = output.cursor_range.map(|range| {
         let at = output.galley.pos_from_cursor(range.primary);
