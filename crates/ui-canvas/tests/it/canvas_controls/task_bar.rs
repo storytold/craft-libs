@@ -134,3 +134,34 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     let far = seen(&scene);
     assert!(inside_area(&far), "a place far outside comes back inside {:?}: {:?}", far.area, far.rect);
 }
+
+/// The grip is one of the bar's members: it sits on the members' line, centred with them, inside the bar's padding,
+/// and a drag on it still moves the bar.
+#[trial]
+fn the_grip_sits_on_the_members_line() {
+    let scene = Rc::new(RefCell::new(Scene {
+        anchor: frame(DocVec::ZERO),
+        place: TaskBarPlace::default(),
+        bounds: Rect::NOTHING,
+        area: Rect::NOTHING,
+        rect: Rect::NOTHING,
+    }));
+    let mut fixture = fixture(&scene);
+    fixture.settle();
+    let bar = seen(&scene).rect;
+    let grip = fixture.by_label("Move bar").expect("the grip is named");
+    let done = fixture.by_label("Done").expect("the bar shows its member");
+    assert!(
+        (grip.center().y - done.center().y).abs() < SLACK,
+        "the grip is centred on the members' line: grip {:?}, member {:?}",
+        grip.rect,
+        done.rect
+    );
+    assert!(grip.rect.top() > bar.top() + SLACK, "the grip keeps the bar's padding above it: grip {:?}, bar {bar:?}", grip.rect);
+    assert!(grip.rect.left() > bar.left() + SLACK, "the grip keeps the bar's padding before it: grip {:?}, bar {bar:?}", grip.rect);
+
+    let by = Vec2::new(-80.0, 40.0);
+    fixture.drag(&grip, by).settle();
+    let dropped = seen(&scene);
+    assert!((dropped.rect.min - (bar.min + by)).length() < 2.0 * SLACK, "a drag on the grip moves the bar: {:?}", dropped.rect);
+}
