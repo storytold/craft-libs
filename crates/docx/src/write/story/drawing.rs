@@ -130,24 +130,7 @@ impl Writer<'_> {
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
-            None => {
-                w.open("a:prstGeom", &[("prst", prst)]);
-                let adj = match kind {
-                    ShapeKind::RoundedRectangle => Some("adj"),
-                    ShapeKind::Frame => Some("adj1"),
-                    _ => None,
-                };
-                match adj.zip(extra.corner) {
-                    Some((name, c)) => {
-                        w.open("a:avLst", &[]);
-                        let fmla = format!("val {}", c.min(craft_wordmodel::connector::MAX_CORNER));
-                        w.empty("a:gd", &[("name", name), ("fmla", &fmla)]);
-                        w.close("a:avLst");
-                    }
-                    None => w.empty("a:avLst", &[]),
-                }
-                w.close("a:prstGeom");
-            }
+            None => prst_geom(w, *kind, prst, extra),
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
@@ -375,6 +358,47 @@ pub(super) fn shape_name(kind: ShapeKind, freeform: Option<&craft_wordmodel::fre
 
 /// A freeform's geometry as DrawingML custom geometry (`a:custGeom`): each path in EMUs of its
 /// own coordinate space (the shape's size when it has none), from `a:moveTo` along `a:lnTo`.
+/// `a:prstGeom` for preset `prst`: with a rounded rectangle's corner or a frame's border width, or
+/// an elbow's or curve's preset and adjust values as they were read.
+fn prst_geom(w: &mut W, kind: ShapeKind, prst: &str, extra: &craft_wordmodel::connector::ShapeExtra) {
+    // Normalized: a document's geometry didn't necessarily come through `ConnectorGeom::new`.
+    let connector =
+        extra.connector.as_ref().filter(|_| matches!(kind, ShapeKind::ElbowConnector | ShapeKind::CurvedConnector)).and_then(|c| c.normalized());
+    let connector = connector.as_ref();
+    let named;
+    let prst = match connector {
+        Some(c) => {
+            named = format!("{}{}", if kind == ShapeKind::ElbowConnector { "bentConnector" } else { "curvedConnector" }, c.preset.clamp(2, 5));
+            named.as_str()
+        }
+        None => prst,
+    };
+    w.open("a:prstGeom", &[("prst", prst)]);
+    let corner = match kind {
+        ShapeKind::RoundedRectangle => Some("adj"),
+        ShapeKind::Frame => Some("adj1"),
+        _ => None,
+    };
+    match (corner.zip(extra.corner), connector) {
+        (Some((name, c)), _) => {
+            w.open("a:avLst", &[]);
+            let fmla = format!("val {}", c.min(craft_wordmodel::connector::MAX_CORNER));
+            w.empty("a:gd", &[("name", name), ("fmla", &fmla)]);
+            w.close("a:avLst");
+        }
+        (None, Some(c)) if !c.adj.is_empty() => {
+            w.open("a:avLst", &[]);
+            for (k, v) in c.adj.iter().enumerate() {
+                let (name, fmla) = (format!("adj{}", k + 1), format!("val {v}"));
+                w.empty("a:gd", &[("name", &name), ("fmla", &fmla)]);
+            }
+            w.close("a:avLst");
+        }
+        _ => w.empty("a:avLst", &[]),
+    }
+    w.close("a:prstGeom");
+}
+
 fn cust_geom(w: &mut W, f: &craft_wordmodel::freeform::Freeform, sw: f32, sh: f32) {
     let (pw, ph) = (if f.w > 0.0 { f.w } else { sw.max(0.0) }, if f.h > 0.0 { f.h } else { sh.max(0.0) });
     w.open("a:custGeom", &[]);
