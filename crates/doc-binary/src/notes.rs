@@ -31,8 +31,9 @@ pub(crate) fn parse_notes(table: &[u8], fib: &crate::fib::Fib, ref_pair: usize, 
     }
     let mut out = Vec::new();
     let mut kept_to = 0u32;
-    // The reference PLC's aFtnIdx order matches the story order; pair them by index.
-    for (i, &cp) in refs.iter().enumerate() {
+    // The reference PLC's aFtnIdx order matches the story order; pair them by index. Its last
+    // CP is its limit, which has no FRD and is no note.
+    for (i, &cp) in refs.iter().take(refs.len().saturating_sub(1)).enumerate() {
         if let (Some(&a), Some(&b)) = (txts.get(i), txts.get(i + 1))
             && b > a
             && a >= kept_to
