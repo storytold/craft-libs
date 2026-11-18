@@ -67,9 +67,14 @@ pub(crate) struct Output {
     pub caret: Rect,
     /// Interrupt the OS composition and ask for a reset.
     pub interrupt: bool,
-    /// Changes when the owner changes.
+    /// The context generation the tracker gave the owner: it changes when the owner, its epoch, its focus or its
+    /// purpose changes, and stays for ordinary edits.
     pub generation: u64,
     pub password: bool,
+    /// The bounded committed text around the caret, or `Unavailable`.
+    pub surrounding: egui::output::IMESurroundingText,
+    /// Whether the input method made the change to `surrounding`, as the tracker proved it from the receipts.
+    pub cause: egui::output::ImeChangeCause,
 }
 
 /// Writes the pass's IME output; egui reads it only when it is `Some` at the end of the pass. Returns the reset
@@ -86,6 +91,8 @@ pub(crate) fn write(ctx: &Context, viewport: ViewportId, out: Output) -> Option<
         );
         ime.should_interrupt_composition = out.interrupt;
         ime.reset_request = reset;
+        ime.surrounding_text = out.surrounding;
+        ime.change_cause = out.cause;
         output.ime = Some(ime);
     });
     reset

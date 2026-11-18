@@ -2,29 +2,43 @@
 //! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
 
 use craft_behavior::{EditorInput, PartKey, Sense, TextPos};
-use craft_ui::contract::{Common, Component, Cx, PaintUi, PartsCx, Props as _, Role, Show as _};
-use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState};
+use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
+use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
 use craft_ui::runtime::focus::KeyUse;
+use craft_ui::runtime::frame::discard_pass;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{click, moved, press, release};
+use craft_ui::testing::text::ImeSeen;
 use craft_ui::testing::{Frames, trial};
-use craft_ui_test_kit::contract::PlainStyle;
+use craft_ui_test_kit::contract::{PlainStyle, Probe as Button, Seen};
+use egui::output::{IMESurroundingText, ImeChangeCause};
 use egui::{Event, Id, ImeEvent, Key, Modifiers, Pos2, Rect, Response};
 use std::cell::{Cell, RefCell};
 
 const AT: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(210.0, 90.0) };
+/// Where the control after the probe sits, for the trials that Tab away from it.
+const NEXT: Rect = Rect { min: Pos2::new(10.0, 110.0), max: Pos2::new(90.0, 130.0) };
 const TEXT: &str = "fn main";
 const EDITOR: PartKey = PartKey::new("editor");
 
-/// An editor that keeps no text: it logs the inputs it receives and, while `report` is set, reports `TEXT` as its one
-/// line.
+/// An editor that logs the inputs it receives and, while `report` is set, reports its one line: `TEXT`, or the text
+/// of its `doc` when it keeps one.
 #[derive(craft_ui::contract::Component)]
 struct Probe<'a> {
     #[common]
     common: Common,
     log: &'a RefCell<Vec<EditorInput>>,
     report: bool,
+    purpose: EditorPurpose,
+    doc: Option<&'a Doc>,
+}
+
+impl<'a> Probe<'a> {
+    /// A code editor that logs into `log` and keeps no text.
+    fn new(log: &'a RefCell<Vec<EditorInput>>, report: bool) -> Self {
+        Probe { common: Common::new(), log, report, purpose: EditorPurpose::Code, doc: None }
+    }
 }
 
 impl Component for Probe<'_> {
@@ -38,34 +52,146 @@ impl Component for Probe<'_> {
         PlainStyle::default()
     }
 
+    fn keys(&self) -> KeyUse {
+        // A prose field leaves Tab to the focus order, so Tab can take the keyboard away from it.
+        if self.purpose == EditorPurpose::Code { KeyUse::CODE } else { KeyUse::of(craft_ui::contract::Input::Editor) }
+    }
+
     fn sense(&self) -> Sense {
         Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.editor(EDITOR, rect, EditorPurpose::Code);
+        cx.editor(EDITOR, rect, self.purpose);
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        self.log.borrow_mut().extend(cx.editor_input());
+        let inputs: Vec<EditorInput> = cx.editor_input().collect();
+        if let Some(doc) = self.doc {
+            doc.apply(cx, &inputs);
+        }
+        self.log.borrow_mut().extend(inputs);
     }
 
     fn paint(&mut self, _: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         if !self.report {
             return;
         }
-        let positions: Vec<f32> = (0..TEXT.len()).map(|at| at as f32 * 8.0).collect();
-        let widths = vec![8.0; TEXT.len()];
-        let runs = [EditorRun::new(0..TEXT.len(), false, &positions, &widths)];
+        let text = self.doc.map(|doc| doc.text.borrow());
+        let shown = text.as_deref().map_or(TEXT, String::as_str);
+        let positions: Vec<f32> = (0..shown.len()).map(|at| at as f32 * 8.0).collect();
+        let widths = vec![8.0; shown.len()];
+        let runs = [EditorRun::new(0..shown.len(), false, &positions, &widths)];
         let line = Rect::from_min_size(cx.content_rect.min, egui::vec2(cx.content_rect.width(), 16.0));
-        let lines = [EditorLine::new(TEXT, line, line.bottom(), &runs)];
-        let end = TextPos::new(0, TEXT.len());
-        let caret = Rect::from_min_size(line.min + egui::vec2(TEXT.len() as f32 * 8.0, 0.0), egui::vec2(0.0, 16.0));
-        cx.editor_state(EditorState::new(caret, &lines, end));
+        let lines = [EditorLine::new(shown, line, line.bottom(), &runs)];
+        let end = TextPos::new(0, shown.len());
+        let caret = Rect::from_min_size(line.min + egui::vec2(shown.len() as f32 * 8.0, 0.0), egui::vec2(0.0, 16.0));
+        let mut state = EditorState::new(caret, &lines, end);
+        let Some(doc) = self.doc else {
+            cx.editor_state(state);
+            return;
+        };
+        state.composing = doc.composing.get();
+        if let Some(epoch) = doc.epoch.get() {
+            state = state.surrounding(epoch, EditorSurrounding::Text { text: shown, cursor: shown.len(), anchor: shown.len() });
+        }
+        match cx.editor_handle().filter(|_| doc.body.get()) {
+            Some(handle) => body(&handle, &cx.response.ctx, state),
+            None => cx.editor_state(state),
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
+    }
+}
+
+/// A body inside the probe that has the editor handle and the context but no `Cx`, as a canvas tool's body does.
+fn body(handle: &EditorHandle, ctx: &egui::Context, state: EditorState<'_>) {
+    handle.report(ctx, state);
+}
+
+/// The committed text of a probe that keeps one, and how the probe reports it.
+#[derive(Default)]
+struct Doc {
+    /// The committed text; IME commits and typing append to it.
+    text: RefCell<String>,
+    /// The epoch of the input-method target the text is reported at; `None` reports no surrounding text.
+    epoch: Cell<Option<u64>>,
+    /// The probe shows marked text: a preedit started it, a commit or a press in the text ends it.
+    composing: Cell<bool>,
+    /// The probe reports from a body through `EditorHandle::report` rather than through `Cx::editor_state`.
+    body: Cell<bool>,
+    /// The probe discards the next pass it runs, so its frame runs a second pass.
+    discard: Cell<bool>,
+    /// What each IME receipt the probe noted answered.
+    receipts: RefCell<Vec<bool>>,
+}
+
+impl Doc {
+    fn new(text: &str, epoch: Option<u64>) -> Doc {
+        Doc { text: RefCell::new(text.to_owned()), epoch: Cell::new(epoch), ..Doc::default() }
+    }
+
+    /// Applies the pass's inputs: text after an `ImeCommit` is the input method's and notes a receipt, any other text
+    /// is the application's.
+    fn apply<C: Component>(&self, cx: &Cx<'_, C>, inputs: &[EditorInput]) {
+        let mut by_ime = false;
+        for input in inputs {
+            match input {
+                EditorInput::Preedit { text, .. } => self.composing.set(!text.is_empty()),
+                EditorInput::ImeCommit => {
+                    by_ime = true;
+                    self.composing.set(false);
+                }
+                EditorInput::Text(typed) => {
+                    let mut text = self.text.borrow_mut();
+                    let before = stamp(&text);
+                    text.push_str(typed);
+                    let after = stamp(&text);
+                    if std::mem::take(&mut by_ime) {
+                        self.receipts.borrow_mut().push(cx.ime_receipt(before, after));
+                    } else {
+                        cx.ime_application_change();
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A press in the text moves the caret, which ends the marked text the probe shows.
+        if cx.response.clicked() {
+            self.composing.set(false);
+        }
+        if self.discard.take() {
+            discard_pass(&cx.response.ctx, "trial");
+        }
+    }
+}
+
+/// The receipt stamp of `text` with the caret at its end, where the probe reports it.
+fn stamp(text: &str) -> ImeStamp {
+    ImeStamp::from_committed(text, text.len(), text.len(), None)
+}
+
+/// What one frame of the rig shows, borrowed from the rig apart from its frames.
+#[derive(Clone, Copy)]
+struct View<'r> {
+    log: &'r RefCell<Vec<EditorInput>>,
+    id: &'r Cell<Id>,
+    read_only: bool,
+    purpose: EditorPurpose,
+    doc: Option<&'r Doc>,
+    next: Option<&'r RefCell<Seen>>,
+}
+
+impl View<'_> {
+    fn show(self, ui: &mut egui::Ui) {
+        let probe = Probe { purpose: self.purpose, doc: self.doc, ..Probe::new(self.log, true) };
+        let response = probe.label("Source").read_only(self.read_only).id_salt("code").show_at(ui, AT);
+        self.id.set(response.id);
+        if let Some(seen) = self.next {
+            let _ = Button::new(seen).id_salt("next").show_at(ui, NEXT);
+        }
     }
 }
 
@@ -74,26 +200,76 @@ struct Rig {
     log: RefCell<Vec<EditorInput>>,
     id: Cell<Id>,
     read_only: bool,
+    purpose: EditorPurpose,
+    doc: Option<Doc>,
+    /// The control after the probe that Tab takes the keyboard to, when the rig shows one.
+    next: Option<RefCell<Seen>>,
 }
 
 impl Rig {
     fn new() -> Rig {
-        let mut rig = Rig { frames: Frames::new(), log: RefCell::new(Vec::new()), id: Cell::new(Id::NULL), read_only: false };
+        Rig::with(EditorPurpose::Code, None, false)
+    }
+
+    /// A rig whose probe edits `purpose`, keeps `doc` and, with `next`, has a control after it.
+    fn with(purpose: EditorPurpose, doc: Option<Doc>, next: bool) -> Rig {
+        let mut rig = Rig {
+            frames: Frames::new(),
+            log: RefCell::new(Vec::new()),
+            id: Cell::new(Id::NULL),
+            read_only: false,
+            purpose,
+            doc,
+            next: next.then(|| RefCell::new(Seen::default())),
+        };
         for _ in 0..3 {
             rig.frame(Vec::new());
         }
         rig
     }
 
-    fn frame(&mut self, events: Vec<Event>) {
-        let (log, id, read_only) = (&self.log, &self.id, self.read_only);
-        self.frames.frame(events, |ui| show(ui, log, id, read_only));
+    /// A frame with `events`; returns the passes it ran.
+    fn frame(&mut self, events: Vec<Event>) -> usize {
+        let view = View {
+            log: &self.log,
+            id: &self.id,
+            read_only: self.read_only,
+            purpose: self.purpose,
+            doc: self.doc.as_ref(),
+            next: self.next.as_ref(),
+        };
+        self.frames.frame(events, |ui| view.show(ui))
     }
 
     fn focus(&mut self) {
-        let (log, id, read_only) = (&self.log, &self.id, self.read_only);
-        click(&mut self.frames, AT.center(), &mut |ui| show(ui, log, id, read_only));
+        let view = View {
+            log: &self.log,
+            id: &self.id,
+            read_only: self.read_only,
+            purpose: self.purpose,
+            doc: self.doc.as_ref(),
+            next: self.next.as_ref(),
+        };
+        click(&mut self.frames, AT.center(), &mut |ui| view.show(ui));
         self.log.borrow_mut().clear();
+    }
+
+    fn doc(&self) -> &Doc {
+        self.doc.as_ref().expect("the rig's probe keeps a text")
+    }
+
+    /// The IME output of the last frame, which a focused probe always writes.
+    fn ime(&self) -> ImeSeen {
+        self.frames.ime().cloned().expect("the focused editor writes the IME output")
+    }
+
+    /// Whether the last frame reset the input method as egui-winit counts it: the IME coming back on, or an
+    /// interrupt while it is on. `on` is whether it was on, and becomes whether it is.
+    fn resets_ime(&self, on: &mut bool) -> bool {
+        let ime = self.frames.ime();
+        let reset = ime.is_some_and(|ime| !*on || ime.interrupt);
+        *on = ime.is_some();
+        reset
     }
 
     fn take(&self) -> Vec<EditorInput> {
@@ -110,11 +286,6 @@ impl Rig {
     fn click_resets(&mut self, at: Pos2) -> Vec<egui::ImeResetId> {
         [vec![moved(at)], vec![press(at)], vec![release(at)], Vec::new()].into_iter().filter_map(|events| self.frame_reset(events)).collect()
     }
-}
-
-fn show(ui: &mut egui::Ui, log: &RefCell<Vec<EditorInput>>, id: &Cell<Id>, read_only: bool) {
-    let response = Probe { common: Common::new(), log, report: true }.label("Source").read_only(read_only).id_salt("code").show_at(ui, AT);
-    id.set(response.id);
 }
 
 /// Text, Backspace, Tab and Enter reach an editor as one input stream in the order they were typed; a read-only
@@ -188,8 +359,8 @@ fn a_reset_the_integration_retires_is_asked_again() {
     let (first, second) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
     let report = Cell::new(true);
     let mut ui = |ui: &mut egui::Ui| {
-        Probe { common: Common::new(), log: &first, report: true }.label("First").id_salt("first").show_at(ui, AT);
-        Probe { common: Common::new(), log: &second, report: report.get() }.label("Second").id_salt("second").show_at(ui, OTHER);
+        Probe::new(&first, true).label("First").id_salt("first").show_at(ui, AT);
+        Probe::new(&second, report.get()).label("Second").id_salt("second").show_at(ui, OTHER);
     };
     let mut frames = Frames::new();
     click(&mut frames, AT.center(), &mut ui);
@@ -223,3 +394,153 @@ fn a_reset_the_integration_retires_is_asked_again() {
         "the new request's completion gives the new editor its IME: {inputs:?}"
     );
 }
+
+fn commit(text: &str) -> Event {
+    Event::Ime(ImeEvent::Commit(text.to_owned()))
+}
+
+/// The surrounding text of an IME output with its cursor and anchor; `None` when it is unavailable.
+fn window(seen: &ImeSeen) -> Option<(String, usize, usize)> {
+    seen.surrounding.available().map(|payload| (payload.text.clone(), payload.cursor, payload.anchor))
+}
+
+/// The editor that owns the IME publishes its committed text around the caret with the cursor and anchor offsets. A
+/// commit the editor applies with a receipt is the input method's change, also in a frame that runs a second pass,
+/// which gets no input and notes no receipt; typing is the application's. Edits keep the context, a new epoch starts
+/// a new one, and an owner that reports no surrounding text publishes none.
+#[trial]
+fn an_editors_surrounding_text_and_receipts_reach_the_ime_output() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, Some(1))), false);
+    rig.focus();
+    rig.frame(Vec::new());
+    let seen = rig.ime();
+    assert_eq!(window(&seen), Some((TEXT.to_owned(), 7, 7)), "the owner's text and caret reach the output");
+    let generation = seen.generation;
+
+    rig.doc().discard.set(true);
+    assert_eq!(rig.frame(vec![commit("(")]), 2, "the commit's frame runs a second pass");
+    assert_eq!(*rig.doc().receipts.borrow(), [true], "the first pass's receipt continues the observed text; the second notes none");
+    let seen = rig.ime();
+    assert_eq!(window(&seen), Some(("fn main(".to_owned(), 8, 8)));
+    assert_eq!(seen.cause, ImeChangeCause::InputMethod, "the receipt proves the input method's change");
+    assert_eq!(seen.generation, generation, "an edit keeps the context");
+
+    rig.frame(vec![Event::Text(")".into())]);
+    let seen = rig.ime();
+    assert_eq!(window(&seen), Some(("fn main()".to_owned(), 9, 9)));
+    assert_eq!(seen.cause, ImeChangeCause::Other, "typing is the application's change");
+    assert_eq!(seen.generation, generation, "typing keeps the context");
+
+    rig.doc().epoch.set(Some(2));
+    rig.frame(Vec::new());
+    let seen = rig.ime();
+    assert_ne!(seen.generation, generation, "a new epoch starts a new context");
+    assert_eq!(window(&seen), Some(("fn main()".to_owned(), 9, 9)));
+
+    let second = seen.generation;
+    rig.doc().epoch.set(None);
+    rig.frame(Vec::new());
+    let seen = rig.ime();
+    assert_eq!(seen.surrounding, IMESurroundingText::Unavailable, "an owner that reports nothing publishes no text");
+    assert_eq!(seen.generation, second, "a pass with no report keeps the target's epoch, so the context stays");
+}
+
+/// While the editor composes, and for one guard frame after a commit, Enter, Space, Backspace, Escape and Delete
+/// never become editor inputs and do not interrupt: the composition goes on. A press in the editor's text does
+/// interrupt it: the press moves the caret, the editor ends the marked text it showed, and the engine asks for one
+/// reset and fences the composition's late events.
+#[trial]
+fn keys_that_end_a_composition_do_not_reach_the_editor_while_it_composes() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, None)), false);
+    rig.focus();
+    rig.frame(vec![preedit("k")]);
+    assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "the editor composes");
+    for key in [Key::Enter, Key::Space, Key::Backspace, Key::Escape, Key::Delete] {
+        assert_eq!(rig.frame_reset(vec![key_press(key, Modifiers::NONE)]), None, "{key:?} interrupts the composition");
+        let inputs = rig.take();
+        assert!(inputs.is_empty(), "{key:?} pressed while composing reaches the editor: {inputs:?}");
+    }
+    rig.frame(vec![preedit("ka")]);
+    let inputs = rig.take();
+    assert!(matches!(inputs.as_slice(), [EditorInput::Preedit { text, .. }] if &**text == "ka"), "the composition goes on: {inputs:?}");
+
+    rig.frame(vec![commit("ka")]);
+    let inputs = rig.take();
+    assert!(matches!(inputs.as_slice(), [EditorInput::ImeCommit, EditorInput::Text(text)] if &**text == "ka"), "the commit lands: {inputs:?}");
+    rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
+    let inputs = rig.take();
+    assert!(inputs.is_empty(), "the Enter that confirmed the commit, a frame late, is no newline: {inputs:?}");
+    rig.frame(vec![key_press(Key::Enter, Modifiers::NONE)]);
+    let inputs = rig.take();
+    assert!(matches!(inputs.as_slice(), [EditorInput::Newline]), "after the guard frame Enter is a newline: {inputs:?}");
+
+    rig.frame(vec![preedit("x")]);
+    assert!(matches!(rig.take().as_slice(), [EditorInput::Preedit { .. }]), "a new composition starts");
+    let resets = rig.click_resets(AT.center());
+    assert_eq!(resets.len(), 1, "a press in the text interrupts the composition with one reset: {resets:?}");
+    rig.frame(vec![preedit("xy")]);
+    let inputs = rig.take();
+    assert!(inputs.is_empty(), "the interrupted composition's late preedit is fenced: {inputs:?}");
+}
+
+/// A body that runs inside the component reports through `EditorHandle::report`: its caret reaches the IME output
+/// and its lines reach AccessKit as the component's own `Cx::editor_state` report does.
+#[trial]
+fn a_report_through_the_editor_handle_reaches_the_ime_note_and_the_text_facts() {
+    let reported = |through_body: bool| {
+        let doc = Doc::new(TEXT, None);
+        doc.body.set(through_body);
+        let mut rig = Rig::with(EditorPurpose::Code, Some(doc), false);
+        rig.focus();
+        rig.frame(Vec::new());
+        let caret = rig.frames.ime().map(|ime| ime.caret);
+        (caret, rig.frames.tree().run_texts(rig.id.get()))
+    };
+    let (own_caret, own_runs) = reported(false);
+    let (body_caret, body_runs) = reported(true);
+    assert!(own_caret.is_some_and(|caret| caret.is_finite()), "the component's own report notes the caret: {own_caret:?}");
+    assert_eq!(own_runs, [TEXT.to_owned()], "the component's own report reaches AccessKit");
+    assert_eq!(body_caret, own_caret, "the body's caret reaches the IME note");
+    assert_eq!(body_runs, own_runs, "the body's text facts reach the pass's record and AccessKit");
+}
+
+/// #2986: a field that keeps the keyboard does not reset the input method every frame. Once it has focus no frame
+/// interrupts and typing lands; when Tab takes the keyboard to the next control and Shift+Tab brings it back, the
+/// input method is reset once, counted as egui-winit counts it, and not again in the frames after.
+#[trial]
+fn a_focused_text_field_does_not_interrupt_the_input_method_every_frame() {
+    let mut rig = Rig::with(EditorPurpose::Text, None, true);
+    let mut on = false;
+    let mut resets = 0;
+    for events in [vec![moved(AT.center())], vec![press(AT.center())], vec![release(AT.center())]] {
+        rig.frame(events);
+        resets += usize::from(rig.resets_ime(&mut on));
+    }
+    assert!(on, "the focused field owns the input method");
+    assert_eq!(resets, 1, "taking focus turns the input method on once");
+    for frame in 0..6 {
+        rig.frame(Vec::new());
+        let seen = rig.ime();
+        assert!(!seen.interrupt && seen.reset.is_none(), "frame {frame} with focus interrupts the input method: {seen:?}");
+    }
+    rig.take();
+    rig.frame(vec![key_press(Key::A, Modifiers::NONE), Event::Text("a".into())]);
+    assert!(!rig.resets_ime(&mut on), "typing resets the input method");
+    let inputs = rig.take();
+    assert!(inputs.iter().any(|input| matches!(input, EditorInput::Text(text) if &**text == "a")), "typing lands: {inputs:?}");
+
+    let (mut left, mut round) = (false, 0);
+    for events in [vec![key_press(Key::Tab, Modifiers::NONE)], Vec::new(), vec![key_press(Key::Tab, Modifiers::SHIFT)], Vec::new()] {
+        rig.frame(events);
+        round += usize::from(rig.resets_ime(&mut on));
+        left |= !on;
+    }
+    assert!(left, "Tab takes the keyboard to the next control");
+    assert!(on, "Shift+Tab gives the field the input method back");
+    assert_eq!(round, 1, "Tab and back reset the input method once");
+    for frame in 0..4 {
+        rig.frame(Vec::new());
+        assert!(!rig.resets_ime(&mut on), "frame {frame} after the round trip resets the input method");
+    }
+}
+

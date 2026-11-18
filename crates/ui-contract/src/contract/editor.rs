@@ -6,6 +6,7 @@ use super::Component;
 use super::cx::{Cx, Edit as _, PartsCx};
 use crate::primitives::{EditorPurpose, EditorState, ImeStamp, ImeSurface};
 use crate::runtime::access::text::{self as text_access, Line, Run, TextFacts};
+
 use crate::runtime::egui::{editor as egui_editor, focus as egui_focus};
 use crate::runtime::focus::KeyUse;
 use crate::runtime::{commands, ime};
@@ -90,65 +91,51 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
 /// component reports through for the component's editor part.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditorHandle {
-    #[allow(dead_code)] // P3(canvas-w2): cv.K41
     widget: egui::Id,
-    #[allow(dead_code)] // P3(canvas-w2): cv.K41
     rect: Rect,
-    #[allow(dead_code)] // P3(canvas-w2): cv.K41
     purpose: EditorPurpose,
-    #[allow(dead_code)] // P3(canvas-w2): cv.K41
     focused: bool,
-    #[allow(dead_code)] // P3(canvas-w2): cv.K41
     read_only: bool,
 }
 
+
 impl EditorHandle {
+    /// The handle of the editor part step 8b set up.
+    fn of(info: &EditorInfo) -> EditorHandle {
+        EditorHandle { widget: info.widget, rect: info.rect, purpose: info.purpose, focused: info.focused, read_only: info.read_only }
+    }
+
     /// Reports the caret and composition to the input-method engine and puts the text facts in the running pass's
     /// editor record, which the owning component's report step reads in the same pass.
     pub fn report(&self, ctx: &egui::Context, state: EditorState<'_>) {
-        let _ = (ctx, state);
-        todo!("cv.K41")
-    }
-}
-
-impl<C: Component> Cx<'_, C> {
-    /// The editor part of this pass, `None` when the component registered none.
-    pub fn editor_handle(&self) -> Option<EditorHandle> {
-        todo!("cv.K41")
-    }
-
-    /// Notes the input-method receipt between the stamps `before` and `after` on the egui fork's tracker for this
-    /// viewport and frame; true when the stamps prove the engine applied it.
-    pub fn ime_receipt(&self, before: ImeStamp, after: ImeStamp) -> bool {
-        let _ = (before, after);
-        todo!("cv.K27")
-    }
-
-    /// Notes an input-method application change on the egui fork's tracker for this viewport and frame.
-    pub fn ime_application_change(&self) {
-        todo!("cv.K27")
-    }
-
-    /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
-    /// to its own document.
-    pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {
-        std::mem::take(&mut self.core.editor_inputs).into_iter()
-    }
-
-    /// Reports the editor's caret, visible lines, selection and undo state once per pass, from `update` or `paint`.
-    pub fn editor_state(&self, state: EditorState<'_>) {
-        let Some(info) = &self.core.editor else {
-            debug_assert!(false, "`editor_state` needs an editor part registered by `parts`");
-            return;
-        };
-        let ctx = &self.core.ctx;
-        let masked = info.purpose == EditorPurpose::Password;
-        if info.focused {
-            ime::note_caret(ctx, info.widget, info.rect, state.caret, masked);
+        if let Some(facts) = self.note(ctx, state) {
+            // PLAN: assumed `pub(crate) fn note_editor_facts(ctx: &egui::Context, widget: egui::Id, facts: TextFacts)` in `contract/steps/report.rs` (ribbon-w5): the pass-scoped slot step 16 reads for `core.editor`'s widget.
+            super::steps::report::note_editor_facts(ctx, self.widget, facts);
         }
-        ime::note_editor(ctx, info.widget, state.composing, (state.can_undo, state.can_redo));
-        if !text_access::exposed(ctx, info.widget) {
-            return;
+    }
+
+    /// Notes the input-method receipt between the stamps `before` and `after` for this editor part; true when the
+    /// stamps prove the engine applied it. A body that applies the input method's edits calls it with `ctx`.
+    pub fn ime_receipt(&self, ctx: &egui::Context, before: ImeStamp, after: ImeStamp) -> bool {
+        ime::note_receipt(ctx, self.widget, before, after)
+    }
+
+    /// Notes an application change of this editor part's committed text.
+    pub fn ime_application_change(&self, ctx: &egui::Context) {
+        ime::note_application_change(ctx, self.widget);
+    }
+
+    /// The one editor report path: notes the caret, the composition, the undo state and the surrounding text with the
+    /// IME engine, and returns the text facts when AccessKit reads the part.
+    fn note(&self, ctx: &egui::Context, state: EditorState<'_>) -> Option<TextFacts> {
+        let masked = self.purpose == EditorPurpose::Password;
+        if self.focused {
+            ime::note_caret(ctx, self.widget, self.rect, state.caret, masked);
+        }
+        let surrounding = state.surrounding.as_ref().map(|(epoch, report)| (*epoch, report));
+        ime::note_editor(ctx, self.widget, state.composing, (state.can_undo, state.can_redo), surrounding);
+        if !text_access::exposed(ctx, self.widget) {
+            return None;
         }
         let lines = state
             .lines
@@ -167,6 +154,44 @@ impl<C: Component> Cx<'_, C> {
             .collect();
         let text = state.lines.iter().map(|line| line.text).collect::<Vec<_>>().join("\n");
         let selection = state.selection.or(Some((state.caret_at, state.caret_at)));
-        *self.core.text_access.borrow_mut() = Some(TextFacts { widget: info.widget, text, masked, editable: !info.read_only, lines, selection });
+        Some(TextFacts { widget: self.widget, text, masked, editable: !self.read_only, lines, selection })
+    }
+}
+
+impl<C: Component> Cx<'_, C> {
+    /// The editor part of this pass, `None` when the component registered none.
+    pub fn editor_handle(&self) -> Option<EditorHandle> {
+        self.core.editor.as_ref().map(EditorHandle::of)
+    }
+
+    /// Notes the input-method receipt between the stamps `before` and `after` on the egui fork's tracker for this
+    /// viewport and frame; true when the stamps prove the engine applied it.
+    pub fn ime_receipt(&self, before: ImeStamp, after: ImeStamp) -> bool {
+        self.editor_handle().is_some_and(|handle| handle.ime_receipt(&self.core.ctx, before, after))
+    }
+
+    /// Notes an input-method application change on the egui fork's tracker for this viewport and frame.
+    pub fn ime_application_change(&self) {
+        if let Some(handle) = self.editor_handle() {
+            handle.ime_application_change(&self.core.ctx);
+        }
+    }
+
+    /// The editor part's inputs of this pass in the order they arrived; call it in `update`. The editor applies them
+    /// to its own document.
+    pub fn editor_input(&mut self) -> impl Iterator<Item = EditorInput> + '_ {
+        std::mem::take(&mut self.core.editor_inputs).into_iter()
+    }
+
+    /// Reports the editor's caret, visible lines, selection and undo state once per pass, from `update` or `paint`.
+    pub fn editor_state(&self, state: EditorState<'_>) {
+        let Some(handle) = self.editor_handle() else {
+            debug_assert!(false, "`editor_state` needs an editor part registered by `parts`");
+            return;
+        };
+        // The component's own report reaches its report step directly; a body's goes through the record.
+        if let Some(facts) = handle.note(&self.core.ctx, state) {
+            *self.core.text_access.borrow_mut() = Some(facts);
+        }
     }
 }
