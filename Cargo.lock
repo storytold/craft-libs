@@ -1780,6 +1780,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-develop-model"
+version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "craft-metadata",
+ "miniz_oxide 0.9.1",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-dex"
 version = "0.1.0"
 dependencies = [
@@ -2183,6 +2195,14 @@ name = "craft-gcode"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-geom"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
 ]
 
 [[package]]
