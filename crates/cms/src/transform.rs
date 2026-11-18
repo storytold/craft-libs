@@ -46,7 +46,7 @@ const OUT_TABLE: usize = GpuMatrixShaper::OUTPUT_ENTRIES;
 const _: () = assert!(OUT_TABLE.is_power_of_two());
 
 /// ICC v4 perceptual reference medium black (ICC.1:2010 §6.3.4.4), XYZ.
-const PERCEPTUAL_BLACK: [f64; 3] = [0.00336, 0.0034731, 0.00287];
+pub(crate) const PERCEPTUAL_BLACK: [f64; 3] = [0.00336, 0.0034731, 0.00287];
 
 /// Accelerated representation of a transform.
 #[derive(Debug)]

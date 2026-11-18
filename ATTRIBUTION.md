@@ -119,6 +119,59 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 `crates/palette` extracts the GPL text parser from AniCraft `crates/doc/src/swatch.rs` at `d875a7feb250e6ab06aa28a37fb78a0699e88330` (MIT OR Apache-2.0), introduced by Tanish Manku in `a64130a9da9bdde545463b852d95d6a6774b1dfd` (AniCraft #270). The import preserves Tanish as primary author. Neutral RGB/name adaptation separates application display-name sanitization and the `Untitled` policy; validation tests and integration are subsequent Dylan M. Taylor changes.
 
+The legacy ZIP Zstandard method-20 mapping and bounded-read regression in `crates/zip/src/lenient` are ported from RRFZ's Craft Anything commit `29badae7c9280fdf4c24795927bf3a91f51694c6` (MIT OR Apache-2.0). RRFZ remains the primary Git author. Firmware scanner detection remains app-owned and is not part of this port.
+## TAR/CPIO compatibility updates
+
+The old GNU sparse-extension traversal, GNU CRC-symlink compatibility and PAX-size precedence fixes and their regression tests in `crates/tar` are ported from RRFZ's Craft Anything PRs #1973 (`8ea2ec66a1bc80f0420f3695baac877a0cb9b9a5`), #1984 (`b226a475f7dce9710e3af7a069386fe7a9720df7`) and #2007 (`d29465c20b0d570ea4973be512a0cb4e212bb60f`). Source is MIT OR Apache-2.0; RRFZ remains the primary Git author of each port. The PAX update adapts to the shared parser's existing `PaxOverrides` structure without changing the source policy.
+
+## Aligned stored ZIP entries
+
+The USDZ alignment requirement and compatibility fixture for `Writer::add_stored_aligned` come from TextureCraft `crates/formats/src/mesh_export/usd.rs`, introduced by bflatastic in `bdbb52c9` and maintained through `9eb20086` (MIT OR Apache-2.0). The shared API and alignment validation are subsequent Dylan M. Taylor work. Scene/material mapping remains in TextureCraft.
+
+The raw gradient wire ordering in `craft-lottie::Gradient::flat_values` follows
+AniCraft's Lottie exporter by Tanish Manku (`63b39355`, `b9258b7b`), MIT OR Apache-2.0.
+Sanitization, animation fitting and numeric output policy remain caller-owned.
+
 ## Screen Video key frames
 
 `crates/video/src/screen_video.rs` extracts AniCraft `crates/xfl/src/video.rs` codec-3 decoding and its synthetic partial-block fixture, introduced by Tanish Manku in `1f3e603b7ff53a3da364e41ec4da8d43dc83aab0` with pixel-loop cleanup `2b7571363b4b647266df758f95b6e397021cfd4d` (MIT OR Apache-2.0). Import commits preserve Tanish as primary author. Caller-owned bounds and neutral RGBA output separate codec work from the consuming app's FLV first-frame/report policy. Boundary tests and integration are subsequent Dylan M. Taylor changes.
+
+## Source Map v3 parser and lookup
+
+`crates/sourcemap` extracts the bounded parser, source inventory and generated-position lookup from Craft Anything `crates/formats/src/sourcemap.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). Core-history ports preserve Brandon Thomas, BFlat, Afloat, RRFZ, Nicolas Bohn and Alex Joaquim Pereira as primary authors, with exact source revisions in each commit. Six regression files preserve their source authors; nine core unit tests retain the original tests. App annotation scanning, data URLs, base64 and file I/O are intentionally not imported. Workspace wiring is a subsequent change; existing limits and errors are unchanged.
+## JSONC span-preserving editing
+
+`crates/jsonc` is extracted from Craft Anything `crates/formats/src/jsonc.rs` at `e5c9c94106747ed44b9a3fb0decce867c2285f93` (MIT OR Apache-2.0). The original implementation and hardening by BFlat, newline preservation by NetterSilver, and subsequent RRFZ/Afloat correctness fixes retain separate primary-author port commits with immutable source revisions. Shared API wiring and optional input-byte admission are subsequent changes. Compatibility parsing and all existing formatting/editing tests are retained; application file I/O and policy are not imported.
+
+## XFA XML DOM
+
+`crates/xfa/src/xml.rs` is extracted from PDFCraft at `271e479c53723b1b294c866d5cb2f27604601b29`, originally by Dylan M. Taylor (`eead4541`, `7d44e654`), MIT OR Apache-2.0. The initial extraction changes visibility and module boundaries; subsequent namespace-retention budget hardening intentionally tightens resource admission. PDF/layout/form policy remains in the app.
+
+## Java class inspection
+
+`crates/java-class` extracts Craft Anything `java_class.rs` and `java_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0), preserving separate primary-author source-history ports by Brandon Thomas, BFlat, Afloat and RRFZ. The checked byte-reader, modified UTF-8 unit decoder, descriptor display helper and synthetic class fixtures come from the same source snapshot. Seven regression files retain their source authors. Neutral error wiring and shared crate integration are subsequent changes. No JAR archive, application I/O or bytecode execution is imported.
+
+## WebAssembly inspection
+
+`crates/wasm` extracts Craft Anything `crates/formats/src/wasm.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2`, with its checked byte-reader subset and original synthetic WASM/testkit fixtures (MIT OR Apache-2.0). Eight core-history ports preserve Brandon Thomas, Afloat and RRFZ as primary authors; component, repeated-custom-section and referenced-string regression imports retain source authors and commit references. Fixtures come from `crates/testkit/src/formats.rs` and deterministic mutation helpers from `crates/testkit/src/lib.rs`; no third-party binaries. Shared error naming and workspace wiring are subsequent changes. Existing inspection limits and report behavior are unchanged; this crate validates/inspects/renders, never executes modules.
+
+## Packet capture and protocol inspection
+
+`crates/pcap` extracts Craft Anything `crates/formats/src/pcap.rs`, its checked byte reader primitives and synthetic packet fixtures/regressions at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Brandon Thomas introduced the implementation, byte reader and fixtures in `f64ae3bf3c8863a982af1304e06de20653803968`. Subsequent fixes by phatloi0010, GGWA, BFlat, Afloat, NetterSilver, Max Mittelstädt and RRFZ retain separate primary-author source-history commits with immutable source revisions. Shared error/API wiring and chrono-based timestamp formatting with exhaustive day-boundary parity tests are subsequent Dylan M. Taylor changes. No packet reassembly, decryption, live capture or app analysis policy is imported.
+## HTTP Archive reader
+
+`crates/har` preserves Craft Anything `crates/formats/src/har.rs` from `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Brandon Thomas introduced the typed reader in `f64ae3bf3c8863a982af1304e06de20653803968`; BFlat added UTF-8 BOM compatibility in `cb0bb9d8fa4536ba44ef2c86f5ed759b879cc2d3`. Both source snapshots retain primary author attribution. Shared wiring, explicit byte admission and its tests are subsequent Dylan M. Taylor changes. Redaction and analysis remain app-owned.
+
+## Dalvik DEX inspection
+
+`crates/dex` extracts Craft Anything `crates/formats/src/dex.rs` and `dex_ops.rs` at `5979f9b13f16dcf1df3c7ae7f8e7735f452866f2` (MIT OR Apache-2.0). Five source-history ports preserve Brandon Thomas, BFlat and Afloat as primary authors. Five regression imports retain BFlat/Afloat authors and exact source revisions. The checked byte-reader/MUTF-8 subset and synthetic DEX fixture come from that app's `bytes.rs` and `testkit/src/android.rs`; deterministic noise/mutations come from its testkit. No application file I/O, APK logic or execution is imported. Shared neutral errors and workspace wiring are subsequent changes; existing per-file strings, member/handler and bytecode payload budgets are retained.
+
+## EVM bytecode inspection
+
+`crates/evm` extracts Craft Anything `crates/formats/src/evm.rs` at `a31e995858f4312e0f1d59a007112da191ef2d26` (MIT OR Apache-2.0). Eight separate source-history ports preserve Brandon Thomas, Afloat, RRFZ and NetterSilver as primary authors with immutable source references. Synthetic EVM fixtures and deterministic mutation helpers come from the same app source; regression files retain their source provenance. Neutral errors and workspace integration are subsequent changes. No code execution or transaction behavior is imported.
+
+## XFDF field reader
+
+`crates/xfdf` extracts PDFCraft field reading from #5937 refresh `cb564fd827f572818e9ddb0ea5989a432b1f39fd` (MIT OR Apache-2.0). App-side annotation and form policy remains local; source history is retained in the original repository.
+
+Retained XFDF source contributors (move-aware blame): Brandon Thomas, Marco Arnulfo, pkibiego and storybored379; module split by aiongg. Subsequent budget/integration work by Dylan M. Taylor.
