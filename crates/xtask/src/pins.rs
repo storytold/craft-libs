@@ -18,6 +18,10 @@
 //!   allowed.
 //! - Packages the policy does not name are allowed. An empty policy accepts any metadata.
 //!
+//! [`check_commits`] reads the same JSON against a list of [`OneCommit`] rules: every package from
+//! the rule's git repository resolves from one commit, apart from the [`Extra`] packages the rule
+//! names at their own commit.
+//!
 //! A rule that needs `resolve.nodes`, a package `id` or a node's `features` or `deps` returns an
 //! [`Error::Output`] when the field is missing, and so does JSON that does not parse.
 //!
@@ -30,7 +34,7 @@
 //! the command and returns [`Error::TooLarge`]. Standard error is read to its end while the command
 //! runs, and its first [`Limits::stderr_bytes`] bytes are kept for the error message.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -127,6 +131,26 @@ pub struct Policy<'a> {
     pub forbidden: &'a [Forbidden<'a>],
 }
 
+/// Packages from one git repository that resolve from one commit, for [`check_commits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OneCommit<'a> {
+    /// The repository URL as the app's `Cargo.toml` writes it, for example
+    /// `https://github.com/storytold/craft-libs`.
+    pub url: &'a str,
+    /// Packages allowed at another commit.
+    pub extra: &'a [Extra<'a>],
+}
+
+/// A package a [`OneCommit`] rule allows at a commit other than the one the rest resolve from, for a
+/// dependency the app declares at a second revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Extra<'a> {
+    /// The package name.
+    pub name: &'a str,
+    /// The full commit hash.
+    pub rev: &'a str,
+}
+
 /// Size limits for the commands' output and the JSON [`check`] reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -193,6 +217,13 @@ pub enum Violation {
         /// The root it was reached from, for [`Scope::ProductionFrom`].
         root: Option<String>,
     },
+    /// Packages from one git repository resolve from more than one commit.
+    Commits {
+        /// The repository URL.
+        url: String,
+        /// Each commit, in sorted order, with the sorted names of the packages resolved from it.
+        commits: Vec<(String, Vec<String>)>,
+    },
 }
 
 impl fmt::Display for Violation {
@@ -219,6 +250,14 @@ impl fmt::Display for Violation {
             Violation::Forbidden { name, rule, root: None } => write!(f, "{name}: forbidden ({rule}) and resolved"),
             Violation::Forbidden { name, rule, root: Some(root) } => {
                 write!(f, "{name}: forbidden ({rule}) and reached from {root} over normal or build dependencies")
+            }
+            Violation::Commits { url, commits } => {
+                write!(f, "{url}: packages resolve from {} commits:", commits.len())?;
+                for (i, (commit, names)) in commits.iter().enumerate() {
+                    let sep = if i == 0 { " " } else { "; " };
+                    write!(f, "{sep}{commit} ({})", names.join(", "))?;
+                }
+                Ok(())
             }
         }
     }
@@ -336,6 +375,49 @@ pub fn check(metadata_json: &[u8], policy: &Policy<'_>, limits: &Limits) -> Resu
         }
     }
     Ok(())
+}
+
+/// Checks `cargo metadata --format-version 1` JSON against `rules`, in order: every package whose
+/// `source` is the rule's git repository resolves from one commit, except the packages its
+/// [`OneCommit::extra`] list names at their own commit. The commit is the part of the `source` after
+/// its `#`. Packages from other sources, path packages included, are not checked. The first broken
+/// rule is returned.
+pub fn check_commits(metadata_json: &[u8], rules: &[OneCommit<'_>], limits: &Limits) -> Result<(), Error> {
+    if metadata_json.len() > limits.metadata_bytes {
+        return Err(Error::TooLarge { command: METADATA.into(), limit: limits.metadata_bytes });
+    }
+    let meta: Value = serde_json::from_slice(metadata_json).map_err(|e| invalid(format!("not JSON: {e}")))?;
+    let packages = meta.get("packages").and_then(Value::as_array).ok_or_else(|| invalid("packages is missing"))?;
+    for rule in rules {
+        let mut commits: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for package in packages {
+            let name = str_field(package, "name", "a package")?;
+            let Some(source) = package.get("source").and_then(Value::as_str) else { continue };
+            let Some(commit) = git_commit(source, rule.url)? else { continue };
+            if rule.extra.iter().any(|extra| extra.name == name && extra.rev == commit) {
+                continue;
+            }
+            commits.entry(commit).or_default().insert(name);
+        }
+        if commits.len() > 1 {
+            let commits = commits.into_iter().map(|(commit, names)| (commit.to_owned(), names.into_iter().map(str::to_owned).collect())).collect();
+            return Err(Violation::Commits { url: rule.url.into(), commits }.into());
+        }
+    }
+    Ok(())
+}
+
+/// The commit of a `source` from the git repository at `url`: the text after its last `#`. `None`
+/// for a source from anywhere else.
+fn git_commit<'s>(source: &'s str, url: &str) -> Result<Option<&'s str>, Error> {
+    let Some(rest) = source.strip_prefix("git+").and_then(|s| s.strip_prefix(url)) else { return Ok(None) };
+    if !rest.starts_with(['?', '#']) {
+        return Ok(None);
+    }
+    match rest.rsplit_once('#') {
+        Some((_, commit)) if !commit.is_empty() => Ok(Some(commit)),
+        _ => Err(invalid(format!("source {source} names no commit"))),
+    }
 }
 
 /// The packages and resolved nodes of one metadata result.
@@ -629,7 +711,10 @@ fn stop(child: &mut Child) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CRATES_IO, Error, FeatureRule, Forbidden, Limits, Name, Pin, Policy, Scope, Violation, check, check_target_features, git_source};
+    use super::{
+        CRATES_IO, Error, Extra, FeatureRule, Forbidden, Limits, Name, OneCommit, Pin, Policy, Scope, Violation, check, check_commits,
+        check_target_features, git_source,
+    };
     use serde_json::{Value, json};
 
     fn bytes(v: &Value) -> Vec<u8> {
@@ -724,6 +809,65 @@ mod tests {
         });
         let policy = Policy { pins: &[], forbidden: &[Forbidden { name: Name::Exact("x"), scope: Scope::ProductionFrom("app") }] };
         assert!(output_error(validate(&m, &policy)).contains("kind"));
+    }
+
+    const LIBS: &str = "https://github.com/storytold/craft-libs";
+
+    fn libs_metadata(packages: &[(&str, &str)]) -> Value {
+        let packages: Vec<Value> = packages.iter().map(|(name, source)| json!({"name": name, "source": source})).collect();
+        json!({ "packages": packages })
+    }
+
+    fn check_libs(m: &Value, extra: &[Extra<'_>]) -> Result<(), Error> {
+        check_commits(&bytes(m), &[OneCommit { url: LIBS, extra }], &Limits::default())
+    }
+
+    #[test]
+    fn packages_from_one_repository_resolve_from_one_commit() {
+        let a = git_source(LIBS, "aaa");
+        let b = git_source(LIBS, "bbb");
+        let ok = libs_metadata(&[("craft-xml", &a), ("craft-zip", &a), ("serde", CRATES_IO), ("app", "")]);
+        assert!(check_libs(&ok, &[]).is_ok());
+        assert!(check_libs(&json!({"packages": [{"name": "app"}]}), &[]).is_ok(), "a path package has no source");
+
+        let split = libs_metadata(&[("craft-xml", &a), ("craft-zip", &b), ("craft-xml", &b)]);
+        assert_eq!(
+            violation(check_libs(&split, &[])),
+            Violation::Commits {
+                url: LIBS.into(),
+                commits: vec![("aaa".into(), vec!["craft-xml".into()]), ("bbb".into(), vec!["craft-xml".into(), "craft-zip".into()])]
+            }
+        );
+        assert_eq!(
+            violation(check_libs(&split, &[])).to_string(),
+            "https://github.com/storytold/craft-libs: packages resolve from 2 commits: aaa (craft-xml); bbb (craft-xml, craft-zip)"
+        );
+    }
+
+    #[test]
+    fn an_extra_allows_one_package_at_its_own_commit_only() {
+        let main = git_source(LIBS, "aaa");
+        let dtd = git_source(LIBS, "ddd");
+        let m = libs_metadata(&[("craft-xml", &main), ("craft-zip", &main), ("craft-xml", &dtd)]);
+        assert!(check_libs(&m, &[Extra { name: "craft-xml", rev: "ddd" }]).is_ok());
+        // The extra names one package at one commit: another package there is still a second commit.
+        let m = libs_metadata(&[("craft-xml", &main), ("craft-xml", &dtd), ("craft-zip", &dtd)]);
+        assert!(matches!(violation(check_libs(&m, &[Extra { name: "craft-xml", rev: "ddd" }])), Violation::Commits { .. }));
+        assert!(matches!(violation(check_libs(&m, &[Extra { name: "craft-xml", rev: "eee" }])), Violation::Commits { .. }));
+    }
+
+    #[test]
+    fn a_commit_is_read_from_any_git_source_of_the_repository_only() {
+        // A branch or tag dependency still names its commit after `#`.
+        let m = libs_metadata(&[("craft-xml", &git_source(LIBS, "aaa")), ("craft-zip", &format!("git+{LIBS}?branch=main#bbb"))]);
+        assert!(matches!(violation(check_libs(&m, &[])), Violation::Commits { .. }));
+        // A repository whose URL only starts the same is another repository.
+        let m =
+            libs_metadata(&[("craft-xml", &git_source(LIBS, "aaa")), ("other", &git_source("https://github.com/storytold/craft-libs-extra", "bbb"))]);
+        assert!(check_libs(&m, &[]).is_ok());
+        let m = libs_metadata(&[("craft-xml", &format!("git+{LIBS}?rev=aaa"))]);
+        assert!(output_error(check_libs(&m, &[])).contains("names no commit"));
+        assert!(output_error(check_libs(&json!({"packages": [{"source": CRATES_IO}]}), &[])).contains("name"));
     }
 
     #[test]

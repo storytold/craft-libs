@@ -10,7 +10,7 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `assets` | always | `Policy`, `RowMode`, `check`, `run`, `list_files`, `read_document`, `is_asset`, `ASSET_EXT`: the asset attribution check against the document, folders and extensions the app supplies |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
-| `pins` | `pins` | `run`, `check`, `run_target_features`, `host_target`: the version, source and features of pinned dependencies, and packages the app forbids, read from `cargo metadata` within size limits |
+| `pins` | `pins` | `run`, `check`, `check_commits`, `run_target_features`, `host_target`: the version, source and features of pinned dependencies, packages the app forbids, and one commit per git repository, read from `cargo metadata` within size limits |
 
 No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `pins` adds `serde_json`.
 
@@ -207,6 +207,18 @@ Some("pdf-deps") => {
   or build edges; one reached only through development edges is allowed. `Name::Family("hayro")`
   matches `hayro` and every `hayro-*` name.
 - Packages the policy does not name are allowed, and an empty policy accepts any metadata.
+- `check_commits` reads the same JSON against `OneCommit` rules. Every package whose source is the
+  rule's git repository must resolve from one commit, the text after the source's `#`. An `Extra`
+  names a package allowed at its own commit, for a dependency the app declares at a second revision
+  (DesignCraft's `craft-xml-dtd = { package = "craft-xml", … }`). A violation lists each commit with
+  the packages resolved from it:
+
+  ```rust
+  let json = craft_xtask::pins::metadata(cargo, &limits)?;
+  let rule = OneCommit { url: "https://github.com/storytold/craft-libs", extra: &[Extra { name: "craft-xml", rev: DTD_REV }] };
+  craft_xtask::pins::check_commits(&json, &[rule], &limits)?;
+  ```
+
 - JSON that does not parse, or lacks a field a rule needs (`resolve.nodes`, a package `id`, a node's
   `features` or `deps`, an edge's `dep_kinds`), is an error.
 - Cargo merges every target's features into one metadata result. `run_target_features` runs
