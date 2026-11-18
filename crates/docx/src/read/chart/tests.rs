@@ -745,6 +745,11 @@ fn value_axis_title_turns_counter_clockwise_like_word() {
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="5400000" vert="horz"/>"#))), Some(90.0));
     // A horizontal title (`rot="0"`) stays horizontal: the plot makes room for it (see below).
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="0" vert="horz"/>"#))), Some(0.0));
+    // The horizontal tolerance excludes both boundary angles and keeps equivalent full turns.
+    for (rot, expected) in [(30000, 0.0), (-30000, 0.0), (60000, -90.0), (-60000, -90.0), (10800000, -90.0), (21600000, 0.0)] {
+        let body = format!(r#"<a:bodyPr rot="{rot}" vert="horz"/>"#);
+        assert_eq!(angle(&line_with("", &title(&body))), Some(expected), "rotation {rot}");
+    }
     // Hostile values stay finite.
     let odd = angle(&line_with("", &title(r#"<a:bodyPr rot="99999999999999999999"/>"#)));
     assert!(odd.is_some_and(f32::is_finite));
@@ -898,4 +903,28 @@ fn source_linked_series_labels_do_not_inherit_the_chart_format() {
     // Control: a series without a label format still takes the chart's.
     let inherited = run(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#);
     assert!(inherited.contains(&"320%".to_string()), "{inherited:?}");
+}
+
+#[test]
+fn office_2016_chart_draws_a_placeholder_of_its_size() {
+    let cx = |series: &str, title: &str| {
+        let x = format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chart>{title}<cx:plotArea><cx:plotAreaRegion>{series}</cx:plotAreaRegion></cx:plotArea></cx:chart></cx:chartSpace>"#
+        );
+        crate::xml::parse(x.as_bytes()).unwrap()
+    };
+    let title = r#"<cx:title pos="t"><cx:tx><cx:txData><cx:v>Quarterly steps</cx:v></cx:txData></cx:tx></cx:title>"#;
+    let rich = r#"<cx:title><cx:tx><cx:rich><a:p><a:r><a:t>Sales </a:t></a:r><a:r><a:t>funnel</a:t></a:r></a:p></cx:rich></cx:tx></cx:title>"#;
+    let waterfall = chartex_items(Some(&cx(r#"<cx:series layoutId="waterfall"/>"#, title)), 432.0, 252.0);
+    assert_eq!(texts(&waterfall), ["Quarterly steps", "Waterfall chart (not supported yet)"]);
+    let framed = waterfall.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 432.0, 252.0]));
+    assert!(framed, "the frame has the chart's size: {waterfall:?}");
+    let funnel = chartex_items(Some(&cx(r#"<cx:series layoutId="funnel"/>"#, rich)), 300.0, 200.0);
+    assert_eq!(texts(&funnel), ["Sales funnel", "Funnel chart (not supported yet)"]);
+    let other = chartex_items(Some(&cx(r#"<cx:series layoutId="newKind"/>"#, "")), 300.0, 200.0);
+    assert_eq!(texts(&other), ["Chart (not supported yet)"]);
+    // An unreadable part still reserves and frames the chart's place.
+    let missing = chartex_items(None, 300.0, 200.0);
+    assert_eq!(texts(&missing), ["Chart (not supported yet)"]);
+    assert!(chartex_items(None, 0.0, 200.0).is_empty() && chartex_items(None, f32::NAN, 200.0).is_empty());
 }

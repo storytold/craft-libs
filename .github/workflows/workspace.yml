@@ -6,17 +6,21 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  # A full run on main every 6 hours that is never cancelled, so the caches are saved while pushes
+  # to main cancel each other.
+  schedule:
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (push to main, a release tag, a manual run) gets a group of its own: it is neither
-  # cancelled nor replaced while queued, so a main run always finishes and saves the dependency
-  # cache, and a release run is never cancelled.
-  group: workspace-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A pull request, and main, each have one group, so a newer push cancels the run it supersedes;
+  # the newest push's run still tests everything before it. Every other run (a release tag, a
+  # manual run, the scheduled run) gets a group of its own and is neither cancelled nor replaced
+  # while queued: a release run always finishes, and the scheduled run saves the caches.
+  group: workspace-${{ (github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   native:
@@ -24,47 +28,63 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
+      # On a pull request, macOS and Windows run only when it can change platform behaviour: a
+      # crate with platform cfg code or one that depends on it, the build setup, or a file outside
+      # the crates (craft-common-actions' select-platforms). The full-ci label runs them anyway
+      # from the next push or manual run; pushes to main always run every leg.
+      select-os: '["windows-latest","macos-latest"]'
       timeout-minutes: 120
-      # The Windows leg runs its tests with nextest (.config/nextest.toml).
+      # Every leg runs its tests with nextest, and its doctests with cargo test (.config/nextest.toml).
       tools: cargo-nextest@0.9.150
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
-      env: CRAFT_PRINT_REQUIRE_QUEUE=0
-      setup-command: |
-        set -euo pipefail
-        corpus_fetcher=.test-inputs/photocraft
-        mkdir -p "$corpus_fetcher"
-        git -C "$corpus_fetcher" init
-        git -C "$corpus_fetcher" remote add origin https://github.com/storytold/PhotoCraft.git
-        git -C "$corpus_fetcher" fetch --quiet --depth=1 origin 74330157cb601573ae4523a95bb9132822fc3918
-        git -C "$corpus_fetcher" checkout --quiet --detach FETCH_HEAD
-        (cd "$corpus_fetcher" && cargo xtask corpus --psd --psd-tools --atn --exr --heif --pngsuite)
-        mkdir -p corpus
-        cp -a "$corpus_fetcher/corpus/." corpus/
-        python scripts/test-fetch-pdf-test-fonts.py
-        python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
-        printf 'CRAFT_PSD_CORPUS=%s\n' "$GITHUB_WORKSPACE/$corpus_fetcher/corpus" >> "$GITHUB_ENV"
-        printf 'CRAFT_PDF_TEST_FONT_DIR=%s\n' "$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
+      # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
+      # time. A panic still names its file and line; only backtrace frames lose theirs, and the
+      # Linux and macOS legs keep line tables.
+      windows-env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+        CARGO_PROFILE_DEV_DEBUG=0
+      # The fuzz-style tests run a fraction of their cases here: every hostile-input hammer and
+      # sweep 1/8 (craft-testkit's CRAFT_HOSTILE_DIVISOR), every proptest without its own case
+      # count 64 cases instead of 256. nightly.yml runs them all in full.
+      env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=0
+        CRAFT_HOSTILE_DIVISOR=8
+        PROPTEST_CASES=64
+      setup-command: bash scripts/ci-test-inputs.sh
+      # The PhotoCraft corpora, keyed on the script that pins them: a hit skips the PhotoCraft
+      # checkout and its xtask build (1:51 on Windows).
+      cache-paths: .test-inputs/photocraft/corpus
+      cache-key: photocraft-corpus
+      cache-key-files: scripts/ci-test-inputs.sh
+      # A `lint (<os>)` leg beside each `gate (<os>)` leg, so clippy is off the tests' critical path.
+      lint-command: |
+        if [ "$RUNNER_OS" = Linux ]; then
+          python3 scripts/test-workspace-concurrency.py
+          python3 scripts/test-workspace-tests.py
+        fi
+        # One rustfmt call gets every source root of the workspace, which is longer than
+        # Windows allows for a command line (os error 206). rustfmt's result is the same on
+        # every system, so the Linux and macOS legs check it.
+        if [ "$RUNNER_OS" != Windows ]; then
+          cargo fmt --check
+        fi
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       command: |
-        python3 scripts/test-workspace-concurrency.py
-        cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        cargo test --workspace --locked
-        cargo test --workspace --all-features --locked
-      windows-command: |
-        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo fmt --check
-        cargo clippy --workspace --all-targets --locked -- -D warnings
-        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        # The same tests as `cargo test`, run in parallel across test binaries instead of one
-        # binary at a time; nextest skips doctests, so `cargo test --doc` runs them.
-        cargo nextest run --workspace --locked --profile ci
-        cargo test --workspace --doc --locked
+        # The tests run once, with every feature, in parallel across test binaries; nextest skips
+        # doctests, so `cargo test --doc` runs them. The default-feature compile is the lint leg's
+        # first clippy run; the last command runs the crates whose tests check behaviour with a
+        # feature off, which an all-features build cannot reach.
         cargo nextest run --workspace --all-features --locked --profile ci
         cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
+      windows-command: |
+        powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
+        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo test --workspace --doc --all-features --locked
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
 
   msrv:
     name: Rust 1.95
