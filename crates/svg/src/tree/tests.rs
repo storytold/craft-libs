@@ -92,6 +92,10 @@ fn every_limit_refuses_the_file_past_it() {
     let bomb = format!("<!DOCTYPE svg [<!ENTITY a \"{}\">]>{}", "x".repeat(1000), svg(&format!("<title>{}</title>", "&a;".repeat(10))));
     assert_eq!(try_parse(&bomb, &Limits { entity_bytes: 9_999, ..shallow() }).err(), Some(Error::Entities));
     assert!(try_parse(&bomb, &Limits { entity_bytes: 10_000, ..shallow() }).is_ok());
+    // A comment marker in an earlier entity's value hides no declaration.
+    let bait = bomb.replacen("<!ENTITY a", "<!ENTITY c \"<!--\"><!ENTITY a", 1);
+    assert_eq!(try_parse(&bait, &Limits { entity_bytes: 9_999, ..shallow() }).err(), Some(Error::Entities));
+    assert!(try_parse(&bait, &Limits { entity_bytes: 10_000, ..shallow() }).is_ok());
     // XML nodes.
     assert!(matches!(try_parse(&svg(&"<g/>".repeat(100)), &Limits { xml_nodes: 50, ..shallow() }), Err(Error::Xml(_))));
     // Not XML, and XML that is not an SVG.
@@ -543,7 +547,7 @@ mod invalid_image_accounting {
     }
 
     #[test]
-    fn failed_decode_forgets_address_but_preserves_spent_budget() {
+    fn failed_decode_releases_input_but_preserves_spent_budget() {
         let valid = png();
         let idat = valid.windows(4).position(|b| b == b"IDAT").unwrap();
         let invalid = Arc::new(valid[..idat + 4].to_vec());
@@ -551,11 +555,12 @@ mod invalid_image_accounting {
         let limits = Limits { embedded_raster_pixels: 3, ..shallow() };
         let resolver = ImageResolver::new(limits);
         let used = &resolver.used;
-        let format = craft_image_codecs::Format::Png;
+        let format = SvgRaster::Png;
         assert!(raster_image(used, &limits, invalid, format).is_none());
-        assert!(!used.raster_data.lock().unwrap().contains(&pointer));
+        assert!(!used.raster_data.lock().unwrap().contains_key(&pointer));
         assert_eq!(resolver.usage().raster_pixels, 1);
         let first_data = Arc::new(valid.clone());
+        let first_pointer = Arc::as_ptr(&first_data) as usize;
         let first = raster_image(used, &limits, first_data.clone(), format).unwrap();
         assert_eq!(resolver.usage().raster_pixels, 2);
         let repeated = raster_image(used, &limits, first_data, format).unwrap();
@@ -565,6 +570,9 @@ mod invalid_image_accounting {
         assert!(raster_image(used, &limits, Arc::new(valid), format).is_none());
         assert_eq!(resolver.usage().raster_limit_images, 1);
         drop((first, repeated, second));
+        let seen = used.raster_data.lock().unwrap();
+        let identity = seen.get(&first_pointer).expect("the cache holds the allocation identity");
+        assert!(identity.upgrade().is_none(), "the cache must not retain encoded bytes");
     }
 
     #[test]

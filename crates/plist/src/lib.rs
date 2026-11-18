@@ -5,7 +5,7 @@
 mod binary;
 mod bytes;
 mod xml;
-pub use binary::{DateValue, Value, first_string_in_array, parse_binary, parse_binary_with_limits};
+pub use binary::{BinaryOptions, DateValue, Value, first_string_in_array, parse_binary, parse_binary_with_limits, parse_binary_with_options};
 pub use xml::{XmlOptions, parse_xml, parse_xml_with_limits, parse_xml_with_options, parse_xml_with_token_limit};
 
 /// Caller-selected resource limits. Zero values refuse the corresponding resource.

@@ -362,7 +362,7 @@ impl Writer<'_> {
     }
 
     fn write_shape(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, extra, .. } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, extra, story, .. } = o else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
@@ -371,7 +371,11 @@ impl Writer<'_> {
         // VML fallback instead of refusing the file. A shape without one stays bare: guarded with
         // no fallback, that reader would open the file without the shape and drop it on its next
         // save, which is worse than refusing the file.
-        let fallback = freeform.is_none() && vml_tag(*kind).is_some();
+        // VML currently has no chain IDs or mso-next-textbox links. Keep every member of a
+        // linked story bare, including its head: an unlinked fallback would silently lose
+        // overflow text in older readers. Unlinked boxes still get the compatibility fallback.
+        let linked = story.is_some_and(|id| self.txbx_links.contains_key(&id));
+        let fallback = freeform.is_none() && vml_tag(*kind).is_some() && !linked;
         if fallback {
             w.open("mc:AlternateContent", &[]);
             w.open("mc:Choice", &[("Requires", "wps")]);
@@ -394,8 +398,9 @@ impl Writer<'_> {
         }
         let float = &float;
         self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
-        // This shape's stacking order: floating objects in its text box move `self.z` on.
-        let z = self.z;
+        // This shape's stacking order, as its anchor gave it: floating objects in its text box
+        // write anchors of their own.
+        let z = self.anchor_z;
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);

@@ -810,3 +810,56 @@ fn verifies_ecdsa_on_p521_and_the_brainpool_curves() {
         assert!(!key.verify(Scheme::Ecdsa, alg, &digest[..digest.len() / 2], &sig).unwrap(), "{name}: short digest");
     }
 }
+
+#[test]
+fn parsed_parts_preserve_owned_bytes_and_unverified_fields() {
+    use craft_pkcs7::revocation::{CertStatus, ResponderId};
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let cert = craft_pkcs7::x509::Certificate::parse(&id.certificate.raw).unwrap();
+    let raw_pointer = cert.raw.as_ptr();
+    let expected = cert.clone();
+    let parts = cert.into_parts();
+    assert_eq!(parts.raw.as_ptr(), raw_pointer);
+    assert_eq!(parts.raw, expected.raw);
+    assert_eq!(parts.subject, expected.subject);
+    assert_eq!(parts.issuer, expected.issuer);
+    assert_eq!(parts.public_key, expected.public_key);
+    assert_eq!(parts.serial, expected.serial);
+    let der = der::Tlv::parse_all(&parts.raw).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    let this = mid_june();
+    let bytes = crl(&id, Some((&id.certificate.serial, this)), this, this);
+    let crl = CertificateList::parse(&bytes).unwrap();
+    let revoked_pointer = crl.revoked.as_ptr();
+    let parts = crl.into_parts();
+    assert_eq!(parts.revoked.as_ptr(), revoked_pointer);
+    assert_eq!(parts.revoked, vec![(id.certificate.serial.iter().copied().skip_while(|b| *b == 0).collect(), this)]);
+    assert_eq!(parts.this_update, this);
+    assert_eq!(parts.next_update, Some(this));
+    assert_eq!(parts.issuer_raw, id.certificate.subject.raw);
+    let der = der::Tlv::parse_all(&bytes).unwrap().children().unwrap();
+    assert_eq!(parts.tbs, der[0].raw);
+    assert_eq!(parts.sig_alg, der[1].raw);
+    assert_eq!(parts.signature, der[2].bits().unwrap());
+    for status in [RevocationStatus::Good, RevocationStatus::Unknown, RevocationStatus::Revoked { at: this }] {
+        let response = OcspResponse::parse(&ocsp(&id, status.clone(), this, this)).unwrap();
+        let responses_pointer = response.responses.as_ptr();
+        let parts = response.into_parts();
+        assert_eq!(parts.responses.as_ptr(), responses_pointer);
+        assert!(matches!(&parts.responder_id, ResponderId::ByName(name) if *name == id.certificate.subject.raw));
+        assert!(parts.responder_cert.is_none());
+        let (cert_id, parsed, date, next) = parts.responses.into_iter().next().unwrap().into_parts();
+        assert_eq!(cert_id, craft_pkcs7::revocation::CertId::build(&id.certificate, &id.certificate, DigestAlg::Sha1));
+        assert_eq!((date, next), (this, Some(this)));
+        assert_eq!(
+            parsed,
+            match status {
+                RevocationStatus::Good => CertStatus::Good,
+                RevocationStatus::Unknown => CertStatus::Unknown,
+                RevocationStatus::Revoked { at } => CertStatus::Revoked(at),
+            }
+        );
+    }
+}
