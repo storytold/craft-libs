@@ -3,6 +3,8 @@
 mod range;
 mod setup;
 mod size_picker;
+
+mod text_select;
 mod text_tables;
 mod thumbnails;
 mod views;

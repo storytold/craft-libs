@@ -50,7 +50,7 @@ pub trait PageTextSource {
     }
 }
 
-/// What is selected on one page.
+/// What a selection covers: a run from its page on to any other, or a column on its page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum TextSpan {
@@ -77,13 +77,8 @@ pub enum TextSpan {
 }
 
 impl TextSpan {
-    /// A run from the glyph `anchor` to the glyph `head`.
-    pub fn run(anchor: usize, head: usize) -> Self {
-        TextSpan::Run { anchor, head, head_page: 0, end_x: None } // P3(pdf-canvas-w5): CV-C24
-    }
-
     /// A run from the glyph `anchor` on the selection's page to the glyph `head` on page `head_page`.
-    pub fn run_to(anchor: usize, head_page: usize, head: usize) -> Self {
+    pub fn run(anchor: usize, head_page: usize, head: usize) -> Self {
         TextSpan::Run { anchor, head, head_page, end_x: None }
     }
 
@@ -93,66 +88,105 @@ impl TextSpan {
     }
 }
 
-/// A text selection on one page.
+/// A text selection: a run in reading order from its page on to any other, or a column on its page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct TextSelection {
-    /// Page index, 0-based.
+    /// Page index, 0-based: where the selection started.
     pub page: usize,
-    /// The selected glyphs on that page.
+    /// The selected glyphs.
     pub span: TextSpan,
 }
 
 impl TextSelection {
-    /// The selection `span` on page `page`.
+    /// The selection `span`, started on page `page`.
     pub fn new(page: usize, span: TextSpan) -> Self {
         TextSelection { page, span }
     }
 
-    /// The selection as rectangles, one per line piece (for highlighting and markup quads).
-    // pdfcraft: crates/ui-egui/src/canvas/selection.rs:29 `Selection::rects`.
-    pub fn rects(&self, text: &dyn PageTextSource) -> Vec<Rect> {
-        match self.span {
-            TextSpan::Run { anchor, head, .. } => text.line_rects(run_range(anchor, head)),
-            TextSpan::Column { from, to } => {
-                let glyphs = text.glyphs_in(Rect::from_points(from, to));
-                runs(&glyphs).into_iter().flat_map(|run| text.line_rects(run)).collect()
-            }
-        }
+    /// A run's ends as `(page, glyph)`, anchor then head; `None` for a column.
+    fn run_ends(&self) -> Option<((usize, usize), (usize, usize))> {
+        let TextSpan::Run { anchor, head, head_page, .. } = self.span else { return None };
+        Some(((self.page, anchor), (head_page, head)))
+    }
+
+    /// A run's ends in reading order, first then last: `(page, glyph)` pairs compare in reading order.
+    fn reading_order(&self) -> Option<((usize, usize), (usize, usize))> {
+        let (anchor, head) = self.run_ends()?;
+        Some(if anchor <= head { (anchor, head) } else { (head, anchor) })
     }
 
     /// The pages the selection covers, from its first to its last.
     pub fn pages(&self) -> RangeInclusive<usize> {
-        todo!("CV-C24")
+        match self.reading_order() {
+            Some(((first, _), (last, _))) => first..=last,
+            None => self.page..=self.page,
+        }
     }
 
-    /// The glyphs of the selection on `page`; `None` when it covers nothing there.
+    /// The glyphs of the selection on `page`: the rest of its first page, every page between whole, its last page up
+    /// to its last glyph, whichever way the drag went. `None` when it covers nothing there, and for a column, whose
+    /// glyphs are not one range ([`rects_on`](Self::rects_on) and [`text`](Self::text) read it).
     pub fn glyphs_on(&self, page: usize, text: &dyn PageTextSource) -> Option<Range<usize>> {
-        let _ = (page, text);
-        todo!("CV-C24")
+        let ((first_page, first), (last_page, last)) = self.reading_order()?;
+        if !(first_page..=last_page).contains(&page) {
+            return None;
+        }
+        // The indices may be stale (the page's text was read again) or hostile: every one is clamped to the page.
+        let count = text.glyph_count();
+        let start = if page == first_page { first.min(count) } else { 0 };
+        let end = if page == last_page { last.saturating_add(1).min(count) } else { count };
+        Some(start..end).filter(|glyphs| !glyphs.is_empty())
     }
 
-    /// The selection on `page` as rectangles, one per line piece.
+    /// The selection on `page` as rectangles, one per line piece (for highlighting and markup quads).
+    // pdfcraft: crates/ui-egui/src/canvas/selection.rs:29 `Selection::rects`.
     pub fn rects_on(&self, page: usize, text: &dyn PageTextSource) -> Vec<Rect> {
-        let _ = (page, text);
-        todo!("CV-C24")
+        match self.span {
+            TextSpan::Column { from, to } if page == self.page => glyph_rects(text, &text.glyphs_in(Rect::from_points(from, to))),
+            TextSpan::Column { .. } => Vec::new(),
+            TextSpan::Run { .. } => match self.rows_on(page, text) {
+                Some(rows) => glyph_rects(text, &rows),
+                None => self.glyphs_on(page, text).map(|glyphs| text.line_rects(glyphs)).unwrap_or_default(),
+            },
+        }
     }
 
-    /// The selected text, as Copy puts it on the clipboard; `None` while a covered page is unread.
+    /// The glyphs a one-page run released past its row's last glyph selects by rows, when the page says so.
+    fn rows_on(&self, page: usize, text: &dyn PageTextSource) -> Option<Vec<usize>> {
+        let TextSpan::Run { anchor, head, end_x: Some(end_x), .. } = self.span else { return None };
+        let ((first, _), (last, _)) = self.reading_order()?;
+        (first == page && last == page).then(|| text.rows_between(anchor, head, end_x)).flatten()
+    }
+
+    /// The selected text on `page`, one of the pages the selection covers.
+    fn text_on(&self, page: usize, text: &dyn PageTextSource) -> String {
+        match self.span {
+            TextSpan::Column { from, to } => text.column_text(&text.glyphs_in(Rect::from_points(from, to))),
+            TextSpan::Run { .. } => match self.rows_on(page, text) {
+                Some(rows) => text.column_text(&rows),
+                None => self.glyphs_on(page, text).map(|glyphs| text.text_of(glyphs)).unwrap_or_default(),
+            },
+        }
+    }
+
+    /// The selected text, as Copy puts it on the clipboard: the covered pages' parts joined with newlines. `None`
+    /// while a covered page is unread ([`unread_pages`](Self::unread_pages) says which).
     // pdfcraft: crates/ui-egui/src/canvas/selection.rs:37 `Selection::text`.
     pub fn text(&self, texts: &dyn PageTexts) -> Option<String> {
-        let text = texts.page(self.page)?; // P3(pdf-canvas-w5): CV-C24, the first page only
-        Some(match self.span {
-            TextSpan::Run { anchor, head, .. } => text.text_of(run_range(anchor, head)),
-            TextSpan::Column { from, to } => text.column_text(&text.glyphs_in(Rect::from_points(from, to))),
-        })
+        let parts = self.pages().map(|page| texts.page(page).map(|text| self.text_on(page, text))).collect::<Option<Vec<_>>>()?;
+        Some(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n"))
     }
 
     /// The covered pages whose text is not read yet.
     pub fn unread_pages(&self, texts: &dyn PageTexts) -> Vec<usize> {
-        let _ = texts;
-        todo!("CV-C24")
+        self.pages().filter(|&page| texts.page(page).is_none()).collect()
     }
+}
+
+/// One rectangle per line piece of `glyphs`, taken as runs of consecutive indices.
+fn glyph_rects(text: &dyn PageTextSource, glyphs: &[usize]) -> Vec<Rect> {
+    runs(glyphs).into_iter().flat_map(|run| text.line_rects(run)).collect()
 }
 
 /// The glyphs of a run, both ends included.
@@ -165,8 +199,8 @@ fn runs(glyphs: &[usize]) -> Vec<Range<usize>> {
     let mut runs: Vec<Range<usize>> = Vec::new();
     for &glyph in glyphs {
         match runs.last_mut() {
-            Some(run) if run.end == glyph => run.end += 1,
-            _ => runs.push(glyph..glyph + 1),
+            Some(run) if run.end == glyph => run.end = run.end.saturating_add(1),
+            _ => runs.push(glyph..glyph.saturating_add(1)),
         }
     }
     runs
@@ -216,7 +250,8 @@ pub trait PageTexts {
 pub struct TextSelectState {
     /// The selection, if any.
     pub selection: Option<TextSelection>,
-    /// The drag in progress: the page and where it started (glyph, or page point for a column).
+    /// The drag in progress: the selection's page and where it started (a run from the anchor to the pressed glyph,
+    /// or the column's first corner).
     gesture: Option<(usize, TextSpan)>,
     /// The press's click count, and the selection from before the gesture (Esc brings it back).
     clicks: u32,
@@ -269,8 +304,8 @@ fn paint_marks(
                 draw.fill(&PaintShape::Rect(screen(rect).expand(grow), look.radius), fill);
             }
         }
-        if let Some(selection) = selection.filter(|selection| selection.page == placed.page) {
-            for rect in selection.rects(text) {
+        if let Some(selection) = selection {
+            for rect in selection.rects_on(placed.page, text) {
                 draw.fill(&PaintShape::Rect(screen(rect), look.radius), look.selection);
             }
         }
@@ -280,14 +315,16 @@ fn paint_marks(
 /// Acrobat's Select tool on the page view, a craft-ui [`CanvasTool`] the app runs in its `ToolHost` over the page
 /// view's canvas; built per pass over the pass's placed pages and the app's [`TextSelectState`].
 ///
-/// - Press and drag with the primary button selects ([`TextSpan::Run`], anchored at the press's glyph); with Alt held
-///   (or [`column`](Self::column) on: the Column Select tool) it selects a column, its rectangle outlined while
-///   dragging. The press's click count is [`ToolPointer::clicks`]: 2 the word, 3 the line, 4 the page
-///   ([`click_unit`]). The cursor is the I-beam over glyphs, the arrow elsewhere. A press off any glyph clears the
+/// - Press and drag with the primary button selects ([`TextSpan::Run`], anchored at the press's glyph, its head on
+///   whichever page the pointer is over); with Alt held (or [`column`](Self::column) on: the Column Select tool) it
+///   selects a column on the pressed page, its rectangle outlined while dragging. The press's click count is
+///   [`ToolPointer::clicks`]: 2 the word, 3 the line, 4 the page ([`click_unit`]); dragging after 2 or 3 extends by
+///   whole units onto other pages too, the page unit stays on its page. Shift-click extends the run from its anchor
+///   onto any page. The cursor is the I-beam over glyphs, the arrow elsewhere. A press off any glyph clears the
 ///   selection.
-/// - Keys while the canvas has the keyboard: Shift with the arrows extends a run by a glyph (Shift and Alt by a word;
-///   left and right swap in a right-to-left interface), Escape clears. Select
-///   All and Copy are the app's commands (they read [`TextSelection::text`]).
+/// - Keys while the canvas has the keyboard: Shift with the arrows moves a run's head on its page by a glyph (Shift
+///   and Alt by a word; left and right swap in a right-to-left interface), Escape clears. Select All and Copy are the
+///   app's commands (they read [`TextSelection::text`]).
 /// - Its command form is the app's Select All command: the tool selects, so it is not freehand.
 /// - The selection is reported to assistive technology through the page view's accessibility bridge.
 pub struct TextSelectTool<'a> {
@@ -336,6 +373,47 @@ impl<'a> TextSelectTool<'a> {
         self.state.clicks = 0;
         self.state.before = None;
     }
+
+    /// The run a 2-, 3- or 4-click drag selects from the unit pressed (around glyph `origin` on `page`) to glyph `hit`
+    /// on `head_page`: whole units both ways in `(page, glyph)` order; the four-click page unit stays on its page.
+    /// `None` for a single-click drag, or when the pressed glyph has no unit.
+    fn unit_run(&self, page: usize, origin: usize, head_page: usize, hit: usize) -> Option<TextSpan> {
+        let clicks = self.state.clicks;
+        if clicks < 2 {
+            return None;
+        }
+        let unit = click_unit(self.texts.page(page)?, clicks, origin).filter(|unit| !unit.is_empty())?;
+        if clicks >= 4 {
+            return Some(TextSpan::run(unit.start, page, unit.end - 1));
+        }
+        let reached = self
+            .texts
+            .page(head_page)
+            .and_then(|text| click_unit(text, clicks, hit))
+            .filter(|unit| !unit.is_empty())
+            .unwrap_or(hit..hit.saturating_add(1));
+        Some(if (head_page, reached.start) < (page, unit.start) {
+            TextSpan::run(unit.end - 1, head_page, reached.start)
+        } else if head_page == page {
+            TextSpan::run(unit.start, page, (reached.end - 1).max(unit.end - 1))
+        } else {
+            TextSpan::run(unit.start, head_page, reached.end - 1)
+        })
+    }
+
+    /// Where a single-click drag that stayed on its page was released, in page points, when no glyph's box holds the
+    /// release point: the end [`PageTextSource::rows_between`] reads. `None` for a click (the head never left the
+    /// pressed glyph), a unit drag, a column and a run across pages.
+    fn released_past_row(&self, pointer: &ToolPointer) -> Option<f64> {
+        let (page, TextSpan::Run { head: pressed, head_page: pressed_page, .. }) = self.state.gesture? else { return None };
+        let ((selected, _), head) = self.state.selection?.run_ends()?;
+        if self.state.clicks != 1 || selected != page || head.0 != page || head == (pressed_page, pressed) {
+            return None;
+        }
+        let placed = self.page_at(pointer.pos).filter(|placed| placed.page == page)?;
+        let at = placed.to_page(pointer.pos);
+        self.texts.page(page)?.glyph_box_at(at).is_none().then_some(at.x)
+    }
 }
 
 // pdfcraft: crates/ui-egui/src/canvas.rs:1470 `text_layer`, :1547 `text_pointer_input`.
@@ -362,13 +440,13 @@ impl CanvasTool for TextSelectTool<'_> {
             self.set(None);
             return ToolAction::Done;
         };
-        let at = placed.to_page(pointer.pos);
+        let (page, at) = (placed.page, placed.to_page(pointer.pos));
         let before = self.state.selection;
         if self.column || pointer.mods.alt {
-            self.state.gesture = Some((placed.page, TextSpan::Column { from: at, to: at }));
+            self.state.gesture = Some((page, TextSpan::column(at, at)));
             self.state.clicks = 1;
             self.state.before = before;
-            self.set(Some(TextSelection { page: placed.page, span: TextSpan::Column { from: at, to: at } }));
+            self.set(Some(TextSelection::new(page, TextSpan::column(at, at))));
             return ToolAction::Claimed;
         }
         let Some(glyph) = text.glyph_at(at) else {
@@ -376,24 +454,30 @@ impl CanvasTool for TextSelectTool<'_> {
             return ToolAction::Done;
         };
         let clicks = pointer.clicks.max(1);
-        let extended = before.filter(|selection| pointer.mods.shift && clicks < 2 && selection.page == placed.page);
-        let (span, start) = match (clicks, extended) {
+        let extended = before.filter(|_| pointer.mods.shift && clicks < 2).and_then(|selection| selection.run_ends());
+        let (selection, start) = match (clicks, extended) {
             (2.., _) => match click_unit(text, clicks, glyph).filter(|unit| !unit.is_empty()) {
-                Some(unit) => (TextSpan::run_to(unit.start, placed.page, unit.end - 1), TextSpan::run_to(glyph, placed.page, glyph)),
+                Some(unit) => {
+                    (TextSelection::new(page, TextSpan::run(unit.start, page, unit.end - 1)), TextSelection::new(page, TextSpan::run(glyph, page, glyph)))
+                }
                 None => {
                     self.set(None);
                     return ToolAction::Done;
                 }
             },
-            (_, Some(TextSelection { span: TextSpan::Run { anchor, .. }, .. })) => {
-                (TextSpan::run_to(anchor, placed.page, glyph), TextSpan::run_to(anchor, placed.page, anchor))
+            (_, Some(((from, anchor), _))) => {
+                let run = TextSelection::new(from, TextSpan::run(anchor, page, glyph));
+                (run, run)
             }
-            _ => (TextSpan::run_to(glyph, placed.page, glyph), TextSpan::run_to(glyph, placed.page, glyph)),
+            _ => {
+                let run = TextSelection::new(page, TextSpan::run(glyph, page, glyph));
+                (run, run)
+            }
         };
-        self.state.gesture = Some((placed.page, start));
+        self.state.gesture = Some((start.page, start.span));
         self.state.clicks = clicks;
         self.state.before = before;
-        self.set(Some(TextSelection { page: placed.page, span }));
+        self.set(Some(selection));
         ToolAction::Claimed
     }
 
@@ -401,37 +485,35 @@ impl CanvasTool for TextSelectTool<'_> {
         let (pages, texts) = (self.pages, self.texts);
         let Some((page, start)) = self.state.gesture else { return };
         let Some(selection) = self.state.selection.filter(|selection| selection.page == page) else { return };
-        let (Some(placed), Some(text)) = (pages.iter().find(|placed| placed.page == page), texts.page(page)) else { return };
-        let at = placed.to_page(pointer.pos);
         let span = match (selection.span, start) {
-            (TextSpan::Column { from, .. }, _) => TextSpan::Column { from, to: at },
-            (TextSpan::Run { anchor, .. }, TextSpan::Run { anchor: origin, .. }) => {
-                let Some(hit) = text.glyph_at(at) else { return };
-                let clicks = self.state.clicks;
-                match click_unit(text, clicks, origin).filter(|unit| !unit.is_empty()) {
-                    Some(unit) if clicks >= 2 => {
-                        let reached = click_unit(text, clicks, hit).filter(|unit| !unit.is_empty()).unwrap_or(hit..hit + 1);
-                        if reached.start < unit.start {
-                            TextSpan::run_to(unit.end - 1, page, reached.start)
-                        } else {
-                            TextSpan::run_to(unit.start, page, (reached.end - 1).max(unit.end - 1))
-                        }
-                    }
-                    _ => TextSpan::run_to(anchor, page, hit),
-                }
+            (TextSpan::Column { from, .. }, _) => {
+                let Some(placed) = pages.iter().find(|placed| placed.page == page) else { return };
+                TextSpan::column(from, placed.to_page(pointer.pos))
             }
-            (span, _) => span,
+            (TextSpan::Run { anchor, .. }, TextSpan::Run { anchor: origin, .. }) => {
+                // The head follows the pointer onto whichever page it is over; off every page, or over a page whose
+                // text is not read yet, the selection keeps its last value.
+                let Some(placed) = self.page_at(pointer.pos) else { return };
+                let Some(hit) = texts.page(placed.page).and_then(|text| text.glyph_at(placed.to_page(pointer.pos))) else { return };
+                self.unit_run(page, origin, placed.page, hit).unwrap_or(TextSpan::run(anchor, placed.page, hit))
+            }
+            _ => return,
         };
-        self.set(Some(TextSelection { page, span }));
+        self.set(Some(TextSelection::new(page, span)));
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         self.drag(pointer, cx);
-        if let Some(selection) = self.state.selection
-            && matches!(selection.span, TextSpan::Column { .. })
-            && selection.text(self.texts).is_none_or(|text| text.is_empty())
-        {
-            self.set(None);
+        let end_x = self.released_past_row(pointer);
+        let selection = self.state.selection;
+        match selection {
+            Some(selection @ TextSelection { span: TextSpan::Column { .. }, .. }) if selection.text(self.texts).is_none_or(|text| text.is_empty()) => {
+                self.set(None);
+            }
+            Some(TextSelection { page, span: TextSpan::Run { anchor, head, head_page, .. } }) if end_x.is_some() => {
+                self.set(Some(TextSelection::new(page, TextSpan::Run { anchor, head, head_page, end_x })));
+            }
+            _ => {}
         }
         self.end_gesture();
     }
@@ -452,8 +534,9 @@ impl CanvasTool for TextSelectTool<'_> {
                 true
             }
             ToolKey::Nudge { direction, mods, .. } if mods.shift => {
-                let TextSpan::Run { anchor, head, .. } = selection.span else { return false };
-                let Some(text) = self.texts.page(selection.page) else { return false };
+                // The head moves on its own page and stops at that page's first and last glyph.
+                let Some(((_, anchor), (head_page, head))) = selection.run_ends() else { return false };
+                let Some(text) = self.texts.page(head_page) else { return false };
                 let count = text.glyph_count();
                 let vertical = direction.y != 0.0;
                 let forward = if vertical { direction.y > 0.0 } else { (direction.x > 0.0) != cx.direction().is_rtl() };
@@ -462,14 +545,11 @@ impl CanvasTool for TextSelectTool<'_> {
                 } else if mods.alt {
                     word_step(text, head, forward, count)
                 } else if forward {
-                    head + 1
+                    head.saturating_add(1)
                 } else {
                     head.saturating_sub(1)
                 };
-                self.set(Some(TextSelection {
-                    page: selection.page,
-                    span: TextSpan::run_to(anchor, selection.page, moved.min(count.saturating_sub(1))),
-                }));
+                self.set(Some(TextSelection::new(selection.page, TextSpan::run(anchor, head_page, moved.min(count.saturating_sub(1))))));
                 true
             }
             _ => false,
@@ -501,7 +581,7 @@ impl CanvasTool for TextSelectTool<'_> {
 /// The head one word on from `head`, or back.
 fn word_step(text: &dyn PageTextSource, head: usize, forward: bool, count: usize) -> usize {
     if forward {
-        (head + 1..count).find_map(|glyph| text.word_at(glyph).map(|word| word.end - 1).filter(|end| *end > head)).unwrap_or(head)
+        (head.saturating_add(1)..count).find_map(|glyph| text.word_at(glyph).map(|word| word.end - 1).filter(|end| *end > head)).unwrap_or(head)
     } else {
         (0..head).rev().find_map(|glyph| text.word_at(glyph).map(|word| word.start).filter(|start| *start < head)).unwrap_or(head)
     }
