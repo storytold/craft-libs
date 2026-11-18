@@ -282,7 +282,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | Text parts | `layout`, text outcomes and the editor stream and state, methods of `MeasureCx` and `PartsCx` | `craft_ui::contract` | 1.5, 18 |
 | `TextRun`, `TextLayout` | The one description of UI text, and its laid-out form | `craft_ui::primitives` | 5.2 |
 | `TextureCache` | The one texture path | `craft_ui::primitives::textures` | 5.5 |
-| `ThemeScope` | Token-changing values (mode, contrast, a named theme, density, text size) for a container's body | `craft_ui::runtime::env` | 2.3 |
+| `ThemeScope` | Another theme definition, mode, contrast or density for a container, everything it shows and the layers opened from it | `craft_ui::runtime::env` | 2.3 |
 | `TitleRow`, `FooterBar` | The layer-5 components library containers show in their header and footer regions | `craft_ui` title-row and bar families | 16.4 |
 | `Tokens` | craft-theme's resolved semantic token set | craft-theme | 4.4, 4.5 |
 | Token group | A crate-prefixed group of semantic colour and shape tokens for a crate's own concepts | craft-theme (trait), `craft_ui::style` (cache) | 4.5 |

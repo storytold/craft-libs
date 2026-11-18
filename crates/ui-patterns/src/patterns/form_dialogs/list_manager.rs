@@ -3,7 +3,7 @@
 use crate::contract::{
     Bind, CollectionEvent, NoValue, Outcome, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
 };
-use crate::dialog::{Dialog, DialogOutput};
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
 use crate::display::{Shade, Text};
 use crate::form::Field;
 use crate::layout_components::Stack;
@@ -334,15 +334,16 @@ impl<'a> ListManager<'a> {
             })
             .collect();
         buttons.push(FooterButton::new(common.cancel.clone(), DialogRole::Cancel));
-        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).side_buttons(true).buttons(buttons).settle_buttons(
-            move |cx, buttons| {
-                let folder = cx.env.folder();
-                let typed = cx.memory::<Session>().name.clone();
-                for (button, action) in buttons.iter_mut().zip(actions) {
-                    button.set_enabled(is_enabled(action, entries, &folder, &typed));
-                }
-            },
-        );
+        let mut dialog =
+            Dialog::new(title.clone()).collection_body().close_on_enter(false).button_place(ButtonPlace::Side).buttons(buttons).settle_buttons(
+                move |cx, buttons| {
+                    let folder = cx.env.folder();
+                    let typed = cx.memory::<Session>().name.clone();
+                    for (button, action) in buttons.iter_mut().zip(actions) {
+                        button.set_enabled(is_enabled(action, entries, &folder, &typed));
+                    }
+                },
+            );
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

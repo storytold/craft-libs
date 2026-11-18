@@ -10,7 +10,7 @@ use craft_theme::{ContrastChoice, ModeChoice, SuiteChoice, TextSize, ThemeId, Th
 
 use super::SuiteClient;
 use crate::{
-    Op, SelectionChange, StoreOptions, SuiteDir, SuiteWatch,
+    Op, SelectionChange, StoreError, StoreOptions, SuiteDir, SuiteWatch,
     testing::{SAMPLE_THEME_ID, SAMPLE_THEME_JSON},
 };
 
@@ -126,4 +126,32 @@ fn a_library_theme_on_its_way_never_shows_the_app_default() {
     own.set_app_theme(Some(ThemePair::same(id("gone"))));
     own.sync();
     assert!(!own.is_loading(&id("gone")));
+}
+
+#[trial]
+fn a_save_through_the_client_reports_the_new_stamp() {
+    let mut client = SuiteClient::memory();
+    client.sync();
+    client.watch().request(Op::Import { bytes: Arc::from(SAMPLE_THEME_JSON.as_bytes()), as_copy: false });
+    client.sync();
+    let sample = id(SAMPLE_THEME_ID);
+    let entry = |client: &SuiteClient| client.snapshot().index.iter().find(|e| e.id == sample).cloned().unwrap();
+    let loaded = entry(&client).stamp;
+    let edited: Arc<[u8]> = Arc::from(SAMPLE_THEME_JSON.replace("\"version\": 3", "\"version\": 4").as_bytes());
+
+    assert!(client.save_theme(sample.clone(), Arc::clone(&edited), loaded));
+    // One save at a time.
+    assert!(!client.save_theme(sample.clone(), Arc::clone(&edited), loaded));
+    assert!(client.is_saving());
+    client.sync();
+    assert!(!client.is_saving());
+    let (saved, stamp) = client.take_saved().unwrap();
+    let stamp = stamp.unwrap();
+    assert_eq!(saved, sample);
+    assert_eq!((entry(&client).stamp, entry(&client).version), (stamp, 4));
+
+    // The stamp from before the save is stale now.
+    assert!(client.save_theme(sample.clone(), edited, loaded));
+    client.sync();
+    assert!(matches!(client.take_saved(), Some((_, Err(StoreError::Changed(_))))));
 }

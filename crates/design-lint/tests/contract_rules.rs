@@ -83,7 +83,7 @@ fn type_facts_cross_files_of_a_crate() {
     let root = Path::new(FIXTURES).join("tree");
     let scope = scope().layer("src/chips", 5).crate_tree(&root, "fx", "src/lib.rs").unwrap();
     let report = check_with_scope(&Config::new(["src/chips"]), &root, &scope).unwrap();
-    let hits: Vec<_> = report.findings.iter().map(|f| (f.path.display().to_string(), f.rule)).collect();
+    let hits: Vec<_> = report.findings.iter().map(|f| (f.path.display().to_string().replace('\\', "/"), f.rule)).collect();
     assert_eq!(
         hits,
         [

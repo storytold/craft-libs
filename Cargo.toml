@@ -11,6 +11,12 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-java-class = { path = "crates/java-class" }
+craft-sourcemap = { path = "crates/sourcemap" }
+craft-pcap = { path = "crates/pcap" }
+craft-har = { path = "crates/har" }
+craft-xfdf = { path = "crates/xfdf" }
+craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
 craft-shx = { path = "crates/shx" }
@@ -25,6 +31,7 @@ acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-plist = { path = "crates/plist" }
+craft-wasm = { path = "crates/wasm" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
@@ -58,6 +65,9 @@ craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-cloud = { path = "crates/cloud" }
+craft-cloud-local = { path = "crates/cloud-local" }
+craft-cloud-ui = { path = "crates/cloud-ui" }
 craft-color = { path = "crates/color" }
 craft-color-ui = { path = "crates/color-ui" }
 craft-frame = { path = "crates/frame" }
@@ -113,7 +123,7 @@ craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-font-subset = { path = "crates/font-subset" }
 # The HarfBuzz subsetter from storytold's HarfBuzz fork (branch rust-subset-15.0.0: HarfBuzz 15.0.0 plus rust/harfbuzz-subset-sys).
-harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "2659dd807f9a48f75604ee7c76cb709f7b70b950" }
+harfbuzz-subset-sys = { git = "https://github.com/storytold/harfbuzz.git", rev = "f32ed1e548eaa8852bff47e49a90629a013a2faa" }
 craft-host = { path = "crates/host" }
 craft-i18n = { path = "crates/i18n" }
 craft-ipc = { path = "crates/ipc" }
@@ -198,6 +208,7 @@ craft-tiff = { path = "crates/tiff" }
 craft-metadata = { path = "crates/metadata" }
 craft-table = { path = "crates/table" }
 craft-theme = { path = "crates/theme" }
+craft-theme-editor = { path = "crates/theme-editor" }
 craft-theme-store = { path = "crates/theme-store" }
 craft-ui = { path = "crates/ui" }
 craft-ui-canvas = { path = "crates/ui-canvas" }
@@ -304,44 +315,3 @@ opt-level = 3
 # 2 MiB stack of a test thread. The apps this reader came from build their crates at this level.
 [profile.dev.package.craft-affinity]
 opt-level = 1
-# Dev and test builds never run LTO: with `lto = false` (cargo's default) rustc runs thin-local LTO across every
-# optimised crate's 256 codegen units on each rebuild, which multiplied the incremental rebuild of the framework
-# crates. Off, a one-line edit re-optimises only the changed units.
-[profile.dev]
-lto = "off"
-
-# Dependencies (egui, rendering, text shaping, syn) run optimised in dev and test builds, so
-# screen tests, design-lint and the debug gallery run at a usable speed. They build once per
-# target dir; the workspace's own crates stay unoptimised and incremental.
-[profile.dev.package."*"]
-opt-level = 2
-
-# craft-theme's colour maths and the behaviour cores, which run in every screen-test frame, and craft-proof, whose
-# tests parse and check whole dictionaries, build at opt-level 1: unoptimised, they made the test binaries several
-# times slower, and they are rarely edited. Every other workspace crate, the framework runtime included, stays at
-# opt-level 0: an edit to craft-ui-contract (65k lines) rebuilt for 35-90 s at opt-level 1 and rebuilds in seconds at 0,
-# and the runtime's hot pipeline is generic, so it compiles in the dependants at their opt-level anyway.
-[profile.dev.package.craft-theme]
-opt-level = 1
-[profile.dev.package.craft-behavior]
-opt-level = 1
-[profile.dev.package.craft-proof]
-opt-level = 1
-
-# The gallery on the Mac: optimised like release, but the workspace's crates build in many small
-# units, incrementally, so a change to craft-ui rebuilds in minutes. Dependencies keep release
-# settings and build once in target/gallery. `cargo run --profile gallery -p craft-ui-gallery`.
-[profile.gallery]
-inherits = "release"
-incremental = true
-codegen-units = 256
-opt-level = 1
-
-# The workspace's own crates build at opt-level 1 in the gallery profile: rustc shares generic instantiations across
-# crates at opt-level 0, 1, s and z only, so at 1 a change in a framework crate no longer makes every dependant
-# re-generate its own copies of that crate's generics and inlined functions (a one-line edit rebuilt the gallery in
-# 25 s at opt-level 1 and 69–84 s at 3). `package."*"` matches the dependencies only: they keep release optimisation,
-# so this changes nothing in their settings.
-[profile.gallery.package."*"]
-codegen-units = 16
-opt-level = 3

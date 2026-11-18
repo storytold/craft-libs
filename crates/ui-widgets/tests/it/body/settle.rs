@@ -1,8 +1,9 @@
 //! Settling children (`Lazy::settles`): a settled child adds its last run to the pass in place of running, and runs
 //! when something it shows may have changed: the pointer over it, a bound value, inspection record or command state it
-//! read, its room, its content version, an animation or a repaint asked inside it.
+//! read, its room, its content version, its environment (theme, density), an animation or a repaint asked inside it.
 
 use crate::values::kit::{AT, INITIAL, Scrub, Seen};
+use craft_theme::{Contrast, Mode, Size};
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
@@ -12,7 +13,7 @@ use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Comm
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Frames, last_pass_measuring_runs, trial};
+use craft_ui::testing::{Fixture, Frames, last_pass_measuring_runs, trial};
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -430,4 +431,56 @@ fn a_press_with_the_pointer_arriving_reaches_a_member_of_a_settled_child() {
     frames.frame(vec![moved(medium), press(medium)], &mut show);
     frames.frame(vec![release(medium)], &mut show);
     assert_eq!(picked.get(), 2, "the press that came with the pointer picks Medium");
+}
+
+/// A child with a content version runs when the theme changes, whose tokens it painted with, and when the density
+/// does; it settles again after each.
+#[trial]
+fn a_settled_child_runs_when_the_theme_or_density_changes() {
+    let runs = std::rc::Rc::new(Cell::new(0));
+    let counted = std::rc::Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("themed", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            Button::new("Themed").show(ui);
+        });
+    });
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the child settles");
+    fixture.theme(Mode::Light, Contrast::High);
+    assert!(frame(&mut fixture) > 0, "a theme change runs it");
+    assert_eq!(frame(&mut fixture), 0, "and it settles in the new theme");
+    fixture.density(Size::Comfortable);
+    assert!(frame(&mut fixture) > 0, "a density change runs it");
+}
+
+/// A child with a content version runs when the host switches the language, and settles again in it.
+#[trial]
+fn a_settled_child_runs_when_the_language_changes() {
+    let runs = std::rc::Rc::new(Cell::new(0));
+    let counted = std::rc::Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("worded", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            Button::new("Save").show(ui);
+        });
+    });
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the child settles");
+    let (i18n, problems) = craft_i18n::I18n::from_owned([("de".to_owned(), String::new(), "@id\ttrial.save\tSpeichern\n".to_owned())], &["de"]);
+    assert!(problems.is_empty(), "{problems:?}");
+    let host = craft_host::Host::builder(craft_host::AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(std::sync::Arc::new(i18n)).build();
+    fixture.host(std::sync::Arc::new(host));
+    assert!(frame(&mut fixture) > 0, "a new language runs it");
+    assert_eq!(frame(&mut fixture), 0, "and it settles in that language, the host kept");
 }

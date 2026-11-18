@@ -85,7 +85,7 @@
 use super::frame_step;
 use super::momentary::{Momentary, MomentaryCommands, MomentaryTool};
 use super::navigate::Autoscroll;
-use super::readout::{paint_readout, shown as readouts_shown};
+use super::readout::shown as readouts_shown;
 use super::tool::{CanvasTool, March, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRequests};
 use super::zoom_motion::{self, Steer};
 use super::{CanvasSpace, Snap, ToolPass, context_click};
@@ -633,7 +633,7 @@ impl<'m> ToolHost<'m> {
             let (rows, paints) = if requests.hud.is_some() { (requests.hud, true) } else { (requests.readout, gate) };
             if let Some(rows) = rows {
                 if paints {
-                    paint_readout(&ctx, at, &rows);
+                    crate::contract::ghost::readout(&ctx, &env.view(), at, &rows);
                 }
                 response.readout = Some(ToolReadout { at, rows });
             }

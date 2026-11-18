@@ -110,7 +110,7 @@ impl WindowMode {
     }
 }
 
-/// A move of a viewport mount's OS window that the app runs ([`windows::keeps_app_drag`]), from its Begin to its Commit
+/// A move of a viewport mount's OS window that the app runs (`Overlay::moved_by_app`), from its Begin to its Commit
 /// or Cancel. Rects are the window's outer rect in desktop points.
 #[derive(Clone, Copy, PartialEq)]
 struct WindowMove {
@@ -562,7 +562,7 @@ impl BodyHooks<'_> {
         self.mode.sizing = Some(sizing);
     }
 
-    /// The move of an OS window whose app runs it ([`windows::keeps_app_drag`]): a drag of the move band keeps the
+    /// The move of an OS window whose app runs it (`Overlay::moved_by_app`): a drag of the move band keeps the
     /// pressed point under the pointer, and each step is reported through `placement_changed` as a layer's move is,
     /// from Begin to Commit or Cancel. Where the platform tracks the OS's moves ([`Caps::OS_MOVES_TRACKED`]) the OS
     /// moves the window, from the press: `StartMove` hands it the press event, which a later pass no longer has. The
@@ -592,7 +592,11 @@ impl BodyHooks<'_> {
                 PressPhase::DragStart { start, pos, .. } if !tracked => {
                     moving.grab = start.origin.to_vec2();
                     self.reports.push(change(outer, GesturePhase::Begin));
-                    moving.at = outer.translate(pos - start.origin);
+                    // As every later step: from the system pointer where the platform tells it (see below).
+                    moving.at = match windows::system_pointer(&ctx) {
+                        Some(pointer) => Rect::from_min_size(pointer - moving.grab - inset, outer.size()),
+                        None => outer.translate(pos - start.origin),
+                    };
                     windows::act(&ctx, viewport, WindowAction::SetOuterPosition(moving.at.min));
                     self.reports.push(change(moving.at, GesturePhase::Update));
                 }
@@ -612,6 +616,13 @@ impl BodyHooks<'_> {
             if ended == GesturePhase::Cancel && !moving.tracked {
                 windows::act(&ctx, viewport, WindowAction::SetOuterPosition(moving.start.min));
                 moving.at = moving.start;
+            } else if moving.begun
+                && !moving.tracked
+                && let Some(to) = windows::system_pointer(&ctx).map(|pointer| pointer - moving.grab - inset).filter(|to| *to != moving.at.min)
+            {
+                // The release lands the window where the pointer let go, past the last pass that moved it.
+                windows::act(&ctx, viewport, WindowAction::SetOuterPosition(to));
+                moving.at = Rect::from_min_size(to, moving.at.size());
             }
             if moving.begun {
                 self.reports.push(change(moving.at, ended));
@@ -624,9 +635,15 @@ impl BodyHooks<'_> {
             // AppKit sends no pointer events while it moves the window: the next pass reads the system pointer again.
             crate::runtime::egui::repaint::request(&ctx);
             host.desktop_pointer().map(|pointer| pointer - moving.grab - inset)
+        } else if let Some(pointer) = windows::system_pointer(&ctx) {
+            // The system pointer is in desktop points and does not depend on where the window is, so the window lands
+            // with the pressed point under it whatever moves the platform has applied by now. A pointer event is
+            // relative to the window as it was when the system sent it; the window moves between passes, so a place
+            // derived from an event lags further each pass and the window falls behind the pointer.
+            Some(pointer - moving.grab - inset)
         } else {
-            // A pointer move of this pass is relative to where the window was when the system sent it, which is where
-            // the window reports itself now; a position from an earlier pass was measured against an older place.
+            // A platform that tells no system pointer: a pointer move of this pass is relative to where the window was
+            // when the system sent it, taken as where the window reports itself now.
             let moved = pointer::pass_pointer(&ctx)
                 .events
                 .iter()

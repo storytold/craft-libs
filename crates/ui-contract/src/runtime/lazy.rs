@@ -19,6 +19,7 @@ use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
+use crate::style::EnvKey;
 use egui::{Context, Id, IdMap, IdSet, Layout, Rect, Vec2};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -121,7 +122,7 @@ struct Entry {
     touched: u64,
 }
 
-/// Where a settling child ran: it is settled only while it runs at the same place.
+/// Where a settling child ran: it is settled only while it runs at the same place, in the same environment.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -130,6 +131,9 @@ pub(crate) struct Place {
     pub(crate) layer: Layer,
     pub(crate) layout: Layout,
     pub(crate) pixels_per_point: f32,
+    /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
+    /// window is active.
+    pub(crate) env: EnvKey,
 }
 
 /// The last measuring run of a measure-only child: content a pass measures and never shows, as a page `Pages` holds
@@ -287,7 +291,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - none of its stops holds focus or is the target of a focus request, now or in its last run;
 /// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`);
-/// - its content version is the one of its last run;
+/// - its content version is the one of its last run, and its environment (theme, density, scale, language, window
+///   active) the one it ran in;
 /// - no frame unsettled every child (`unsettle`): an app's repaint request outside every settling child or an edit of a
 ///   given value, this frame or the one before;
 /// - for a child with no content version: no input other than pointer motion this frame or the one before;
@@ -380,6 +385,15 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
         settled.frame = frame;
         if let Some(entry) = store.entries.get_mut(&id) {
             entry.settled = Some(Arc::new(settled));
+        }
+    });
+}
+
+/// Drops the kept run of the settling child `id`: its last run is not one it settles on, so it runs again.
+pub(crate) fn forget(ctx: &Context, id: Id) {
+    with(ctx, |store, _, _| {
+        if let Some(entry) = store.entries.get_mut(&id) {
+            entry.settled = None;
         }
     });
 }

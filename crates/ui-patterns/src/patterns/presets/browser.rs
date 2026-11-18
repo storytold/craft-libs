@@ -816,7 +816,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             let row_of = |key: &K| rows.iter().position(|row| row.key == *key);
             if let Some(zone) = drop_zone {
                 let target = ZoneDrop { source: response.id, rows, zone };
-                if let Some((key, at)) = drag::zone_target(ui.ctx(), list_id.with("drop zone"), zone, &target) {
+                if let Some((key, at)) = drag::zone_target(ui, list_id.with("drop zone"), zone, &target) {
                     events.push(PresetEvent::DropAt { key, at, mods });
                 }
             }

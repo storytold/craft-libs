@@ -57,7 +57,7 @@ pub use craft_theme::format;
 pub use craft_theme::format::{FormatError, FormatErrors, MAX_THEME_BYTES};
 pub use dir::{DirSource, SUITE_DIR_ENV, SuiteDir};
 pub use selection::{Accepted, MAX_SELECTION_BYTES, SELECTION_SCHEMA_VERSION, SelectionChange, SelectionError};
-pub use store::{Imported, LOCK_TIMEOUT, Library, ParseCounts, Problem, Store, StoreError, StoreOptions, ThemeEntry, ThemeRecord};
+pub use store::{Imported, LOCK_TIMEOUT, Library, ParseCounts, Problem, Saved, Store, StoreError, StoreOptions, ThemeEntry, ThemeRecord};
 pub use watch::{Op, OpOutput, RESULTS_KEPT, STAT_INTERVAL, Snapshot, SuiteWatch, VERIFY_INTERVAL};
 
 #[cfg(test)]

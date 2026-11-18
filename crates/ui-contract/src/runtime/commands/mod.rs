@@ -329,7 +329,8 @@ impl CommandInput {
         self
     }
 
-    /// The one gate over commands.
+    /// The one gate over commands. It answers from what the app knew before the frame: the runtime asks it once per
+    /// command per frame, whichever components and passes resolve the command.
     #[must_use]
     pub fn gate(mut self, gate: CommandGate) -> Self {
         self.gate = Some(gate);
