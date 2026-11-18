@@ -54,7 +54,8 @@ fn writes_pages_metadata_and_selected_version_without_a_renderer() {
         assert_eq!(day(&pdf.metadata().creation_date), Some((2026, 10, 9)));
         assert_eq!(day(&pdf.metadata().modification_date), Some((2026, 10, 12)));
         assert!(
-            text.contains("<xmp:CreateDate>2026-10-09") && text.contains("<xmp:ModifyDate>2026-10-12")
+            text.contains("<xmp:CreateDate>2026-10-09")
+                && text.contains("<xmp:ModifyDate>2026-10-12")
                 && text.contains("<xmp:MetadataDate>2026-10-12"),
             "XMP dates"
         );
