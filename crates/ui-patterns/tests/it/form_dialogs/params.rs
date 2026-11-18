@@ -297,3 +297,31 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     toggle(&mut fixture);
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
 }
+
+/// photocraft#15540: a parameter dialog opens with its first field's whole text selected, so typing right away replaces
+/// the value: a text row (New Layer's Name) and a slider row's number (Gaussian Blur's Radius).
+#[trial]
+fn typing_in_a_freshly_opened_parameter_dialog_replaces_its_first_field() {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let params = vec![
+            Param::new("name", "Name", ParamKind::text("Layer 1")),
+            Param::new("radius", "Radius", ParamKind::range(0.1, 1000.0, 1.0, SliderScale::Log)),
+        ];
+        let _ = ParamDialog::new("newLayer", "New Layer", params).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    fixture.type_text("Sky").settle();
+    assert_eq!(values.borrow().text("name"), Some("Sky"), "typing replaced the name");
+
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let params = vec![Param::new("radius", "Radius", ParamKind::range(0.1, 1000.0, 1.0, SliderScale::Log))];
+        let _ = ParamDialog::new("gaussianBlur", "Gaussian Blur", params).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    fixture.type_text("7").key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("radius"), Some(7.0), "typing replaced the radius");
+}
