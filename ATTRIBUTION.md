@@ -117,7 +117,7 @@ The XML reader in `crates/plist/src/xml.rs` and its base64 compatibility helper 
 
 ## Audio DSP
 
-`crates/audio-dsp` is moved from StudioCraft's `crates/craft-audio-dsp` ([blamejs/StudioCraft](https://github.com/blamejs/StudioCraft) at `98224a9cc3e9eb353844908b2a676b2e6a9327d5`, MIT OR Apache-2.0). That crate combines FilmCraft `crates/audio-dsp` at `3f137a7ed420cac79b32145f5243b7f98b31f71c` and SoundCraft `crates/dsp` at `648ed9db9a0e98cc55643babffac381521a556c8` (both MIT OR Apache-2.0). `crates/audio-dsp/NOTICE` keeps the copyright notices of all three projects.
+`crates/audio-dsp` combines FilmCraft `crates/audio-dsp` at `3f137a7ed420cac79b32145f5243b7f98b31f71c` and SoundCraft `crates/dsp` at `648ed9db9a0e98cc55643babffac381521a556c8` (both MIT OR Apache-2.0). `crates/audio-dsp/NOTICE` keeps the copyright notices of both projects.
 
 ## GIMP palette reader
 
