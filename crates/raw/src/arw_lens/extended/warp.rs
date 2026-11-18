@@ -82,6 +82,10 @@ pub(super) fn general_opcode(table: &[i16; 19], count: u16, g: &SonyLensGeometry
 }
 
 fn fit_opcode(map: &Map<'_>, g: &SonyLensGeometry, crop: Rect) -> Option<Opcode> {
+    // a one-pixel extent has no span to normalise the centre by (0 / 0)
+    if g.storage_width < 2 || g.storage_height < 2 || crop.width < 2 || crop.height < 2 {
+        return None;
+    }
     let (w, h) = (crop.width as f64, crop.height as f64);
     let radius = w.hypot(h) / 2.0;
     let (cx, cy) = (crop.x as f64 + (w - 1.0) / 2.0, crop.y as f64 + (h - 1.0) / 2.0);
