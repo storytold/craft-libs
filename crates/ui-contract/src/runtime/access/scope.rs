@@ -166,7 +166,7 @@ pub(crate) struct ScopeNode {
     pub unnamed: Option<Finding>,
     /// The first focus stop inside a control that has none of its own: where a click on its label moves focus.
     pub inner_stop: Option<crate::runtime::focus::FocusTarget>,
-    /// The node takes key focus itself.
+    /// The control takes key focus, at its own stop or at a part's (a segmented control's segments).
     pub focusable: bool,
     /// The control is disabled: a label that names only disabled controls is disabled too.
     pub disabled: bool,
