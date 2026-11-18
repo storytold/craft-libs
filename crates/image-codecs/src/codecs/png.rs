@@ -49,6 +49,16 @@ fn check_inflatable(image_bytes: u64, idat: u64) -> Result<(), CodecError> {
     Ok(())
 }
 
+// For expanded Adam7 output, the DEFLATE ratio applies only to packed samples.
+// Validate pass rows without retaining the full image before allowing its allocation.
+fn validate_adam7(bytes: &[u8], limits: &Limits) -> Result<(), CodecError> {
+    let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
+    decoder.set_ignore_text_chunk(true);
+    let mut reader = decoder.read_info().map_err(map_png_err)?;
+    while reader.next_interlaced_row().map_err(map_png_err)?.is_some() {}
+    Ok(())
+}
+
 fn err(e: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, e)
 }
@@ -65,23 +75,30 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
 /// Decodes a whole PNG, by driving a [`PngDecodeRows`] to its end.
 /// The stored size and EXIF block [`decode`] would find, from the chunks before the image data:
 /// the same header checks (limits, a file too small for its image) and the same frame (an fcTL
-/// before the IDAT overrides the header's size), without inflating any pixels or text.
+/// before the IDAT overrides the header's size), without inflating text. Unusually expanded Adam7 images validate packed pass rows first.
 pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
     let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: limits.alloc_usize() });
-    // the output `decode` makes, for the interlaced check below
+    // Match the output layout used by decode.
     decoder.set_transformations(png::Transformations::EXPAND);
     decoder.set_ignore_text_chunk(true);
-    let idat = idat_bytes(bytes);
+    let idat;
     {
         let info = decoder.read_header_info().map_err(map_png_err)?;
         let (w, h) = info.size();
         limits.check_size(w, h)?;
+        idat = idat_bytes(bytes);
         let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
         check_inflatable(stored, idat)?;
     }
     let reader = decoder.read_info().map_err(map_png_err)?;
     if reader.info().interlaced {
-        check_inflatable(reader.output_buffer_size().ok_or_else(|| err("image too large"))? as u64, idat)?;
+        let size = reader.output_buffer_size().ok_or_else(|| err("image too large"))?;
+        if size > limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+        }
+        if size as u64 > inflate_capacity(idat) {
+            validate_adam7(bytes, limits)?;
+        }
     }
     let info = reader.info();
     let (w, h) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
@@ -181,8 +198,6 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
     line: usize,
     /// The decoder's whole output size, for an interlaced image's single frame decode.
     size: usize,
-    /// The bytes of image data in the file's IDAT chunks.
-    idat: u64,
     rows: usize,
     /// For [`PngDecodeRows::step_stream`]: the first row of the group held in `buf`.
     group_start: usize,
@@ -202,8 +217,8 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
 }
 
 impl<B: AsRef<[u8]>> PngDecodeRows<B> {
-    /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
-    /// past `limits`, and a file too small for the image it declares.
+    /// Reads the header and rejects sizes past `limits` or implausibly small image data.
+    /// Exceptionally expanded Adam7 images also validate packed pass rows before allocation.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, true, false)
     }
@@ -219,13 +234,14 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         // png's lazy text get_text() inflates without consulting its allocation limit.
         // Read text separately below, without retaining compressed copies in the decoder.
         decoder.set_ignore_text_chunk(true);
-        let idat = idat_bytes(bytes.as_ref());
+        let idat;
         {
             let info = decoder.read_header_info().map_err(map_png_err)?;
             let (w, h) = info.size();
             // Size checks now; the allocation budget once the output layout (channels and sample
             // size) is known below, so a Gray8 image isn't charged for RGBA16.
             limits.check_size(w, h)?;
+            idat = idat_bytes(bytes.as_ref());
             // zlib never beats 1032:1; refuse a file whose IDAT data is too small for the declared
             // image before the output buffer exists. Measured on the stored samples: palette, tRNS
             // and 1, 2 or 4-bit expansion multiply them by up to 32 with no more data, so a sound
@@ -270,6 +286,12 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if line.checked_mul(height).is_none_or(|needed| needed > size) {
             return Err(err("image too large"));
         }
+        if info.interlaced && size as u64 > inflate_capacity(idat) {
+            if size > limits.alloc_usize() {
+                return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+            }
+            validate_adam7(bytes.as_ref(), limits)?;
+        }
         // Reserve without touching: each row is zero-filled as it is decoded, so the first slice
         // doesn't zero-fill the whole image (a stall on the web build). Only as much as the IDAT
         // data can inflate to: a 1-bit image expands up to 32 times, so a few dozen kilobytes may
@@ -293,7 +315,6 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
             height,
             line,
             size,
-            idat,
             rows: 0,
             group_start: 0,
             interlaced,
@@ -333,11 +354,6 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     fn check_full_output(&self) -> Result<(), CodecError> {
         let height = u32::try_from(self.height).map_err(|_| err("image too large"))?;
         self.limits.check(self.width, height, self.layout, self.sample)?;
-        // An Adam7 frame is decoded in one go into the whole zero-filled output, before any of its
-        // data is read: that output must be one the IDAT data can make.
-        if self.interlaced {
-            check_inflatable(self.size as u64, self.idat)?;
-        }
         if self.size > self.limits.alloc_usize() {
             return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
         }
@@ -2570,12 +2586,13 @@ mod inflate_bound_tests {
         }
     }
 
-    /// An interlaced image is decoded in one go into its whole zero-filled output, before any data is read, so its
-    /// expanded output is what the IDAT data must be able to make.
+    /// Invalid pass data fails before the expanded Adam7 image is allocated.
     #[test]
-    fn a_forged_interlaced_one_bit_image_is_refused_on_its_expanded_size() {
+    fn a_forged_interlaced_one_bit_image_is_refused_before_full_allocation() {
         for (color, trns) in [(3, true), (0, false)] {
-            assert!(refused_by_the_bound(&forged(1, color, trns, 1, 60_000, 0)), "colour type {color}, tRNS {trns}");
+            let bytes = forged(1, color, trns, 1, 60_000, 0);
+            assert!(matches!(probe(&bytes, &roomy()), Err(CodecError::Malformed { .. })));
+            assert!(matches!(PngDecodeRows::new(bytes.as_slice(), &roomy()), Err(CodecError::Malformed { .. })));
         }
     }
 
@@ -2626,6 +2643,39 @@ mod inflate_bound_tests {
     /// A real 1-bit palette image with transparency whose RGBA output is far more than 1032 times its IDAT data
     /// (a solid 2000×2000 sheet: 16 MB from a few hundred bytes) still decodes, growing its buffer as the rows come.
     /// A bound on the expanded output would refuse it.
+    #[test]
+    fn solid_adam7_palette_expansion_is_not_a_deflate_ratio() {
+        let (w, h) = (2048u32, 2048u32);
+        let mut raw = Vec::new();
+        for (x, y, dx, dy) in [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] {
+            let width = (w - x).div_ceil(dx);
+            for _ in 0..(h - y).div_ceil(dy) {
+                raw.push(0);
+                raw.extend(std::iter::repeat_n(0xff, width.div_ceil(8) as usize));
+            }
+        }
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(&raw).unwrap();
+        let packed = z.finish().unwrap();
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut header = Vec::new();
+        header.extend(w.to_be_bytes());
+        header.extend(h.to_be_bytes());
+        header.extend([1, 3, 0, 0, 1]);
+        chunk(&mut bytes, b"IHDR", &header);
+        chunk(&mut bytes, b"PLTE", &[0, 0, 0, 10, 20, 30]);
+        chunk(&mut bytes, b"tRNS", &[0, 200]);
+        chunk(&mut bytes, b"IDAT", &packed);
+        chunk(&mut bytes, b"IEND", &[]);
+        assert!(u64::from(w) * u64::from(h) * 4 > inflate_capacity(idat_bytes(&bytes)));
+        assert_eq!(probe(&bytes, &Limits::default()).unwrap().0, w);
+        let image = decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!(image.dimensions(), (w, h));
+        assert!(image.data().as_chunks::<4>().0.iter().all(|p| *p == [10, 20, 30, 200]));
+        let small = Limits { max_alloc: 1 << 20, ..Limits::default() };
+        assert!(matches!(decode(&bytes, &small), Err(CodecError::LimitExceeded(_))));
+    }
+
     #[test]
     fn a_solid_one_bit_image_past_the_ratio_once_expanded_still_decodes() {
         let (w, h) = (2000u32, 2000u32);
