@@ -249,10 +249,21 @@ impl OcspResponse {
         for t in it {
             if t.tag == tag::ctx(0) {
                 for c in t.children()? {
-                    if c.tag == tag::SEQUENCE
-                        && let Ok(cert) = Certificate::parse(c.raw)
-                    {
+                    if c.tag != tag::SEQUENCE {
+                        continue;
+                    }
+                    // Preserve the historical direct-certificate form. RFC 6960 instead wraps
+                    // certificates in one SEQUENCE OF inside [0]; unwrap only that one level.
+                    if let Ok(cert) = Certificate::parse(c.raw) {
                         responder_cert.get_or_insert(cert);
+                    } else if let Ok(certs) = c.children() {
+                        for cert in certs {
+                            if cert.tag == tag::SEQUENCE
+                                && let Ok(cert) = Certificate::parse(cert.raw)
+                            {
+                                responder_cert.get_or_insert(cert);
+                            }
+                        }
                     }
                 }
             }
