@@ -714,7 +714,8 @@ fn check_pixel_shift_bands(values: &[u16], sensor_width: usize, crop: Rect) -> R
     // These composites retain the sensor black pedestal even in deep shadows. A band
     // of literal zeros over all four channels inside the crop indicates missing data.
     // Two gallery ARQs contain only a top portion despite declaring the full strip length.
-    for band in rows.chunks_exact(row_words * 64) {
+    // `chunks`, not `chunks_exact`: the last band may be shorter than 64 rows and is checked too.
+    for band in rows.chunks(row_words * 64) {
         if !band.chunks_exact(row_words).any(|row| row.get(columns.clone()).is_some_and(|words| words.iter().any(|&word| word != 0))) {
             return Err(RawError::Corrupt("Sony Pixel Shift strip contains a blank sensor band".into()));
         }
@@ -1024,7 +1025,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             sony_capture_gains_q11: mn.as_ref().and_then(|note| crate::arw_capture_gains::read_q11(&note.ifd)).map(Box::new),
         },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
-        notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb, ..Default::default() },
+        notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb && !pixel_shift, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -1096,6 +1097,39 @@ mod tests {
         };
         assert_eq!(&pixels[..3], &[1140, 929, 1000]);
         assert_eq!(full.info().developed_size(), (4, 4));
+    }
+
+    #[test]
+    fn pixel_shift_bands_cover_the_last_partial_band() {
+        // two words wide, four samples each: 80 rows are one full band of 64 and a partial one of 16
+        let (width, crop) = (2, Rect::new(0, 0, 2, 80));
+        let mut values = vec![600u16; 2 * 4 * 80];
+        assert!(check_pixel_shift_bands(&values, width, crop).is_ok());
+        values[2 * 4 * 64..].fill(0);
+        assert!(check_pixel_shift_bands(&values, width, crop).is_err(), "a blank partial band at the bottom");
+    }
+
+    #[test]
+    fn a_pixel_shift_composite_reports_no_assumed_cfa() {
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let mut raw = IfdBuilder::new();
+        raw.set(t::MAKE, Value::Ascii("SONY".into()));
+        raw.set(t::MODEL, Value::Ascii("ILCE-7RM3".into()));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14, 14, 14, 14]));
+        raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![4]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![32892]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
+        let words: Vec<u8> = std::iter::repeat_n(600u16.to_le_bytes(), 4 * 2 * 4).flatten().collect();
+        raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![words] });
+        let file = TiffWriter::default().write(&[raw]).unwrap();
+        for mode in [Mode::Header, Mode::Full] {
+            let image = decode(&file, mode, &Limits::default()).unwrap();
+            // three-channel RGB: no CFA is used, so none was assumed
+            assert_eq!((image.cpp, image.cfa.is_none(), image.notices.assumed_cfa), (3, true, false), "{mode:?}");
+        }
     }
 
     #[test]

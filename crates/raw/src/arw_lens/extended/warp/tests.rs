@@ -158,3 +158,18 @@ fn storage_padding_does_not_change_the_optical_mapping() {
         .collect();
     assert!((radial[0] - radial[1]).abs() < 1e-12);
 }
+
+/// A one-pixel stored frame has no extent to normalise the centre by: no opcode, never a NaN centre.
+#[test]
+fn a_single_pixel_frame_gets_no_warp() {
+    let mut g = geometry("a1-full-u");
+    let crop = Rect::new(0, 0, 1, 1);
+    (g.storage_width, g.storage_height) = (1, 1);
+    (g.sony_crop, g.default_crop, g.image_crop, g.reference) = (Some(crop), Some(crop), crop, crop);
+    let table = std::array::from_fn(|i| (i * i * 4) as i16);
+    let map = Map::new(&table, 16, 1.0).unwrap();
+    if let Some(Opcode::WarpRectilinear { center, .. }) = fit_opcode(&map, &g, crop) {
+        panic!("centre {center:?}");
+    }
+    assert!(general_opcode(&table, 16, &g).is_none());
+}
