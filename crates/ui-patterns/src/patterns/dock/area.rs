@@ -673,7 +673,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
 /// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
-fn register_bands<P: Clone + Eq + Hash + Send + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
+fn register_bands<P: Clone + Eq + Hash + Send + Sync + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
     if scene.layout.root.is_none() {
         return;
     }
@@ -758,15 +758,15 @@ fn panel_menu_rows<P: Clone + Eq + Hash>(
 /// command states and move targets read across groups. Sizes are left out: a size reaches a region as its room.
 fn chrome_key<P: Hash>(layout: &Layout<P>, version: u64, config: &DockConfig, locked: bool, auto_collapse: bool) -> u64 {
     use std::hash::Hasher;
-    fn column<P: Hash>(column: &Column<P>, hasher: &mut impl Hasher) {
-        (column.iconic, column.steps, column.groups.len()).hash(hasher);
-        for group in &column.groups {
+    fn column<P: Hash>(shown: &Column<P>, hasher: &mut impl Hasher) {
+        (shown.iconic, shown.steps, shown.groups.len()).hash(hasher);
+        for group in &shown.groups {
             (&group.panels, group.active, group.minimized).hash(hasher);
         }
     }
-    fn node<P: Hash>(node: &Node<P>, hasher: &mut impl Hasher) {
-        std::mem::discriminant(node).hash(hasher);
-        match node {
+    fn node<P: Hash>(shown: &Node<P>, hasher: &mut impl Hasher) {
+        std::mem::discriminant(shown).hash(hasher);
+        match shown {
             Node::Split { first, second, .. } => {
                 node(first, hasher);
                 node(second, hasher);
@@ -974,7 +974,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         };
         let output = ui
             .scope_builder(UiBuilder::new().max_rect(rect).id_salt(key), |ui| {
-                lazy.show(ui, |ui| make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output)
+                lazy.show(ui, |ui| {
+                    let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
+                    // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
+                    ui.expand_to_include_rect(rect);
+                    output
+                })
             })
             .inner;
         // A settled group replayed its last run: nothing reached it.

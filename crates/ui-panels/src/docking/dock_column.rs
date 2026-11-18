@@ -531,7 +531,7 @@ pub(super) fn column_grip<P: Value + Hash>(column: &Column<P>, spec: &dyn Fn(&P)
 
 /// Registers the drop bands of the two edges of the column in `rect` with the dock `dock`: a drop there makes a new
 /// column beside the one that holds `anchor`.
-pub(super) fn register_edges<P: Clone + Send + 'static>(ctx: &Context, dock: Id, anchor: &P, rect: Rect, rtl: bool, sizes: &DockSizes) {
+pub(super) fn register_edges<P: Clone + Send + Sync + 'static>(ctx: &Context, dock: Id, anchor: &P, rect: Rect, rtl: bool, sizes: &DockSizes) {
     let flow = Flow::new(rect, rtl);
     // A narrow column keeps a third of its width between its two edge bands, so a drop inside it still reaches its
     // groups.

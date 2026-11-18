@@ -403,7 +403,7 @@ impl<P> Default for Pass<P> {
     }
 }
 
-impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
+impl<P: Clone + Send + 'static> DockTargets<P> {
     /// Runs `f` on the registries of the running pass; `None` outside a pass.
     fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass<P>) -> R) -> Option<R> {
         let facts = frame::running(ctx)?;
@@ -422,6 +422,39 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
         ))
     }
 
+    /// Runs `f` on the registry of `dock` in the running pass, made empty the first time.
+    fn with_dock(ctx: &Context, dock: Id, f: impl FnOnce(&mut DockTargets<P>)) {
+        Self::with_pass(ctx, |pass| {
+            let at = match pass.now.iter().position(|(id, _)| *id == dock) {
+                Some(at) => at,
+                None => {
+                    pass.now.push((dock, DockTargets::new()));
+                    pass.now.len() - 1
+                }
+            };
+            f(&mut pass.now[at].1);
+        });
+    }
+
+    /// The room the dock `dock` laid its panels out in the previous pass ([`Self::register_room`]); `None` outside a
+    /// pass and where the dock registered none.
+    pub fn room(ctx: &Context, dock: Id) -> Option<Rect> {
+        Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.room)).flatten()
+    }
+
+    /// The spot a drop at `at` lands on in the dock `dock`, by the spots of the previous pass, with the rect its
+    /// mark applies to (`DockSpot::mark` takes it); `None` outside a pass.
+    ///
+    /// A dock calls it only inside its own `DropTarget::accept`, so the drag session arbitrates between the dock
+    /// and an app's own `DropTarget<PanelDrag>` in a panel body, and between docks, by layer order and
+    /// registration order.
+    pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
+        Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
+    }
+}
+
+/// The registrations of a pass. A settled region's run record keeps each one to make it again, so the panel type is `Sync`.
+impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
     /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
     /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
     /// the drag session orders the layers, so no registry orders them.
@@ -472,36 +505,6 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
     /// registers its drop spots again when it replays its last run.
     fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
         crate::runtime::replay::journal(ctx, make);
-    }
-
-    /// Runs `f` on the registry of `dock` in the running pass, made empty the first time.
-    fn with_dock(ctx: &Context, dock: Id, f: impl FnOnce(&mut DockTargets<P>)) {
-        Self::with_pass(ctx, |pass| {
-            let at = match pass.now.iter().position(|(id, _)| *id == dock) {
-                Some(at) => at,
-                None => {
-                    pass.now.push((dock, DockTargets::new()));
-                    pass.now.len() - 1
-                }
-            };
-            f(&mut pass.now[at].1);
-        });
-    }
-
-    /// The room the dock `dock` laid its panels out in the previous pass ([`Self::register_room`]); `None` outside a
-    /// pass and where the dock registered none.
-    pub fn room(ctx: &Context, dock: Id) -> Option<Rect> {
-        Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.room)).flatten()
-    }
-
-    /// The spot a drop at `at` lands on in the dock `dock`, by the spots of the previous pass, with the rect its
-    /// mark applies to (`DockSpot::mark` takes it); `None` outside a pass.
-    ///
-    /// A dock calls it only inside its own `DropTarget::accept`, so the drag session arbitrates between the dock
-    /// and an app's own `DropTarget<PanelDrag>` in a panel body, and between docks, by layer order and
-    /// registration order.
-    pub fn resolve(ctx: &Context, dock: Id, at: Pos2) -> Option<(DockSpot<P>, Rect)> {
-        Self::with_pass(ctx, |pass| pass.before.iter().find(|(id, _)| *id == dock).and_then(|(_, targets)| targets.at(at))).flatten()
     }
 }
 

@@ -122,7 +122,19 @@ pub(in crate::docking) fn settled_bar(ui: &mut Ui, band: Rect, content: Option<u
         Some(version) => lazy.content(version),
         None => lazy,
     };
-    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt(key), |ui| lazy.show(ui, show)).inner.unwrap_or_default()
+    if !band.is_positive() {
+        return BarRecord::default();
+    }
+    ui.scope_builder(UiBuilder::new().max_rect(band).id_salt(key), |ui| {
+        lazy.show(ui, |ui| {
+            let record = show(ui);
+            // The grip takes no room in flow; the run covers the band, so the pointer over it runs it again.
+            ui.expand_to_include_rect(band);
+            record
+        })
+    })
+    .inner
+    .unwrap_or_default()
 }
 
 /// The name of a column's bar: the labels of its panels.
