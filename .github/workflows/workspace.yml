@@ -25,8 +25,7 @@ concurrency:
 jobs:
   native:
     name: Workspace
-    # craft-common-actions#270 (warm-command). Back to @main once it merges.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@a24d4fc3de6488ecd028ea46aee0bf0f1834b07c
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # Pushes to next run Linux only.
       os: ${{ github.ref == 'refs/heads/next' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest","macos-latest"]' }}
