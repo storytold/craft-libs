@@ -124,11 +124,16 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
             enabled: resolved.enabled,
         };
         scope::finish(ctx, id, Some(facts));
+        scope::leave(ctx, id);
         return;
     }
     scope::finish(ctx, id, None);
     let carried = scope::carried_name(ctx, id);
-    let Role::Node(role) = role else { return };
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`).
+    let Role::Node(role) = role else {
+        scope::leave(ctx, id);
+        return;
+    };
     if !input.node {
         return;
     }
