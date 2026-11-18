@@ -5,6 +5,7 @@ craft_ui::words! {
     pub struct RailWords {
         tools: "toolRail.name" = "Tools";
         drawer_title: "toolbarDrawer.title" = "Edit Toolbar";
+        drawer_search: "toolbarDrawer.search" = "Search Tools";
         drawer_tools: "toolbarDrawer.allTools" = "All Tools";
         drawer_hint: "toolbarDrawer.hint" = "Drag tools to or from the toolbar.";
         drawer_close: "toolbarDrawer.close" = "Close";

@@ -155,9 +155,9 @@ impl PanelSpec {
 
     /// The panel's toggle command.
     #[must_use]
-    pub fn command(self, command: impl Into<CommandRef>) -> Self {
-        let _ = command;
-        todo!("CH-C19")
+    pub fn command(mut self, command: impl Into<CommandRef>) -> Self {
+        self.command = Some(command.into());
+        self
     }
 
     /// The panel's icon.

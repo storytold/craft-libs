@@ -815,7 +815,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         let titles: Vec<PanelTitle> = members
             .iter()
-            .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+            .map(|panel| {
+                let spec = scene.spec(panel);
+                PanelTitle::new(PanelKey::of(panel), spec.label).closable(scene.permissions(panel).closable).command(spec.command)
+            })
             .collect();
         let shown = &members[active];
         let (menu, hosted) = self.menu_rows(body, shown);

@@ -540,8 +540,14 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
                 let ink = if selected { style.name_open } else { style.name };
                 let _ = ui.draw().text(room, &TextRun::new(spec.label.as_str().to_owned()).color(ink).elide());
             }
+            // A cell bound to the panel's toggle command shows that command's marker and hint; the column's `CELL`
+            // part keeps the press, as the face only resolves the command.
+            let face = match spec.command {
+                Some(command) => IconButton::command(icon, command),
+                None => IconButton::new(icon),
+            };
             // A cell is a rail button: the tool rail's size and glyphs, so a collapsed column's icons match the tools'.
-            let cell = IconButton::new(icon).label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
+            let cell = face.label(spec.label).selected(selected).size(ControlSize::Md).glyphs(GlyphRole::ToolRail);
             ui.face(CELL.at(at as u64), cell);
         }
         // The edge's line lies on the column's inner edge; its handle stays inside the column.

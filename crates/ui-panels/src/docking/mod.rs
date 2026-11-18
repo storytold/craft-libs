@@ -123,9 +123,9 @@ impl PanelTitle {
 
     /// The panel's toggle command.
     #[must_use]
-    pub fn command(self, command: Option<CommandRef>) -> Self {
-        let _ = command;
-        todo!("CH-C19")
+    pub fn command(mut self, command: Option<CommandRef>) -> Self {
+        self.command = command;
+        self
     }
 
     /// Whether the panel's tab shows a close button.

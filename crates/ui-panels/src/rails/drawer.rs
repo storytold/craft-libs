@@ -16,9 +16,11 @@ use crate::popover::Popover;
 use crate::primitives::IconSpec;
 use crate::runtime::commands::{self, ResolvedCommand};
 use crate::runtime::env::{Env, Label};
+use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::os_of;
 use crate::sections::DropAction;
 use crate::style::TypeRole;
+use crate::text::TextField;
 use craft_behavior::overlay::{Align, Side};
 use craft_behavior::{DisplayOrder, IconId, ItemSource, Value};
 use egui::{Rect, Response, Ui};
@@ -223,6 +225,21 @@ impl DisplayOrder<DrawerKey> for Rows<'_> {
 
 impl ItemSource<DrawerKey> for Rows<'_> {}
 
+/// What a searchable drawer keeps in its stack's memory while it is open: the query its search field edits and its
+/// list filters by.
+#[derive(Clone, Default)]
+struct DrawerSearch {
+    query: String,
+}
+
+/// The texts a query finds a tool by: its label as shown, its catalogue (English) label and its command id.
+fn match_texts<T>(command: &ResolvedCommand, tool: &RailTool<T>) -> Vec<Label> {
+    let mut texts = vec![Label::from(command.label.clone())];
+    texts.extend(command.catalog_label.clone().map(Label::from));
+    texts.push(Label::from(tool.command.id.clone()));
+    texts
+}
+
 /// Whether the toolbar holds the tool `id`.
 fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
     toolbar.iter().any(|slot| slot.tools.iter().any(|tool| tool.id == *id))
@@ -232,7 +249,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
     /// Shows the drawer and reports what the user changed.
     pub fn show(self, ui: &mut Ui) -> ToolbarDrawerOutput<T> {
         let ToolbarDrawer { rail, groups, toolbar, opens, dropped, opener, kind } = self;
-        let _ = kind; // P3(pdf-chrome-w6): CH-C20
+        let searchable = kind == DrawerKind::Searchable;
         let env = Env::of(ui);
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());
@@ -266,20 +283,28 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
             let accepts = |drag: &ToolDrag| matches!(drag, ToolDrag::Rail { .. });
             let slot = DropAction::<ToolDrag>::new(accepts).show(ui, |ui, _| {
                 let rows = Rows::new(&resolved);
+                let list_id = ui.scope_id().with("drawer-tools");
+                // The search field is the stack's header and the list its body; both read the query from the stack's
+                // memory, which lives while the drawer is open.
                 Stack::new()
                     .gap(Gap::Row)
-                    .header(|ui, _| {
+                    .header(|ui, stack| {
                         Row::new().show(ui, |ui, _| {
                             Text::new(words.drawer_title.clone()).role(TypeRole::Title).show(ui);
                             let close = IconButton::new(IconId::new("close")).label(words.drawer_close.clone()).show(ui);
                             leave |= clicked(&close);
                         });
+                        if searchable {
+                            let state = stack.memory::<DrawerSearch>();
+                            TextField::search(words.drawer_search.clone(), Bind::bound(&mut state.query)).drives(list_id).show(ui);
+                        }
                         Text::new(words.drawer_hint.clone()).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
                     })
                     .footer(|ui, _| restore |= clicked(&Button::new(words.drawer_restore.clone()).show(ui)))
-                    .show(ui, |ui, _| {
-                        let list = List::<DrawerKey>::new(words.drawer_tools.clone())
-                            .id(ui.scope_id().with("drawer-tools"))
+                    .show(ui, |ui, stack| {
+                        let query = stack.memory::<DrawerSearch>().query.clone();
+                        let mut list = List::<DrawerKey>::new(words.drawer_tools.clone())
+                            .id(list_id)
                             .select(SelectMode::None)
                             .activate(ActivateOn::Click)
                             .can_drag(|key| match *key {
@@ -291,6 +316,13 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                                 DrawerKey::Group(_) => None,
                             })
                             .sizing(Sizing::Content);
+                        if searchable {
+                            // A heading has no text of its own: the list keeps it while a tool under it matches.
+                            list = list.filter(&query, |key: &DrawerKey| match *key {
+                                DrawerKey::Tool { group, tool } => match_texts(&resolved[group][tool], &groups[group].tools[tool]),
+                                DrawerKey::Group(_) => Vec::new(),
+                            });
+                        }
                         let out = list.show_items(ui, &rows, &mut |key, _| match *key {
                             DrawerKey::Group(group) => ListRow::new(groups[group].label.clone()).section_heading(),
                             DrawerKey::Tool { group, tool } => {
