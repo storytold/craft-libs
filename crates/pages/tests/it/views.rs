@@ -323,9 +323,12 @@ fn columns_above_the_nav(room: egui::Vec2) -> (Vec<egui::Rect>, egui::Rect) {
     let tall = DemoPages::new(1).page_size(0).height as f32 * ReadingView::screen_scale(1.0);
     let pages = DemoPages::new(6);
     let mut state = ReadingState::default();
+    let nav_bar = Rc::new(Cell::new(egui::Rect::NOTHING));
+    let bar_seen = Rc::clone(&nav_bar);
     let mut fixture = Fixture::new(move |ui| {
         let all = ui.available_rect_before_wrap();
         let (view, bar) = all.split_top_bottom_at_y(all.max.y - NAV_ROW);
+        bar_seen.set(bar);
         ReadingView::new("Document", &pages, &mut state, PAPER).show_at(ui, view);
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
             ReadingNav::new(&mut state, 6).show(ui);
@@ -334,7 +337,9 @@ fn columns_above_the_nav(room: egui::Vec2) -> (Vec<egui::Rect>, egui::Rect) {
     fixture.room(room);
     fixture.settle();
     let papers = fixture.shape_bounds().iter().copied().filter(|rect| (rect.height() - tall).abs() < 1.0).collect();
-    let next = fixture.by_label("Next Screen").expect("the row has Next").rect;
+    // The view's own page-turn parts carry the same names, so the row's Next is the last button inside the row.
+    let bar = nav_bar.get();
+    let next = fixture.by_role(Role::BUTTON).into_iter().map(|target| target.rect).rfind(|rect| bar.contains_rect(*rect)).expect("the row has Next");
     (papers, next)
 }
 
@@ -439,7 +444,9 @@ fn a_reading_column_turn_eases_and_lands_exactly_on_the_column_start() {
     let tall = DemoPages::new(1).page_size(0).height as f32 * ReadingView::screen_scale(1.0);
     let pages = DemoPages::new(6);
     let mut fixture = Fixture::new(move |ui| {
-        ReadingView::new("Document", &pages, &mut kept.borrow_mut(), PAPER).show(ui);
+        // Shown over the whole room, as the app shows it, so the viewport is as tall as the room.
+        let all = ui.available_rect_before_wrap();
+        ReadingView::new("Document", &pages, &mut kept.borrow_mut(), PAPER).show_at(ui, all);
     });
     // Tall enough that the pages' paper is not cut by the room, so each paper's bounds keep the page's height.
     fixture.room(vec2(900.0, 1400.0));
