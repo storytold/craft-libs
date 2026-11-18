@@ -1289,6 +1289,23 @@ impl Styles {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.extra.lang.clone()).or_else(|| self.default_lang.clone())
     }
 
+    /// The document's default East Asian and complex-script properties: the default style's, with
+    /// the Standard style's languages over them, as [`document_lang`](Self::document_lang) does for
+    /// the Western one (#1836: LibreOffice keeps its untouched default on the default style and
+    /// the user's choice on Standard).
+    pub(super) fn document_scripts(&self) -> craft_wordmodel::props::CharProps {
+        let mut scripts = self.default_scripts.clone();
+        if let Some(s) = self.map.get("Standard").filter(|s| !s.auto) {
+            if let Some(l) = &s.fmt.extra.lang_ea {
+                scripts.lang_ea = Some(l.clone());
+            }
+            if let Some(l) = &s.fmt.extra.lang_bidi {
+                scripts.lang_bidi = Some(l.clone());
+            }
+        }
+        scripts
+    }
+
     /// The document's default font: the Standard paragraph style's, else the default style's.
     pub(super) fn doc_font(&self) -> Option<String> {
         self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
