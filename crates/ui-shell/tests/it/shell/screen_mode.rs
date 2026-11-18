@@ -189,7 +189,7 @@ struct Laid {
 
 impl Default for Laid {
     fn default() -> Self {
-        Self { body: Rect::NOTHING, screen: None, drops: None, revealed: false }
+        Self { body: Rect::NOTHING, screen: None, drops: None, revealed: false, dropped: false }
     }
 }
 
