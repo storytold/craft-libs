@@ -455,11 +455,14 @@ pub struct PressStep<T> {
     pub dragging: bool,
     /// The target released as a click in this pass.
     pub activated: Option<T>,
+    /// The start of an open press whose sense has `PASSES_DRAG` and no `DRAG` that moved past slop in this pass:
+    /// the caller may hand it to the shape below with [`PressMachine::hand_over`].
+    pub passes: Option<PressStart>,
 }
 
 impl<T> Default for PressStep<T> {
     fn default() -> Self {
-        PressStep { target: None, phase: None, dragging: false, activated: None }
+        PressStep { target: None, phase: None, dragging: false, activated: None, passes: None }
     }
 }
 
@@ -633,7 +636,7 @@ impl<T: Copy> PressMachine<T> {
         }
         if let Some((target, start, reason)) = cancelled {
             let phase = PressPhase::Cancel { start, reason };
-            return PressStep { target: Some(target), phase: Some(phase), dragging: false, activated: None };
+            return PressStep { target: Some(target), phase: Some(phase), dragging: false, activated: None, passes: None };
         }
         if let Some((target, start, at, was_dragging, click)) = released {
             let phase = PressPhase::Release { start, pos: at, click };
@@ -642,6 +645,7 @@ impl<T: Copy> PressMachine<T> {
                 phase: Some(phase),
                 dragging: was_dragging,
                 activated: (click && start.button == PointerButton::Primary).then_some(target),
+                passes: None,
             };
         }
         let Some(open) = self.open.as_mut() else { return PressStep::default() };
@@ -656,7 +660,15 @@ impl<T: Copy> PressMachine<T> {
             PressPhase::Held { start: open.start, pos }
         };
         open.reported = true;
-        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None }
+        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes: None }
+    }
+
+    /// Makes `target` the open press's target in the pass that reported `passes`, dragging from the same
+    /// `PressStart`. It returns the `DragStart` step when an earlier pass reported the press, and the `Down` step
+    /// (the `DragStart` follows in the next pass) when the move past slop came in the pass of the press itself.
+    pub fn hand_over(&mut self, target: T, sense: Sense) -> Option<PressStep<T>> {
+        let _ = (target, sense);
+        todo!("CV-C12")
     }
 }
 

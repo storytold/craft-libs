@@ -62,7 +62,7 @@ mod sha256;
 mod tests;
 
 pub use embed::{Embed, Error, target_is_wasm};
-pub use manifest::{CJK_SCRIPTS, MONO_ROLE, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
+pub use manifest::{CJK_SCRIPTS, MONO_ROLE, ManifestEntry, ParseError, SIGNATURE_ROLE, UI_ROLE, parse_manifest};
 
 /// A craft-fonts face embedded by [`Embed`]: one line of `fonts/manifest.txt`.
 ///

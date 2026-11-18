@@ -82,6 +82,20 @@ pub enum Intake {
         /// Where they landed.
         target: DropTarget,
     },
+    /// The OS asked to open these absolute paths for the app's own action.
+    OpenFor {
+        /// The files, absolute and sorted.
+        paths: Vec<PathBuf>,
+        /// The app's action name.
+        action: String,
+    },
+    /// A file that arrived as bytes, with no path.
+    Bytes {
+        /// The file's name.
+        name: String,
+        /// The contents.
+        bytes: Arc<[u8]>,
+    },
 }
 
 /// The sending side of a [`FileIntake`]: `Send + Clone`, for the threads that hear the OS (the
@@ -108,6 +122,19 @@ impl IntakeSender {
         paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
         push(&self.queue, Intake::Open(paths));
         self.wake.wake();
+    }
+
+    /// Queues an open request for the app's own `action`, made absolute and sorted as [`open`](Self::open) does, and
+    /// wakes the UI. Empty input is ignored.
+    pub fn open_for(&self, paths: Vec<PathBuf>, action: impl Into<String>) {
+        let _ = (paths, action);
+        todo!("SH-C22")
+    }
+
+    /// Queues a file that arrived as bytes, and wakes the UI.
+    pub fn open_bytes(&self, name: String, bytes: Arc<[u8]>) {
+        let _ = (name, bytes);
+        todo!("SH-C22")
     }
 }
 
@@ -307,6 +334,14 @@ fn reveal_command(platform: &str, path: &Path) -> Result<(&'static str, Vec<OsSt
             ))
         }
     }
+}
+
+/// Opens `target` in a new browser tab with `window.open(target, "_blank", "noopener,noreferrer")`; a `null` return
+/// is success. The one web opener. Not on native targets (see the native `open_external`).
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+pub fn open_external(target: &str) -> Result<(), String> {
+    let _ = target;
+    todo!("SH-C23")
 }
 
 /// Opens a file or an `http(s)` URL with the system's handler (`open`, `rundll32

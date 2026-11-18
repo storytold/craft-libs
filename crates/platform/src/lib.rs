@@ -27,6 +27,7 @@ mod message_tests;
 pub mod open;
 #[cfg(test)]
 mod open_tests;
+pub mod owner_only;
 pub mod pacing;
 #[cfg(feature = "pointer")]
 pub mod pointer;

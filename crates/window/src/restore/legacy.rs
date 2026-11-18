@@ -18,8 +18,8 @@ use craft_behavior::placement::Placement;
 /// The placement in an eframe `app.ron` text: its `"window"` entry, with the size converted to
 /// points at zoom 1 using the `"egui"` entry's `zoom_factor` (1 when absent).
 pub fn eframe_app_ron(text: &str) -> Option<Placement> {
-    let window = ron_string_entry(text, "window")?;
-    let zoom = ron_string_entry(text, "egui").and_then(|e| number(field(&e, "zoom_factor")?)).unwrap_or(1.0);
+    let window = eframe_app_ron_entry(text, "window")?;
+    let zoom = eframe_app_ron_entry(text, "egui").and_then(|e| number(field(&e, "zoom_factor")?)).unwrap_or(1.0);
     eframe_window_settings(&window, zoom)
 }
 
@@ -142,7 +142,7 @@ fn vec2(s: &str) -> Option<[f32; 2]> {
 }
 
 /// The string value for `key` in a RON map of strings (`{"key": "value", …}`), unescaped.
-fn ron_string_entry(text: &str, key: &str) -> Option<String> {
+pub fn eframe_app_ron_entry(text: &str, key: &str) -> Option<String> {
     let mut literals = string_literals(text).into_iter();
     while let Some(k) = literals.next() {
         let v = literals.next()?;

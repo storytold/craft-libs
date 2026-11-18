@@ -78,6 +78,9 @@ pub struct RecoveryMeta {
     pub extension: String,
     /// The edit revision the copy holds.
     pub revision: u64,
+    /// The recovered copy needs a password to open. Old sidecars read as `false`.
+    #[serde(default)]
+    pub protected: bool,
 }
 
 /// A copy an earlier run left.
@@ -225,7 +228,8 @@ impl RecoveryStore {
                 None if self.owns_key(&key) || self.other_instance_alive() => None,
                 None => copies.first().map(|(ext, path)| {
                     let saved = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
-                    let meta = RecoveryMeta { name: key.clone(), original: None, extension: ext.clone(), revision: 0 };
+                    // P3(pdf-shell-w3): SH-C28
+                    let meta = RecoveryMeta { name: key.clone(), original: None, extension: ext.clone(), revision: 0, protected: false };
                     RecoveryEntry { key: key.clone(), meta, saved, path: path.clone() }
                 }),
             };

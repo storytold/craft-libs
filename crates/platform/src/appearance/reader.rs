@@ -118,6 +118,12 @@ impl SystemReader {
         self.watcher.as_ref().and_then(Watcher::icon_theme)
     }
 
+    /// The desktop text scale as the watcher last heard it; see [`Watcher::text_scale`]. `None` where the platform
+    /// does not say.
+    pub fn text_scale(&self) -> Option<f32> {
+        todo!("SH-C24")
+    }
+
     /// The preferences now, without blocking.
     pub fn read(&self) -> Reading {
         let reported = &self.reported;

@@ -86,6 +86,47 @@ pub struct Wheel {
     pub rotation: f32,
     /// Rotation of a two-finger touch, in radians.
     pub touch_rotation: f32,
+    /// The running gesture's scroll gathered so far, this share included, in its owner's points.
+    pub gathered: Vec2,
+    /// Whether the owner marked the running gesture moved (`Pointer::mark_wheel_moved`).
+    pub moved: bool,
+}
+
+/// The eased motion of a canvas's line wheel: notches gather into owed motion that later passes pay out.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[allow(dead_code)] // P3(pdf-canvas-w4): CV-C2
+pub struct WheelEase {
+    owed: Vec2,
+    burst: u32,
+    last_notch: f64,
+    last_sign: Vec2,
+    last_paid: f64,
+}
+
+impl WheelEase {
+    /// Adds the line pan `pan` of this pass, at time `now`, to the owed motion; a burst of notches under 0.08 s apart
+    /// accelerates it, a reversal or 0.3 s idle resets the burst.
+    pub fn feed(&mut self, pan: Vec2, now: f64) {
+        let _ = (pan, now);
+        todo!("CV-C2")
+    }
+
+    /// Drops the owed motion on the axes marked.
+    pub fn cancel_axis(&mut self, x: bool, y: bool) {
+        let _ = (x, y);
+        todo!("CV-C2")
+    }
+
+    /// The step this pass pays at time `now`: `1 − 0.1^(dt/0.1)` of the owed motion, with `dt` since the last paid pass.
+    pub fn step(&mut self, now: f64) -> Vec2 {
+        let _ = now;
+        todo!("CV-C2")
+    }
+
+    /// Whether motion is still owed.
+    pub fn owes(&self) -> bool {
+        todo!("CV-C2")
+    }
 }
 
 impl Wheel {
@@ -104,6 +145,8 @@ impl Wheel {
             touch_zoom: 1.0,
             rotation: 0.0,
             touch_rotation: 0.0,
+            gathered: Vec2::ZERO,
+            moved: false,
         }
     }
 

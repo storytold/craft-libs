@@ -228,6 +228,11 @@ impl Watcher {
             _ => None,
         }
     }
+    /// GNOME's `text-scaling-factor` through the portal (the gsettings fallback), clamped to 0.5..=3.0. A change
+    /// raises the generation and wakes, as the other appearance values do. `None` where the platform does not say.
+    pub fn text_scale(&self) -> Option<f32> {
+        todo!("SH-C24")
+    }
     /// Block until the first answer is known, then return it; at most `timeout`.
     ///
     /// Returns early, with `current()`, when the portal is absent and the `gsettings` fallback

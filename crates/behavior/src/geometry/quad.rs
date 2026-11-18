@@ -200,6 +200,21 @@ pub struct BoxRules {
     /// minimum keeps a scale drag from flipping the box, and a side already shorter than it at
     /// the press keeps its length as its floor, so a click changes nothing.
     pub min_side: f64,
+    /// Which handles the box shows and takes keys and drags for.
+    pub handles: BoxHandles,
+}
+
+/// Which handles of a box are shown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BoxHandles {
+    /// The four corners and the four sides.
+    #[default]
+    All,
+    /// The four corners.
+    Corners,
+    /// The right and left sides.
+    Sides,
 }
 
 impl Default for BoxRules {
@@ -211,6 +226,7 @@ impl Default for BoxRules {
             allow: BoxAllow::default(),
             rotate_step: 15.0,
             min_side: 0.0,
+            handles: BoxHandles::default(),
         }
     }
 }
@@ -244,6 +260,18 @@ impl BoxRules {
     pub fn with_min_side(mut self, side: f64) -> BoxRules {
         self.min_side = side;
         self
+    }
+
+    /// The rules with `handles` as the handles the box shows.
+    pub fn with_handles(mut self, handles: BoxHandles) -> BoxRules {
+        self.handles = handles;
+        self
+    }
+
+    /// Whether the box shows `part`: `Corners` shows the four corners, `Sides` the right and left sides.
+    pub fn shows(&self, part: BoxPart) -> bool {
+        let _ = part;
+        todo!("ED-F5")
     }
 
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.

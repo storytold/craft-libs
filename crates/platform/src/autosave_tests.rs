@@ -30,7 +30,8 @@ fn doc(id: u64, revision: u64, dirty: bool) -> AutosaveDoc {
 }
 
 fn meta(name: &str, revision: u64) -> RecoveryMeta {
-    RecoveryMeta { name: name.into(), original: None, extension: "pcraft".into(), revision }
+    // P3(pdf-shell-w3): SH-C28
+    RecoveryMeta { name: name.into(), original: None, extension: "pcraft".into(), revision, protected: false }
 }
 
 // Nothing is due before the interval; then only dirty documents with a new revision and no

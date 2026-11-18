@@ -148,8 +148,9 @@ impl CropBox {
         (w.is_finite() && h.is_finite()).then(|| (w.round().max(1.0), h.round().max(1.0)))
     }
 
-    /// Whether both sides are at least one document unit.
-    pub fn size_ok(&self) -> bool {
+    /// Whether both sides are at least `min`, and at least one document unit.
+    pub fn size_ok(&self, min: f64) -> bool {
+        let _ = min; // P3(pdf-edit-w4): ED-F9
         self.rect.width() >= MIN_FRAME && self.rect.height() >= MIN_FRAME
     }
 

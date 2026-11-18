@@ -68,6 +68,9 @@ pub const UI_ROLE: &str = "ui";
 /// The `role` of the monospace face (JetBrains Mono): the Monospace stack leads with the embedded face that has it.
 pub const MONO_ROLE: &str = "mono";
 
+/// The `role` of a signature face: `FontRef::signature()` selects the embedded faces that have it.
+pub const SIGNATURE_ROLE: &str = "signature";
+
 /// Script tags of the CJK faces, which craft-fonts also ships as interface faces. `Hant` covers
 /// `Hant-HK`.
 pub const CJK_SCRIPTS: &[&str] = &["Hans", "Hant", "Jpan", "Kore", "Hani"];

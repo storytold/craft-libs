@@ -36,6 +36,12 @@ pub struct Flavor {
 }
 
 impl Flavor {
+    /// A [`URI_LIST`] flavor (RFC 2483) of the files `paths`.
+    pub fn files(paths: &[std::path::PathBuf]) -> Flavor {
+        let _ = paths;
+        todo!("SH-C27")
+    }
+
     /// A flavor of `data` with the given MIME type.
     pub fn new(mime: impl Into<Cow<'static, str>>, data: Vec<u8>) -> Self {
         Self { mime: mime.into(), data }

@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use super::convert::{rgba8_flavor, rgba8_image, trim_cr, uri_list};
+use super::convert::{parse_uri_list, rgba8_flavor, rgba8_image, trim_cr, uri_list};
 use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, HTML, PNG, RGBA8, TEXT, URI_LIST};
 
 /// What a write did.
@@ -321,6 +321,7 @@ pub(crate) enum Put {
     Image(ClipboardImage),
     Html { html: String, alt: Option<String> },
     Text(String),
+    Files(Vec<PathBuf>),
 }
 
 /// The first flavor the system clipboard can hold, as its index in `flavors` and what to put
@@ -345,6 +346,7 @@ pub(crate) fn plan_write(flavors: &[Flavor], decode: Option<&Decode>) -> Result<
             }
             HTML => return Ok((index, Put::Html { html: text_of(flavor), alt: flavors.iter().find(|f| f.mime == TEXT).map(text_of) })),
             TEXT => return Ok((index, Put::Text(text_of(flavor)))),
+            URI_LIST => return Ok((index, Put::Files(parse_uri_list(&text_of(flavor))))),
             _ => {}
         }
     }
@@ -371,6 +373,10 @@ impl ClipboardBackend for SystemClipboard {
             }
             Put::Html { html, alt } => handle.set_html(html, alt),
             Put::Text(text) => handle.set_text(text),
+            Put::Files(files) => {
+                let _ = files;
+                todo!("SH-C27")
+            }
         }
         .map_err(system_error)?;
         Ok(index)

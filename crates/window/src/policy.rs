@@ -287,6 +287,15 @@ pub fn apply(builder: egui::ViewportBuilder, frame: &Frame) -> egui::ViewportBui
     }
 }
 
+/// The commands that move an open window from the frame `from` to `to`, the runtime twin of [`apply`]: `Native` to
+/// `Integrated` gives `Decorations(false)`, the reverse `Decorations(true)`, two `Integrated` or two equal frames
+/// `[]`. A change to or from `Inset` gives `None`, as egui has no runtime command for its builder-only settings.
+#[cfg(feature = "ui")]
+pub fn reframe(from: &Frame, to: &Frame) -> Option<Vec<egui::ViewportCommand>> {
+    let _ = (from, to);
+    todo!("SH-C37")
+}
+
 impl From<&crate::Frame> for Frame {
     /// The old two-way frame as a new one: `Desktop` is `Native`, `App(layout)` is integrated
     /// with generic captions.

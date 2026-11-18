@@ -50,6 +50,9 @@ bitflags! {
         /// with `DRAG` by a part whose click does nothing a drag could be mistaken for (a transform box's handles).
         /// The component begins the gesture from `PressPhase::Held`.
         const FOLLOWS_IN_SLOP = 65536;
+        /// A shape that clicks and passes its drag: within slop the press stays its click; past slop the drag goes to
+        /// the shape below it that senses a drag.
+        const PASSES_DRAG = 131072;
     }
 }
 
