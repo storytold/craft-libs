@@ -80,7 +80,8 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
-    pub(crate) menu_bar: bool,
+    /// The menu bar the last pass registered, which takes F10, a lone Alt and Alt with a letter.
+    pub(crate) menu_bar: Option<Id>,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -150,7 +151,7 @@ pub(crate) struct State {
     pub(super) entered: bool,
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
-    pub(super) menu_bar: bool,
+    pub(super) menu_bar: Option<Id>,
     /// The menu bar that took focus and the stop it took focus from, for the bar or a menu pick to give back.
     pub(super) bar_return: Option<(Id, StopKey)>,
     pub(crate) press: press::PressState,
@@ -427,9 +428,11 @@ pub(crate) fn pop_scope(ctx: &Context) {
     apply(ctx, acts);
 }
 
-/// Registers that a menu bar can take the menu-bar keys of the next input hook (spec 9.7).
-pub(crate) fn register_menu_bar(ctx: &Context) {
-    with(ctx, |state| state.menu_bar = true);
+/// Registers that the menu bar `bar` takes the menu-bar keys of the next input hook (spec 9.7). A settled bar
+/// registers again when it replays its last run, and the keys it takes run it (`keys::routed_to`).
+pub(crate) fn register_menu_bar(ctx: &Context, bar: Id) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_menu_bar(ctx, bar));
+    with(ctx, |state| state.menu_bar = Some(bar));
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this
@@ -733,6 +736,11 @@ pub(crate) fn set_visible(ctx: &Context, viewport: ViewportId, visible: bool) {
 /// What the input hook may read: the viewport's focus record from its last end hook.
 pub(crate) fn record(ctx: &Context, viewport: ViewportId) -> FocusedRecord {
     with_viewport(ctx, viewport, |state| state.record.clone())
+}
+
+/// The menu bar the last pass of `viewport` registered for the menu-bar keys.
+pub(crate) fn menu_bar(ctx: &Context, viewport: ViewportId) -> Option<Id> {
+    with_viewport(ctx, viewport, |state| state.record.menu_bar)
 }
 
 /// Whether a text field has the keys in `viewport`, as its last end hook recorded: the focused stop types text, or

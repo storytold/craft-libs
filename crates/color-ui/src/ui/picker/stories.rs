@@ -1,5 +1,5 @@
-//! Stories of `ColorPicker` and `ColorWarningChip`: Compact with alpha, Compact with Only Web Colors, Full with the
-//! compare swatch and a warning, and Full with the host's CMYK model and OKLCH.
+//! Stories of `ColorPicker` and `ColorPickerDialog`: Compact, Compact with opacity, Compact with Only Web Colors, Full
+//! with Photoshop's models and both warnings, Full with an InDesign-like model set, and the dialog behind its button.
 
 use craft_theme::{Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, Srgba};
 use craft_ui::contract::{Bind, Props as _, Show as _};
@@ -8,8 +8,9 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, TrackRamp};
 use super::screen_pick::ScreenPickButton;
-use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorWarning, ColorWarningChip, PickedColor};
-use crate::ui::AreaMode;
+use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
+use crate::ui::{AreaMode, ColorPickerDialog, ColorWarning};
+use craft_ui::dialog::stories::hosted;
 
 /// A naive CMYK in percent, without a working space: a host's model for the stories. A real host converts through its
 /// CMYK profile.
@@ -67,13 +68,23 @@ fn start() -> PickedColor {
     PickedColor::rgb(Srgba::rgb(0.2, 0.5, 0.8))
 }
 
+/// The compact popup's picker: the default models and the screen-pick button.
 #[story(ColorPicker<'static>, covers = [Default], drive = Drive::Never)]
 fn color_picker_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let color = data.value("color", start());
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).eyedropper(true).show(ui);
+    with_readout(data, shown)
+}
+
+/// The compact picker with the opacity row.
+#[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
+fn color_picker_compact_alpha(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let color = data.value("color", start());
     let shown = ColorPicker::new("Foreground color", Bind::bound(color)).alpha(true).eyedropper(true).show(ui);
     with_readout(data, shown)
 }
 
+/// The compact picker with Only Web Colors on: the field and strip show flat cells of the web colours.
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
 fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let web = *data.value("web", true);
@@ -83,34 +94,42 @@ fn color_picker_web_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     with_readout(data, shown)
 }
 
+/// Photoshop's Color Picker body: HSB, RGB, Lab and the host's CMYK, the compare block with both warnings, Only Web
+/// Colors and the screen-pick button; outside a dialog the actions cell is empty.
 #[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
 fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut mode = *data.value("mode", AreaMode::default());
     let current = Srgba::rgb(0.9, 0.2, 0.1);
     let color = data.value("color", PickedColor::rgb(Srgba::rgb(1.0, 0.0, 1.0)));
+    let models: [&'static dyn ColorModel; 4] = [&HsbModel, &RgbModel, &LabModel, &CMYK_MODEL];
     let shown = ColorPicker::new("Foreground color", Bind::bound(color))
         .layout(ColorPickerLayout::Full)
+        .models(models)
         .mode(Bind::bound(&mut mode))
         .compare(PickedColor::rgb(current))
-        .warnings([ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.9, 0.1, 0.9))])
+        .warnings([
+            ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.9, 0.1, 0.9)),
+            ColorWarning::web_colors("Not a web color", Srgba::rgb(1.0, 0.0, 0.8)),
+        ])
         .eyedropper(true)
         .show(ui);
     with_readout(data, shown)
 }
 
+/// An InDesign-like model set: RGB in the first group; Lab, OKLCH (with its radios) and the host's CMYK in the second.
 #[story(ColorPicker<'static>, covers = [Many], drive = Drive::Never)]
 fn color_picker_full_models(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let color = data.value("color", start());
-    let models: [&'static dyn ColorModel; 5] = [&HsbModel, &RgbModel, &LabModel, &CMYK_MODEL, &OklchModel];
-    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).alpha(true).show(ui);
+    let models: [&'static dyn ColorModel; 4] = [&RgbModel, &LabModel, &OklchModel, &CMYK_MODEL];
+    let shown = ColorPicker::new("Foreground color", Bind::bound(color)).layout(ColorPickerLayout::Full).models(models).show(ui);
     with_readout(data, shown)
 }
 
-#[story(ColorWarningChip<'static>, covers = [Default], drive = Drive::Never)]
-fn color_warning_chip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    static WARNING: std::sync::LazyLock<ColorWarning> =
-        std::sync::LazyLock::new(|| ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.9, 0.1, 0.9)));
-    ColorWarningChip::new(&WARNING).show(ui).into()
+/// The Color Picker dialog (`ColorPickerDialog`) behind its button: OK, Cancel and Add to Swatches stand in the
+/// picker's actions cell.
+#[story(ColorPicker<'static>, covers = [], drive = Drive::Never)]
+fn color_picker_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || ColorPickerDialog::foreground(Srgba::rgb(0.2, 0.5, 0.8)))
 }
 
 #[story(ScreenPickButton, covers = [Default], drive = Drive::Never)]

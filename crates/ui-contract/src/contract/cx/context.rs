@@ -334,8 +334,9 @@ impl StageAccess for CxCore<'_> {
 /// ```
 #[non_exhaustive]
 pub struct Cx<'a, C: Component> {
+    /// The pass core, which the pipeline builds once per run and lends to every step.
     #[doc(hidden)]
-    pub core: CxCore<'a>,
+    pub core: &'a mut CxCore<'a>,
     /// The component's cached style.
     pub style: &'a C::Style,
     /// The shown copy of the value, shared with shown memory.
@@ -354,7 +355,7 @@ impl<'a, C: Component> Deref for Cx<'a, C> {
     type Target = CxCore<'a>;
 
     fn deref(&self) -> &CxCore<'a> {
-        &self.core
+        self.core
     }
 }
 

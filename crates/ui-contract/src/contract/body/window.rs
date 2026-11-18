@@ -110,7 +110,7 @@ impl WindowMode {
     }
 }
 
-/// A move of a viewport mount's OS window that the app runs ([`windows::keeps_app_drag`]), from its Begin to its Commit
+/// A move of a viewport mount's OS window that the app runs (`Overlay::moved_by_app`), from its Begin to its Commit
 /// or Cancel. Rects are the window's outer rect in desktop points.
 #[derive(Clone, Copy, PartialEq)]
 struct WindowMove {
@@ -562,7 +562,7 @@ impl BodyHooks<'_> {
         self.mode.sizing = Some(sizing);
     }
 
-    /// The move of an OS window whose app runs it ([`windows::keeps_app_drag`]): a drag of the move band keeps the
+    /// The move of an OS window whose app runs it (`Overlay::moved_by_app`): a drag of the move band keeps the
     /// pressed point under the pointer, and each step is reported through `placement_changed` as a layer's move is,
     /// from Begin to Commit or Cancel. Where the platform tracks the OS's moves ([`Caps::OS_MOVES_TRACKED`]) the OS
     /// moves the window, from the press: `StartMove` hands it the press event, which a later pass no longer has. The
