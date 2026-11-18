@@ -115,16 +115,24 @@ fn press_menu_key(fixture: &mut Fixture) {
 /// A document editor's wheel: the wheel scrolls, Shift + wheel scrolls sideways, and Ctrl or Cmd + wheel steps the zoom
 /// ladder.
 #[story(Canvas, covers = [Default])]
-fn document_wheel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+fn document_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let mut navigation = NavigationOptions::default();
     navigation.wheel = WheelScheme::Document;
+    let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
     Canvas::new("Document")
         .navigation(navigation)
-        .view(StoryDocument::STANDARD.view(room, ui.pixels_per_point(), 100.0))
+        .view(Bind::bound(&mut *view))
         .show_at(ui, room, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD))
         .output
         .into()
+}
+
+/// The standard document zoomed in and scrolled off its origin, so a story that scrolls opens away from the start.
+fn scrolled_view(room: Rect, pixels_per_point: f32) -> craft_behavior::CanvasView {
+    let mut view = StoryDocument::STANDARD.view(room, pixels_per_point, ZOOMED);
+    view.center = Point::new(view.center.x + 60.0, view.center.y + 40.0);
+    view
 }
 
 /// The middle button's autoscroll, started by a middle click: the mark stands where the click came up, and the view
@@ -134,7 +142,7 @@ fn middle_autoscroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let mut navigation = NavigationOptions::default();
     navigation.middle_button = MiddleButton::Autoscroll;
-    let view = data.value("view", StoryDocument::STANDARD.view(room, ui.pixels_per_point(), 100.0));
+    let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
     let shown = Canvas::new("Document")
         .navigation(navigation)
         .view(Bind::bound(&mut *view))
@@ -148,7 +156,7 @@ fn middle_autoscroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn editor_part(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
     let view = StoryDocument::STANDARD.view(room, ui.pixels_per_point(), 100.0);
-    let typed = data.value("typed", String::new());
+    let typed = data.value("typed", String::from("Typed text"));
     let shown = Canvas::new("Page").editor(EditorPurpose::Text).view(view).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
         let Some(pass) = tool_pass(&body.env) else { return };
