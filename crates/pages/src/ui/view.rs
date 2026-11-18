@@ -278,9 +278,18 @@ pub struct PageViewOutput {
     /// pasteboard colour menu at [`PasteboardOutput::context_at`]; a page name click is not used here.
     pub pasteboard: Option<PasteboardOutput>,
     frame: Frame,
+    resident: usize,
 }
 
 impl PageViewOutput {
+    /// How many page pictures the view holds after this pass: its pages' own pictures and the pictures of the part
+    /// in view of pages larger than the texture side, shown or kept for later, as their stores count them. The
+    /// stores evict the pictures drawn longest ago past their budget, so the count stays bounded however many pages
+    /// the view scrolls through. 0 for a pass that drew nothing.
+    pub fn resident_pictures(&self) -> usize {
+        self.resident
+    }
+
     /// Takes the view a tool host reported (`ToolHostResponse::view`, from the Hand and Zoom tools) into `state`:
     /// the scroll offset, and the zoom when it changed (a fit ends). In a continuous view the current page follows
     /// the offset.
@@ -485,6 +494,7 @@ impl<'a> PageView<'a> {
             toggle_white_space,
             pasteboard: seen.pasteboard,
             frame: seen.frame,
+            resident: seen.resident,
         }
     }
 }
@@ -508,6 +518,8 @@ struct Seen {
     visible: Range<usize>,
     current_changed: bool,
     pasteboard: Option<PasteboardOutput>,
+    /// The page pictures held.
+    resident: usize,
     /// What the caller stores after the real run.
     next: Option<Next>,
 }
@@ -532,6 +544,7 @@ impl Seen {
             visible: 0..0,
             current_changed: false,
             pasteboard: None,
+            resident: 0,
             next: None,
         }
     }
@@ -768,10 +781,11 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         })
         .collect();
     let pictures = PagePictures::new(source, &pages, &near, paper).label(words.text.clone()).hold(zooming || ratio != 1.0);
-    match describer {
+    let resident = match describer {
         Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
         None => pictures.show_at(ui, cx.rect),
-    };
+    }
+    .resident;
 
     // The scroll bars come before the clamp, so a drag of this pass lands in this pass.
     let document = drawn_frame.document(&drawn);
@@ -806,6 +820,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         visible,
         current_changed,
         pasteboard: Some(pasteboard),
+        resident,
         next: Some(Next { started, state, mem, edit: words.edit.as_str().to_owned() }),
     })
 }
