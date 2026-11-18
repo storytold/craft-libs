@@ -171,8 +171,10 @@ fn a_bound_caret_moves_the_caret_and_follows_it() {
     let (shown, bound, seen) = (text.clone(), caret.clone(), rect.clone());
     let mut fixture = Fixture::new(move |ui| {
         let mut at = bound.get();
-        let field = TextField::new("Notes", Bind::bound(&mut *shown.borrow_mut())).lines(2).max_lines(2).caret(Bind::bound(&mut at));
+        let mut held = shown.borrow_mut();
+        let field = TextField::new("Notes", Bind::bound(&mut *held)).lines(2).max_lines(2).caret(Bind::bound(&mut at));
         seen.set(field.show(ui).response.rect);
+        drop(held);
         bound.set(at);
     });
     fixture.settle();
