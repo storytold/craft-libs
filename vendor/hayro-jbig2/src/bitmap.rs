@@ -22,7 +22,8 @@ pub(crate) const MAX_PIXELS: u64 = 1 << 28;
 /// Craft patch: the bounds a stream is decoded within. The bound on the pixels of one bitmap, the
 /// decoding work ([`MAX_WORK`]), the symbol pixels of a dictionary, the halftone grid cells
 /// ([`MAX_GRID_CELLS`]) and the words a page's segments may hold all follow
-/// [`Limits::max_pixels`], in the proportions they have at its default of 2^28.
+/// [`Limits::max_pixels`], in the proportions they have at its default of 2^28. The decoding work
+/// is never less than the most that decoding one bitmap within the limit takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     max_pixels: u64,
@@ -46,9 +47,13 @@ impl Limits {
         self.max_pixels
     }
 
-    /// The decoding work one image may ask for (see [`MAX_WORK`]).
+    /// The decoding work one image may ask for (see [`MAX_WORK`]). It is at least the most work
+    /// that decoding one bitmap within `max_pixels` takes (see [`decode_work`]): its pixels, and
+    /// the cost of up to 65535 rows, which a bitmap of width 0 has with no pixels. A low limit
+    /// still decodes a bitmap it allows.
     pub(crate) fn work(&self) -> u64 {
-        self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS)
+        let one_bitmap = self.max_pixels.saturating_add(decode_work(0, MAX_DIMENSION));
+        self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS).max(one_bitmap)
     }
 
     /// The most cells a halftone grid may have (see [`MAX_GRID_CELLS`]).
@@ -451,5 +456,21 @@ mod pdfcraft_limit_tests {
         assert_eq!(raised.work(), 4 << 30);
         assert_eq!(raised.grid_cells(), 1 << 27);
         assert_eq!(Limits::with_max_pixels(u64::MAX).work(), u64::MAX);
+    }
+
+    /// Craft patch: a low limit still pays for decoding a bitmap it allows, the row cost of
+    /// [`decode_work`] included.
+    #[test]
+    fn a_low_limit_pays_for_a_bitmap_it_allows() {
+        let bitmaps = [(1, 1), (1, 4), (1, MAX_DIMENSION), (2, MAX_DIMENSION)];
+        for (width, height) in bitmaps {
+            let max_pixels = u64::from(width) * u64::from(height);
+            let work = Limits::with_max_pixels(max_pixels).work();
+            assert!(work >= decode_work(width, height), "{width} by {height}: {work}");
+        }
+        for max_pixels in [0, 1] {
+            let work = Limits::with_max_pixels(max_pixels).work();
+            assert!(work >= decode_work(0, MAX_DIMENSION), "0 by 65535 within {max_pixels}: {work}");
+        }
     }
 }
