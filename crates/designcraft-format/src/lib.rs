@@ -127,9 +127,10 @@ pub fn starts_designcraft(prefix: &[u8]) -> bool {
     craft_document_bundle::starts_with_mimetype(prefix, BUNDLE)
 }
 
-/// Read the first-page PNG preview from a ZIP package, with a fixed 4 MiB cap.
+/// Read the first-page PNG preview from an unprefixed native ZIP package, with a fixed 4 MiB cap.
+/// Nonmatching signatures are rejected after at most four bytes read.
 pub fn read_preview<R: Read + Seek>(reader: R) -> Option<Vec<u8>> {
-    craft_document_bundle::read_preview_from(reader, PREVIEW)
+    craft_document_bundle::read_unprefixed_preview_from(reader, PREVIEW)
 }
 
 fn is_linked(document: &Value, id: &str) -> bool {
