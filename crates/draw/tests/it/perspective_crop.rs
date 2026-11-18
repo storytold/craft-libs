@@ -6,10 +6,12 @@ use std::rc::Rc;
 
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::Constraint;
-use craft_behavior::kurbo::{Point, Size};
-use craft_draw::ui::crop::{CropDocKey, PerspectiveCropEvent, PerspectiveCropTool, PerspectiveInput, grid_lines, grid_steps, is_valid};
+use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
+use craft_draw::ui::crop::{
+    CropDocKey, PerspectiveCropEvent, PerspectiveCropQuad, PerspectiveCropTool, PerspectiveInput, grid_lines, grid_steps, is_valid,
+};
 use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
-use craft_ui::contract::ShowContainer as _;
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::access::Role;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Vec2};
@@ -18,6 +20,35 @@ const SIZE: Size = Size::new(400.0, 300.0);
 const SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::NONE };
 const ALT: Modifiers = Modifiers { alt: true, ..Modifiers::NONE };
 const BOTH: Modifiers = Modifiers { shift: true, alt: true, ..Modifiers::NONE };
+/// The bounds of the bounded quad, around the upright quad of the trials.
+const BOUNDS: DocRect = DocRect::new(60.0, 50.0, 340.0, 240.0);
+
+/// The screen point of document point `(x, y)` on the fixture's canvas: the view shows (200, 150) at its centre.
+fn screen(fixture: &Fixture, x: f64, y: f64) -> Pos2 {
+    let canvas = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas");
+    canvas.center() + Vec2::new(x as f32 - 200.0, y as f32 - 150.0)
+}
+
+fn button(fixture: &mut Fixture, at: Pos2, pressed: bool, modifiers: Modifiers) {
+    fixture.hold(modifiers);
+    fixture.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers }]);
+}
+
+/// A drag in document points over four moves; the last move and the release hold `last`, the others `first`.
+fn drag_on(fixture: &mut Fixture, from: (f64, f64), to: (f64, f64), first: Modifiers, last: Modifiers) {
+    let (from, to) = (screen(fixture, from.0, from.1), screen(fixture, to.0, to.1));
+    fixture.hold(first);
+    fixture.frame(vec![Event::PointerMoved(from)]);
+    button(fixture, from, true, first);
+    for step in 1..=4 {
+        let mods = if step == 4 { last } else { first };
+        fixture.hold(mods);
+        fixture.frame(vec![Event::PointerMoved(from + (to - from) * (step as f32 / 4.0))]);
+    }
+    button(fixture, to, false, last);
+    fixture.hold(Modifiers::NONE);
+    fixture.frame(Vec::new());
+}
 
 /// The tool on a canvas showing its quad, driven by pointer events.
 struct Rig {
@@ -55,29 +86,16 @@ impl Rig {
 
     /// The screen point of document point `(x, y)`: the view shows (200, 150) at the canvas's centre.
     fn at(&self, x: f64, y: f64) -> Pos2 {
-        let canvas = self.fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas");
-        canvas.center() + Vec2::new(x as f32 - 200.0, y as f32 - 150.0)
+        screen(&self.fixture, x, y)
     }
 
     fn button(&mut self, at: Pos2, pressed: bool, modifiers: Modifiers) {
-        self.fixture.hold(modifiers);
-        self.fixture.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers }]);
+        button(&mut self.fixture, at, pressed, modifiers);
     }
 
     /// A drag over four moves; the last move and the release hold `last`, the others `first`.
     fn drag_with(&mut self, from: (f64, f64), to: (f64, f64), first: Modifiers, last: Modifiers) {
-        let (from, to) = (self.at(from.0, from.1), self.at(to.0, to.1));
-        self.fixture.hold(first);
-        self.fixture.frame(vec![Event::PointerMoved(from)]);
-        self.button(from, true, first);
-        for step in 1..=4 {
-            let mods = if step == 4 { last } else { first };
-            self.fixture.hold(mods);
-            self.fixture.frame(vec![Event::PointerMoved(from + (to - from) * (step as f32 / 4.0))]);
-        }
-        self.button(to, false, last);
-        self.fixture.hold(Modifiers::NONE);
-        self.fixture.frame(Vec::new());
+        drag_on(&mut self.fixture, from, to, first, last);
     }
 
     fn drag(&mut self, from: (f64, f64), to: (f64, f64), mods: Modifiers) {
@@ -134,6 +152,36 @@ fn near(got: Option<[Point; 4]>, want: [(f64, f64); 4]) -> bool {
 fn rectangle((a, b): (Point, Point)) -> [(f64, f64); 4] {
     let (x0, y0, x1, y1) = (a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
     [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+}
+
+/// The quad alone on a canvas, kept inside [`BOUNDS`], starting at `start`; and its value.
+fn bounded(start: [Point; 4]) -> (Fixture, Rc<RefCell<Option<[Point; 4]>>>) {
+    let quad = Rc::new(RefCell::new(Some(start)));
+    let shown = Rc::clone(&quad);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let view = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
+        let _ = Canvas::new("Document").document(SIZE).view(view).show(ui, |ui, body| {
+            let mut quad = shown.borrow_mut();
+            let _ = PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).bounds(BOUNDS).show_at(ui, body.rect);
+        });
+    });
+    fixture.settle();
+    (fixture, quad)
+}
+
+fn inside(q: &[Point; 4]) -> bool {
+    q.iter().all(|p| p.x >= BOUNDS.x0 - 1e-6 && p.x <= BOUNDS.x1 + 1e-6 && p.y >= BOUNDS.y0 - 1e-6 && p.y <= BOUNDS.y1 + 1e-6)
+}
+
+/// Whether `b` is `a` moved without a change of shape.
+fn same_shape(a: &[Point; 4], b: &[Point; 4]) -> bool {
+    let by = b[0] - a[0];
+    a.iter().zip(b).all(|(p, q)| ((*q - *p) - by).hypot() < 1e-6)
+}
+
+fn on_right_edge(x: f64) -> bool {
+    (x - BOUNDS.x1).abs() < 1e-6
 }
 
 #[trial]
@@ -240,6 +288,56 @@ fn perspective_box_and_corner_modifiers_and_clicks() {
     rig.set(upright);
     rig.click((300.0, 220.0));
     assert!(near(rig.quad(), upright), "a click moves nothing: {:?}", rig.quad());
+}
+
+#[trial]
+fn a_bounded_quad_stays_inside_its_bounds_whatever_moves_it() {
+    let upright = [(100.0, 80.0), (300.0, 80.0), (300.0, 220.0), (100.0, 220.0)].map(|(x, y)| Point::new(x, y));
+    let (mut fixture, quad) = bounded(upright);
+    let value = |quad: &Rc<RefCell<Option<[Point; 4]>>>| quad.borrow().expect("a quad");
+
+    // An Alt corner drag past the bounds' corner: the corner and its moved neighbours stop at the edges.
+    drag_on(&mut fixture, (300.0, 220.0), (370.0, 270.0), ALT, ALT);
+    let q = value(&quad);
+    assert!(inside(&q), "an Alt corner drag stays inside: {q:?}");
+    assert!(on_right_edge(q[2].x) && (q[2].y - BOUNDS.y1).abs() < 1e-6, "the dragged corner stops at the edges: {q:?}");
+    assert!((q[1].x - q[2].x).abs() < 1e-6 && (q[3].y - q[2].y).abs() < 1e-6 && q[0] == upright[0], "Alt still keeps the rectangle: {q:?}");
+
+    // A whole-quad drag past the bounds keeps its shape: the farthest corner stops at the edge, the rest follow.
+    *quad.borrow_mut() = Some(upright);
+    fixture.frame(Vec::new());
+    drag_on(&mut fixture, (200.0, 150.0), (290.0, 180.0), Modifiers::NONE, Modifiers::NONE);
+    let moved = value(&quad);
+    assert!(inside(&moved) && same_shape(&upright, &moved), "a moved quad stays inside with its shape: {moved:?}");
+    assert!(on_right_edge(moved[1].x) && moved != upright, "the move stops at the edge: {moved:?}");
+
+    // The arrows on the whole quad: one step in, then a far step out stops at the edge.
+    fixture.key(Key::ArrowLeft, Modifiers::NONE);
+    fixture.frame(Vec::new());
+    let left = value(&quad);
+    assert!(left[1].x < moved[1].x && same_shape(&moved, &left), "an arrow moves the whole quad: {left:?}");
+    fixture.key(Key::ArrowRight, SHIFT);
+    fixture.frame(Vec::new());
+    let back = value(&quad);
+    assert!(inside(&back) && same_shape(&moved, &back) && on_right_edge(back[1].x), "a nudge out stops at the edge: {back:?}");
+
+    // The arrows on a picked corner: a press on it picks it, and a far nudge out stops it at the edge.
+    let corner = screen(&fixture, back[2].x, back[2].y);
+    fixture.frame(vec![Event::PointerMoved(corner)]);
+    button(&mut fixture, corner, true, Modifiers::NONE);
+    button(&mut fixture, corner, false, Modifiers::NONE);
+    fixture.frame(Vec::new());
+    assert_eq!(value(&quad), back, "a click on a corner moves nothing");
+    fixture.key(Key::ArrowLeft, SHIFT);
+    fixture.frame(Vec::new());
+    let pulled = value(&quad);
+    assert!(pulled[2].x < back[2].x && pulled[1] == back[1], "an arrow moves the picked corner alone: {pulled:?}");
+    for _ in 0..2 {
+        fixture.key(Key::ArrowRight, SHIFT);
+        fixture.frame(Vec::new());
+    }
+    let pushed = value(&quad);
+    assert!(inside(&pushed) && on_right_edge(pushed[2].x), "a corner nudged out stops at the edge: {pushed:?}");
 }
 
 #[trial]
