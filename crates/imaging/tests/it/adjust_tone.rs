@@ -73,3 +73,79 @@ fn a_curves_point_from_a_sample_goes_on_the_shown_channel_or_on_each_colour() {
     assert_eq!(xs(&curves, 2), [0.0, 153.0, 255.0]);
     assert_eq!((xs(&curves, 1).len(), xs(&curves, 3).len()), (2, 2), "the other colours stay as they were");
 }
+
+/// The Channel select of a dialog's Curves and Levels panels shows, beside each entry, the key that picks it:
+/// Photoshop's Alt+2 for the composite to Alt+5 for Blue. A panel whose host runs its own channel keys (Properties)
+/// shows the host's commands' keys, and one with neither shows none.
+#[trial]
+fn the_channel_select_shows_the_key_of_each_entry() {
+    use craft_imaging::ui::adjust::{AdjustContext, LevelsPanel};
+    use craft_ui::contract::Bind;
+    use craft_ui::runtime::commands::CommandRef;
+    use craft_ui::testing::Fixture;
+    let host: &'static [CommandRef] = Box::leak(HostChannel::refs().into_boxed_slice());
+    // (the panel's context, the host's keys, Levels instead of Curves)
+    let cases = [
+        (AdjustContext::dialog(true), None, false),
+        (AdjustContext::dialog(true), None, true),
+        (AdjustContext::properties(false), Some(host), false),
+        (AdjustContext::properties(false), None, false),
+    ];
+    for (context, keys, levels) in cases {
+        let mut fixture = Fixture::new(move |ui| {
+            if levels {
+                let mut value = vec![Levels::identity(0.0..=255.0); 4];
+                let mut panel = LevelsPanel::new("Levels", Bind::bound(&mut value), rgb()).context(context);
+                if let Some(keys) = keys {
+                    panel = panel.channel_keys(keys);
+                }
+                panel.show(ui);
+            } else {
+                let mut value = ToneCurves::identity(&rgb());
+                let mut panel = CurvesPanel::new("Curves", Bind::bound(&mut value), rgb()).context(context);
+                if let Some(keys) = keys {
+                    panel = panel.channel_keys(keys);
+                }
+                panel.show(ui);
+            }
+        });
+        fixture.os(craft_host::target::Os::Linux);
+        fixture.settle();
+        let select = fixture.by_label("Channel").expect("the Channel select");
+        fixture.click(&select);
+        fixture.settle();
+        let shown: Vec<String> = fixture.texts().iter().map(|text| text.text.to_string()).collect();
+        let has = |key: &str| shown.iter().any(|text| text == key);
+        let expected = context.is_dialog() || keys.is_some();
+        for key in ["Alt+2", "Alt+3", "Alt+4", "Alt+5"] {
+            assert_eq!(
+                has(key),
+                expected,
+                "{key} beside its entry ({}, host keys {}, levels {levels}): {shown:?}",
+                if context.is_dialog() { "dialog" } else { "properties" },
+                keys.is_some()
+            );
+        }
+    }
+}
+
+/// The channel keys a Properties host runs itself, in the application's scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::CommandSet)]
+#[command(prefix = "trialHostChannel", scope = "app")]
+#[non_exhaustive]
+enum HostChannel {
+    #[command(label = "Composite", default = "Alt+2")]
+    Composite,
+    #[command(label = "First", default = "Alt+3")]
+    First,
+    #[command(label = "Second", default = "Alt+4")]
+    Second,
+    #[command(label = "Third", default = "Alt+5")]
+    Third,
+}
+
+impl HostChannel {
+    fn refs() -> Vec<craft_ui::runtime::commands::CommandRef> {
+        [Self::Composite, Self::First, Self::Second, Self::Third].into_iter().map(Into::into).collect()
+    }
+}

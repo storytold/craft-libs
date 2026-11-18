@@ -20,11 +20,12 @@ use craft_ui::contract::{
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
+use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
 use egui::{Id, Response, Ui};
 
-use super::context::{read_shown, write_shown};
+use super::context::{channel_commands, read_shown, write_shown};
 use super::{AdjustContext, AdjustWords, LevelsClip, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
 use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveEnd, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
@@ -236,6 +237,11 @@ pub struct CurvesPanel<'a> {
     /// Dialog or Properties panel.
     #[prop]
     context: AdjustContext,
+    /// The commands that pick the Channel select's entries, by position, when the host runs them itself (a Properties
+    /// panel): the select shows their keys beside the entries. A dialog's panel runs and shows its own
+    /// [`ToneChannelCommands`].
+    #[prop]
+    channel_keys: Option<&'a [CommandRef]>,
     /// Selects point `index` of the shown curve in this pass, as a click on it would.
     #[prop]
     select: Option<usize>,
@@ -265,6 +271,7 @@ impl<'a> CurvesPanel<'a> {
             picker_enabled: [true; 3],
             pickers_unavailable: false,
             context: AdjustContext::dialog(true),
+            channel_keys: None,
             select: None,
             enabled: true,
             fill_height: None,
@@ -356,10 +363,12 @@ impl<'a> CurvesPanel<'a> {
             picker_enabled,
             pickers_unavailable,
             context,
+            channel_keys,
             select,
             enabled,
             fill_height,
         } = self;
+        let key_commands = channel_commands(channel_keys, context);
         let env = Env::of(ui);
         let words = env.words::<AdjustWords>();
         let view = env.view();
@@ -425,9 +434,19 @@ impl<'a> CurvesPanel<'a> {
             let mut picked = channel;
             // No channels (an action whose target is unresolved): no Channel select.
             if !entries.is_empty() {
+                // Each entry shows the key that picks it, as the keymap has it now (Photoshop's Alt+2 to Alt+5).
+                let keys: Vec<String> = key_commands
+                    .iter()
+                    .map(|command| craft_ui::runtime::commands::chord(ui.ctx(), command).map(|chord| chord.display(os)).unwrap_or_default())
+                    .collect();
                 Row::new().show(ui, |ui, _| {
                     Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
-                    if let Some(&at) = Select::new(words.channel.clone(), Bind::given(channel), &entries).show(ui).value() {
+                    let keys = keys.clone();
+                    let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).decorate(move |at, row| match keys.get(*at) {
+                        Some(key) if !key.is_empty() => row.trailing(key.clone()),
+                        _ => row,
+                    });
+                    if let Some(&at) = select.show(ui).value() {
                         picked = at;
                     }
                 });

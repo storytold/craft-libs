@@ -6,6 +6,7 @@ use std::sync::Arc;
 use craft_behavior::{EditEvent, Mixed};
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, CommandSet};
+use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::StageAccess;
 
@@ -281,6 +282,11 @@ pub enum ToneChannelCommands {
 }
 
 impl ToneChannelCommands {
+    /// The commands in entry order, as a dialog's Curves or Levels panel takes them.
+    pub fn refs() -> Vec<CommandRef> {
+        [Self::Channel1, Self::Channel2, Self::Channel3, Self::Channel4, Self::Channel5].into_iter().map(CommandRef::from).collect()
+    }
+
     /// The entry's position, 0 to 4.
     pub const fn index(self) -> usize {
         match self {
@@ -312,5 +318,15 @@ pub(super) fn read_shown(bind: &mut Option<Bind<'_, usize>>, cx: &mut impl Stage
 pub(super) fn write_shown(bind: &mut Option<Bind<'_, usize>>, cx: &mut impl StageAccess, before: usize, after: usize) {
     if let (Some(bind), true) = (bind.as_mut(), before != after) {
         bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), after, Arc::from("Channel"), None));
+    }
+}
+
+/// The commands whose keys the Channel select shows beside its entries, by position: the host's (a Properties panel
+/// that runs keys of its own), else in a dialog the panel's [`ToneChannelCommands`], else none.
+pub(super) fn channel_commands(host: Option<&[CommandRef]>, context: AdjustContext) -> Vec<CommandRef> {
+    match host {
+        Some(commands) => commands.to_vec(),
+        None if context.is_dialog() => ToneChannelCommands::refs(),
+        None => Vec::new(),
     }
 }
