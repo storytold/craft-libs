@@ -161,12 +161,13 @@ fn ranges(sttb: &[u8], bkf: &[u8], bkl: &[u8]) -> Vec<(i32, (u32, u32))> {
         at += extra;
     }
     let starts_n = bkf.len().saturating_sub(4) / 8;
-    let starts = plc_cps(bkf, starts_n);
-    let ends = plc_cps(bkl, bkl.len() / 4);
+    // `PlcfAtnBkl`'s last CP is its limit, no comment's end.
+    let ends_n = (bkl.len() / 4).saturating_sub(1);
+    let cp_at = |plc: &[u8], i: usize| plc.get(4 * i..4 * i + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let mut out = Vec::new();
     for (i, &tag) in tags.iter().enumerate().take(starts_n) {
-        let ibkl = u16_at(bkf, 4 * (starts_n + 1) + 4 * i).map(usize::from);
-        if let (Some(&start), Some(&end)) = (starts.get(i), ibkl.and_then(|k| ends.get(k)))
+        let ibkl = u16_at(bkf, 4 * (starts_n + 1) + 4 * i).map(usize::from).filter(|&k| k < ends_n);
+        if let (Some(start), Some(end)) = (cp_at(bkf, i), ibkl.and_then(|k| cp_at(bkl, k)))
             && start <= end
         {
             out.push((tag, (start, end)));
@@ -285,6 +286,26 @@ mod tests {
         assert_eq!(got.len(), super::MAX);
         assert_eq!((got[0].initials.as_str(), got[0].author.len()), ("ZZ", super::MAX_AUTHOR));
         assert_eq!((got[1].initials.as_str(), got[1].author.as_str()), ("AA", "Ann"));
+    }
+
+    #[test]
+    fn a_comment_ending_at_the_end_tables_limit_has_no_range() {
+        // `PlcfAtnBkl` holds one end and its limit; a start naming index 1 names the limit, so
+        // its comment covers only its reference, not the text up to the limit.
+        let refs = [u32s(&[10, 20, 26]), atrd97("AA", 0, 1), atrd97("BB", 0, 2)].concat();
+        let txts = u32s(&[0, 9, 20, 21]);
+        let owners = [3u16.to_le_bytes().to_vec(), "Ann".encode_utf16().flat_map(u16::to_le_bytes).collect()].concat();
+        let mut sttb = [0xFFFFu16, 2, 10].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        for tag in [1i32, 2] {
+            sttb.extend_from_slice(&[0, 0, 0, 1]);
+            sttb.extend_from_slice(&tag.to_le_bytes());
+            sttb.extend_from_slice(&(-1i32).to_le_bytes());
+        }
+        let bkf = [u32s(&[6, 12, 28]), u32s(&[0, 1])].concat();
+        let bkl = u32s(&[10, 28]);
+        let (fib, table) = with(&[(4, refs), (5, txts), (36, owners), (37, sttb), (42, bkf), (43, bkl)]);
+        let got = parse(&table, &fib, Layout::Word97);
+        assert_eq!(got.iter().map(|c| c.range).collect::<Vec<_>>(), [Some((6, 10)), None]);
     }
 
     #[test]
