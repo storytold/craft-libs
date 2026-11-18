@@ -458,7 +458,10 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
-        let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash()).with_line(line_ratio);
+        let words = host_words(ctx, host.as_ref());
+        let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())
+            .with_line(line_ratio)
+            .with_words(words.generation());
         Env {
             scoped: Arc::new(Scoped {
                 inherited: Arc::new(Inherited {
@@ -472,7 +475,7 @@ impl Env {
                     motion,
                     scale,
                     commands: CommandChain::default(),
-                    words: host_words(ctx, host.as_ref()),
+                    words,
                     format: host_format(ctx, host.as_ref()),
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
@@ -577,7 +580,8 @@ impl Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
         scoped.key = EnvKey::new(scoped.tokens.key(), scoped.direction, scoped.scale, scoped.os, scoped.active, scoped.values.style_hash())
-            .with_line(scoped.line_ratio);
+            .with_line(scoped.line_ratio)
+            .with_words(scoped.words.generation());
         Env { scoped: Arc::new(scoped) }
     }
 

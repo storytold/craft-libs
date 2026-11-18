@@ -572,20 +572,26 @@ pub(super) fn shared_labels<R>(
     body: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     match columns {
-        LabelColumns::Own => {
-            let (result, scoped) = ColumnGroup::scope_measured(ui, sub(id, "labels"), seed, |ui, group| {
-                group.offer(room);
-                body(ui)
-            });
-            (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
-            result
-        }
-        LabelColumns::Through { sized } => {
-            let (result, reached) = ColumnGroup::through(ui, sub(id, "through"), room, sized, body);
-            found.reached = reached;
-            result
-        }
+        LabelColumns::Own => own_labels(ui, id, (room, seed), found, body),
+        LabelColumns::Through { sized } => through_labels(ui, id, (room, sized), found, body),
         LabelColumns::Field => ColumnGroup::field(ui, body),
         LabelColumns::Apart => ColumnGroup::barrier(ui, body),
     }
+}
+
+/// The body's rows in a label group of their own, offered `room` and opened at the `seed` widths.
+fn own_labels<R>(ui: &mut Ui, id: Id, (room, seed): (f32, Option<Columns>), found: &mut LabelsFound, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let (result, scoped) = ColumnGroup::scope_measured(ui, sub(id, "labels"), seed, |ui, group| {
+        group.offer(room);
+        body(ui)
+    });
+    (found.extent, found.unsettled) = (scoped.extent, scoped.unsettled);
+    result
+}
+
+/// The body's rows in the label group around the container.
+fn through_labels<R>(ui: &mut Ui, id: Id, (room, sized): (f32, bool), found: &mut LabelsFound, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let (result, reached) = ColumnGroup::through(ui, sub(id, "through"), room, sized, body);
+    found.reached = reached;
+    result
 }

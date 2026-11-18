@@ -716,17 +716,17 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 
     /// Shows the component at `rect`, with no allocation.
     fn show_at(self, ui: &mut Ui, rect: Rect) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Rect(rect), None)
+        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), None)
     }
 
     /// Shows the component with rich tooltip content from the same call.
     fn show_with_tip(self, ui: &mut Ui, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Flow, Some(Box::new(tip)))
+        run::show_leaf(&mut Some(self), ui, ShowAt::Flow, Some(Box::new(tip)))
     }
 
     /// Shows the component at `rect` with rich tooltip content.
     fn show_at_with_tip(self, ui: &mut Ui, rect: Rect, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Rect(rect), Some(Box::new(tip)))
+        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), Some(Box::new(tip)))
     }
 
     /// Measures without allocating: steps 1 to 5 under the id `show` would use next. It registers no id, opens no
@@ -740,18 +740,18 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 pub trait ShowContainer: Container + sealed::ShowContainer {
     /// Shows the container in the flow of `ui`.
     fn show<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Flow, body, None)
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, None)
     }
 
     /// Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
     fn show_at<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Rect(rect), body, None)
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, None)
     }
 
     /// Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies
     /// past it, as after [`show`](Self::show).
     fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container_taking(self, ui, rect, body)
+        run::show_container_taking(&mut Some(self), ui, rect, body)
     }
 
     /// Measures the container with `body` without allocating: steps 1 to 5 under the id `show` would use next, with
@@ -763,7 +763,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
 
     /// Shows the container with rich tooltip content.
     fn show_with_tip<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Flow, body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, Some(Box::new(tip)))
     }
 
     /// Shows the container at `rect` with rich tooltip content.
@@ -774,7 +774,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
         body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
         tip: impl FnOnce(&mut Ui),
     ) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
     }
 }
 
@@ -782,7 +782,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
 pub trait ShowCollection: Collection + sealed::ShowCollection {
     /// Shows the visible items of `source`, one `item` call each.
     fn show_items<'r>(self, ui: &mut Ui, source: &dyn ItemSource<Self::Key>, item: &mut ItemFn<'r, Self>) -> Self::Output {
-        run::show_items(self, ui, source, item)
+        run::show_items(&mut Some(self), ui, source, item)
     }
 }
 

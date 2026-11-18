@@ -655,7 +655,12 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
 /// The components the running pass's intents are routed to (keys, AccessKit requests, edits): a settling region that
 /// holds one runs, so the component takes them.
 pub(crate) fn routed_to(ctx: &Context) -> Vec<Id> {
-    current(ctx, |stage| stage.routed.keys().flatten().copied().collect())
+    let (mut routed, menu_keys) = current(ctx, |stage| (stage.routed.keys().flatten().copied().collect::<Vec<_>>(), !stage.menu.is_empty()));
+    // The menu keys of the pass go to the menu bar the last pass registered.
+    if menu_keys {
+        routed.extend(focus::menu_bar(ctx, crate::runtime::egui::pass::current_viewport(ctx)));
+    }
+    routed
 }
 
 /// The member whose `Activate` the group `root` reads this pass.
