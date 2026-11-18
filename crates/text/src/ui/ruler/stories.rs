@@ -90,10 +90,16 @@ fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let values = data.value("values", word());
     let stage = craft_ui::testing::stage(ui);
     let (strip, _) = Rulers::strips(ui, stage);
+    // The page starts at the strip's start edge: its right edge in a right-to-left interface.
+    let (origin, extent) = if craft_ui::runtime::env::Env::of(ui).direction.is_rtl() {
+        (strip.max.x - PAGE_MARGIN, egui::Rangef::new(strip.max.x - PAGE, strip.max.x))
+    } else {
+        (strip.min.x + PAGE_MARGIN, egui::Rangef::new(strip.min.x, strip.min.x + PAGE))
+    };
     TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN)
         .unit(inches())
-        .origin(strip.min.x + PAGE_MARGIN)
-        .extent(egui::Rangef::new(strip.min.x, strip.min.x + PAGE))
+        .origin(origin)
+        .extent(extent)
         .scale(1.0)
         .show_at(ui, strip)
         .into()
