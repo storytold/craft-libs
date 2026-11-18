@@ -67,9 +67,10 @@ pub struct Picture<'a> {
     #[prop]
     revision: Revision,
     source: Source<'a>,
-    /// The width of the picture's rect as a multiple of its height.
+    /// The width of the picture's rect as a multiple of its height. Unset, an SVG takes its view box's aspect and any
+    /// other source a square.
     #[prop]
-    aspect: ThumbAspect,
+    aspect: Option<ThumbAspect>,
     /// The picture's height.
     #[style_key]
     #[prop]
@@ -96,7 +97,16 @@ impl<'a> Picture<'a> {
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
-        Picture { common: Common::new(), revision: Revision::default(), source, aspect: ThumbAspect::SQUARE, extent: PictureSize::Icon }.label(label)
+        Picture { common: Common::new(), revision: Revision::default(), source, aspect: None, extent: PictureSize::Icon }.label(label)
+    }
+
+    /// The width of the picture's rect at `height`: the set aspect, else the SVG's own, else a square.
+    fn width(&self, height: f32) -> f32 {
+        match (self.aspect, &self.source) {
+            (Some(aspect), _) => aspect.of(height),
+            (None, Source::Svg(svg)) => svg_ratio(svg).map_or_else(|| ThumbAspect::SQUARE.of(height), |ratio| ratio * height),
+            (None, _) => ThumbAspect::SQUARE.of(height),
+        }
     }
 }
 
@@ -123,7 +133,7 @@ impl Component for Picture<'_> {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let height = cx.style.height;
-        Vec2::new(self.aspect.of(height), height)
+        Vec2::new(self.width(height), height)
     }
 
     fn sense(&self) -> Sense {
@@ -189,6 +199,17 @@ impl Component for Picture<'_> {
 const MAX_SVG_SIDE: u32 = 4096;
 /// Bytes drawing one SVG picture may allocate, its target included.
 const SVG_DRAW_BUDGET: u64 = 96 << 20;
+
+/// The widest and narrowest width-to-height ratio a view box gives a picture.
+const SVG_RATIO_LIMITS: (f32, f32) = (1.0 / 16.0, 16.0);
+
+/// The width-to-height ratio of `svg`'s view box, from the same bounded parse `rasterise_svg` does; `None` for an SVG
+/// that is refused or has no usable size.
+fn svg_ratio(svg: &[u8]) -> Option<f32> {
+    let size = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| svg_tree::parse(svg).ok().map(|tree| tree.size()))).ok().flatten()?;
+    let ratio = size.width() / size.height();
+    ratio.is_finite().then_some(ratio).filter(|ratio| *ratio > 0.0).map(|ratio| ratio.clamp(SVG_RATIO_LIMITS.0, SVG_RATIO_LIMITS.1))
+}
 
 /// The store key of `svg` drawn at `width` x `height` pixels: the asset's identity and the size, so a resize or a
 /// scale change rasterises again and a static picture rasterises once.

@@ -8,6 +8,24 @@ use egui::{Rect, Shape, Vec2, pos2, vec2};
 /// A small valid drawing.
 const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#2a7"/></svg>"##;
 
+/// A 4:1 drawing.
+const WIDE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 20"><rect width="80" height="20" fill="#36c"/></svg>"##;
+
+/// An SVG picture with no aspect is as wide as its view box says; an aspect set explicitly wins.
+#[trial]
+fn an_svg_picture_without_an_aspect_takes_its_view_box_aspect() {
+    use craft_ui::list::ThumbAspect;
+    let mut fixture = Fixture::new(|ui| {
+        Picture::svg("Wide", WIDE).show(ui);
+        Picture::svg("Square", WIDE).aspect(ThumbAspect::SQUARE).show(ui);
+    });
+    fixture.room(Vec2::new(600.0, 300.0)).settle();
+    let wide = fixture.by_label("Wide").expect("the wide picture's node").rect;
+    let square = fixture.by_label("Square").expect("the square picture's node").rect;
+    assert!((wide.width() / wide.height() - 4.0).abs() < 0.05, "a 4:1 drawing is four times wider than tall: {wide:?}");
+    assert!((square.width() - square.height()).abs() < 0.05, "an explicit aspect wins: {square:?}");
+}
+
 /// The rects textured shapes cover in one painted frame; a picture with square corners paints a textured mesh.
 fn pictures(shapes: &[Shape]) -> Vec<Rect> {
     shapes

@@ -33,6 +33,9 @@ fn picture_thumbnail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// An original mark: a teal disc with an amber diamond, so the SVG's own colours and its fit show.
 const MARK: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#1f8a8a"/><path d="M12 4 L19 12 L12 20 L5 12 Z" fill="#f2b233"/></svg>"##;
 
+/// An original 4:1 drawing: a wordmark-shaped bar with two dots.
+const WIDE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 20"><rect x="1" y="1" width="78" height="18" rx="9" fill="#3b5fc0"/><circle cx="12" cy="10" r="5" fill="#ffffff"/><circle cx="68" cy="10" r="5" fill="#f2b233"/></svg>"##;
+
 /// Bytes that are not an SVG document.
 const NOT_SVG: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><circle";
 
@@ -45,6 +48,12 @@ fn picture_svg(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     })
     .inner
     .into()
+}
+
+/// A 4:1 SVG with no aspect set is shown four times wider than tall.
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_wide_svg(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Picture::svg("Wide mark", WIDE).extent(PictureSize::Thumb(ThumbSize::Small)).show(ui).into()
 }
 
 #[story(Picture<'static>, covers = [], drive = Drive::Never)]
