@@ -49,7 +49,8 @@ fn serve(stream: Stream, reply: Vec<u8>, chunked: bool, http_status: u16, tx: &m
     let mut out = reader.into_inner();
     let status_text = if http_status == 200 { "OK" } else { "Nope" };
     if chunked {
-        let mut resp = format!("HTTP/1.1 {http_status} {status_text}\r\nContent-Type: application/ipp\r\nTransfer-Encoding: chunked\r\n\r\n").into_bytes();
+        let mut resp =
+            format!("HTTP/1.1 {http_status} {status_text}\r\nContent-Type: application/ipp\r\nTransfer-Encoding: chunked\r\n\r\n").into_bytes();
         for chunk in reply.chunks(7) {
             resp.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
             resp.extend_from_slice(chunk);
@@ -58,8 +59,10 @@ fn serve(stream: Stream, reply: Vec<u8>, chunked: bool, http_status: u16, tx: &m
         resp.extend_from_slice(b"0\r\n\r\n");
         out.write_all(&resp).unwrap();
     } else {
-        out.write_all(format!("HTTP/1.1 {http_status} {status_text}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes())
-            .unwrap();
+        out.write_all(
+            format!("HTTP/1.1 {http_status} {status_text}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes(),
+        )
+        .unwrap();
         out.write_all(&reply).unwrap();
     }
     out.flush().unwrap();
@@ -170,7 +173,11 @@ fn printer_groups_do_not_share_metadata() {
             ),
             (
                 TAG_PRINTER_GROUP,
-                &[(TAG_TEXT, "printer-info", &[b"Second printer"]), (TAG_ENUM, "printer-state", &[&state_b]), (TAG_NAME, "printer-name", &[b"second"])],
+                &[
+                    (TAG_TEXT, "printer-info", &[b"Second printer"]),
+                    (TAG_ENUM, "printer-state", &[&state_b]),
+                    (TAG_NAME, "printer-name", &[b"second"]),
+                ],
             ),
         ],
     );
@@ -190,7 +197,8 @@ fn printer_attribute_order_does_not_change_results() {
         (TAG_BOOLEAN, "printer-is-accepting-jobs", &[b"\0"]),
         (TAG_NAME, "printer-name", &[b"studio"]),
     ];
-    let expected = Printer { name: "studio".into(), info: "Studio Printer".into(), state: 5, accepting_jobs: false, is_default: false, is_class: false };
+    let expected =
+        Printer { name: "studio".into(), info: "Studio Printer".into(), state: 5, accepting_jobs: false, is_default: false, is_class: false };
     let mut permutations = 0;
     for first in 0..4 {
         for second in 0..4 {
@@ -305,9 +313,11 @@ fn default_printer_is_read_and_absence_is_not_an_error() {
 fn a_print_job_carries_the_document_and_returns_its_id() {
     let (ep, rx) = fake(ipp(0, &[ok_header(), (TAG_JOB_GROUP, &[(TAG_INTEGER, "job-id", &[&42u32.to_be_bytes()])])]), true, 200);
     let pdf = b"%PDF-1.4 fake".to_vec();
-    let id =
-        print_job(&ep, &Job { printer: "Office", is_class: false, title: "photo.psd", user: "diego", copies: 2, document: &pdf, format: "application/pdf" })
-            .unwrap();
+    let id = print_job(
+        &ep,
+        &Job { printer: "Office", is_class: false, title: "photo.psd", user: "diego", copies: 2, document: &pdf, format: "application/pdf" },
+    )
+    .unwrap();
     assert_eq!(id, 42);
     let (op, attrs, doc) = rx.recv().unwrap();
     assert_eq!(op, OP_PRINT_JOB);
@@ -330,12 +340,15 @@ fn a_print_job_carries_the_document_and_returns_its_id() {
 
 #[test]
 fn error_statuses_and_broken_replies_are_errors() {
-    let (ep, _rx) = fake(ipp(0x0506, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"Printer is not accepting jobs"])])]), false, 200);
-    let e = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" }).unwrap_err();
+    let (ep, _rx) =
+        fake(ipp(0x0506, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"Printer is not accepting jobs"])])]), false, 200);
+    let e = print_job(&ep, &Job { printer: "P", is_class: false, title: "t", user: "u", copies: 1, document: b"x", format: "application/pdf" })
+        .unwrap_err();
     assert_eq!(e, Error::Status(0x0506, "Printer is not accepting jobs".into()));
     assert!(e.to_string().contains("0x0506"));
     // A CUPS with no printer at all answers "not found": that is an empty list, not an error.
-    let (ep, _rx) = fake(ipp(0x0406, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"No destinations added."])])]), false, 200);
+    let (ep, _rx) =
+        fake(ipp(0x0406, &[ok_header(), (TAG_OPERATION_GROUP, &[(TAG_TEXT, "status-message", &[b"No destinations added."])])]), false, 200);
     assert_eq!(printers(&ep).unwrap(), Vec::<Printer>::new());
     // HTTP 401, a reply cut short, garbage.
     let (ep, _rx) = fake(ipp(0, &[ok_header()]), false, 401);
@@ -520,7 +533,9 @@ fn replies_end_at_content_length_or_the_last_chunk_without_waiting_for_close() {
                     }
                     resp.extend_from_slice(b"0\r\n\r\n");
                 } else {
-                    resp.extend_from_slice(format!("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes());
+                    resp.extend_from_slice(
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\n\r\n", reply.len()).as_bytes(),
+                    );
                     resp.extend_from_slice(&reply);
                 }
                 if out.write_all(&resp).and_then(|()| out.flush()).is_err() {

@@ -525,8 +525,11 @@ fn http_response(raw: &[u8]) -> Result<(u16, Headers, &[u8])> {
     let head = String::from_utf8_lossy(raw.get(..end).unwrap_or(&[]));
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
-    let status: u16 =
-        status_line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
     let headers = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_ascii_lowercase())).collect();
     Ok((status, headers, raw.get(end + 4..).unwrap_or(&[])))
 }
@@ -561,7 +564,8 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
     loop {
         let line_end = b.windows(2).position(|w| w == b"\r\n").ok_or_else(|| Error::Protocol("cut chunk size".into()))?;
         let size_str = String::from_utf8_lossy(b.get(..line_end).unwrap_or(&[]));
-        let size = usize::from_str_radix(size_str.split(';').next().unwrap_or_default().trim(), 16).map_err(|_| Error::Protocol("bad chunk size".into()))?;
+        let size =
+            usize::from_str_radix(size_str.split(';').next().unwrap_or_default().trim(), 16).map_err(|_| Error::Protocol("bad chunk size".into()))?;
         b = b.get(line_end + 2..).unwrap_or(&[]);
         if size == 0 {
             return Ok(out);
