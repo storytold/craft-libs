@@ -41,7 +41,7 @@ craft_ui::words! {
         kind_callout: "annotate.kindCallout" = "Callout";
         kind_attach: "annotate.kindAttach" = "Attachment";
         kind_highlight: "annotate.kindHighlight" = "Highlight";
-        kind_freehand_highlight: "annotate.kindFreehandHighlight" = "Freehand highlight";
+        kind_freehand_highlight: "annotate.kindFreehandHighlight" = "Freehand-Highlight";
         kind_underline: "annotate.kindUnderline" = "Underline";
         kind_strike_out: "annotate.kindStrikeOut" = "Strikethrough";
         kind_squiggly: "annotate.kindSquiggly" = "Squiggly";
@@ -166,7 +166,7 @@ pub enum AnnotateCommand {
     #[command(label = "Highlight", icon = "brush")]
     Highlight,
     /// Highlight freehand.
-    #[command(label = "Freehand highlight", icon = "brush")]
+    #[command(label = "Freehand-Highlight", icon = "brush")]
     FreehandHighlight,
     /// Underline page text.
     #[command(label = "Underline", icon = "text_underline")]
@@ -247,11 +247,14 @@ impl AnnotateCommand {
     }
 
     /// The command's state with the icon `icons` names for it: `CommandState::new()` with `icon` set when `icons` has
-    /// one.
-    #[allow(dead_code)] // P3(pdf-comments-w1): CM-C31
+    /// one. Every surface showing the command reads the icon from its resolved state, so this is the one place an
+    /// app's glyph reaches the toolbar, its flyouts, the palette and menus.
     pub fn state(self, icons: &AnnotateIcons) -> CommandState {
-        let _ = icons;
-        todo!("CM-C31")
+        match icons.icon(self) {
+            // PLAN: assumed CommandState::icon(self, icon: impl Into<Cow<'static, str>>) -> Self (pdf-chrome-w1)
+            Some(icon) => CommandState::new().icon(icon.to_owned()),
+            None => CommandState::new(),
+        }
     }
 }
 
@@ -269,18 +272,19 @@ impl AnnotateIcons {
         Self::default()
     }
 
-    /// The set with `icon` for `command`.
+    /// The set with `icon` for `command`, in place of any icon it named for it before.
     #[must_use]
-    #[allow(dead_code)] // P3(pdf-comments-w1): CM-C31
-    pub fn with(self, command: AnnotateCommand, icon: impl Into<Cow<'static, str>>) -> Self {
-        let _ = (command, icon.into());
-        todo!("CM-C31")
+    pub fn with(mut self, command: AnnotateCommand, icon: impl Into<Cow<'static, str>>) -> Self {
+        let icon = icon.into();
+        match self.icons.iter_mut().find(|(held, _)| *held == command) {
+            Some(entry) => entry.1 = icon,
+            None => self.icons.push((command, icon)),
+        }
+        self
     }
 
     /// The icon the set names for `command`, if any.
-    #[allow(dead_code)] // P3(pdf-comments-w1): CM-C31
     pub fn icon(&self, command: AnnotateCommand) -> Option<&str> {
-        let _ = (command, &self.icons);
-        todo!("CM-C31")
+        self.icons.iter().find(|(held, _)| *held == command).map(|(_, icon)| icon.as_ref())
     }
 }

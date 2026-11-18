@@ -23,7 +23,9 @@ pub mod thread;
 pub mod versions;
 pub mod vote;
 
-pub use annotate::{AnnotateTool, AnnotateWords, AnnotationOverlay, AnnotationToolbar, AnnotationToolbarOutput, PALETTE};
+pub use annotate::{
+    AnnotateTool, AnnotateWords, AnnotationOverlay, AnnotationToolbar, AnnotationToolbarOutput, BodyPaint, DrawOptions, PALETTE, SelectOptions,
+};
 pub use avatar::{Avatar, AvatarOutput, paint_avatar};
 pub use chat::{ChatWords, CursorChatBox, CursorChatBoxOutput, ReviewCommand, paint_chat_bubble};
 pub use comments::{
