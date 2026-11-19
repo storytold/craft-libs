@@ -6,29 +6,33 @@ mod stories;
 
 use super::recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
 use super::words::ShellWords;
+use crate::buttons::button::ButtonStyleKey;
 use crate::buttons::{Button, Link};
 use crate::choice::Segmented;
 use crate::contract::{
     ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, Scroll, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, clicked,
 };
-use crate::display::{Divider, Icon};
+use crate::display::{Divider, Icon, Text};
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow, RowEvent, ThumbAspect, ThumbSize, TrailingFace, TrailingPart};
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
-use crate::primitives::{CheckerArea, ContentPainterCx, IconSpec, Priority, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails, paint_surround};
+use crate::primitives::{
+    CheckerArea, ContentPainterCx, HAlign, IconSpec, Priority, RectSide, Rule, RuleKind, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails,
+    paint_surround,
+};
 use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::Section;
-use crate::style::{Corners, SurfaceKind, SurroundLook};
+use crate::style::{Corners, StyleCx, SurfaceKind, SurroundLook, TypeRole};
 use crate::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent};
 use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
-use craft_theme::Variant;
-use craft_theme::variant::Tone;
-use egui::{CornerRadius, Rect, Response, Ui, Vec2};
+use craft_theme::variant::{CustomVariant, Emphasis, RadiusStep, Tone, VariantLook};
+use craft_theme::{Rgba, Tokens, Variant};
+use egui::{CornerRadius, Rect, Response, Ui, Vec2, pos2, vec2};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -42,6 +46,13 @@ const PICTURE_HIGH: u16 = 9;
 
 /// The number of recent files shown until `max_recent` says otherwise.
 const RECENT_SHOWN: usize = 12;
+
+const HOME_BREAKPOINT: f32 = 640.0;
+const HOME_RAIL_WIDTH: f32 = 170.0;
+const HOME_COMPACT_WIDTH: f32 = 520.0;
+const HOME_DROP_WIDTH: f32 = 540.0;
+const HOME_DROP_HEIGHT: f32 = 200.0;
+const HOME_DROP_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-drop", home_drop_look);
 
 /// The revealed part of a recent row that takes the file off the list.
 const REMOVE: TrailingPart = TrailingPart::new(0);
@@ -172,6 +183,12 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
     drop_hint: Option<Label>,
+    home: Option<HomeLayout<'a>>,
+}
+
+struct HomeLayout<'a> {
+    title: Label,
+    footer_links: &'a [StartLink],
 }
 
 /// A link on the start screen's rail.
@@ -184,6 +201,7 @@ pub struct StartLink {
     pub icon: Option<IconId>,
     /// What the link does.
     pub target: StartLinkTarget,
+    selected: bool,
 }
 
 /// What a [`StartLink`] does.
@@ -199,12 +217,18 @@ pub enum StartLinkTarget {
 impl StartLink {
     /// A link that opens `url`, shown as its tooltip.
     pub fn url(label: impl Into<Label>, icon: Option<IconId>, url: impl Into<String>) -> Self {
-        StartLink { label: label.into(), icon, target: StartLinkTarget::Url(url.into()) }
+        StartLink { label: label.into(), icon, target: StartLinkTarget::Url(url.into()), selected: false }
     }
 
     /// A link that fires `command`.
     pub fn command(label: impl Into<Label>, icon: Option<IconId>, command: impl Into<CommandRef>) -> Self {
-        StartLink { label: label.into(), icon, target: StartLinkTarget::Command(command.into()) }
+        StartLink { label: label.into(), icon, target: StartLinkTarget::Command(command.into()), selected: false }
+    }
+
+    /// Highlights this command link on a Home rail.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 }
 
@@ -222,7 +246,15 @@ impl<'a> StartScreen<'a> {
             thumbnails: None,
             links: &[],
             drop_hint: None,
+            home: None,
         }
+    }
+
+    /// Uses a Home layout with a title above the page and a separate group of links at the bottom of its rail.
+    /// The navigation links come from [`Self::links`]. Narrow rooms put both groups below the content.
+    pub fn home_layout(mut self, title: impl Into<Label>, footer_links: &'a [StartLink]) -> Self {
+        self.home = Some(HomeLayout { title: title.into(), footer_links });
+        self
     }
 
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
@@ -341,7 +373,7 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint } = self;
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, home } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
@@ -356,23 +388,27 @@ impl StartScreen<'_> {
 
         let rail_stack = || Stack::new().gap(Gap::Tight).pad(Pad::Regular).label(words.start_links.clone());
         let rail_body = |ui: &mut Ui| {
-            new_and_open(&page, ui);
+            new_and_open(&page, ui, Sizing::Content);
             let _ = Divider::horizontal().show(ui);
-            link_items(ui, links);
+            link_items(ui, links, false);
         };
         let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
         // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
         // the sections.
-        let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool| {
+        let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool, drop_center: Option<f32>| {
             let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
             let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
             let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
             sort_recent(&mut files, current_sort, &collator);
 
             if !beside {
-                let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui));
+                let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui, Sizing::Content));
             }
-            recent_section(&page, ui, &view, &sort, current_view, &files);
+            if let (true, Some(hint), Some(center)) = (files.is_empty(), page.drop_hint, drop_center) {
+                home_drop(&page, ui, hint, center);
+            } else {
+                recent_section(&page, ui, &view, &sort, current_view, &files);
+            }
             if let Some(pinned) = pinned {
                 pinned_section(&page, ui, pinned);
             }
@@ -380,15 +416,20 @@ impl StartScreen<'_> {
                 templates_section(&page, ui, templates);
             }
             if !beside && !links.is_empty() {
-                let _ = Stack::new().gap(Gap::Tight).label(words.start_links.clone()).show(ui, |ui, _| link_items(ui, links));
+                let _ = Stack::new().gap(Gap::Tight).label(words.start_links.clone()).show(ui, |ui, _| link_items(ui, links, false));
             }
         };
+
+        if let Some(home) = home {
+            let response = home.show(ui, &page, links, |ui, cx, center| page_body(ui, cx, true, Some(center)));
+            return StartOutput { response, actions: actions.into_inner() };
+        }
 
         // The rail stands beside the sections when the room holds the rail, the gap and the sections' least width; a
         // narrower page keeps New and Open in its row and lists the links after the sections.
         let rail = !links.is_empty() && {
             let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
-            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true)).x;
+            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true, None)).x;
             ui.available_width() >= rail_width + env.tokens.space.gap.section + sections_least
         };
 
@@ -401,30 +442,167 @@ impl StartScreen<'_> {
             if rail {
                 let _ = Row::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
                     let _ = rail_stack().show(ui, |ui, _| rail_body(ui));
-                    let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, true));
+                    let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, true, None));
                 });
             } else {
-                let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, false));
+                let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, false, None));
             }
         });
         StartOutput { response: shown.output, actions: actions.into_inner() }
     }
 }
 
+impl HomeLayout<'_> {
+    fn show(&self, ui: &mut Ui, page: &Page<'_>, links: &[StartLink], mut sections: impl FnMut(&mut Ui, &mut BodyCx<'_>, f32)) -> Response {
+        // Keep the opening gesture on the fixed surface, outside the two independent scrolling regions.
+        Stack::new()
+            .fill()
+            .senses_surface()
+            .show(ui, |ui, cx| {
+                if cx.surface_double_pressed() {
+                    page.push(StartAction::Open);
+                }
+                let room = ui.available_rect_before_wrap();
+                let wide = room.width() >= HOME_BREAKPOINT;
+                let content = if wide {
+                    let (rail, content) = home_columns(room, page.env);
+                    self.rail(ui, page, links, rail);
+                    content
+                } else {
+                    Rect::from_center_size(room.center(), vec2(room.width().min(HOME_COMPACT_WIDTH), room.height()))
+                };
+                let _ = Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(Gap::Section).scroll(Scroll::vertical()).show_at(
+                    ui,
+                    content,
+                    |ui, cx| {
+                        let top = ui.available_rect_before_wrap().top();
+                        if !wide {
+                            let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::FillWidth));
+                        }
+                        let _ = Text::new(self.title.clone()).role(TypeRole::Display).show(ui);
+                        home_divider(ui);
+                        sections(ui, cx, top + content.height() / 2.0);
+                        if !wide {
+                            home_links(ui, page, "home-nav", links);
+                            home_links(ui, page, "home-footer", self.footer_links);
+                        }
+                    },
+                );
+            })
+            .output
+    }
+
+    fn rail(&self, ui: &mut Ui, page: &Page<'_>, links: &[StartLink], rect: Rect) {
+        let stack = || Stack::new().id_salt("home-rail").pad(Pad::Regular).gap(Gap::Tight);
+        let top = |ui: &mut Ui| {
+            new_and_open(page, ui, Sizing::FillWidth);
+            home_divider(ui);
+            home_links(ui, page, "home-nav", links);
+        };
+        let footer = |ui: &mut Ui| {
+            if !self.footer_links.is_empty() {
+                home_divider(ui);
+                home_links(ui, page, "home-footer", self.footer_links);
+            }
+        };
+        // A short window scrolls the entire rail so the fixed footer cannot crowd the opening buttons out.
+        let footer_fits = !self.footer_links.is_empty()
+            && stack()
+                .measure_in(ui, Proposal::Ideal, |ui, _| {
+                    top(ui);
+                    footer(ui);
+                })
+                .y
+                <= rect.height();
+        let rail = stack().fill().scroll(Scroll::vertical());
+        if footer_fits {
+            let _ = rail.footer(|ui, _| footer(ui)).show_at(ui, rect, |ui, _| top(ui));
+        } else {
+            let _ = rail.show_at(ui, rect, |ui, _| {
+                top(ui);
+                footer(ui);
+            });
+        }
+    }
+}
+
+fn home_columns(room: Rect, env: &Env) -> (Rect, Rect) {
+    let gap = env.tokens.space.gap.section;
+    if env.direction.is_rtl() {
+        let rail = Rect::from_min_max(pos2(room.right() - HOME_RAIL_WIDTH, room.top()), room.max);
+        let content = Rect::from_min_max(room.min, pos2(rail.left() - gap, room.bottom()));
+        (rail, content)
+    } else {
+        let rail = Rect::from_min_max(room.min, pos2(room.left() + HOME_RAIL_WIDTH, room.bottom()));
+        let content = Rect::from_min_max(pos2(rail.right() + gap, room.top()), room.max);
+        (rail, content)
+    }
+}
+
+fn home_links(ui: &mut Ui, page: &Page<'_>, id: &'static str, links: &[StartLink]) {
+    if !links.is_empty() {
+        let _ =
+            Stack::new().id_salt(id).gap(Gap::Tight).label(page.words.start_links.clone()).fill_width().show(ui, |ui, _| link_items(ui, links, true));
+    }
+}
+
+fn home_divider(ui: &mut Ui) {
+    let env = Env::of(ui);
+    let style = StyleCx::of_env(ui.ctx(), &env);
+    let mut look = style.rule(RuleKind::Divider);
+    look.color = style.color(home_edge(&env.tokens)).egui();
+    let scale = ui.ctx().pixels_per_point();
+    let room = ui.available_rect_before_wrap();
+    let line = Rect::from_min_size(room.min, vec2(room.width(), look.width.points(scale)));
+    let _ = Stack::new().show_at_taking_room(ui, line, |ui, _| ui.painter().extend(Rule::edge(&look, line, RectSide::Top, scale)));
+}
+
+/// Panel dividers can match the canvas surround exactly, so use existing muted ink on that surround.
+fn home_edge(tokens: &Tokens) -> Rgba {
+    let color = &tokens.color;
+    if color.line.divider == color.surface.canvas { color.text.faint } else { color.line.divider }
+}
+
+fn home_drop_look(tokens: &Tokens) -> VariantLook {
+    let mut look = Variant::SECONDARY.resolve(tokens).radius(RadiusStep::Control);
+    if let Some(edge) = &mut look.edge {
+        edge.rest = home_edge(tokens);
+    }
+    look
+}
+
+fn home_drop(page: &Page<'_>, ui: &mut Ui, hint: &Label, center: f32) {
+    let room = ui.available_rect_before_wrap();
+    let width = HOME_DROP_WIDTH.min(room.width());
+    let top = (center - HOME_DROP_HEIGHT / 2.0).max(room.top());
+    let slot = Rect::from_min_max(room.min, pos2(room.right(), top + HOME_DROP_HEIGHT));
+    let left = room.center().x - width / 2.0;
+    let card = Rect::from_min_max(pos2(left, top), pos2(left + width, slot.bottom()));
+    let _ = Stack::new().id_salt("home-drop").show_at_taking_room(ui, slot, |ui, _| {
+        if clicked(&Button::new(hint.clone()).id_salt("drop").variant(Variant::Custom(HOME_DROP_LOOK)).show_at(ui, card)) {
+            page.push(StartAction::Open);
+        }
+        let side = page.env.tokens.size.icon.lg;
+        let icon_center = card.center() - vec2(0.0, side + page.env.tokens.space.gap.tight);
+        let icon = Rect::from_center_size(icon_center, Vec2::splat(side));
+        let _ = Icon::new(IconSpec::svg(IconId::new("image"))).show_at(ui, icon);
+    });
+}
+
 /// New and Open, the first Tab stops of the page.
-fn new_and_open(page: &Page<'_>, ui: &mut Ui) {
+fn new_and_open(page: &Page<'_>, ui: &mut Ui, sizing: Sizing) {
     let words = page.words;
-    if clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).show(ui)) {
+    if clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).sizing(sizing).show(ui)) {
         page.push(StartAction::New);
     }
-    if clicked(&Button::new(words.open.clone()).id_salt("open").show(ui)) {
+    if clicked(&Button::new(words.open.clone()).id_salt("open").sizing(sizing).show(ui)) {
         page.push(StartAction::Open);
     }
 }
 
 /// The links, one under another: a URL opens through its `Link` (the URL is its tooltip), a command fires as a
 /// pointer activation.
-fn link_items(ui: &mut Ui, links: &[StartLink]) {
+fn link_items(ui: &mut Ui, links: &[StartLink], home: bool) {
     for (at, link) in links.iter().enumerate() {
         match &link.target {
             StartLinkTarget::Url(url) => {
@@ -437,6 +615,10 @@ fn link_items(ui: &mut Ui, links: &[StartLink]) {
             }
             StartLinkTarget::Command(command) => {
                 let mut button = Button::new(link.label.clone()).id_salt(("start-link", at));
+                if home {
+                    let variant = if link.selected { Variant::look(Emphasis::Soft, Tone::Accent) } else { Variant::GHOST };
+                    button = button.variant(variant).align(HAlign::Start).sizing(Sizing::FillWidth);
+                }
                 if let Some(icon) = &link.icon {
                     button = button.icon(icon.clone());
                 }
