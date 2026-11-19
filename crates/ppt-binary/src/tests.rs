@@ -288,6 +288,20 @@ fn streams_with_document(
     outline: &[Vec<u8>],
     extra: &[Vec<u8>],
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    streams_with_title_masters(token, times, master, slide, title_master.into_iter().collect(), outline, extra)
+}
+
+/// As [`streams_with_document`], with any number of title masters: persist ids 5 on, slide ids
+/// `TITLE_MASTER_ID` on.
+fn streams_with_title_masters(
+    token: u32,
+    times: usize,
+    master: Vec<u8>,
+    slide: Vec<u8>,
+    title_masters: Vec<Vec<u8>>,
+    outline: &[Vec<u8>],
+    extra: &[Vec<u8>],
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let pictures = atom(0xF01E, 0x6E0, &[&[0u8; 17][..], &png()].concat());
     let mut fbse = vec![0u8; 36];
     fbse[0] = 6;
@@ -311,8 +325,8 @@ fn streams_with_document(
                 0,
                 if id == 2 {
                     MASTER_ID
-                } else if id == 5 {
-                    TITLE_MASTER_ID
+                } else if id >= 5 {
+                    TITLE_MASTER_ID + (id - 5)
                 } else if id == 3 {
                     SLIDE_ID
                 } else {
@@ -326,14 +340,18 @@ fn streams_with_document(
         atom(rt::DOCUMENT_ATOM, 0, &doc_atom),
         container(rt::ENVIRONMENT, 0, &[container(rt::FONT_COLLECTION, 0, &[atom(rt::FONT_ENTITY, 0, &font), atom(rt::FONT_ENTITY, 1, &wing)])]),
         container(rt::DRAWING_GROUP, 0, &[container(rt::DGG_CONTAINER, 0, &[bstore])]),
-        container(rt::SLIDE_LIST_WITH_TEXT, 1, &if title_master.is_some() { vec![persist(2), persist(5)] } else { vec![persist(2)] }),
+        container(
+            rt::SLIDE_LIST_WITH_TEXT,
+            1,
+            &(0..=title_masters.len() as u32).map(|k| persist(if k == 0 { 2 } else { 4 + k })).collect::<Vec<_>>(),
+        ),
         container(rt::SLIDE_LIST_WITH_TEXT, 0, &[vec![persist(3); times], outline.to_vec()].concat()),
         container(rt::SLIDE_LIST_WITH_TEXT, 2, &[persist(4)]),
     ];
     let document = container(rt::DOCUMENT, 0, &[&parts[..], extra].concat());
     let mut stream = vec![];
     let mut offsets = vec![];
-    let parts: Vec<Vec<u8>> = [document, master, slide, notes()].into_iter().chain(title_master).collect();
+    let parts: Vec<Vec<u8>> = [document, master, slide, notes()].into_iter().chain(title_masters).collect();
     for part in &parts {
         offsets.push(stream.len() as u32);
         stream.extend_from_slice(part);
@@ -548,8 +566,9 @@ fn nested_persist_directories_are_read_within_the_stream() {
     let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, prev, 0, 0]));
     // The streams are read directly: the test file builder can't hold a stream this size.
     let t = std::time::Instant::now();
-    let _ = crate::doc::read(&cu, &stream);
+    let r = crate::doc::read(&cu, &stream);
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+    assert!(matches!(r, Err(crate::PptError::Damaged(_))));
 }
 
 #[test]
@@ -923,12 +942,11 @@ fn headers_and_footers_become_footer_placeholders() {
     // Every layout's slide number sits where the master's does, with its look.
     let master = &p.masters[0];
     for l in &master.layouts {
-        if let Some(n) = l.shapes.iter().find(|s| s.ph_type() == Some(PhType::SlideNum)) {
-            let x = n.xfrm.unwrap();
-            assert_eq!((x.x, x.y), (5000.0 / 8.0, 4000.0 / 8.0), "{}", l.name);
-            let level = n.text.as_ref().unwrap().list_style.level(0).unwrap();
-            assert_eq!((level.para.align, level.run.size), (Some(Align::Right), Some(10.0)));
-        }
+        let n = l.shapes.iter().find(|s| s.ph_type() == Some(PhType::SlideNum)).unwrap_or_else(|| panic!("no slide number on {}", l.name));
+        let x = n.xfrm.unwrap();
+        assert_eq!((x.x, x.y), (5000.0 / 8.0, 4000.0 / 8.0), "{}", l.name);
+        let level = n.text.as_ref().unwrap().list_style.level(0).unwrap();
+        assert_eq!((level.para.align, level.run.size), (Some(Align::Right), Some(10.0)));
     }
 }
 
@@ -1000,4 +1018,151 @@ fn an_outline_block_is_used_by_one_shape() {
     let p = open_streams(streams_with_outline(0xE391_C05F, 1, slide, None, &outline));
     let texts: Vec<String> = p.slides[0].shapes.iter().map(|s| s.text.as_ref().unwrap().text()).collect();
     assert_eq!(texts, ["Shared", ""]);
+}
+
+fn open_plain((cu, doc, pics): (Vec<u8>, Vec<u8>, Vec<u8>)) -> Presentation {
+    crate::import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]), &craft_pptx::Plain).unwrap()
+}
+
+/// A footer-only `HeadersFootersContainer` of `instance` with `footer` as its text.
+fn footer_record(instance: u16, footer: &str) -> Vec<u8> {
+    container(
+        rt::HEADERS_FOOTERS,
+        instance,
+        &[atom(rt::HEADERS_FOOTERS_ATOM, 0, &[&0u16.to_le_bytes()[..], &0x20u16.to_le_bytes()].concat()), atom(rt::CSTRING, 2, &utf16(footer))],
+    )
+}
+
+/// A slide's own headers and footers (`PerSlideHeadersFootersContainer`, instance 0) win over the
+/// document's for every slide (instance 3). Only the document's used to be looked for.
+#[test]
+fn a_slides_own_footer_wins_over_the_documents() {
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[]), footer_record(0, "This slide")]);
+    let p = open_streams(streams_with_document(0xE391_C05F, 1, master(), slide, None, &[], &[footer_record(3, "Every slide")]));
+    let footer = p.slides[0].shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).expect("a footer");
+    assert_eq!(footer.text.as_ref().unwrap().text(), "This slide");
+    assert_eq!(p.header_footer.footer_text, "Every slide");
+}
+
+/// A text box that points at an outline block keeps its own `TextRulerAtom`: the margin it sets
+/// (one inch at level 1) wins over the block's. It used to be dropped with the reference.
+#[test]
+fn a_text_boxs_own_ruler_applies_to_its_outline_text() {
+    let outline = [atom(rt::TEXT_HEADER, 0, &1u32.to_le_bytes()), atom(rt::TEXT_CHARS, 0, &utf16("Indented"))];
+    let ruler = atom(rt::TEXT_RULER, 0, &[&(1u32 << 3).to_le_bytes()[..], &576u16.to_le_bytes()].concat());
+    let body = container(
+        rt::SP_CONTAINER,
+        0,
+        &[
+            fsp(1, 2049, 0xA00),
+            anchor(1300, 500, 5260, 3000),
+            placeholder(0x0E),
+            container(rt::CLIENT_TEXTBOX, 0, &[atom(rt::OUTLINE_TEXT_REF, 0, &0u32.to_le_bytes()), ruler]),
+        ],
+    );
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[body])]);
+    let p = open_streams(streams_with_outline(0xE391_C05F, 1, slide, None, &outline));
+    let t = p.slides[0].shapes[0].text.as_ref().unwrap();
+    assert_eq!(t.text(), "Indented");
+    assert_eq!(t.paragraphs[0].props.margin_left, Some(72.0));
+}
+
+/// A slide list entry whose object isn't a slide (here the notes page) is a lost slide, not a
+/// slide silently left out.
+#[test]
+fn a_slide_entry_naming_another_object_is_reported_lost() {
+    let (cu, mut stream, pics) = streams(0xE391_C05F);
+    // The persist directory's last two entries (the slide's, then the notes page's) end just
+    // before the 36-byte edit: point the slide's at the notes page.
+    let end = stream.len() - 36;
+    let notes_at: [u8; 4] = stream[end - 4..end].try_into().unwrap();
+    stream[end - 8..end - 4].copy_from_slice(&notes_at);
+    let (p, lost) = import_checked(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    assert!(p.slides.is_empty());
+    assert_eq!(lost, vec![format!("slide {SLIDE_ID}")]);
+}
+
+/// A title master with a centred title and a subtitle placeholder, `extra` shapes after them.
+fn title_master_with(extra: &[Vec<u8>]) -> Vec<u8> {
+    let ph =
+        |spid: u32, kind: u8, a: [i16; 4]| container(rt::SP_CONTAINER, 0, &[fsp(1, spid, 0xA00), anchor(a[0], a[1], a[2], a[3]), placeholder(kind)]);
+    let shapes = [vec![ph(3001, 0x0F, [1000, 600, 5160, 2000]), ph(3002, 0x10, [2200, 1200, 4540, 3200])], extra.to_vec()].concat();
+    container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &shapes)])
+}
+
+/// The first "Title Master" layout of `p`'s first master.
+fn title_layout(p: &Presentation) -> &Layout {
+    p.masters[0].layouts.iter().find(|l| l.name == "Title Master").expect("the title master's layout")
+}
+
+/// A title master's placeholders place its layout's, as a main master's place the master's: the
+/// title takes its box, and the subtitle the default title layout lacks is added. With the plain
+/// defaults (no placeholders at all) both are added.
+#[test]
+fn a_title_masters_placeholders_place_its_layouts() {
+    let boxes = |l: &Layout| {
+        let at = |f: &dyn Fn(PhType) -> bool| {
+            let x = l.shapes.iter().find(|s| s.ph_type().is_some_and(f)).and_then(|s| s.xfrm).unwrap_or_else(|| panic!("{:?}", l.shapes));
+            (x.x, x.y, x.w, x.h)
+        };
+        (at(&|t| matches!(t, PhType::Title | PhType::CtrTitle)), at(&|t| t == PhType::SubTitle))
+    };
+    let expected = ((75.0, 125.0, 570.0, 125.0), (150.0, 275.0, 417.5, 125.0));
+    let p = open_streams(streams_of(0xE391_C05F, 1, slide(), Some(title_master_with(&[]))));
+    assert_eq!(boxes(title_layout(&p)), expected);
+    let p = open_plain(streams_of(0xE391_C05F, 1, slide(), Some(title_master_with(&[]))));
+    assert_eq!(boxes(title_layout(&p)), expected);
+}
+
+/// A second title master's layout copies placeholders only, not the first title master's own
+/// shapes, which its layout (the first title layout the plain defaults' master has) holds.
+#[test]
+fn a_second_title_master_doesnt_copy_the_firsts_shapes() {
+    let second = container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &[])]);
+    let p =
+        open_plain(streams_with_title_masters(0xE391_C05F, 1, master(), slide(), vec![title_master_with(&[scheme_filled(3003)]), second], &[], &[]));
+    let layouts: Vec<&Layout> = p.masters[0].layouts.iter().filter(|l| l.name == "Title Master").collect();
+    assert_eq!(layouts.len(), 2);
+    assert_eq!(layouts[0].shapes.iter().filter(|s| s.ph.is_none()).count(), 1);
+    assert!(layouts[1].shapes.iter().all(|s| s.ph.is_some()), "{:?}", layouts[1].shapes);
+    assert_eq!(layouts[1].shapes.len(), 2, "the first title master's placeholders");
+}
+
+/// A title slide of the main master takes an ordinary layout, not the one made for a title
+/// master: that one is for the slides that name the title master.
+#[test]
+fn a_title_masters_layout_is_only_for_its_own_slides() {
+    let on_main = container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &[])]);
+    let p = open_plain(streams_of(0xE391_C05F, 1, on_main, Some(title_master_with(&[]))));
+    let (_, layout) = p.layout(p.slides[0].layout).unwrap();
+    assert_eq!(layout.name, "Blank");
+}
+
+/// When the edit chain is broken and the stream holds more edits than are read, the newest are the
+/// ones read: here the newest edit replaces the slide, behind 4095 edits with no directory.
+#[test]
+fn a_broken_chain_reads_the_newest_edits() {
+    let (_, mut stream, pics) = streams(0xE391_C05F);
+    let first_edit = stream.len() - 36;
+    let offsets: Vec<u32> =
+        (0..4).map(|i| u32::from_le_bytes(stream[first_edit - 16 + 4 * i..first_edit - 12 + 4 * i].try_into().unwrap())).collect();
+    // Edits that point at themselves and name the document as their directory.
+    let junk_at = stream.len() as u32;
+    for _ in 0..4095 {
+        let at = stream.len() as u32;
+        let mut edit = le32(&[0, 0x0300_03F4, at, 0, 1, 5]);
+        edit.extend_from_slice(&[0; 4]);
+        stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
+    }
+    let title = container(rt::SP_CONTAINER, 0, &[fsp(1, 2049, 0xA00), anchor(400, 500, 5260, 1200), placeholder(0x0D), text_box(0, "Newest", &[])]);
+    let slide_at = stream.len() as u32;
+    stream.extend_from_slice(&container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[title])]));
+    let dir_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(rt::PERSIST_DIRECTORY, 0, &le32(&[1 | (4 << 20), offsets[0], offsets[1], slide_at, offsets[3]])));
+    let mut edit = le32(&[0, 0x0300_03F4, first_edit as u32, dir_at, 1, 5]);
+    edit.extend_from_slice(&[0; 4]);
+    stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
+    let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, junk_at, 0, 0]));
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().text(), "Newest");
 }

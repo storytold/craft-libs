@@ -326,6 +326,31 @@ pub fn auto_number_scheme(v: u16) -> &'static str {
         13 => "arabicPlain",
         14 => "romanUcParenBoth",
         15 => "romanUcParenR",
+        0x10 => "ea1ChsPlain",
+        0x11 => "ea1ChsPeriod",
+        0x12 => "circleNumDbPlain",
+        0x13 => "circleNumWdWhitePlain",
+        0x14 => "circleNumWdBlackPlain",
+        0x15 => "ea1ChtPlain",
+        0x16 => "ea1ChtPeriod",
+        0x17 => "arabic1Minus",
+        0x18 => "arabic2Minus",
+        0x19 => "hebrew2Minus",
+        0x1A => "ea1JpnKorPlain",
+        0x1B => "ea1JpnKorPeriod",
+        0x1C => "arabicDbPlain",
+        0x1D => "arabicDbPeriod",
+        0x1E => "thaiAlphaPeriod",
+        0x1F => "thaiAlphaParenR",
+        0x20 => "thaiAlphaParenBoth",
+        0x21 => "thaiNumPeriod",
+        0x22 => "thaiNumParenR",
+        0x23 => "thaiNumParenBoth",
+        0x24 => "hindiAlphaPeriod",
+        0x25 => "hindiNumPeriod",
+        0x26 => "ea1JpnChsDbPeriod",
+        0x27 => "hindiNumParenR",
+        0x28 => "hindiAlpha1Period",
         _ => "arabicPeriod",
     }
 }
@@ -353,14 +378,26 @@ pub fn read_master_style(r: &Rec) -> LevelStyles {
     let mut c = Cursor::new(r.data);
     let mut out = LevelStyles::default();
     let Some(n) = c.u16() else { return out };
-    for _ in 0..n.min(5) {
-        // From the centre-body type on, each level names itself.
-        if u32::from(r.instance) >= ty::CENTER_BODY && c.u16().is_none() {
-            break;
-        }
+    for i in 0..usize::from(n.min(5)) {
+        // From the centre-body type on, each level names itself (TextMasterStyleLevel.level).
+        let level = if u32::from(r.instance) >= ty::CENTER_BODY {
+            let Some(l) = c.u16() else { break };
+            usize::from(l)
+        } else {
+            i
+        };
         let Some(pf) = read_pf(&mut c) else { break };
         let Some(cf) = read_cf(&mut c) else { break };
-        out.levels.push((pf, cf));
+        // Only five levels exist; one naming another is read past.
+        if level >= 5 {
+            continue;
+        }
+        if out.levels.len() <= level {
+            out.levels.resize(level + 1, Default::default());
+        }
+        if let Some(slot) = out.levels.get_mut(level) {
+            *slot = (pf, cf);
+        }
     }
     out
 }
@@ -575,6 +612,36 @@ pub(crate) mod tests {
         assert!(read_style9(&[]).is_empty());
         assert_eq!(auto_number_scheme(3), "arabicPeriod");
         assert_eq!(auto_number_scheme(0), "alphaLcPeriod");
+    }
+
+    /// The East Asian, bidi, Thai and Hindi schemes (0x10–0x28) have DrawingML names of their
+    /// own; only an unknown value falls back to "1.".
+    #[test]
+    fn every_numbering_scheme_has_its_drawingml_name() {
+        assert_eq!(auto_number_scheme(0x10), "ea1ChsPlain");
+        assert_eq!(auto_number_scheme(0x13), "circleNumWdWhitePlain");
+        assert_eq!(auto_number_scheme(0x19), "hebrew2Minus");
+        assert_eq!(auto_number_scheme(0x26), "ea1JpnChsDbPeriod");
+        assert_eq!(auto_number_scheme(0x28), "hindiAlpha1Period");
+        let names: std::collections::HashSet<_> = (0..=0x28).map(auto_number_scheme).collect();
+        assert_eq!(names.len(), 0x29, "each value its own scheme");
+        assert_eq!(auto_number_scheme(0x29), "arabicPeriod");
+    }
+
+    /// From the centre-body type on, a master style level names its level: it is stored there,
+    /// and a level past the fifth is read past.
+    #[test]
+    fn master_style_levels_go_where_they_say() {
+        let level = |l: u16, size: u16| [&l.to_le_bytes()[..], &0u32.to_le_bytes(), &cf_bytes(false, 0, size, [0, 0, 0])].concat();
+        let body = [&3u16.to_le_bytes()[..], &level(2, 20), &level(7, 30), &level(0, 40)].concat();
+        let rec = crate::record::build::atom(rt::TEXT_MASTER_STYLE, ty::CENTER_BODY as u16, &body);
+        let st = read_master_style(&Rec::at(&rec, 0).unwrap());
+        let sizes: Vec<_> = st.levels.iter().map(|(_, cf)| cf.size).collect();
+        assert_eq!(sizes, [Some(40), None, Some(20)]);
+        // Before it, levels are in order.
+        let body = [&1u16.to_le_bytes()[..], &0u32.to_le_bytes(), &cf_bytes(false, 0, 12, [0, 0, 0])].concat();
+        let rec = crate::record::build::atom(rt::TEXT_MASTER_STYLE, ty::BODY as u16, &body);
+        assert_eq!(read_master_style(&Rec::at(&rec, 0).unwrap()).levels[0].1.size, Some(12));
     }
 
     /// A paragraph exception with many tab stops keeps the first [`MAX_TABS`] and reads the

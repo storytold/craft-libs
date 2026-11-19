@@ -3,7 +3,7 @@
 //! object ids to stream offsets, newer edits winning), the document container and the lists of
 //! masters, slides and notes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::PptError;
 use crate::record::{Rec, Records};
@@ -166,11 +166,17 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
     }
     if broken {
         // Recover what the cut-off edits held: every edit in the stream, newest (last written)
-        // first, fills only the persist ids the chain left unset.
+        // first, fills only the persist ids the chain left unset. Past MAX_EDITS, the newest are
+        // kept: they are the ones that win.
         log::warn!("ppt: the edit history is broken; reading every edit in the stream");
-        let mut edits: Vec<Rec> = Records::new(stream).filter(|r| r.kind == rt::USER_EDIT).take(MAX_EDITS).collect();
-        edits.reverse();
-        for edit in edits {
+        let mut edits: VecDeque<Rec> = VecDeque::with_capacity(MAX_EDITS.min(64));
+        for edit in Records::new(stream).filter(|r| r.kind == rt::USER_EDIT) {
+            if edits.len() == MAX_EDITS {
+                edits.pop_front();
+            }
+            edits.push_back(edit);
+        }
+        for edit in edits.into_iter().rev() {
             if let Some(dir) =
                 edit.u32(12).filter(|&o| dirs_seen.insert(o)).and_then(|o| Rec::at(stream, o as usize)).filter(|r| r.kind == rt::PERSIST_DIRECTORY)
             {
@@ -203,6 +209,11 @@ pub fn read<'a>(current_user: &[u8], stream: &'a [u8]) -> Result<Doc<'a>, PptErr
                 }
                 let (Some(pid), Some(slide_id)) = (r.u32(0), r.u32(12)) else { continue };
                 match lookup(pid) {
+                    // The slide list names slides; anything else there is a slide the file lost.
+                    Some(rec) if list.instance == 0 && rec.kind != rt::SLIDE => {
+                        log::warn!("ppt: slide persist id {pid} is not a slide");
+                        doc.lost.push(format!("slide {slide_id}"));
+                    }
                     Some(rec) if !listed.insert(rec.offset) => log::warn!("ppt: persist id {pid} is listed again; skipped"),
                     Some(rec) => current = Some(Listed { rec, slide_id, outline: vec![] }),
                     None => {
@@ -306,7 +317,7 @@ pub fn fonts(doc: &Doc) -> Vec<String> {
         .collect()
 }
 
-/// What a `HeadersFootersContainer` ([MS-PPT] §2.4.15.1, instance 3: slides) says the footer row
+/// What a `HeadersFootersContainer` ([MS-PPT] §2.4.15.1 and §2.5.16) says the footer row
 /// shows: the date (today's in a format, or fixed text), the slide number and the footer text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HeadersFooters {
@@ -327,9 +338,11 @@ fn cstring_units(b: &[u8]) -> impl Iterator<Item = u16> + '_ {
     b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0)
 }
 
-/// The slides' headers and footers in `container` (a slide, or the document for every slide).
-pub fn headers_footers(container: &Rec) -> Option<HeadersFooters> {
-    let hf = container.children().find(|r| r.kind == rt::HEADERS_FOOTERS && r.instance == 3)?;
+/// The slides' headers and footers in `container`, from its `HeadersFootersContainer` of
+/// `instance`: 3 in the document (`SlideHeadersFootersContainer`, for every slide), 0 in a slide or
+/// main master (`PerSlideHeadersFootersContainer`, its own).
+pub fn headers_footers(container: &Rec, instance: u16) -> Option<HeadersFooters> {
+    let hf = container.children().find(|r| r.kind == rt::HEADERS_FOOTERS && r.instance == instance)?;
     let atom = hf.child(rt::HEADERS_FOOTERS_ATOM)?;
     let flags = atom.u16(2)?;
     let text = |instance: u16| {

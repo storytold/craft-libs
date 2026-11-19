@@ -21,9 +21,9 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Main masters become masters, with their colour scheme, fonts, text styles, background and
   decorative shapes. Title masters become layouts of their main master.
 - Slides keep their shapes (preset and freeform geometry, groups, rotation and flips), fills,
-  lines, shadows, pictures (PNG, JPEG, DIB, TIFF, EMF and WMF), tables, and text with the master's
-  styles resolved into it, along with fields, numbering, headers and footers, notes, and hidden
-  slides.
+  lines, shadows, pictures (PNG, JPEG, DIB, TIFF, EMF and WMF), tables (as groups of shapes, the
+  way the file stores them), and text with the master's styles resolved into it, along with
+  fields, numbering, headers and footers, notes, and hidden slides.
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.

@@ -114,7 +114,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         app,
     };
     let environment = d.document.child(rt::ENVIRONMENT);
-    if let Some(hf) = doc::headers_footers(&d.document) {
+    if let Some(hf) = doc::headers_footers(&d.document, 3) {
         cx.p.header_footer = craft_pptx::HeaderFooter {
             date: hf.date,
             slide_number: hf.slide_number,
@@ -154,9 +154,10 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
     // An unknown master falls back to the first main master. Title masters share their main
     // master's index, so including them would tie, and HashMap order would pick the winner. Found
     // once, as is each master's layout for each layout type: a search per slide would be slides ×
-    // masters (or layouts).
+    // masters (or layouts). A title master's layout is only for the slides that name it.
     let first_main = masters.values().filter(|m| m.layout.is_none()).min_by_key(|m| m.index).cloned();
-    let layouts: Vec<LayoutTable> = cx.p.masters.iter().map(|m| layout_table(m)).collect();
+    let title_layouts: HashSet<LayoutId> = masters.values().filter_map(|m| m.layout).collect();
+    let layouts: Vec<LayoutTable> = cx.p.masters.iter().map(|m| layout_table(m, &title_layouts)).collect();
     let find = Find { masters: &masters, first_main: first_main.as_ref(), layouts: &layouts, notes_of: &notes_of };
     for s in &d.slides {
         if s.rec.kind != rt::SLIDE {
@@ -172,15 +173,17 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
 /// A master's first layout of each layout type, and its first layout.
 type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
 
-fn layout_table(m: &Master) -> LayoutTable {
+fn layout_table(m: &Master, skip: &HashSet<LayoutId>) -> LayoutTable {
     let mut kinds: Vec<(LayoutType, LayoutId)> = vec![];
-    for l in &m.layouts {
+    let layouts = m.layouts.iter().filter(|l| !skip.contains(&l.id));
+    let first = layouts.clone().next().map(|l| l.id);
+    for l in layouts {
         // Layout types are few, so the list stays short.
         if !kinds.iter().any(|(k, _)| *k == l.kind) {
             kinds.push((l.kind, l.id));
         }
     }
-    (kinds, m.layouts.first().map(|l| l.id))
+    (kinds, first)
 }
 
 /// What a slide's master, layout and notes page are looked up in.
@@ -301,19 +304,39 @@ impl<'a> Ctx<'a> {
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let shapes: Vec<Shape> =
             drawing.shapes.iter().filter(|r| r.placeholder.is_none_or(|p| p.kind == 0)).filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
-        // Its placeholders follow the main master's title layout, with ids of their own.
-        let base = self
+        // Its placeholders follow the main master's title layout, with ids of their own. Only the
+        // placeholders: a layout made for an earlier title master holds that one's own shapes.
+        let base: Vec<Shape> = self
             .p
             .masters
             .get(parent.index)
             .and_then(|m| m.layouts.iter().find(|l| l.kind == LayoutType::Title))
-            .map(|l| l.shapes.clone())
+            .map(|l| l.shapes.iter().filter(|s| s.ph.is_some()).cloned().collect())
             .unwrap_or_default();
         let mut placeholders = Vec::with_capacity(base.len());
         for mut s in base {
             let Some(id) = self.alloc() else { break };
             s.id = ShapeId(id);
             placeholders.push(s);
+        }
+        // The title master's own placeholders say where its slides' placeholders go, as a main
+        // master's do; one the title layout lacks is added.
+        for raw in &drawing.shapes {
+            let Some(ph) = raw.placeholder.filter(|p| p.kind != 0) else { continue };
+            let (Some(kind), Some(x)) = (ph_type(ph.kind), raw.anchor.map(|a| xfrm(&a, TOP, 0.0, false, false))) else { continue };
+            if let Some(s) = placeholders.iter_mut().find(|s| s.ph_type().is_some_and(|t| same_family(t, kind))) {
+                s.xfrm = Some(x);
+                continue;
+            }
+            let Some(id) = self.alloc() else { break };
+            placeholders.push(Shape {
+                id: ShapeId(id),
+                name: raw.props.string(prop::NAME).unwrap_or_else(|| default_name(raw)),
+                xfrm: Some(x),
+                ph: Some(Placeholder { kind, idx: ph.position, ..Default::default() }),
+                text: Some(TextBody::default()),
+                ..Default::default()
+            });
         }
         let Some(master) = self.p.masters.get_mut(parent.index) else { return };
         Arc::make_mut(master).layouts.push(Layout {
@@ -415,7 +438,7 @@ impl<'a> Ctx<'a> {
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let mut shapes: Vec<Shape> = drawing.shapes.iter().filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
         // The slide's own headers and footers, else the document's for every slide.
-        if let Some(hf) = doc::headers_footers(&s.rec).or_else(|| doc::headers_footers(&d.document)) {
+        if let Some(hf) = doc::headers_footers(&s.rec, 0).or_else(|| doc::headers_footers(&d.document, 3)) {
             self.footers(&mut shapes, &hf);
         }
         let hidden = s.rec.child(rt::SLIDE_SHOW_SLIDE_INFO).and_then(|i| i.u16(10)).is_some_and(|f| f & 0x4 != 0);
@@ -744,10 +767,14 @@ impl<'a> Ctx<'a> {
         })
     }
 
-    /// The text block of a shape: its own, or the slide list's outline block it points at.
+    /// The text block of a shape: its own, or the slide list's outline block it points at. A text
+    /// box holding the reference may also hold its own ruler ([MS-PPT] OfficeArtClientTextbox:
+    /// `OutlineTextRefAtom` then an optional `TextRulerAtom`); the margins and indents it sets
+    /// win over the block's.
     fn text_block(&self, raw: &RawShape<'a>, scope: &Scope) -> Option<TextBlock> {
         let tb = raw.text?;
         let own = text::read_block(tb.children())?;
+        let own_ruler = own.ruler;
         match own.outline_ref {
             Some(i) if own.chars.is_empty() && scope.used_outline.borrow_mut().insert(i as usize) => scope
                 .outline
@@ -755,6 +782,10 @@ impl<'a> Ctx<'a> {
                 .and_then(|r| text::read_block(r.clone()))
                 .map(|mut b| {
                     b.outline_index = Some(i as usize);
+                    for ((lm, ind), (own_lm, own_ind)) in b.ruler.iter_mut().zip(own_ruler) {
+                        *lm = own_lm.or(*lm);
+                        *ind = own_ind.or(*ind);
+                    }
                     b
                 })
                 .or(Some(own)),

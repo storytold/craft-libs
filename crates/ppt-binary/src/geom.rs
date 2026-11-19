@@ -226,7 +226,9 @@ fn custom_path(props: &Props) -> Option<Vec<CustomPath>> {
         d.push(' ');
     };
     match props.array(prop::SEGMENT_INFO) {
-        Some((2, segs)) => {
+        // An empty segment list is no segments ([MS-ODRAW] shapePath: it applies unless the list
+        // is "neither NULL nor empty").
+        Some((2, segs)) if !segs.is_empty() => {
             for c in segs.as_chunks::<2>().0.iter().take(MAX_SEGMENTS) {
                 let v = u16::from_le_bytes(*c);
                 let count = usize::from(v & 0x1FFF);
@@ -254,18 +256,40 @@ fn custom_path(props: &Props) -> Option<Vec<CustomPath>> {
                     }
                     3 => push("Z", &[]),
                     4 => break,
-                    // Escapes (arcs, fill/stroke switches) carry no points we draw.
+                    // Escapes and client escapes (MSOPATHESCAPEINFO: escape code in bits 8–12,
+                    // segment count in bits 0–7): arcs, ellipses and curves aren't drawn, but they
+                    // use up their points, so the segments after them take the right ones.
+                    5 | 6 => {
+                        for _ in 0..(v & 0xFF) {
+                            pts.next();
+                        }
+                    }
                     _ => {}
                 }
             }
         }
-        // No segments: a polyline through every vertex.
+        // No segments: shapePath says how the vertices join (MSOSHAPEPATH), by default
+        // msoshapeLinesClosed.
         _ => {
+            let shape_path = props.get(prop::SHAPE_PATH).unwrap_or(1);
             if let Some(p) = pts.next() {
                 push("M", &[p]);
             }
-            for p in pts {
-                push("L", &[p]);
+            if matches!(shape_path, 2 | 3) {
+                loop {
+                    let ps: Vec<_> = pts.by_ref().take(3).collect();
+                    if ps.len() < 3 {
+                        break;
+                    }
+                    push("C", &ps);
+                }
+            } else {
+                for p in pts {
+                    push("L", &[p]);
+                }
+            }
+            if matches!(shape_path, 1 | 3) {
+                push("Z", &[]);
             }
         }
     }
@@ -342,6 +366,51 @@ mod tests {
         let Geom::Custom { paths } = geometry(0, &p) else { panic!("not custom") };
         let d = &paths[0].d;
         assert_eq!(d.matches('M').count() + d.matches('L').count(), MAX_POINTS);
+    }
+
+    fn freeform(verts: &[(i16, i16)], segs: Option<&[u16]>, extra: &[(u16, u32)]) -> Geom {
+        let verts: Vec<u8> = verts.iter().flat_map(|(x, y)| [x.to_le_bytes(), y.to_le_bytes()].concat()).collect();
+        let v = array(4, &verts);
+        let mut entries = vec![(prop::GEO_RIGHT, 100), (prop::GEO_BOTTOM, 100), (0x8000 | prop::VERTICES, v.len() as u32)];
+        entries.extend_from_slice(extra);
+        let mut complex = v;
+        if let Some(segs) = segs {
+            let s = array(2, &segs.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+            entries.push((0x8000 | prop::SEGMENT_INFO, s.len() as u32));
+            complex.extend_from_slice(&s);
+        }
+        let t = props(&entries, &complex);
+        let mut p = Props::default();
+        p.add_table(&Rec::at(&t, 0).unwrap());
+        geometry(0, &p)
+    }
+
+    fn path_of(g: Geom) -> String {
+        let Geom::Custom { paths } = g else { panic!("not custom: {g:?}") };
+        paths[0].d.clone()
+    }
+
+    /// An escape segment (here msopathEscapeArcTo over four points) uses up its points: the line
+    /// after it goes to the fifth vertex, not the first of the arc's.
+    #[test]
+    fn path_escapes_consume_their_points() {
+        let verts = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (50, 60)];
+        // moveTo, escape ArcTo (3) with 4 segments, lineTo, end
+        let escape = (5u16 << 13) | (3 << 8) | 4;
+        assert_eq!(path_of(freeform(&verts, Some(&[0x4000, escape, 0x0001, 0x8000]), &[])), "M 0 0 L 50 60");
+    }
+
+    /// Without segments, shapePath says how the vertices join: closed lines by default, open
+    /// lines, or Bézier curves three points at a time. An empty segment list is no segments.
+    #[test]
+    fn shape_path_joins_vertices_without_segments() {
+        let tri = [(0, 100), (50, 0), (100, 100)];
+        assert_eq!(path_of(freeform(&tri, None, &[])), "M 0 100 L 50 0 L 100 100 Z");
+        assert_eq!(path_of(freeform(&tri, Some(&[]), &[])), "M 0 100 L 50 0 L 100 100 Z");
+        assert_eq!(path_of(freeform(&tri, None, &[(prop::SHAPE_PATH, 0)])), "M 0 100 L 50 0 L 100 100");
+        let curve = [(0, 0), (10, 0), (20, 10), (20, 20)];
+        assert_eq!(path_of(freeform(&curve, None, &[(prop::SHAPE_PATH, 2)])), "M 0 0 C 10 0 20 10 20 20");
+        assert_eq!(path_of(freeform(&curve, None, &[(prop::SHAPE_PATH, 3)])), "M 0 0 C 10 0 20 10 20 20 Z");
     }
 
     #[test]

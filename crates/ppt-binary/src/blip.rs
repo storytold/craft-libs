@@ -140,17 +140,22 @@ fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
         (usize::from(crate::record::u16_at(dib, 14)?), crate::record::u32_at(dib, 16)?, crate::record::u32_at(dib, 32)? as usize)
     };
     let entry = if header == 12 { 3 } else { 4 };
-    let colors = if used > 0 {
-        used.min(256)
-    } else if bits <= 8 {
-        1 << bits
-    } else {
-        0
+    // The colour table: up to 2^bits entries (all of them when biClrUsed is 0) for 8 bits or
+    // fewer; biClrUsed entries, an optional table, for more.
+    let colors = match bits {
+        0..=8 if used > 0 => used.min(1 << bits),
+        0..=8 => 1 << bits,
+        _ => used,
     };
     // BI_BITFIELDS with the 40-byte header: three masks follow it.
     let masks = if compression == 3 && header == 40 { 12 } else { 0 };
-    let offset = 14usize.checked_add(header)?.checked_add(colors * entry)?.checked_add(masks)?;
-    let total = u32::try_from(14 + dib.len()).ok()?;
+    let offset = 14usize.checked_add(header)?.checked_add(colors.checked_mul(entry)?)?.checked_add(masks)?;
+    let file_len = 14usize.checked_add(dib.len())?;
+    // Pixels starting past the end are no bitmap.
+    if offset > file_len {
+        return None;
+    }
+    let total = u32::try_from(file_len).ok()?;
     let mut out = Vec::with_capacity(dib.len() + 14);
     out.extend_from_slice(b"BM");
     out.extend_from_slice(&total.to_le_bytes());
@@ -256,6 +261,27 @@ mod tests {
         let img = image::load_from_memory_with_format(&p.data, image::ImageFormat::Bmp).unwrap().to_rgba8();
         assert_eq!(img.dimensions(), (1, 1));
         assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
+    }
+
+    /// The pixels start after the colour table: biClrUsed entries for more than 8 bits (none when
+    /// it is 0), at most 2^bits for fewer, and a table running past the DIB is no picture.
+    #[test]
+    fn a_dib_colour_table_is_sized_by_its_bit_depth() {
+        let dib = |bits: u16, used: u32, extra: usize| {
+            let mut d = vec![0u8; 40];
+            d[0] = 40;
+            d[14..16].copy_from_slice(&bits.to_le_bytes());
+            d[32..36].copy_from_slice(&used.to_le_bytes());
+            d.resize(40 + extra, 0);
+            d
+        };
+        let offset = |b: &[u8]| dib_to_bmp(b).map(|bmp| u32::from_le_bytes(bmp[10..14].try_into().unwrap()));
+        assert_eq!(offset(&dib(24, 0, 4)), Some(54));
+        assert_eq!(offset(&dib(24, 300, 1204)), Some(54 + 1200), "more than 256 entries for 24 bits");
+        assert_eq!(offset(&dib(8, 300, 1028)), Some(54 + 1024), "8 bits: at most 256");
+        assert_eq!(offset(&dib(4, 0, 68)), Some(54 + 64));
+        assert_eq!(offset(&dib(24, 300, 100)), None, "the table runs past the DIB");
+        assert_eq!(offset(&dib(32, u32::MAX, 0)), None);
     }
 
     /// JPEG (RGB and CMYK), TIFF and a PNG with a second UID: the instance says how many UIDs come

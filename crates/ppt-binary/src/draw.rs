@@ -25,6 +25,7 @@ pub mod prop {
     pub const GEO_TOP: u16 = 0x0141;
     pub const GEO_RIGHT: u16 = 0x0142;
     pub const GEO_BOTTOM: u16 = 0x0143;
+    pub const SHAPE_PATH: u16 = 0x0144;
     pub const VERTICES: u16 = 0x0145;
     pub const SEGMENT_INFO: u16 = 0x0146;
     pub const ADJUST_VALUE: u16 = 0x0147;
