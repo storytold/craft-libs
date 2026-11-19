@@ -22,6 +22,7 @@ use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keye
 use craft_theme::{ControlSize, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 /// The style of a group grip: its size comes from the tokens.
@@ -265,7 +266,7 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     reported: Reported,
 }
 
-impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
+impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
@@ -313,7 +314,7 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
     }
 }
 
-impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
+impl<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
     const ROLE: Role = Role::TAB_PANEL;
     type Style = DockGroupStyle;
     type Output = DockGroupOutput;
@@ -427,7 +428,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
     }
 }
 
-impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
+impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for DockGroup<'_, P> {
     /// Closed while minimized: the body step runs the header alone, and the body leaves no node, shape or stop.
     fn open(&mut self) -> Option<BindMut<'_, bool>> {
         self.open = Bind::given(!self.minimized);
@@ -527,7 +528,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
 
 /// Registers the tab insertion spots of a group: the half of each shown tab nearer the start edge inserts before
 /// it, the other half after it, and each spot's mark is the line at the boundary it inserts at.
-fn register_insertions<P: Clone + Hash + Send + Sync + 'static>(
+fn register_insertions<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(
     ctx: &egui::Context,
     dock: Id,
     anchor: &P,
