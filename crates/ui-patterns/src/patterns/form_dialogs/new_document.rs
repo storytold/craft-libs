@@ -377,7 +377,7 @@ impl Outcome for NewDocumentOutput {
 }
 
 /// The columns of the body: the cards take the room the details column leaves.
-static COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
+const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
 
 /// The body of the dialog: the columns, then what they asked for.
 fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, shared: &Shared<'_>) -> bool {

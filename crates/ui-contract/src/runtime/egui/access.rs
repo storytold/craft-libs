@@ -10,9 +10,7 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
-#[cfg(feature = "testing")]
-use egui::FullOutput;
-use egui::{Context, Id, IdMap, IdSet, ViewportId};
+use egui::{Context, FullOutput, Id, IdMap, IdSet, ViewportId};
 use std::collections::HashMap;
 
 use super::pass;
@@ -199,4 +197,29 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
 #[cfg(feature = "testing")]
 pub(crate) fn tree_of(output: &mut FullOutput) -> Option<AccessTree> {
     output.platform_output.accesskit_update.take().map(AccessTree::new)
+}
+
+/// Drops relations that name a node this update does not carry.
+///
+/// A menu reports its popup open on a frame where the popup's own node is not emitted (the ordering
+/// differs per menu), and `runtime::access::emit` puts that id in `controls`. A host's UIA adapter
+/// unwraps every `controls` lookup (`accesskit_consumer`'s `Node::controls`), so one id with no node
+/// in the same update aborts the app: photocraft#15597, where clicking Image, Edit or Layer — and on
+/// one machine Filter — closed PhotoCraft on the click that opened the menu.
+pub(crate) fn drop_dangling_relations(output: &mut FullOutput) {
+    let Some(update) = output.platform_output.accesskit_update.as_mut() else { return };
+    prune_controls(update);
+}
+
+/// The step itself: every `controls` id of `update` that names no node of `update` is dropped. Other
+/// relations keep their ids: they are built from nodes this pass wrote.
+pub fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
+    let ids: std::collections::HashSet<egui::accesskit::NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+    for (_, node) in update.nodes.iter_mut() {
+        if node.controls().iter().all(|id| ids.contains(id)) {
+            continue;
+        }
+        let kept: Vec<egui::accesskit::NodeId> = node.controls().iter().copied().filter(|id| ids.contains(id)).collect();
+        node.set_controls(kept);
+    }
 }
