@@ -455,11 +455,11 @@ impl Component for MenuBar<'_> {
             return Vec2::ZERO;
         }
         let (widths, height, _) = self.widths(cx);
-        Vec2::new(self.width.unwrap_or_else(|| widths.iter().sum()), height)
+        Vec2::new(self.width.filter(|width| *width > 0.0).unwrap_or_else(|| widths.iter().sum()), height)
     }
 
     fn fills(&self) -> Option<Axis> {
-        self.width.is_none().then_some(Axis::X)
+        self.width.is_none_or(|width| width <= 0.0).then_some(Axis::X)
     }
 
     fn sense(&self) -> Sense {

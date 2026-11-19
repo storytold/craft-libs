@@ -250,7 +250,7 @@ impl<'b> BodyHooks<'b> {
         let (line, _) = self.header_line(header, inset, parts, rtl);
         // A header that declares its width gets it on the line, the body beside it taking the rest: laid out by the
         // line alone, its content is squeezed into the share of a body it shares the line with.
-        let line = match declared.filter(|width| width.is_finite()) {
+        let line = match declared.filter(|width| width.is_finite() && *width > 0.0) {
             Some(width) if rtl => Rect::from_min_max(Pos2::new((line.max.x - width).max(line.min.x), line.min.y), line.max),
             Some(width) => Rect::from_min_max(line.min, Pos2::new((line.min.x + width).min(line.max.x), line.max.y)),
             None => line,
@@ -419,7 +419,7 @@ impl<'b> BodyHooks<'b> {
         let header = if inline {
             // The header keeps the width it measured, none when it measured nothing; before its first measure it
             // takes the whole line. The body takes the rest.
-            let head_w = props.header.and_then(|header| header.inline_width).filter(|width| width.is_finite()).map_or_else(
+            let head_w = props.header.and_then(|header| header.inline_width).filter(|width| width.is_finite() && *width > 0.0).map_or_else(
                 || sizes.header.map_or(width, |took| took.x.min(width)),
                 |declared| declared.min(width),
             );
