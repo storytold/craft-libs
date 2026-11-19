@@ -328,11 +328,13 @@ fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node
     assert!(fixture.by_role(Role::IMAGE).is_empty(), "the picture is not a node of its own");
 }
 
-/// The first style of `type_name` resolved when `show` runs alone.
-fn style_seen(type_name: &str, show: impl Fn(&mut Ui) + 'static) -> std::sync::Arc<craft_ui::testing::style::StyleSeen> {
+/// The surface of the first style of `type_name` resolved when `show` runs alone, and the width of the control
+/// named `name`.
+fn seen(type_name: &str, name: &str, show: impl Fn(&mut Ui) + 'static) -> (Option<craft_ui::style::SurfaceLook>, f32) {
     let mut fixture = Fixture::new(move |ui| show(ui));
     fixture.settle();
-    fixture.styles_of(type_name).into_iter().next().expect("the control resolved its style")
+    let style = fixture.styles_of(type_name).into_iter().next().expect("the control resolved its style");
+    (style.looks.surface.clone(), fixture.by_label(name).expect("the control").rect.width())
 }
 
 /// Shows `show` where a ribbon group shows its content.
@@ -346,43 +348,47 @@ fn in_ribbon(ui: &mut Ui, show: impl FnOnce(&mut Ui)) {
     );
 }
 
-/// In a ribbon a push or split button that asks for no variant is flat at rest: it resolves the ghost look. Anywhere
-/// else it keeps its outlined default, and in a ribbon a variant it asks for stays.
+/// In a ribbon a push or split button that asks for no variant is flat at rest: it draws the ghost surface, and its
+/// sides take the control's padding, so it is narrower than a ghost button elsewhere. Anywhere else a button keeps its
+/// outlined default, and in a ribbon a variant it asks for stays.
 #[trial]
 fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     let button = std::any::type_name::<Button<'static>>();
-    let ribbon = style_seen(button, |ui| {
+    let (ribbon, narrow) = seen(button, "Copy", |ui| {
         in_ribbon(ui, |ui| {
             let _ = Button::new("Copy").show(ui);
         });
     });
-    let ghost = style_seen(button, |ui| {
+    let (ghost, wide) = seen(button, "Copy", |ui| {
         let _ = Button::new("Copy").variant(Variant::GHOST).show(ui);
     });
-    let standard = style_seen(button, |ui| {
+    let (standard, _) = seen(button, "Copy", |ui| {
         let _ = Button::new("Copy").show(ui);
     });
-    let primary = style_seen(button, |ui| {
+    let (primary, _) = seen(button, "Copy", |ui| {
         in_ribbon(ui, |ui| {
             let _ = Button::new("Copy").variant(Variant::PRIMARY).show(ui);
         });
     });
-    assert!(ribbon.looks.same_as(&ghost.looks), "a ribbon button takes the ghost look");
-    assert!(!standard.looks.same_as(&ghost.looks), "outside a ribbon the default look stays");
-    assert!(!primary.looks.same_as(&ghost.looks), "a variant asked for in a ribbon stays");
+    assert!(ghost.is_some(), "a button has a surface");
+    assert_eq!(ribbon, ghost, "a ribbon button draws the ghost surface");
+    assert_ne!(standard, ghost, "outside a ribbon the default look stays");
+    assert_ne!(primary, ghost, "a variant asked for in a ribbon stays");
+    assert!(narrow < wide - 0.5, "a ribbon's flat button sits close: {narrow} against {wide}");
 
     let split = std::any::type_name::<SplitButton<'static, usize>>();
-    let ribbon = style_seen(split, |ui| {
+    let (ribbon, narrow) = seen(split, "Paste", |ui| {
         let entries = [Entry::new(1_usize, "Keep text only")];
         in_ribbon(ui, |ui| {
             let _ = SplitButton::new("Paste", &entries).show(ui);
         });
     });
-    let ghost = style_seen(split, |ui| {
+    let (ghost, wide) = seen(split, "Paste", |ui| {
         let entries = [Entry::new(1_usize, "Keep text only")];
         let _ = SplitButton::new("Paste", &entries).variant(Variant::GHOST).show(ui);
     });
-    assert!(ribbon.looks.same_as(&ghost.looks), "a ribbon split button takes the ghost look");
+    assert_eq!(ribbon, ghost, "a ribbon split button draws the ghost surface");
+    assert!(narrow < wide - 0.5, "a ribbon's flat split button sits close: {narrow} against {wide}");
 }
 
 /// In a ribbon a combo box is as wide as its widest option and its chevron, not a field length.
