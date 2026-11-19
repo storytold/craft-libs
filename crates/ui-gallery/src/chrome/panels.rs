@@ -267,6 +267,8 @@ impl Panels<'_> {
             });
             story_props(ui, &mut state.data);
         });
+        // An edit in the editors moves the revision the story's view keys on.
+        state.data.settle();
         if reset {
             state.reset();
         }

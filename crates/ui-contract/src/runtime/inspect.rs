@@ -215,12 +215,19 @@ pub fn record<R>(ui: &mut Ui, key: Id, body: impl FnOnce(&mut Ui) -> R) -> (R, O
     let out = body(ui);
     let Some(open) = pass_state::with::<Log, _>(&ctx, |log| log.open.pop()) else { return (out, None) };
     let recorded = Arc::new(finish(&ctx, open));
-    write(&ctx, key, |kept| {
-        let changed = kept.recorded.as_deref() != Some(&*recorded);
-        kept.recorded = Some(Arc::clone(&recorded));
+    keep(&ctx, key, &recorded);
+    // A memoized view that replays this region keeps its record as the run left it.
+    crate::runtime::replay::journal(&ctx, || (key, Arc::clone(&recorded)), |ctx, (key, recorded)| keep(ctx, *key, recorded));
+    (out, Some(recorded))
+}
+
+/// Keeps `recorded` as the record of the region `key`.
+fn keep(ctx: &Context, key: Id, recorded: &Arc<Recorded>) {
+    write(ctx, key, |kept| {
+        let changed = kept.recorded.as_deref() != Some(&**recorded);
+        kept.recorded = Some(Arc::clone(recorded));
         changed
     });
-    (out, Some(recorded))
 }
 
 /// The latest record of the region `key`, read as a value: when the region shows later in the pass with a different

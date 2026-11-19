@@ -36,7 +36,7 @@ impl Inspect<'_> {
 }
 
 /// How a card's stories are inspected: the tab the card is in, which keys their regions, and the drawings shown.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Inspected {
     /// The centre tab the card is in.

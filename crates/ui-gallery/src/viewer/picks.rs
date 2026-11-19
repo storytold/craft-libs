@@ -33,6 +33,16 @@ pub struct CardState {
     pub resets: u32,
 }
 
+/// A card's view of a story's state, by what the card shows from it: the values by their revision (whether they differ
+/// from the start follows from it and the start), whether the start is taken, the dialog's flags and the reset count. A
+/// write the card's own run makes moves the key, so the card runs once more and then replays.
+impl craft_ui::contract::MemoProps for &mut CardState {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        let DialogState { known, hidden, shown, painted } = self.dialog;
+        (self.data.revision(), self.start.is_some(), (known, hidden, shown, painted), self.resets).key(key);
+    }
+}
+
 impl CardState {
     /// Whether the story's values differ from the ones it started with.
     pub fn changed(&self) -> bool {
@@ -53,6 +63,7 @@ impl CardState {
         if let Some(open) = self.data.present::<bool>("open") {
             *open = true;
         }
+        self.data.settle();
     }
 
     /// Gives the story its start values again, on a fresh id scope.

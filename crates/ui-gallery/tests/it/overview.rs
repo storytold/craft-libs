@@ -3,9 +3,9 @@
 use craft_settings::{Location, OpenOptions, SettingsStore};
 use craft_ui::runtime::access::Role;
 use craft_ui::shell::app::ShellApp;
-use craft_ui::testing::{Fixture, last_pass_measuring_runs, last_pass_runs, pointer, trial};
-use craft_ui_gallery::chrome::{Gallery, Persisted};
-use craft_ui_gallery::viewer::{Catalog, GallerySettings, by_level};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_measuring_runs, last_pass_runs, pointer, trial};
+use craft_ui_gallery::chrome::{Gallery, Persisted, region_key};
+use craft_ui_gallery::viewer::{Catalog, GallerySettings, PanelId, by_level};
 use egui::Vec2;
 
 fn gallery_at(level: &str) -> Gallery {
@@ -202,6 +202,32 @@ fn a_storys_dialog_starts_closed_opens_over_the_view_and_closes_back_to_the_open
     assert_eq!(openers(&fixture), closed, "closing the story's dialog brings the opener back");
 }
 
+/// A story whose dialog is open runs in every frame: the dialog paints on a layer of its own, which a replay can't add,
+/// so the shell counts the dialog in every pass and the card keeps the story in place of its opener.
+#[trial]
+fn a_story_with_its_dialog_open_runs_every_frame_and_keeps_the_dialog_counted() {
+    let mut gallery = gallery_filtered(level_of("FindReplaceDialog"), "FindReplaceDialog");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let closed = openers(&fixture);
+    let opener = fixture
+        .by_role(Role::BUTTON)
+        .into_iter()
+        .filter(|button| fixture.tree().name_of(button.node) == Some("Show dialog"))
+        .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+        .expect("an opener");
+    fixture.click(&opener).settle();
+    let open = painted_times(&fixture, "Find what:");
+    for frame in 0..3 {
+        fixture.idle(1);
+        let stories =
+            last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(ty, _, run)| ty.contains("::StoryProps") && *run == MemoRun::Ran).count();
+        assert!(stories >= 1, "idle frame {frame}: the story with its dialog open ran");
+        assert_eq!(openers(&fixture), closed - 1, "idle frame {frame}: the card keeps the story, its dialog counted");
+        assert_eq!(painted_times(&fixture, "Find what:"), open, "idle frame {frame}: the dialog stays open");
+    }
+}
+
 /// Regression: the wheel over a canvas card went to its story and the Overview stopped scrolling; inside a
 /// card the wheel takers take the wheel only while focused or armed, so it scrolls the Overview.
 #[trial]
@@ -327,4 +353,123 @@ fn a_card_of_a_filling_story_is_as_tall_as_its_content() {
     let (short, tall) = (card_height("LayersPanel", 900.0), card_height("LayersPanel", 1400.0));
     assert!(short < 900.0, "the card fits the window: {short}");
     assert!((tall - short).abs() < 1.0, "the card keeps its content's height in a taller window: {short} -> {tall}");
+}
+
+/// The card and story views of the last frame by id, with how each took part: ran, replayed or out of view. Sizing and
+/// measuring calls count.
+fn view_runs(fixture: &Fixture) -> Vec<(egui::Id, MemoRun)> {
+    let views = |ty: &str| ty.contains("::CardProps") || ty.contains("::StoryProps");
+    last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(ty, _, _)| views(ty)).map(|(_, id, run)| (id, run)).collect()
+}
+
+/// The card views of the last frame that ran, by id, once each.
+fn cards_ran(fixture: &Fixture) -> Vec<egui::Id> {
+    let mut ids: Vec<_> = last_frame_memo_runs(fixture.ctx())
+        .into_iter()
+        .filter(|(ty, _, run)| ty.contains("::CardProps") && *run == MemoRun::Ran)
+        .map(|(_, id, _)| id)
+        .collect();
+    ids.sort_unstable_by_key(|id| id.value());
+    ids.dedup();
+    ids
+}
+
+fn ran(runs: &[(egui::Id, MemoRun)]) -> Vec<egui::Id> {
+    runs.iter().filter(|(_, run)| *run == MemoRun::Ran).map(|(id, _)| *id).collect()
+}
+
+/// An idle Overview runs no card and no story: every card in view replays its last run, the stories in it included.
+/// The Button card's Variants story animates a loading button, which runs every frame by itself, so the Controls level
+/// shows its Slider cards only.
+#[trial]
+fn an_idle_overview_runs_no_card_or_story() {
+    for (level, filter) in [("Primitives", ""), ("Composites", ""), ("Patterns", ""), ("Shells", ""), ("Controls", "Slider")] {
+        let mut gallery = gallery_filtered(level, filter);
+        let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+        fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(3);
+        let runs = view_runs(&fixture);
+        assert!(runs.iter().any(|(_, run)| *run == MemoRun::Replayed), "{level}: the cards in view replay");
+        assert!(ran(&runs).is_empty(), "{level}: an idle frame ran {} of {} card and story views: {:?}", ran(&runs).len(), runs.len(), ran(&runs));
+    }
+}
+
+/// An edit of one story's data runs that card alone: the click that flips a checkbox of one card, and the confirming run
+/// of the changed values after it, run no other card.
+#[trial]
+fn a_story_data_edit_runs_one_card() {
+    let mut gallery = gallery_filtered("Controls", "Checkbox");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(2);
+    let target = *fixture.by_role(Role::CHECK_BOX).first().expect("a checkbox");
+    let checked = |fixture: &Fixture| fixture.tree().toggled_of(target.node);
+    let before = checked(&fixture);
+    let mut cards = Vec::new();
+    for events in [vec![pointer::moved(target.center())], vec![pointer::press(target.center())], vec![pointer::release(target.center())]] {
+        fixture.frame(events);
+        cards.extend(cards_ran(&fixture));
+    }
+    fixture.frame(vec![pointer::moved(egui::pos2(1.0, 1.0))]);
+    cards.extend(cards_ran(&fixture));
+    // The card settles within a frame after `settle`.
+    fixture.settle();
+    cards.extend(cards_ran(&fixture));
+    fixture.idle(1);
+    cards.extend(cards_ran(&fixture));
+    assert_ne!(checked(&fixture), before, "the click flipped the checkbox");
+    cards.sort_unstable_by_key(|id| id.value());
+    cards.dedup();
+    assert_eq!(cards.len(), 1, "an edit of one story ran these cards: {cards:?}");
+    fixture.idle(1);
+    assert!(ran(&view_runs(&fixture)).is_empty(), "then every card replays: {:?}", ran(&view_runs(&fixture)));
+}
+
+/// While the Overview scrolls, every card in view runs in each scrolled frame, since its place moved and a replay adds
+/// its record at the place it ran. No card out of view runs, and the frame after the scroll ends replays every card.
+/// A replay that moves its record with the scroll would run only the cards a scroll newly shows: a separate task
+/// (egui `replay_pass_records` with an offset).
+#[trial]
+fn scrolling_runs_the_cards_in_view_and_none_out_of_view() {
+    let mut gallery = gallery_at("Composites");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(2);
+    let header = fixture.by_label("Open").expect("a card header").center();
+    fixture.frame(vec![pointer::moved(header)]).settle();
+    let listed = listed("Composites", "").len();
+    for _ in 0..4 {
+        fixture.frame(vec![pointer::wheel(-120.0)]);
+        let cards = cards_ran(&fixture);
+        assert!(!cards.is_empty(), "the cards in view run at their new place (until replays move with the scroll)");
+        assert!(cards.len() < listed / 2, "only the cards in view run while the Overview scrolls: {} of {listed}", cards.len());
+    }
+    fixture.settle().idle(1);
+    assert!(ran(&view_runs(&fixture)).is_empty(), "the frame after the scroll ends replays every card: {:?}", ran(&view_runs(&fixture)));
+}
+
+/// The inspected card replays as every card does, and keeps the inspector's record of its run: the record a replay
+/// leaves is the one the real run made.
+#[trial]
+fn the_inspected_card_replays_with_the_record_of_its_run() {
+    const CHECKBOX: &str = "craft_ui_widgets::choice::check::Checkbox<'_>";
+    let mut gallery = gallery_filtered("Controls", "Checkbox");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let title = fixture.texts().iter().find(|run| run.text == "Checkbox").expect("the card's title").rect;
+    fixture.click_at(title.center()).settle();
+    let tab = fixture.by_label("Inspect").expect("the Inspect tab");
+    fixture.click(&tab).settle();
+    let catalog = Catalog::linked();
+    let records = |fixture: &Fixture| -> Vec<_> {
+        catalog
+            .stories_of(CHECKBOX)
+            .iter()
+            .filter_map(|story| craft_ui::runtime::inspect::recorded(fixture.ctx(), region_key(PanelId::Overview, *story)))
+            .collect()
+    };
+    let ran = records(&fixture);
+    assert!(!ran.is_empty(), "the selected card's stories are inspected");
+    fixture.idle(3);
+    assert!(view_runs(&fixture).iter().all(|(_, run)| *run != MemoRun::Ran), "the inspected card replays");
+    let replayed = records(&fixture);
+    assert_eq!(replayed.len(), ran.len(), "every inspected story keeps its record");
+    assert!(replayed.iter().zip(&ran).all(|(now, then)| **now == **then), "a replay keeps the record the real run made");
 }

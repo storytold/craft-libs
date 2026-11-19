@@ -56,7 +56,7 @@ impl Level {
 }
 
 /// The surface a type's stories sit on in an app; a viewer draws a story on it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Surface {
     /// A dock panel (`surface.panel`): most types.
@@ -71,7 +71,7 @@ pub enum Surface {
 }
 
 /// How a viewer lays out the stories of one type together, as the old gallery's story of the type laid out its cases.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StoryLayout {
     /// One under the other, each under its caption.

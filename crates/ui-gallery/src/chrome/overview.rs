@@ -150,9 +150,9 @@ pub(super) fn on_background(ui: &mut Ui, key: &str, mut add: impl FnMut(&mut Ui,
 }
 
 /// The cards in one or two columns, scrolling vertically; each row is as tall as its tallest card. A row out of view
-/// does not run (`Lazy`), and a settled card in view repaints its last run (`Lazy::settles`); the card of the component
-/// `reveal` names glides to the top of the view. The selected card of
-/// `tab` is inspected while the inspector is on. The cards report into `reported`.
+/// does not run (`Lazy`). Each card and each story in it is a memoized view that replays its last run until its inputs
+/// change (the story's data by its revision, the card's look and state, the room and place). The card of the component `reveal` names glides to the top of the view. The selected card of `tab` is
+/// inspected while the inspector is on. The cards report into `reported`.
 pub(super) fn grid(
     ui: &mut Ui,
     scroll_id: impl std::hash::Hash + std::fmt::Debug,
@@ -179,9 +179,8 @@ pub(super) fn grid(
             Lazy::new((generation, columns, keys), estimate).reveal(revealed).show(ui, |ui| {
                 Grid::new(if columns == 1 { ONE } else { TWO }).gap(Gap::CardColumn).fill_width().show(ui, |ui, _| {
                     for (at, spec) in chunk.iter().enumerate() {
-                        // A settled card repaints its last run; a card that does not run reports nothing, as it took
-                        // no press and ran no command.
-                        Lazy::new((generation, spec.key.as_str()), spec.estimate(&tokens)).settles(true).show(ui, |ui| {
+                        // A card out of view does not run and reports nothing, as it took no press and ran no command.
+                        Lazy::new((generation, spec.key.as_str()), spec.estimate(&tokens)).show(ui, |ui| {
                             let stories = spec.card_stories();
                             let mut card = spec.card(&stories, format!("{}-{generation}", spec.key), room);
                             card.inspect = p.inspect.of(tab, spec.selected);

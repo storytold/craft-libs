@@ -505,8 +505,11 @@ pub(crate) fn emit_shrink(ctx: &Context, id: Id, measured: Measured, dropped: bo
 /// hands forward a measure: it serves the rest of this pass, and a later pass that takes the kept measurement of a body
 /// it ran in gets it with that measurement, where the content that found it does not run. A real run emits it too: a
 /// text other than the one a kept transcript gave the pass shows that transcript changed.
+///
+/// A memoized view that replays emits it again.
 pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>) {
     emit(ctx, id, Recorded::Text(text.map(Arc::from)));
+    super::replay::journal(ctx, || (id, text.map(Arc::<str>::from)), |ctx, (id, text)| emit(ctx, *id, Recorded::Text(text.clone())));
 }
 
 /// The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.

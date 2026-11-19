@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use std::sync::{Mutex, PoisonError};
 
 /// A panel of the viewer's dock layouts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum PanelId {
     /// The component tree.

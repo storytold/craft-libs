@@ -156,10 +156,11 @@ fn dialog_story(ui: &mut Ui, data: &mut StoryData, search: bool, finish: bool) -
     if search && !*started {
         *started = true;
         dialog.begin_search();
-        ui.ctx().request_repaint();
+        craft_ui::runtime::frame::request_repaint(ui.ctx());
     }
+    // The framework's repaint runs the story's view again, where the next jobs run.
     if finish && demo.jobs.run_all() > 0 {
-        ui.ctx().request_repaint();
+        craft_ui::runtime::frame::request_repaint(ui.ctx());
     }
     StoryOutput::default()
 }
