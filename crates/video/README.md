@@ -55,3 +55,31 @@ comes with its codec's feature):
 
 The constructors check that every plane's buffer, stride and size fit the frame, so a picture
 with inconsistent fields is an error, not an out-of-bounds read.
+
+## Decoding a track
+
+`TrackDecoder` is the counterpart of `craft_audio::TrackDecoder` for an app with its own demuxer.
+It picks the decoder from a track's `CodecParams`, takes packets in decode order with their
+timestamps, and returns `VideoFrame`s in display order. `flush` returns the frames still held at
+the end of the stream, and `reset` prepares for decoding from another key frame after a seek. It
+is built with any of the decoder features below and decodes the codecs whose feature is on.
+
+| Codec | Feature | `extradata` |
+|---|---|---|
+| H.264 | `h264-decode` | an `avcC` record (length-prefixed packets), Annex B parameter sets, or empty (Annex B packets) |
+| HEVC | `hevc-decode` | an `hvcC` record (length-prefixed packets), Annex B parameter sets, or empty (Annex B packets) |
+| VP9 | `vp9-decode` | ignored |
+| AV1 | `av1-decode` | an `av1C` record, or empty |
+| MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
+
+Configuration that holds picture data (a slice, a frame OBU, an MPEG-2 picture) is refused.
+Errors are `VideoError`: `Unsupported`, `Malformed`, or a picture that did not convert.
+
+When a picture does not convert, the frames finished with it are kept and the next call returns
+them first. When the codec itself fails, the pictures it had finished are up to the codec:
+
+- H.264 keeps them for later calls, also when the error comes at `flush`.
+- HEVC does too, but only its newest 32 while calls keep failing, which bounds its memory.
+- VP9 keeps those of earlier packets.
+- MPEG-2 returns them with the call, unless the packet made too many pictures.
+- AV1 drops those the failing `decode` or `flush` had finished.
