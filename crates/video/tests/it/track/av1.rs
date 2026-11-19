@@ -1,6 +1,6 @@
 //! AV1 in MP4 (an `av1C` record whose config OBUs hold the sequence header).
 
-use crate::common;
+use super::common;
 use craft_media::CodecId;
 
 /// libaom when ffmpeg has it, else SVT-AV1: a fixture name and the encoder arguments.

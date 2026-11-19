@@ -1,7 +1,7 @@
 //! MPEG-2 video in MPEG-TS (no configuration), and with its sequence header moved from the
 //! packets into `extradata`.
 
-use crate::common;
+use super::common;
 use craft_media::CodecId;
 
 /// Closed GOPs every 12 frames with B-frames (ffmpeg's encoder needs scene change detection off

@@ -1,7 +1,7 @@
 //! H.264 in MP4 (an `avcC` record, length-prefixed packets), MPEG-TS (Annex B, no configuration)
 //! and AVI with the parameter sets in the stream header only (an Annex B configuration).
 
-use crate::common;
+use super::common;
 use craft_media::CodecId;
 use craft_video::{TrackDecoder, VideoError};
 

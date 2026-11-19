@@ -85,10 +85,6 @@ craft-media-testkit = { workspace = true }
 # demuxers, for the track decoder's tests; the VMD demuxer, for the VMD decoder's.
 craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "vmd"] }
 
-# Built with any decoder feature; each codec's tests need its own.
-[[test]]
-name = "track"
-
 [[example]]
 name = "vp8_fuzz"
 required-features = ["vp8-decode"]

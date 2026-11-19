@@ -1,7 +1,7 @@
 //! HEVC in MP4 (an `hvcC` record, length-prefixed packets) and MPEG-TS (Annex B, no
 //! configuration), 8-bit and 10-bit.
 
-use crate::common;
+use super::common;
 use craft_media::CodecId;
 
 /// Closed GOPs every 12 frames with B-frames, so decoding from a key packet gives every frame

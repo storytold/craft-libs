@@ -71,3 +71,6 @@ mod hevc;
 #[cfg(feature = "av1")]
 #[path = "av1/main.rs"]
 mod av1;
+
+#[path = "track/main.rs"]
+mod track;
