@@ -4346,7 +4346,7 @@ exit 0
         fn hdiutil(args: &[&std::ffi::OsStr]) -> std::process::Output {
             let mut output = std::process::Command::new("hdiutil").args(args).output().unwrap();
             for wait_ms in [500, 1000, 2000, 4000] {
-                if output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("Resource temporarily unavailable") {
+                if output.status.success() || !busy(&output.stderr) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(wait_ms));
