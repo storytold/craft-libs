@@ -71,6 +71,22 @@ fn the_listed_about_tab_stands_one_item_to_a_line_and_closes_with_close() {
     assert_eq!(links.borrow().as_slice(), ["https://example.org".to_owned()]);
 }
 
+/// The listed layout is a wide dialog (`LeastWidth::WideDialog`), as WordCraft's About: wider than the centred one
+/// with the same text.
+#[trial]
+fn the_listed_about_is_a_wide_dialog() {
+    let width = |layout: AboutLayout| {
+        let mut fixture = Fixture::new(move |ui| {
+            let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0");
+            let _ = AboutDialog::new(&info, &CREDITS).layout(layout).show(ui);
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        fixture.by_role(Role::DIALOG).first().expect("the dialog shows").rect.width()
+    };
+    let (listed, centred) = (width(AboutLayout::Listed), width(AboutLayout::Centred));
+    assert!(listed > centred + 200.0, "the listed About is a wide dialog: {listed} against {centred}");
+}
+
 #[trial]
 fn about_tab_is_a_field() {
     let host = Rc::new(RefCell::new(DialogHost::new()));

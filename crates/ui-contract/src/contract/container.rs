@@ -200,6 +200,12 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
+    /// `size.dialog.least` and `size.dialog.wrap` together: a wide dialog, as wide as a dialog's least content beside a
+    /// paragraph's line (an About dialog whose tabs hold credit tables).
+    WideDialog,
+    /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
+    /// band beside the page, not as buttons cut to their labels.
+    SideMenu,
 }
 
 impl LeastWidth {
@@ -211,6 +217,8 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
+            LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
+            LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
         }
     }
 }
@@ -222,6 +230,8 @@ impl LeastWidth {
 pub enum WrapWidth {
     /// `size.dialog.wrap`: a dialog's paragraphs.
     Dialog,
+    /// `size.dock.column`: a page's column of settings beside a preview (a Print page), as wide as a dock column.
+    Column,
 }
 
 impl WrapWidth {
@@ -229,6 +239,7 @@ impl WrapWidth {
     pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
         match self {
             WrapWidth::Dialog => tokens.size.dialog.wrap,
+            WrapWidth::Column => tokens.size.dock.column,
         }
     }
 }

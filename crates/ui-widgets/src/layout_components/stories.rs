@@ -1,7 +1,8 @@
 //! Stories of the layout components `Row`, `Stack` and `Grid`.
 
 use super::{Grid, Row, Stack};
-use crate::contract::{Gap, Pad, Props as _, ShowContainer as _, Sizing};
+use crate::contract::{Gap, LeastWidth, Pad, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth};
+use crate::display::Text;
 use crate::story_kit::sample::{outlined, words};
 use crate::testing::{StoryData, StoryOutput, story};
 use craft_behavior::ColumnWidth;
@@ -46,7 +47,29 @@ fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     })
 }
 
-static COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Fixed(60.0)];
+/// The two width roles of a content-sized stack: a side menu held at its least width with short items, and a column
+/// of settings whose paragraph breaks at the column's line length instead of widening it.
+#[story(Stack<'static>, covers = [], title = "Width roles")]
+fn stack_width_roles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    outlined(ui, |ui| {
+        Row::new()
+            .gap(Gap::Section)
+            .show(ui, |ui, _| {
+                Stack::new().least_width(LeastWidth::SideMenu).gap(Gap::Tight).pad(Pad::Regular).show(ui, |ui, _| words(ui, 0..2));
+                Stack::new().wrap_width(WrapWidth::Column).gap(Gap::Stack).pad(Pad::Regular).show(ui, |ui, _| {
+                    let _ = Text::new(
+                        "Save a copy in another format. Printing goes through a PDF you can print from any viewer, and the pages \
+                         picked here are the ones that print.",
+                    )
+                    .show(ui);
+                    words(ui, 2..3);
+                });
+            })
+            .into()
+    })
+}
+
+static COLUMNS: [ColumnWidth; 2] =[ColumnWidth::Content, ColumnWidth::Fixed(60.0)];
 
 #[story(Grid, covers = [Default])]
 fn grid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
