@@ -365,6 +365,9 @@ struct HostState {
     /// The tip the tool's last hover asked for: the tool answers again only when the pointer moves, so it stands
     /// while the pointer rests, until a press, a gesture or the pointer leaving drops it.
     tip: Option<Tooltip>,
+    /// A press ran since the last hover: the next resting pass hovers at the pointer even when it did not move, so the
+    /// tool answers again for where the pointer rests and the tip the press dropped comes back.
+    rehover: bool,
 }
 
 fn state_id(canvas: Id) -> Id {
@@ -1251,14 +1254,21 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or
     /// released in the pass it began in starts here.
     fn phase(&mut self, press: &PressState, frame: &PointerFrame) {
+        if press.phase.is_press() {
+            self.state.rehover = true;
+        }
         match press.phase {
             PressPhase::Idle => self.state.spent = false,
             PressPhase::Hover => {
                 self.state.spent = false;
                 // A pointer that stands still keeps the position its last move gave the tool. One that rests in
-                // the edge band gets a hover at its own position in every pass, since the view scrolls under it.
+                // the edge band gets a hover at its own position in every pass, since the view scrolls under it. The
+                // first resting pass after a press hovers too: the press dropped the tip, and a pointer that came up
+                // where it went down gets it back (WordCraft showed a link's tip again after a Ctrl+click on it).
                 if let Some(pointer) = hover_pointer(frame, *press)
-                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred) || self.hover_edge(pointer.pos).is_some())
+                    && (pointer::with_pass_pointer(self.ctx, |pass| pass.stirred)
+                        || std::mem::take(&mut self.state.rehover)
+                        || self.hover_edge(pointer.pos).is_some())
                 {
                     self.hover(pointer);
                 }

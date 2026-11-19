@@ -1651,6 +1651,42 @@ fn a_hovering_tools_tip_shows_at_the_pointer_and_a_press_hides_it() {
     assert!(!reported.get(), "a press drops the tip");
 }
 
+/// After a handled press comes up, a pointer that rests where it was gets the tool's tip again, as the WordCraft
+/// canvas showed a link's tip again after a Ctrl+click on it. The press drops the tip and the tool answers only on a
+/// hover, so the host hovers once at the resting pointer when a press ends. Before that, a still pointer never got
+/// the tip back.
+#[trial]
+fn a_pointer_resting_after_a_handled_press_gets_the_tip_again() {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let tool = RefCell::new(Tipping);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let mut reply = None;
+        let _ = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
+        });
+        seen.set(reply.unwrap_or_default().tip.is_some());
+    });
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(reported.get(), "the hover asks for the tip");
+    fixture.frame(vec![pointer::press(centre)]);
+    fixture.settle();
+    assert!(!reported.get(), "the press drops the tip");
+    fixture.frame(vec![pointer::release(centre)]);
+    fixture.settle();
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(reported.get(), "the host reports the tip again with the pointer resting where the press was");
+    assert!(fixture.texts().iter().any(|run| run.text == TIP), "the tip shows again once the pointer rested for the tooltip delay");
+}
+
 /// A tool that keeps the points of its gesture: the press and every drag.
 #[derive(Default)]
 struct Trail {
