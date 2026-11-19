@@ -142,20 +142,36 @@ pub fn parse_dsdiff_header(bytes: &[u8]) -> Result<(Metadata, usize, usize), Err
 
                     match &sub_id {
                         b"FS  " => {
-                            if sub_data.len() >= 4 {
-                                sample_rate = Some(u32::from_be_bytes([sub_data[0], sub_data[1], sub_data[2], sub_data[3]]));
+                            if sub_data.len() < 4 {
+                                return Err(Error::UnexpectedEof("truncated FS chunk"));
                             }
+                            if sample_rate.is_some() {
+                                return Err(Error::InvalidHeader("duplicate FS chunk"));
+                            }
+                            let sr = u32::from_be_bytes([sub_data[0], sub_data[1], sub_data[2], sub_data[3]]);
+                            if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sr) {
+                                return Err(Error::InvalidHeader("sampling frequency out of range"));
+                            }
+                            sample_rate = Some(sr);
                         }
                         b"CHNL" => {
-                            if sub_data.len() >= 2 {
-                                let n = u16::from_be_bytes([sub_data[0], sub_data[1]]);
-                                num_channels = Some(n);
-                                let mut ch_pos = 2;
-                                while ch_pos + 4 <= sub_data.len() && channel_names.len() < n as usize {
-                                    let id: [u8; 4] = [sub_data[ch_pos], sub_data[ch_pos + 1], sub_data[ch_pos + 2], sub_data[ch_pos + 3]];
-                                    channel_names.push(channel_id_to_name(&id));
-                                    ch_pos += 4;
-                                }
+                            if sub_data.len() < 2 {
+                                return Err(Error::UnexpectedEof("truncated CHNL chunk"));
+                            }
+                            if num_channels.is_some() {
+                                return Err(Error::InvalidHeader("duplicate CHNL chunk"));
+                            }
+                            let n = u16::from_be_bytes([sub_data[0], sub_data[1]]);
+                            if n == 0 || n > MAX_CHANNELS as u16 {
+                                return Err(Error::Unsupported("channel count must be between 1 and 8"));
+                            }
+                            num_channels = Some(n);
+                            channel_names.clear();
+                            let mut ch_pos = 2;
+                            while ch_pos + 4 <= sub_data.len() && channel_names.len() < n as usize {
+                                let id: [u8; 4] = [sub_data[ch_pos], sub_data[ch_pos + 1], sub_data[ch_pos + 2], sub_data[ch_pos + 3]];
+                                channel_names.push(channel_id_to_name(&id));
+                                ch_pos += 4;
                             }
                         }
                         b"CMPR" if sub_data.len() >= 4 => {

@@ -113,6 +113,8 @@ fn dsf_with_tag(tag: &[u8]) -> Vec<u8> {
     let offset = bytes.len() as u64;
     bytes[20..28].copy_from_slice(&offset.to_le_bytes());
     bytes.extend_from_slice(tag);
+    let file_size = bytes.len() as u64;
+    bytes[12..20].copy_from_slice(&file_size.to_le_bytes());
     bytes
 }
 

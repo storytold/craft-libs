@@ -137,79 +137,103 @@ fn parse_dsf_header_bounded(bytes: &[u8]) -> Result<(Metadata, usize, usize, u32
     if dsd_chunk_size != 28 {
         return Err(Error::InvalidHeader("invalid 'DSD ' chunk size (must be 28)"));
     }
-    let _file_size = u64::from_le_bytes(bytes[12..20].try_into().map_err(|_| Error::UnexpectedEof("file size"))?);
+    let file_size = u64::from_le_bytes(bytes[12..20].try_into().map_err(|_| Error::UnexpectedEof("file size"))?);
     let metadata_offset = u64::from_le_bytes(bytes[20..28].try_into().map_err(|_| Error::UnexpectedEof("metadata offset"))?);
+
+    if file_size > bytes.len() as u64 {
+        return Err(Error::UnexpectedEof("declared file size extends beyond buffer"));
+    }
+    let file_len = usize::try_from(file_size).map_err(|_| Error::MemoryLimitExceeded)?;
+    if file_len < 28 + 52 + 12 {
+        return Err(Error::InvalidHeader("declared file size is smaller than required headers"));
+    }
+    let file_bytes = &bytes[..file_len];
 
     // 2. 'fmt ' chunk
     let fmt_offset = 28;
-    if &bytes[fmt_offset..fmt_offset + 4] != b"fmt " {
+    if &file_bytes[fmt_offset..fmt_offset + 4] != b"fmt " {
         return Err(Error::InvalidHeader("missing 'fmt ' chunk header"));
     }
-    let fmt_chunk_size = u64::from_le_bytes(bytes[fmt_offset + 4..fmt_offset + 12].try_into().map_err(|_| Error::UnexpectedEof("fmt chunk size"))?);
+    let fmt_chunk_size =
+        u64::from_le_bytes(file_bytes[fmt_offset + 4..fmt_offset + 12].try_into().map_err(|_| Error::UnexpectedEof("fmt chunk size"))?);
     if fmt_chunk_size < 52 {
         return Err(Error::InvalidHeader("invalid 'fmt ' chunk size (must be at least 52)"));
     }
     let fmt_size = usize::try_from(fmt_chunk_size).map_err(|_| Error::MemoryLimitExceeded)?;
-    if fmt_size > bytes.len().saturating_sub(fmt_offset + 12) {
+    if fmt_size > file_bytes.len().saturating_sub(fmt_offset) {
         return Err(Error::UnexpectedEof("fmt chunk extends beyond file bounds"));
     }
 
-    let format_version = u32::from_le_bytes(bytes[fmt_offset + 12..fmt_offset + 16].try_into().map_err(|_| Error::UnexpectedEof("format version"))?);
+    let format_version =
+        u32::from_le_bytes(file_bytes[fmt_offset + 12..fmt_offset + 16].try_into().map_err(|_| Error::UnexpectedEof("format version"))?);
     if format_version != 1 {
         return Err(Error::Unsupported("unsupported DSF format version (only version 1 is supported)"));
     }
 
-    let format_id = u32::from_le_bytes(bytes[fmt_offset + 16..fmt_offset + 20].try_into().map_err(|_| Error::UnexpectedEof("format id"))?);
+    let format_id = u32::from_le_bytes(file_bytes[fmt_offset + 16..fmt_offset + 20].try_into().map_err(|_| Error::UnexpectedEof("format id"))?);
     if format_id != 0 {
         return Err(Error::Unsupported("unsupported DSF format id (only raw DSD id=0 is supported)"));
     }
 
-    let channel_type = u32::from_le_bytes(bytes[fmt_offset + 20..fmt_offset + 24].try_into().map_err(|_| Error::UnexpectedEof("channel type"))?);
-    let channel_count = u32::from_le_bytes(bytes[fmt_offset + 24..fmt_offset + 28].try_into().map_err(|_| Error::UnexpectedEof("channel count"))?);
+    let channel_type = u32::from_le_bytes(file_bytes[fmt_offset + 20..fmt_offset + 24].try_into().map_err(|_| Error::UnexpectedEof("channel type"))?);
+    let channel_count =
+        u32::from_le_bytes(file_bytes[fmt_offset + 24..fmt_offset + 28].try_into().map_err(|_| Error::UnexpectedEof("channel count"))?);
     if channel_count == 0 || channel_count > MAX_CHANNELS as u32 {
         return Err(Error::Unsupported("DSF channel count must be between 1 and 8"));
     }
     let channels = channel_count as u16;
 
-    let sample_rate = u32::from_le_bytes(bytes[fmt_offset + 28..fmt_offset + 32].try_into().map_err(|_| Error::UnexpectedEof("sampling frequency"))?);
+    let sample_rate =
+        u32::from_le_bytes(file_bytes[fmt_offset + 28..fmt_offset + 32].try_into().map_err(|_| Error::UnexpectedEof("sampling frequency"))?);
     if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) {
         return Err(Error::InvalidHeader("DSF sampling frequency out of valid range"));
     }
 
     let bits_per_sample =
-        u32::from_le_bytes(bytes[fmt_offset + 32..fmt_offset + 36].try_into().map_err(|_| Error::UnexpectedEof("bits per sample"))?);
+        u32::from_le_bytes(file_bytes[fmt_offset + 32..fmt_offset + 36].try_into().map_err(|_| Error::UnexpectedEof("bits per sample"))?);
     if bits_per_sample != 1 {
         return Err(Error::Unsupported("DSF bits per sample must be 1"));
     }
 
-    let sample_count = u64::from_le_bytes(bytes[fmt_offset + 36..fmt_offset + 44].try_into().map_err(|_| Error::UnexpectedEof("sample count"))?);
+    let sample_count = u64::from_le_bytes(file_bytes[fmt_offset + 36..fmt_offset + 44].try_into().map_err(|_| Error::UnexpectedEof("sample count"))?);
 
     let block_size_per_channel =
-        u32::from_le_bytes(bytes[fmt_offset + 44..fmt_offset + 48].try_into().map_err(|_| Error::UnexpectedEof("block size per channel"))?);
+        u32::from_le_bytes(file_bytes[fmt_offset + 44..fmt_offset + 48].try_into().map_err(|_| Error::UnexpectedEof("block size per channel"))?);
     if block_size_per_channel == 0 || block_size_per_channel > MAX_BLOCK_SIZE {
         return Err(Error::InvalidHeader("DSF block size per channel is invalid or too large"));
     }
 
     // 3. 'data' chunk
-    let data_offset = fmt_offset + fmt_size;
-    if &bytes[data_offset..data_offset + 4] != b"data" {
+    let data_offset = fmt_offset.saturating_add(fmt_size);
+    if data_offset.saturating_add(12) > file_bytes.len() {
+        return Err(Error::UnexpectedEof("missing 'data' chunk header"));
+    }
+    if &file_bytes[data_offset..data_offset + 4] != b"data" {
         return Err(Error::InvalidHeader("missing 'data' chunk header"));
     }
     let data_chunk_size =
-        u64::from_le_bytes(bytes[data_offset + 4..data_offset + 12].try_into().map_err(|_| Error::UnexpectedEof("data chunk size"))?);
+        u64::from_le_bytes(file_bytes[data_offset + 4..data_offset + 12].try_into().map_err(|_| Error::UnexpectedEof("data chunk size"))?);
     if data_chunk_size < 12 {
         return Err(Error::InvalidHeader("invalid 'data' chunk size (must be at least 12)"));
     }
 
     let payload_offset = data_offset + 12;
     let payload_size = usize::try_from(data_chunk_size - 12).map_err(|_| Error::MemoryLimitExceeded)?;
-    if payload_size > bytes.len().saturating_sub(payload_offset) {
+    if payload_size > file_bytes.len().saturating_sub(payload_offset) {
         return Err(Error::UnexpectedEof("data chunk payload extends beyond file bounds"));
     }
+    let data_end = payload_offset.saturating_add(payload_size);
 
     // Parse ID3v2 metadata if pointer is valid.
-    let (title, artist) =
-        if metadata_offset > 0 && metadata_offset < bytes.len() as u64 { parse_id3v2(bytes, metadata_offset as usize) } else { (None, None) };
+    let (title, artist) = if metadata_offset == 0 {
+        (None, None)
+    } else {
+        let meta_offset = usize::try_from(metadata_offset).map_err(|_| Error::MemoryLimitExceeded)?;
+        if meta_offset < data_end || meta_offset >= file_len {
+            return Err(Error::InvalidHeader("DSF metadata offset outside declared file bounds"));
+        }
+        parse_id3v2(file_bytes, meta_offset)
+    };
 
     let channel_names = dsf_channel_names(channel_type, channels);
 

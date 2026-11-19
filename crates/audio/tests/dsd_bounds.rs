@@ -128,6 +128,78 @@ fn dsdiff_odd_payload_receives_pad_byte() {
 }
 
 #[test]
+fn dsf_declared_file_size_and_metadata_pointer_bounds() {
+    let valid = encode_dsf(2_822_400, &[&[0x69; 8]], 64, 8).unwrap();
+
+    // Undersized file size declaration (e.g. 28)
+    let mut undersized = valid.clone();
+    undersized[12..20].copy_from_slice(&28u64.to_le_bytes());
+    assert!(read_metadata(&undersized).is_err());
+    assert!(read_raw(&undersized).is_err());
+
+    // Oversized file size declaration beyond buffer
+    let mut oversized = valid.clone();
+    let big_size = valid.len() as u64 + 100;
+    oversized[12..20].copy_from_slice(&big_size.to_le_bytes());
+    assert!(read_metadata(&oversized).is_err());
+    assert!(read_raw(&oversized).is_err());
+
+    // Metadata pointer outside the declared file bounds
+    let mut outside_meta = valid.clone();
+    let outside_offset = valid.len() as u64 + 10;
+    outside_meta[20..28].copy_from_slice(&outside_offset.to_le_bytes());
+    assert!(read_metadata(&outside_meta).is_err());
+    assert!(read_raw(&outside_meta).is_err());
+
+    // Metadata pointer overlapping data chunk
+    let mut overlap_meta = valid.clone();
+    overlap_meta[20..28].copy_from_slice(&32u64.to_le_bytes());
+    assert!(read_metadata(&overlap_meta).is_err());
+    assert!(read_raw(&overlap_meta).is_err());
+}
+
+#[test]
+fn dsdiff_channel_count_and_duplicate_chunks_are_validated() {
+    let base = encode_dsdiff(2_822_400, &[&[0xaa; 8]], 64).unwrap();
+
+    // Locate PROP chunk payload and CHNL subchunk
+    let prop_idx = base.windows(4).position(|w| w == b"PROP").unwrap();
+    let chnl_idx = base.windows(4).position(|w| w == b"CHNL").unwrap();
+
+    // 1. Oversized channel count (e.g. 65535 or 9)
+    let mut bad_count = base.clone();
+    bad_count[chnl_idx + 12..chnl_idx + 14].copy_from_slice(&65535u16.to_be_bytes());
+    assert!(matches!(read_metadata(&bad_count), Err(Error::Unsupported(_))));
+    assert!(matches!(read_raw(&bad_count), Err(Error::Unsupported(_))));
+
+    let mut zero_count = base.clone();
+    zero_count[chnl_idx + 12..chnl_idx + 14].copy_from_slice(&0u16.to_be_bytes());
+    assert!(matches!(read_metadata(&zero_count), Err(Error::Unsupported(_))));
+
+    // 2. Conflicting duplicate CHNL chunk in PROP
+    let mut dup_chnl = base.clone();
+    let chnl_chunk = dup_chnl[chnl_idx..chnl_idx + 18].to_vec();
+    dup_chnl.splice(chnl_idx..chnl_idx, chnl_chunk);
+    // Adjust PROP size and FRM8 size
+    let prop_size = u64::from_be_bytes(dup_chnl[prop_idx + 4..prop_idx + 12].try_into().unwrap()) + 18;
+    dup_chnl[prop_idx + 4..prop_idx + 12].copy_from_slice(&prop_size.to_be_bytes());
+    let frm8_size = (dup_chnl.len() - 12) as u64;
+    dup_chnl[4..12].copy_from_slice(&frm8_size.to_be_bytes());
+    assert_eq!(read_metadata(&dup_chnl), Err(Error::InvalidHeader("duplicate CHNL chunk")));
+
+    // 3. Duplicate FS chunk in PROP
+    let fs_idx = base.windows(4).position(|w| w == b"FS  ").unwrap();
+    let mut dup_fs = base.clone();
+    let fs_chunk = dup_fs[fs_idx..fs_idx + 16].to_vec();
+    dup_fs.splice(fs_idx..fs_idx, fs_chunk);
+    let prop_size = u64::from_be_bytes(dup_fs[prop_idx + 4..prop_idx + 12].try_into().unwrap()) + 16;
+    dup_fs[prop_idx + 4..prop_idx + 12].copy_from_slice(&prop_size.to_be_bytes());
+    let frm8_size = (dup_fs.len() - 12) as u64;
+    dup_fs[4..12].copy_from_slice(&frm8_size.to_be_bytes());
+    assert_eq!(read_metadata(&dup_fs), Err(Error::InvalidHeader("duplicate FS chunk")));
+}
+
+#[test]
 #[cfg(target_pointer_width = "32")]
 fn dsdiff_32bit_padding_overflow_is_rejected() {
     let dummy = [&[][..]];

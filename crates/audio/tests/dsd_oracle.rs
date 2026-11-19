@@ -221,7 +221,9 @@ fn id3v2_tag_in_dsf() {
     id3.extend_from_slice(&frames);
 
     dsf.extend_from_slice(&id3);
-    // Update metadata_offset at offset 20 of 'DSD ' chunk
+    // Update file size and metadata_offset of 'DSD ' chunk
+    let file_size = dsf.len() as u64;
+    dsf[12..20].copy_from_slice(&file_size.to_le_bytes());
     dsf[20..28].copy_from_slice(&metadata_offset.to_le_bytes());
 
     let meta = read_metadata(&dsf).expect("read metadata with ID3");
