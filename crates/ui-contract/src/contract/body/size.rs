@@ -10,6 +10,7 @@ use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
+use crate::style::UiTokens;
 use craft_behavior::layout_memory::measure_tolerance;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::sync::Arc;
@@ -266,8 +267,9 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The room the mount offers: a layer's room, unless the host gives it a rect of its own size, else the rect the
-    /// container is shown at, else the room of the flow.
-    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt) -> Vec2 {
+    /// container is shown at, else the room of the flow. `tokens` are the container's own, as its token scope sets them:
+    /// the layer keeps the inset from the screen edge the host places it with.
+    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt, tokens: &UiTokens) -> Vec2 {
         match (overlay_of(props), self.fixed) {
             (Some(overlay), false) => {
                 let env = Env::of(ui);
@@ -285,7 +287,7 @@ impl<'b> BodyHooks<'b> {
                     overlay,
                     own,
                     areas::layer_to_screen(ctx, ui.layer_id()),
-                    Env::of(ui).tokens.space.pad.regular,
+                    tokens.space.pad.regular,
                     rtl,
                 ) {
                     Some(side) => side.min(room),

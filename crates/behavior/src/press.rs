@@ -471,6 +471,11 @@ struct Open<T> {
     dragging: bool,
     /// Moved past slop on a target that senses no drag: the click is gone and nothing starts.
     abandoned: bool,
+    /// The pointer left the window ([`PointerEvent::Gone`]): the click is gone, but a target that senses a drag still
+    /// starts it from the moves that follow. The button is still down and the window keeps getting the pointer's moves
+    /// and release while it is outside, so a press near a window edge (a window's resize grip) that leaves the window
+    /// before it passes slop still drags.
+    left: bool,
     /// A pass reported the press: later passes within slop report `Held`, not `Down`.
     reported: bool,
     /// A pass reported the drag's start: later passes report `Drag`.
@@ -489,7 +494,7 @@ impl<T> Open<T> {
 
     /// A release now is a click.
     fn clicks(&self) -> bool {
-        !self.dragging && !self.abandoned && self.sense.contains(Sense::CLICK)
+        !self.dragging && !self.abandoned && !self.left && self.sense.contains(Sense::CLICK)
     }
 }
 
@@ -568,7 +573,7 @@ impl<T: Copy> PressMachine<T> {
                 }
                 PointerEvent::Gone => {
                     if let Some(open) = &mut self.open {
-                        open.abandoned = true;
+                        open.left = true;
                     }
                 }
                 PointerEvent::Pressed { button, pos: at, time, clicks } => {
@@ -607,6 +612,7 @@ impl<T: Copy> PressMachine<T> {
                             start: PressStart::new(at, button, time, clicks),
                             dragging: false,
                             abandoned: false,
+                            left: false,
                             reported: false,
                             drag_reported: false,
                             released_at: None,
@@ -737,6 +743,25 @@ mod tests {
             up.phase
         );
         assert!(machine.target().is_none(), "the release ends the press");
+    }
+
+    /// The pointer leaving the window (a press on a window's edge grip pulled outward) ends the press's click but not
+    /// its drag: the window keeps getting the held button's moves from outside, and they start the drag once past slop.
+    /// The resize from a window edge used to fail whenever the pointer left the window before it passed slop.
+    #[test]
+    fn a_press_whose_pointer_left_the_window_still_drags_but_no_longer_clicks() {
+        let moved = |x: f32| PointerEvent::Moved { at: pos2(x, 0.0), sample: None };
+        let up = |x: f32| PointerEvent::released(pos2(x, 0.0));
+        let gone = PointerEvent::Gone;
+        let out = [moved(SLOP / 2.0), gone];
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &out, &[moved(SLOP * 2.0)], &[moved(SLOP * 3.0)], &[up(SLOP * 3.0)]], Sense::DRAG), "D H S G R");
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &out, &[up(SLOP / 2.0)]], Sense::CLICK), "D H R", "a click target loses its click");
+        assert_eq!(
+            phases(&[&[press(0.0, 1.0)], &out, &[moved(0.0)], &[up(0.0)]], Sense::CLICK | Sense::DRAG),
+            "D H H R",
+            "coming back does not bring the click back"
+        );
+        assert_eq!(phases(&[&[press(0.0, 1.0)], &[moved(0.0)], &[up(0.0)]], Sense::CLICK), "D H R!", "a press that stays in still clicks");
     }
 
     #[test]

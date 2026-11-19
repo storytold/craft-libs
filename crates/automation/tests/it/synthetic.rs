@@ -179,6 +179,74 @@ fn injected_caps_lock_holds_until_cleared() {
     assert_eq!(rig.host().injected_caps_lock(), None);
 }
 
+/// Per pass: whether the waiter had its reply by the pass's end, and the pointer position the pass saw.
+type PassLog = Rc<RefCell<Vec<(bool, Option<Pos2>)>>>;
+
+/// A fixture whose UI polls `channel` at the end of each pass, as an application does after its UI, with `discard`
+/// asking egui to run the pass again on the passes it is true for; `answered` records, per pass, whether the waiter
+/// had its reply by the pass's end and the pointer position the pass saw.
+fn polling_fixture(
+    channel: Rc<RefCell<craft_automation::control::ControlChannel>>,
+    reply: Rc<std::sync::mpsc::Receiver<craft_automation::control::ControlResponse>>,
+    discard: impl Fn(usize) -> bool + 'static,
+) -> (Fixture, PassLog) {
+    let answered = Rc::new(RefCell::new(Vec::new()));
+    let seen = answered.clone();
+    let fx = Fixture::new(move |ui| {
+        let pass = seen.borrow().len();
+        if discard(pass) {
+            ui.ctx().request_discard("the test runs this pass again");
+        }
+        channel.borrow_mut().poll_input(&WindowHost::of(ui.ctx()));
+        let pos = ui.input(|i| i.pointer.latest_pos());
+        seen.borrow_mut().push((reply.try_recv().is_ok(), pos));
+    });
+    (fx, answered)
+}
+
+/// A waiter on a move is answered at the end of the pass that ran the move, not a pass later: the application polls
+/// after its UI, where the running pass has not ended yet.
+#[trial]
+fn a_waiter_is_answered_by_the_pass_that_ran_its_step() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), |_| false);
+    fx.idle(2);
+    answered.borrow_mut().clear();
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    let passes = answered.borrow().clone();
+    assert_eq!(passes, vec![(true, Some(pos2(30.0, 20.0)))], "the pass that saw the move answered it");
+}
+
+/// A pass egui runs again (`request_discard`) does not answer: the pass that runs again, and draws what the step
+/// did, does.
+#[trial]
+fn a_pass_run_again_leaves_the_answer_to_its_rerun() {
+    use craft_automation::control::{ControlChannel, ControlRequest, Reply};
+
+    let (_transport, requests) = std::sync::mpsc::channel();
+    let channel = Rc::new(RefCell::new(ControlChannel::new(requests)));
+    let (req, reply) = ControlRequest::new("ui.move", json!({"x": 30, "y": 20}));
+    let start = Rc::new(Cell::new(usize::MAX));
+    let first = start.clone();
+    let (mut fx, answered) = polling_fixture(channel.clone(), Rc::new(reply), move |pass| pass == first.get());
+    fx.idle(2);
+    start.set(answered.borrow().len());
+    let host = WindowHost::of(fx.ctx());
+    input_method("ui.move", &json!({"x": 30, "y": 20}), &host, ViewportId::ROOT, &map).expect("a method").expect("valid");
+    channel.borrow_mut().settle(req, Reply::AfterInput, None, 0.0);
+    fx.frame(Vec::new());
+    assert_eq!(fx.passes(), 2, "egui ran the discarded pass again");
+    let passes: Vec<bool> = answered.borrow()[start.get()..].iter().map(|(done, _)| *done).collect();
+    assert_eq!(passes, vec![false, true], "the rerun answers, the discarded pass does not");
+}
+
 /// A move with `rest` counts as processed only once the pointer has rested that long.
 #[trial]
 fn a_hover_rest_holds_the_reply_until_it_has_passed() {

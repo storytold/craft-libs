@@ -133,7 +133,8 @@ macro_rules! layout_component {
                 self
             }
 
-            /// The body and everything under it resolve their tokens through `theme`.
+            /// The container, everything it shows and every layer opened from inside it resolve their tokens through
+            /// `theme`.
             pub fn theme(mut self, theme: ThemeScope) -> Self {
                 self.props = self.props.theme(theme);
                 self

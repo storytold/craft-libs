@@ -153,6 +153,14 @@ impl<'a> Bar<'a> {
         self
     }
 
+    /// Paints `kind` behind the bar instead of the chrome: a bar that floats on its own, as a canvas's task bar does,
+    /// is a floating surface with its corners and shadow.
+    #[must_use]
+    pub fn surface(mut self, kind: SurfaceKind) -> Self {
+        self.props = self.props.surface(kind);
+        self
+    }
+
     /// Ends the bar with a cancel and a commit button named `cancel` and `commit`. They run `BarCommands::Cancel`
     /// and `BarCommands::Commit`, so their tooltips carry the chords the registry binds.
     #[must_use]

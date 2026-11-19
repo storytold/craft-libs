@@ -70,6 +70,9 @@ pub(crate) struct Board {
     app: Option<AppCatalog>,
     keymap: Option<KeymapCache>,
     gate: Option<CommandGate>,
+    /// The gate's answers in this frame, by command key (`CommandRef::key`). The gate answers from what the app knew
+    /// before the frame, so the board asks it once per command per frame, whichever readers and passes resolve it.
+    gate_answers: HashMap<String, bool>,
     /// Command ids by number, so a state lookup allocates nothing.
     numbers: HashMap<String, u32>,
     this: HashMap<StateKey, CommandState>,
@@ -614,6 +617,7 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         board.last = std::mem::replace(&mut board.this, states);
         board.modal_published_last = std::mem::take(&mut board.modal_published);
         board.gate = input.gate.clone();
+        board.gate_answers.clear();
         board.app = input.catalog.clone();
         let stale = board.keymap.as_ref().is_none_or(|cache| {
             cache.platform != platform
@@ -798,12 +802,25 @@ fn resolve_in(
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.
         board.number(&command.id);
         let resolved = board.resolve(ctx, command, instance, reach, from.unwrap_or(&board.here));
-        (resolved, first_unknown, board.gate.clone())
+        // This frame's answer, else the gate to ask.
+        let gate = board.gate.as_ref().map(|gate| board.gate_answers.get(command.key_text().as_ref()).copied().ok_or_else(|| gate.clone()));
+        (resolved, first_unknown, gate)
     });
     if first_unknown {
         log::warn!("the command {} is in no registered command set: it is an app command with its id as its label", command.id);
     }
-    if gate.is_some_and(|gate| !gate.allows(command)) {
+    let allowed = match gate {
+        None => true,
+        Some(Ok(answer)) => answer,
+        Some(Err(gate)) => {
+            let answer = gate.allows(command);
+            with(ctx, |board| {
+                board.gate_answers.insert(command.key(), answer);
+            });
+            answer
+        }
+    };
+    if !allowed {
         resolved.enabled = false;
     }
     (resolved, key)

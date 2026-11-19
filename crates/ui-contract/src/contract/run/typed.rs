@@ -12,7 +12,7 @@ use crate::contract::{
 use crate::primitives::{FaceRecord, face_id};
 use crate::runtime::access::{Politeness, SetPosition};
 use crate::runtime::commands::{self, ResolvedCommand};
-use crate::runtime::env::{AppValues, Env, Message};
+use crate::runtime::env::{AppValues, Env, Message, ThemeScope};
 use crate::runtime::focus;
 use crate::runtime::layout_memory::Inputs;
 use crate::runtime::memory::{MemoryStage, sub};
@@ -208,6 +208,10 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
 
     fn instance_scope(&self) -> Option<commands::CommandScope> {
         self.hooks.instance_scope(self.comp.get_ref())
+    }
+
+    fn theme_scope(&self) -> Option<ThemeScope> {
+        self.hooks.theme_scope(self.comp.get_ref())
     }
 
     fn memory_owner(&self) -> Option<Id> {

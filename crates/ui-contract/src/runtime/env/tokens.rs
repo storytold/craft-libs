@@ -1,21 +1,30 @@
 //! The root token cache: resolved tokens keyed by what they depend on.
 
 use super::root::{ResolvedRoot, RootEnv};
+use crate::runtime::egui::pass;
 use crate::runtime::pass_state;
 use crate::style::UiTokens;
-use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins, resolve_sized};
+use craft_theme::{AppSizes, Appearance, Contrast, Mode, SUITE_DEFAULT, Size, TextSize, ThemeDef, ThemeId, builtins};
 use egui::Context;
 use std::sync::Arc;
 
-/// The newest few root-token inputs are kept; an app swaps its sizes rarely.
-const KEPT_ROOT_TOKENS: usize = 4;
+/// How many root-token inputs the cache keeps beyond those used in the current frame: the window's, a few themed
+/// regions', and the ones a draft replaced last.
+const KEPT_ROOT_TOKENS: usize = 8;
 
 #[derive(Default)]
 pub(crate) struct RootTokenCache {
-    entries: Vec<(TokenInputs, Arc<UiTokens>)>,
+    entries: Vec<RootTokens>,
     /// How many lookups missed the cache.
     #[cfg(feature = "testing")]
     misses: usize,
+}
+
+/// One cached resolve and the root frame that last read it.
+struct RootTokens {
+    inputs: TokenInputs,
+    tokens: Arc<UiTokens>,
+    used: u64,
 }
 
 /// How many times the context resolved root tokens it had no entry for.
@@ -24,11 +33,23 @@ pub(crate) fn root_token_resolves(ctx: &Context) -> usize {
     pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.misses)
 }
 
-/// The tokens `inputs` resolve to, cached by the inputs.
+/// The tokens `inputs` resolve to, cached by the inputs. An entry read in the current root frame is never dropped, so
+/// however many themed regions a frame shows, each resolves once; past the kept count the least recently read of the
+/// others goes.
 pub(super) fn tokens_for(ctx: &Context, inputs: &TokenInputs) -> Arc<UiTokens> {
-    if let Some(hit) =
-        pass_state::with::<RootTokenCache, _>(ctx, |cache| cache.entries.iter().find(|(key, _)| key.same(inputs)).map(|(_, tokens)| tokens.clone()))
-    {
+    let frame = pass::root_frame_nr(ctx);
+    let hit = pass_state::with::<RootTokenCache, _>(ctx, |cache| {
+        let entry = cache.entries.iter_mut().find(|entry| entry.inputs.same(inputs))?;
+        entry.used = frame;
+        // An equal definition in another allocation: the next frames find this one by pointer.
+        if let (Some(kept), Some(given)) = (&mut entry.inputs.theme_def, &inputs.theme_def)
+            && !Arc::ptr_eq(kept, given)
+        {
+            *kept = given.clone();
+        }
+        Some(entry.tokens.clone())
+    });
+    if let Some(hit) = hit {
         return hit;
     }
     let tokens = resolved(inputs);
@@ -37,10 +58,13 @@ pub(super) fn tokens_for(ctx: &Context, inputs: &TokenInputs) -> Arc<UiTokens> {
         {
             cache.misses += 1;
         }
-        if cache.entries.len() == KEPT_ROOT_TOKENS {
-            cache.entries.remove(0);
+        if cache.entries.len() >= KEPT_ROOT_TOKENS
+            && let Some(oldest) =
+                cache.entries.iter().enumerate().filter(|(_, entry)| entry.used != frame).min_by_key(|(_, entry)| entry.used).map(|(at, _)| at)
+        {
+            cache.entries.remove(oldest);
         }
-        cache.entries.push((inputs.clone(), tokens.clone()));
+        cache.entries.push(RootTokens { inputs: inputs.clone(), tokens: tokens.clone(), used: frame });
     });
     tokens
 }
@@ -82,11 +106,11 @@ fn resolve_inputs(inputs: &TokenInputs) -> Arc<UiTokens> {
         Appearance { mode: inputs.mode, contrast: inputs.contrast, size: inputs.density, text_size: inputs.text_size, reduced_motion: false };
     let themes = builtins();
     if let Some(def) = &inputs.theme_def {
-        return Arc::new(UiTokens::new(Arc::new(resolve_sized(def, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density));
+        return Arc::new(UiTokens::of_theme(def, appearance, &inputs.sizes));
     }
     let theme: &ThemeDef =
         [inputs.theme.as_str(), SUITE_DEFAULT].into_iter().find_map(|id| themes.iter().find(|theme| theme.id.as_str() == id)).unwrap_or(&themes[0]);
-    Arc::new(UiTokens::new(Arc::new(resolve_sized(theme, appearance, None, &inputs.sizes).tokens), inputs.contrast, inputs.density))
+    Arc::new(UiTokens::of_theme(theme, appearance, &inputs.sizes))
 }
 
 /// What the resolved root tokens depend on. The sizes are compared by identity, as `set_input` does.
@@ -137,8 +161,8 @@ impl TokenInputs {
     }
 }
 
-/// Whether two library theme definitions are the same theme: one allocation or equal values.
-fn same_def(a: &Option<Arc<ThemeDef>>, b: &Option<Arc<ThemeDef>>) -> bool {
+/// Whether two theme definitions are the same theme: one allocation or equal values.
+pub(super) fn same_def(a: &Option<Arc<ThemeDef>>, b: &Option<Arc<ThemeDef>>) -> bool {
     match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,

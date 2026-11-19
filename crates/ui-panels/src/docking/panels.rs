@@ -39,7 +39,9 @@ pub trait DockPanels<P> {
     /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
     /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
     /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
-    /// otherwise repaints its last run. `None` (the default) runs the body every pass.
+    /// otherwise repaints its last run. A [`group_view`](Self::group_view) settles the same way under the version of
+    /// the group's shown panel, its panels and its shown tab: the version covers what the view shows, and whether the
+    /// host takes the group depends only on its panels. `None` (the default) runs the body, and the view, every pass.
     fn content(&self, _panel: &P) -> Option<u64> {
         None
     }
@@ -59,7 +61,8 @@ pub trait DockPanels<P> {
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at
     /// `GroupAt::Measure(width)` it measures that view at `width` the way it shows it. It returns the height the view
     /// takes (at `Show`, the rect's). `None` (the default) leaves the group to the dock, at both. A canvas group uses
-    /// the panels to tell which document it holds and draws it in the room `ui` has.
+    /// the panels to tell which document it holds and draws it in the room `ui` has. At `Show` the view settles when
+    /// the shown panel has a [`content`](Self::content) version: a settled view repaints its last run instead of running.
     fn group_view(&mut self, _panels: &[P], _active: usize, _ui: &mut Ui, _at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
         None
     }

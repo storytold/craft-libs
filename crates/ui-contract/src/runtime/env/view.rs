@@ -171,4 +171,14 @@ impl<'a> EnvView<'a> {
     pub fn resolve(&self, label: &Label) -> Label {
         label.resolved(&self.scoped.words)
     }
+
+    /// The env this view shows, owned: what the drag preview, which paints after the region it started in, paints with.
+    pub(crate) fn to_env(self) -> super::Env {
+        super::Env { scoped: Arc::new(self.scoped.clone()) }
+    }
+
+    /// The scope's resolved tokens, shared: what a drop target's mark paints with.
+    pub(crate) fn shared_tokens(&self) -> Arc<crate::style::UiTokens> {
+        self.scoped.tokens.clone()
+    }
 }

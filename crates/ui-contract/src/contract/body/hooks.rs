@@ -25,7 +25,7 @@ use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
 use crate::runtime::egui::{alloc, areas, child, repaint, response, style};
-use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, FooterSlotOf, Installed, Message, RowLine};
+use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, FooterSlotOf, Installed, Message, RowLine, ThemeScope};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
@@ -78,6 +78,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// container (a canvas) is the instance its chords and the commands it takes reach.
     fn instance_scope(&self, comp: &C) -> Option<commands::CommandScope> {
         comp.props(Internal::new()).command_scope
+    }
+
+    fn theme_scope(&self, comp: &C) -> Option<ThemeScope> {
+        comp.props(Internal::new()).theme.clone()
     }
 
     fn memory_owner(&self, comp: &C) -> Option<Id> {
@@ -280,7 +284,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn extent(&mut self, comp: &C, ui: &Ui, at: ShowAt, id: Id, scx: &StyleCx<'_>) -> Vec2 {
         let props = comp.props(Internal::new());
-        self.room = self.mount_room(props, ui, id, at);
+        self.room = self.mount_room(props, ui, id, at, scx.tokens);
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
         self.fixed_height = self.fixed_height(props, at);
@@ -1672,7 +1676,7 @@ impl BodyHooks<'_> {
         self.least_width = least_of(&at.env.tokens, props.least_width);
         self.room = match at.width {
             Some(width) => Vec2::new(width, props.room_height.unwrap_or(f32::INFINITY)),
-            None => self.mount_room(&props, at.ui, id, at.at),
+            None => self.mount_room(&props, at.ui, id, at.at, at.scx.tokens),
         };
         self.given = self.given_axes(&props, at.env, at.at);
         self.fixed_height = self.fixed_height(&props, at.at);

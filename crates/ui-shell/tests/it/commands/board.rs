@@ -103,6 +103,36 @@ fn the_gate_may_resolve_commands() {
     assert_eq!(ids(&take_output(&frames.ctx).fired), ["trial.save"]);
 }
 
+/// The gate answers from what the app knew before the frame: a frame asks it once per command, however many components
+/// show the command and however many passes and readers resolve it.
+#[trial]
+fn a_frame_asks_the_gate_once_per_command() {
+    use std::sync::{Arc, Mutex};
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = Arc::clone(&asked);
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().gate(CommandGate::new(move |command: &CommandRef| {
+        log.lock().expect("the gate's log").push(command.key());
+        true
+    })));
+    let mut show = |ui: &mut Ui| {
+        for salt in ["a", "b", "c"] {
+            Tap::new().id_salt(salt).command(AppCommand::Save).show(ui);
+        }
+    };
+    frames.idle(2, &mut show);
+    for at in [5.0, 6.0, 7.0] {
+        asked.lock().expect("the gate's log").clear();
+        frames.frame(vec![moved(Pos2::new(at, at))], &mut show);
+        let asked = asked.lock().expect("the gate's log").clone();
+        let mut once = asked.clone();
+        once.sort();
+        once.dedup();
+        assert!(once.contains(&"trial.save".to_owned()), "the frame resolves the taps' command: {asked:?}");
+        assert_eq!(asked.len(), once.len(), "a frame asked the gate for a command twice: {asked:?}");
+    }
+}
+
 /// 11.3: a scoped entry waits for its instance and is dropped when the instance stops being live.
 #[trial]
 fn an_untaken_scoped_entry_is_dropped_with_its_instance() {

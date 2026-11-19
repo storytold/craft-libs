@@ -68,7 +68,7 @@ ROOT = "feature-root"
 # Domain crates the story renderer can link, by the crate's short name.
 RENDER_FEATURES = {
     "automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text",
-    "theme-store", "timeline", "dialogs", "font-manager", "update",
+    "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update",
 }
 REFUSED = {
     "--all-features": "it enables snapshot, system_fonts, color_fonts, all-languages and more, a set no loop uses, which rebuilds every dependency and the whole framework once; CI runs it",

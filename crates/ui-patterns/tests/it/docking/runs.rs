@@ -6,7 +6,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role};
-use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec};
+use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelDrag, PanelSpec};
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
@@ -119,6 +119,69 @@ fn a_panel_body_with_a_content_version_runs_only_when_its_version_changes() {
     version.set(2);
     assert!(frame()[0] > 0, "a new version runs the versioned body");
     assert_eq!(frame()[0], 0, "and it settles at it");
+}
+
+/// Panel 0's group is the host's view and panel 1's the dock's; both panels give the content version `version`. The
+/// view counts its runs where it shows, the bodies theirs.
+struct Hosted {
+    views: Rc<Cell<usize>>,
+    bodies: Rc<Cell<usize>>,
+    version: Rc<Cell<u64>>,
+}
+
+impl DockPanels<usize> for Hosted {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+
+    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {
+        self.bodies.set(self.bodies.get() + 1);
+    }
+
+    fn content(&self, _: &usize) -> Option<u64> {
+        Some(self.version.get())
+    }
+
+    fn group_view(&mut self, panels: &[usize], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
+        if !panels.contains(&0) {
+            return None;
+        }
+        match at {
+            GroupAt::Measure(_) => Some(0.0),
+            GroupAt::Show(rect) => {
+                self.views.set(self.views.get() + 1);
+                Some(rect.height())
+            }
+        }
+    }
+}
+
+/// A host view settles as a panel body does: it runs in the frame its panel's version changes or the pointer comes
+/// over it, and not in a settled frame. The group the host leaves to the dock keeps showing beside it.
+#[trial]
+fn a_host_view_with_a_content_version_runs_only_when_its_version_changes() {
+    let (views, bodies, version) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(1)));
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1], 0));
+    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let mut panels = Hosted { views: Rc::clone(&views), bodies: Rc::clone(&bodies), version: Rc::clone(&version) };
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    let mut frame = |events: Vec<egui::Event>| {
+        views.set(0);
+        bodies.set(0);
+        fixture.frame(events);
+        (views.get(), bodies.get())
+    };
+    assert_eq!(frame(Vec::new()), (0, 0), "a settled frame runs neither the view nor the versioned body");
+    assert_eq!(frame(Vec::new()), (0, 0), "nor the next one");
+    version.set(2);
+    let (viewed, bodied) = frame(Vec::new());
+    assert!(viewed > 0 && bodied > 0, "a new version runs the view and the body: {viewed}, {bodied}");
+    assert_eq!(frame(Vec::new()), (0, 0), "both settle at it");
+    assert!(frame(vec![moved(Pos2::new(300.0, 300.0))]).0 > 0, "the pointer over the view runs it");
+    assert!(fixture.by_label("Panel 1").is_some(), "the dock's group shows beside the view");
 }
 
 /// Panels whose specs and bodies all have versions, so the dock's chrome settles; `plain` is a panel whose body has

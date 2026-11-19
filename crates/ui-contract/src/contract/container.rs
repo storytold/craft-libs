@@ -766,7 +766,8 @@ pub struct ContainerProps {
     pub gates: bool,
     /// The body is shown through this transform on its own egui layer.
     pub transform: Option<CanvasTransform>,
-    /// Token-changing values for the body.
+    /// Another theme definition, mode, contrast or density for the container itself (its surface, header, rules,
+    /// scroll bars, pads and focus ring), everything it shows, and every layer opened from inside it.
     pub theme: Option<ThemeScope>,
     /// The container is an instance of this command scope.
     pub command_scope: Option<CommandScope>,
@@ -1039,7 +1040,7 @@ impl ContainerProps {
         self
     }
 
-    /// Token-changing values for the body.
+    /// Resolves the container, everything it shows and every layer opened from inside it through `theme`.
     pub fn theme(mut self, theme: ThemeScope) -> Self {
         self.theme = Some(theme);
         self
