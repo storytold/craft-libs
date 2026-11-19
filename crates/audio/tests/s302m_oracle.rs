@@ -150,36 +150,38 @@ fn decoded_by_ffmpeg(ff: &Path, ts: &Path, out: &Path, wide: bool) -> Vec<i32> {
 fn we_decode_and_encode_what_ffmpeg_encodes_and_ffmpeg_decodes_ours() {
     let Some(ff) = craft_media_testkit::ffmpeg() else { return };
     let dir = craft_media_testkit::fixture_subdir("s302m");
-    for (channels, bits) in [(2usize, 16u32), (2, 24), (4, 24), (6, 16), (8, 24)] {
+    for (channels, bits) in [(2usize, 16u32), (2, 20), (2, 24), (4, 20), (4, 24), (6, 16), (6, 20), (8, 20), (8, 24)] {
         let name = format!("{channels}ch{bits}");
         let frames = 6000;
-        let wide = bits == 24;
+        let wide = bits > 16;
         let pcm = signal(channels, frames, 17);
         let raw = dir.join(format!("{name}.pcm"));
         std::fs::write(&raw, pcm_bytes(&pcm, wide)).expect("write");
         let ts = dir.join(format!("{name}.ts"));
-        ffmpeg(
-            &ff,
-            &[
-                "-f",
-                if wide { "s32le" } else { "s16le" },
-                "-ar",
-                "48000",
-                "-ac",
-                &channels.to_string(),
-                "-i",
-                &s(&raw),
-                "-af",
-                "asetnsamples=n=1024:p=0",
-                "-c:a",
-                "s302m",
-                "-strict",
-                "-2",
-                "-f",
-                "mpegts",
-                &s(&ts),
-            ],
-        );
+        let ch_str = channels.to_string();
+        let raw_str = s(&raw);
+        let ts_str = s(&ts);
+        let mut ff_args = vec![
+            "-f",
+            if wide { "s32le" } else { "s16le" },
+            "-ar",
+            "48000",
+            "-ac",
+            &ch_str,
+            "-i",
+            &raw_str,
+            "-af",
+            "asetnsamples=n=1024:p=0",
+            "-c:a",
+            "s302m",
+            "-strict",
+            "-2",
+        ];
+        if bits == 20 {
+            ff_args.extend(["-bits_per_raw_sample", "20"]);
+        }
+        ff_args.extend(["-f", "mpegts", &ts_str]);
+        ffmpeg(&ff, &ff_args);
         let bytes = std::fs::read(&ts).expect("read");
         let pieces = pes_pieces(&bytes);
         assert!(pieces.len() >= 2, "{name}: {} packets", pieces.len());
@@ -198,8 +200,8 @@ fn we_decode_and_encode_what_ffmpeg_encodes_and_ffmpeg_decodes_ours() {
             // our encoder writes the same bytes ffmpeg's does
             assert!(enc.encode(&d.samples).expect("encode") == packet, "{name}: our packet differs from ffmpeg's at frame {frames_seen}");
             frames_seen += d.samples.len() / channels;
-            // 24-bit samples are scaled to 32 bits by ffmpeg's decoder; 16-bit ones are not
-            ours.extend(d.samples.iter().map(|&v| if wide { v << 8 } else { v }));
+            // 20-bit and 24-bit samples are scaled to 32 bits by ffmpeg's decoder; 16-bit ones are not
+            ours.extend(d.samples.iter().map(|&v| if bits == 16 { v } else { v << (32 - bits) }));
         }
         let n = ours.len().min(theirs.len());
         assert!(n >= (frames - 1600) * channels, "{name}: {n} samples");
@@ -215,10 +217,10 @@ fn we_decode_and_encode_what_ffmpeg_encodes_and_ffmpeg_decodes_ours() {
             let h = parse_header(&es).expect("header");
             let n_frames = h.audio_bytes / h.frame_bytes();
             let at = expect.len();
-            let src: Vec<i32> = mine[at..at + n_frames * channels].iter().map(|&v| if wide { v >> 8 } else { v >> 16 }).collect();
+            let src: Vec<i32> = mine[at..at + n_frames * channels].iter().map(|&v| v >> (32 - bits)).collect();
             let packet = enc.encode(&src).expect("encode");
             assert_eq!(packet.len(), 4 + h.audio_bytes);
-            expect.extend(src.iter().map(|&v| if wide { v << 8 } else { v }));
+            expect.extend(src.iter().map(|&v| if bits == 16 { v } else { v << (32 - bits) }));
             let mut k = 0;
             for &(o, len) in pes {
                 let take = len.min(packet.len() - k);

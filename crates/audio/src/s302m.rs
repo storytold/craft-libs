@@ -107,8 +107,7 @@ pub fn decode(packet: &[u8]) -> Result<Decoded> {
     let n = header.bits as usize;
     let mut samples = Vec::with_capacity(audio.len() / (n + 4) * 8 / 2);
     for frame in audio.chunks_exact(frame_bytes) {
-        for (sub, pos) in (0..header.channels).map(|c| (c, c * (n + 4))) {
-            let _ = sub;
+        for pos in (0..header.channels).map(|c| c * (n + 4)) {
             let mut v = 0u32;
             for k in 0..n {
                 v |= bit(frame, pos + k) << k;
