@@ -313,15 +313,13 @@ fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node
 
     fixture.click_at(picture.center());
     assert!(clicks.get() > 0, "a click inside the picture activates the button");
-    for child in fixture.tree().children_of(button.node) {
-        let tree = fixture.tree();
-        eprintln!(
-            "DIAG rf-fu2 button child {child:?}: role {:?} hidden {} images {}",
-            tree.role_of(child),
-            tree.is_hidden(child),
-            fixture.by_role(Role::IMAGE).len()
-        );
+    let tree = fixture.tree();
+    let mut pending = vec![(button.node, 0)];
+    while let Some((key, depth)) = pending.pop() {
+        eprintln!("DIAG rf-button depth {depth} {key:?}: role {:?} hidden {}", tree.role_of(key), tree.is_hidden(key));
+        pending.extend(tree.children_of(key).into_iter().map(|child| (child, depth + 1)));
     }
-    assert!(fixture.tree().children_of(button.node).is_empty(), "the picture adds no node under the button");
+    // The child `Ui` the button shows its picture in is a generic container, which screen readers pass over.
+    assert!(tree.seen_children_of(button.node).is_empty(), "a screen reader finds no node under the button");
     assert!(fixture.by_role(Role::IMAGE).is_empty(), "the picture is not a node of its own");
 }

@@ -158,6 +158,16 @@ pub(crate) fn hide(ctx: &Context, id: Id) {
     });
 }
 
+/// Makes the node of `id` a generic container without actions: assistive technology passes over it and reports its
+/// children in its place, as it does for a `Ui`'s node.
+pub(crate) fn pass_through(ctx: &Context, id: Id) {
+    crate::runtime::egui::widgets::note_node(ctx, id);
+    ctx.accesskit_node_builder(id, |node| {
+        node.set_role(accesskit::Role::GenericContainer);
+        node.clear_actions();
+    });
+}
+
 /// Reports `id` as the focused node of this pass.
 pub(crate) fn set_focus(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| emitted.focus_set = true);
