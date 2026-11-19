@@ -992,6 +992,206 @@ fn optional_unsupported_operations_still_allow_listing_printers() {
     assert!(!printers[0].is_default);
 }
 
+fn http_probe_reply(status: u16, body: &[u8]) -> Vec<u8> {
+    let mut response = format!("HTTP/1.1 {status} Reply\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+fn fake_raw_probe_responses(responses: Vec<Vec<u8>>) -> (Endpoint, mpsc::Sender<()>, std::thread::JoinHandle<usize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (done, caller_done) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut requests = 0;
+        for response in responses {
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if caller_done.try_recv().is_ok() {
+                            return requests;
+                        }
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("accepting fake probe: {error}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(stream);
+            let (mut line, mut length) = (String::new(), 0usize);
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            reader.into_inner().write_all(&response).unwrap();
+            requests += 1;
+        }
+        requests
+    });
+    (Endpoint::Tcp("127.0.0.1".into(), port), done, server)
+}
+
+#[test]
+fn optional_http_failures_still_allow_listing_printers() {
+    let primary = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes = ipp(0, &[ok_header()]);
+    let default = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let mut failures = Vec::new();
+    for probe in [1, 2] {
+        for status in [401, 403, 500] {
+            let mut responses = vec![http_probe_reply(200, &primary), http_probe_reply(200, &classes), http_probe_reply(200, &default)];
+            responses[probe] = http_probe_reply(status, b"denied");
+            let (endpoint, done, server) = fake_raw_probe_responses(responses);
+            let result = printers(&endpoint);
+            let _ = done.send(());
+            let requests = server.join().unwrap();
+            match result {
+                Ok(printers) => {
+                    assert_eq!(requests, 3);
+                    assert_eq!(printers.len(), 1);
+                    assert_eq!(printers[0].name, "Office");
+                    assert_eq!(printers[0].is_default, probe == 1);
+                }
+                Err(error) => failures.push(format!("probe {probe}, HTTP {status}: {error}")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "optional HTTP failures hid available printers: {failures:?}");
+}
+
+#[test]
+fn optional_empty_connection_closes_still_allow_listing_printers() {
+    let primary = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes = ipp(0, &[ok_header()]);
+    let default = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let mut failures = Vec::new();
+    for probe in [1, 2] {
+        let mut responses = vec![http_probe_reply(200, &primary), http_probe_reply(200, &classes), http_probe_reply(200, &default)];
+        responses[probe].clear();
+        let (endpoint, done, server) = fake_raw_probe_responses(responses);
+        let result = printers(&endpoint);
+        let _ = done.send(());
+        let requests = server.join().unwrap();
+        match result {
+            Ok(printers) => {
+                assert_eq!(requests, 3);
+                assert_eq!(printers.len(), 1);
+                assert_eq!(printers[0].name, "Office");
+                assert_eq!(printers[0].is_default, probe == 1);
+            }
+            Err(error) => failures.push(format!("probe {probe}: {error}")),
+        }
+    }
+    assert!(failures.is_empty(), "optional connection closes hid available printers: {failures:?}");
+}
+
+#[test]
+fn standalone_http_and_transport_failures_keep_their_public_error_messages() {
+    for (status, expected) in
+        [(401, "the print server asks for authentication (HTTP 401)"), (403, "the print server forbids this request (HTTP 403)"), (500, "HTTP 500")]
+    {
+        let (endpoint, done, server) = fake_raw_probe_responses(vec![http_probe_reply(status, b"denied")]);
+        let result = default_printer(&endpoint);
+        let _ = done.send(());
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(result, Err(Error::Protocol(expected.into())));
+    }
+    let (endpoint, done, server) = fake_raw_probe_responses(vec![Vec::new()]);
+    let result = default_printer(&endpoint);
+    let _ = done.send(());
+    assert_eq!(server.join().unwrap(), 1);
+    assert_eq!(result, Err(Error::Protocol("no HTTP header".into())));
+}
+
+#[test]
+fn invalid_content_lengths_are_not_accepted_as_eof_delimited_bodies() {
+    let primary = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes = ipp(0, &[ok_header()]);
+    let default = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let bodies = [primary, classes, default];
+    let mut failures = Vec::new();
+    for probe in [0, 1, 2] {
+        for invalid in [String::new(), "garbage".into(), "18446744073709551616".into(), format!("+{}", bodies[probe].len())] {
+            let mut responses: Vec<_> = bodies.iter().map(|body| http_probe_reply(200, body)).collect();
+            responses[probe] = format!("HTTP/1.1 200 OK\r\nContent-Length: {invalid}\r\n\r\n").into_bytes();
+            responses[probe].extend_from_slice(&bodies[probe]);
+            let (endpoint, done, server) = fake_raw_probe_responses(responses);
+            let result = printers(&endpoint);
+            let _ = done.send(());
+            server.join().unwrap();
+            if !matches!(result, Err(Error::Protocol(_))) {
+                failures.push(format!("probe {probe}, length {invalid:?}: {result:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "accepted invalid present Content-Length: {failures:?}");
+}
+
+#[test]
+fn absent_content_length_and_chunked_precedence_remain_supported() {
+    let body = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let mut eof_delimited = b"HTTP/1.1 200 OK\r\n\r\n".to_vec();
+    eof_delimited.extend_from_slice(&body);
+    let mut chunked =
+        b"HTTP/1.1 200 OK\r\nContent-Length: invalid\r\nContent-Length: 18446744073709551616\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    chunked.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+    chunked.extend_from_slice(&body);
+    chunked.extend_from_slice(b"\r\n0\r\n\r\n");
+    for response in [eof_delimited, chunked] {
+        let (endpoint, done, server) = fake_raw_probe_responses(vec![response]);
+        let result = default_printer(&endpoint);
+        let _ = done.send(());
+        assert_eq!(server.join().unwrap(), 1);
+        assert_eq!(result, Ok(Some("Office".into())));
+    }
+}
+
+#[test]
+fn duplicate_content_lengths_must_be_valid_and_identical() {
+    let primary = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes = ipp(0, &[ok_header()]);
+    let default = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let bodies = [primary, classes, default];
+    let mut failures = Vec::new();
+    for probe in [0, 1, 2] {
+        let length = bodies[probe].len();
+        for later in [String::new(), "garbage".into(), "18446744073709551616".into(), format!("+{length}"), (length + 1).to_string()] {
+            let mut responses: Vec<_> = bodies.iter().map(|body| http_probe_reply(200, body)).collect();
+            responses[probe] = format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nContent-Length: {later}\r\n\r\n").into_bytes();
+            responses[probe].extend_from_slice(&bodies[probe]);
+            let (endpoint, done, server) = fake_raw_probe_responses(responses);
+            let result = printers(&endpoint);
+            let _ = done.send(());
+            server.join().unwrap();
+            if !matches!(result, Err(Error::Protocol(_))) {
+                failures.push(format!("probe {probe}, later length {later:?}: {result:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "accepted invalid or conflicting later Content-Length: {failures:?}");
+}
+
+#[test]
+fn identical_duplicate_content_lengths_remain_supported() {
+    let body = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let mut response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Length: {}\r\n\r\n", body.len(), body.len()).into_bytes();
+    response.extend_from_slice(&body);
+    let (endpoint, done, server) = fake_raw_probe_responses(vec![response]);
+    let result = default_printer(&endpoint);
+    let _ = done.send(());
+    assert_eq!(server.join().unwrap(), 1);
+    assert_eq!(result, Ok(Some("Office".into())));
+}
+
 #[test]
 fn a_slow_reachable_first_address_keeps_its_full_connection_window() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1023,7 +1223,7 @@ fn a_slow_reachable_first_address_keeps_its_full_connection_window() {
 }
 
 #[test]
-fn failed_attempts_refill_two_connection_slots_in_resolver_order() {
+fn failed_attempts_immediately_advance_in_resolver_order() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable = listener.local_addr().unwrap();
     let blocked: SocketAddr = "192.0.2.1:631".parse().unwrap();
@@ -1060,21 +1260,19 @@ fn failed_attempts_refill_two_connection_slots_in_resolver_order() {
     assert!(result.is_ok());
     let trace = trace.lock().unwrap();
     assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [blocked, refused, reachable]);
-    assert_eq!(trace.peak, 2, "a slot must refill without launching a third concurrent connector");
+    assert_eq!(trace.peak, 2, "a quick refusal must advance without another stagger delay");
     assert_eq!(trace.active, 0);
     listener.accept().unwrap();
 }
 
 #[test]
 fn overlapping_attempts_share_one_deadline() {
-    let first: SocketAddr = "192.0.2.1:631".parse().unwrap();
-    let second: SocketAddr = "192.0.2.2:631".parse().unwrap();
-    let third: SocketAddr = "192.0.2.3:631".parse().unwrap();
+    let addresses: Vec<_> = (1..=16).map(|last| SocketAddr::from(([192, 0, 2, last], 631))).collect();
     let trace = Arc::new(Mutex::new(ConnectTrace::default()));
     let record = Arc::clone(&trace);
     let (finished, done) = mpsc::channel();
     let started = std::time::Instant::now();
-    let result = open_tcp("printserver", 631, [first, second, third], move |addr, timeout| {
+    let result = open_tcp("printserver", 631, addresses.clone(), move |addr, timeout| {
         record.lock().unwrap().start(addr, timeout);
         std::thread::sleep(timeout);
         record.lock().unwrap().finish();
@@ -1082,14 +1280,64 @@ fn overlapping_attempts_share_one_deadline() {
         Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "address did not answer"))
     });
     let elapsed = started.elapsed();
-    done.recv_timeout(Duration::from_secs(1)).unwrap();
-    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    let count = trace.lock().unwrap().calls.len();
+    for _ in 0..count {
+        done.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
     assert!(matches!(result, Err(Error::Unreachable(_))));
     assert!(elapsed < CONNECT + Duration::from_secs(1), "each worker received a separate budget: {elapsed:?}");
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, second]);
-    assert_eq!(trace.peak, 2);
+    assert!(count >= 3, "later addresses never received a chance");
+    assert!(count <= 12, "the shared deadline and stagger must not fan out indefinitely");
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), addresses[..count]);
+    assert!(trace.peak <= 12);
     assert_eq!(trace.active, 0);
+}
+
+#[test]
+fn two_blocked_addresses_do_not_hide_a_reachable_third_address() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let third = listener.local_addr().unwrap();
+    let first: SocketAddr = "192.0.2.1:631".parse().unwrap();
+    let second: SocketAddr = "192.0.2.2:631".parse().unwrap();
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let (release_first, held_first) = mpsc::channel();
+    let held_first = Mutex::new(held_first);
+    let (release_second, held_second) = mpsc::channel();
+    let held_second = Mutex::new(held_second);
+    let (finished, done) = mpsc::channel();
+    let started = std::time::Instant::now();
+    let result = open_tcp("printserver", 631, [first, second, third], move |addr, timeout| {
+        record.lock().unwrap().start(addr, timeout);
+        let result = if addr == third {
+            TcpStream::connect_timeout(&addr, timeout)
+        } else {
+            if addr == first {
+                let _ = held_first.lock().unwrap().recv_timeout(timeout);
+            } else {
+                let _ = held_second.lock().unwrap().recv_timeout(timeout);
+            }
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "address did not answer"))
+        };
+        record.lock().unwrap().finish();
+        if addr != third {
+            let _ = finished.send(());
+        }
+        result
+    });
+    let elapsed = started.elapsed();
+    let _ = release_first.send(());
+    let _ = release_second.send(());
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(result.is_ok(), "two stalled addresses hid the reachable third address");
+    assert!(elapsed < Duration::from_secs(2), "the third address waited for the blocked attempts: {elapsed:?}");
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, second, third]);
+    assert_eq!(trace.peak, 3);
+    assert_eq!(trace.active, 0);
+    listener.accept().unwrap();
 }
 
 #[test]
