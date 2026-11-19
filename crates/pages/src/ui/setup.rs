@@ -334,36 +334,54 @@ impl Rows<'_> {
     /// Number of Pages (Document Setup, whose Paper is a section of its own).
     fn pages(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup, document_setup: bool, papers: &[PaperSize]) -> bool {
         let words = self.words;
-        section(ui, &words.pages, |ui| {
-            let label = if document_setup { &words.facing_pages } else { &words.mirror_margins };
-            let check = Checkbox::new(Bind::given(setup.mirrored)).label(label.clone()).show(ui);
-            if let Some(on) = check.value().copied() {
-                setup.mirrored = on;
-            }
-            if !document_setup {
-                TitleRow::new(words.paper.clone()).strength(HeaderStrength::Section).show(ui);
-                return self.paper_rows(ui, form, setup, papers);
-            }
-            let shown = f64::from(setup.pages.unwrap_or(1));
-            let codec = NumberCodec::new(self.units.reader(None), 0);
-            let field = Field::new(words.number_of_pages.clone())
-                .id_salt("pages")
-                .show(ui, |ui, _| {
-                    NumberField::new(words.number_of_pages.clone(), Bind::given(Some(shown)))
-                        .codec(codec.clone())
-                        .range(1.0..=f64::from(MAX_PAGES))
-                        .show(ui)
-                })
-                .inner;
-            let Some(field) = field else { return true };
-            apply(form, setup, &field.edit, |next, value| {
-                if value != shown {
-                    next.pages = Some(value.round() as u32);
+        let title = &words.pages;
+        // The check box stands at the section's start, as WordCraft's dialog has it: outside the field group, whose
+        // label column (Paper size:, Width:) would set it in the field column.
+        GroupBox::new(title.clone(), None)
+            .show(ui, |ui, _| {
+                let label = if document_setup { &words.facing_pages } else { &words.mirror_margins };
+                let check = Checkbox::new(Bind::given(setup.mirrored)).label(label.clone()).show(ui);
+                if let Some(on) = check.value().copied() {
+                    setup.mirrored = on;
                 }
-            });
-            !field.edit.unparsed
-        })
-        .unwrap_or(true)
+                if !document_setup {
+                    TitleRow::new(words.paper.clone()).strength(HeaderStrength::Section).show(ui);
+                }
+                FieldGroup::new(title.clone())
+                    .show(ui, |ui, _| {
+                        if !document_setup {
+                            return self.paper_rows(ui, form, setup, papers);
+                        }
+                        self.page_count(ui, form, setup)
+                    })
+                    .inner
+            })
+            .inner
+            .flatten()
+            .unwrap_or(true)
+    }
+
+    /// Document Setup's Number of Pages row; `false` while its text is not a number.
+    fn page_count(&self, ui: &mut Ui, form: &mut FormCx<'_, '_>, setup: &mut PageSetup) -> bool {
+        let words = self.words;
+        let shown = f64::from(setup.pages.unwrap_or(1));
+        let codec = NumberCodec::new(self.units.reader(None), 0);
+        let field = Field::new(words.number_of_pages.clone())
+            .id_salt("pages")
+            .show(ui, |ui, _| {
+                NumberField::new(words.number_of_pages.clone(), Bind::given(Some(shown)))
+                    .codec(codec.clone())
+                    .range(1.0..=f64::from(MAX_PAGES))
+                    .show(ui)
+            })
+            .inner;
+        let Some(field) = field else { return true };
+        apply(form, setup, &field.edit, |next, value| {
+            if value != shown {
+                next.pages = Some(value.round() as u32);
+            }
+        });
+        !field.edit.unparsed
     }
 
     /// The Paper section of Document Setup.
