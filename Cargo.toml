@@ -163,6 +163,7 @@ craft-opc = { path = "crates/opc" }
 craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
+craft-ppt-binary = { path = "crates/ppt-binary" }
 craft-penpot = { path = "crates/penpot" }
 craft-plugin-abi = { path = "crates/plugin-abi" }
 craft-plugin-host = { path = "crates/plugin-host", default-features = false }
