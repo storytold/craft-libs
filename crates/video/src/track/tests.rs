@@ -389,3 +389,45 @@ fn new_codec_errors_keep_their_category() {
     #[cfg(feature = "vp8-decode")]
     assert!(matches!(VideoError::from(crate::vp8::Error::Invalid("header".into())), VideoError::Malformed(_)));
 }
+
+#[test]
+fn track_decoder_options_and_draft_persist_across_reset() {
+    let opts = TrackDecoderOptions { threads: Some(0), draft: true };
+    #[cfg(feature = "h264-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::H264, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        dec.set_draft(false);
+        assert!(!dec.draft());
+        let dec2 = TrackDecoder::with_threads(&params(CodecId::H264, &[]), 2).unwrap();
+        assert_eq!(dec2.threads(), Some(2));
+        assert!(!dec2.draft());
+    }
+    #[cfg(feature = "hevc-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Hevc, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        dec.reset().unwrap();
+        assert!(dec.draft());
+    }
+    #[cfg(feature = "av1-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Av1, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        dec.reset().unwrap();
+        assert!(dec.draft());
+    }
+    #[cfg(feature = "vp9-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Vp9, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        dec.reset().unwrap();
+        assert!(dec.draft());
+    }
+}
