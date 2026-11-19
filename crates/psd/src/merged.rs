@@ -1,6 +1,9 @@
 //! Borrowed, merged-only PSD reader that skips layer records and decodes selected planes.
 use crate::{Head, PsdError, Result};
 
+mod rows;
+pub use rows::{ChannelRows, EncodedRow, EncodedRows};
+
 /// Dimensions in the fixed header fields, for reporting a preflight limit error.
 /// This does not validate the PSD signature or remaining header.
 pub fn declared_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
