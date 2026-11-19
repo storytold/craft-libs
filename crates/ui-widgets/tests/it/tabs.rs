@@ -6,7 +6,7 @@ use craft_ui::contract::{CollectionEvent, Role, ShowCollection as _};
 use craft_ui::runtime::egui::access::AccessTree;
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::testing::focus::AccessActionKind;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui};
 use std::cell::{Cell, RefCell};
@@ -404,4 +404,35 @@ fn the_strip_reports_the_tab_under_the_pointer_while_another_root_holds_the_pres
     fixture.frame(vec![craft_ui::testing::pointer::moved(empty)]);
     fixture.frame(vec![]);
     assert_eq!(*seen.borrow(), None, "the empty room has no tab");
+}
+
+/// A secondary click on a document tab asks for the tab's menu without showing the tab.
+#[trial]
+fn a_secondary_click_on_a_document_tab_asks_for_its_menu_without_showing_it() {
+    let shown = Rc::new(Cell::new(0_usize));
+    let menus = Rc::new(Cell::new(0_usize));
+    let (now, asked) = (shown.clone(), menus.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = TabStrip::new("Documents").shown(now.get()).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+        for event in &out.response.events {
+            if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
+                && let Some(key) = keys.last()
+            {
+                now.set(*key);
+            }
+        }
+        if out.menu.is_some() {
+            asked.set(asked.get() + 1);
+        }
+    });
+    fixture.settle();
+    let two = tab_rect(fixture.tree(), "Two").center();
+    fixture.frame(vec![moved(two)]);
+    fixture.frame(vec![secondary(two, true)]);
+    fixture.frame(vec![secondary(two, false)]);
+    fixture.settle();
+    assert!(menus.get() > 0, "the secondary click asks for the tab's menu");
+    assert_eq!(shown.get(), 0, "the secondary click does not show the tab");
 }

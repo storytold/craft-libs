@@ -134,6 +134,9 @@ pub struct PanelSpec {
     /// The panel's toggle command: an iconic cell's face is `IconButton::command` of it, so the marker and the hint
     /// follow the command.
     pub command: Option<CommandRef>,
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills: it stays in view while the
+    /// body scrolls.
+    pub footer: bool,
 }
 
 impl PanelSpec {
@@ -150,7 +153,15 @@ impl PanelSpec {
             canvas: false,
             grid: None,
             command: None,
+            footer: false,
         }
+    }
+
+    /// The panel has a footer pinned under its body, which `DockPanels::footer` fills.
+    #[must_use]
+    pub fn footer(mut self) -> Self {
+        self.footer = true;
+        self
     }
 
     /// The panel's toggle command.

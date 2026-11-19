@@ -217,6 +217,24 @@ fn a_click_on_a_finding_activates_it() {
     assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Activate(1))), "one click activates the finding");
 }
 
+/// A findings list given `max_rows` is as tall as that many rows, not the room it is offered, and scrolls the rest.
+#[trial]
+fn a_findings_list_with_max_rows_is_as_tall_as_those_rows() {
+    use craft_ui::contract::WordSetCx as _;
+    use craft_ui::list::{Finding, Findings, FindingsList, FindingsWords, Severity};
+    let mut fixture = Fixture::new(move |ui| {
+        let findings: Vec<Finding> = (0..20).map(|at| Finding::new(at, Severity::Warning, format!("Finding {at}"))).collect();
+        let source = Findings::new(&findings);
+        FindingsList::new("Findings").max_rows(3).show_items(ui, &source, &mut |key, icx| findings[*key as usize].row(&icx.words::<FindingsWords>()));
+    });
+    let room = Vec2::new(400.0, 500.0);
+    fixture.room(room).settle();
+    let list = fixture.by_label("Findings").expect("the list").rect;
+    let row = fixture.by_label("Finding 0, Warning").expect("the first finding").rect;
+    assert!(list.height() >= 3.0 * row.height() - 0.5, "the list shows three rows: {list:?}, a row {row:?}");
+    assert!(list.height() < 5.0 * row.height(), "the list is not as tall as the room: {list:?}, a row {row:?}");
+}
+
 /// A list of the three rows built by `row`, in `room`, and what it reported.
 fn rows_rig(room: Vec2, row: fn(usize) -> ListRow<'static>) -> (Fixture, Events) {
     let seen = Rc::new(RefCell::new(Vec::new()));

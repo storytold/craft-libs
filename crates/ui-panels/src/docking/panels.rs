@@ -14,7 +14,8 @@ use egui::{Context, Id, Ui};
 ///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
 ///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
 /// 2. Otherwise `group_header` once, inside the group's header region before its tab strip, then `spec` for each of
-///    its panels, then `body` for the panels whose bodies are shown. `panel_rows` runs when a panel's menu opens.
+///    its panels, then `body` for the panels whose bodies are shown, and `footer` under the body of a shown panel
+///    whose spec has `PanelSpec::footer`. `panel_rows` runs when a panel's menu opens.
 ///
 /// A panel's `spec` is read every pass, so a host may change a label or a limit between passes. The dock's actions
 /// name a group by one of its panels.
@@ -33,6 +34,11 @@ pub trait DockPanels<P> {
     /// taller than the group scrolls in the body's own scrolling container. A document panel's body
     /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
+
+    /// Shows `panel`'s footer in `ui`: a footer bar pinned under the body, across the group, that stays in view while
+    /// the body scrolls (a panel's actions on everything its body lists). The dock calls it only for a panel whose
+    /// spec has `PanelSpec::footer` (the default shows nothing).
+    fn footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
     /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
     /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
