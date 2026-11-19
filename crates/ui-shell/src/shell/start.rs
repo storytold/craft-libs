@@ -245,7 +245,8 @@ impl Outcome for StartOutput {
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
 ///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder. A file's
 ///   [`note`](RecentFile::note) shows in place of its age.
-/// - **Pinned folders.** Each folder is a heading row. A listed folder holds its files, the first
+/// - **Pinned folders.** Each folder is a heading row, with a disclosure when the app lists it (still listing, empty
+///   or unavailable too). A listed folder holds its files, the first
 ///   [`PINNED_FILES_SHOWN`] until the app expands it, then a More row; the heading's trailing note says when the app is
 ///   still listing, cannot list, found no files or kept only the newest. The app owns fold and expansion: the
 ///   disclosure and Left/Right report [`StartAction::FoldPinned`], the More row [`StartAction::ExpandPinned`], and the
@@ -813,7 +814,7 @@ fn folder_note(words: &ShellWords, folder: &PinnedFolder) -> Option<Label> {
 }
 
 /// The source of the pinned folders' list: each folder's heading, then the files it shows and its More row when it
-/// holds more than [`PINNED_FILES_SHOWN`]. A heading is a tree group when the folder has listed files.
+/// holds more than [`PINNED_FILES_SHOWN`]. A heading is a tree group when the app lists the folder.
 struct PinnedRows<'f> {
     rows: Vec<(PinnedKey, PinnedRow<'f>)>,
 }
@@ -860,8 +861,9 @@ impl DisplayOrder<PinnedKey> for PinnedRows<'_> {
         }
     }
 
+    /// Every folder the app lists folds, one with no files to show too, so each heading has its disclosure.
     fn has_children(&self, at: usize) -> bool {
-        matches!(self.rows[at].1, PinnedRow::Folder(folder) if !listed_files(folder).is_empty())
+        matches!(self.rows[at].1, PinnedRow::Folder(folder) if folder.listing.is_some())
     }
 
     fn open(&self, at: usize) -> bool {
@@ -887,13 +889,11 @@ fn pinned_row<'r>(words: &ShellWords, row: PinnedRow<'_>) -> ListRow<'r> {
                 .detail(folder.path.display().to_string())
                 .icon(IconSpec::svg(IconId::new("folder")))
                 .depth(0);
-            if !listed_files(folder).is_empty() {
-                heading = heading.group(!folder.folded);
-            }
             // A folder the app does not list keeps the plain row; its menu and Delete still unpin it.
             if folder.listing.is_none() {
                 return heading;
             }
+            heading = heading.group(!folder.folded);
             if let Some(note) = folder_note(words, folder) {
                 heading = heading.trailing(note);
             }

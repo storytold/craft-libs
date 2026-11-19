@@ -108,6 +108,13 @@ fn a_group_with_a_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// A group whose shown panel counts what it lists after its name and says more in a caption under the header.
+#[story(DockGroup<'static, usize>, covers = [Default])]
+fn a_panel_with_a_count_and_a_caption(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let panels = vec![title_of(LAYERS).count(Some(3)).caption(Some("2 hidden".into())), title_of(CHANNELS).count(Some(4))];
+    DockGroup::new(LAYERS, &panels, panels[0].key).show(ui, |_, _| ()).output.into()
+}
+
 /// A click on the panel menu button opens the group's panel menu.
 fn open_panel_menu(fixture: &mut Fixture) {
     if let Some(button) = fixture.root_id().and_then(|id| fixture.part(id, MENU)) {

@@ -113,12 +113,30 @@ pub struct PanelTitle {
     pub closable: bool,
     /// The panel's toggle command: the tab resolves it for its marker and its hint.
     pub command: Option<CommandRef>,
+    /// The number the tab shows after the title ([`PanelSpec::count`]).
+    pub count: Option<usize>,
+    /// The line under the header row while the panel is shown ([`PanelSpec::caption`]).
+    pub caption: Option<Label>,
 }
 
 impl PanelTitle {
     /// A panel `key` titled `title`, not closable from its tab.
     pub fn new(key: PanelKey, title: impl Into<Label>) -> Self {
-        PanelTitle { key, title: title.into(), closable: false, command: None }
+        PanelTitle { key, title: title.into(), closable: false, command: None, count: None, caption: None }
+    }
+
+    /// The number the tab shows after the title.
+    #[must_use]
+    pub fn count(mut self, count: Option<usize>) -> Self {
+        self.count = count;
+        self
+    }
+
+    /// The line under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, caption: Option<Label>) -> Self {
+        self.caption = caption;
+        self
     }
 
     /// The panel's toggle command.

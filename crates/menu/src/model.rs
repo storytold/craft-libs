@@ -150,6 +150,9 @@ pub enum Node {
         role: Option<ItemRole>,
         /// The platforms it is shown on.
         platforms: Platforms,
+        /// Whether it can be opened. A disabled submenu shows its row greyed and never opens
+        /// (Open Recent with nothing to list); one whose rows are all disabled is greyed too.
+        enabled: bool,
     },
     /// An item AppKit provides and runs itself (Services, Zoom, …), with the label to show.
     #[non_exhaustive]
@@ -432,9 +435,20 @@ impl Node {
         Node::Standard { kind, label: label.into() }
     }
 
-    /// A submenu shown on every platform.
+    /// An enabled submenu shown on every platform.
     pub fn submenu(label: impl Into<String>, children: Vec<Node>) -> Node {
-        Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL }
+        Node::Submenu { label: label.into(), children, role: None, platforms: Platforms::ALL, enabled: true }
+    }
+
+    /// Set whether an item can be chosen or a submenu opened:
+    /// `Node::submenu("Open Recent", rows).enabled(!recent.is_empty())`.
+    pub fn enabled(mut self, on: bool) -> Node {
+        match &mut self {
+            Node::Item(it) => it.enabled = on,
+            Node::Submenu { enabled, .. } => *enabled = on,
+            Node::Separator | Node::Standard { .. } => {}
+        }
+        self
     }
 
     /// Give an item or a submenu a role: `Node::submenu("Theme", pages).role(ItemRole::Appearance)`.
@@ -702,12 +716,12 @@ pub fn tidy(nodes: Vec<Node>) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::with_capacity(nodes.len());
     for n in nodes {
         let n = match n {
-            Node::Submenu { label, children, role, platforms } => {
+            Node::Submenu { label, children, role, platforms, enabled } => {
                 let children = tidy(children);
                 if children.is_empty() {
                     continue;
                 }
-                Node::Submenu { label, children, role, platforms }
+                Node::Submenu { label, children, role, platforms, enabled }
             }
             other => other,
         };
@@ -764,8 +778,10 @@ fn hash_nodes(nodes: &[Node], h: &mut DefaultHasher) {
                 it.alternate.as_ref().map(|a| (a.command.key(), a.mods)).hash(h);
             }
             Node::Separator => '-'.hash(h),
-            Node::Submenu { label, children, role, .. } => {
-                ('[', label, role).hash(h);
+            // A native submenu is enabled only through its children (see `mac::lower_nodes`), so its
+            // enabled state is structure.
+            Node::Submenu { label, children, role, enabled, .. } => {
+                ('[', label, role, enabled).hash(h);
                 hash_nodes(children, h);
                 ']'.hash(h);
             }

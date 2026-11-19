@@ -225,6 +225,18 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
         let mut layout = comp.item_layout_from(previous, &*self.source, width, item, scx);
+        // An auto-width layout sets its items side by side: where its width comes from its rows, it takes their run at
+        // their ideal widths, not the widest one (a tab strip in a bar's unbounded row).
+        let run = (layout.auto_widths() && (asked.is_some() || !bounded) && !self.source.is_empty())
+            .then(|| self.run_in(ui, id, room).min(room.x))
+            .filter(|run| *run > width);
+        let (width, asked) = match run {
+            Some(run) => {
+                layout = comp.item_layout_from(Some(layout), &*self.source, run, item, scx);
+                (run, asked.map(|asked| asked.max(run)))
+            }
+            None => (width, asked),
+        };
         if self.header.has_columns() {
             layout.set_columns(&self.header.columns(width));
         }

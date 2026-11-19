@@ -129,8 +129,8 @@ impl<'a> Rows<'a> {
                 Node::Separator => {
                     Divider::horizontal().show(ui);
                 }
-                Node::Submenu { children, .. } => {
-                    if is_dead(children) {
+                Node::Submenu { children, enabled, .. } => {
+                    if !enabled || is_dead(children) {
                         MenuItem::submenu(label).enabled(false).show(ui);
                     } else {
                         Menu::submenu_row(ui, label, |ui, _| self.show(ui, children));
@@ -212,7 +212,7 @@ fn checked(ui: &Ui, command: &CommandRef) -> Option<bool> {
 fn is_dead(nodes: &[Node]) -> bool {
     !nodes.iter().any(|node| match node {
         Node::Item(item) => item.enabled,
-        Node::Submenu { children, .. } => !is_dead(children),
+        Node::Submenu { children, enabled, .. } => *enabled && !is_dead(children),
         Node::Separator | Node::Standard { .. } => false,
     })
 }

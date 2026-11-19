@@ -99,7 +99,8 @@ pub trait ItemLayout {
 
     /// Whether the items are as wide as they measure themselves. A layout that asks for widths places the items
     /// from their measured ideal and minimum widths (`set_width`), so every item must be built and measured: its
-    /// `visible` lists all items, and the collection does not virtualise it.
+    /// `visible` lists all items, and the collection does not virtualise it. Its items sit side by side, so where the
+    /// collection's width comes from its rows (a room that does not bound it) it is their ideal widths' sum.
     fn auto_widths(&self) -> bool {
         false
     }
