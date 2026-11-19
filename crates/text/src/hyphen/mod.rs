@@ -14,7 +14,7 @@
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 #[cfg(feature = "generator")]
-pub(crate) mod dict;
+pub mod dict;
 #[cfg(not(feature = "generator"))]
 pub(crate) mod dict;
 #[cfg(feature = "generator")]

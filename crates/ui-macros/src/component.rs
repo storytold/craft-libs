@@ -179,25 +179,28 @@ pub(crate) fn purpose_of(attrs: &[Attribute]) -> String {
     sentence.trim_end_matches('.').to_owned()
 }
 
-/// The attributes on a registration block, from the crate being compiled. See `gate_for`.
-pub(crate) fn registration_gate() -> TokenStream {
+/// Whether the crate being compiled declares its own suite feature.
+pub(crate) fn declares_suite() -> bool {
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR").and_then(|dir| std::fs::read_to_string(std::path::Path::new(&dir).join("Cargo.toml")).ok());
-    gate_for(manifest.as_deref().unwrap_or_default())
+    declares_suite_in(manifest.as_deref().unwrap_or_default())
 }
 
 /// The attributes on a registration block. The registration's types can exist only under the defining package's
 /// `suite` feature, which may be off while craft-ui's `testing` is on, so the block is gated on it (the cfg
 /// is evaluated in the defining crate) when the package's `manifest` declares that feature, and is not gated otherwise.
-pub(crate) fn gate_for(manifest: &str) -> TokenStream {
+pub(crate) fn declares_suite_in(manifest: &str) -> bool {
     let mut in_features = false;
-    let declares = manifest.lines().map(str::trim).any(|line| {
+    manifest.lines().map(str::trim).any(|line| {
         if line.starts_with('[') {
             in_features = line.trim_end_matches(|c: char| c.is_whitespace()) == "[features]";
             return false;
         }
         in_features && line.strip_prefix("suite").is_some_and(|rest| rest.trim_start().starts_with('='))
-    });
-    if declares { quote!(#[cfg(feature = "suite")]) } else { quote!() }
+    })
+}
+
+pub(crate) fn registration_gate() -> TokenStream {
+    if declares_suite() { quote!(#[cfg(feature = "suite")]) } else { quote!() }
 }
 
 fn registry_helper(types: &[Type]) -> syn::Result<Ident> {

@@ -33,5 +33,6 @@ pub mod testing {
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[crate::testing::register]));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

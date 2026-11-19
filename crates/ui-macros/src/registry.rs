@@ -99,6 +99,12 @@ fn module_file(dir: &Path, path_dir: &Path, module: &ItemMod) -> Option<PathBuf>
     }
 }
 
+#[derive(Default)]
+struct Registrations {
+    trials: Vec<TokenStream>,
+    suite: Vec<TokenStream>,
+}
+
 fn walk(
     items: &[Item],
     file: &Path,
@@ -106,7 +112,7 @@ fn walk(
     path_dir: &Path,
     path: &[Ident],
     inherited: &[Attribute],
-    calls: &mut Vec<TokenStream>,
+    calls: &mut Registrations,
 ) -> syn::Result<()> {
     for item in items {
         match item {
@@ -137,7 +143,7 @@ fn walk(
                 let helper = format_ident!("__registry_component_{}", crate::command_set::snake(&item.ident.to_string()));
                 let mut cfg = inherited.to_vec();
                 cfg.extend(attrs_cfg(&item.attrs));
-                calls.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
+                calls.suite.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
             }
             Item::Fn(item) if marker(&item.attrs, "story") || marker(&item.attrs, "trial") => {
                 let (prefix, method) =
@@ -145,13 +151,14 @@ fn walk(
                 let helper = format_ident!("__registry_{}_{}", prefix, item.sig.ident);
                 let mut cfg = inherited.to_vec();
                 cfg.extend(attrs_cfg(&item.attrs));
-                calls.push(quote! { #(#cfg)* registry.#method(crate::#(#path::)*#helper()); });
+                let entries = if marker(&item.attrs, "trial") { &mut calls.trials } else { &mut calls.suite };
+                entries.push(quote! { #(#cfg)* registry.#method(crate::#(#path::)*#helper()); });
             }
             Item::Enum(item) if derives(&item.attrs, "CommandSet") && opt(&item.attrs, "command", "story") => {
                 let helper = format_ident!("__registry_command_{}", crate::command_set::snake(&item.ident.to_string()));
                 let mut cfg = inherited.to_vec();
                 cfg.extend(attrs_cfg(&item.attrs));
-                calls.push(quote! { #(#cfg)* registry.add_story_set(crate::#(#path::)*#helper()); });
+                calls.suite.push(quote! { #(#cfg)* registry.add_story_set(crate::#(#path::)*#helper()); });
             }
             Item::Macro(item) if item.mac.path.is_ident("include") => {
                 let expression: syn::Expr = syn::parse2(item.mac.tokens.clone())?;
@@ -174,7 +181,7 @@ fn walk(
                     let helper = format_ident!("__registry_component_{}", crate::command_set::snake(&name.ident.to_string()));
                     let mut cfg = inherited.to_vec();
                     cfg.extend(attrs_cfg(&item.attrs));
-                    calls.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
+                    calls.suite.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
                 }
             }
             _ => {}
@@ -193,13 +200,17 @@ pub fn expand() -> syn::Result<TokenStream> {
     let source = if invocation.starts_with(&src) { src.join("lib.rs") } else { invocation };
     let text = std::fs::read_to_string(&source).map_err(|e| syn::Error::new(Span::call_site(), format!("cannot read {}: {e}", source.display())))?;
     let parsed = syn::parse_file(&text)?;
-    let mut calls = Vec::new();
+    let mut calls = Registrations::default();
     walk(&parsed.items, &source, source.parent().unwrap_or(&manifest), source.parent().unwrap_or(&manifest), &[], &[], &mut calls)?;
     let k = crate::util::ui_crate();
+    let Registrations { trials, suite } = calls;
+    let gate = crate::component::registration_gate();
     Ok(quote! {
         /// Adds this crate's suite items to the caller's registry.
         pub fn register(registry: &mut #k::testing::Registry) {
-            #(#calls)*
+            #(#trials)*
+            #gate
+            { #(#suite)* }
         }
     })
 }
@@ -214,7 +225,7 @@ mod tests {
         let parsed = syn::parse_file("include!(\"included.rs\");");
         assert!(parsed.is_ok());
         if let Ok(parsed) = parsed {
-            let mut calls = Vec::new();
+            let mut calls = Registrations::default();
             let dir = root.parent().unwrap_or(Path::new(""));
             assert!(walk(&parsed.items, &root, dir, dir, &[], &[], &mut calls).is_err());
         }
@@ -227,11 +238,12 @@ mod tests {
         let parsed = syn::parse_file(&source);
         assert!(parsed.is_ok());
         if let Ok(parsed) = parsed {
-            let mut calls = Vec::new();
+            let mut calls = Registrations::default();
             let result =
                 walk(&parsed.items, &root, root.parent().unwrap_or(Path::new("")), root.parent().unwrap_or(Path::new("")), &[], &[], &mut calls);
             assert!(result.is_ok());
-            let generated = quote! { #(#calls)* }.to_string();
+            let Registrations { trials, suite } = calls;
+            let generated = quote! { #(#trials)* #(#suite)* }.to_string();
             assert!(generated.contains("feature = \"sample\""));
             assert!(generated.contains("__registry_story_view"));
             assert!(generated.contains("__registry_trial_changes"));

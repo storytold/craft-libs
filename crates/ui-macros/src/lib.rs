@@ -135,7 +135,7 @@ pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
     let ident = &sig.ident;
     let name = ident.to_string();
-    let gate = component::registration_gate();
+    let gate = component::declares_suite().then(|| quote!(#[cfg(any(test, feature = "suite"))]));
     let helper = quote::format_ident!("__registry_trial_{}", ident);
     quote! {
         #gate
