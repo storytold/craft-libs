@@ -202,6 +202,8 @@ impl std::fmt::Display for Endpoint {
 /// Try the resolved addresses within one connection budget, reserving time for later addresses
 /// when an earlier one does not answer. The connector is a parameter so refusals can be tested
 /// without racing to claim a port; the last failed attempt still reports why it failed.
+/// Each attempt gets the remaining budget divided by the remaining addresses: a slow address can
+/// time out before the full connection deadline so a later address still has a chance to connect.
 fn open_tcp(
     host: &str,
     port: u16,
@@ -644,8 +646,16 @@ fn queue_path(name: &str, is_class: bool) -> Result<String> {
 pub fn printers(endpoint: &Endpoint) -> Result<Vec<Printer>> {
     let mut out = queues(endpoint, OP_CUPS_GET_PRINTERS, false)?;
     // A server without classes answers "not found"; an older server may not know the operation.
-    out.extend(queues(endpoint, OP_CUPS_GET_CLASSES, true).unwrap_or_default());
-    let default = default_printer(endpoint).unwrap_or(None);
+    match queues(endpoint, OP_CUPS_GET_CLASSES, true) {
+        Ok(classes) => out.extend(classes),
+        Err(error @ Error::Protocol(_)) => return Err(error),
+        Err(_) => {}
+    }
+    let default = match default_printer(endpoint) {
+        Ok(default) => default,
+        Err(error @ Error::Protocol(_)) => return Err(error),
+        Err(_) => None,
+    };
     for p in &mut out {
         p.is_default = default.as_deref() == Some(p.name.as_str());
     }
