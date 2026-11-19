@@ -14,6 +14,12 @@ struct Props;
 
 impl MemoProps for Props {}
 
+impl PlainData for Props {}
+
+fn project() -> Path {
+    Path::__from_field_path(&[])
+}
+
 fn read(path: &str) -> Vec<u8> {
     static INNER: Mutex<u32> = Mutex::new(0);
     std::fs::read(path).unwrap_or_default()

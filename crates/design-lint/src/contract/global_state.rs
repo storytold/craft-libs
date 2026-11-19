@@ -16,8 +16,27 @@ pub const ID: &str = "contract/no-global-state";
 
 const PATH_FS: [&str; 2] = ["std", "fs"];
 
+/// Permission keys of the two derive-only rules; no location is allowed.
+const PLAIN_DATA: &str = "contract/no-global-state:plain-data";
+const PROJECTION: &str = "contract/no-global-state:projection";
+
+/// The hidden constructor behind `field!`; the lint reads source before macro expansion, so every textual hit is a direct call.
+const FROM_FIELD_PATH: &str = "__from_field_path";
+
 struct Hits {
     found: Vec<(proc_macro2::Span, String)>,
+    derive_only: Vec<(proc_macro2::Span, String)>,
+    projection: Vec<(proc_macro2::Span, String)>,
+}
+
+fn field_path_in(tokens: proc_macro2::TokenStream, out: &mut Vec<proc_macro2::Span>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(i) if i == FROM_FIELD_PATH => out.push(i.span()),
+            proc_macro2::TokenTree::Group(g) => field_path_in(g.stream(), out),
+            _ => {}
+        }
+    }
 }
 
 fn is_cfg_test(attrs: &[Attribute]) -> bool {
@@ -90,6 +109,21 @@ impl Visit<'_> for Hits {
         visit::visit_item_use(self, node);
     }
 
+    fn visit_ident(&mut self, node: &proc_macro2::Ident) {
+        if node == FROM_FIELD_PATH {
+            self.projection.push((node.span(), format!("`{FROM_FIELD_PATH}` is called by `field!` only")));
+        }
+    }
+
+    fn visit_macro(&mut self, node: &syn::Macro) {
+        let mut spans = Vec::new();
+        field_path_in(node.tokens.clone(), &mut spans);
+        for span in spans {
+            self.projection.push((span, format!("`{FROM_FIELD_PATH}` is called by `field!` only")));
+        }
+        visit::visit_macro(self, node);
+    }
+
     fn visit_path(&mut self, node: &SynPath) {
         let names: Vec<String> = node.segments.iter().map(|s| s.ident.to_string()).collect();
         if names_fs(&names) {
@@ -103,9 +137,14 @@ impl Visit<'_> for Hits {
 
     fn visit_item_impl(&mut self, node: &ItemImpl) {
         if let Some((_, path, _)) = &node.trait_
-            && path.segments.last().is_some_and(|s| s.ident == "MemoProps")
+            && let Some(name) = path.segments.last().map(|s| s.ident.to_string()).filter(|n| n == "MemoProps" || n == "PlainData")
         {
-            self.found.push((node.impl_token.span, "`MemoProps` is implemented by the derive only".to_owned()));
+            let message = format!("`{name}` is implemented by the derive only");
+            if name == "MemoProps" {
+                self.found.push((node.impl_token.span, message));
+            } else {
+                self.derive_only.push((node.impl_token.span, message));
+            }
         }
         visit::visit_item_impl(self, node);
     }
@@ -126,9 +165,15 @@ pub(super) fn check(cx: &Cx<'_>, out: &mut Vec<Finding>) {
     if normal.ends_with("/build.rs") || normal == "build.rs" || normal.contains("/src/bin/") {
         return;
     }
-    let mut hits = Hits { found: Vec::new() };
+    let mut hits = Hits { found: Vec::new(), derive_only: Vec::new(), projection: Vec::new() };
     hits.visit_file(cx.file);
     for (span, message) in hits.found {
         cx.flag_span(out, ID, ID, span, message);
+    }
+    for (span, message) in hits.derive_only {
+        cx.flag_span(out, ID, PLAIN_DATA, span, message);
+    }
+    for (span, message) in hits.projection {
+        cx.flag_span(out, ID, PROJECTION, span, message);
     }
 }

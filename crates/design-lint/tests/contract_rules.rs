@@ -100,10 +100,13 @@ fn type_facts_cross_files_of_a_crate() {
 fn global_state_counts_every_form_and_honours_the_allowlist() {
     let src = fixture("reject", "contract-global-state.rs");
     let found = analyze_contract(&src, Path::new(FAMILY), &scope(), false);
-    // static, static mut, static OnceLock, thread_local!, impl MemoProps, a static in a fn, `use std::fs`, `std::fs::read`.
-    assert_eq!(found.iter().filter(|f| f.rule == "contract/no-global-state").count(), 8, "{found:?}");
+    // static, static mut, static OnceLock, thread_local!, impl MemoProps, a static in a fn, `use std::fs`, `std::fs::read`,
+    // and the two derive-only forms: impl PlainData and a direct `__from_field_path`.
+    assert_eq!(found.iter().filter(|f| f.rule == "contract/no-global-state").count(), 10, "{found:?}");
     let allowed = StaticScope::new().allow("contract/no-global-state", "crates/x/src/chips");
-    assert!(rules_at(&src, FAMILY, &allowed).is_empty());
+    // The derive-only forms have no allowed location, whatever the scope says.
+    let left = analyze_contract(&src, Path::new(FAMILY), &allowed, false);
+    assert_eq!(left.len(), 2, "{left:?}");
     for skipped in ["crates/x/build.rs", "crates/x/src/bin/tool.rs"] {
         assert!(rules_at(&src, skipped, &scope()).is_empty(), "{skipped}");
     }
