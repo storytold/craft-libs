@@ -12,8 +12,11 @@ use quote::{format_ident, quote};
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields};
 
-/// The escape for a foreign plain type: the field feeds the key through its `Hash`.
-const ESCAPE: Escape = Escape { attr: "memo_props", keyword: "hash" };
+/// The escape for a foreign plain type: the field feeds the key through its `Hash`. A type parameter only such fields
+/// name (a dock's panel type) is bound by what `MemoKey::feed_hash` needs.
+fn escape() -> Escape {
+    Escape { attr: "memo_props", keyword: "hash", bound: Some(quote!(::core::hash::Hash + ::core::marker::Sync)) }
+}
 
 /// The escape for a callback's type parameter (`Stateless<E>`): bound by what `Stateless<E>: MemoProps` needs.
 fn stateless() -> ParamEscape {
@@ -39,7 +42,7 @@ fn feed(fields: &Fields, k: &TokenStream) -> syn::Result<(TokenStream, Vec<Token
     };
     let mut statements = Vec::new();
     for (field, name) in fields.iter().zip(&names) {
-        statements.push(if escaped(field, &ESCAPE)? { quote!(key.feed_hash(#name);) } else { quote!(#k::contract::MemoProps::key(#name, key);) });
+        statements.push(if escaped(field, &escape())? { quote!(key.feed_hash(#name);) } else { quote!(#k::contract::MemoProps::key(#name, key);) });
     }
     Ok((pattern, statements))
 }
@@ -48,7 +51,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let input: DeriveInput = syn::parse2(input)?;
     let k = ui_crate();
     let trait_path = quote!(#k::contract::MemoProps);
-    let FieldChecks { generics, .. } = field_checks(&input, &trait_path, Some(&ESCAPE), Some(&stateless()))?;
+    let FieldChecks { generics, .. } = field_checks(&input, &trait_path, Some(&escape()), Some(&stateless()))?;
     let body = match &input.data {
         Data::Struct(data) => {
             let (pattern, statements) = feed(&data.fields, &k)?;
