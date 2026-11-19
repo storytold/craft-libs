@@ -77,7 +77,7 @@ impl Focus for CxCore<'_> {
 
     fn focus_arrived_by_key(&self) -> Option<PartRef> {
         let facts = if focus::writes() == self.focus.at { self.focus } else { focus::facts(&self.ctx, self.id) };
-        self.focus_arrived().filter(|_| facts.arrived_origin == Some(focus::FocusOrigin::Request))
+        self.focus_arrived().filter(|_| matches!(facts.arrived_origin, Some(focus::FocusOrigin::Request | focus::FocusOrigin::Open)))
     }
 
     fn is_focused(&self) -> bool {
@@ -107,6 +107,7 @@ impl Focus for CxCore<'_> {
     }
 
     fn register_menu_bar(&mut self) {
+<<<<<<< HEAD
         focus::register_menu_bar(&self.ctx, self.id, false);
     }
 
@@ -116,6 +117,9 @@ impl Focus for CxCore<'_> {
 
     fn take_first_claimed(&mut self, chords: &[Chord]) -> Option<Chord> {
         crate::runtime::keys::take_first_claimed(&self.ctx, self.id, chords)
+=======
+        focus::register_menu_bar(&self.ctx, self.id);
+>>>>>>> up/next
     }
 
     fn take_menu_keys(&mut self) -> Vec<MenuKey> {

@@ -39,8 +39,9 @@ pub struct ColorAreaStyle {
 /// The area keeps its axes right to left: across still grows to the right. Its value text names both components
 /// ("Saturation 40 %, Brightness 70 %", from [`names`](ColorArea::names)).
 ///
-/// It is at least `size.plot` and fills the width its row leaves; with `Props::sizing(Sizing::Fill)` it takes the room
-/// on both axes, however small (the Color panel's field, as tall as its dock group leaves it).
+/// Its size comes from its [`shape`](ColorArea::shape), never from the room: the compact pickers' field at plot
+/// proportions, or the Color Picker dialog's square. With `Props::sizing(Sizing::Fill)` it takes the room on both axes
+/// instead, however small (the Color panel's field, as tall as its dock group leaves it).
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct ColorArea<'a> {
     #[common]
@@ -56,12 +57,27 @@ pub struct ColorArea<'a> {
     /// The names of the across and down components in the value text; the model's channel names without them.
     #[prop]
     names: Option<[Label; 2]>,
+    /// The size of an area that does not fill its room; plot proportions by default.
+    #[prop]
+    shape: AreaShape,
+}
+
+/// The size of a [`ColorArea`] that does not fill its room.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AreaShape {
+    /// `size.plot.width` wide and `size.plot.height` tall: the field of the Color panel's popover and the compact
+    /// pickers, wider than tall.
+    #[default]
+    Plot,
+    /// A square `size.plot.width` on a side: the Color Picker dialog's field, as Photoshop's.
+    Square,
 }
 
 impl<'a> ColorArea<'a> {
     /// An area named `label` ("Saturation and brightness") showing `values`, values of `mode`'s model.
     pub fn new(label: impl Into<Label>, mode: AreaMode, values: Bind<'a, ModelValues>) -> Self {
-        ColorArea { common: Common::new(), mode, values, quantize: None, names: None }.label(label).ltr_axis()
+        ColorArea { common: Common::new(), mode, values, quantize: None, names: None, shape: AreaShape::Plot }.label(label).ltr_axis()
     }
 
     /// The across and down channels of the mode's model.
@@ -159,8 +175,11 @@ impl Component for ColorArea<'_> {
                 _ => Vec2::splat(cx.tokens.size.plot.width),
             };
         }
-        let mut picker = self.picker(cx.value(), false);
-        cx.child("picker", &mut picker, cx.proposal)
+        let plot = &cx.tokens.size.plot;
+        match self.shape {
+            AreaShape::Plot => Vec2::new(plot.width, plot.height),
+            AreaShape::Square => Vec2::splat(plot.width),
+        }
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {

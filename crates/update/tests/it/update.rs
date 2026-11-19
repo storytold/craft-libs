@@ -60,6 +60,20 @@ fn a_request_during_the_startup_check_is_not_lost() {
 }
 
 #[trial]
+fn a_check_exposes_the_release_it_found_and_an_up_to_date_one_exposes_none() {
+    let ctx = ctx();
+    let mut found = updater(Ok(Some(newer())));
+    assert!(found.available().is_none());
+    found.check_now();
+    found.settle_for_tests(&ctx);
+    assert_eq!(found.available().map(|r| r.tag.as_str()), Some("v9.0.0"));
+    let mut current = updater(Ok(None));
+    current.check_now();
+    current.settle_for_tests(&ctx);
+    assert!(current.available().is_none());
+}
+
+#[trial]
 fn a_panicking_check_is_an_error_not_a_hang() {
     let ctx = ctx();
     let mut u = Updater::new(&PHOTOCRAFT, "0.1.0").with_source(Arc::new(|| std::panic::panic_any("boom"))).with_pins_path(no_pins());

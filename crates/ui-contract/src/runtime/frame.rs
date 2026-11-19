@@ -26,7 +26,9 @@ pub struct FrameInput {
     pub root: RootEnv,
     /// App-scope command state, the binding overrides and the gate, set from app state.
     pub commands: CommandInput,
-    /// The app's `Host`, read through `EnvView::host`.
+    /// The app's `Host`, read through `EnvView::host`. The app keeps one `Arc<Host>` across frames and installs a
+    /// new one only to switch the language or a service: the scope's words are built again for a new host, and a new
+    /// language runs every settling region again (`Lazy::settles`).
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
@@ -50,7 +52,7 @@ impl FrameInput {
         self
     }
 
-    /// Sets the host.
+    /// Sets the host: the same `Arc<Host>` every frame, a new one to switch (see [`FrameInput::host`](Self::host)).
     pub fn host(mut self, host: Arc<Host>) -> Self {
         self.host = Some(host);
         self

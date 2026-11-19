@@ -7,7 +7,11 @@ use craft_behavior::{SelectionChange, keyed};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, CollectionEvent, Entry, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
+<<<<<<< HEAD
 use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+=======
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+>>>>>>> up/next
 use craft_ui::display::Text;
 use craft_ui::form::{Field as FormField, Help};
 use craft_ui::menu::Menu;
@@ -437,6 +441,7 @@ impl StackDialog for FindReplaceDialog {
         buttons.push(FooterButton::new(words.close_button.clone(), DialogRole::Cancel));
         let close_at = buttons.len() - 1;
 
+<<<<<<< HEAD
         let shown = Dialog::new(words.title.clone())
             .modeless()
             .side_buttons(true)
@@ -447,6 +452,9 @@ impl StackDialog for FindReplaceDialog {
                 }
             })
             .show(ui, |ui, _| {
+=======
+        let shown = Dialog::new(words.title.clone()).modeless().button_place(ButtonPlace::Side).buttons(buttons).show(ui, |ui, _| {
+>>>>>>> up/next
             if word {
                 let tabs = [
                     (FindTab::Find, words.find_tab.as_str().to_owned()),

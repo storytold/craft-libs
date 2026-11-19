@@ -1,10 +1,15 @@
 [package]
 name = "craft-gpu"
+<<<<<<< HEAD
 description = "GPU start-up choices per platform for Craft apps on eframe's wgpu backend: backends, power preference, DX12 compiler and the Linux DRM device pick."
+=======
+description = "Provider-neutral GPU traits, GpuJob envelope, and registry (no vendor IO)"
+>>>>>>> up/next
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+<<<<<<< HEAD
 repository.workspace = true
 
 [dependencies]
@@ -22,3 +27,15 @@ tempfile = "3"
 
 [lints]
 workspace = true
+=======
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+>>>>>>> up/next

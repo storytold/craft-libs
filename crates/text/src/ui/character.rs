@@ -135,7 +135,7 @@ const TRACKING_RANGE: RangeInclusive<f64> = -1000.0..=10000.0;
 /// The range of the scale fields, percent.
 const SCALE_RANGE: RangeInclusive<f64> = 0.0..=1000.0;
 /// Two columns of the same share, for the rows of two fields.
-static TWO_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
+const TWO_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
 
 /// The variable-font axes of the current face: what the axis sliders under the style row show.
 #[cfg(feature = "font-picker")]

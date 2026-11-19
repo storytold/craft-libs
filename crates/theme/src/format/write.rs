@@ -8,8 +8,22 @@ use crate::theme::{AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, 
 use crate::tokens::{KnobShape, WellShape};
 
 /// Top-level keys in the order a file lists them; other keys follow, sorted.
-const TOP_ORDER: [&str; 13] =
-    ["schema", "schema_version", "id", "name", "version", "variants", "contrast_intent", "seeds", "shape", "light", "dark", "high_contrast", "apps"];
+const TOP_ORDER: [&str; 14] = [
+    "schema",
+    "schema_version",
+    "id",
+    "name",
+    "version",
+    "variants",
+    "contrast_intent",
+    "icon_pack",
+    "seeds",
+    "shape",
+    "light",
+    "dark",
+    "high_contrast",
+    "apps",
+];
 
 /// The file as pretty-printed JSON ending in a newline. Known values come from `file.theme`;
 /// unknown keys come from the file that was parsed. Keys are sorted below the top level. Fails
@@ -41,6 +55,14 @@ fn update(raw: &mut Map<String, Value>, t: &ThemeDef) {
         ContrastIntent::Low => "low",
     };
     raw.insert("contrast_intent".to_owned(), intent.into());
+    match &t.icon_pack {
+        None => {
+            raw.remove("icon_pack");
+        }
+        Some(pack) => {
+            raw.insert("icon_pack".to_owned(), pack.as_str().into());
+        }
+    }
 
     with_object(raw, "seeds", |seeds| {
         seeds.insert("neutral".to_owned(), t.seeds.neutral.to_hex().into());

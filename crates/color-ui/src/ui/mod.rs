@@ -14,6 +14,7 @@
 mod area;
 mod channels;
 mod choice;
+mod compare;
 mod disc;
 mod droppers;
 mod eyedropper;
@@ -41,12 +42,18 @@ mod swatches;
 /// The stories and trials this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing;
+mod warning;
 mod wheel;
 
 pub use crate::AreaMode;
+<<<<<<< HEAD
 pub use area::{ColorArea, ColorAreaStyle, smooth_mesh};
+=======
+pub use area::{AreaShape, ColorArea, ColorAreaStyle};
+>>>>>>> up/next
 pub use channels::finite_values;
 pub use choice::{ChosenColor, ColorChoice, ColorChoiceOutput, ColorChoiceWords, NamedColor};
+pub use compare::{CompareSwatch, CompareSwatchOutput, CompareSwatchStyle};
 pub use disc::{ColorDisc, ColorDiscOutput, ColorDiscStyle, ColorDiscWords, DiscMove};
 pub use droppers::{DropperButton, DropperButtonOutput, DropperKind, DropperTool};
 pub use eyedropper::{
@@ -69,11 +76,16 @@ pub use palette::{SwatchPalette, SwatchPaletteOutput};
 pub use panel::{
     ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp, ColorPanelState, ColorPanelWords, PanelTarget,
 };
+<<<<<<< HEAD
 pub use picker::{
     ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, ColorWarning, ColorWarningChip, ColorWarningChipOutput,
     PickedColor, ScreenPickGesture,
 };
 pub use picker_dialog::{ColorPickerDialog, ColorPickerDialogLayout, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult, ColorPickerTab};
+=======
+pub use picker::{ColorConstraint, ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorPickerWords, PickedColor, ScreenPickGesture};
+pub use picker_dialog::{ColorPickerDialog, ColorPickerDialogWords, ColorPickerMemory, ColorPickerResult};
+>>>>>>> up/next
 pub use popover::{ColorPopover, ColorPopoverOutput};
 pub use profile_prompts::{ProfileAction, ProfileAnswer, ProfileMismatchDialog, ProfileMode, ProfileQuestion, ProfileStatus, ProfileWords};
 pub use ramp::{ColorRamp, ColorRampOutput, ColorRampStyle, ColorRampWords, Gamut, RampKind, RampPick};
@@ -89,6 +101,7 @@ pub use swatches::{
     MAX_GROUPS, MAX_SWATCHES, SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput,
     SwatchesPanel, SwatchesPanelOutput, SwatchesState, SwatchesWords, swatch_rows,
 };
+pub use warning::{ColorWarning, ColorWarningArrangement, ColorWarningChip, ColorWarningChipOutput, ColorWarningChipStyle};
 pub use wheel::{
     ColorWheel, ColorWheelStyle, ColorWheelWords, WheelGeometry, WheelPart, hue_at, hue_direction, triangle_corners, triangle_point, triangle_sv,
 };

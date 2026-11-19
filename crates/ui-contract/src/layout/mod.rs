@@ -7,7 +7,11 @@ mod label;
 mod slot;
 
 pub use arrange::{Placed, arrange};
+<<<<<<< HEAD
 pub use body::{BodyLayout, RowAlign, ShrinkOrder, ShrinkUnit, levelled_unit, plan_levels, shrink_widths};
+=======
+pub use body::{BodyLayout, CellAlign, GridFit, RowAlign, ShrinkOrder, ShrinkUnit, empty_cell, shrink_widths};
+>>>>>>> up/next
 pub use column_group::ColumnGroup;
 #[doc(hidden)]
 pub use column_group::ambient_width;

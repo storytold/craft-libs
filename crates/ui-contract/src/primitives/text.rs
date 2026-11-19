@@ -280,7 +280,6 @@ impl TextRun<'_> {
             },
             break_anywhere: elide || clip,
             overflow_character: if clip { None } else { TextWrapping::default().overflow_character },
-            ..TextWrapping::default()
         };
         let mut job = paragraph_job(env.direction, self.ltr, wrap);
         let base = self.color.map_or(env.ink, StyleColor::egui);

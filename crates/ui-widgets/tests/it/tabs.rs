@@ -331,7 +331,7 @@ fn panel_widths(room: f32) -> Vec<(&'static str, f32)> {
         ui.set_max_width(room);
         let keys = [0_usize, 1, 2, 3, 4, 5];
         let source = keyed(&keys, |key: &usize| *key);
-        TabStrip::new("Panels").kind(TabKind::Panel).shown(1).show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
+        let _ = TabStrip::new("Panels").kind(TabKind::Panel).shown(1).show_items(ui, &source, &mut |key, _| Tab::new(PANELS[*key]));
     };
     frames.idle(3, &mut show);
     let tree = frames.tree();

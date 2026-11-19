@@ -8,6 +8,7 @@ pub(crate) mod editor;
 pub use editor::EditorHandle;
 mod entry;
 mod faces;
+pub(crate) mod footer_slot;
 pub mod ghost;
 mod group;
 mod held;
@@ -20,6 +21,7 @@ mod level;
 #[cfg(feature = "testing")]
 mod level_table;
 mod looks;
+mod memo;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -38,6 +40,7 @@ pub mod toast;
 pub mod tooltip;
 mod values;
 
+pub use crate::bind_tracked;
 pub use crate::layout::{BodyLayout, RowAlign};
 pub use crate::primitives::FacesCx;
 pub use crate::runtime::access::{Access, FieldLabel, GridPlace, Name, Numeric, Politeness, PopupKind, Role, SetPosition, SubNode, announce};
@@ -66,17 +69,19 @@ pub use container::{
     BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
     Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
-pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
+pub use craft_tracked::{PlainData, Revision, Tracked};
+pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
 #[doc(hidden)]
 pub use cx::THUMB;
 pub use cx::{
     Accessible, Activation, BodyCx, Cx, CxCore, Edit, Focus, ItemCx, ItemOpener, MeasureCx, PartBuilder, PartsCx, Pointer, Styled, WordSetCx,
 };
 pub use entry::{Entry, step_stop, step_stops};
+#[doc(hidden)]
+pub use footer_slot::FooterSlot;
 pub use group::{GroupHandle, GroupKind, GroupState};
 pub use held::Held;
 pub use hosted::{Hosted, HostedKey, Hosting};
-#[doc(hidden)]
 pub use items::lead_position;
 #[doc(hidden)]
 pub use items::put_toggle_names;
@@ -90,6 +95,7 @@ pub use lazy::Lazy;
 #[cfg(feature = "testing")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
+pub use memo::{MemoKey, MemoProps, Stateless};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
@@ -712,8 +718,8 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
     /// The height of the empty state at `width`: a `Sizing::Content` collection with no rows is this tall. The
     /// default is the height of `CollectionProps::empty` laid out at `width`; an override replaces the empty text, so
     /// it replaces `empty` as well.
-    fn empty_height(&self, width: f32, ui: &Ui, _cx: &StyleCx<'_>) -> f32 {
-        self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::height(ui, text, width))
+    fn empty_height(&self, width: f32, ui: &Ui, cx: &StyleCx<'_>) -> f32 {
+        self.items().empty.as_ref().map_or(0.0, |text| items::empty_text::height(ui, cx.tokens, text, width))
     }
 
     /// The empty state at the rect the item step placed. The default shows `CollectionProps::empty`.
@@ -733,17 +739,17 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 
     /// Shows the component at `rect`, with no allocation.
     fn show_at(self, ui: &mut Ui, rect: Rect) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Rect(rect), None)
+        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), None)
     }
 
     /// Shows the component with rich tooltip content from the same call.
     fn show_with_tip(self, ui: &mut Ui, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Flow, Some(Box::new(tip)))
+        run::show_leaf(&mut Some(self), ui, ShowAt::Flow, Some(Box::new(tip)))
     }
 
     /// Shows the component at `rect` with rich tooltip content.
     fn show_at_with_tip(self, ui: &mut Ui, rect: Rect, tip: impl FnOnce(&mut Ui)) -> Self::Output {
-        run::show_leaf(self, ui, ShowAt::Rect(rect), Some(Box::new(tip)))
+        run::show_leaf(&mut Some(self), ui, ShowAt::Rect(rect), Some(Box::new(tip)))
     }
 
     /// Measures without allocating: steps 1 to 5 under the id `show` would use next. It registers no id, opens no
@@ -757,18 +763,18 @@ pub trait Show: Component + Meta<Shape = shape::Leaf> + sealed::Show {
 pub trait ShowContainer: Container + sealed::ShowContainer {
     /// Shows the container in the flow of `ui`.
     fn show<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Flow, body, None)
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, None)
     }
 
     /// Shows the container at `rect`, with no allocation: a frame over a split or a layer the parent places.
     fn show_at<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Rect(rect), body, None)
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, None)
     }
 
     /// Shows the container at `rect` and takes that rect's room in the flow of `ui`: what is shown after it lies
     /// past it, as after [`show`](Self::show).
     fn show_at_taking_room<R>(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<Self::Output, R> {
-        run::show_container_taking(self, ui, rect, body)
+        run::show_container_taking(&mut Some(self), ui, rect, body)
     }
 
     /// Measures the container with `body` without allocating: steps 1 to 5 under the id `show` would use next, with
@@ -780,7 +786,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
 
     /// Shows the container with rich tooltip content.
     fn show_with_tip<R>(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R, tip: impl FnOnce(&mut Ui)) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Flow, body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Flow, body, Some(Box::new(tip)))
     }
 
     /// Shows the container at `rect` with rich tooltip content.
@@ -791,7 +797,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
         body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
         tip: impl FnOnce(&mut Ui),
     ) -> Inner<Self::Output, R> {
-        run::show_container(self, ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
+        run::show_container(&mut Some(self), ui, ShowAt::Rect(rect), body, Some(Box::new(tip)))
     }
 }
 
@@ -799,7 +805,7 @@ pub trait ShowContainer: Container + sealed::ShowContainer {
 pub trait ShowCollection: Collection + sealed::ShowCollection {
     /// Shows the visible items of `source`, one `item` call each.
     fn show_items<'r>(self, ui: &mut Ui, source: &dyn ItemSource<Self::Key>, item: &mut ItemFn<'r, Self>) -> Self::Output {
-        run::show_items(self, ui, source, item)
+        run::show_items(&mut Some(self), ui, source, item)
     }
 }
 

@@ -123,7 +123,7 @@ pub struct CardEvents {
 }
 
 /// The column lists of story grids, by count.
-static COLUMNS: [ColumnWidth; 4] = [ColumnWidth::fill(1.0); 4];
+const COLUMNS: [ColumnWidth; 4] = [ColumnWidth::fill(1.0); 4];
 
 /// The columns of a form-rows card: the captions, the stories, then the values they show. The stories' column is as
 /// wide as its widest story, so each value sits a gap past its control, as the old gallery showed it.
@@ -411,7 +411,7 @@ impl Host<'_> {
         let pad = if kind == SurfaceKind::Panel { self.panel_pad } else { Pad::Regular };
         let mut stack = Stack::new().id(self.id).fill_width().room_height(self.room).surface(kind).pad(pad);
         if let Some(mode) = self.look.mode {
-            stack = stack.theme(ThemeScope::mode(mode));
+            stack = stack.theme(ThemeScope::new().mode(mode));
         }
         stack
     }

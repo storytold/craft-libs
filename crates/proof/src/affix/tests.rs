@@ -475,3 +475,38 @@ x/12
         }
     }
 }
+
+#[test]
+fn displayed_casing_rejects_exact_exclusions_before_case_fallback() {
+    for flag in ["N", "F", "S"] {
+        let aff = "SET UTF-8\nNOSUGGEST N\nFORBIDDENWORD F\nSUBSTANDARD S\nSFX A Y 1\nSFX A 0 s .\nSFX B Y 1\nSFX B 0 S .\n";
+        let dic = format!("5\nnormal/A\nNORMAL/{flag}B\nmixCase\npour\nkm/K\n");
+        let d = AffixDict::from_hunspell(&format!("{aff}KEEPCASE K\n"), &dic, &[]).unwrap();
+        for (original, changed) in [("normal", "NORMAL"), ("normals", "NORMALS")] {
+            assert!(!d.can_suggest_cased(changed, changed), "{flag}: {changed}");
+            assert!(!d.can_suggest_cased(original, changed), "{flag}: {original} → {changed}");
+        }
+        assert!(d.can_suggest_cased("normal", "Normal"));
+        assert!(d.can_suggest_cased("mixCase", "MIXCASE"));
+        assert!(d.can_suggest_cased("km", "km") && !d.can_suggest_cased("km", "KM"));
+        assert!(!d.can_suggest_cased("normal", "pour"), "no arbitrary replacement");
+        let back = AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap();
+        assert!(!back.can_suggest_cased("normal", "NORMAL"));
+    }
+}
+
+#[test]
+fn displayed_casing_uses_normalization_and_native_homonym_policy() {
+    let aff = "SET UTF-8\nNOSUGGEST N\nSUBSTANDARD S\nIGNORE ()\nICONV 1\nICONV Q NORMAL\n";
+    for flag in ["N", "S"] {
+        let d = AffixDict::from_hunspell(aff, &format!("3\nnormal\nNORMAL/{flag}\nNORMAL\n"), &[]).unwrap();
+        // Native homonyms carry exclusions: a second entry does not erase NOSUGGEST.
+        assert!(!d.contains_suggestible("NORMAL"));
+        assert!(!d.can_suggest_cased("(normal)", "(NORMAL)"));
+        assert!(!d.can_suggest_cased("Q", "Q"));
+    }
+    let plain = AffixDict::from_hunspell(aff, "3\nnormal\nNORMAL\nNORMAL\n", &[]).unwrap();
+    assert!(plain.can_suggest_cased("normal", "NORMAL"));
+    assert!(plain.can_suggest_cased("Q", "Q"));
+    assert!(!plain.can_suggest_cased(&"x".repeat(MAX_INPUT_BYTES + 1), "NORMAL"));
+}

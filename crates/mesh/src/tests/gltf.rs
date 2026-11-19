@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::hammer;
-use crate::gltf::{MAX_ZERO_COMPONENTS, glb_container, read, split_glb, write_glb};
+use crate::gltf::{MAX_ZERO_COMPONENTS, glb_container, read, split_glb, uri_decode, write_glb};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
     TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
@@ -923,4 +923,33 @@ fn morph_targets_and_other_scenes_are_named_in_warnings() {
     assert_eq!(s.warnings, [morphs]);
     let s = parse(&one_mesh(&b, plain.clone())).unwrap();
     assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+}
+
+#[test]
+fn strict_uri_decoding_preserves_exact_names_and_rejects_invalid_utf8() {
+    use crate::gltf::uri_decode_strict;
+    for (input, expected) in [
+        ("", Some("")),
+        ("a+b", Some("a+b")),
+        ("a%20b", Some("a b")),
+        ("é/%E2%82%AC", Some("é/€")),
+        ("%", Some("%")),
+        ("%2", Some("%2")),
+        ("%GG", Some("%GG")),
+        ("%252e%252e", Some("%2e%2e")),
+        ("%2e%2e%2fmesh.bin", Some("../mesh.bin")),
+        ("%00", Some("\0")),
+        ("%FF", None),
+        ("%C0%AF", None),
+        ("%ED%A0%80", None),
+        ("%E2%82", None),
+    ] {
+        assert_eq!(uri_decode_strict(input).as_deref(), expected, "{input}");
+    }
+    // Keep the existing API's replacement-character behavior unchanged.
+    assert_eq!(uri_decode("%FF"), "�");
+    let input = "%41%GG+é".repeat(100_000);
+    let decoded = uri_decode_strict(&input).unwrap();
+    assert_eq!(decoded, "A%GG+é".repeat(100_000));
+    assert!(decoded.len() <= input.len());
 }

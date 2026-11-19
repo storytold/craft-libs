@@ -9,7 +9,11 @@ use crate::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowCo
 use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
+<<<<<<< HEAD
 use crate::dialog::{Dialog, DialogOutput, HeldAnswer};
+=======
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
+>>>>>>> up/next
 
 use crate::runtime::env::{Env, Label};
 
@@ -189,7 +193,7 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 /// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
 ///   typing run is one step.
 /// - The footer goes across the foot, the Preview check box and the footer controls at its start edge; with
-///   [`side_buttons`](FormDialog::side_buttons) the buttons stand in a column beside the body, with the Preview check
+///   [`button_place`](FormDialog::button_place) `ButtonPlace::Side` the buttons stand in a column beside the body, with the Preview check
 ///   box and the footer controls under them.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern)]
@@ -211,7 +215,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     closable: bool,
     accept_stays_open: bool,
     enter_confirms: bool,
-    side_buttons: bool,
+    button_place: ButtonPlace,
     footer_extra: Option<FooterExtraFn<'a>>,
     /// The Preview check box when shown, over its owner's bind or (`None`) the footer's memory.
     preview: Option<Option<Bind<'a, bool>>>,
@@ -246,7 +250,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable: true,
             accept_stays_open: false,
             enter_confirms: true,
-            side_buttons: false,
+            button_place: ButtonPlace::Foot,
             footer_extra: None,
             preview: None,
             extra_buttons: Vec::new(),
@@ -367,10 +371,11 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// Whether the buttons stand in a column beside the body, with the Preview check box and the footer controls under
-    /// them (`Dialog::side_buttons`), instead of across the foot: Photoshop's button-column dialogs.
-    pub fn side_buttons(mut self, on: bool) -> Self {
-        self.side_buttons = on;
+    /// Where the buttons stand (`Dialog::button_place`): across the foot by default; `ButtonPlace::Side` puts them in a
+    /// column beside the body, with the Preview check box and the footer controls under them, as Photoshop's
+    /// button-column dialogs.
+    pub fn button_place(mut self, place: ButtonPlace) -> Self {
+        self.button_place = place;
         self
     }
 
@@ -433,7 +438,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             closable,
             accept_stays_open,
             enter_confirms,
-            side_buttons,
+            button_place,
             footer_extra,
             preview,
             extra_buttons,
@@ -496,11 +501,16 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             .closable(closable)
             .close_on_enter(enter_confirms && if no_ok { enter_extra } else { ok_enabled })
             .outer_gesture(outer_gesture)
+<<<<<<< HEAD
             .side_buttons(side_buttons);
         dialog = match close {
             Some(close) => dialog.buttons(close),
             None => reset.install(dialog, accept, restore),
         };
+=======
+            .button_place(button_place);
+        dialog = reset.install(dialog, accept, restore);
+>>>>>>> up/next
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

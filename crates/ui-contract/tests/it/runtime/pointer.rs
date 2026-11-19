@@ -461,7 +461,7 @@ fn a_root_under_a_nested_control_hovers_only_where_its_press_lands() {
 fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
     const NAMES: [&str; 8] = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"];
     let counts = |roots: usize| {
-        let stack = NAMES[..roots].iter().map(|name| ProbeRoot::new(*name, rect(100.0, 100.0, 200.0, 100.0), Sense::CLICK)).collect();
+        let stack = NAMES[..roots].iter().map(|name| ProbeRoot::new(name, rect(100.0, 100.0, 200.0, 100.0), Sense::CLICK)).collect();
         let (mut show_frame, _log) = scene(stack);
         let mut frames = Frames::new();
         frames.idle(2, &mut show_frame);

@@ -665,7 +665,7 @@ pub(super) fn initial_focus(state: &mut State, frame: u64) -> Vec<Act> {
     match pick.cloned() {
         Some(rec) => {
             state.entered = true;
-            state.focus_stop(rec)
+            state.focus_stop_from(rec, FocusOrigin::Open)
         }
         None => Vec::new(),
     }

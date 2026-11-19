@@ -3,6 +3,7 @@
 //! Help search, undoes the typing in the text field that held focus. Any other activation that closes a menu returns
 //! focus the same way; Escape is no activation and leaves focus on the bar title.
 
+use craft_host::target::Os;
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::menu::MenuItem;
 use craft_ui::menu::bar::{MenuBar, MenuHelp, MenuTitle};
@@ -40,11 +41,13 @@ fn rig() -> Rig {
                 MenuItem::new("&About").show(ui);
             }),
         ];
-        let help = vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
+        let help = || vec![HelpEntry::new(EditCommands::Undo, "Undo").with_path(["Edit"])];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(1, &help)).show(ui);
         let mut held = text.borrow_mut();
         field.set(Some(TextField::new("Name", Bind::bound(&mut *held)).show(ui).response.id));
     });
+    // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
     fixture.settle();
     let name = fixture.by_label("Name").expect("the text field");
     fixture.click(&name);
@@ -108,6 +111,7 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -145,6 +149,7 @@ fn a_command_shortcut_closes_an_open_menu_and_runs() {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -207,7 +212,7 @@ fn scoped_rig() -> ScopedRig {
         let titles = vec![MenuTitle::new("&Help", |ui| {
             MenuItem::new("&About").show(ui);
         })];
-        let help = vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
+        let help = || vec![HelpEntry::new(BarKeysCommand::Toggle, "Toggle")];
         MenuBar::new("Main menu", titles).help(MenuHelp::new(0, &help)).show(ui);
         craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
             while cx.take_command::<BarKeysCommand>().is_some() {
@@ -216,6 +221,7 @@ fn scoped_rig() -> ScopedRig {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -284,6 +290,7 @@ fn a_command_shortcut_after_moving_in_an_open_menu_runs_where_focus_was() {
             stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
         });
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
     fixture.settle();
@@ -365,6 +372,7 @@ fn an_open_menu_takes_letters_and_arrows_from_a_focused_text_field() {
         let mut held = text.borrow_mut();
         field.set(Some(TextField::new("Zoom level", Bind::bound(&mut *held)).show(ui).response.id));
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let name = fixture.by_label("Zoom level").expect("the text field");
     fixture.click(&name);

@@ -9,7 +9,11 @@ use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Bind, FieldLayout, NoValue, Outcome, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SideLabel, Sizing,
 };
+<<<<<<< HEAD
 use craft_ui::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id};
+=======
+use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
+>>>>>>> up/next
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Row, Stack};
@@ -425,11 +429,18 @@ impl HyperlinkDialog {
             buttons.push(FooterButton::new(words.remove.clone(), DialogRole::Destructive));
         }
         let dialog = Dialog::new(title)
+<<<<<<< HEAD
             .side_buttons(true)
             .buttons(buttons)
             .initial_focus(Initial::Default)
             .opened(Bind::bound(open))
             .refusal(|| refused.as_ref().filter(|(_, answer)| current.borrow().as_ref() == Some(answer)).map(|(reason, _)| reason.clone()))
+=======
+            .button_place(ButtonPlace::Side)
+            .buttons(buttons)
+            .initial_focus(Initial::Default)
+            .opened(Bind::bound(open))
+>>>>>>> up/next
             .settle_buttons(|_, buttons| {
                 if let Some(accept) = buttons.get_mut(OK) {
                     accept.set_enabled(current.borrow().is_some() && !waiting);

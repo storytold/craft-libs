@@ -15,6 +15,7 @@ Grouped by gallery level, then shape, then name.
 | `CropOverlay` | Leaf | `craft_ui_canvas::canvas::crop` | The crop frame of a document, edited by dragging it as Photoshop's Classic crop does (or moving and turning the image behind it in image mode) and by the keyboard |
 | `Divider` | Leaf | `craft_ui_widgets::display::divider` | A separator line in the divider colour, snapped to the pixel grid |
 | `FalloffPreview` | Leaf | `craft_ui_canvas::canvas_controls::brush::falloff` | A tip's falloff centred at a document point, with the circle of the brush's size round it: the preview a brush resize and a hover show |
+| `FooterSlot` | Leaf | `craft_ui_contract::contract::footer_slot` | The cell where a container whose footer stands in its body (`FooterPlace::Body`) draws that footer: a dialog's buttons in the cell its body's arrangement keeps for them, as the Color Picker keeps one above its second field group |
 | `Guides` | Leaf | `craft_ui_canvas::canvas_controls::guides` | The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard |
 | `HeaderText` | Leaf | `craft_ui_contract::contract::items::header` | A header cell's label |
 | `HoverOutline` | Leaf | `craft_ui_canvas::canvas_controls::outline` | The outline of the object under the pointer: decoration over the canvas, drawn after the document and before the tool's own marks |
@@ -104,7 +105,7 @@ Grouped by gallery level, then shape, then name.
 | `ThumbnailSlider` | Leaf | `craft_ui_widgets::tile_grid::slider` | The tile size slider: a small picture glyph button, a `Slider` over [`TileZoom::range`] and a large picture glyph button |
 | `Tile` | Leaf | `craft_ui_widgets::tile_grid::tile` | One tile of a tile grid |
 | `TitleFace` | Leaf | `craft_ui_widgets::menu::bar` | The face of a menu title: lit while its menu is open or the keyboard is on it, its mnemonic underlined while Alt is held or the bar has focus |
-| `TitleRow` | Leaf | `craft_ui_panels::sections::title_row` | An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional subtitle at the band's end (muted caption text: the target's kind), a lead (a disclosure bound to the container's open state, or a check box bound to its gate) and action parts |
+| `TitleRow` | Leaf | `craft_ui_panels::sections::title_row` | An optional icon, a title with an optional note run on after it ("· note", muted body text) and an optional subtitle at the band's end (faint caption text: the target's kind), a lead (a disclosure bound to the container's open state, or a check box bound to its gate) and action parts |
 | `DropAction` | Body | `craft_ui_panels::sections::footer` | A container that is as large as its one child and takes drops of payload type `P` over that child |
 | `Field` | Body | `craft_ui_widgets::form::field` | One control with a side label: beside it, above it, as a caption or after it (`Field::layout`) |
 | `FieldGroup` | Body | `craft_ui_widgets::form::group` | A stack of `Field`s (and `LinkedFields`) named `label`, filling the width offered |
@@ -132,7 +133,7 @@ Grouped by gallery level, then shape, then name.
 | `PreviewPane` | Leaf | `craft_ui_patterns::patterns::form_dialogs::preview` | A picture in a well, over a checkerboard where it is transparent |
 | `Splitter` | Leaf | `craft_ui_panels::docking::splitter` | A line between two panes, as thick across as the pointer's grab distance |
 | `VeilCard` | Leaf | `craft_ui_widgets::popover::drop_veil` | The card of a veil: a popup surface around the label's `Text`, as wide and high as the text with its padding |
-| `Bar` | Body | `craft_ui_widgets::bars::bar` | A bar over a chrome surface whose body holds the members in reading order: a tool bar's at the standard control size, an options or status bar's at the small one |
+| `Bar` | Body | `craft_ui_widgets::bars::bar` | A bar over a chrome surface whose body holds the members in reading order: a tool or options bar's at the standard control size, a status bar's at the small one |
 | `BlockingOverlay` | Body | `craft_ui_panels::dialog::blocking` | A modal layer that takes the window's input while it is shown, with the wait cursor |
 | `Dialog` | Body | `craft_ui_panels::dialog::modal` | A dialog on its own layer |
 | `DialogFrame` | Body | `craft_ui_panels::dialog::frame` | The look of a dialog in the flow of its parent: the dialog surface, a title row, the body and a footer |
@@ -152,7 +153,7 @@ Grouped by gallery level, then shape, then name.
 | `SplitArea` | Body | `craft_ui_panels::docking` | The docked tree of a layout, with a handle between neighbouring groups |
 | `StackSections` | Body | `craft_ui_panels::docking::stack` | An accordion laid out in the rect it is shown at (`section_heights` with the strip height of the docking sizes), with a divider between its open sections |
 | `TitleBar` | Body | `craft_ui_shell::shell::title_bar::bar` | The bar of a window whose frame the app draws |
-| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots in a grid of as many columns as its width holds: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on; its dock column is whole tool columns wide and as tall as its rows and footer |
+| `ToolRail` | Body | `craft_ui_panels::rails::tool` | The rail of tool slots, laid out in a grid of columns: one `FlyoutButton` per visible slot showing the slot's shown tool, the slot with the current tool toggled on |
 | `AboutDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::about` | Help > About: tabs About, Contributors and Models over the app's [`AboutInfo`] and [`Credits`], with an OK button |
 | `Alert` | Pattern | `craft_ui_panels::dialog::alert` | A modal notice with one OK button: a prompt whose only answer is OK, which OK, Enter, Escape and the close action all give |
 | `AlignBar` | Pattern | `craft_ui_widgets::bars::align` | The two sections of four align and distribute buttons, then the menu button, shown as children of a `Bar` |
@@ -234,7 +235,7 @@ Grouped by gallery level, then shape, then name.
 | `DocumentWindow` | Body | `craft_ui_shell::shell::document_window` | A document's window: the container of one entry of the app's window list, in its own OS window |
 | `ShellRegion` | Body | `craft_ui_shell::shell::app_shell` | A region of the window skeleton: the root window's content, the scope that carries the shell to its slots, or one pane (a bar, a rail or the body) |
 | `AppShell` | Pattern | `craft_ui_shell::shell::app_shell` | The window skeleton |
-| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document; then the document area, over the canvas surround |
+| `CanvasPanel` | Pattern | `craft_ui_shell::shell::canvas_shell` | The canvas panel of a dock: the document tab strip flush against the document, then the document area, over the canvas surround |
 | `OpeningCard` | Pattern | `craft_ui_shell::shell::opening` | A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar (indeterminate without a fraction), the percentage at the start and Cancel at the end of the last row |
 | `ScreenModeButton` | Pattern | `craft_ui_shell::shell::screen_mode_button` | A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away or a right click lists the three modes without cycling |
 | `StartScreen` | Pattern | `craft_ui_shell::shell::start` | The start screen, shown in a shell's body when no document is open |

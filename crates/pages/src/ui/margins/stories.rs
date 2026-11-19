@@ -2,7 +2,7 @@
 
 use super::{MarginHandles, PageEdges};
 use crate::setup::Margins;
-use crate::ui::fixtures::demo_placed;
+use crate::ui::fixtures::fitted_page;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::Canvas;
@@ -11,15 +11,18 @@ use craft_ui::runtime::env::{Message, UnitKind};
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Ui, Vec2};
 
+<<<<<<< HEAD
 /// The pasteboard shown above and to the left of the page, points: the page's corner and its left and top margins lie
 /// inside the stage, where a pointer reaches their edges.
 const LEAD: f64 = 48.0;
 
+=======
+>>>>>>> up/next
 /// How far the drag moves the left edge, in drag thresholds.
 const DRAG_THRESHOLDS: f32 = 12.0;
 
 fn drag_left_edge(fixture: &mut Fixture) {
-    let Some(target) = fixture.by_label("Left Margin") else { return };
+    let target = fixture.by_label("Left Margin").expect("the handles name their left edge Left Margin");
     let travel = DRAG_THRESHOLDS * craft_ui::testing::input::slop(fixture.ctx());
     fixture.drag(&target, Vec2::new(travel, 0.0));
 }
@@ -27,14 +30,22 @@ fn drag_left_edge(fixture: &mut Fixture) {
 /// The handles over `edges` on a page canvas.
 fn handles(ui: &mut Ui, edges: Bind<'_, PageEdges>) -> StoryOutput {
     let full = craft_ui::testing::stage(ui);
+<<<<<<< HEAD
     // At 100% the page is wider than the stage: the view shows its top-left corner, as a document opens scrolled to it.
     let centre = Point::new(f64::from(full.width()) / 2.0 - LEAD, f64::from(full.height()) / 2.0 - LEAD);
     let view = CanvasView::new(full, centre, 1.0);
+=======
+    let mut view = CanvasView::new(full, Point::ZERO, 1.0);
+    let page = fitted_page(&mut view, ui.ctx().pixels_per_point());
+>>>>>>> up/next
     let mut edges = edges;
     Canvas::new("Pages")
         .view(view)
         .show_at(ui, full, |ui, body| {
+<<<<<<< HEAD
             let page = demo_placed(1, CanvasView::new(body.rect, centre, 1.0).to_screen(Point::ZERO)).remove(0);
+=======
+>>>>>>> up/next
             Some(MarginHandles::new("Margins", &page, edges.reborrowed()).header_footer().unit(UnitKind::Inches).show_at(ui, body.rect))
         })
         .inner

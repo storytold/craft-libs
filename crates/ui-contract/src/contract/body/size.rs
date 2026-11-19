@@ -2,7 +2,7 @@
 
 use super::BodyHooks;
 use super::placement::overlay_of;
-use super::regions::{RegionSizes, end_full_height, footer_in_end};
+use super::regions::{RegionSizes, end_full_height, footer_in_body, footer_in_end};
 use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
 use crate::contract::{ContainerProps, Mount, PadEdges, ShellPane, Sizing};
@@ -10,6 +10,7 @@ use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
 use crate::runtime::memory::sub;
+use crate::style::UiTokens;
 use craft_behavior::layout_memory::measure_tolerance;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::sync::Arc;
@@ -218,6 +219,8 @@ impl<'b> BodyHooks<'b> {
     /// stacks with its content; a full-height end region stands beside the body and the footer.
     pub(super) fn regions_size(&self, props: &ContainerProps, body: Vec2, header: Vec2, footer: Vec2, end: Vec2) -> Vec2 {
         let in_end = footer_in_end(props);
+        // A footer the body places is inside the body's size.
+        let footer = if footer_in_body(props) { Vec2::ZERO } else { footer };
         let end = if in_end { Vec2::new(end.x.max(footer.x), end.y + footer.y) } else { end };
         let across = if in_end { Vec2::ZERO } else { footer };
         let gap = |width: f32, gap: f32| if width > 0.0 { width + gap } else { 0.0 };
@@ -264,8 +267,9 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The room the mount offers: a layer's room, unless the host gives it a rect of its own size, else the rect the
-    /// container is shown at, else the room of the flow.
-    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt) -> Vec2 {
+    /// container is shown at, else the room of the flow. `tokens` are the container's own, as its token scope sets them:
+    /// the layer keeps the inset from the screen edge the host places it with.
+    pub(super) fn mount_room(&self, props: &ContainerProps, ui: &Ui, id: Id, at: ShowAt, tokens: &UiTokens) -> Vec2 {
         match (overlay_of(props), self.fixed) {
             (Some(overlay), false) => {
                 let env = Env::of(ui);
@@ -283,7 +287,7 @@ impl<'b> BodyHooks<'b> {
                     overlay,
                     own,
                     areas::layer_to_screen(ctx, ui.layer_id()),
-                    Env::of(ui).tokens.space.pad.regular,
+                    tokens.space.pad.regular,
                     rtl,
                 ) {
                     Some(side) => side.min(room),

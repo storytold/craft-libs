@@ -355,6 +355,51 @@ fn a_panel_that_shares_no_column_moves_only_to_a_column_of_its_own() {
     assert_eq!(sorted(&saved.layout), [1, 2, 3, 4, 6]);
 }
 
+/// A panel that docks only in dock columns (a toolbar, photocraft#12517) refuses every placement that leaves it in a
+/// frame of the docked tree: a split beside the canvas on any side and an edge of the docked area, so it never lies
+/// across the window. A new dock, a column beside another and a float still take it, other panels still move while
+/// one sits in a frame (only a new breach is refused), and reconcile moves a saved one into a dock column.
+#[test]
+fn a_panel_that_docks_only_in_columns_never_lands_in_a_frame() {
+    let strip = |p: &u32| match p {
+        2 => Permissions::ALL.shares_column(false).docks_outside_columns(false),
+        1 => Permissions::PROTECTED.accepts_splits(true),
+        _ => Permissions::ALL,
+    };
+    let layout = columns();
+    let sides = [DockSide::Top, DockSide::Bottom, DockSide::Start, DockSide::End];
+    let framed = sides.iter().map(|side| DockPlacement::Split(*side)).chain(sides.iter().map(|side| DockPlacement::Edge(*side)));
+    for placement in framed {
+        let mut moved = layout.clone();
+        let action = Action::move_column(2, Target::at(1, placement.clone()));
+        assert_eq!(moved.apply_with_permissions(action, strip), Err(DockError::NotAllowed), "{placement:?}");
+        assert_eq!(moved, layout, "{placement:?}");
+    }
+    for to in [Target::new_dock(DockEdge::Start), Target::at(3, DockPlacement::column(true)), Target::float(window())] {
+        let mut moved = layout.clone();
+        moved.apply_with_permissions(Action::move_column(2, to.clone()), strip).unwrap_or_else(|e| panic!("{to:?}: {e}"));
+        assert!(!matches!(moved.place(&2), Some(PanelPlace::Node(_))), "{to:?}");
+    }
+    // Without the right the same split takes it, so the refusal above is this right's.
+    let mut split = layout.clone();
+    split
+        .apply_with_permissions(Action::move_column(2, Target::at(1, DockPlacement::Split(DockSide::Bottom))), |p: &u32| match p {
+            2 => Permissions::ALL.shares_column(false),
+            _ => Permissions::ALL,
+        })
+        .unwrap();
+    assert!(matches!(split.place(&2), Some(PanelPlace::Node(_))));
+
+    // A layout saved with the panel in a frame: other panels still move, and reconcile docks it in a column.
+    let mut other = split.clone();
+    other.apply_with_permissions(Action::move_group(6, Target::at(3, DockPlacement::column(false))), strip).unwrap();
+    let mut saved = Workspace::new(split);
+    saved.reconcile(|_| true, strip, &Workspace::new(columns()));
+    assert!(matches!(saved.layout.place(&2), Some(PanelPlace::Dock { .. })), "reconcile docks it in a column: {:?}", saved.layout);
+    assert_eq!(column_of(&saved.layout, 2).panels().collect::<Vec<_>>(), [&2]);
+    assert_eq!(sorted(&saved.layout), [1, 2, 3, 4, 6]);
+}
+
 /// A stepped column (a toolbar's) keeps its step count docked, floating and through JSON, and its width moves only
 /// by steps.
 #[test]

@@ -200,7 +200,7 @@ impl PaintUi<'_> {
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(super::Props::id(child, id), kids, ShowAt::Rect(rect), tip));
+        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
         Env::restore(&ctx, installed);
         output
     }

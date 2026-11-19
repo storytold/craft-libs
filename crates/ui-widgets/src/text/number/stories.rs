@@ -55,16 +55,16 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .size(size)
                 .show(ui);
         });
-        row("Unit after").show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
+            row("Unit after").show(ui, |ui, _| {
                 NumberField::new("Angle", Bind::bound(data.value("angle", Some(120.0))))
                     .range(0.0..=360.0)
                     .unit_kind(UnitKind::Degrees)
                     .unit_placement(UnitPlacement::After)
                     .size(size)
                     .show(ui);
-                Text::new(units.symbol(UnitKind::Degrees)).show(ui);
             });
+            Text::new(units.symbol(UnitKind::Degrees)).show(ui);
         });
         row("Mixed").show(ui, |ui, _| {
             NumberField::new("Mixed size", Bind::bound_mixed(data.value("mixed", Mixed::<Option<f64>>::Mixed)))

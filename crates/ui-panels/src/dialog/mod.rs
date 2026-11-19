@@ -28,8 +28,13 @@ pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHoo
 pub use held::{HeldAnswer, HeldOk};
 #[doc(hidden)]
 pub use host::dialog_probe;
+<<<<<<< HEAD
 pub use host::{ChildDialog, DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
 pub use modal::{Dialog, DialogStyle};
+=======
+pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
+pub use modal::{ButtonPlace, Dialog, DialogStyle};
+>>>>>>> up/next
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};
 pub use recovery::{RecoveredDocument, RecoveryAnswer, RecoveryDialog, RecoveryOutput};
