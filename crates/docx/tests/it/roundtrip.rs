@@ -299,7 +299,7 @@ fn styles_and_lists_round_trip() {
     d.body = ps.into_iter().map(para_block).collect();
     let r = rt(&d);
     assert_eq!(r.numbering, d.numbering);
-    assert_eq!(r.styles.default_chr, d.styles.default_chr);
+    assert_eq!(r.styles.default_chr, slots_named(&d.styles.default_chr));
     assert_eq!(r.styles.default_para, d.styles.default_para);
     for s in &d.styles.styles {
         assert_eq!(r.styles.get(&s.id), Some(s), "style {}", s.id);
@@ -1926,7 +1926,9 @@ fn flat_opc_round_trip_equals_docx() {
 fn builtin_stylesheet_survives() {
     let d = Document::new();
     let r = rt(&d);
-    assert_eq!(r.styles, d.styles);
+    let mut want = (*d.styles).clone();
+    want.default_chr = slots_named(&want.default_chr);
+    assert_eq!(*r.styles, want);
     assert_eq!(r.body, d.body);
     assert_eq!(r.last_section, d.last_section);
 }
@@ -3048,4 +3050,18 @@ fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
     assert_eq!(saved.matches("<w:gutterAtTop/>").count(), 1, "{saved}");
     let at = |tag: &str| saved.find(tag).unwrap_or_else(|| panic!("{tag} missing: {saved}"));
     assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:proofState"), "{saved}");
+}
+
+/// Run defaults as a save writes them: each font slot WordCraft draws in the Latin font, named.
+/// (Word draws a slot the run defaults leave out in Times New Roman.)
+fn slots_named(c: &CharProps) -> CharProps {
+    let latin = c.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
+    let mut c = c.clone();
+    if c.font_cs.is_none() && c.font_cs_theme.is_none() {
+        c.font_cs = Some(latin.clone());
+    }
+    if c.font_ea.is_none() && c.font_ea_theme.is_none() {
+        c.font_ea = Some(latin);
+    }
+    c
 }

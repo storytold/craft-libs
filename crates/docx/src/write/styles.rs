@@ -29,15 +29,24 @@ pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     w.open("w:docDefaults", &[]);
     w.open("w:rPrDefault", &[]);
     w.open("w:rPr", &[]);
-    if s.default_chr.size.is_none() {
-        // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
-        // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
-        let mut chr = s.default_chr.clone();
-        chr.size = Some(craft_wordmodel::props::DEFAULT_FONT_SIZE);
-        props::rpr_inner(&mut w, &chr);
-    } else {
-        props::rpr_inner(&mut w, &s.default_chr);
+    let mut chr = s.default_chr.clone();
+    // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
+    // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
+    chr.size.get_or_insert(craft_wordmodel::props::DEFAULT_FONT_SIZE);
+    // Word draws each font slot the run defaults leave out in Times New Roman, where WordCraft
+    // draws the Latin font (its body font when that is unset too): each is written out, so Thai
+    // and East Asian text keep the font they had. A theme slot stays a theme slot.
+    let latin = chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
+    if chr.font.is_none() && chr.font_ascii_theme.is_none() && chr.font_hansi_theme.is_none() {
+        chr.font = Some(latin.clone());
     }
+    if chr.font_cs.is_none() && chr.font_cs_theme.is_none() {
+        chr.font_cs = Some(latin.clone());
+    }
+    if chr.font_ea.is_none() && chr.font_ea_theme.is_none() {
+        chr.font_ea = Some(latin);
+    }
+    props::rpr_inner(&mut w, &chr);
     w.close("w:rPr");
     w.close("w:rPrDefault");
     if s.default_para_present || s.default_para != craft_wordmodel::props::ParaProps::default() {

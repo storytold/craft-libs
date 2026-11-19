@@ -228,6 +228,61 @@ fn a_default_part_left_out_is_words_own() {
     assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));
 }
 
+/// Run defaults naming only a Latin font: Word draws Thai and East Asian text in Times New Roman,
+/// not in that font (measured in Word for Windows), so those slots read as Times New Roman. And
+/// run defaults WordCraft writes name every slot it draws with, the Latin font where the model
+/// leaves one to it, so Word draws Thai and East Asian text in the same font after a save.
+#[test]
+fn run_defaults_naming_only_a_latin_font_leave_the_other_slots_words() {
+    use std::io::Read as _;
+    let part_xml = |bytes: &[u8], name: &str| {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        archive.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    };
+    let styles = |fonts: &str| {
+        format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr>{fonts}</w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        )
+    };
+    let read = |fonts: &str| {
+        let styles = styles(fonts);
+        craft_docx::read(&docx("<w:p><w:r><w:t>ไทย</w:t></w:r></w:p>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles.as_str())]))
+            .unwrap()
+    };
+    let s = |f: &str| Some(f.to_string());
+    let d = read(r#"<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/>"#);
+    let c = &d.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Georgia"), s("Times New Roman"), s("Times New Roman")));
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Times New Roman");
+    // Named slots stay theirs.
+    let d = read(r#"<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia" w:cs="Tahoma" w:eastAsia="SimSun"/>"#);
+    let c = &d.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Georgia"), s("Tahoma"), s("SimSun")));
+    // Written: each slot WordCraft draws with, and the same when read back.
+    let mut d = craft_wordmodel::Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr =
+        craft_wordmodel::props::CharProps { font: s("Aptos"), size: Some(11.0), ..Default::default() };
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = part_xml(&bytes, "word/styles.xml");
+    let defaults = xml.split("<w:rPrDefault>").nth(1).and_then(|r| r.split("</w:rPrDefault>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(defaults.contains(r#"w:cs="Aptos""#) && defaults.contains(r#"w:eastAsia="Aptos""#), "{defaults}");
+    let again = craft_docx::read(&bytes).unwrap();
+    let c = &again.styles.default_chr;
+    assert_eq!((c.font.clone(), c.font_cs.clone(), c.font_ea.clone()), (s("Aptos"), s("Aptos"), s("Aptos")));
+    // A theme slot is still written as a theme slot, not filled.
+    let mut d = craft_wordmodel::Document::new();
+    std::sync::Arc::make_mut(&mut d.styles).default_chr = craft_wordmodel::props::CharProps {
+        font: s("Aptos"),
+        font_cs_theme: Some(craft_wordmodel::props::ThemeFont::MinorBidi),
+        ..Default::default()
+    };
+    let xml = part_xml(&craft_docx::write(&d).unwrap(), "word/styles.xml");
+    let defaults = xml.split("<w:rPrDefault>").nth(1).and_then(|r| r.split("</w:rPrDefault>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(defaults.contains(r#"w:cstheme="minorBidi""#) && !defaults.contains(r#"w:cs="Aptos""#), "{defaults}");
+}
+
 /// A theme's font names are bounded as the run fonts are: an over-long `a:latin` or `a:cs`
 /// typeface is left out, so it doesn't become the document's theme font or, where the run
 /// defaults are left out, every run's complex-script font.
