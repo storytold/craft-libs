@@ -6,4 +6,5 @@ mod hit_order;
 mod pages;
 mod pointer;
 mod style;
+mod tracked_bind;
 mod visited_type;
