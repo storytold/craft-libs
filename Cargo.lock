@@ -1571,7 +1571,7 @@ dependencies = [
 [[package]]
 name = "craft-ai-agents"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-ai-integrations?rev=35e0352666a117407d62230a6c6c2366f3e21a3b#35e0352666a117407d62230a6c6c2366f3e21a3b"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=d94a3593adcff504eaaad9e5aee4c84fd2f07a72#d94a3593adcff504eaaad9e5aee4c84fd2f07a72"
 dependencies = [
  "dirs",
  "serde",
@@ -1697,6 +1697,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-color-transform"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+ "craft-color",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
@@ -1781,6 +1791,27 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-develop-model",
+ "proptest",
+ "serde",
+]
+
+[[package]]
+name = "craft-develop-model"
+version = "0.1.0"
+dependencies = [
+ "craft-geom",
+ "craft-metadata",
+ "miniz_oxide 0.9.1",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2190,11 +2221,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-geom"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-gif"
 version = "0.1.0"
 dependencies = [
  "gif",
  "image",
+]
+
+[[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-null"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+]
+
+[[package]]
+name = "craft-gpu-providers"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+]
+
+[[package]]
+name = "craft-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-providers",
+ "pollster 0.4.0",
+ "wgpu",
 ]
 
 [[package]]
@@ -2303,6 +2376,7 @@ dependencies = [
  "craft-dds",
  "craft-heif",
  "craft-jpeg",
+ "craft-jxl",
  "craft-media-testkit",
  "craft-metadata",
  "craft-tiff",
@@ -2353,6 +2427,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ipp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-java-class"
 version = "0.1.0"
 dependencies = [
@@ -2399,6 +2477,7 @@ dependencies = [
 name = "craft-jxl"
 version = "0.1.0"
 dependencies = [
+ "brotli-decompressor 5.0.3",
  "craft-cms",
  "jixel",
  "jxl-oxide",
@@ -2887,6 +2966,7 @@ dependencies = [
 name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
+ "kurbo 0.13.1",
  "serde",
  "thiserror 2.0.21",
 ]

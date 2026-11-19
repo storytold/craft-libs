@@ -61,8 +61,8 @@ craft-gzip = { path = "crates/gzip" }
 craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
-# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/ai-agents).
-craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
+# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/app/ai-agents).
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72" }
 craft-dex = { path = "crates/dex" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
@@ -72,6 +72,7 @@ craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
 craft-cloud-local = { path = "crates/cloud-local" }
 craft-color = { path = "crates/color" }
+craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
@@ -114,9 +115,14 @@ craft-gif = { path = "crates/gif" }
 craft-hdr = { path = "crates/hdr" }
 craft-mesh = { path = "crates/mesh" }
 craft-html = { path = "crates/html" }
+craft-ipp = { path = "crates/ipp" }
 craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
+craft-gpu = { path = "crates/gpu" }
+craft-gpu-null = { path = "crates/gpu-null" }
+craft-gpu-providers = { path = "crates/gpu-providers" }
+craft-gpu-wgpu = { path = "crates/gpu-wgpu" }
 craft-i18n = { path = "crates/i18n" }
 craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
@@ -127,7 +133,7 @@ craft-jpeg = { path = "crates/jpeg" }
 craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
-craft-jxl = { path = "crates/jxl" }
+craft-jxl = { path = "crates/jxl", default-features = false }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
@@ -173,6 +179,9 @@ craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
+craft-geom = { path = "crates/geom" }
+craft-develop = { path = "crates/develop" }
+craft-develop-model = { path = "crates/develop-model" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-settings = { path = "crates/settings" }
@@ -228,6 +237,9 @@ proptest = "1"
 encoding_rs = "0.8"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# Foundation crates for craft-gpu-wgpu. The versions match the ones the app repos already pin.
+pollster = "0.4"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
