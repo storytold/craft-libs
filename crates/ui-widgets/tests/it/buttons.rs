@@ -545,6 +545,35 @@ fn a_side_menus_selected_row_shows_a_band_over_the_brand() {
     assert!(plain.expect("a ghost button has a surface").fill.on.is_none(), "a selected ghost button elsewhere keeps its look");
 }
 
+/// A side menu's row shows its icon at the standard icon side, larger than a control's small one, as WordCraft's File
+/// rail reads by its page icons; a ghost button elsewhere keeps the control's icon.
+#[trial]
+fn a_side_menus_row_shows_the_standard_icon() {
+    let icon_side = |side: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                let _ = Button::new("Print").icon(IconId::new("print")).variant(Variant::GHOST).show(ui);
+            };
+            if side {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        let style = fixture.styles_of(std::any::type_name::<Button<'static>>()).into_iter().next().expect("the button resolved its style");
+        style.looks.icons.first().expect("a button has an icon look").side
+    };
+    let (menu, plain) = (icon_side(true), icon_side(false));
+    assert!(menu > plain, "a side menu's icon is the standard one: {menu} against {plain}");
+}
+
 /// A split button's body that closes itself (a colour palette's swatch pick) closes the split's menu layer: before,
 /// the close reached only the inline menu inside the layer, which stayed open around an empty body. Opened again, the
 /// body shows its rows.

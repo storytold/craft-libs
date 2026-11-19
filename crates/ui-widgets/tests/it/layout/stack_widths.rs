@@ -4,7 +4,7 @@
 //! row there too.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{LeastWidth, Props as _, Show as _, ShowContainer as _, WrapWidth};
+use craft_ui::contract::{Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, WrapWidth};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::testing::{Fixture, trial};
@@ -41,6 +41,69 @@ fn a_stacks_least_width_holds_it_wider_than_narrow_content() {
     assert!(plain != Rect::NOTHING && menu != Rect::NOTHING, "both stacks showed");
     assert!(plain.width() < button.width() + 2.0, "a plain stack is as wide as its button: {plain:?} for {button:?}");
     assert!(menu.width() > plain.width() + 60.0, "the side menu's least width holds it wider: {menu:?} against {plain:?}");
+}
+
+/// In a row beside a page that fills, a full-height side menu keeps its least width: the row places its children by
+/// their measure, and that measure held only the menu's content (a File page's rail came out at its widest name).
+#[trial]
+fn a_side_menu_in_a_row_keeps_its_least_width() {
+    let shown = |least: bool| {
+        let seen = Rc::new(Cell::new((Rect::NOTHING, Rect::NOTHING)));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let (menu, page) = (Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING));
+            let _ = Row::new().fill().show(ui, |ui, _| {
+                let mut stack = Stack::new().sizing(Sizing::FillHeight).gap(Gap::None).scroll(Scroll::vertical()).footer(|ui, _| {
+                    let _ = Button::new("About").sizing(Sizing::FillWidth).show(ui);
+                });
+                if least {
+                    stack = stack.least_width(LeastWidth::SideMenu);
+                }
+                menu.set(stack.show(ui, |ui, _| {
+                    let _ = Button::new("Home").sizing(Sizing::FillWidth).show(ui);
+                })
+                .output
+                .rect);
+                page.set(Stack::new().fill().show(ui, |ui, _| {
+                    let _ = Text::new("Page").show(ui);
+                })
+                .output
+                .rect);
+            });
+            if !ui.is_sizing_pass() {
+                out.set((menu.get(), page.get()));
+            }
+        });
+        fixture.room(Vec2::new(1440.0, 900.0)).settle();
+        seen.get()
+    };
+    let (plain, _) = shown(false);
+    let (menu, page) = shown(true);
+    assert!(plain != Rect::NOTHING && menu != Rect::NOTHING && page != Rect::NOTHING, "the menu and the page showed");
+    assert!(menu.width() > plain.width() + 60.0, "the side menu's least width holds in the row: {menu:?} against {plain:?}");
+    assert!(page.left() >= menu.right() - 0.5, "the page starts after the menu: {page:?} after {menu:?}");
+    assert!(menu.height() > 800.0, "the menu is as tall as the row: {menu:?}");
+}
+
+/// A page's padding stands its content off the edges by two and a half roomy pads: a File page's margin.
+#[trial]
+fn a_pages_padding_is_two_and_a_half_roomy_pads() {
+    let inset = |pad: Pad| {
+        let seen = Rc::new(Cell::new(Vec2::ZERO));
+        let out = Rc::clone(&seen);
+        let mut fixture = Fixture::new(move |ui| {
+            let child = Cell::new(Rect::NOTHING);
+            let shown = Stack::new().pad(pad).show(ui, |ui, _| child.set(Button::new("Home").show(ui).rect));
+            if !ui.is_sizing_pass() {
+                out.set(child.get().min - shown.output.rect.min);
+            }
+        });
+        fixture.room(Vec2::new(800.0, 600.0)).settle();
+        seen.get()
+    };
+    let (roomy, page) = (inset(Pad::Roomy), inset(Pad::Page));
+    assert!(roomy.x > 0.0, "a roomy stack pads its content: {roomy:?}");
+    assert!((page.x - roomy.x * 2.5).abs() < 0.6 && (page.y - roomy.y * 2.5).abs() < 0.6, "a page pads 2.5 roomy pads: {page:?} for {roomy:?}");
 }
 
 #[trial]
