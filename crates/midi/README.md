@@ -7,6 +7,7 @@ so the crate builds for wasm32.
 |---|---|---|
 | Standard MIDI File (`.mid`, `.midi`), formats 0 and 1 | yes | format 0 or 1 |
 | Standard MIDI File, format 2 | best effort (all tracks share one timeline) | no |
+| Cakewalk `.ins` | Instrument profiles and patch names, standard bank select | no |
 
 RIFF-wrapped MIDI (`.rmi`), System Exclusive dumps (`.syx`) and karaoke lyrics are not here; no
 app reads or writes them.
@@ -93,3 +94,15 @@ These wire helpers are extracted from LoopCraft's `crates/midi/src/sync.rs` at
 The source history credits bflatastic. Transport state and scheduling remain app-owned.
 Tests cover known wire vectors, truncated/invalid input, all song-position input values and
 legacy conversion behavior. No application consumer cutover is claimed by this library addition.
+
+## Cakewalk instrument definitions
+
+The reader accepts UTF-8 and Windows-1252 with LF, CRLF, or CR line endings. Semicolons
+start comments when they are the first nonblank character. Patch-list references ignore ASCII
+case. Section names retain their spelling. Instruments are returned in name order and repeated
+instrument sections with the same spelling are combined.
+
+Packed bank numbers range from 0 to 16383 and program numbers from 0 to 127. `Patch[*]`
+is the default list. Standard bank select (method 0 or omitted) is supported. The reader
+resolves only reachable patch lists, refuses cycles among those lists, and limits input to
+2 MiB and expanded patch names to 32 MiB.

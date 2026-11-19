@@ -1,5 +1,6 @@
 //! Named MIDI banks in Cakewalk instrument definitions.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -7,62 +8,78 @@ use std::sync::Arc;
 pub const MAX_INS_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EXPANDED_PATCH_BYTES: usize = 32 * 1024 * 1024;
 
+/// Patch banks for one instrument definition.
 #[derive(Debug, PartialEq, Eq)]
 pub struct InsInstrument {
+    /// Name of the instrument section.
     pub name: String,
     /// Bank keys use the normal MIDI bank number: MSB * 128 + LSB.
     pub banks: BTreeMap<u16, Arc<InsBank>>,
+    /// The wildcard list from `Patch[*]`.
     pub default_bank: Option<Arc<InsBank>>,
 }
 
+/// A named patch list, shared among instruments that reference it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct InsBank {
+    /// The spelling from the patch-list section.
     pub name: String,
+    /// Program-change numbers from 0 to 127 and their display labels.
     pub programs: BTreeMap<u8, String>,
 }
 
+/// An instrument definition could not be read.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum InsError {
+    /// The input or expanded patch names exceed their size limit.
     #[error("The instrument definition is too large")]
     TooLarge,
-    #[error("The instrument definition must use UTF-8 text")]
-    Encoding,
+    /// There are no usable patch names for standard bank select.
     #[error("No named MIDI banks with standard bank select found")]
     NoBanks,
+    /// A referenced patch list inherits from itself, directly or indirectly.
     #[error("Cyclic BasedOn references in Cakewalk patch lists")]
     CyclicPatchLists,
 }
 
 #[derive(Default)]
 struct PatchList<'a> {
-    base: Option<&'a str>,
+    base: Option<String>,
     programs: BTreeMap<u8, &'a str>,
 }
 
 #[derive(Default)]
 struct Definition<'a> {
     method: Option<&'a str>,
-    banks: BTreeMap<u16, &'a str>,
-    default_bank: Option<&'a str>,
+    banks: BTreeMap<u16, String>,
+    default_bank: Option<String>,
 }
 
-/// Read the patch names and instrument profiles from a UTF-8 (or ASCII) Cakewalk .ins file.
+/// Read the patch names and instrument profiles from UTF-8 or Windows-1252 Cakewalk .ins text.
 ///
 /// Controller names, note names and profiles requiring nonstandard bank-select methods are
 /// omitted. Patch lists inherit names through `BasedOn` and keep their own overrides.
-/// Missing bases contribute no names. Cyclic inheritance is rejected.
+/// Patch-list references ignore ASCII case. Missing bases contribute no names. Cycles in
+/// referenced lists are rejected. Instrument sections with the same spelling are combined,
+/// and profiles are returned in name order. A semicolon starts a comment at the start of a line.
 /// The caller can use a profile's wildcard patch list when a bank has no explicit list.
 pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
     if bytes.len() > MAX_INS_BYTES {
         return Err(InsError::TooLarge);
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| InsError::Encoding)?;
-    let mut patch_names = BTreeMap::<&str, PatchList>::new();
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => Cow::Owned(bytes.iter().copied().map(craft_codepage::cp1252).collect::<String>()),
+    };
+    let mut patch_names = BTreeMap::<String, (&str, PatchList)>::new();
     let mut instruments = BTreeMap::<&str, Definition>::new();
     let mut section = "";
     let mut heading = "";
-    for line in text.trim_start_matches('\u{feff}').lines() {
-        let line = line.split(';').next().unwrap_or_default().trim();
+    for line in text.trim_start_matches('\u{feff}').split(['\r', '\n']) {
+        let line = line.trim();
+        if line.starts_with(';') {
+            continue;
+        }
         if let Some(value) = line.strip_prefix('.') {
             heading = value;
             section = "";
@@ -80,9 +97,10 @@ pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
         }
         if heading.eq_ignore_ascii_case("Patch Names") {
             if key.eq_ignore_ascii_case("BasedOn") {
-                patch_names.entry(section).or_default().base = Some(value);
+                patch_names.entry(section.to_ascii_lowercase()).or_insert_with(|| (section, PatchList::default())).1.base =
+                    Some(value.to_ascii_lowercase());
             } else if let Ok(program @ 0..=127) = key.parse::<u8>() {
-                patch_names.entry(section).or_default().programs.insert(program, value);
+                patch_names.entry(section.to_ascii_lowercase()).or_insert_with(|| (section, PatchList::default())).1.programs.insert(program, value);
             }
         } else if heading.eq_ignore_ascii_case("Instrument Definitions") {
             let def = instruments.entry(section).or_default();
@@ -93,40 +111,47 @@ pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
                 && let Some(bank) = bank.strip_suffix(']').map(str::trim)
             {
                 if bank == "*" {
-                    def.default_bank = Some(value);
+                    def.default_bank = Some(value.to_ascii_lowercase());
                 } else if let Ok(bank @ 0..=16_383) = bank.parse::<u16>() {
-                    def.banks.insert(bank, value);
+                    def.banks.insert(bank, value.to_ascii_lowercase());
                 }
             }
         }
     }
-    let patch_names = resolve_patch_lists(&patch_names)?;
+    let roots = instruments
+        .values()
+        .filter(|def| def.method.is_none_or(|m| m == "0"))
+        .flat_map(|def| def.banks.values().chain(def.default_bank.iter()).map(String::as_str));
+    let patch_names = resolve_patch_lists(&patch_names, roots)?;
     let result: Vec<_> = instruments
-        .into_iter()
+        .iter()
         .filter(|(_, def)| def.method.is_none_or(|m| m == "0"))
         .filter_map(|(name, def)| {
-            let default_bank = def.default_bank.and_then(|list| patch_names.get(list)).filter(|list| !list.programs.is_empty()).cloned();
+            let default_bank = def.default_bank.as_deref().and_then(|list| patch_names.get(list)).filter(|list| !list.programs.is_empty()).cloned();
             let banks: BTreeMap<_, _> = def
                 .banks
-                .into_iter()
-                .filter_map(|(bank, list)| {
-                    let list = patch_names.get(list)?;
+                .iter()
+                .filter_map(|(&bank, list)| {
+                    let list = patch_names.get(list.as_str())?;
                     (!list.programs.is_empty()).then(|| (bank, Arc::clone(list)))
                 })
                 .collect();
             if banks.is_empty() && default_bank.is_none() {
                 return None;
             }
-            Some(InsInstrument { name: name.to_owned(), banks, default_bank })
+            Some(InsInstrument { name: (*name).to_owned(), banks, default_bank })
         })
         .collect();
     if result.is_empty() { Err(InsError::NoBanks) } else { Ok(result) }
 }
 
-fn resolve_patch_lists<'a>(lists: &BTreeMap<&'a str, PatchList<'a>>) -> Result<BTreeMap<&'a str, Arc<InsBank>>, InsError> {
+fn resolve_patch_lists<'a>(
+    lists: &'a BTreeMap<String, (&str, PatchList<'_>)>,
+    roots: impl Iterator<Item = &'a str>,
+) -> Result<BTreeMap<&'a str, Arc<InsBank>>, InsError> {
     let mut resolved = BTreeMap::<&str, Arc<InsBank>>::new();
     let mut remaining = MAX_EXPANDED_PATCH_BYTES;
-    for &name in lists.keys() {
+    for name in roots {
         if resolved.contains_key(name) {
             continue;
         }
@@ -137,22 +162,22 @@ fn resolve_patch_lists<'a>(lists: &BTreeMap<&'a str, PatchList<'a>>) -> Result<B
             if resolved.contains_key(name) {
                 break;
             }
-            let Some(list) = lists.get(name) else { break };
+            let Some(&(spelling, ref list)) = lists.get(name) else { break };
             if !visiting.insert(name) {
                 return Err(InsError::CyclicPatchLists);
             }
-            chain.push((name, list));
-            current = list.base;
+            chain.push((name, spelling, list));
+            current = list.base.as_deref();
         }
-        for (name, list) in chain.into_iter().rev() {
-            let base = list.base.and_then(|name| resolved.get(name));
+        for (name, spelling, list) in chain.into_iter().rev() {
+            let base = list.base.as_deref().and_then(|name| resolved.get(name));
             let mut programs: BTreeMap<u8, &str> =
                 base.into_iter().flat_map(|bank| bank.programs.iter().map(|(&program, label)| (program, label.as_str()))).collect();
             programs.extend(list.programs.iter().map(|(&program, &label)| (program, label)));
             let bytes = programs.values().map(|label| label.len() + std::mem::size_of::<(u8, String)>()).sum::<usize>();
-            remaining = remaining.checked_sub(name.len() + bytes).ok_or(InsError::TooLarge)?;
+            remaining = remaining.checked_sub(spelling.len() + bytes).ok_or(InsError::TooLarge)?;
             let programs = programs.into_iter().map(|(program, label)| (program, label.to_owned())).collect();
-            resolved.insert(name, Arc::new(InsBank { name: name.to_owned(), programs }));
+            resolved.insert(name, Arc::new(InsBank { name: spelling.to_owned(), programs }));
         }
     }
     Ok(resolved)
@@ -164,7 +189,7 @@ mod tests {
 
     #[test]
     fn resolves_programs_by_profile_and_packed_bank() -> Result<(), InsError> {
-        let bank = b"\xef\xbb\xbf.Patch Names\r\n[Lead]\r\n0=First=Lead ; comment\r\n128=Invalid\n\
+        let bank = b"\xef\xbb\xbf.Patch Names\r\n[Lead]\r\n0=First=Lead\r\n; comment\r\n128=Invalid\n\
             [Drums]\n127=Last Kit\n.Instrument Definitions\n[Melodic]\nPatch[6192]=Lead\nPatch[*]=Lead\n\
             Patch[16384]=Lead\nPatch[9]=Undefined\n[Percussion]\nBankSelMethod=0\nPatch[6192]=Drums\n\
             [Other method]\nBankSelMethod=1\nPatch[0]=Lead\n.Note Names\n[Drums]\n127=Ignored";
@@ -180,9 +205,52 @@ mod tests {
     }
 
     #[test]
+    fn accepts_utf8_and_windows_1252_names() -> Result<(), InsError> {
+        for input in [
+            ".Patch Names\n[GM]\n1=Piéno – ™\n.Instrument Definitions\n[Synth]\nPatch[0]=GM".as_bytes(),
+            b".Patch Names\n[GM]\n1=Pi\xe9no \x96 \x99\n.Instrument Definitions\n[Synth]\nPatch[0]=GM",
+        ] {
+            assert_eq!(read_ins(input)?[0].banks[&0].programs[&1], "Piéno – ™");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_unreferenced_cycles() -> Result<(), InsError> {
+        let input = b".Patch Names\n[GM]\n0=Piano\n[A]\nBasedOn=B\n[B]\nBasedOn=A\n\
+            .Instrument Definitions\n[Synth]\nPatch[0]=GM";
+        assert_eq!(read_ins(input)?[0].banks[&0].programs[&0], "Piano");
+        Ok(())
+    }
+
+    #[test]
+    fn retains_semicolons_in_patch_names() -> Result<(), InsError> {
+        let input = b".Patch Names\n[GM]\n ; ignored\n0=Pad; warm\n.Instrument Definitions\n[Synth]\nPatch[0]=GM";
+        assert_eq!(read_ins(input)?[0].banks[&0].programs[&0], "Pad; warm");
+        Ok(())
+    }
+
+    #[test]
+    fn resolves_section_references_case_insensitively() -> Result<(), InsError> {
+        let input =
+            b".Patch Names\n[GM Voices]\n0=Piano\n[Extra]\nBasedOn=GM VOICES\n.Instrument Definitions\n[Synth]\nPatch[0]=extra\nPatch[*]=gm voices";
+        let profiles = read_ins(input)?;
+        assert_eq!(profiles[0].banks[&0].programs[&0], "Piano");
+        assert_eq!(profiles[0].default_bank.as_ref().unwrap().name, "GM Voices");
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_cr_only_line_endings() -> Result<(), InsError> {
+        let input = b".Patch Names\r[GM]\r0=Piano\r.Instrument Definitions\r[Synth]\rPatch[0]=GM";
+        assert_eq!(read_ins(input)?[0].banks[&0].programs[&0], "Piano");
+        Ok(())
+    }
+
+    #[test]
     fn rejects_unusable_inputs() {
         assert_eq!(read_ins(b".Patch Names\n[Voices]\n0=Lead"), Err(InsError::NoBanks));
-        assert_eq!(read_ins(b"\xff"), Err(InsError::Encoding));
+        assert_eq!(read_ins(b"\xff"), Err(InsError::NoBanks));
         assert_eq!(read_ins(&vec![0; MAX_INS_BYTES + 1]), Err(InsError::TooLarge));
     }
 

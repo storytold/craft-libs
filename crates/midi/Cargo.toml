@@ -15,6 +15,7 @@ workspace = true
 serde = ["dep:serde"]
 
 [dependencies]
+craft-codepage.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
