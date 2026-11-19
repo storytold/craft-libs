@@ -14,7 +14,7 @@ use crate::runtime::{focus, frame, keys, lazy, measure, overlay, replay, sampler
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
     Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
-    Trigger,
+    Trigger, TypingRule,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -442,13 +442,15 @@ impl KeyScopes {
     /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
     /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own. A
     /// held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
-    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+    /// With a matcher, a binding of a command `accept` refuses (disabled where the press lands) is passed over for the
+    /// press's next binding.
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64, &dyn Fn(&CommandRef) -> bool)>) -> Option<Hit> {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
         let held: &[&'static str] = if typing { &[] } else { &self.held };
         let contexts: Vec<&str> = self.typing.iter().chain(held).copied().collect();
         let active = Active { panel, contexts: &contexts, typing };
         match matcher {
-            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
+            Some((matcher, now, accept)) => matcher.press_where(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }, accept),
             None => Matcher::single(layout, &self.keymap, input, &active, outer),
         }
     }
@@ -474,9 +476,12 @@ struct BuiltKeymap {
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
 }
 
-/// The keymap of `defs` on `platform` under `overrides`.
-fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>) -> Keymap {
+/// The keymap of `defs` on `platform` under `overrides`, with the app's typing rule when it set one.
+fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, overrides: Option<&Arc<Overrides>>, typing: Option<TypingRule>) -> Keymap {
     let mut keymap = Keymap::new(defs, scopes, platform);
+    if let Some(rule) = typing {
+        keymap = keymap.with_typing_rule(rule);
+    }
     if let Some(overrides) = overrides {
         keymap.set_overrides((**overrides).clone());
     }
@@ -522,6 +527,12 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
     if let Some(app) = app {
+        // The app's defaults for a linked set's command replace the set's, before the app's alternate keys join them.
+        for def in &mut defs {
+            if let Some(bindings) = app.replaced_defaults(&def.command.id) {
+                def.defaults = bindings.to_vec();
+            }
+        }
         for extra in app.defs() {
             if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
                 for binding in &extra.defaults {
@@ -532,7 +543,8 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             }
         }
     }
-    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides);
+    let typing = app.and_then(AppCatalog::typing);
+    let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides, typing);
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs
         .iter()
@@ -546,7 +558,7 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             def.defaults
                 .retain(|binding| !yielded.iter().any(|(command, chord)| *command == def.command && binding.trigger.effective(platform) == *chord));
         }
-        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides);
+        keymap = keymap_of(joined(defs.as_slice()), scopes, platform, overrides, typing);
     }
     let window_shortcuts = registry
         .defs()
@@ -1267,8 +1279,15 @@ pub(crate) fn begin(ctx: &Context) {
                 }
             }
             _ => {
-                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing && !shortcut.canvas, Some((&mut matcher, time)))
-                else {
+                // A binding whose command is disabled where the press lands (a window command with no floating
+                // window, a canvas's view command it does not offer) is passed over: the press runs the next binding
+                // of its chord, in an outer scope, or of its next chord candidate, as if the disabled one were unbound.
+                let enabled = |command: &CommandRef| {
+                    let (_, instance) = with(ctx, |board| board.target_of(ctx, command, &board.here));
+                    resolve_in(ctx, command, instance, Reach::Focus, None).0.enabled
+                };
+                let typing = shortcuts.typing && !shortcut.canvas;
+                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, typing, Some((&mut matcher, time, &enabled))) else {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));

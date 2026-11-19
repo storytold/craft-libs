@@ -68,8 +68,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
         let reads_egui = rec.stop.host || rec.stop.keys.owner == OwnerClass::Text;
         for (at, (typed, taken)) in batch.texts.iter().zip(&mut taken_texts).enumerate() {
+            // A claimed text (a claim's, or an Alt shortcut's that the keymap binds) is withdrawn and is no component's
+            // typing: its press is not the focused stop's to hold, so the shortcut it comes with still reaches the
+            // key stage from a text field or a list, as Alt+F7 or Alt+Q does from a word processor's page.
             if typed.claimed {
-                *taken = true;
                 continue;
             }
             let route = text_route(rec, driven, &typed.text);

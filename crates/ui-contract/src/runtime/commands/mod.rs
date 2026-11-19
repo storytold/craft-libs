@@ -7,7 +7,7 @@ mod registry;
 
 pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
-pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope};
+pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope, TypingRule};
 pub use library::ChromeCommand;
 pub(crate) use library::WindowShortcut;
 pub use library::{EditCommands, NavCommand, WindowCommand};
@@ -50,6 +50,10 @@ pub struct AppCatalog {
     defs: Arc<[CommandDef]>,
     index: Arc<HashMap<String, usize>>,
     generation: u64,
+    /// The default chords the app gives a linked set's command in place of the set's own (`replace_defaults`).
+    replaced: Arc<[(String, Vec<Binding>)]>,
+    /// Which chords fire while a text component has the keyboard (`typing_rule`); `None` keeps the keymap's default.
+    typing: Option<TypingRule>,
 }
 
 impl AppCatalog {
@@ -63,7 +67,41 @@ impl AppCatalog {
             }
             registry::index_id(&mut index, &def.command.id, at)?;
         }
-        Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation })
+        Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation, replaced: Arc::from([]), typing: None })
+    }
+
+    /// Gives the linked set's command `id` the default chords `bindings` in place of the set's own; an empty list drops
+    /// them. A component's chord that the app means for its own command (a canvas's `Ctrl+=` zoom where Word's
+    /// `Ctrl+=` is Subscript) is dropped here, so the app's binding takes the key. They are defaults: the user's
+    /// overrides still replace them, and resetting a command returns to them. A later call for the same id replaces
+    /// the earlier one. An id no linked set defines is ignored; an app command's defaults are its def's.
+    #[must_use]
+    pub fn replace_defaults(mut self, id: impl Into<String>, bindings: Vec<Binding>) -> Self {
+        let id = id.into();
+        let mut replaced: Vec<(String, Vec<Binding>)> = self.replaced.iter().filter(|(at, _)| *at != id).cloned().collect();
+        replaced.push((id, bindings));
+        self.replaced = replaced.into();
+        self
+    }
+
+    /// Sets which chords fire while a text component has the keyboard. The keymap's default,
+    /// [`TypingRule::CommandKeysOnly`], leaves Alt chords to the text; an app whose document editor fires Alt+letter
+    /// commands while the person types (a word processor's Alt+Q) gives [`TypingRule::PlainKeysWait`]. It holds for
+    /// every text component of the app's windows; a binding in an active context still always works.
+    #[must_use]
+    pub fn typing_rule(mut self, rule: TypingRule) -> Self {
+        self.typing = Some(rule);
+        self
+    }
+
+    /// The default chords the app gives the linked set's command `id`, when it replaced them.
+    pub(crate) fn replaced_defaults(&self, id: &str) -> Option<&[Binding]> {
+        self.replaced.iter().find(|(at, _)| at == id).map(|(_, bindings)| bindings.as_slice())
+    }
+
+    /// The typing rule the app set.
+    pub(crate) fn typing(&self) -> Option<TypingRule> {
+        self.typing
     }
 
     /// The app's version of the catalog. The board rebuilds the keymap when it differs from the last frame's, and never

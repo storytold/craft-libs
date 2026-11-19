@@ -1,7 +1,7 @@
 //! Trials of the keys and presses a host's own egui widgets keep while the runtime is installed on the whole window.
 
 use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
-use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope};
+use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
 use crate::runtime::env::RootEnv;
@@ -669,4 +669,52 @@ fn a_window_shortcut_runs_from_a_pane_title_and_not_from_a_modal_dialog_or_a_tex
     frames.idle(2, &mut show);
     focus_stop(&mut frames, &mut show, title);
     assert_eq!(fired(&mut frames, &mut show), replace, "with the dialog closed the title runs it again");
+}
+
+/// The app command the typing-rule trial presses: Alt+Q, as a word processor's search.
+const SEARCH: &str = "hostKeyTrial.search";
+
+/// The ids of the commands an Alt+`key` press, bound to `SEARCH`, fired while a text stop has the keyboard, with the
+/// text the platform sends with it, under the app catalog's typing rule `rule` (`None`: the keymap's default).
+fn alt_while_typing(key: Key, rule: Option<TypingRule>) -> Vec<String> {
+    let field = named_id("document");
+    let mut show = move |ui: &mut Ui| {
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+    };
+    let Ok(binding) = Binding::parse(&format!("Alt+{}", key.name())) else { return vec!["the trial's chord does not parse".to_owned()] };
+    let Ok(catalog) = AppCatalog::new(vec![CommandDef::new(SEARCH, "Search", Scope::app()).with_default(binding)], 1) else {
+        return vec!["the trial's catalog is refused".to_owned()];
+    };
+    let catalog = match rule {
+        Some(rule) => catalog.typing_rule(rule),
+        None => catalog,
+    };
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog));
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, field);
+    assert_eq!(egui_focused(&frames.ctx), Some(field), "the text stop has the keyboard");
+    take_output(&frames.ctx);
+    frames.frame(vec![key_press(key, Modifiers::ALT), Event::Text("x".into())], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect()
+}
+
+/// An app sets the typing rule through its catalog: by default an Alt+letter chord waits while a text component has
+/// the keyboard (Option types characters on the Mac), and under `PlainKeysWait` it fires from there, as Word's Alt+Q
+/// opens search from the page, though the platform sends the key's text with it.
+#[trial]
+fn the_app_catalog_s_typing_rule_lets_an_alt_chord_fire_while_typing() {
+    assert_eq!(alt_while_typing(Key::Q, None), Vec::<String>::new(), "by default the Alt chord stays with the text");
+    assert_eq!(alt_while_typing(Key::Q, Some(TypingRule::CommandKeysOnly)), Vec::<String>::new(), "so it does under the default rule named");
+    assert_eq!(alt_while_typing(Key::Q, Some(TypingRule::PlainKeysWait)), vec![SEARCH.to_owned()], "under PlainKeysWait it fires");
+}
+
+/// The text a platform sends with a bound Alt chord is withdrawn and is not the text field's typing, so the field does
+/// not hold the press: an Alt+function-key chord, which fires while typing under every rule but `AllWait`, runs its
+/// command from a text field (Word's Alt+F7, next misspelling, from the page).
+#[trial]
+fn a_bound_alt_chord_s_text_leaves_the_press_to_its_command() {
+    assert_eq!(alt_while_typing(Key::F7, None), vec![SEARCH.to_owned()], "Alt+F7 fires from the text field");
 }

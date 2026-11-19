@@ -195,3 +195,25 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
     let km = Keymap::new(vec![app("layer.new.layer", &["F2"])], Scopes::new(), Platform::Mac);
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
 }
+
+/// A press passes over the binding of a command the caller refuses (one disabled where it lands): the chord's binding
+/// in an outer scope runs instead, the lookup says the same, and with every holder refused the press runs nothing.
+#[test]
+fn a_refused_command_leaves_its_chord_to_the_next_binding() {
+    let km = Keymap::new(
+        vec![in_scope("view.zoomIn", "Canvas", &["Cmd+="]), app("format.subscript", &["Cmd+="])],
+        Scopes::new().with_panel("Canvas"),
+        Platform::Linux,
+    );
+    let input = KeyInput::new(Mods { cmd: true, ctrl: false, alt: false, shift: false }).with_physical(Key::Equals);
+    let active = Active::panel("Canvas");
+    let press = Press { input: &input, repeat: false, now: 0.0, active: &active, outer: &[] };
+    let hit = |accept: &dyn Fn(&CommandRef) -> bool| Matcher::new().press_where(&Layout::new(), &km, &press, accept).map(|hit| hit.command);
+    assert_eq!(hit(&|_| true), Some(cmd("view.zoomIn")), "the canvas's binding ranks first");
+    assert_eq!(hit(&|c| c.id != "view.zoomIn"), Some(cmd("format.subscript")), "refused, it leaves the chord to the app's binding");
+    assert_eq!(hit(&|_| false), None, "with every holder refused the press runs nothing");
+    let refused = |c: &CommandRef| c.id != "view.zoomIn";
+    assert_eq!(km.lookup_where(&chord("Cmd+="), false, &active, &[], &refused), Lookup::Run(cmd("format.subscript")));
+    let all = Matcher::new().press(&Layout::new(), &km, &press).map(|hit| hit.command);
+    assert_eq!(all, Some(cmd("view.zoomIn")), "a plain press accepts every command");
+}

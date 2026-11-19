@@ -376,6 +376,12 @@ impl Keymap {
 
     /// [`lookup`](Self::lookup) with the panels around the focused one in `outer` ([`Scopes::rank_nested`]).
     pub fn lookup_nested(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str]) -> Lookup {
+        self.lookup_where(chord, double, active, outer, &|_| true)
+    }
+
+    /// [`lookup_nested`](Self::lookup_nested) among the commands `accept` takes: the bindings of a command it refuses
+    /// (one disabled where the press lands) are passed over, so the chord's next binding, in an outer scope, runs.
+    pub fn lookup_where(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str], accept: &dyn Fn(&CommandRef) -> bool) -> Lookup {
         let want = Trigger { chord: chord.effective(self.platform), double };
         let held = active.typing && !self.typing.fires(&want.chord, self.platform);
         let Some(holders) = self.by_trigger.get(&want) else { return Lookup::None };
@@ -383,6 +389,9 @@ impl Keymap {
         let mut ranks: Vec<(usize, u8)> = Vec::new();
         for &(i, k) in holders {
             let Some(r) = self.at(i, k).and_then(|(_, s)| self.scopes.rank_nested(s, active, outer)) else { continue };
+            if !accept(&self.catalog[i].command) {
+                continue;
+            }
             // The typing rule holds back everything except bindings of an active context (rank 0).
             if held && r != 0 {
                 continue;
