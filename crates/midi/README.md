@@ -100,5 +100,7 @@ legacy conversion behavior. No application consumer cutover is claimed by this l
 
 
 For `write_smf`, events on the same tick are ordered as note-offs, SysEx, controllers,
-then note-ons. Format-0 export rejects a merge that would interleave split SysEx packets
-from different tracks. Format 1 preserves their separate tracks and timing.
+then note-ons. Both export formats report a write error when that order would put a channel
+event between split SysEx packets, including a note-off at the tick of its closing continuation.
+Format 0 also rejects interleaving split packets from different tracks. Meta events can appear
+between packets because they are local to the file.

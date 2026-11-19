@@ -124,3 +124,24 @@ fn old_sequences_load_and_sysex_packets_survive_json() {
     assert_eq!(sequence.remove_duplicates(), 0, "stateful packets must not be deduplicated");
     assert_eq!(sequence.sysex.len(), 2);
 }
+
+#[test]
+fn rejects_a_format_zero_channel_event_inside_split_sysex() {
+    let sysex = vec![0, 0xF0, 1, 0x43, 10, 0xF7, 2, 0x10, 0xF7, 0, 0xFF, 0x2F, 0];
+    for (program_tick, valid_merge) in [(5, false), (10, true), (11, true)] {
+        let program = vec![program_tick, 0xC0, 7, 0, 0xFF, 0x2F, 0];
+        let mut smf = read_smf(&file(1, &[sysex.clone(), program])).unwrap();
+        assert!(write_smf(&smf).is_ok());
+        smf.format = 0;
+        assert_eq!(write_smf(&smf).is_ok(), valid_merge);
+    }
+}
+
+#[test]
+fn rejects_reordering_a_note_off_before_its_same_tick_sysex_continuation() {
+    let body = vec![0, 0x90, 60, 100, 5, 0xF0, 1, 0x43, 5, 0xF7, 2, 0x10, 0xF7, 0, 0x80, 60, 64, 0, 0xFF, 0x2F, 0];
+    for format in [0, 1] {
+        let smf = read_smf(&file(format, std::slice::from_ref(&body))).unwrap();
+        assert!(matches!(write_smf(&smf), Err(MidiError::Write(message)) if message.contains("interleave")));
+    }
+}

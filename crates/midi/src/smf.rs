@@ -695,7 +695,8 @@ pub fn write_timed_smf(format: u16, division: u16, tracks: Vec<Vec<TimedEvent>>,
     out.extend_from_slice(&format.to_be_bytes());
     out.extend_from_slice(&count.to_be_bytes());
     out.extend_from_slice(&division.to_be_bytes());
-    for track in tracks {
+    for mut track in tracks {
+        track.sort_by_key(|e| (e.tick, e.order));
         write_track_policy(&mut out, track, clamp_deltas, false)?;
     }
     Ok(out)
@@ -712,12 +713,28 @@ fn meta(kind: u8, data: &[u8]) -> Result<Vec<u8>, MidiError> {
     Ok(b)
 }
 
-fn write_track(out: &mut Vec<u8>, events: Vec<WEvent>) -> Result<(), MidiError> {
+fn write_track(out: &mut Vec<u8>, mut events: Vec<WEvent>) -> Result<(), MidiError> {
+    events.sort_by_key(|e| (e.tick, e.order));
+    check_split_sysex_order(&events)?;
     write_track_policy(out, events, false, true)
 }
 
-fn write_track_policy(out: &mut Vec<u8>, mut events: Vec<WEvent>, clamp_deltas: bool, running_status: bool) -> Result<(), MidiError> {
-    events.sort_by_key(|e| (e.tick, e.order));
+// Validate the actual emitted order, after canonical sorting and note-overlap trimming.
+fn check_split_sysex_order(events: &[WEvent]) -> Result<(), MidiError> {
+    let mut open = false;
+    for event in events {
+        match event.bytes.first() {
+            Some(0xFF) => {} // Meta events are local to the file, so they do not interrupt the MIDI message.
+            Some(0xF7) if open => open = event.bytes.last() != Some(&0xF7),
+            _ if open => return Err(MidiError::Write("event ordering would interleave split SysEx packets".into())),
+            Some(0xF0) => open = event.bytes.last() != Some(&0xF7),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn write_track_policy(out: &mut Vec<u8>, events: Vec<WEvent>, clamp_deltas: bool, running_status: bool) -> Result<(), MidiError> {
     let mut body = Vec::new();
     let mut last_tick = 0u64;
     let mut running: Option<u8> = None;
@@ -821,7 +838,7 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 ///
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
 /// (1..=128), more than 65535 tracks, a gap beyond the 28-bit delta limit, an invalid
-/// SysEx status, overlapping split packets in a format-0 merge, or more than
+/// SysEx status, ordering that interrupts split SysEx in either format, or more than
 /// [`MAX_SYSEX_BYTES`] bytes of SysEx payloads or 262,144 SysEx packets.
 pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     let mut sysex_budget = SysexBudget::new();
