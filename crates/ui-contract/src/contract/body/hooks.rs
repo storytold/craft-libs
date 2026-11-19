@@ -731,7 +731,7 @@ impl BodyHooks<'_> {
         key: MeasureKey,
         content: Option<Vec2>,
     ) -> Vec2 {
-        let (layer, rect) = self.begin_measure_run(at, cx);
+        let (layer, rect) = self.begin_measure_run(at, cx.core, cx.style.metrics().padding);
         let mut values = AppValues::default();
         comp.content_env(cx, &mut values);
         // A label group settles its columns before a measure inside stands: when a row of a body that shows at its
@@ -760,8 +760,8 @@ impl BodyHooks<'_> {
 
     /// Opens the measuring run of `cx`'s container: its rect at the room's start edge, which `cx` takes, and the layer
     /// the run lays the regions out on.
-    fn begin_measure_run<C: Container>(&mut self, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> (areas::LayerKey, Rect) {
-        let (id, ctx) = (cx.core.id, at.ui.ctx());
+    fn begin_measure_run(&mut self, at: &Measuring<'_, '_>, core: &mut CxCore<'_>, padding: craft_behavior::Insets) -> (areas::LayerKey, Rect) {
+        let (id, ctx) = (core.id, at.ui.ctx());
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(ctx, id);
         layout_memory::begin_measure(ctx, id);
@@ -781,9 +781,9 @@ impl BodyHooks<'_> {
         } else {
             Rect::from_min_size(origin, self.room)
         };
-        cx.core.rect = rect;
-        cx.core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
-        cx.core.content_rect = cx.core.flow.inset(cx.style.metrics().padding);
+        core.rect = rect;
+        core.flow = craft_behavior::Flow::new(rect, at.env.direction.is_rtl());
+        core.content_rect = core.flow.inset(padding);
         (measure_layer(&self.props, id, at.ui), rect)
     }
 
@@ -957,6 +957,14 @@ fn body_ui(run: &BodyRun<'_>, parent: &mut Ui, at: Rect) -> Ui {
     body_ui
 }
 
+struct BodyFacts<'p> {
+    node: bool,
+    owner: BodyOwner<'p>,
+    surface: Option<SurfaceKind>,
+    gap: Vec2,
+    gate_mixed: bool,
+}
+
 impl BodyHooks<'_> {
     /// The regions and the envs the body step runs them under; registers the container's command instances.
     // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
@@ -969,19 +977,6 @@ impl BodyHooks<'_> {
         cx: &mut Cx<'a, C>,
         values: &AppValues,
     ) -> BodyPlan<'p> {
-        let (id, ctx, rect) = (cx.core.id, cx.core.ctx.clone(), cx.core.rect);
-        let rtl = env.direction.is_rtl();
-        let node = matches!(C::ROLE, Role::Node(_));
-        let scroll = scroll_of(props);
-        let pad = self.pads(props, &env.tokens);
-        let inner = cx.core.content_rect.shrink2(pad);
-        let room = self.room_size(rect, inner);
-        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
-        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
-        let band_slot = ui.painter().add(Shape::Noop);
-        // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
-        // and claims no room in a parent flow.
-        let real = !ui.is_sizing_pass();
         // Only a container that declares its value a gate (a group box) gates its content; a radio group whose value
         // is a bool does not.
         // A mixed gate reads as off, and its check box shows the mixed face.
@@ -989,11 +984,48 @@ impl BodyHooks<'_> {
         let gate_mixed = props.gates && cx.mixed;
         self.gate = self.gate.or(gate_mixed.then_some(false));
         self.gate_at_read = self.gate;
+        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
+        let facts = BodyFacts {
+            node: matches!(C::ROLE, Role::Node(_)),
+            owner: BodyOwner::new(cx.style, gap.y),
+            surface: super::inherit::own_surface(props, cx),
+            gap,
+            gate_mixed,
+        };
+        self.plan_regions(props, ui, env, cx.core, values, facts)
+    }
+
+    #[inline(never)]
+    fn plan_regions<'p, 'a: 'p>(
+        &mut self,
+        props: &'p ContainerProps,
+        ui: &mut Ui,
+        env: &Env,
+        core: &CxCore<'a>,
+        values: &AppValues,
+        facts: BodyFacts<'p>,
+    ) -> BodyPlan<'p> {
+        let BodyFacts { node, owner, surface, gap, gate_mixed } = facts;
+        let (id, ctx, rect) = (core.id, core.ctx.clone(), core.rect);
+        let rtl = env.direction.is_rtl();
+        let scroll = scroll_of(props);
+        let pad = self.pads(props, &env.tokens);
+        let inner = core.content_rect.shrink2(pad);
+        let room = self.room_size(rect, inner);
+        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
+        let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
+        let band_slot = ui.painter().add(Shape::Noop);
+        // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
+        // and claims no room in a parent flow.
+        let real = !ui.is_sizing_pass();
         let window = window_instance(props, id).filter(|window| *window != id);
         if real {
             register_instances(&ctx, props, id, window);
         }
-        let region_env = env.derive(|scoped| self.scope_regions(scoped, props, cx, window, values, real));
+        let region_env = env.derive(|scoped| {
+            self.scope_regions(scoped, props, core, window, values, real);
+            scoped.surface = SurfaceKind::under(surface, scoped.surface);
+        });
         // The size and glyph role the container gives its children reach every region: header, body, end region and
         // footer.
         let region_env = if props.child_size.is_none() && props.child_glyphs.is_none() {
@@ -1008,7 +1040,6 @@ impl BodyHooks<'_> {
                 }
             })
         };
-        let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
         let field_message = if props.label.is_some() { scope::last_message(&ctx, id) } else { None };
         // A measuring run finds the container's first line: the first child its header or body places in flow reports
         // it (`layout::FirstLines`).
@@ -1018,8 +1049,8 @@ impl BodyHooks<'_> {
         }
         BodyPlan {
             props,
-            resolved: cx.core.resolved,
-            owner: BodyOwner::new(cx.style, gap.y),
+            resolved: core.resolved,
+            owner,
             id,
             body_id: sub(id, "body"),
             layout_id: sub(id, "layout"),
@@ -1635,7 +1666,7 @@ impl BodyHooks<'_> {
     /// The room of a measuring run, and whether the body shares a scrolling view; `Err` with the extent when no run is
     /// needed.
     fn measure_room<C: Container>(&mut self, comp: &mut C, at: &Measuring<'_, '_>, cx: &mut Cx<'_, C>) -> Result<bool, Vec2> {
-        let props = Arc::clone(&self.props);
+        let props = &self.props;
         // A mount outside the flow takes no room in a parent's sizing pass, so its regions run only when it is
         // measured itself. A pane as tall as its content takes its height in the flow.
         let flows = match &props.mount {
@@ -1647,7 +1678,13 @@ impl BodyHooks<'_> {
             return Err(self.extent(comp, at.ui, at.at, cx.core.id, at.scx));
         }
         let id = cx.core.id;
-        let open = if self.open_given { self.open } else { open_now(comp, &mut *cx.core.memory, id, &props) };
+        let open = if self.open_given { self.open } else { open_now(comp, &mut *cx.core.memory, id, props) };
+        let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
+        self.measure_open_room(at, id, open, flows)
+    }
+
+    fn measure_open_room(&mut self, at: &Measuring<'_, '_>, id: Id, open: bool, flows: bool) -> Result<bool, Vec2> {
+        let props = Arc::clone(&self.props);
         self.open = open || self.shown_closed;
         self.open_at_read = self.open;
         // An animated collapse shows a share of the full body height, so the body is measured while any of it shows.
@@ -1684,9 +1721,6 @@ impl BodyHooks<'_> {
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
         let (x, y) = (craft_behavior::Axis::X, craft_behavior::Axis::Y);
-        // A container placed at an explicit rect, or mounted on a layer or in a window, is no flow child of that body:
-        // it takes its own room, not a share.
-        let flows = matches!(at.at, ShowAt::Flow) && self.in_flow(comp);
         // Along an axis the flow does not bound it fills nothing (`sized`): it measures its content there. In a `Stack`
         // body that scrolls along y it shares what the view shows.
         let bounded = crate::layout::flow_room(at.ui);
