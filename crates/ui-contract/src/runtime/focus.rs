@@ -897,6 +897,29 @@ pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
     Some(with(ctx, |state| state.within(rec.scope, scope)))
 }
 
+/// Whether the focused stop's innermost layer-like scope (groups and panes skipped) is a dialog whose Escape closes it
+/// and which is the top layer, so the dialog's own Escape rule decides this pass's Escape. A text field holding a
+/// draft there passes Escape on: one Escape cancels the dialog and its typing goes with it, as Word's dialogs do. A
+/// field in a popup or menu inside the dialog, or in no dialog (a ribbon box), keeps the Escape to revert its draft.
+pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
+    let Some(rec) = focused_rec(ctx) else {
+        return false;
+    };
+    let dialog = with(ctx, |state| {
+        let mut at = rec.scope;
+        while let Some(id) = at {
+            let scope = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id))?;
+            match scope.policy.kind {
+                craft_behavior::ScopeKind::Group | craft_behavior::ScopeKind::Pane => at = scope.parent,
+                craft_behavior::ScopeKind::Dialog => return (scope.policy.cancel == craft_behavior::CancelRule::Close).then_some(id),
+                _ => return None,
+            }
+        }
+        None
+    });
+    dialog.is_some_and(|id| crate::runtime::overlay::top(ctx) == Some(id))
+}
+
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop
 /// the layer opened from: that scope leaves the focus on its opener while its list is in use. `None` when nothing
 /// is focused. The layer's dismissal and its Escape both read it.

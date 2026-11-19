@@ -555,6 +555,29 @@ fn enter_on_a_focused_cancel_cancels_the_form() {
     assert!(matches!(closed, Some((reason, false)) if !matches!(reason, CloseReason::Activated | CloseReason::Enter)), "Enter cancels: {closed:?}");
 }
 
+// One Escape in a number field holding typed text cancels the dialog, as in Word and the old apps: the draft does
+// not take the Escape first, and the dialog answers no OK, so the typing goes with it.
+#[trial]
+fn one_escape_over_a_typed_draft_cancels_the_dialog() {
+    let seen = Rc::new(Cell::new(None::<(CloseReason, bool)>));
+    let out = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).show(ui);
+        if let Some(closed) = dialog.closed {
+            out.set(Some((closed, dialog.result.is_some())));
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().expect("the radius row has a number field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.type_text("55").settle();
+    let typed = fixture.by_role(Role::SPIN_BUTTON).into_iter().next().and_then(|field| fixture.tree().value_of(field.node).map(str::to_owned));
+    assert_eq!(typed.as_deref(), Some("55"), "the field shows the typing as a draft");
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(matches!(seen.get(), Some((CloseReason::Escape, false))), "one Escape cancels the dialog: {:?}", seen.get());
+}
+
 // Alt turns Cancel into Reset, which restores the opening values with the `reset_to` ones over them: a key `reset_to`
 // lacks returns to its opening value, and a key without a row added since the open goes.
 #[trial]

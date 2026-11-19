@@ -470,8 +470,21 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     }
     // A clearing field takes Escape while it shows text, with or without a draft, and passes it on once it is empty:
     // a list open on it (a search box's results) then gets the Escape that finds the field empty and closes.
+    // A draft in a dialog whose Escape closes it does not take the Escape: the one Escape cancels the dialog and
+    // the typing with it (Word, and the old apps). Outside dialogs Escape reverts the draft first.
+    let dialog_escape = focused_before
+        && state.draft.is_some()
+        && state.preedit.is_none()
+        && !input.options.clear_on_escape
+        && input.intents.untaken(&Intent::Cancel)
+        && crate::runtime::focus::escape_closes_dialog(ctx);
+    if dialog_escape {
+        // The draft ends as for Escape (its typing is dropped), and the Escape stays for the dialog.
+        state.end = Some(End::Escape);
+    }
+    let draft_takes = state.draft.is_some() && !dialog_escape;
     let takes_escape =
-        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { state.draft.is_some() || state.preedit.is_some() };
+        if input.options.clear_on_escape { !base.is_empty() || state.preedit.is_some() } else { draft_takes || state.preedit.is_some() };
     let list_first = input.list_open && !input.options.clear_on_escape;
     if focused_before && takes_escape && !state.completions.open && !list_first && input.intents.take(Intent::Cancel) {
         // Escape over a composition alone ends the composition and leaves the text.
