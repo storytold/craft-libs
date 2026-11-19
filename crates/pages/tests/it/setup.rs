@@ -63,9 +63,9 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
         fixture.click(&radio).settle();
     };
     assert!(disabled(&fixture, "Characters per line") && disabled(&fixture, "Lines per page"), "no grid: both counts disabled");
-    pick(&mut fixture, "Line grid only");
+    pick(&mut fixture, "Lines only");
     assert!(disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines only: just the lines count");
-    pick(&mut fixture, "Line and character grid");
+    pick(&mut fixture, "Lines and characters");
     assert!(!disabled(&fixture, "Characters per line") && !disabled(&fixture, "Lines per page"), "lines and characters: both counts");
 
     let field = fixture.by_label("Characters per line").expect("the characters field");
@@ -83,4 +83,34 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
     assert!(fixture.by_label(reason).is_some(), "the refusal shows in the dialog");
     pick(&mut fixture, "No grid");
     assert!(fixture.by_label(reason).is_none(), "changing a value clears the refusal");
+}
+
+/// Page Setup lays its rows out two to a line, as WordCraft's dialog did: Top beside Bottom, Left beside Right, Width
+/// beside Height, Portrait beside Landscape, the grid kinds and the two grid counts on one line, and the section
+/// direction on the counts' section. It then fits the default room without scrolling, Different First Page included.
+#[trial]
+fn page_setup_rows_stand_two_to_a_line() {
+    let start = PageSetup { grid: Some(DocumentGrid::new(GridKind::None, 40, 30)), ..PageSetup::default() };
+    let state = Rc::new(RefCell::new(start));
+    let seen = Rc::clone(&state);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut setup = seen.borrow_mut();
+        PageSetupDialog::new(Bind::bound(&mut *setup)).layout().direction().opened(Bind::given(true)).show(ui);
+    });
+    fixture.room(Vec2::new(1440.0, 900.0)).settle();
+    let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("{label} is shown")).rect;
+    let same_line = |a: &str, b: &str| {
+        let (a_rect, b_rect) = (rect(a), rect(b));
+        assert!((a_rect.center().y - b_rect.center().y).abs() < 1.0 && a_rect.max.x <= b_rect.min.x, "{a} stands before {b} on its line");
+    };
+    same_line("Top", "Bottom");
+    same_line("Left", "Right");
+    same_line("Width", "Height");
+    same_line("Portrait", "Landscape");
+    same_line("No grid", "Lines only");
+    same_line("Characters per line", "Lines per page");
+    same_line("Left-to-right", "Right-to-left");
+    assert!(rect("Top").max.y < rect("Left").min.y, "Left and Right are on the line under Top and Bottom");
+    let first = rect("Different First Page");
+    assert!(first.max.y <= 900.0, "the last row is in view without scrolling: {first:?}");
 }
