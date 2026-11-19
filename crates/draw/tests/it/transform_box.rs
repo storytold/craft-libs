@@ -365,7 +365,10 @@ fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
     assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "the middle still takes the edge");
     drag(&mut h, Point::new(301.0, 110.0), Point::new(321.0, 110.0));
     let quad = h.state().quad;
-    assert!((quad[1].x - 321.0).abs() < 1e-6 && (quad[2].x - 321.0).abs() < 1e-6, "the dragged side moved to the pointer: {quad:?}");
+    // A pressed handle moves by the drag and keeps the press's offset from the side, as measured on the reference
+    // application (a corner pressed 4 px inside or 3 px outside its handle): pressed 1 px outside, the side lands 1 px
+    // inside the pointer.
+    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the dragged side moved by the drag: {quad:?}");
     assert!((quad[0].x - RECT.x0).abs() < 1e-6 && (quad[3].x - RECT.x0).abs() < 1e-6, "the far side stayed: {quad:?}");
 }
 
@@ -652,7 +655,7 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
-/// reports them while a snapped corner drag runs and none once it ends.
+/// reports them while a snapped edge drag runs and none once it ends.
 #[trial]
 fn the_session_boxs_snap_lines_reach_the_tool_host() {
     use craft_draw::ui::transform::TransformTool;
@@ -689,7 +692,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
         }
     });
     fixture.settle();
-    let from = view.borrow().to_screen(Point::new(300.0, 220.0));
+    let from = view.borrow().to_screen(Point::new(300.0, 150.0));
     let mut step = |events: Vec<egui::Event>| {
         lines.borrow_mut().clear();
         fixture.frame(events);
@@ -698,7 +701,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
     step(vec![pointer::moved(from)]);
     step(vec![pointer::press(from)]);
     step(vec![pointer::moved(from + by(4.0, 0.0))]);
-    assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the corner snapped to x 310: the host reports the line");
+    assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the right edge snapped to x 310: the host reports the line");
     step(vec![pointer::release(from + by(7.0, 0.0))]);
     assert_eq!(step(Vec::new()), 0, "the lines end with the drag");
 }
@@ -1337,4 +1340,28 @@ fn an_alt_click_puts_the_reference_point_half_a_unit_up_and_left() {
     frame(&mut h, vec![pointer::release(at)]);
     let pivot = h.state().pivot;
     assert!(pivot.distance(Point::new(149.5, 119.5)) < 1e-6, "{pivot:?}");
+}
+
+/// A corner that keeps the box's proportions stops where the drag puts it, as in the reference application (a corner
+/// dragged to 2 px from the document's centre, or 3 px from its edge, is not drawn to them); one that stretches
+/// freely still snaps.
+#[trial]
+fn a_proportional_corner_does_not_snap_and_a_free_one_does() {
+    for linked in [true, false] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.rules = BoxRules::default().with_aspect_linked(linked);
+        });
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+        let x = h.state().quad[2].x;
+        // Linked, the corner follows the drag's projection on the diagonal: 200 × 140 scaled by 1 + 1400/59600. Free,
+        // it snaps to the guide at 310.
+        let expected = if linked { 100.0 + 200.0 * (1.0 + 7.0 * 200.0 / (200.0 * 200.0 + 140.0 * 140.0)) } else { 310.0 };
+        assert!((x - expected).abs() < 1e-6, "linked {linked}: the corner at x {x}, not {expected}");
+    }
 }

@@ -429,7 +429,8 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
 ///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
 ///   [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing snaps but the
-///   reference point, which snaps to the box's nine points only. In Distort only the corners snap, to guides. A pass
+///   reference point, which snaps to the box's nine points only. A corner that keeps the box's proportions does not
+///   snap. In Distort only the corners snap, to guides. A pass
 ///   reports the lines of its own drag events only.
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
@@ -598,6 +599,7 @@ impl<'a> TransformBox<'a> {
 
     /// The box the pointer at screen position `pos` gives a drag, snapped and rounded, with the lines it snapped to.
     ///
+    /// - A corner that keeps the box's proportions does not snap.
     /// - A corner or an edge snaps the grabbed handle through the canvas's `snap`, not the pointer: a press a few
     ///   pixels off the handle still lands the handle on the line. A distorting corner reports only the lines it
     ///   reaches once the box's folding rule has placed it: a corner stopped short of a line claims no alignment.
@@ -624,8 +626,10 @@ impl<'a> TransformBox<'a> {
                 // An ⌥ press keeps the point half a unit up and left of the pointer through its drag.
                 (if grip.moves_pivot { pulled } else { pulled + off }, Vec::new())
             }
+            // A corner that keeps the box's proportions does not snap: in the reference application it stops where
+            // the drag puts it, 2 px from the document's centre or 3 px from its edge.
             (BoxPart::Corner(_), Some(snap), Some(grabbed)) | (BoxPart::Edge(_), Some(snap), Some(grabbed))
-                if !distort_mode || matches!(grip.part, BoxPart::Corner(_)) =>
+                if (!distort_mode || matches!(grip.part, BoxPart::Corner(_))) && !self.rules.keeps_proportions(grip.part, mods) =>
             {
                 let off = grip.from - grabbed;
                 let (at, lines) = snap.point(to - off, mods, gesture);
@@ -645,7 +649,14 @@ impl<'a> TransformBox<'a> {
             }
             _ => (to, Vec::new()),
         };
-        let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, acting, &self.rules);
+        // A turn from outside the box reads the pointer half a pixel up and left, as measured on the reference
+        // application's; the rotate handle is a control of its own and turns with the pointer as it is.
+        let (from, to) = if grip.part == BoxPart::Outside && self.rotate_zone == RotateZone::Handle {
+            (grip.from + HANDLE_TURN_UNDO, to + HANDLE_TURN_UNDO)
+        } else {
+            (grip.from, to)
+        };
+        let dragged = quad::drag(&grip.start, &grip.last, grip.part, from, to, acting, &self.rules);
         // The canvas's pixel grid rounds an upright box and its corners to whole document units; keys are not rounded.
         let dragged = if snap.is_some_and(Snap::rounds_to_pixels) { on_pixel_grid(dragged) } else { dragged };
         if kind == Some(BoxDrag::Distort)
@@ -1458,6 +1469,9 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
 /// Where an ⌥ press puts the reference point, from the press: half a document pixel up and left, as the reference
 /// application does (an ⌥ click at (250, 200) puts it at (249.5, 199.5)).
 const ALT_PRESS_PIVOT: DocVec = DocVec::new(-0.5, -0.5);
+
+/// Undoes [`quad::drag`]'s half-pixel turn offset for the rotate handle ([`RotateZone::Handle`]).
+const HANDLE_TURN_UNDO: DocVec = DocVec::new(0.5, 0.5);
 
 /// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
 /// bottom edge; `None` for another part or a collapsed top edge.

@@ -303,6 +303,12 @@ impl BoxRules {
     pub fn drag_kind(&self, part: BoxPart, mods: Mods) -> Option<BoxDrag> {
         self.allows(part).then(|| resolve_kind(self.effective_mode(), part, self.drag_modifiers(part, mods)))
     }
+
+    /// Whether a drag of `part` with `mods` held (as the host has them) scales a corner keeping the box's
+    /// proportions.
+    pub fn keeps_proportions(&self, part: BoxPart, mods: Mods) -> bool {
+        matches!(part, BoxPart::Corner(_)) && self.drag_kind(part, mods) == Some(BoxDrag::Scale) && !self.drag_modifiers(part, mods).shift
+    }
 }
 
 /// The box after dragging `part` from `from` to `to` (document points) with `mods` held, from the
@@ -445,8 +451,9 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
         }
         BoxPart::Pivot => BoxState { quad: q0, pivot: p },
         BoxPart::Outside => {
-            let a0 = (g.start - c).atan2();
-            let a1 = (p - c).atan2();
+            // Both angles are read where the pointer acts in the document: half a pixel up and left of it.
+            let a0 = (g.start + TURN_POINTER_OFFSET - c).atan2();
+            let a1 = (p + TURN_POINTER_OFFSET - c).atan2();
             let mut da = a1 - a0;
             if mods.shift && rules.rotate_step > 0.0 {
                 // Snap the turn of this drag; the angle the box started at is kept.
@@ -514,8 +521,26 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     }
 }
 
+/// Where a turn reads the pointer, as the reference application does: half a document pixel up and left of it
+/// (measured on four turns of a 302 × 202 box, within 0.005°).
+const TURN_POINTER_OFFSET: Vec2 = Vec2::new(-0.5, -0.5);
+
+/// A corner's handle, or an edge's: the middle between its two corners (on a box in perspective the reference
+/// application keeps that point of a dragged side on the pointer).
+fn handle_at(quad: [Point; 4], part: BoxPart) -> Option<Point> {
+    match part {
+        BoxPart::Corner(i) => quad.get(usize::from(i)).copied(),
+        BoxPart::Edge(i) => {
+            let i = usize::from(i) % 4;
+            Some(quad[i].midpoint(quad[(i + 1) % 4]))
+        }
+        _ => None,
+    }
+}
+
 /// A plain corner or edge drag: scaling in the box's own frame (the unit square through the
-/// homography), so rotated and skewed boxes scale along their axes. A proportional corner follows
+/// homography), so rotated and skewed boxes scale along their axes. The grabbed handle moves by the drag (a press
+/// beside it keeps its offset, as in the reference application). A proportional corner follows
 /// the pointer's projection on the line from the anchor to the corner, so a distorted box scales
 /// along its own diagonal; past the anchor the factor turns negative and the box flips. Each
 /// scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed box.
@@ -559,6 +584,11 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
     }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
+    // The grabbed handle moves by the drag, so a press beside it keeps its offset from it.
+    let p = match handle_at(g.quad0, g.part) {
+        Some(at) => at + (p - g.start),
+        None => p,
+    };
     let Point { x: u, y: v } = inv.apply(p);
     let Point { x: pu, y: pv } = inv.apply(g.pivot0);
     // Which sides of the unit box move: (u = 0, u = 1) and (v = 0, v = 1).

@@ -55,7 +55,8 @@ fn a_proportional_corner_follows_the_diagonal_and_flips_past_the_anchor() {
 fn turned(by: f64, mods: Mods) -> f64 {
     let start = session().turned_about_pivot(25.59f64.to_radians());
     let c = start.pivot;
-    let at = |deg: f64| c + Vec2::from_angle(deg.to_radians()) * 200.0;
+    // A turn reads the pointer half a pixel up and left of it: these pointers act on the exact angles.
+    let at = |deg: f64| c + Vec2::from_angle(deg.to_radians()) * 200.0 + Vec2::new(0.5, 0.5);
     let from = at(0.0);
     assert_eq!(start.part_at(from, 8.0), BoxPart::Outside);
     drag(&start, &start, BoxPart::Outside, from, at(by), mods, &BoxRules::default()).angle()
@@ -1084,5 +1085,47 @@ fn an_alt_side_drag_under_a_tilted_top_eases_like_the_reference() {
         let start = BoxState::new(quad, mean);
         let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
         assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
+
+/// The reference application's box of 302 × 202 at (150, 125), the reference point at its centre, dragged with
+/// nothing held (its saved placements).
+fn reference_drag(from: Point, to: Point) -> BoxState {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    drag(&start, &start, start.part_at(from, 8.0), from, to, Mods::NONE, &BoxRules::default())
+}
+
+/// A corner pressed beside its handle keeps the press's offset from the corner: the corner moves by the drag.
+#[test]
+fn a_corner_pressed_beside_its_handle_moves_by_the_drag() {
+    for (from, to, want) in [(p(448.0, 323.0), p(301.0, 226.0), 0.5153), (p(455.0, 330.0), p(320.0, 240.0), 0.5534)] {
+        let s = reference_drag(from, to);
+        let k = (s.quad[2].x - s.quad[0].x) / 302.0;
+        assert!((k - want).abs() < 5e-4, "{from:?} to {to:?}: {k}, not {want}");
+    }
+}
+
+/// An edge pressed beside its handle moves by the drag too.
+#[test]
+fn an_edge_pressed_beside_its_handle_moves_by_the_drag() {
+    let s = reference_drag(p(449.0, 226.0), p(400.0, 226.0));
+    assert!((s.quad[1].x - 403.0).abs() < 1e-6, "{:?}", s.quad);
+}
+
+/// A turn reads both of its angles at the pointer less half a pixel, as the reference application does: four drags
+/// outside the box, turns within 0.01° of its saved placements.
+#[test]
+fn a_turn_reads_the_pointer_half_a_pixel_up_and_left() {
+    let cases = [
+        (p(480.0, 140.0), p(420.0, 60.0), -28.706),
+        (p(130.0, 110.0), p(100.0, 200.0), -26.696),
+        (p(475.0, 350.0), p(300.0, 400.0), 55.051),
+        (p(470.0, 345.0), p(400.0, 380.0), 22.195),
+    ];
+    for (from, to, want) in cases {
+        let s = reference_drag(from, to);
+        let top = s.quad[1] - s.quad[0];
+        let turned = top.y.atan2(top.x).to_degrees();
+        assert!((turned - want).abs() < 0.01, "{from:?} to {to:?}: {turned}°, not {want}°");
     }
 }
