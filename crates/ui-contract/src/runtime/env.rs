@@ -605,6 +605,11 @@ impl Env {
         Env { scoped: Arc::new(scoped) }
     }
 
+    /// Reuse a sweep's scope while it is uniquely held. A captured child env keeps its snapshot.
+    pub(crate) fn local_mut(&mut self) -> &mut Scoped {
+        Arc::make_mut(&mut self.scoped)
+    }
+
     /// This env's container scope on top of `root`, the root env of the viewport the scope now runs in: the scale,
     /// active state, window facts and OS are the viewport's, everything else stays.
     pub(crate) fn rebase(&self, root: &Env) -> Env {

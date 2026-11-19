@@ -234,12 +234,27 @@ impl<T: Stored> Stored for Stamped<T> {
 impl<T: Stored> PerViewport<T> {
     /// Runs `f` on the record of `viewport`, created on first use.
     pub(crate) fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        Self::visit(ctx, viewport, &mut |value| {
+            if let Some(f) = f.take() {
+                out = Some(f(value));
+            }
+        });
+        #[expect(clippy::expect_used, reason = "visit calls its visitor once on the viewport's record")]
+        out.expect("the viewport record was visited")
+    }
+
+    fn visit(ctx: &Context, viewport: ViewportId, f: &mut dyn FnMut(&mut T)) {
         // The prune registration runs outside the records' borrow: it reaches the context.
-        let (registered, out) = T::records(ctx, |records| (std::mem::replace(&mut records.pruning, true), f(records.record(viewport))));
+        let registered = T::records(ctx, |records| {
+            let registered = std::mem::replace(&mut records.pruning, true);
+            f(records.record(viewport));
+            registered
+        });
         if !registered {
             Self::register_prune(ctx);
         }
-        out
     }
 
     /// Runs `f` on the record of every viewport that has one.

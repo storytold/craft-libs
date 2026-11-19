@@ -18,7 +18,7 @@ use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Id, IdSet, ViewportId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -127,6 +127,7 @@ pub(crate) struct RowGroups {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) stops: Vec<StopRec>,
+    stop_ids: IdSet,
     pub(crate) last_stops: Vec<StopRec>,
     pub(crate) scopes: FastMap<Id, ScopeRec>,
     pub(crate) last_scopes: FastMap<Id, ScopeRec>,
@@ -201,6 +202,7 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
     with(ctx, |state| {
         let scope = state.open.last().map(|(id, _)| *id);
+        state.stop_ids.insert(stop.id);
         state.stops.push(StopRec { stop, scope });
     });
 }
@@ -320,7 +322,10 @@ pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
                 state.seen.insert(*id, frame);
             }
         }
-        state.stops.extend(transcript.stops.iter().map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }));
+        state.stops.extend(transcript.stops.iter().map(|rec| {
+            state.stop_ids.insert(rec.stop.id);
+            StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }
+        }));
         for group in &transcript.groups {
             state.groups.insert(group.id, *group);
         }
@@ -338,7 +343,7 @@ pub(crate) fn targets(ctx: &Context) -> [Option<Id>; 2] {
 /// `from` (a `stop_count`), which a component inside it holds.
 pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<FocusTarget> {
     with(ctx, |state| {
-        if state.stops.iter().any(|rec| rec.stop.id == id) {
+        if state.stop_ids.contains(&id) {
             return None;
         }
         let rec = state.stops.get(from..)?.first()?;

@@ -15,6 +15,7 @@ use super::scroll::{
 use super::size::MeasureKey;
 use super::window::{WindowMode, os_window, window_instance};
 use super::{BodyHooks, BodyView};
+use crate::contract::cx::CxCore;
 use crate::contract::cx::{BodyCx, BodyOwner, RegionShare};
 use crate::contract::label::{self, LabelIn};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
@@ -502,7 +503,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     }
 
     fn sensed(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        self.reorder_keys(comp.props(Internal::new()), cx);
+        self.reorder_keys(comp.props(Internal::new()), cx.core);
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
@@ -537,21 +538,21 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {
             self.open = !self.open;
         }
-        self.band_double(cx);
-        self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx);
+        self.band_double(cx.core);
+        self.surface_press(comp.sense().contains(craft_behavior::Sense::SURFACE), cx.core);
         let band = props.header.is_some_and(|header| header.band == DragBand::Move);
         if (band || matches!(props.mount, Mount::Viewport { .. } | Mount::Window { .. }))
             && let Some(viewport) = os_window(props, cx.core.memory.ctx(), cx.core.id, &cx.core.env)
         {
             self.window_os(viewport, props, cx);
-            self.window_movable(viewport, cx);
+            self.window_movable(viewport, cx.core);
         }
-        self.pane_drag(props, cx);
+        self.pane_drag(props, cx.core);
         if layer && !(matches!(props.mount, Mount::Viewport { .. }) && windows::mount_window(cx.core.memory.ctx(), cx.core.id)) {
             self.window_keys(props, cx);
             self.window_drag(props, cx);
         }
-        self.window_placed(props, cx);
+        self.window_placed(props, cx.core);
         // The body moves and resizes the layer in screen space; the caller places it in its parent's layer space.
         let from_screen = crate::runtime::overlay::parent_space(&cx.core.ctx, cx.core.id).inverse();
         for mut change in std::mem::take(&mut self.reports) {
@@ -581,10 +582,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.footer_slot_step(comp, ui, cx, &mut plan);
         }
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
-        self.label_step(ui, env, cx, &mut plan);
+        self.label_step(ui, env, cx.core, &mut plan);
         // B3 body, if open, under the body env; the gate is read after the header changed it.
         if plan.is_open {
-            self.body_step(ui, env, cx, &mut plan);
+            self.body_step(ui, env, cx.core, &mut plan);
             self.after_body(ui, env, &mut plan);
             if plan.real && props.end.is_some() {
                 self.end_step(comp, ui, cx, &mut plan);
@@ -1155,7 +1156,7 @@ impl BodyHooks<'_> {
     /// B2: the body's place beside the regions measured so far, the label step and the body's env.
     // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
     #[inline(never)]
-    fn label_step<C: Container>(&mut self, ui: &mut Ui, env: &Env, cx: &Cx<'_, C>, plan: &mut BodyPlan<'_>) {
+    fn label_step(&mut self, ui: &mut Ui, env: &Env, core: &CxCore<'_>, plan: &mut BodyPlan<'_>) {
         let props = plan.props;
         let (ctx, id, real) = (&plan.ctx, plan.id, plan.real);
         let beside =
@@ -1200,7 +1201,7 @@ impl BodyHooks<'_> {
         plan.ran_top = plan.body_rect.min.y;
         plan.label_extra = label_extra_of(plan.regions.body, plan.body_rect, plan.label_rect, plan.rtl);
         // The body's control shows an inside label in its slot, in the measuring run and the real run alike.
-        let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, cx.core.resolved.enabled));
+        let inside = props.label.as_ref().and_then(|side| label::inside(env.view(), side, core.resolved.enabled));
         // In an inspector the control beside its label fills the width the label leaves.
         let cell_fills = props.label.as_ref().is_some_and(|side| side.layout == label::FieldLayout::Beside)
             && env.values.get::<label::LabelScheme>() == label::LabelScheme::Inspector;
@@ -1224,7 +1225,7 @@ impl BodyHooks<'_> {
 
     /// B3: the body region, on the body layer when the container transforms its body.
     #[expect(clippy::expect_used, reason = "the label step sets the body env before the body step")]
-    fn body_step<C: Container>(&mut self, ui: &mut Ui, env: &Env, cx: &mut Cx<'_, C>, plan: &mut BodyPlan<'_>) {
+    fn body_step(&mut self, ui: &mut Ui, env: &Env, core: &mut CxCore<'_>, plan: &mut BodyPlan<'_>) {
         let props = plan.props;
         let body_env = plan.body_env.as_ref().expect("the label step ran");
         let reveal_clip = (plan.animated && self.presence.t < 1.0).then(|| {
@@ -1253,19 +1254,11 @@ impl BodyHooks<'_> {
         };
         let body_rect = plan.body_rect;
         let share = plan.share(false);
-        let mut bcx = BodyCx::new(
-            plan.body_id,
-            body_env.view(),
-            plan.resolved,
-            body_rect,
-            &mut *cx.core.memory,
-            &mut plan.open,
-            plan.gate.as_mut(),
-            Some(share),
-        );
+        let mut bcx =
+            BodyCx::new(plan.body_id, body_env.view(), plan.resolved, body_rect, &mut *core.memory, &mut plan.open, plan.gate.as_mut(), Some(share));
         let mut bars = Vec2::ZERO;
         self.body_size = match props.transform {
-            Some(transform) => self.run_transformed(&run, ui, (transform, cx.core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars),
+            Some(transform) => self.run_transformed(&run, ui, (transform, core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars),
             None => self.run_body(&run, ui, body_rect, &mut bcx, &mut bars),
         };
         plan.close = plan.close.or(bcx.close_requested());

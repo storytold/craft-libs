@@ -22,7 +22,11 @@ pub(crate) fn take_raw<T: Any + Send + Sync>(data: &mut Map, id: Id) -> Option<R
 
 /// Moves the slot of type `T` under `id` out of context data as the box it is stored in.
 pub(crate) fn take_boxed<T: Any + Send + Sync>(ctx: &Context, id: Id) -> Option<Removed> {
-    ctx.data_mut(|data| take_raw::<T>(data, id))
+    remove(ctx, RawKey::new::<T>(id))
+}
+
+fn remove(ctx: &Context, key: RawKey) -> Option<Removed> {
+    ctx.data_mut(|data| data.remove_temp_raw(key))
 }
 
 /// Moves the slot of type `T` under `id` out of context data.
@@ -77,7 +81,11 @@ pub(crate) fn peek_clone<T: Any + Clone + Send + Sync>(ctx: &Context, id: Id) ->
 
 /// Whether a slot of type `T` is stored under `id`.
 pub(crate) fn exists<T: Any + Send + Sync>(ctx: &Context, id: Id) -> bool {
-    ctx.data(|data| data.get_temp_raw(RawKey::new::<T>(id)).is_some())
+    contains(ctx, RawKey::new::<T>(id))
+}
+
+fn contains(ctx: &Context, key: RawKey) -> bool {
+    ctx.data(|data| data.get_temp_raw(key).is_some())
 }
 
 /// Runs `f` on the context's data under its lock; `f` runs no app code and makes no call that reaches the context.

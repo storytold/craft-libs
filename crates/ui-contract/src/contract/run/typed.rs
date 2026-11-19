@@ -542,7 +542,7 @@ pub(crate) fn show_container_taking<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     rect: Rect,
-    body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Inner<C::Output, R> {
     let shown = show_container(slot, ui, ShowAt::Rect(rect), body, None);
     crate::runtime::egui::alloc::advance_past(ui, rect);
@@ -553,7 +553,7 @@ pub(crate) fn show_container<C: Container, R>(
     slot: &mut Option<C>,
     ui: &mut Ui,
     at: ShowAt,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
     tip: Option<TipFn<'_>>,
 ) -> Inner<C::Output, R> {
     if let Some(output) = unshown(held(slot), ui) {
@@ -643,7 +643,7 @@ pub(crate) fn measure_container<C: Container, R>(
     comp: &mut C,
     ui: &Ui,
     proposal: Proposal,
-    mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
+    body: &mut dyn FnMut(&mut Ui, &mut BodyCx<'_>) -> R,
 ) -> Vec2 {
     let mut call = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
         body(ui, cx);

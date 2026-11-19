@@ -507,18 +507,15 @@ fn shrink_widths_in_turn(units: &[ShrinkUnit], first: &[bool], fixed: f32, room:
 fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> R {
     let ctx = ui.ctx().clone();
     let layout = *ui.layout();
-    let sweep = |ui: &mut Ui, shrink: Shrink, body: &mut dyn FnMut(&mut Ui) -> R| {
-        let installed = Env::install_for(
-            ui,
-            Env::of(ui).derive_local(|scoped| {
-                scoped.shrink = Some(shrink);
-                // The least of a body is what it takes in no room.
-                if matches!(shrink, Shrink::Least(_)) {
-                    scoped.unbounded.0 = true;
-                    scoped.least = true;
-                }
-            }),
-        );
+    let mut env = Env::of(ui);
+    let inherited = (env.unbounded.0, env.least);
+    let mut sweep = |ui: &mut Ui, shrink: Shrink, body: &mut dyn FnMut(&mut Ui) -> R| {
+        let scoped = env.local_mut();
+        scoped.shrink = Some(shrink);
+        let least = matches!(shrink, Shrink::Least(_));
+        scoped.unbounded.0 = inherited.0 || least;
+        scoped.least = inherited.1 || least;
+        let installed = Env::install_for(ui, env.clone());
         let inner = body(ui);
         Env::restore(&ctx, installed);
         inner
@@ -627,7 +624,7 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
         let share = layout_memory::measured(&ctx, key)
             .filter(|found| found.took.y >= 1.0 && room.is_finite())
             .map(|found| ((room - found.took.x) / found.took.y).max(0.0));
-        share_sweep(ui, env, id, axis, share, &mut body)
+        share_sweep(ui, &mut env.clone(), id, axis, share, &mut body)
     })
     .0
 }
@@ -653,14 +650,11 @@ fn share_room(ui: &Ui, axis: Axis) -> f32 {
 }
 
 /// One sweep of the children of the sharing body `id` in `ui`, each child that fills `axis` given `share`.
-fn share_sweep<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, share: Option<f32>, body: &mut dyn FnMut(&mut Ui) -> R) -> R {
-    let installed = Env::install_for(
-        ui,
-        env.derive_local(|scoped| {
-            scoped.fill_body = Some((id, axis));
-            scoped.fill_share = share;
-        }),
-    );
+fn share_sweep<R>(ui: &mut Ui, env: &mut Env, id: Id, axis: Axis, share: Option<f32>, body: &mut dyn FnMut(&mut Ui) -> R) -> R {
+    let scoped = env.local_mut();
+    scoped.fill_body = Some((id, axis));
+    scoped.fill_share = share;
+    let installed = Env::install_for(ui, env.clone());
     let inner = body(ui);
     Env::restore(ui.ctx(), installed);
     inner
@@ -684,12 +678,13 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
     }
     let key = sub(id, "share");
     let along = |size: Vec2| if axis == Axis::Y { size.y } else { size.x };
+    let mut sweep_env = env.clone();
     let first = crate::contract::keeping_ids(&ctx, || {
         let (inner, rect, room) = {
             let mut first = laid_out_child(ui, layout);
             let room = share_room(&first, axis);
             pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0));
-            let inner = share_sweep(&mut first, env, id, axis, None, body);
+            let inner = share_sweep(&mut first, &mut sweep_env, id, axis, None, body);
             (inner, first.min_rect(), room)
         };
         let fills = pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.remove(&id)).unwrap_or(0);
@@ -699,7 +694,7 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
         ((inner, rect, share), share.is_some())
     });
     match first {
-        (_, _, Some(share)) => in_child(ui, &mut |ui| share_sweep(ui, env, id, axis, Some(share), body)),
+        (_, _, Some(share)) => in_child(ui, &mut |ui| share_sweep(ui, &mut sweep_env, id, axis, Some(share), body)),
         (inner, rect, None) => (inner, rect),
     }
 }

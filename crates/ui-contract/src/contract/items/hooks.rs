@@ -879,29 +879,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let editor = comp.rename_editor(row_ui, Bind::bound(&mut draft), label, &name);
         self.renaming.draft = draft;
         if let Some(editor) = editor {
-            if !self.renaming.focused {
-                focus::request_now(ctx, focus::FocusTarget::Id(editor.response.id));
-                self.renaming.focused = true;
-            }
             let gesture = self.renaming.gesture;
             let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
-            // The editor's gesture end, if the pass has one, ends the rename.
-            let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
-            let edited = !editor.events.is_empty();
-            if end.is_some() {
-                self.refocus = focus::is_focused(ctx, editor.response.id);
-            }
-            // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
-            // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
-            keys::hold_escape(ctx, editor.response.id);
-            let escaped = !edited && focus::is_focused(ctx, editor.response.id) && {
-                let mut intents = keys::intents_of(ctx, Some(editor.response.id), rtl);
-                let left = intents.take(Intent::Cancel);
-                keys::settle(ctx, Some(editor.response.id), &intents);
-                left
-            };
+            let (end, escaped) = rename_input(ctx, &editor, rtl, &mut self.renaming.focused, &mut self.refocus);
             match end {
-                None if edited => {}
+                None if !editor.events.is_empty() => {}
                 None if escaped => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Escape, Some(before))));
                     self.ended_rename = true;
@@ -943,6 +925,33 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
         }
     }
+}
+
+/// Focus and Escape belong to the editor until the rename ends, independent of the row's key type.
+fn rename_input(
+    ctx: &Context,
+    editor: &crate::contract::EditResponse<String>,
+    rtl: bool,
+    focused: &mut bool,
+    refocus: &mut bool,
+) -> (Option<EditEvent<String>>, bool) {
+    let id = editor.response.id;
+    if !*focused {
+        focus::request_now(ctx, focus::FocusTarget::Id(id));
+        *focused = true;
+    }
+    let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
+    if end.is_some() {
+        *refocus = focus::is_focused(ctx, id);
+    }
+    keys::hold_escape(ctx, id);
+    let escaped = editor.events.is_empty() && focus::is_focused(ctx, id) && {
+        let mut intents = keys::intents_of(ctx, Some(id), rtl);
+        let left = intents.take(Intent::Cancel);
+        keys::settle(ctx, Some(id), &intents);
+        left
+    };
+    (end, escaped)
 }
 
 /// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the row height `row` for

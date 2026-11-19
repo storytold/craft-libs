@@ -505,36 +505,41 @@ impl MemoryStage {
         store::peek_copy::<Seen>(&self.ctx, base).is_none_or(|seen| seen.0 == frame)
     }
 
-    #[allow(clippy::unreachable, reason = "the entry key holds the lifetime and the type, so the downcast cannot fail")]
-    fn slot<const TIER: u8, T: Slot>(&mut self, id: Id) -> &mut T {
-        let ctx = &self.ctx;
-        let peek = self.peek_only;
-        let key = (TIER, TypeId::of::<T>(), id);
+    fn entry(&mut self, key: (u8, TypeId, Id), create: fn(&Context, bool, Id) -> Entry) -> &mut Entry {
         let at = match self.entries.iter().position(|entry| entry.key == key) {
             Some(at) => at,
             None => {
-                let (value, recorded): (Box<dyn Any + Send + Sync>, bool) = if peek {
-                    (Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default()), false)
-                } else {
-                    // The box the slot was stored in stays the entry's value.
-                    match store::locked(ctx, |data| take_raw::<Wrapped<TIER, T>>(data, id)) {
-                        Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => (boxed, true),
-                        _ => (Box::new(Wrapped::<TIER, T>::default()), false),
-                    }
-                };
-                self.entries.push(Entry {
-                    key,
-                    value,
-                    write_back: write_back::<TIER, T>,
-                    remove: remove_slot::<TIER, T>,
-                    ended: None,
-                    recorded,
-                    persist: None,
-                });
+                self.entries.push(create(&self.ctx, self.peek_only, key.2));
                 self.entries.len() - 1
             }
         };
-        match self.entries[at].value.downcast_mut::<Wrapped<TIER, T>>() {
+        &mut self.entries[at]
+    }
+
+    #[allow(clippy::unreachable, reason = "the entry key holds the lifetime and the type, so the downcast cannot fail")]
+    fn slot<const TIER: u8, T: Slot>(&mut self, id: Id) -> &mut T {
+        fn create<const TIER: u8, T: Slot>(ctx: &Context, peek: bool, id: Id) -> Entry {
+            let (value, recorded): (Box<dyn Any + Send + Sync>, bool) = if peek {
+                (Box::new(store::peek_clone::<Wrapped<TIER, T>>(ctx, id).unwrap_or_default()), false)
+            } else {
+                // The box the slot was stored in stays the entry's value.
+                match store::take_boxed::<Wrapped<TIER, T>>(ctx, id) {
+                    Some(boxed) if boxed.is::<Wrapped<TIER, T>>() => (boxed, true),
+                    _ => (Box::new(Wrapped::<TIER, T>::default()), false),
+                }
+            };
+            Entry {
+                key: (TIER, TypeId::of::<T>(), id),
+                value,
+                write_back: write_back::<TIER, T>,
+                remove: remove_slot::<TIER, T>,
+                ended: None,
+                recorded,
+                persist: None,
+            }
+        }
+        let entry = self.entry((TIER, TypeId::of::<T>(), id), create::<TIER, T>);
+        match entry.value.downcast_mut::<Wrapped<TIER, T>>() {
             Some(wrapped) => &mut wrapped.0,
             None => unreachable!("an entry's value has the type its key names"),
         }
