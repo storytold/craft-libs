@@ -107,7 +107,7 @@ The gallery shows every registered story of every crate with a `ui` feature, und
 
 ```
 git switch craft-framework
-cargo run --profile gallery -p craft-ui-gallery
+cargo run --release -p craft-ui-gallery
 ```
 
 - The `gallery` profile is release optimisation with incremental builds; `cl build gallery` builds the debug gallery instead. Both are described in [development.md](development.md), with the story renderer (`cl render`), which writes one component's stories to PNG files without building the gallery.
@@ -179,7 +179,7 @@ Inside `craft-libs`, every local cargo command goes through `tools/cl`, which gi
 | Check the crate you changed | `cl check <crate>` |
 | Run its suite and trials | `cl test <crate>`, or `cl test <crate> -- <filter>` |
 | One component's stories as PNG files | `cl render <crate> <Component>` (`ui` for the library's own components) |
-| The gallery | `cl build gallery` (debug), or `cargo run --profile gallery -p craft-ui-gallery` |
+| The gallery | `cl build gallery` (debug), or `cargo run --release -p craft-ui-gallery` |
 
 Writing a component, its stories and its trials: [authoring.md](authoring.md). Moving an app's UI onto the framework: [porting.md](porting.md).
 
@@ -492,7 +492,7 @@ The Text size setting scales the roles only (0.83x, 1x, 1.17x, 1.33x), rounded t
 
 ### 5.3 Iconography
 
-- **Sets.** Phosphor is the base set. The gallery's active set defaults to Lucide. A theme may supply an icon pack that replaces the base icons it covers; missing icons fall back to the base set.
+- **Sets.** Phosphor is the base set: it draws every icon. The suite's default set is Lucide, which falls back to Phosphor. A theme picks its set with `icon_pack` ([suite-themes.md](suite-themes.md)): a built-in set (`craft.lucide`, `craft.phosphor`, `craft.carbon`, `craft.tabler`) or a pack in the suite library that replaces the icons it covers. Missing icons fall back to the base set, a library pack's to the default set. The resolved tokens carry the set, so every icon drawn under a theme, a theme scope included, follows it.
 - **Strokes.** 1.25 pt at the small size, 1.5 pt at medium and large.
 
 ### 5.4 Dimensions

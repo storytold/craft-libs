@@ -35,6 +35,12 @@ pub use craft_browse as browse;
 pub use craft_captions as captions;
 #[cfg(feature = "cfb")]
 pub use craft_cfb as cfb;
+#[cfg(feature = "cloud")]
+pub use craft_cloud as cloud;
+#[cfg(feature = "cloud-local")]
+pub use craft_cloud_local as cloud_local;
+#[cfg(feature = "cloud-ui")]
+pub use craft_cloud_ui as cloud_ui;
 #[cfg(feature = "cms")]
 pub use craft_cms as cms;
 #[cfg(feature = "codepage")]
@@ -133,6 +139,8 @@ pub use craft_gif as gif;
 pub use craft_gridcraft_format as gridcraft_format;
 #[cfg(feature = "gzip")]
 pub use craft_gzip as gzip;
+#[cfg(feature = "har")]
+pub use craft_har as har;
 #[cfg(feature = "hdr")]
 pub use craft_hdr as hdr;
 #[cfg(feature = "heif")]
@@ -155,10 +163,14 @@ pub use craft_imaging as imaging;
 pub use craft_indd as indd;
 #[cfg(feature = "ipc")]
 pub use craft_ipc as ipc;
+#[cfg(feature = "java-class")]
+pub use craft_java_class as java_class;
 #[cfg(feature = "jmap")]
 pub use craft_jmap as jmap;
 #[cfg(feature = "jpeg")]
 pub use craft_jpeg as jpeg;
+#[cfg(feature = "jsonc")]
+pub use craft_jsonc as jsonc;
 #[cfg(feature = "jsonrpc")]
 pub use craft_jsonrpc as jsonrpc;
 #[cfg(feature = "jxl")]
@@ -221,6 +233,8 @@ pub use craft_ora as ora;
 pub use craft_pages as pages;
 #[cfg(feature = "palette")]
 pub use craft_palette as palette;
+#[cfg(feature = "pcap")]
+pub use craft_pcap as pcap;
 #[cfg(feature = "pcraft-bundle")]
 pub use craft_pcraft_bundle as pcraft_bundle;
 #[cfg(feature = "pcraft-format")]
@@ -291,6 +305,8 @@ pub use craft_sketch as sketch;
 pub use craft_smime as smime;
 #[cfg(feature = "sniff")]
 pub use craft_sniff as sniff;
+#[cfg(feature = "sourcemap")]
+pub use craft_sourcemap as sourcemap;
 #[cfg(feature = "ssip")]
 pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]
@@ -314,6 +330,8 @@ pub use craft_texture as texture;
 #[cfg(feature = "tga")]
 pub use craft_tga as tga;
 pub use craft_theme as theme;
+#[cfg(feature = "theme-editor")]
+pub use craft_theme_editor as theme_editor;
 #[cfg(feature = "theme-store")]
 pub use craft_theme_store as theme_store;
 #[cfg(feature = "tiff")]
@@ -336,6 +354,8 @@ pub use craft_vectorcraft_format as vectorcraft_format;
 pub use craft_vectordrawable as vectordrawable;
 #[cfg(feature = "video")]
 pub use craft_video as video;
+#[cfg(feature = "wasm")]
+pub use craft_wasm as wasm;
 #[cfg(feature = "web-api")]
 pub use craft_web_api as web_api;
 #[cfg(feature = "web-host")]
@@ -348,6 +368,8 @@ pub use craft_window as window;
 pub use craft_wordmodel as wordmodel;
 #[cfg(feature = "xcf")]
 pub use craft_xcf as xcf;
+#[cfg(feature = "xfdf")]
+pub use craft_xfdf as xfdf;
 #[cfg(feature = "xfl")]
 pub use craft_xfl as xfl;
 #[cfg(feature = "xls")]

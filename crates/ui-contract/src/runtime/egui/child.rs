@@ -24,12 +24,18 @@ pub(crate) fn pinned_layout() -> Layout {
 /// Runs `body` in a child `Ui` with an explicit layout and returns what it produced with the rect the child
 /// took in `ui`. `rect` bounds the child; `None` gives it the rest of the parent.
 pub(crate) fn block<R>(ui: &mut Ui, rect: Option<Rect>, layout: Layout, body: impl FnOnce(&mut Ui) -> R) -> (R, Rect) {
-    let mut builder = UiBuilder::new().layout(layout);
-    if let Some(rect) = rect {
-        builder = builder.max_rect(rect);
-    }
-    let out = ui.scope_builder(builder, body);
+    let out = ui.scope_dyn(block_builder(rect, layout), Box::new(body));
     (out.inner, out.response.rect)
+}
+
+/// The builder of a `block`'s child, made outside the generic `block` so a body nested in blocks keeps one builder
+/// per level on the stack.
+fn block_builder(rect: Option<Rect>, layout: Layout) -> UiBuilder {
+    let builder = UiBuilder::new().layout(layout);
+    match rect {
+        Some(rect) => builder.max_rect(rect),
+        None => builder,
+    }
 }
 
 /// The physical layout of a `Stack` or `Grid` body for `right_to_left`.

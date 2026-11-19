@@ -70,7 +70,8 @@ pub struct MenuBarOutput {
 #[derive(craft_ui::contract::Pattern)]
 pub struct MenuBarUi<'a> {
     bar: &'a MenuBar,
-    target: Target,
+    /// The platform set with [`target`](Self::target); the shell's when none is.
+    target: Option<Target>,
     english: Option<&'a EnglishHook<'a>>,
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
@@ -78,16 +79,16 @@ pub struct MenuBarUi<'a> {
 }
 
 impl<'a> MenuBarUi<'a> {
-    /// The bar for `bar`, already laid out ([`crate::layout`]), on [`Target::current`].
+    /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a MenuBar) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: Target::current(), english: None, preferred: &[], keyboard: None, help_search: false }
+        MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false }
     }
 
     /// The platform the bar is on, for the shortcut column ([`craft_keymap::Chord::display`]): ⌘ glyphs on
     /// [`Target::Mac`] and in a browser on a Mac, Ctrl names everywhere else. On [`Target::Mac`] the native bar
     /// has the keys, and this one takes none unless [`keyboard`](Self::keyboard) says so.
     pub fn target(mut self, target: Target) -> MenuBarUi<'a> {
-        self.target = target;
+        self.target = Some(target);
         self
     }
 
@@ -127,15 +128,18 @@ impl<'a> MenuBarUi<'a> {
     /// the root window instead.
     pub fn show(self, ui: &mut Ui) -> MenuBarOutput {
         let env = Env::of(ui);
-        let rows = Rows::new(self.target).english(self.english).preferred(self.preferred);
+        let target = self.target.unwrap_or_else(|| Target::of_shell(env.view().shell()));
+        let rows = Rows::new(target).english(self.english).preferred(self.preferred);
         let labels =
             rows.labels(&self.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
         let shared = &rows;
         let titles: Vec<MenuTitle<'_>> =
             self.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
         let help = self.help_search.then(|| self.bar.menus.iter().position(|menu| menu.role == MenuRole::Help)).flatten();
-        let entries = if help.is_some() { entries_of(self.bar, self.english) } else { Vec::new() };
-        let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(self.target != Target::Mac));
+        // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
+        let (bar_model, english) = (self.bar, self.english);
+        let entries = move || entries_of(bar_model, english);
+        let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(target != Target::Mac));
         if let Some(menu) = help {
             bar = bar.help(MenuHelp::new(menu, &entries));
         }

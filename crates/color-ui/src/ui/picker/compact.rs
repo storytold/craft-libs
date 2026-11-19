@@ -1,10 +1,10 @@
 //! The picker's body: the Compact layout, and the parts both layouts show (the area and strip, the hex field and the
 //! screen-pick button). The Full layout is in `full.rs`.
 
-use craft_behavior::Mixed;
 use craft_theme::ColorModel;
-use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Gap, LabelScheme, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::form::{Field, FieldGroup};
+use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
@@ -14,22 +14,19 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::screen_pick::ScreenPickButton;
-use super::{Collected, ColorPickerLayout, ColorPickerWords, ColorWarning, Pass, PickedColor};
+use super::{Collected, ColorPickerLayout, ColorPickerWords, Pass};
 use crate::ui::channels::WEB_LEVELS;
-use crate::ui::{AreaMode, ColorArea, ColorStrip};
+use crate::ui::{AreaMode, AreaShape, ColorArea, ColorStrip, ColorWarning};
 
 /// What the body shows.
 pub(super) struct Body<'a> {
     pub layout: ColorPickerLayout,
     pub models: Vec<&'a dyn ColorModel>,
     pub warnings: Vec<ColorWarning>,
-    pub compare: Option<Mixed<PickedColor>>,
     pub alpha: bool,
     pub dynamic_tracks: bool,
     pub eyedropper: bool,
     pub eyedropper_busy: bool,
-    /// Whether the host holds Only Web Colors, so the Full layout shows its check box.
-    pub has_web_check: bool,
 }
 
 impl<'a> Body<'a> {
@@ -41,12 +38,13 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The area and strip over the channel rows of one model, the model switch, the hex row and the opacity row.
+    /// The area at plot proportions and the strip, which set the width, over rows across it: the channel rows of one
+    /// model, the opacity row, the model switch, and the hex row with the screen-pick button at its end.
     fn compact(&self, ui: &mut Ui, pass: &Pass<'a>, got: &mut Collected) {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let model = self.models.iter().copied().find(|m| Some(m.id()) == pass.model);
         let visible: Vec<&dyn ColorModel> = model.into_iter().chain([pass.mode.model()]).collect();
-        self.area_and_strip(ui, pass, &visible, got);
+        self.area_and_strip(ui, pass, &visible, AreaShape::Plot, got);
         if let Some(model) = model {
             FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let values = pass.shown.values_in(model);
@@ -76,22 +74,24 @@ impl<'a> Body<'a> {
                 }
             }
         }
-        Row::new().show(ui, |ui, _| {
-            Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, got));
-            self.sample_button(ui, &words, got);
+        // The hex field at the row's start; the rest of the row puts the screen-pick button at its end.
+        Row::new().fill_width().show(ui, |ui, _| {
+            Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, None, got));
+            Row::new().fill_width().align(RowAlign::End).show(ui, |ui, _| self.sample_button(ui, &words, got));
         });
     }
 
-    /// The area and the strip beside it, for the mode of the pass.
-    pub(super) fn area_and_strip(&self, ui: &mut Ui, pass: &Pass<'a>, visible: &[&dyn ColorModel], got: &mut Collected) {
+    /// The area in `shape` and the strip beside it, as tall as the area, for the mode of the pass.
+    pub(super) fn area_and_strip(&self, ui: &mut Ui, pass: &Pass<'a>, visible: &[&dyn ColorModel], shape: AreaShape, got: &mut Collected) {
         let mode: AreaMode = pass.mode;
         let model = mode.model();
         let [across, down] = mode.area();
         let values = pass.shown.values_in(model);
         let levels = pass.rules.web.then_some(WEB_LEVELS);
-        Row::new().show(ui, |ui, _| {
+        Row::new().gap(Gap::Item).show(ui, |ui, _| {
             let mut area = ColorArea::new(Label::from(mode.name()), mode, Bind::given(values))
-                .names([channel_name(model, across, visible), channel_name(model, down, visible)]);
+                .names([channel_name(model, across, visible), channel_name(model, down, visible)])
+                .shape(shape);
             let mut strip = ColorStrip::new(channel_name(model, mode.strip(), visible), mode, Bind::given(values));
             if let Some(levels) = levels {
                 area = area.quantize(levels);
@@ -119,11 +119,15 @@ impl<'a> Body<'a> {
         }
     }
 
-    /// The hex field. The Full layout's first show focuses it.
-    pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
-        let edit = TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba())))
-            .empty(pass.shown.color.to_rgba())
-            .show(ui);
+    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected.
+    pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
+        let field =
+            TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba());
+        let edit = match sizing {
+            Some(sizing) => field.sizing(sizing),
+            None => field,
+        }
+        .show(ui);
         if pass.focus_hex {
             focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
         }

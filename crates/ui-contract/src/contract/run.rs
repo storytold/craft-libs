@@ -11,7 +11,7 @@ use crate::primitives::sensing::{self, MemberSpec, RootSpec};
 use crate::primitives::{PaintRecord, PartResult};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::commands::ResolvedCommand;
-use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView};
+use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView, ThemeScope};
 use crate::runtime::layout_memory::{Call, Inputs};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
@@ -251,6 +251,11 @@ pub(crate) trait ShapeHooks<C: Component> {
 
     /// The command scope the component is an instance of: its own `Cx` and the items below see it in the chain.
     fn instance_scope(&self, _comp: &C) -> Option<commands::CommandScope> {
+        None
+    }
+
+    /// The token scope of the component and everything it shows (`ContainerProps::theme`).
+    fn theme_scope(&self, _comp: &C) -> Option<ThemeScope> {
         None
     }
 
@@ -496,12 +501,13 @@ pub(crate) trait Erased {
     fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2;
     /// Builds the component's `Cx` over `core` and `style` (what `style` gave), runs `rest` with it, then `finish`.
     /// `rest` returns whether a real pass ran.
-    fn with_cx<'a>(&mut self, core: CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool);
+    fn with_cx<'a>(&mut self, core: &'a mut CxCore<'a>, style: &'a dyn StyleView, rest: &mut dyn FnMut(&mut dyn ErasedPass<'a>) -> bool);
 
     fn shape(&self) -> ShapeKind;
     fn declares_parts(&self) -> bool;
     fn read(&mut self, stage: &mut MemoryStage, id: Id, env: &Env);
     fn instance_scope(&self) -> Option<commands::CommandScope>;
+    fn theme_scope(&self) -> Option<ThemeScope>;
     fn memory_owner(&self) -> Option<Id>;
     fn in_flow(&self) -> bool;
     /// Whether the shape fills the width of the room it is shown in (a body not sized from its content).
@@ -649,19 +655,6 @@ struct Pass<'p, 'r, 'a> {
     activated: bool,
     /// The source of the first activation `Cx::activate` injected in the passes.
     injected: Option<commands::FireSource>,
-}
-
-/// Steps 6 to 16, in the `Ui` the host gives, inside the component's focus scope.
-fn pass(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
-    let scope = if p.sizing || ui.is_sizing_pass() { None } else { p.p.focus() };
-    let (ctx, id) = (p.p.core_ref().ctx.clone(), p.resolved.id);
-    if let Some(policy) = scope {
-        focus::push_scope(&ctx, id, policy, None);
-    }
-    run_in_host(p, ui, host_at, host_env);
-    if scope.is_some() {
-        focus::pop_scope(&ctx);
-    }
 }
 
 /// A component wider than its room widens the flow `Ui` it was placed in, toward the end of the line.
@@ -850,15 +843,70 @@ fn create_node(ctx: &Context, ui: &Ui, id: Id, member: bool, role: Role) -> bool
     }
 }
 
-/// Steps 6 to 16 of the pass, run in the `Ui` the host gives.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "steps 6 to 16 in their fixed order; each step is already its own function and the rest is the order"
-)]
+/// Steps 6 to 16, in the `Ui` the host gives, inside the component's focus scope. Children run inside the overlay
+/// step, `paint`, the content and `paint_over`; each step group is its own function, so during a child's run this
+/// level keeps only `HostStep` on the stack.
 fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, host_env: Option<&Env>) {
+    let scope = enter_scope(p, ui);
+    let env = host_env.unwrap_or(p.env);
+    if let Some(mut h) = sense_steps(p, ui, host_at, env) {
+        update_steps(p, &h);
+        overlay_step(p, ui, env, &h);
+        state_steps(p, ui, env, &h);
+        paint_step(p, ui, env, &mut h);
+        content_step(p, ui, env, &h);
+        paint_over_step(p, ui, env, &h);
+        report_steps(p, ui, env, &h);
+    }
+    if let Some(ctx) = scope {
+        focus::pop_scope(&ctx);
+    }
+}
+
+/// Opens the component's focus scope, outside a sizing pass. Returns the context to close it with.
+fn enter_scope(p: &Pass<'_, '_, '_>, ui: &Ui) -> Option<Context> {
+    let policy = if p.sizing || ui.is_sizing_pass() { None } else { p.p.focus() };
+    policy.map(|policy| {
+        let ctx = p.p.core_ref().ctx.clone();
+        focus::push_scope(&ctx, p.resolved.id, policy, None);
+        ctx
+    })
+}
+
+/// What steps 9 to 16 of one pass read of steps 6 to 8b.
+struct HostStep {
+    ctx: Context,
+    id: Id,
+    /// The component's own direction: right to left unless its axis keeps its order.
+    rtl: bool,
+    rect: Rect,
+    /// The parts step 7 declared.
+    decls: super::cx::Decls,
+    text_keys: Option<focus::KeyUse>,
+    own: Sense,
+    member: Option<crate::runtime::env::ArenaId>,
+    node: bool,
+    /// The bar line whose rules wait for this member.
+    line: Option<Id>,
+    /// A bar's view cut the member: it shows nothing until the clip is restored.
+    cut: bool,
+    shown_clip: Rect,
+    inspected: bool,
+    /// The values `content_env` gave the content at step 13.
+    values: AppValues,
+    /// The clip around the component, and the clip inside its rect grown by its paint outset.
+    outer_clip: Rect,
+    inside: Rect,
+}
+
+/// Steps 6 to 8b: place, parts, sense and the text part. `None` when the pass stops before 8b: a sizing pass, or an
+/// inert component.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, env: &Env) -> Option<HostStep> {
     let ctx = p.p.core_ref().ctx.clone();
     let (id, rtl) = (p.resolved.id, p.env.direction.is_rtl());
-    let (env, resolved, inert, facts, style) = (host_env.unwrap_or(p.env), p.resolved, p.inert, p.facts, p.style);
+    let (resolved, inert, facts) = (p.resolved, p.inert, p.facts);
     // 6 place
     let at = host_at.unwrap_or(p.at);
     // A root that fills takes the room of the `Ui` its host runs it in: a pane's or a layer's own, not its parent's.
@@ -877,7 +925,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         // The output words the value in a measuring run too, so what is measured beside the component holds it.
         let text = p.p.value_text();
         *p.p.core_ref().value_text.borrow_mut() = text;
-        return;
+        return None;
     }
     p.real = true;
     let inspected = p.trace.recording() && inspect::open_element(ui, id, facts.name);
@@ -1006,7 +1054,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         if inspected {
             inspect::close_element(&ctx, id, rect, rect);
         }
-        return;
+        return None;
     }
     // The popups the text part and `update` register start over for this pass.
     if facts.overlays {
@@ -1025,6 +1073,32 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         super::text::run_selections(e.core(), &parts.text.selections);
         e.core().selections = parts.text.selections.iter().map(|decl| decl.part).collect();
     }
+    Some(HostStep {
+        ctx,
+        id,
+        rtl,
+        rect,
+        decls: parts.decls,
+        text_keys,
+        own,
+        member,
+        node,
+        line,
+        cut,
+        shown_clip,
+        inspected,
+        values: AppValues::default(),
+        outer_clip: Rect::NOTHING,
+        inside: Rect::NOTHING,
+    })
+}
+
+/// Step 9, update, with the body's roving group, which registers after `update`.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn update_steps(p: &mut Pass<'_, '_, '_>, h: &HostStep) {
+    let (facts, ctx, id, rtl) = (p.facts, &h.ctx, h.id, h.rtl);
+    let e = &mut *p.p;
     // 9 update
     p.trace.mark(Step::Update);
     e.gesture_gate();
@@ -1034,7 +1108,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     e.scrub_by_label();
     e.update();
     if cfg!(debug_assertions) {
-        let keys = text_keys.unwrap_or_else(|| e.keys());
+        let keys = h.text_keys.unwrap_or_else(|| e.keys());
         let held = |mv: NavMove| match keys.keep {
             focus::KeepKeys::BlockArrows => true,
             focus::KeepKeys::InlineArrows => matches!(mv, NavMove::Back | NavMove::Forward),
@@ -1057,28 +1131,39 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
             None => group,
         };
         focus::register_group(
-            &ctx,
+            ctx,
             match core.roving_arrival {
                 Some(arrival) => group.selected((arrival, None)),
                 None => group,
             },
         );
     }
-    // 10 overlay
+}
+
+/// Step 10, overlay: the component's popups show their content here.
+fn overlay_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
     p.trace.mark(Step::Overlay);
-    if facts.overlays {
-        let core = e.core();
+    if p.facts.overlays {
+        let (ctx, id) = (&h.ctx, h.id);
+        let core = p.p.core();
         let open = overlay::open_map(&mut *core.memory, id);
         let parts = core
             .toggles
             .iter()
             .filter_map(|toggle| core.results.get(&(toggle.part.key, toggle.part.index)).map(|result| (toggle.part, result.rect)))
             .collect();
-        let mut overlays = OverlayUi::new(&ctx, overlay::OverlayOwner { id, anchor: rect, parts }, &mut *ui, resolved, env.clone(), open);
-        e.overlay(&mut overlays);
-        overlay::apply_closes(&ctx, overlays.closed);
+        let mut overlays = OverlayUi::new(ctx, overlay::OverlayOwner { id, anchor: h.rect, parts }, &mut *ui, p.resolved, env.clone(), open);
+        p.p.overlay(&mut overlays);
+        overlay::apply_closes(ctx, overlays.closed);
     }
-    // What `update` and `overlay` left untaken goes back to the key service.
+}
+
+/// Steps 11 (apply) and 12 (state), after what `update` and `overlay` left untaken goes back to the key service.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn state_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
+    let (facts, resolved, style) = (p.facts, p.resolved, p.style);
+    let e = &mut *p.p;
     steps::after_update(e.core());
     // 11 apply
     p.trace.mark(Step::Apply);
@@ -1089,68 +1174,92 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     e.register_reset();
     // 12 state
     p.trace.mark(Step::State);
-    let open = facts.overlays && overlay::popup_shown(&ctx, id);
+    let open = facts.overlays && overlay::popup_shown(&h.ctx, h.id);
     let expanded = e.expanded() == Some(true);
     steps::state(e, style, open, expanded, env.ink);
     if e.core_ref().state.flags.contains(crate::style::Flags::FOCUSED) {
-        commands::note_focus(&ctx, id, &env.commands);
+        commands::note_focus(&h.ctx, h.id, &env.commands);
     }
-    // 13 paint
+}
+
+/// Step 13, paint: a composite's `paint` shows its children here. Leaves the clip inside the component's rect for
+/// the content, and the values `content_env` gives it.
+fn paint_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &mut HostStep) {
     p.trace.mark(Step::Paint);
+    let e = &mut *p.p;
     let fade = steps::fade(ui, env, e.core());
-    let rule_from = line.filter(|_| facts.rule && !cut).map(|line| (line, steps::next_shape(ui)));
-    steps::paint_surface(ui, env, e.core_ref(), style);
+    let rule_from = h.line.filter(|_| p.facts.rule && !h.cut).map(|line| (line, steps::next_shape(ui)));
+    steps::paint_surface(ui, env, e.core_ref(), p.style);
     steps::paint_part_layers(ui, env, e.core_ref());
     // Paint and content stay inside the rect (grown by the type's declared outset), however small the room is.
-    let outer_clip = ui.clip_rect();
-    let inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(outer_clip);
-    ui.set_clip_rect(inside);
+    h.outer_clip = ui.clip_rect();
+    h.inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(h.outer_clip);
+    ui.set_clip_rect(h.inside);
     e.paint(ui, env);
     // The content's values may read what `paint` found this pass.
-    let mut values = AppValues::default();
-    e.content_env(&mut values);
+    e.content_env(&mut h.values);
     steps::unfade(ui, e.core(), fade);
-    ui.set_clip_rect(outer_clip);
-    steps::paint_focus(ui, e.core_ref(), style);
+    ui.set_clip_rect(h.outer_clip);
+    steps::paint_focus(ui, e.core_ref(), p.style);
     // A rule a bar's view shows waits for the member after it.
     if let Some((line, from)) = rule_from {
         hold_rule(ui, line, from);
     }
-    ui.set_clip_rect(inside);
-    // 14 content, then `paint_over`
-    if p.trace.mark(Step::Content) {
-        if facts.role == Role::Merged {
-            scope::begin(&ctx, id, id, scope::Kind::Merge);
-        }
-        // A real run checks a body's content against the kept transcript its records came from; a collection's rows
-        // are its own measure, not the enclosing body's, and a layer's content is not part of its parent's flow.
-        let scoped = (!p.sizing && !crate::runtime::measure::active(&ctx))
-            .then(|| match e.shape() {
-                ShapeKind::Body => Some((Some(id), !e.in_flow())),
-                ShapeKind::Item => Some((None, true)),
-                _ => None,
-            })
-            .flatten();
-        if let Some((body, boundary)) = scoped {
-            crate::runtime::layout_memory::open_content(&ctx, body, boundary);
-        }
-        e.content(ui, env, &values);
-        if scoped.is_some() {
-            crate::runtime::layout_memory::close_content(&ctx, &e.regions(id));
-        }
+    ui.set_clip_rect(h.inside);
+}
+
+/// Step 14, content: a body's regions or a collection's rows.
+fn content_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
+    if !p.trace.mark(Step::Content) {
+        return;
     }
-    // The `over` parts are placed before `paint_over`, so the children it shows stack above them (8.3).
-    ui.set_clip_rect(outer_clip);
-    sensing::place_over_widgets(ui, id, member, decls);
-    ui.set_clip_rect(inside);
+    let (ctx, id) = (&h.ctx, h.id);
+    let e = &mut *p.p;
+    if p.facts.role == Role::Merged {
+        scope::begin(ctx, id, id, scope::Kind::Merge);
+    }
+    // A real run checks a body's content against the kept transcript its records came from; a collection's rows
+    // are its own measure, not the enclosing body's, and a layer's content is not part of its parent's flow.
+    let scoped = (!p.sizing && !crate::runtime::measure::active(ctx))
+        .then(|| match e.shape() {
+            ShapeKind::Body => Some((Some(id), !e.in_flow())),
+            ShapeKind::Item => Some((None, true)),
+            _ => None,
+        })
+        .flatten();
+    if let Some((body, boundary)) = scoped {
+        crate::runtime::layout_memory::open_content(ctx, body, boundary);
+    }
+    e.content(ui, env, &h.values);
+    if scoped.is_some() {
+        crate::runtime::layout_memory::close_content(ctx, &e.regions(id));
+    }
+}
+
+/// `paint_over`, after the `over` parts are placed, so the children it shows stack above them (8.3).
+fn paint_over_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
+    ui.set_clip_rect(h.outer_clip);
+    sensing::place_over_widgets(ui, h.id, h.member, h.decls.parts());
+    ui.set_clip_rect(h.inside);
+    let e = &mut *p.p;
     let fade = steps::fade(ui, env, e.core());
     e.paint_over(ui, env);
     steps::unfade(ui, e.core(), fade);
-    ui.set_clip_rect(outer_clip);
+    ui.set_clip_rect(h.outer_clip);
+}
+
+/// Steps 15 (settle) and 16 (report, then the tooltip), and the activation step 17 fires.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
+    let (facts, resolved, style) = (p.facts, p.resolved, p.style);
+    let (ctx, id) = (&h.ctx, h.id);
+    let e = &mut *p.p;
     // 15 settle
     p.trace.mark(Step::Settle);
     e.settle();
     let edit = e.settle_values();
+    let leaf = e.shape() == ShapeKind::Leaf;
     steps::rerun_after_edit(e, style, edit, &MeasureIn { ui: &*ui, env: p.env, proposal: Proposal::Ideal, room: p.room }, resolved, leaf);
     // 16 report, then the tooltip.
     p.trace.mark(Step::Report);
@@ -1158,33 +1267,33 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         e,
         facts,
         &steps::ReportIn {
-            node,
-            decls: &parts.decls,
-            sense: own,
+            node: h.node,
+            decls: &h.decls,
+            sense: h.own,
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),
             position: e.position(),
-            group: steps::member_group(&ctx, env.roving, id),
+            group: steps::member_group(ctx, env.roving, id),
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label, message });
+    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;
     let injected = e.core().injected.take().filter(|_| resolved.enabled);
     if (natural || injected.is_some()) && !e.core_ref().keep_open {
-        crate::runtime::overlay::note_activated(&ctx, id);
+        crate::runtime::overlay::note_activated(ctx, id);
     }
     p.activated |= natural || injected.is_some();
     p.injected = p.injected.or(injected);
-    if inspected {
+    if h.inspected {
         let core = e.core_ref();
-        inspect::close_element(&ctx, id, core.rect, core.content_rect);
+        inspect::close_element(ctx, id, core.rect, core.content_rect);
     }
-    if cut {
-        ui.set_clip_rect(shown_clip);
+    if h.cut {
+        ui.set_clip_rect(h.shown_clip);
     }
 }
 
@@ -1286,12 +1395,76 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn
     }
 }
 
-/// Steps 1 to 17 of `run`.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "steps 1 to 17 in their fixed order; each step is already its own function and the rest is the order"
-)]
-fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<'_>>) {
+/// Steps 1 to 17 of `run`. A component's children run inside step 5 (a body's measuring run) and inside the passes
+/// of steps 6 to 16, so the frames on that path keep only what the run reads after them: each step runs in its own
+/// function, and `run_steps` holds what steps 1 to 5 found.
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    let begun = begin(t, ui);
+    let mut stage = begun.open_stage(t);
+    let mixed = value_step(t, &begun, &mut stage);
+    let resolved = begun.resolved(t);
+    let room = room_step(t, ui, at, &begun);
+    let extent = extent_step(t, ui, (at, mixed), (&begun, &resolved), &mut stage);
+    let sizes = measure_step(t, ui, at, (&begun, &resolved, &room), extent, &mut stage);
+    let real = run_passes(t, ui, at, tip, (&begun, &resolved, &sizes), &mut stage);
+    if real {
+        t.record(&mut stage, &begun.ctx, resolved.id);
+    }
+    if !begun.sizing {
+        stage.write_back();
+    }
+}
+
+/// What steps 1 to 4 found, which the rest of the run reads.
+struct Begun {
+    ctx: Context,
+    facts: TypeFacts,
+    shape: ShapeKind,
+    /// The parent `Ui` is in egui's invisible sizing pass: steps 1 to 6 run and allocate the size, with no id
+    /// registration, sensing or memory writes.
+    sizing: bool,
+    /// The inspector records this run; read once per run.
+    recording: bool,
+    /// The env of the parent `Ui`, which the style reads.
+    env: Env,
+    /// The env with the component's own command instance, when it has one.
+    own_env: Option<Env>,
+    /// `Common`, moved out of the component; `Resolved` borrows it.
+    common: Common,
+    step1: steps::EnvStep,
+    style: Arc<dyn StyleView>,
+    id: Id,
+}
+
+impl Begun {
+    /// The env steps 4 to 17 run under.
+    fn env(&self) -> &Env {
+        self.own_env.as_ref().unwrap_or(&self.env)
+    }
+
+    fn trace(&self) -> Trace<'_> {
+        Trace::new(&self.ctx, self.id, self.shape, self.recording)
+    }
+
+    /// The memory stage of step 3: a copy in a sizing pass, the component's own stage otherwise.
+    fn open_stage(&self, t: &dyn Erased) -> MemoryStage {
+        if self.sizing {
+            MemoryStage::open_peek(&self.ctx, self.id)
+        } else {
+            MemoryStage::open_owned(&self.ctx, self.id, t.memory_owner().unwrap_or(self.id))
+        }
+    }
+
+    /// `Common` after step 1, with the padding the shape adds.
+    fn resolved(&self, t: &dyn Erased) -> Resolved<'_> {
+        Resolved { pad: t.pad(&self.env().tokens), ..steps::resolved(self.id, &self.step1, &self.common) }
+    }
+}
+
+/// Steps 1 to 3: env, style and id.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1304,32 +1477,65 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
     let sizing = ui.is_sizing_pass();
     // The inspector flag is read once per run.
     let recording = !sizing && inspect::recording(&ctx);
-    // 1 env: `Common` moves out of the component; `Resolved` borrows these locals.
-    let env = Env::of(ui);
+    // 1 env: `Common` moves out of the component; `Resolved` borrows it. A themed component resolves its own look in its
+    // scope, and everything it shows inherits it.
+    let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
     let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
     // 2 style
-    let scx = steps::style_cx(&ctx, &env, &step1);
-    let style = t.style(&ctx, &scx);
-    // 3 id, and the memory stage for it
+    let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+    // 3 id
     let id = steps::id(ui, &common.id, !sizing, true, facts.style_key, facts.name);
-    let trace = Trace::new(&ctx, id, shape, recording);
     if recording {
         inspect::begin(&ctx, id);
+        let trace = Trace::new(&ctx, id, shape, recording);
         for step in [Step::Env, Step::Style, Step::Id] {
             trace.mark(step);
         }
     }
-    let mut stage = if sizing { MemoryStage::open_peek(&ctx, id) } else { MemoryStage::open_owned(&ctx, id, t.memory_owner().unwrap_or(id)) };
-    let resolved = Resolved { pad: t.pad(&env.tokens), ..steps::resolved(id, &step1, &common) };
-    // 4 value. A sizing pass reads the cancel and ends nothing: its stage is a copy, and the real run reads the
-    // cancel again.
-    let mixed = t.value(&mut stage, id, step1.command.as_deref(), sizing);
-    t.read(&mut stage, id, &env);
+    // The command instance the component is, which steps 4 to 17 run under.
     let own_env = t.instance_scope().map(|scope| env.derive_local(|scoped| scoped.inherited_mut().commands = scoped.commands.pushed(scope, id)));
-    let env = own_env.as_ref().unwrap_or(&env);
-    trace.mark(Step::Value);
-    // 5 measure
+    Begun { ctx, facts, shape, sizing, recording, env, own_env, common, step1, style, id }
+}
+
+/// Step 4, value: returns whether the binding holds a mixed value. A sizing pass reads the cancel and ends nothing:
+/// its stage is a copy, and the real run reads the cancel again.
+fn value_step(t: &mut dyn Erased, begun: &Begun, stage: &mut MemoryStage) -> bool {
+    let mixed = t.value(stage, begun.id, begun.step1.command.as_deref(), begun.sizing);
+    t.read(stage, begun.id, &begun.env);
+    begun.trace().mark(Step::Value);
+    mixed
+}
+
+/// What step 5 found: the room, the measured size and the size the root takes.
+struct Sizes {
+    /// The width the parent offers, which step 5 and step 7's measure view both read.
+    room: Option<f32>,
+    /// The size step 5 measured, before `sized` made it fill.
+    measured: Vec2,
+    /// The size the root takes in the parent `Ui`.
+    size: Vec2,
+    inert: bool,
+    /// The row around the leaf gave it no width: it takes no place in the flow (`layout::shrink_cap`).
+    dropped: bool,
+}
+
+/// What step 5 reads of the room before the measuring run: the width the parent offers and the shrink step of the
+/// body around.
+#[derive(Clone, Copy)]
+struct Room {
+    room: Option<f32>,
+    in_flow: bool,
+    fill_body: bool,
+    shrink: Option<crate::layout::Shrink>,
+    cap: Option<f32>,
+    dropped: bool,
+}
+
+/// Step 5's room: what the parent offers, capped by the width the row around gave a leaf.
+fn room_step(t: &mut dyn Erased, ui: &Ui, at: ShowAt, begun: &Begun) -> Room {
+    let (ctx, shape, id) = (&begun.ctx, begun.shape, begun.id);
+    let env = begun.env();
     let room = match at {
         ShowAt::Rect(rect) => Some(rect.width()),
         // A measuring run in a content column asks for what the content needs: nothing there fills the room. Once the
@@ -1337,7 +1543,7 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
         ShowAt::Flow => match env.column {
             Some(ColumnSweep::Column(width)) if env.content_column && t.fills_width() => Some(width),
             _ => Some(crate::layout::flow_room(ui).x)
-                .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(&ctx))),
+                .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(ctx))),
         },
     };
     // A leaf or body in flow that does not fill takes part in the shrink step of the body around it: in a row that
@@ -1348,7 +1554,7 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
     let fill_body = shape == ShapeKind::Body && in_flow && t.in_flow() && t.fills_width() && crate::layout::flow_room(ui).x.is_finite();
     let shrink = env.shrink.filter(|_| in_flow && (shape == ShapeKind::Leaf || (shape == ShapeKind::Body && t.in_flow() && !fill_body)));
     let given = match shrink {
-        Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(&ctx, row, id),
+        Some(crate::layout::Shrink::Apply(row)) if shape == ShapeKind::Leaf => crate::layout::shrink_cap(ctx, row, id),
         _ => None,
     };
     let dropped = given.is_some_and(|given| given.dropped);
@@ -1357,31 +1563,61 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
         Some(cap) => Some(room.map_or(cap, |room| room.min(cap))),
         None => room,
     };
+    Room { room, in_flow, fill_body, shrink, cap, dropped }
+}
+
+/// Step 5's extent: a sizing pass measures the shape from its content; in a real pass a body or item shape takes
+/// what its measuring run found. A body's children run here, in its measuring run.
+fn extent_step(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    (at, mixed): (ShowAt, bool),
+    (begun, resolved): (&Begun, &Resolved<'_>),
+    stage: &mut MemoryStage,
+) -> Vec2 {
+    let (ctx, facts, shape, sizing, id) = (&begun.ctx, &begun.facts, begun.shape, begun.sizing, begun.id);
+    let env = begun.env();
     // A body root with parts steps its press machine before its measuring run, so the body reads this pass's part
     // presses in both runs (`BodyCx::part_press`). Step 8 finds the outcome. A member of another arena senses at step 8.
     if !sizing && shape == ShapeKind::Body && (facts.parts || t.declares_parts()) && (t.arena() || facts.text() || env.arena.is_none()) {
-        sensing::sense_early(&ctx, id, resolved.enabled);
+        sensing::sense_early(ctx, id, resolved.enabled);
     }
-    // Sizes come from this pass: a sizing pass measures the shape from its content; in a real pass a body or item
-    // shape takes what its measuring run found.
-    let extent = if sizing || matches!(shape, ShapeKind::Body | ShapeKind::Item) {
-        let measuring = Measuring { ui: &*ui, at, width: None, env, scx: &scx, resolved: &resolved, command: step1.command.clone(), mixed };
-        if sizing { t.measured_extent(&measuring, &mut stage) } else { t.pass_extent(&measuring) }
+    let scx = steps::style_cx(ctx, &begun.env, &begun.step1);
+    if sizing || matches!(shape, ShapeKind::Body | ShapeKind::Item) {
+        let measuring = Measuring { ui, at, width: None, env, scx: &scx, resolved, command: begun.step1.command.clone(), mixed };
+        if sizing { t.measured_extent(&measuring, stage) } else { t.pass_extent(&measuring) }
     } else {
         t.extent(ui, at, id, &scx)
-    };
+    }
+}
+
+/// Step 5's sizes from the `extent`, and what the rows and bodies around the component take from it.
+// Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
+#[inline(never)]
+fn measure_step(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    at: ShowAt,
+    (begun, resolved, room): (&Begun, &Resolved<'_>, &Room),
+    extent: Vec2,
+    stage: &mut MemoryStage,
+) -> Sizes {
+    let (ctx, facts, shape, sizing, id) = (&begun.ctx, &begun.facts, begun.shape, begun.sizing, begun.id);
+    let env = begun.env();
+    let style = &*begun.style;
+    let Room { room, in_flow, fill_body, shrink, cap, dropped } = *room;
     let ask = |t: &mut dyn Erased, proposal: Proposal, room: Option<f32>, extent: Vec2| {
-        measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, &*style, &resolved, extent)
+        measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, style, resolved, extent)
     };
     let (size, inputs) = ask(&mut *t, Proposal::Ideal, room, extent);
     let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
-    let in_label = shape == ShapeKind::Leaf && scope::in_label(&ctx);
+    let in_label = shape == ShapeKind::Leaf && scope::in_label(ctx);
     // A leaf that fills the main axis of its body tells the body its least in the body's first sweep: its share never
     // cuts it below that (`layout::fill_size`). The call joins the body's transcript, which holds it while the inputs
     // hold.
-    let fills = |axis: craft_behavior::Axis| t.fills() == Some(axis) || common.sizing == Some(super::Sizing::Fill);
+    let fills = |axis: craft_behavior::Axis| t.fills() == Some(axis) || begun.common.sizing == Some(super::Sizing::Fill);
     let tells_least = shape == ShapeKind::Leaf
         && matches!(at, ShowAt::Flow)
         && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
@@ -1394,7 +1630,7 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
     // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
     // takes no room in the flow: its body's layout takes the rect, and any measure its caller sized the rect by
     // records itself.
-    let leaf = shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && (!sizing || crate::runtime::measure::active(&ctx));
+    let leaf = shape == ShapeKind::Leaf && matches!(at, ShowAt::Flow) && (!sizing || crate::runtime::measure::active(ctx));
     if leaf {
         let mut both;
         let mut one;
@@ -1408,17 +1644,17 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
                 &mut one
             }
         };
-        crate::runtime::layout_memory::leaf_call(&ctx, id, calls, |proposal, room| ask(&mut *t, proposal, room, extent).0);
+        crate::runtime::layout_memory::leaf_call(ctx, id, calls, |proposal, room| ask(&mut *t, proposal, room, extent).0);
     }
-    trace.mark(Step::Measure);
-    let min = min_took.inspect(|min| scope::record_control_min(&ctx, min.x));
+    begun.trace().mark(Step::Measure);
+    let min = min_took.inspect(|min| scope::record_control_min(ctx, min.x));
     // The read record: the binding step 4 read, and the sizes step 5 made from it.
     if let Some(key) = t.bind_key(id) {
         let ideal = Sample { proposal: Proposal::Ideal, room, took: size };
-        let measuring = sizing || crate::runtime::measure::active(&ctx);
+        let measuring = sizing || crate::runtime::measure::active(ctx);
         match min {
-            Some(min) => reads::note(&ctx, key, id, measuring, &[ideal, Sample { proposal: Proposal::Min, room: None, took: min }]),
-            None => reads::note(&ctx, key, id, measuring, &[ideal]),
+            Some(min) => reads::note(ctx, key, id, measuring, &[ideal, Sample { proposal: Proposal::Min, room: None, took: min }]),
+            None => reads::note(ctx, key, id, measuring, &[ideal]),
         }
     }
     // In the least measure of a body every leaf in flow takes its least. In a stack a leaf wider than the stack's room
@@ -1447,22 +1683,22 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
     match shrink {
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
-            let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: None };
-            let (content, _) = t.measure_content(&input, &resolved);
-            let ideal = steps::measure(&*style, &input, content, Vec2::ZERO, &resolved).x;
-            let whole = steps::whole(&*style, content, Vec2::ZERO, &resolved);
+            let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
+            let (content, _) = t.measure_content(&input, resolved);
+            let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
+            let whole = steps::whole(style, content, Vec2::ZERO, resolved);
             let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
-            crate::layout::report_shrink(&ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
+            crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }
-        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(&ctx, row, id, size.x, size.x, None, false),
-        Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(&ctx, row, id, size.x),
+        Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
+        Some(crate::layout::Shrink::Least(row)) if shape == ShapeKind::Body => crate::layout::report_least(ctx, row, id, size.x),
         _ => {}
     }
     // A body that fills the rest of a shrinking row needs at least its content: the row counts it at that width, so
     // the units narrow to leave it, and it takes what they leave.
     if let Some(crate::layout::Shrink::Count(row)) = env.shrink.filter(|_| fill_body) {
         let content = measured.x + t.overflow();
-        crate::layout::report_shrink(&ctx, row, id, size.x.min(content), content, Some((content, content)), false);
+        crate::layout::report_shrink(ctx, row, id, size.x.min(content), content, Some((content, content)), false);
     }
     // A component shown at a rect fills it: the rect is its size, and a leaf that measures nothing (a content
     // painter) still shows there.
@@ -1471,67 +1707,103 @@ fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<TipFn<
         ShowAt::Flow => !steps::guard(size, shape),
     };
     if inert && size != Vec2::ZERO {
-        let now = crate::runtime::frame::clock(&ctx);
+        let now = crate::runtime::frame::clock(ctx);
         let log = stage.shown::<SizeLog>(sub(id, "size_log"));
         if now - log.0 >= 1.0 || log.0 > now {
             log.0 = now;
             log::debug!("{} measured the size {size:?} and shows nothing", facts.name);
         }
     }
-    let mut core = blank_core(env.view(), &resolved, &mut stage, ctx.clone(), env.ink, steps::inert_response(ui, id), step1.command.clone());
-    core.faded = facts.faded && !resolved.enabled;
+    Sizes { room, measured, size, inert, dropped }
+}
+
+/// Steps 6 to 17 under the run's one `CxCore`, which lives in this frame: a sizing child that recurses inside step 5
+/// finds no core of its level on the stack. Returns whether a pass ran past the sizing check.
+// Holds the run's `CxCore`, which opt-level 2 would merge into `run_steps`, on the stack of every measuring run below.
+#[inline(never)]
+fn run_passes(
+    t: &mut dyn Erased,
+    ui: &mut Ui,
+    at: ShowAt,
+    mut tip: Option<TipFn<'_>>,
+    (begun, resolved, sizes): (&Begun, &Resolved<'_>, &Sizes),
+    stage: &mut MemoryStage,
+) -> bool {
+    let env = begun.env();
+    let id = resolved.id;
+    let mut core = blank_core(env.view(), resolved, stage, begun.ctx.clone(), env.ink, steps::inert_response(ui, id), begun.step1.command.clone());
+    core.faded = begun.facts.faded && !resolved.enabled;
     // 6 to 16, in the host's `Ui`, once per call of the host.
-    let mut host = t.host(HostCx { ui: &*ui, env, id, label: &step1.label, size });
-    let parent = ui.scope_id();
-    let mut real_pass = false;
-    t.with_cx(core, &*style, &mut |e| {
-        let mut run = Pass {
-            p: &mut *e,
-            facts: &facts,
-            env,
-            style: &*style,
-            resolved: &resolved,
-            trace,
-            tip: tip.take(),
-            at,
-            room,
-            measured,
-            size,
-            parent,
-            inert: inert || dropped,
-            dropped,
-            sizing,
-            real: false,
-            activated: false,
-            injected: None,
-        };
-        host.run(id, ui, env, &mut |host_ui, host_at, host_env| pass(&mut run, host_ui, host_at, host_env));
-        let (real, activated, injected) = (run.real, run.activated, run.injected);
-        // A layer's dismissal is decided after its body so a field inside commits in the press pass; its open state is
-        // written here, after the report (the one write point outside step 15, besides `request_close`).
-        if real && let Some(why) = host.dismissed() {
-            e.dismissed(why);
-        }
-        // 17 finish, once: the stage is written back after `finish` returns, so writes made in `finish` are kept.
-        if real {
-            trace.mark(Step::Finish);
-            let changed = e.changed();
-            steps::before_finish(e.core(), activated, injected, changed);
-            // A control painting text through its faces (a select, a segmented control) reports that baseline too.
-            let core = e.core_ref();
-            let baseline = core.paint.borrow().baseline;
-            if baseline.is_some() || shape == ShapeKind::Leaf {
-                scope::record_line(&ctx, core.rect, baseline);
-            }
-        }
-        real_pass = real;
+    let mut host = t.host(HostCx { ui: &*ui, env, id, label: &begun.step1.label, size: sizes.size });
+    let mut real = false;
+    t.with_cx(&mut core, &*begun.style, &mut |e| {
+        real = passes(e, &mut *host, ui, (at, tip.take()), (begun, resolved, sizes));
         real
     });
-    if real_pass {
-        t.record(&mut stage, &ctx, id);
+    real
+}
+
+/// Steps 6 to 16 in each call of the host, then the dismissal and step 17.
+fn passes<'a>(
+    e: &mut dyn ErasedPass<'a>,
+    host: &mut dyn Host,
+    ui: &mut Ui,
+    (at, tip): (ShowAt, Option<TipFn<'_>>),
+    (begun, resolved, sizes): (&Begun, &Resolved<'_>, &Sizes),
+) -> bool {
+    let mut run = Pass {
+        p: e,
+        facts: &begun.facts,
+        env: begun.env(),
+        style: &*begun.style,
+        resolved,
+        trace: begun.trace(),
+        tip,
+        at,
+        room: sizes.room,
+        measured: sizes.measured,
+        size: sizes.size,
+        parent: ui.scope_id(),
+        inert: sizes.inert || sizes.dropped,
+        dropped: sizes.dropped,
+        sizing: begun.sizing,
+        real: false,
+        activated: false,
+        injected: None,
+    };
+    host.run(resolved.id, ui, begun.env(), &mut |host_ui, host_at, host_env| run_in_host(&mut run, host_ui, host_at, host_env));
+    finish_passes(&mut run, &*host, begun)
+}
+
+/// The dismissal and step 17 after the host's passes. Returns whether a pass ran past the sizing check.
+fn finish_passes(run: &mut Pass<'_, '_, '_>, host: &dyn Host, begun: &Begun) -> bool {
+    let (real, activated, injected) = (run.real, run.activated, run.injected);
+    let e = &mut *run.p;
+    // A layer's dismissal is decided after its body so a field inside commits in the press pass; its open state is
+    // written here, after the report (the one write point outside step 15, besides `request_close`).
+    if real && let Some(why) = host.dismissed() {
+        e.dismissed(why);
     }
-    if !sizing {
-        stage.write_back();
+    // 17 finish, once: the stage is written back after `finish` returns, so writes made in `finish` are kept.
+    if real {
+        run.trace.mark(Step::Finish);
+        let changed = e.changed();
+        steps::before_finish(e.core(), activated, injected, changed);
+        // A control painting text through its faces (a select, a segmented control) reports that baseline too.
+        let core = e.core_ref();
+        let baseline = core.paint.borrow().baseline;
+        if baseline.is_some() || begun.shape == ShapeKind::Leaf {
+            scope::record_line(&begun.ctx, core.rect, baseline);
+        }
+    }
+    real
+}
+
+/// `env` with a component's token scope applied, the one place a `ThemeScope` takes effect.
+fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
+    match theme {
+        Some(theme) => env.derive(|scoped| theme.apply(ctx, scoped)),
+        None => env,
     }
 }
 
@@ -1544,6 +1816,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
         Some(under) => super::cx::child_env(&Env::of(ui), under),
         None => Env::of(ui),
     };
+    let env = scoped_env(ui.ctx(), env, t.theme_scope());
     let id = id.unwrap_or_else(|| steps::id(ui, &t.common().id, false, false, facts.style_key, facts.name));
     let common = t.common().clone();
     let step1 = steps::env(ui.ctx(), &env, &common, t.variants(common.variant));

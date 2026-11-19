@@ -3,7 +3,7 @@
 use crate::runtime::commands::{CommandInput, CommandSet as _, EditCommands, NavCommand};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
-use crate::runtime::env::RootEnv;
+use crate::runtime::env::{Env, RootEnv};
 use crate::runtime::focus::{EditSet, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
@@ -58,7 +58,7 @@ fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
         register_stop(ui.ctx(), Stop::new(named_id("button"), KeyUse::of(Input::Pointer)));
         host.rect = fixture::host_field(ui, field(), &mut host.text);
         if std::mem::take(&mut host.start_drag) {
-            drag::start(ui.ctx(), named_id("button"), Arc::new(()), None, DragPreview::None);
+            drag::start(ui.ctx(), named_id("button"), &Env::of(ui).view(), Arc::new(()), None, DragPreview::None);
         }
         if with_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
             host.cancels += 1;

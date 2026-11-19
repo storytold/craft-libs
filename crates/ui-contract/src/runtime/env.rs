@@ -68,6 +68,13 @@ impl Deref for Env {
     }
 }
 
+/// A container's footer that its body places (`FooterPlace::Body`): the container and the size the footer measured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FooterSlotOf {
+    pub owner: Id,
+    pub size: egui::Vec2,
+}
+
 /// The values of an env.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -109,6 +116,8 @@ pub struct Scoped {
     pub transform: Option<CanvasTransform>,
     /// The `Grid` or spread `Row` body whose cursor places the children in flow.
     pub(crate) grid: Option<Id>,
+    /// The `Grid` body of `grid` sets its cells at the top of their row (`CellAlign::Top`), not in its middle.
+    pub(crate) grid_top: bool,
     /// The body that encloses the scope is a content-sized column: it takes its width from its widest child that is
     /// not fill-width, so a fill-width child takes the width the others settle on and never sets it. Such a column
     /// exists only where the width comes from content: under a content-sized mount, a row or a grid.
@@ -127,6 +136,9 @@ pub struct Scoped {
     /// Where the first child the scope places in flow reports its first line: a container's header or body
     /// (`layout::FirstLines`). `None` in the children of a `Row` body, which reports its line itself.
     pub(crate) first_line: Option<Id>,
+    /// The container whose footer stands in its body (`FooterPlace::Body`) and the size that footer measured: a
+    /// `FooterSlot` shown under it takes that size and is where the footer is drawn.
+    pub(crate) footer_slot: Option<FooterSlotOf>,
     /// The `Stack` or `Row` body that encloses the scope and the axis it runs along, when a child that fills that
     /// axis shares the room its siblings leave (set only where the body is given the axis).
     pub(crate) fill_body: Option<(Id, craft_behavior::Axis)>,
@@ -353,12 +365,14 @@ impl Scoped {
         self.item_facts = None;
         self.ink = Ink::default();
         self.surface = SurfaceKind::Background;
+        self.footer_slot = None;
         self.inherited_mut().values.set(InBar(false));
     }
 
     /// Ends the layout room of the enclosing body: its flow grid and content column.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
+        self.grid_top = false;
         self.content_column = false;
         self.given_column = false;
         self.content = (false, false);
@@ -444,7 +458,10 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
-        let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash()).with_line(line_ratio);
+        let words = host_words(ctx, host.as_ref());
+        let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())
+            .with_line(line_ratio)
+            .with_words(words.generation());
         Env {
             scoped: Arc::new(Scoped {
                 inherited: Arc::new(Inherited {
@@ -458,7 +475,7 @@ impl Env {
                     motion,
                     scale,
                     commands: CommandChain::default(),
-                    words: host_words(ctx, host.as_ref()),
+                    words,
                     format: host_format(ctx, host.as_ref()),
                     dates: host_dates(ctx, host.as_ref()),
                     today: root.today,
@@ -482,12 +499,14 @@ impl Env {
                 roving: None,
                 transform: None,
                 grid: None,
+                grid_top: false,
                 content_column: false,
                 given_column: false,
                 content: (false, false),
                 row_room: None,
                 row_line: None,
                 first_line: None,
+                footer_slot: None,
                 fill_body: None,
                 fill_share: None,
                 shrink: None,
@@ -561,7 +580,8 @@ impl Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
         scoped.key = EnvKey::new(scoped.tokens.key(), scoped.direction, scoped.scale, scoped.os, scoped.active, scoped.values.style_hash())
-            .with_line(scoped.line_ratio);
+            .with_line(scoped.line_ratio)
+            .with_words(scoped.words.generation());
         Env { scoped: Arc::new(scoped) }
     }
 

@@ -31,6 +31,8 @@ pub(crate) struct ViewportOpen<'a> {
     pub position: Option<Pos2>,
     /// Whether the user can resize the window, from the container's overlay.
     pub resizable: bool,
+    /// Whether the app moves the window from its move band, from the container's overlay (`Overlay::moved_by_app`).
+    pub moved_by_app: bool,
 }
 
 /// Opens the OS viewport of a mount and runs `body` once for each pass it gets: with the saved placement, the OS
@@ -62,6 +64,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         record.chrome = Some(chrome);
         record.captions = captions.clone();
         record.resizable = Some(open.resizable);
+        record.moved_by_app = open.moved_by_app;
         record.awaiting_first_paint |= spec.shown_after_first_paint && record.facts.is_none();
         if record.title.as_deref() != Some(open.title) {
             record.title = Some(open.title.to_owned());

@@ -299,11 +299,11 @@ impl<'a, K: Value + Eq + Hash + 'static> NamedPresetRow<'a, K> {
                     NamedPresetStyle::Buttons => {
                         for command in files.map(PresetFiles::commands).unwrap_or_default() {
                             let enabled = files.is_some_and(|files| files.enabled(command, held.as_ref()));
-                            if clicked(&Button::new(Label::Empty).command(command).enabled(enabled).show(ui)) {
+                            if clicked(&Button::new(Label::Empty).command(command).keeps_name(true).enabled(enabled).show(ui)) {
                                 asked.push(Ask::File(command));
                             }
                         }
-                        let _ = Button::new(Label::Empty).command(NamedPresetCommands::New).show(ui);
+                        let _ = Button::new(Label::Empty).command(NamedPresetCommands::New).keeps_name(true).show(ui);
                         if let Some(field) = &field {
                             let _ = Menu::new(words.more.clone()).opened_by(field, Trigger::Context).show(ui, |ui, _| {
                                 let _ = MenuItem::command(NamedPresetCommands::Rename).show(ui);

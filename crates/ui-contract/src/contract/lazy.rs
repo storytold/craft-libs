@@ -63,7 +63,8 @@ impl Lazy {
     /// - the pointer is over it or was in its last run, a press started on it, or it holds focus or held it;
     /// - an animation in it is not at its end, something in it asked for a repaint, or a wake time it asked for came;
     /// - a bound value it read was written;
-    /// - its place, room, clip or scale differs from its last run;
+    /// - its place, room, clip or scale differs from its last run, or its environment does: the theme, density, language
+    ///   or the window's active state;
     /// - its [`content`](Self::content) version differs from its last run;
     /// - the app asked for a repaint outside every settling child (`frame::request_repaint`), or a given value was
     ///   edited: the framework cannot see which children show that app data, so every child runs then;
@@ -91,6 +92,25 @@ impl Lazy {
     /// Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
     /// run.
     pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+        self.run(ui, |ui, _| add(ui))
+    }
+
+    /// [`show`](Self::show) for a child that may leave its room to other content: `add` runs first and settles; when
+    /// it returns `None`, `otherwise` runs in the same child `Ui` and the run is not kept, so a settling child runs
+    /// again in the next pass rather than replay it. A dock group's host view is one: where the host leaves the group
+    /// to the dock, the dock's group shows in its place and settles by its own rules. `None` when the child did not
+    /// run: it replayed a run of `add`, or was out of view.
+    pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>> {
+        self.run(ui, |ui, run| match add(ui) {
+            Some(shown) => Ok(shown),
+            None => {
+                run.unkept(ui.ctx());
+                Err(otherwise(ui))
+            }
+        })
+    }
+
+    fn run<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Option<R> {
         let ctx = ui.ctx().clone();
         let view = Env::of(ui).view().lazy_view();
         let id = match view {
@@ -126,7 +146,14 @@ impl Lazy {
             }
         }
         let layout = *ui.layout();
-        let place = Place { room: available, clip: ui.clip_rect(), layer: ui.layer_id(), layout, pixels_per_point: ctx.pixels_per_point() };
+        let place = Place {
+            room: available,
+            clip: ui.clip_rect(),
+            layer: ui.layer_id(),
+            layout,
+            pixels_per_point: ctx.pixels_per_point(),
+            env: Env::of(ui).key,
+        };
         if self.settles
             && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), self.content)
         {
@@ -141,17 +168,20 @@ impl Lazy {
             return None;
         }
         let mark = focus::mark(&ctx);
-        let records = self.settles && real;
-        if records {
+        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer };
+        if run.recording {
             replay::open(&ctx);
         }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
         // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
-        let out = layout_memory::boundary(&ctx, false, || add(&mut child));
+        let out = layout_memory::boundary(&ctx, false, || add(&mut child, &mut run));
         let rect = child.min_rect();
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
-        let record = records.then(|| replay::close(&ctx, place.layer));
+        let record = run.recording.then(|| replay::close(&ctx, place.layer));
+        if !run.kept {
+            lazy::forget(&ctx, id);
+        }
         if real {
             layout_memory::backstop(&ctx, id, rect.size());
         }
@@ -169,5 +199,24 @@ impl Lazy {
             lazy::ran(&ctx, id, record, place, rect, self.content);
         }
         Some(out)
+    }
+}
+
+/// The run of a child: whether it records what it adds for a replay, and whether it is kept.
+struct Run {
+    recording: bool,
+    kept: bool,
+    layer: egui::LayerId,
+}
+
+impl Run {
+    /// Ends the run's record here and keeps it from settling: what the child adds from here on is not what it settles
+    /// on.
+    fn unkept(&mut self, ctx: &egui::Context) {
+        if self.recording {
+            replay::close(ctx, self.layer);
+            self.recording = false;
+        }
+        self.kept = false;
     }
 }

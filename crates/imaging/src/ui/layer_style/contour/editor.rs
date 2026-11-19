@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, BodyCx, Entry, Show as _, ShowContainer as _, clicked};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::FormDialog;
@@ -126,7 +126,7 @@ impl StackDialog for ContourEditorDialog {
             .outer_gesture(true)
             .history(true)
             .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
-            .shaped(|dialog| dialog.side_buttons(true))
+            .shaped(|dialog| dialog.button_place(ButtonPlace::Side))
             .show(ui, |ui, _, draft| {
                 FieldGroup::new(words.preset.clone()).show(ui, |ui, _| {
                     Field::new(words.preset.clone()).show(ui, |ui, _| {

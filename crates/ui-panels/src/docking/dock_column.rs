@@ -30,7 +30,7 @@ mod sizing;
 
 use bar::panel_names;
 
-pub(super) use bar::{BarRecord, CHEVRON, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, show_bar};
+pub(super) use bar::{BarRecord, CHEVRON, bar_band, bar_name, bar_slots, describe_chevron, paint_chevron, settled_bar, show_bar};
 use sizing::group_sizes;
 pub use sizing::{GroupSize, column_cells, fit_widths, group_heights, scale_widths, stacked, stepped, width_bounds};
 
@@ -195,6 +195,10 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     /// The rect the dock may grow within, which bounds how wide its inner edge can make the column.
     #[prop]
     within: Rect,
+    /// The version of what the column's bar shows of the host's panels and the arrangement: with one, the bar settles
+    /// (`Lazy::content`).
+    #[prop]
+    content: Option<u64>,
     /// The plan `parts` laid out this pass, which update, paint and access read.
     laid: Option<Plan>,
     resized: Vec<(P, f32)>,
@@ -218,6 +222,7 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             bar: ColumnBar::Own,
             arrow: ColumnArrow::Collapse,
             within: Rect::NOTHING,
+            content: None,
             laid: None,
             resized: Vec::new(),
             width: None,
@@ -244,7 +249,8 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
         at: Option<Rect>,
         mut view: impl FnMut(&Group<P>, Rect, &mut Ui, &mut BodyCx<'_>) + 'a,
     ) -> DockColumnOutput<P> {
-        let (column, spec, auto_collapse, edge, own, arrow) = (self.column, self.spec, self.auto_collapse, self.edge, self.bar, self.arrow);
+        let (column, spec, auto_collapse, edge, own, arrow, content) =
+            (self.column, self.spec, self.auto_collapse, self.edge, self.bar, self.arrow, self.content);
         let mut bar = BarRecord::default();
         let shown = &mut bar;
         let body = move |ui: &mut Ui, body: &mut BodyCx<'_>| {
@@ -253,11 +259,11 @@ impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
             // run alike: the same plan `parts` lays out, so the dividers sit at the seams.
             let drags = |key: u64, divider: &Divider| divider::drag(body.part_press(DIVIDER.at(key)).phase, body.rect, false, divider);
             let plan = column_plan(column, spec, body.rect, own, &sizes, drags);
-            if own == ColumnBar::Own
-                && let Some(grip) = column_grip(column, spec, body)
-            {
+            if own == ColumnBar::Own {
                 let band = bar_band(ui, plan.bar, edge);
-                *shown = show_bar(ui, body, band, true, auto_collapse, arrow, grip);
+                *shown = settled_bar(ui, band, content, |ui| {
+                    column_grip(column, spec, body).map(|grip| show_bar(ui, body, band, true, auto_collapse, arrow, grip)).unwrap_or_default()
+                });
             }
             for (group, rect) in column.groups.iter().zip(&plan.groups) {
                 view(group, *rect, ui, body);
@@ -525,7 +531,7 @@ pub(super) fn column_grip<P: Value + Hash>(column: &Column<P>, spec: &dyn Fn(&P)
 
 /// Registers the drop bands of the two edges of the column in `rect` with the dock `dock`: a drop there makes a new
 /// column beside the one that holds `anchor`.
-pub(super) fn register_edges<P: Clone + Send + 'static>(ctx: &Context, dock: Id, anchor: &P, rect: Rect, rtl: bool, sizes: &DockSizes) {
+pub(super) fn register_edges<P: Clone + Send + Sync + 'static>(ctx: &Context, dock: Id, anchor: &P, rect: Rect, rtl: bool, sizes: &DockSizes) {
     let flow = Flow::new(rect, rtl);
     // A narrow column keeps a third of its width between its two edge bands, so a drop inside it still reaches its
     // groups.

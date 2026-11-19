@@ -240,6 +240,12 @@ impl WindowHost {
         injected::idle(&self.ctx)
     }
 
+    /// [`injected_idle`](Self::injected_idle) asked at the end of a pass, after its UI ran: the step the running pass
+    /// carried counts as run, unless egui runs the pass again. Outside a pass it is `injected_idle`.
+    pub fn injected_idle_at_pass_end(&self) -> bool {
+        injected::idle_at_pass_end(&self.ctx)
+    }
+
     /// Whether an injected step was withdrawn since the last call.
     pub fn take_injected_withdrawn(&self) -> bool {
         injected::take_withdrawn(&self.ctx)
@@ -409,6 +415,13 @@ pub(crate) fn note_source_pointer(ctx: &Context, viewport: ViewportId, local: Op
 
 /// Records the desktop pointer of a move the app runs of `viewport`'s window: the pressed point of the window where the
 /// move last put it. `None` once the move ends.
+/// The system's pointer in desktop points as the pass began, `None` where the platform does not tell it. Unlike
+/// [`WindowHost::desktop_pointer`] it never falls back to a drag's own pointer, so a window moved after it does not
+/// feed its own place back into the move.
+pub(crate) fn system_pointer(ctx: &Context) -> Option<Pos2> {
+    shared(ctx, |shared| shared.system_pointer)
+}
+
 pub(crate) fn note_moved_pointer(ctx: &Context, viewport: ViewportId, desktop: Option<Pos2>) {
     PerViewport::<Record>::with(ctx, viewport, |record| record.moved_pointer = desktop);
 }

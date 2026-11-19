@@ -4,13 +4,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorReadout, PickedColor};
+use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor};
 use craft_host::{AppInfo, Host};
-use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Rgba, Srgba};
-use craft_ui::contract::{Bind, Role};
+use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
+use craft_ui::contract::{Bind, Role, ShowContainer as _};
 use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
+use craft_ui::layout::RowAlign;
+use craft_ui::layout_components::Row;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, vec2};
+use egui::{Key, Modifiers, Rect, vec2};
 
 fn type_into(fixture: &mut Fixture, label: &str, text: &str) {
     let field = fixture.by_label(label).unwrap_or_else(|| panic!("the picker shows a {label} field"));
@@ -118,37 +120,265 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     assert_eq!(edited(&dialogs), Some(values), "Reset returns the typed values");
 }
 
-/// The Full picker's channel rows show a letter after each radio and no channel words; the radios keep their names, and
-/// the number fields of a column, the hex field included, start at one x whether or not their row has a radio.
-#[trial]
-fn the_full_pickers_channel_rows_show_letters_and_align_their_fields() {
-    let mut fixture = Fixture::new(|ui| {
-        let models: [&dyn ColorModel; 3] = [&HsbModel, &RgbModel, &LabModel];
+/// The densities and themes every layout trial runs in: compact and comfortable, a Pro and a Studio theme.
+const LOOKS: [(Size, &str); 4] =
+    [(Size::Compact, "craft.pro"), (Size::Comfortable, "craft.pro"), (Size::Compact, "craft.studio"), (Size::Comfortable, "craft.studio")];
+
+/// Half a point: less than a pixel at any scale.
+const SLACK: f32 = 0.5;
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < SLACK
+}
+
+fn overlap(a: Rect, b: Rect) -> bool {
+    let both = a.intersect(b);
+    both.width() > SLACK && both.height() > SLACK
+}
+
+/// The rect of every node named `name` together: a warning chip and its swatch share the warning's tip, so this is the
+/// whole chip, icon over swatch.
+fn named(fixture: &Fixture, name: &str) -> Rect {
+    let tree = fixture.tree();
+    let rects = tree.keys().into_iter().filter(|key| tree.name_of(*key) == Some(name)).filter_map(|key| tree.bounds_of(key));
+    rects.reduce(Rect::union).unwrap_or_else(|| panic!("the picker shows {name}"))
+}
+
+/// The Full picker's parts, as AccessKit and the painted text show them.
+#[derive(Debug, PartialEq)]
+struct FullParts {
+    area: Rect,
+    strip: Rect,
+    /// The compare block with its captions and warnings column.
+    block: Rect,
+    /// The compare block's current half.
+    current: Rect,
+    new_caption: Rect,
+    radios: Vec<Rect>,
+    fields: Vec<Rect>,
+    hex: Rect,
+    hash: Rect,
+    web: Rect,
+    sample: Rect,
+    warnings: Vec<Rect>,
+    /// The unit texts ("°", "%").
+    units: Vec<Rect>,
+}
+
+impl FullParts {
+    fn of(fixture: &Fixture, warnings: usize) -> FullParts {
+        let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the picker shows {label}")).rect;
+        let text = |text: &str| fixture.texts().iter().filter(|run| run.text == text).map(|run| run.rect).collect::<Vec<_>>();
+        let area = rect("Saturation and brightness");
+        // The area's point picker reports its two axes as sliders; the strip is the slider after the area.
+        let strips: Vec<Rect> = fixture.by_role(Role::SLIDER).into_iter().map(|t| t.rect).filter(|r| r.left() >= area.right() - SLACK).collect();
+        assert_eq!(strips.len(), 1, "one slider, the strip, stands after the area: {strips:?}");
+        let tips = ["Out of gamut for printing", "Not a web color"];
+        FullParts {
+            area,
+            strip: strips[0],
+            block: rect("New color"),
+            current: rect("Restore current color"),
+            new_caption: *text("new").first().expect("the new caption"),
+            radios: fixture.by_role(Role::RADIO_BUTTON).into_iter().map(|t| t.rect).collect(),
+            fields: fixture.by_role(Role::SPIN_BUTTON).into_iter().map(|t| t.rect).collect(),
+            hex: rect("Hex color"),
+            hash: *text("#").first().expect("the # before the hex field"),
+            web: rect("Only Web Colors"),
+            sample: rect("Sample color from the screen"),
+            warnings: tips[..warnings].iter().map(|tip| named(fixture, tip)).collect(),
+            units: [text("\u{b0}"), text("%")].concat(),
+        }
+    }
+
+    /// Every part's rect, for the pairwise overlap check.
+    fn all(&self) -> Vec<Rect> {
+        let one = [self.area, self.strip, self.block, self.hex, self.hash, self.web, self.sample];
+        one.into_iter().chain(self.radios.iter().copied()).chain(self.fields.iter().copied()).chain(self.units.iter().copied()).collect()
+    }
+}
+
+/// Every part a Full picker shows, found by role and name without requiring any: what a narrow room leaves of it.
+fn fixture_parts(fixture: &Fixture) -> Vec<Rect> {
+    let labelled = ["Saturation and brightness", "New color", "Hex color", "Only Web Colors", "Sample color from the screen"];
+    let named = labelled.iter().filter_map(|label| fixture.by_label(label)).map(|t| t.rect);
+    let roles = [Role::SLIDER, Role::RADIO_BUTTON, Role::SPIN_BUTTON].into_iter().flat_map(|role| fixture.by_role(role)).map(|t| t.rect);
+    let texts = fixture.texts().iter().filter(|run| ["#", "\u{b0}", "%"].contains(&run.text.as_str())).map(|run| run.rect);
+    let mut all: Vec<Rect> = named.chain(roles).chain(texts).collect();
+    all.sort_by(|a, b| a.min.x.total_cmp(&b.min.x).then(a.min.y.total_cmp(&b.min.y)));
+    all
+}
+
+/// A Full picker with HSB, RGB, Lab and OKLCH in a room `width` wide, at `density` in `theme`, with the first
+/// `warnings` of the out-of-gamut and web-colour warnings.
+fn full_picker(width: f32, (density, theme): (Size, &str), warnings: usize) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let models: [&dyn ColorModel; 4] = [&HsbModel, &RgbModel, &LabModel, &OklchModel];
         let mut color = PickedColor::rgb(Srgba::rgb(0.2, 0.4, 0.6));
-        let _ = ColorPicker::new("Color", Bind::bound(&mut color)).layout(ColorPickerLayout::Full).models(models).show(ui);
+        let all = [
+            ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.2, 0.4, 0.5)),
+            ColorWarning::web_colors("Not a web color", Srgba::rgb(0.2, 0.4, 0.6)),
+        ];
+        let _ = ColorPicker::new("Color", Bind::bound(&mut color))
+            .layout(ColorPickerLayout::Full)
+            .models(models)
+            .compare(PickedColor::rgb(Srgba::rgb(0.9, 0.2, 0.1)))
+            .warnings(all.into_iter().take(warnings))
+            .eyedropper(true)
+            .show(ui);
     });
-    fixture.room(vec2(900.0, 600.0));
+    fixture.density(density).theme_id(ThemeId::parse(theme).expect("a theme id")).room(vec2(width, 700.0));
     fixture.settle();
-    let texts = fixture.texts();
-    for word in ["Hue", "Saturation", "Brightness", "Red", "Lightness"] {
-        assert!(texts.iter().all(|run| run.text != word), "{word} is not shown beside its radio");
+    fixture
+}
+
+/// The Full picker has one arrangement, Photoshop's, in every room, density and theme: nothing wraps, stacks or
+/// stretches; the area is square with the strip beside it; the compare block's halves are one block taller than wide
+/// with its warnings column after it from its top; both field groups start under the compare block on one row; the
+/// fields of a group share x and width with their units after them; the "#" stands before the hex field in the radio
+/// column; Only Web Colors and the screen-pick button share the row under the area; and no two parts overlap.
+#[trial]
+fn the_full_picker_keeps_photoshops_arrangement_in_every_room_density_and_theme() {
+    for look in LOOKS {
+        let wide = full_picker(600.0, look, 2);
+        let parts = FullParts::of(&wide, 2);
+        the_arrangement_holds_in_other_rooms(look, &wide, &parts);
+        the_area_strip_and_compare_block_stand_as_in_photoshop(look, &parts);
+        the_field_groups_stand_under_the_compare_block(look, &parts);
+        the_hex_field_and_the_rows_under_the_area_stand_as_in_photoshop(look, &parts);
+        for (i, a) in parts.all().iter().enumerate() {
+            for b in &parts.all()[i + 1..] {
+                assert!(!overlap(*a, *b), "{look:?}: no two parts overlap: {a:?} {b:?}");
+            }
+        }
     }
-    for letter in ["H:", "S:", "R:", "L:"] {
-        assert!(texts.iter().any(|run| run.text == letter), "{letter} is shown");
-    }
-    assert_eq!(fixture.by_role(Role::RADIO_BUTTON).len(), 9, "every channel keeps its radio");
-    let fields = fixture.by_role(Role::SPIN_BUTTON);
-    assert_eq!(fields.len(), 9);
-    // The columns are found by x, not by tree order: HSB and RGB fields share the first, Lab's the second.
+}
+
+type Look = (Size, &'static str);
+
+/// Wider and narrower rooms leave the arrangement alone, and the warnings move no other part.
+fn the_arrangement_holds_in_other_rooms(look: Look, wide: &Fixture, parts: &FullParts) {
+    assert_eq!(&FullParts::of(&full_picker(1200.0, look, 2), 2), parts, "{look:?}: the same arrangement in a room 1200 wide");
+    // A room narrower than the picker clips it: every part it shows stands where it stands in a wide room.
+    let inside = |rects: Vec<Rect>| rects.into_iter().filter(|r| r.right() <= 320.0).collect::<Vec<_>>();
+    let narrow = inside(fixture_parts(&full_picker(320.0, look, 2)));
+    assert!(!narrow.is_empty(), "{look:?}: a narrow room shows the picker's start");
+    assert_eq!(narrow, inside(fixture_parts(wide)), "{look:?}: the same arrangement in a room 320 wide, clipped");
+    let without = FullParts::of(&full_picker(600.0, look, 0), 0);
+    assert_eq!(&FullParts { warnings: parts.warnings.clone(), ..without }, parts, "{look:?}: the warnings move no other part");
+}
+
+fn the_area_strip_and_compare_block_stand_as_in_photoshop(look: Look, parts: &FullParts) {
+    let FullParts { area, strip, block, current, new_caption, ref fields, ref warnings, .. } = *parts;
+    assert!(near(area.width(), area.height()), "{look:?}: the area is square: {area:?}");
+    assert!(near(strip.top(), area.top()) && near(strip.height(), area.height()), "{look:?}: the strip is as tall as the area: {strip:?}");
+    assert!(strip.left() >= area.right() - SLACK, "{look:?}: the strip stands after the area");
+
+    // The compare block: the current half is the lower of two halves of one block, wider than a control is high.
+    let control = fields[0].height();
+    assert!(current.width() > control, "{look:?}: the block is wider than one control: {current:?}");
+    assert!(2.0 * current.height() > current.width(), "{look:?}: two halves make it taller than wide: {current:?}");
+    assert!(near(block.top(), area.top()), "{look:?}: the new caption stands level with the area's top: {block:?} {area:?}");
+    assert!(new_caption.bottom() <= current.top() - current.height() + SLACK, "{look:?}: the new caption is over the new half");
+    let new_top = current.top() - current.height();
+    assert!(near(warnings[0].top(), new_top), "{look:?}: the first warning is level with the block's top: {:?}", warnings[0]);
+    assert!(warnings.iter().all(|w| w.left() >= current.right() - SLACK), "{look:?}: the warnings stand after the block");
+    assert!(warnings[0].bottom() <= warnings[1].top() + SLACK, "{look:?}: one warning under the other");
+}
+
+/// Two groups: HSB and RGB at one x, Lab and OKLCH at another, starting on one row under the compare block.
+fn the_field_groups_stand_under_the_compare_block(look: Look, parts: &FullParts) {
+    let FullParts { current, ref fields, ref units, .. } = *parts;
     let mut starts: Vec<f32> = Vec::new();
-    for field in &fields {
-        if !starts.iter().any(|start| (start - field.rect.min.x).abs() < 0.5) {
-            starts.push(field.rect.min.x);
+    for field in fields {
+        if !starts.iter().any(|start| near(*start, field.left())) {
+            starts.push(field.left());
         }
     }
     starts.sort_by(f32::total_cmp);
-    let rects: Vec<_> = fields.iter().map(|field| field.rect).collect();
-    assert_eq!(starts.len(), 2, "the fields start in two columns, one per model column: {rects:?}");
-    let hex = fixture.by_label("Hex color").expect("the hex field");
-    assert!((hex.rect.min.x - starts[0]).abs() < 0.5, "the hex field, which has no radio, starts in the first column: {:?}", hex.rect);
+    assert_eq!(starts.len(), 2, "{look:?}: the fields start in two groups: {fields:?}");
+    let group = |at: usize| fields.iter().filter(|f| near(f.left(), starts[at])).copied().collect::<Vec<_>>();
+    let (first, second) = (group(0), group(1));
+    let top = |rects: &[Rect]| rects.iter().map(|r| r.top()).fold(f32::MAX, f32::min);
+    assert!(near(top(&first), top(&second)), "{look:?}: the second group starts on the first group's first row");
+    assert!(top(fields) >= current.bottom(), "{look:?}: the groups start under the compare block");
+    for group in [&first, &second] {
+        assert!(group.iter().all(|f| near(f.width(), group[0].width())), "{look:?}: a group's fields share a width: {group:?}");
+        assert!(group[0].width() < parts.hex.width(), "{look:?}: the fields are narrower than the hex field");
+    }
+    for unit in units {
+        assert!(
+            fields.iter().any(|f| near(f.center().y, unit.center().y) && unit.left() >= f.right() - SLACK),
+            "{look:?}: a unit stands after its field, outside it: {unit:?}"
+        );
+    }
+}
+
+fn the_hex_field_and_the_rows_under_the_area_stand_as_in_photoshop(look: Look, parts: &FullParts) {
+    let FullParts { area, ref radios, ref fields, hex, hash, web, sample, .. } = *parts;
+    let first_left = fields.iter().map(|f| f.left()).fold(f32::MAX, f32::min);
+    let first_radio = radios.iter().map(|r| r.left()).fold(f32::MAX, f32::min);
+    assert!(hash.left() >= first_radio - SLACK && hash.right() <= first_left, "{look:?}: the # stands in the radio column: {hash:?}");
+    assert!(hex.left() > hash.right() && hex.left() < first_left, "{look:?}: the hex field starts in the letter column: {hex:?}");
+
+    assert!(web.top() >= area.bottom() && near(web.left(), area.left()), "{look:?}: Only Web Colors stands under the area at its start");
+    assert!(sample.left() > web.right() && near(sample.center().y, web.center().y), "{look:?}: the screen-pick button ends Only Web Colors' row");
+}
+
+/// The Color Picker dialog takes the picker's size, its buttons in the picker's actions cell over the second field
+/// group, no end column beside it: in Photoshop's proportions, about twice as wide as the area and one and a half
+/// times as tall.
+#[trial]
+fn the_color_picker_dialog_stands_its_buttons_over_the_second_group_in_photoshops_proportions() {
+    for look in LOOKS {
+        let dialogs = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = Rc::clone(&dialogs);
+        let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+        fixture.density(look.0).theme_id(ThemeId::parse(look.1).expect("a theme id")).room(vec2(1200.0, 900.0));
+        dialogs.borrow_mut().open(ColorPickerDialog::new("fill", "Fill", Srgba::rgb(0.2, 0.4, 0.6)));
+        fixture.idle(6);
+        let rect = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the dialog shows {label}")).rect;
+        let dialog = fixture.by_role(Role::DIALOG).first().expect("the dialog").rect;
+        let (area, ok, cancel, add) = (rect("Saturation and brightness"), rect("OK"), rect("Cancel"), rect("Add to Swatches"));
+        let radios: Vec<Rect> = fixture.by_role(Role::RADIO_BUTTON).into_iter().map(|t| t.rect).collect();
+        let fields: Vec<Rect> = fixture.by_role(Role::SPIN_BUTTON).into_iter().map(|t| t.rect).collect();
+        let second = radios.iter().map(|r| r.left()).fold(f32::MIN, f32::max);
+        assert!(ok.bottom() <= cancel.top() && cancel.bottom() <= add.top(), "{look:?}: OK, Cancel, then Add to Swatches");
+        assert!(near(ok.left(), second), "{look:?}: the buttons start at the second group's edge: {ok:?} against {second}");
+        assert!(fields.iter().all(|f| f.top() >= add.bottom()), "{look:?}: the groups start under the buttons");
+        assert!(ok.right() <= dialog.right() && dialog.right() - ok.right() < ok.width(), "{look:?}: no button column stands beside the body");
+        let wide = dialog.width() / area.width();
+        let tall = dialog.height() / area.width();
+        assert!((1.9..=2.3).contains(&wide), "{look:?}: the dialog is about twice as wide as the area: {wide}");
+        assert!((1.4..=1.8).contains(&tall), "{look:?}: and about one and a half times as tall: {tall}");
+    }
+}
+
+/// The Compact picker's width is set by the area and the strip, and its rows take that width; its popover is as wide
+/// wherever the well stands and whatever the room.
+#[trial]
+fn the_compact_picker_is_as_wide_as_its_area_and_strip_wherever_it_opens() {
+    let span = |width: f32, align: RowAlign| {
+        let mut fixture = Fixture::new(move |ui| {
+            let mut color = PickedColor::rgb(Srgba::rgb(0.2, 0.4, 0.6));
+            Row::new().fill_width().align(align).show(ui, |ui, _| {
+                let _ = ColorPopover::new("Fill", Bind::bound(&mut color)).picker(|picker| picker.eyedropper(true)).show(ui);
+            });
+        });
+        fixture.room(vec2(width, 700.0));
+        fixture.settle();
+        let well = fixture.by_label("Fill").expect("the well");
+        fixture.click(&well).idle(4);
+        let area = fixture.by_label("Saturation and brightness").expect("the popover's area").rect;
+        let hex = fixture.by_label("Hex color").expect("the hex field").rect;
+        let sample = fixture.by_label("Sample color from the screen").expect("the screen-pick button").rect;
+        assert!(hex.left() >= area.left() - SLACK, "the hex row starts under the area");
+        (area.size(), sample.right() - area.left())
+    };
+    let first = span(600.0, RowAlign::Start);
+    for (width, align) in [(600.0, RowAlign::End), (1200.0, RowAlign::Start), (1200.0, RowAlign::End)] {
+        assert_eq!(span(width, align), first, "the popover is as wide in a room {width} wide with the well at {align:?}");
+    }
+    assert!(first.0.x > first.0.y, "the compact area is wider than tall");
+    assert!(first.1 > first.0.x, "the rows reach past the area, to the strip's end");
 }
