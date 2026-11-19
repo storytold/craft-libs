@@ -71,6 +71,28 @@ fn the_listed_about_tab_stands_one_item_to_a_line_and_closes_with_close() {
     assert_eq!(links.borrow().as_slice(), ["https://example.org".to_owned()]);
 }
 
+// The listed layout sets its three blocks apart, as WordCraft's About: the gap from the blurb to the first link and
+// from the last link to the built-with line is wider than the gap between two lines of one block.
+#[trial]
+fn the_listed_about_sets_its_blocks_apart() {
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0")
+        .links([AboutLink::new("Website", "https://example.org"), AboutLink::new("Source", "https://example.org/source")])
+        .built_with("MIT");
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = AboutDialog::new(&info, &CREDITS).layout(AboutLayout::Listed).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    // The links' own rects (a link's padding is its own) against the painted lines of text around them; the gap
+    // between two lines of one block is the one from the version to the blurb.
+    let [website, source] = ["Website", "Source"].map(|name| fixture.by_label(name).expect("every link shows").rect);
+    let painted = |text: &str| fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text shows");
+    let within = painted("An image editor.").top() - painted("Version 1.0").bottom();
+    let after_blurb = website.top() - painted("An image editor.").bottom();
+    let before_caption = painted("MIT").top() - source.bottom();
+    assert!(after_blurb > within + 1.0, "the links stand apart from the blurb: {after_blurb} against {within}");
+    assert!(before_caption > within + 1.0, "the built-with line stands apart from the links: {before_caption} against {within}");
+}
+
 /// The listed layout is a wide dialog (`LeastWidth::WideDialog`), as WordCraft's About: wider than the centred one
 /// with the same text.
 #[trial]
