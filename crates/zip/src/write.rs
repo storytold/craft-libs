@@ -16,6 +16,9 @@ pub enum Compression {
     Level(u8),
 }
 
+/// How much of a streamed entry ([`Writer::add_with`]) is gathered before it reaches the compressor.
+const STREAM_BUFFER: usize = 256 * 1024;
+
 /// A ZIP archive being written into memory. The output is deterministic: the same (1980)
 /// timestamp on every entry. Entries are written in the order they are added.
 pub struct Writer {
@@ -95,7 +98,10 @@ impl Writer {
             .large_file(true);
         let fail = |e: &dyn std::fmt::Display| Error::Write(format!("{name}: {e}"));
         self.zip.start_file(name, options).map_err(|e| fail(&e))?;
-        write(&mut self.zip).map_err(|e| fail(&e))
+        // Serializers write a few bytes at a time; each write straight into the deflater costs a
+        // compressor call, which made a 21 MB document entry take seconds rather than milliseconds.
+        let mut buffered = std::io::BufWriter::with_capacity(STREAM_BUFFER, &mut self.zip);
+        write(&mut buffered).and_then(|()| buffered.flush()).map_err(|e| fail(&e))
     }
 
     /// The finished archive.
