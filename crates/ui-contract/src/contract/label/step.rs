@@ -270,7 +270,9 @@ pub(crate) fn flow_leaf<C: Show>(
     let placed = leaf(ui, &env, &at, &mut child, trailing);
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
-    let content = env.content.0 || ui.layout().is_horizontal();
+    // So is a grid's cell: the room before it is the whole grid's, and a row spanning it measures its column as wide
+    // as the grid, so the grid could never set two such cells beside each other (two columns of check boxes).
+    let content = env.content.0 || ui.layout().is_horizontal() || crate::layout::grid_cell(ui).is_some();
     let control_width = if content { placed.control.width().min(ideal.x) } else { placed.control.width() };
     let rtl = env.direction.is_rtl();
     let cell = Rect::from_min_max(placed.control.min, egui::pos2(placed.control.max.x, placed.control.min.y + ideal.y));
