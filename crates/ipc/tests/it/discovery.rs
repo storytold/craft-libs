@@ -35,7 +35,7 @@ fn sigkill_drops_the_record() {
     let _ = std::fs::remove_dir_all(&path);
     let runtime = RuntimeDir::at(&path).unwrap();
     let exe = std::env::current_exe().unwrap();
-    let child = Command::new(exe).args(["--exact", "hold_until_killed", "--test-threads=1"]).env("CRAFT_HOLD_DIR", &path).spawn().unwrap();
+    let child = Command::new(exe).args(["--exact", "discovery::hold_until_killed", "--test-threads=1"]).env("CRAFT_HOLD_DIR", &path).spawn().unwrap();
     let mut guard = HoldCleanup { dir: path.clone(), child: Some(child) };
     let ready = runtime.path().join("ready");
     let deadline = Instant::now() + Duration::from_secs(10);
