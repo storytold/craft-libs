@@ -12,7 +12,7 @@ use egui::{Color32, Context, Galley};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, Range};
+use std::ops::{Deref, DerefMut, Range};
 use std::sync::{Arc, OnceLock};
 
 /// How a run fits its room.
@@ -642,11 +642,12 @@ pub struct LayoutText {
     galley: Arc<Galley>,
     original: Option<Arc<str>>,
     value: Arc<OnceLock<String>>,
+    changed: Option<String>,
 }
 
 impl LayoutText {
     fn shared(&self) -> Self {
-        Self { galley: self.galley.clone(), original: self.original.clone(), value: self.value.clone() }
+        Self { galley: self.galley.clone(), original: self.original.clone(), value: self.value.clone(), changed: self.changed.clone() }
     }
 }
 
@@ -690,7 +691,14 @@ impl Deref for LayoutText {
     type Target = String;
 
     fn deref(&self) -> &String {
-        self.value.get_or_init(|| self.original.as_deref().unwrap_or(&self.galley.job.text).to_owned())
+        self.changed.as_ref().unwrap_or_else(|| self.value.get_or_init(|| self.original.as_deref().unwrap_or(&self.galley.job.text).to_owned()))
+    }
+}
+
+impl DerefMut for LayoutText {
+    fn deref_mut(&mut self) -> &mut String {
+        let (value, original, galley) = (&self.value, &self.original, &self.galley);
+        self.changed.get_or_insert_with(|| value.get_or_init(|| original.as_deref().unwrap_or(&galley.job.text).to_owned()).clone())
     }
 }
 
@@ -700,11 +708,12 @@ impl Deref for LayoutText {
 pub struct LayoutRuns {
     galley: Arc<Galley>,
     value: Arc<OnceLock<Vec<LayoutRun>>>,
+    changed: Option<Vec<LayoutRun>>,
 }
 
 impl LayoutRuns {
     fn shared(&self) -> Self {
-        Self { galley: self.galley.clone(), value: self.value.clone() }
+        Self { galley: self.galley.clone(), value: self.value.clone(), changed: self.changed.clone() }
     }
 }
 
@@ -730,7 +739,18 @@ impl Deref for LayoutRuns {
     type Target = Vec<LayoutRun>;
 
     fn deref(&self) -> &Vec<LayoutRun> {
-        self.value.get_or_init(|| if self.galley.rows.len() <= 1 { TextLayout::build_row_runs(&self.galley, 0) } else { Vec::new() })
+        self.changed.as_ref().unwrap_or_else(|| {
+            self.value.get_or_init(|| if self.galley.rows.len() <= 1 { TextLayout::build_row_runs(&self.galley, 0) } else { Vec::new() })
+        })
+    }
+}
+
+impl DerefMut for LayoutRuns {
+    fn deref_mut(&mut self) -> &mut Vec<LayoutRun> {
+        let (value, galley) = (&self.value, &self.galley);
+        self.changed.get_or_insert_with(|| {
+            value.get_or_init(|| if galley.rows.len() <= 1 { TextLayout::build_row_runs(galley, 0) } else { Vec::new() }).clone()
+        })
     }
 }
 
@@ -775,8 +795,8 @@ impl TextLayout {
             Some(glyph) => placed.pos.y + glyph.pos.y,
             None => placed.pos.y + placed.row.size.y,
         });
-        let full = LayoutText { galley: galley.clone(), original: full, value: Arc::new(OnceLock::new()) };
-        let runs = LayoutRuns { galley: galley.clone(), value: Arc::new(OnceLock::new()) };
+        let full = LayoutText { galley: galley.clone(), original: full, value: Arc::new(OnceLock::new()), changed: None };
+        let runs = LayoutRuns { galley: galley.clone(), value: Arc::new(OnceLock::new()), changed: None };
         TextLayout { galley, elided, full, first_baseline, runs, rotation: 0.0 }
     }
 
@@ -821,7 +841,11 @@ impl TextLayout {
             .map(|at| {
                 let placed = &self.galley.rows[at];
                 let text = placed.row.glyphs.iter().map(|glyph| glyph.chr).collect();
-                let runs = if self.galley.rows.len() == 1 { self.runs().to_vec() } else { Self::build_row_runs(&self.galley, at) };
+                let runs = if self.galley.rows.len() == 1 && self.runs.changed.is_none() {
+                    self.runs().to_vec()
+                } else {
+                    Self::build_row_runs(&self.galley, at)
+                };
                 (text, egui::Rect::from_min_size(placed.pos, placed.row.size), runs)
             })
             .collect()
@@ -921,6 +945,16 @@ mod memo_tests {
             assert!(second.runs.value.get().is_some());
             let _: String = first.full.clone();
             let _: Vec<LayoutRun> = first.runs.clone();
+            let mut changed = first.clone();
+            changed.full.push('!');
+            changed.runs.clear();
+            assert_eq!(first.full(), "a label long enough to elide");
+            assert_ne!(changed.full(), first.full());
+            assert!(!first.runs().is_empty());
+            assert!(changed.runs().is_empty());
+            let again = run.layout(ctx, &env, 80.0);
+            assert_eq!(again.full(), first.full());
+            assert_eq!(again.runs(), first.runs());
             let _ = run.layout(ctx, &env, 120.0);
             let _ = run.least_width(ctx, &env);
             let least_key = run.layout_key(ctx, &env, f32::INFINITY);
