@@ -21,7 +21,7 @@ const DASH: &str = "–";
 
 /// The grid's columns: a name and its value, twice, so that the two readouts of a line stand side by side and each
 /// column lines up down the grid.
-static COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
+const COLUMNS: [ColumnWidth; 4] = [ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content, ColumnWidth::Content];
 
 craft_ui::words! {
     /// The words of the Info panel, in the installed language unless set.

@@ -35,7 +35,7 @@ use crate::shortcuts::{keyboard, review, sets};
 const TABLE_SHARE: f32 = 0.62;
 /// The detail pane's share of the width beside the table.
 const DETAIL_SHARE: f32 = 0.38;
-static PANES: [ColumnWidth; 2] = [ColumnWidth::fill(TABLE_SHARE), ColumnWidth::fill(DETAIL_SHARE)];
+const PANES: [ColumnWidth; 2] = [ColumnWidth::fill(TABLE_SHARE), ColumnWidth::fill(DETAIL_SHARE)];
 
 /// One frame of the dialog body.
 pub(crate) fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: &mut DialogState) {

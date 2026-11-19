@@ -10,6 +10,8 @@ mod egui_import;
 mod egui_widget;
 mod entry;
 mod facts;
+mod global_state;
+pub(crate) use global_state::FS;
 mod keys;
 mod layers;
 mod memory;
@@ -40,7 +42,7 @@ use crate::report::Finding;
 use sites::Site;
 
 /// Every rule id of this module, for the marker and exemption validation in [`crate::RULES`].
-pub(crate) const IDS: [&str; 40] = [
+pub(crate) const IDS: [&str; 41] = [
     egui_import::ID,
     runtime_egui::ID,
     text_edit::ID,
@@ -81,12 +83,13 @@ pub(crate) const IDS: [&str; 40] = [
     shape::REGISTRATION,
     unsafe_allow::ID,
     registry_expansion::ID,
+    global_state::ID,
 ];
 
 type Check = fn(&Cx<'_>, &mut Vec<Finding>);
 
 /// REGISTRY: add a rule by adding its `check` here and its ids to [`IDS`].
-const REGISTRY: [Check; 22] = [
+const REGISTRY: [Check; 23] = [
     egui_import::check,
     runtime_egui::check,
     text_edit::check,
@@ -109,6 +112,7 @@ const REGISTRY: [Check; 22] = [
     shape::check,
     unsafe_allow::check,
     registry_expansion::check,
+    global_state::check,
 ];
 
 /// One file as the rules see it.

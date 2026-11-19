@@ -159,7 +159,7 @@ impl Texts<'_> {
 const TABS_SHARE: f32 = 2.0;
 /// The search field's share of the top bar beside the tabs.
 const SEARCH_SHARE: f32 = 1.0;
-static TOP_BAR: [ColumnWidth; 2] = [ColumnWidth::fill(TABS_SHARE), ColumnWidth::fill(SEARCH_SHARE)];
+const TOP_BAR: [ColumnWidth; 2] = [ColumnWidth::fill(TABS_SHARE), ColumnWidth::fill(SEARCH_SHARE)];
 
 impl FontsPanel {
     pub(crate) fn top_bar(&mut self, ui: &mut Ui, browse: &FontsBrowseWords, format: &Format, search: Id) {
