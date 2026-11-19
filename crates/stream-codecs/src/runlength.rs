@@ -43,6 +43,21 @@ pub fn decode(data: &[u8], max: usize) -> Step {
 
 pub fn encode(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + data.len() / 128 + 2);
+    encode_packets(data, &mut out, 2);
+    out.push(128);
+    out
+}
+
+/// Append a TIFF PackBits row without an end-of-data marker.
+///
+/// Runs of three or more bytes use repeat packets; pairs remain in literal packets.
+/// Existing output is retained, permitting rows to be appended directly to a strip.
+/// PostScript callers can append their own EOD byte after the final row.
+pub fn encode_packbits_into(data: &[u8], out: &mut Vec<u8>) {
+    encode_packets(data, out, 3);
+}
+
+fn encode_packets(data: &[u8], out: &mut Vec<u8>, repeat_min: usize) {
     let n = data.len();
     let mut i = 0;
     while i < n {
@@ -50,7 +65,7 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
         while i + run < n && run < 128 && data[i + run] == data[i] {
             run += 1;
         }
-        if run >= 2 {
+        if run >= repeat_min {
             out.push((257 - run) as u8);
             out.push(data[i]);
             i += run;
@@ -59,15 +74,14 @@ pub fn encode(data: &[u8]) -> Vec<u8> {
         // Literal: extend until a repeat begins or 128 bytes.
         let start = i;
         let mut j = i + 1;
-        while j < n && j - start < 128 && !(j + 1 < n && data[j] == data[j + 1]) {
+        while j < n && j - start < 128 && !data.get(j..).and_then(|rest| rest.get(..repeat_min)).is_some_and(|run| run.iter().all(|b| *b == data[j]))
+        {
             j += 1;
         }
         out.push((j - start - 1) as u8);
         out.extend_from_slice(&data[start..j]);
         i = j;
     }
-    out.push(128);
-    out
 }
 
 #[cfg(test)]
@@ -113,5 +127,22 @@ mod tests {
         let e = encode(&lit);
         assert_eq!((e[0], e[129]), (127, 71));
         assert_eq!(dec(&e).unwrap(), lit);
+    }
+    #[test]
+    fn packbits_appends_rows_without_eod_and_keeps_pairs_literal() {
+        let mut out = vec![42];
+        encode_packbits_into(b"aabbccc", &mut out);
+        assert_eq!(out, [42, 3, b'a', b'a', b'b', b'b', 254, b'c']);
+        let before = out.clone();
+        encode_packbits_into(b"", &mut out);
+        assert_eq!(out, before);
+        assert_eq!(encode(b"aa"), [255, b'a', 128]);
+        for n in [1, 2, 3, 127, 128, 129, 255, 256, 300] {
+            for row in [vec![7; n], (0..n).map(|i| (i % 251) as u8).collect()] {
+                let mut encoded = Vec::new();
+                encode_packbits_into(&row, &mut encoded);
+                assert_eq!(decode(&encoded, n).map_err(|failure| failure.error).unwrap(), row);
+            }
+        }
     }
 }

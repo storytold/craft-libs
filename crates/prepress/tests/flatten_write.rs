@@ -50,6 +50,7 @@ fn group(opacity: f32, children: Vec<Item>) -> Item {
         isolated: false,
         knockout: false,
         clip: None,
+        clip_rule: FillRule::NonZero,
         mask: None,
         actual_text: None,
         children,
@@ -116,6 +117,21 @@ fn group_opacity_applies_to_the_group_not_to_each_child() {
         let p = separate(&written);
         assert_inks(&p, 50, 50, &[("Black", 128)]);
         assert_inks(&p, 20, 50, &[("Black", 128)]);
+    }
+}
+
+#[test]
+fn an_even_odd_clip_keeps_its_hole_written_or_flattened() {
+    // Two nested squares drawn in the same direction: filled even-odd, the inner one is a hole.
+    let mut ring = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1);
+    ring.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.1));
+    let Item::Group(half_black) = group(0.5, vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(K, 1.0)])]) else { unreachable!() };
+    let clipped = Item::Group(GroupItem { clip: Some(ring), clip_rule: FillRule::EvenOdd, ..half_black });
+    let list = page(InkSet::new(), vec![solid(Rect::new(0.0, 0.0, 100.0, 100.0), &[(C, 1.0)]), clipped]);
+    for written in [pdf(&list), flat_pdf(&list)] {
+        let p = separate(&written);
+        assert_inks(&p, 10, 50, &[("Cyan", 128), ("Black", 128)]);
+        assert_inks(&p, 50, 50, &[("Cyan", 255), ("Black", 0)]);
     }
 }
 
