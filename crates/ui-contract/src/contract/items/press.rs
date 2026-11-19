@@ -248,6 +248,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 {
                     self.events.push(CollectionEvent::CommandClick { key, mods: mods_now });
                 }
+                // The press machine makes a middle release a click only for a collection that senses `MIDDLE_CLICK`.
+                if click
+                    && start.button == PointerButton::Middle
+                    && props.middle_button != MiddleButton::AutoScroll
+                    && local(start.origin).y >= 0.0
+                    && let Some(at) = layout.hit(local(start.origin), offset).filter(|&at| self.source.enabled(at) && layout.shown(at))
+                {
+                    self.events.push(CollectionEvent::MiddleClick(self.source.key(at)));
+                }
                 if let Some(key) = self.drags.activate.take()
                     && click
                     && self.index_of(&key).is_some()

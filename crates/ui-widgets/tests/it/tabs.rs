@@ -133,6 +133,30 @@ fn a_double_click_on_the_empty_strip_asks_for_a_new_document() {
     assert!(!seen.contains(&DocumentTabsEvent::EmptyDoubleClick), "{seen:?}");
 }
 
+/// A middle click on a document tab asks to close it, unless the tab cannot close; it does not show the tab.
+#[trial]
+fn a_middle_click_closes_a_closable_document_tab() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
+    use craft_ui::testing::pointer::middle;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two"), DocumentTab::new(2, "Combine").closable(false)];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let middle_click = |fixture: &mut Fixture, name: &str| {
+        let at = fixture.by_label(name).expect("the tab's node").rect.center();
+        fixture.frame(vec![moved(at), middle(at, true)]).frame(vec![middle(at, false)]).settle();
+    };
+    middle_click(&mut fixture, "Two");
+    assert_eq!(*seen.borrow(), [DocumentTabsEvent::CloseRequested(1)], "the middle-clicked tab closes and is not shown");
+    seen.borrow_mut().clear();
+    middle_click(&mut fixture, "Combine");
+    assert!(!seen.borrow().iter().any(|event| matches!(event, DocumentTabsEvent::CloseRequested(_))), "{:?}", seen.borrow());
+}
+
 /// The bounds of every tab node named `name`, from the reading start.
 fn tab_rects(tree: &AccessTree, name: &str) -> Vec<Rect> {
     let mut rects: Vec<Rect> =

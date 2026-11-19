@@ -504,6 +504,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 .shown(active)
                 .tear_off()
                 .natural_height(true)
+                .can_close(move |key: &PanelKey| panels.iter().any(|panel| &panel.key == key && closes(panel)))
                 .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started }));
             if wheel_selects {
                 strip = strip.wheel_selects();

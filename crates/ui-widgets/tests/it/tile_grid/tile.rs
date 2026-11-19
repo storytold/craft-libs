@@ -60,3 +60,28 @@ fn the_badge_bar_leaves_out_what_does_not_fit_and_never_overlaps() {
         }
     }
 }
+
+/// A named hover action carries its tile in its accessible name, so the shown actions of different tiles are told
+/// apart; the actions of a tile that does not show them stay out of the tree.
+#[trial]
+fn a_named_action_is_exposed_by_its_own_name_while_its_tile_shows_it() {
+    use craft_behavior::IconId;
+    use craft_ui::runtime::commands::CommandRef;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::pointer::moved;
+    const NAMES: [&str; 2] = ["Rotate page 1 clockwise", "Rotate page 2 clockwise"];
+    const PAGES: [&str; 2] = ["Page 1", "Page 2"];
+    let mut fixture = Fixture::new(|ui| {
+        ui.horizontal(|ui| {
+            for (page, name) in PAGES.iter().zip(NAMES) {
+                Tile::new(*page).action_named(IconId::new("rotate_cw"), CommandRef::new("page.rotate"), name).show(ui);
+            }
+        });
+    });
+    fixture.room(vec2(400.0, 300.0)).settle();
+    assert!(NAMES.iter().all(|name| fixture.by_label(name).is_none()), "no tile is hovered, so no action shows");
+    let over = fixture.by_label(PAGES[1]).expect("the second tile").rect.center();
+    fixture.frame(vec![moved(over)]).settle();
+    assert!(fixture.by_label(NAMES[1]).is_some(), "the hovered tile's action is named for its tile");
+    assert!(fixture.by_label(NAMES[0]).is_none(), "the other tile's action stays hidden");
+}

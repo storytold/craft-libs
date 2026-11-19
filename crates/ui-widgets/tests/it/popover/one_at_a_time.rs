@@ -28,6 +28,7 @@ fn opening_a_second_popover_closes_the_first() {
     let grid = fixture.by_label("Grid").expect("the first opener is shown");
     fixture.click(&grid).idle(6);
     assert!(open[0].get(), "the first popover opened");
+    assert!(fixture.by_label("Grid snap").is_some(), "the open popover's body is in the access tree");
     let guides = fixture.by_label("Guides").expect("the second opener is shown");
     fixture.click(&guides).idle(6);
     assert!(open[1].get() && !open[0].get(), "the second popover opened and the first closed");

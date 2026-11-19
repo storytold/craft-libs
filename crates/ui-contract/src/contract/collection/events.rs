@@ -235,6 +235,9 @@ pub enum CollectionEvent<K, E> {
         /// The modifiers held at the click.
         mods: craft_keymap::Mods,
     },
+    /// A middle click on an item of a collection that senses `Sense::MIDDLE_CLICK` (a document tab strip closes the
+    /// tab), unless the middle button auto-scrolls (`MiddleButton::AutoScroll`). A middle drag is no click.
+    MiddleClick(K),
     /// Delete or Backspace at the lead of a `deletable` collection: the selected items when the lead is selected, else
     /// the lead alone, in display order.
     Delete(Vec<K>),
