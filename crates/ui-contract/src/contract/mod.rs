@@ -358,7 +358,8 @@ pub trait Component: Meta + Sized {
     }
     /// Whether the component paints its label as visible text. `false` for a face that shows only an icon or a
     /// glyph: with no tooltip set, its label is then its tooltip, since the label is the only visible name the
-    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`.
+    /// pointer can reach. A component whose answer varies per instance overrides `shows_label`. A canvas control's
+    /// label is never its tooltip, whatever this says: its rect is the canvas, and its parts name themselves.
     const SHOWS_LABEL: bool = true;
     /// Whether the control draws only its mark and its text is the label step's, placed after it: a check box, a
     /// radio button or a switch. `Show::show` then runs the label step for an instance that carries a label and sits

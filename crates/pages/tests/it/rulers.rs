@@ -96,6 +96,33 @@ fn a_margin_drag_is_clamped_by_the_opposite_edge_and_a_mirrored_even_page_swaps_
     assert!(after.margins.right > 90.0, "it moves the stored right margin: {}", after.margins.right);
 }
 
+/// The texts that show once the pointer rests at `at` for the tooltip delay.
+fn texts_added_by_rest(fixture: &mut Fixture, at: egui::Pos2) -> Vec<String> {
+    let before: Vec<String> = fixture.texts().iter().map(|run| run.text.clone()).collect();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+    fixture.advance(craft_ui::contract::tooltip::DELAY);
+    fixture.settle();
+    fixture.texts().iter().map(|run| run.text.clone()).filter(|text| !before.contains(text)).collect()
+}
+
+/// The margin handles' rect is the whole canvas, but only an edge shows a tooltip, naming that edge (Word's "Left
+/// Margin"); the pointer resting on the page shows none, not the handles' own label.
+#[trial]
+fn only_a_margin_edge_shows_a_tooltip_and_it_names_the_edge() {
+    let start = PageEdges::new(Margins::uniform(72.0));
+    let left_name = MarginHandlesWords::default().left;
+    let (mut fixture, _) = margin_rig(start, false);
+    let left = fixture.by_label(left_name.as_str()).expect("the left margin edge").rect;
+    // A point on the page, inside the stage (the page runs past its bottom).
+    let page = demo_placed(1, pos2(PAGE_AT.0, PAGE_AT.1)).remove(0).rect;
+    let on_page = pos2(page.center().x, fixture.shown().center().y);
+    assert!(page.contains(on_page), "the point is on the page");
+    let added = texts_added_by_rest(&mut fixture, on_page);
+    assert!(added.is_empty(), "the pointer on the page shows no tooltip: {added:?}");
+    let on_edge = texts_added_by_rest(&mut fixture, left.center());
+    assert_eq!(on_edge, [left_name.as_str()], "the pointer on the left edge shows its name");
+}
+
 /// A row grip drag is one gesture; Alt reports free; Escape cancels; the arrow nudges the focused grip.
 #[trial]
 fn a_row_grip_drag_reports_one_gesture_with_alt_free_and_the_arrow_nudges() {

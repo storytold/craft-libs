@@ -449,13 +449,16 @@ impl Component for MarginHandles<'_> {
         Some(self.edges.reborrow())
     }
 
-    /// The edges: drag parts on the strips at edge priority, each its own Tab stop that the arrow keys move.
+    /// The edges: drag parts on the strips at edge priority, each its own Tab stop that the arrow keys move, and each
+    /// with a tooltip that names its edge (Word's "Left Margin" over the edge). The handles' rect is the whole canvas,
+    /// so only an edge shows a tooltip: as a canvas control the handles show no label of their own over the page.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(edges) = cx.value().copied() else { return };
         let rules = self.rules(edges, 0.0);
         let (grab, strip) = (cx.style.grab, cx.style.strip);
+        let words = cx.words::<MarginHandlesWords>();
         for &visible in self.edges_shown() {
-            divider::declare(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip)));
+            divider::declare(cx, rect, EDGE, visible.index(), &self.divider(&rules, visible, rect, (grab, strip))).tooltip(visible.name(&words).clone());
         }
     }
 
