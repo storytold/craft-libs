@@ -87,6 +87,24 @@ fn the_listed_about_is_a_wide_dialog() {
     assert!(listed > centred + 200.0, "the listed About is a wide dialog: {listed} against {centred}");
 }
 
+/// The listed layout's tabs are tab faces, as WordCraft's About's strip: each title is set in from its tab's start edge.
+/// The centred layout's are their text alone, starting at the tab's edge.
+#[trial]
+fn the_listed_about_shows_tab_faces() {
+    let inset = |layout: AboutLayout| {
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = AboutDialog::new(&INFO, &CREDITS).layout(layout).show(ui);
+        });
+        fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+        let tab = fixture.by_role(Role::TAB).into_iter().find(|tab| fixture.tree().name_of(tab.node) == Some("Contributors")).expect("the tab");
+        let text = fixture.texts().iter().find(|painted| painted.text == "Contributors").map(|painted| painted.rect).expect("its title");
+        text.left() - tab.rect.left()
+    };
+    let (listed, centred) = (inset(AboutLayout::Listed), inset(AboutLayout::Centred));
+    assert!(centred.abs() < 1.0, "a centred tab is its text: {centred}");
+    assert!(listed > 3.0, "a listed tab is a face with its title set in: {listed}");
+}
+
 #[trial]
 fn about_tab_is_a_field() {
     let host = Rc::new(RefCell::new(DialogHost::new()));

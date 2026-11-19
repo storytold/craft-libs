@@ -1523,6 +1523,14 @@ pub(crate) fn run_body_measured<R>(
         BodyLayout::Row { wrap, align } => {
             let room = ui.available_rect_before_wrap();
             let rect = match *align {
+                // A wrapping row wraps at the line length its container sets for paragraphs (a dialog's), as the
+                // paragraphs beside it do: a dialog sized from its content stays as wide as its text, and a row of
+                // radios that would not fit there takes a second line instead of widening the dialog.
+                // A room unbounded at its end edge (a measuring run's) is cut from its start edge.
+                RowAlign::Start | RowAlign::SpaceBetween if *wrap => env
+                    .measure()
+                    .filter(|measure| *measure < room.width() && (!rtl || room.right().is_finite()))
+                    .map(|measure| Flow::new(room, rtl).span(0.0, measure)),
                 RowAlign::Start | RowAlign::SpaceBetween => None,
                 RowAlign::Center | RowAlign::End => {
                     let last = this_pass(&ctx, sizing, id);

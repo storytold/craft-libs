@@ -86,8 +86,10 @@ fn the_grid_counts_follow_the_grid_kind_and_a_refused_ok_shows_its_reason() {
 }
 
 /// Page Setup lays its rows out two to a line, as WordCraft's dialog did: Top beside Bottom, Left beside Right, Width
-/// beside Height, Portrait beside Landscape, the grid kinds and the two grid counts on one line, and the section
-/// direction on the counts' section. It then fits the default room without scrolling, Different First Page included.
+/// beside Height, Portrait beside Landscape, the grid kinds side by side (Text snaps to characters on a second line, at
+/// the dialog's wrap width) and the two grid counts on one line, and the section direction on the counts' section.
+/// Mirror margins stands at its section's start, as the Headers and footers check boxes do, not in the field column.
+/// It then fits the default room without scrolling, Different First Page included.
 #[trial]
 fn page_setup_rows_stand_two_to_a_line() {
     let start = PageSetup { grid: Some(DocumentGrid::new(GridKind::None, 40, 30)), ..PageSetup::default() };
@@ -111,6 +113,8 @@ fn page_setup_rows_stand_two_to_a_line() {
     same_line("Characters per line", "Lines per page");
     same_line("Left-to-right", "Right-to-left");
     assert!(rect("Top").max.y < rect("Left").min.y, "Left and Right are on the line under Top and Bottom");
+    assert!(rect("No grid").max.y <= rect("Text snaps to characters").min.y, "the last grid kind wraps onto a second line");
     let first = rect("Different First Page");
+    assert!((rect("Mirror margins").min.x - first.min.x).abs() < 1.0, "Mirror margins stands at its section's start");
     assert!(first.max.y <= 900.0, "the last row is in view without scrolling: {first:?}");
 }
