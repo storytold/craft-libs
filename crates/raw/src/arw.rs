@@ -858,7 +858,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         32766 => return Err(RawError::Unsupported("ARW6 without exactly one strip".into())),
         1 => {
-            let word16 = strip_len >= (w * h * 2) as u64;
+            // a pixel-shift composite stores four samples a pixel, as the reader reads them
+            let word16 = strip_len >= samples.saturating_mul(if pixel_shift { 8 } else { 2 });
+            if pixel_shift && !word16 {
+                return Err(RawError::Unsupported("Sony pixel-shift composite without 16-bit words".into()));
+            }
             let packing = if word16 { Packing::Word16 } else { Packing::Msb };
             let order = match chunks.first().and_then(|c| chunk_bytes(bytes, c)) {
                 Some(strip) if word16 => word16_order(strip, bits, tiff.order),
@@ -923,10 +927,15 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
     };
     let black = BlackLevel { values: black.values.iter().map(|v| v * unit).collect(), ..black };
-    let mn = tiff
-        .exif()
-        .and_then(|e| e.get(t::MAKER_NOTE))
-        .and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    let mn_entry = tiff.exif().and_then(|e| e.get(t::MAKER_NOTE));
+    let mn =
+        mn_entry.and_then(|e| makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &ifd0.string(t::MAKE).unwrap_or_default()));
+    // the capture-gain diagnostics only from a note whose gain tags are not repeated (see `gain_tag_repeated`)
+    let gains_note = mn.as_ref().filter(|note| {
+        let header = if note.kind == makernote::MakerNoteKind::Sony { 12 } else { 0 };
+        let ifd = mn_entry.map_or(0, |e| e.offset).saturating_add(header);
+        !crate::arw_capture_gains::gain_tag_repeated(bytes, ifd, note.order)
+    });
     let body = sony_body(&ifd0.string(t::MAKE).unwrap_or_default(), &model, mn.as_ref());
     let wb = raw
         .f64s(WB_RGGB)
@@ -1009,9 +1018,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         lens_metadata: LensMetadata {
             sony: sony_lens,
             sony_camera_settings: sony_camera_settings.clone(),
-            sony_capture_gains: mn.as_ref().and_then(|note| crate::arw_capture_gains::read(&note.ifd)),
-            sony_capture_gains_q12: mn
-                .as_ref()
+            sony_capture_gains: gains_note.and_then(|note| crate::arw_capture_gains::read(&note.ifd)),
+            sony_capture_gains_q12: gains_note
                 .and_then(|note| {
                     if model == "SLT-A58" {
                         return crate::arw_capture_gains::read_slt_nominal(&note.ifd, &model, sony_camera_settings.as_ref()?.shading);
@@ -1026,7 +1034,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
                     capture.source_bits = Some(bits);
                     capture
                 }),
-            sony_capture_gains_q11: mn.as_ref().and_then(|note| crate::arw_capture_gains::read_q11(&note.ifd)).map(Box::new),
+            sony_capture_gains_q11: gains_note.and_then(|note| crate::arw_capture_gains::read_q11(&note.ifd)).map(Box::new),
         },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
         notices: crate::RawNotices { assumed_cfa: assumed_cfa && !linear_rgb && !pixel_shift, ..Default::default() },
@@ -1136,6 +1144,26 @@ mod tests {
         let file = craft_tiff::TiffWriter::default().write(&[pixel_shift_composite(8, false), cfa]).unwrap();
         let tiff = Tiff::parse(&file).unwrap();
         assert_eq!(raw_ifd(&tiff).and_then(|i| i.u16(t::PHOTOMETRIC)), Some(photometric::CFA));
+    }
+
+    #[test]
+    fn a_packed_pixel_shift_composite_is_refused_as_unsupported() {
+        use craft_tiff::{ImageData, TiffWriter};
+        // 16-bit words (8 bytes a pixel) decode; 14-bit samples packed into 7 bytes a pixel are a layout no
+        // composite has shown, so they are refused rather than read word by word or bit by bit
+        for (bytes_per_pixel, decodes) in [(8, true), (7, false)] {
+            let mut raw = pixel_shift_composite(4, true);
+            raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![vec![0x58; 4 * 2 * bytes_per_pixel]] });
+            let file = TiffWriter::default().write(&[raw]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let result = decode(&file, mode, &Limits::default());
+                if decodes {
+                    assert!(result.is_ok(), "{bytes_per_pixel} {mode:?}: {:?}", result.err());
+                } else {
+                    assert!(matches!(result, Err(RawError::Unsupported(_))), "{bytes_per_pixel} {mode:?}: {:?}", result.err());
+                }
+            }
+        }
     }
 
     /// A 2-row ILCE-7RM3 pixel-shift composite `width` pixels wide: R, G1, G2, B, 14 bits, Sony's photometric 32892.

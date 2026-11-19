@@ -372,7 +372,9 @@ pub(super) fn corrections_and_off_warp(
         Some(table) if in_mode && !a7cr && enabled => distortion(model, table, active, geometry.reference),
         _ => None,
     };
-    let warp = validated(if a7cr { auto } else { !off });
+    // A usable alternate record owns distortion; a damaged one is never silently replaced by the older table.
+    let alternate = extended_distortion.as_mut().is_some_and(|record| !extended::settle(record));
+    let warp = if alternate { None } else { validated(if a7cr { auto } else { !off }) };
     let mut distortion_status = match &distortion_table.value {
         None => SonyLensStatus::NoTable,
         Some(_) if warp.is_some() => SonyLensStatus::Applied,
@@ -387,17 +389,16 @@ pub(super) fn corrections_and_off_warp(
     // describing what the camera did, so a renderer can still correct the lens: the validated conversion where the
     // camera had it off, the general one for every other body and mode. "No parameters" gets none.
     let recorded = distortion_setting.value.is_some_and(|s| s.meaning != SonySettingMeaning::Unavailable);
-    let mut off_warp = if warp.is_none() && recorded { validated(true) } else { None };
-    // A usable alternate record owns distortion; a damaged one is never silently replaced by the older table.
-    let alternate = extended_distortion.as_mut().is_some_and(|record| !extended::settle(record));
+    let mut off_warp = if warp.is_none() && recorded && !alternate { validated(true) } else { None };
     if warp.is_none() && off_warp.is_none() {
         off_warp = match extended_distortion.as_ref() {
             Some(record) if alternate => extended::general_warp(record, &geometry),
             _ => general_warp(&distortion_table, &distortion_setting, distortion_samples, &geometry),
         };
-        if alternate && off_warp.is_some() && distortion_table.is_present() {
-            distortion_status = SonyLensStatus::Superseded;
-        }
+    }
+    // the older table is set aside whether the record converts or not (its own status says which)
+    if alternate && distortion_table.is_present() {
+        distortion_status = SonyLensStatus::Superseded;
     }
     // Shading and CA are decoded for the reader, never applied here.
     let unvalidated = |present: bool| if present { SonyLensStatus::NotValidatedComponent } else { SonyLensStatus::NoTable };
@@ -1019,6 +1020,39 @@ mod tests {
                     assert_eq!(raw.opcodes.list3.len(), usize::from(expected == Applied));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn an_alternate_record_owns_distortion_even_where_the_older_table_validates() {
+        use SonyLensStatus::*;
+        let knots: [i16; 19] = std::array::from_fn(|i| i as i16 * i as i16 * 4);
+        let table = std::iter::once(19).chain(knots.map(|v| v as u16)).collect::<Vec<_>>();
+        for model in ["ILCE-7M3", "ILCE-7RM4A"] {
+            let decode_with = |alternate: Option<Vec<(u16, u16, Vec<u16>)>>| {
+                let mut arw = Arw::new(model, Little);
+                arw.plain = plain(&TELE, 1);
+                let mut sr2 = encrypted(&TELE, 1);
+                sr2.extend(alternate.unwrap_or_default());
+                arw.sr2 = Some(sr2);
+                decode(&arw.build())
+            };
+            let legacy = decode_with(None);
+            let [legacy_warp] = legacy.opcodes.list3.as_slice() else { panic!("{model}: the older table applies on its own") };
+            // usable (switch 1) and damaged (switch 5): the record owns distortion, the older table never applies
+            for (setting, status) in [(vec![1, 16], NotValidatedModel), (vec![5, 16], Rejected)] {
+                let image = decode_with(Some(vec![(0x7983, SHORT, setting.clone()), (0x7984, SSHORT, table.clone())]));
+                let record = sony(&image);
+                assert!(image.opcodes.list3.is_empty(), "{model} {setting:?}");
+                assert_ne!(image.opcodes.fallback_warp.as_ref(), Some(legacy_warp), "{model} {setting:?}");
+                assert_eq!(record.extended_distortion.as_ref().map(|e| e.status), Some(status), "{model} {setting:?}");
+                assert_eq!(record.distortion.status, Superseded, "{model} {setting:?}");
+            }
+            // "only the older table": it applies as before
+            let only_legacy = decode_with(Some(vec![(0x7983, SHORT, vec![u16::MAX; 2]), (0x7984, SSHORT, vec![0; 20])]));
+            assert_eq!(only_legacy.opcodes.list3, legacy.opcodes.list3, "{model}");
+            assert_eq!(sony(&only_legacy).distortion.status, Applied, "{model}");
+            assert_eq!(sony(&only_legacy).extended_distortion.as_ref().map(|e| e.status), Some(NoTable), "{model}");
         }
     }
 
