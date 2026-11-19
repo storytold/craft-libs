@@ -157,28 +157,62 @@ fn layer_style_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     host(ui, data, || page_of(&[EffectKind::DropShadow], Some(LayerStylePage::Styles)), &rgb(&words))
 }
 
-/// One story per effect kind: the dialog on that effect's page.
-macro_rules! effect_stories {
-    ($($name:ident => $kind:ident),* $(,)?) => {
-        $(
-            #[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
-            fn $name(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-                let words = Env::of(ui).words::<LayerStyleStoryWords>();
-                host(ui, data, || page_of(&[EffectKind::$kind], None), &rgb(&words))
-            }
-        )*
-    };
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_bevel_emboss(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::BevelEmboss], None), &rgb(&words))
 }
 
-effect_stories! {
-    layer_style_bevel_emboss => BevelEmboss,
-    layer_style_stroke => Stroke,
-    layer_style_inner_shadow => InnerShadow,
-    layer_style_inner_glow => InnerGlow,
-    layer_style_satin => Satin,
-    layer_style_color_overlay => ColorOverlay,
-    layer_style_gradient_overlay => GradientOverlay,
-    layer_style_pattern_overlay => PatternOverlay,
-    layer_style_outer_glow => OuterGlow,
-    layer_style_drop_shadow => DropShadow,
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_stroke(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::Stroke], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_inner_shadow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::InnerShadow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_inner_glow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::InnerGlow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_satin(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::Satin], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_color_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::ColorOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_gradient_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::GradientOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_pattern_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::PatternOverlay], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_outer_glow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::OuterGlow], None), &rgb(&words))
+}
+
+#[story(LayerStyleDialog<'static>, covers = [], drive = Drive::Never)]
+fn layer_style_drop_shadow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let words = Env::of(ui).words::<LayerStyleStoryWords>();
+    host(ui, data, || page_of(&[EffectKind::DropShadow], None), &rgb(&words))
 }

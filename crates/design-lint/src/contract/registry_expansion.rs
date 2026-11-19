@@ -112,6 +112,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detects_story_attributes_inside_repeated_macro_expansions() {
+        let source = r#"macro_rules! stories { ($($name:ident),*) => { $( #[story(Widget, covers = [])] fn $name() {} )* }; }"#;
+        let file = syn::parse_file(source).expect("valid macro definition");
+        let syn::Item::Macro(item) = &file.items[0] else { panic!("expected macro definition") };
+        assert!(has_registration(item.mac.tokens.clone()));
+    }
+
+    #[test]
     fn detects_hidden_registrations_and_allows_unregistered_derive() {
         let hidden = TokenStream::from_str("#[derive(Component)] struct A; #[trial] fn t() {} ").unwrap_or_default();
         let ordinary = TokenStream::from_str("#[derive(Component)] #[component(unregistered)] struct A; ").unwrap_or_default();
