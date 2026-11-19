@@ -113,6 +113,10 @@ pass_state! {
         style_record: crate::testing::style::StyleRecord,
         #[cfg(feature = "testing")]
         type_runs: crate::runtime::measure::TypeRuns,
+        #[cfg(feature = "testing")]
+        settle_log: crate::runtime::measure::SettleLog,
+        #[cfg(feature = "testing")]
+        pass_totals: crate::runtime::measure::PassTotals,
     }
     records {
         focus: crate::runtime::focus::State,

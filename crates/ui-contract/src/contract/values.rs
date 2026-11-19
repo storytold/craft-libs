@@ -8,6 +8,7 @@ use craft_behavior::{Applied, CanvasView, EditEvent, EditEvents, EditPolicy, Mix
 use egui::Id;
 use egui::Response;
 use std::any::TypeId;
+use std::cell::Cell;
 use std::sync::Arc;
 
 /// What a check says about a value, with the message type of craft-ui.
@@ -106,6 +107,9 @@ enum Source<'a, T> {
     Mut(&'a mut T),
     /// Write-through for a multi-selection field.
     MutMixed(&'a mut Mixed<T>),
+    /// Write-through to a field of a `Tracked` (`bind_tracked!`), whose write count moves only when an edit changes
+    /// the field.
+    Tracked { value: &'a mut T, count: &'a Cell<u64> },
     /// No caller value: session memory under the component id, or the saved tier.
     Kept,
 }
@@ -134,6 +138,13 @@ impl<'a, T: Value> Bind<'a, T> {
     /// Edits write through to a field that may be mixed; an edit makes it concrete.
     pub fn bound_mixed(v: &'a mut Mixed<T>) -> Self {
         Self::from_source(Source::MutMixed(v))
+    }
+
+    /// Called by [`bind_tracked!`](crate::bind_tracked) only: edits write through to `value`, and an edit that
+    /// changes it moves `count`, the write count of the `Tracked` that holds it.
+    #[doc(hidden)]
+    pub fn __tracked(value: &'a mut T, count: &'a Cell<u64>) -> Self {
+        Self::from_source(Source::Tracked { value, count })
     }
 
     /// No caller value: the component keeps it in session memory under its id. Until something is stored, it reads
@@ -188,6 +199,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => Source::Given(value.clone()),
             Source::Mut(value) => Source::Mut(&mut **value),
             Source::MutMixed(value) => Source::MutMixed(&mut **value),
+            Source::Tracked { value, count } => Source::Tracked { value: &mut **value, count },
             Source::Kept => Source::Kept,
         };
         let check = self.check.as_deref().map(|check| Box::new(move |value: &T| check(value)) as Box<Check<'_, T>>);
@@ -211,6 +223,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(Mixed::Same(value)) => value == shown,
             Source::Mut(value) => **value == *shown,
             Source::MutMixed(Mixed::Same(value)) => value == shown,
+            Source::Tracked { value, .. } => **value == *shown,
             _ => false,
         }
     }
@@ -221,6 +234,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => SourceMut::Given(value),
             Source::Mut(value) => SourceMut::Mut(&mut **value),
             Source::MutMixed(value) => SourceMut::MutMixed(&mut **value),
+            Source::Tracked { value, count } => SourceMut::Tracked { value: &mut **value, count },
             Source::Kept => SourceMut::Kept,
         };
         BindMut { source, policy: self.policy, check: self.check.as_deref(), save: self.save.as_ref(), reset: self.reset.as_ref() }
@@ -237,6 +251,7 @@ enum SourceMut<'a, T> {
     Given(&'a Mixed<T>),
     Mut(&'a mut T),
     MutMixed(&'a mut Mixed<T>),
+    Tracked { value: &'a mut T, count: &'a Cell<u64> },
     Kept,
 }
 
@@ -258,6 +273,7 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(value) => Some((*value).clone()),
             SourceMut::Mut(value) => Some(Mixed::Same((**value).clone())),
             SourceMut::MutMixed(value) => Some((**value).clone()),
+            SourceMut::Tracked { value, .. } => Some(Mixed::Same((**value).clone())),
             SourceMut::Kept => None,
         }
     }
@@ -269,6 +285,7 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(_) => None,
             SourceMut::Mut(value) => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
             SourceMut::MutMixed(value) => Some(BindKey::Place(std::ptr::from_ref::<Mixed<T>>(value) as usize, TypeId::of::<Mixed<T>>())),
+            SourceMut::Tracked { value, .. } => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
             SourceMut::Kept => Some(match self.save {
                 Some(save) => BindKey::Saved(Id::NULL.with(&save.key)),
                 None => BindKey::Kept(id),
@@ -290,6 +307,7 @@ impl<T: Value> BindMut<'_, T> {
         match &self.source {
             SourceMut::Given(Mixed::Same(value)) | SourceMut::MutMixed(Mixed::Same(value)) => value == shown,
             SourceMut::Mut(value) => **value == *shown,
+            SourceMut::Tracked { value, .. } => **value == *shown,
             _ => false,
         }
     }
@@ -388,7 +406,9 @@ impl<T: Value> BindMut<'_, T> {
     pub(crate) fn writes(&self, event: &EditEvent<T>) -> bool {
         match self.source {
             SourceMut::Given(_) | SourceMut::Kept => false,
-            SourceMut::Mut(_) | SourceMut::MutMixed(_) => self.policy == EditPolicy::WriteThrough || !matches!(event, EditEvent::Update { .. }),
+            SourceMut::Mut(_) | SourceMut::MutMixed(_) | SourceMut::Tracked { .. } => {
+                self.policy == EditPolicy::WriteThrough || !matches!(event, EditEvent::Update { .. })
+            }
         }
     }
 
@@ -401,6 +421,17 @@ impl<T: Value> BindMut<'_, T> {
         match &mut self.source {
             SourceMut::Mut(value) => event.apply(&mut **value),
             SourceMut::MutMixed(value) => event.apply_mixed(&mut **value),
+            SourceMut::Tracked { value, count } => {
+                // A gesture's start and a cancel with nothing to restore never write.
+                if matches!(event, EditEvent::Begin { .. } | EditEvent::Cancel { before: None, .. }) {
+                    return Applied::Unchanged;
+                }
+                let applied = event.apply(&mut **value);
+                if applied != Applied::Unchanged {
+                    count.set(count.get().wrapping_add(1));
+                }
+                applied
+            }
             SourceMut::Given(_) | SourceMut::Kept => Applied::Unchanged,
         }
     }
@@ -565,4 +596,56 @@ pub(crate) enum Checked {
     Cancel,
     /// A refused one-shot change reaches nothing.
     Drop,
+}
+
+/// Write-through bindings to fields of a [`Tracked`](crate::contract::Tracked) value: `bind_tracked!(doc => size)`
+/// gives one [`Bind`], `bind_tracked!(doc => title, style.size)` a tuple with one per field path (field names and
+/// tuple indices only). Making and reading the bindings leaves the revision; an edit that changes a field moves it at
+/// the write, so bindings made every pass don't invalidate the value's readers. Each binding borrows its own field,
+/// so the paths must not overlap.
+///
+/// ```
+/// # extern crate craft_ui_contract as craft_ui;
+/// use craft_ui::contract::{PlainData, Tracked, bind_tracked};
+///
+/// #[derive(PlainData)]
+/// struct Doc {
+///     title: String,
+///     style: (f32, bool),
+/// }
+///
+/// let mut doc = Tracked::new(Doc { title: "a".into(), style: (12.0, false) });
+/// let (title, size) = bind_tracked!(doc => title, style.0);
+/// # let _ = (title, size);
+/// ```
+///
+/// Overlapping paths don't compile:
+///
+/// ```compile_fail,E0499
+/// # extern crate craft_ui_contract as craft_ui;
+/// use craft_ui::contract::{Tracked, bind_tracked};
+/// let mut doc = Tracked::new((1_u32, 2_u32));
+/// let (a, b) = bind_tracked!(doc => 0, 0);
+/// # let _ = (a, b);
+/// ```
+///
+/// A method call is not a field path (a macro with no matching rule reports no error code):
+///
+/// ```compile_fail
+/// # extern crate craft_ui_contract as craft_ui;
+/// use craft_ui::contract::{Tracked, bind_tracked};
+/// let mut names = Tracked::new(vec![String::new()]);
+/// let first = bind_tracked!(names => first());
+/// # let _ = first;
+/// ```
+#[macro_export]
+macro_rules! bind_tracked {
+    ($tracked:expr => $first:tt $(. $rest:tt)*) => {{
+        let (model, count) = $tracked.__split_for_bind();
+        $crate::contract::Bind::__tracked(&mut model.$first $(.$rest)*, count)
+    }};
+    ($tracked:expr => $($first:tt $(. $rest:tt)*),+ $(,)?) => {{
+        let (model, count) = $tracked.__split_for_bind();
+        ($($crate::contract::Bind::__tracked(&mut model.$first $(.$rest)*, count),)+)
+    }};
 }
