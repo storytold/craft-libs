@@ -342,7 +342,16 @@ impl super::Writer<'_> {
     /// the object's current size and position into its own markup (a chart or diagram's frame is
     /// written by the caller). `None` when it can't be written back (its parts are gone).
     pub(super) fn embedded_xml(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float, &str)>) -> Option<String> {
-        self.embedded_tree(src, rels, resize).map(|root| root.to_xml())
+        let mut root = self.embedded_tree(src, rels, resize)?;
+        // read_object prefers a direct VML preview. Its signed z-index is not modeled, so a
+        // coexisting retained DrawingML frame cannot safely be assigned the model's order.
+        let vml_preview = root.els().any(|e| e.name.starts_with("v:") && e.local() != "shapetype");
+        if let Some((_, _, float, _)) = resize
+            && !vml_preview
+        {
+            self.retained_anchor_order(&mut root, float, &mut None, 0);
+        }
+        Some(root.to_xml())
     }
 
     /// The same bounded preservation operation, retaining the parsed tree for a caller that
@@ -481,6 +490,27 @@ impl super::Writer<'_> {
     /// Write an OLE object's size (and position, when floating), rotation and flips into its VML
     /// shape and DrawingML picture, with the effect extent covering the rotated bounds as for
     /// other drawings, its alt text into both, and give its drawing a fresh `wp:docPr` id.
+    /// Retained DrawingML frames of one OLE object share one allocated order.
+    /// This does not normalize VML z-index: its signed order is not represented by the reader.
+    /// Stop at each outer anchor or inline frame: nested drawings have their own placement.
+    fn retained_anchor_order(&mut self, e: &mut El, float: &Float, order: &mut Option<u32>, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        if e.name == "wp:inline" {
+            return;
+        }
+        if e.name == "wp:anchor" {
+            let z = *order.get_or_insert_with(|| self.drawing_order(float));
+            set_attr(e, "relativeHeight", &z.to_string());
+            return;
+        }
+        for child in &mut e.kids {
+            if let xml::Node::El(child) = child {
+                self.retained_anchor_order(child, float, order, depth + 1);
+            }
+        }
+    }
     fn resize_object(&mut self, e: &mut El, w: f32, h: f32, float: &Float, alt: &str, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -500,9 +530,9 @@ impl super::Writer<'_> {
                 }
             }
             "wp:effectExtent" => {
-                // Word's effect extent also covers a rotated object's overhang (its rotated bounds),
+                // Word's effect extent also covers a rotated object's overhang (`Float::effect_spin_pad`),
                 // unless the file it came from kept none.
-                let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(w, h) };
+                let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.effect_spin_pad(w, h) };
                 let [el, et, er, eb] = float.effect_extent();
                 let ext = [el + px, et + py, er + px, eb + py].map(emu);
                 e.attrs.retain(|(k, _)| !matches!(k.as_str(), "l" | "t" | "r" | "b"));

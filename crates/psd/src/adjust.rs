@@ -11,6 +11,32 @@ use crate::error::Result;
 use crate::io::Reader;
 use crate::layer::LayerRecord;
 
+/// Write the legacy brit block with raw signed brightness and contrast values.
+///
+/// The seven-byte payload retains the reserved value 127 and legacy flag 0.
+/// Values are not clamped or normalized; external tagged-block padding is not included.
+pub fn brightness_contrast_block(brightness: i16, contrast: i16) -> crate::tagged::TaggedBlock {
+    let mut data = Vec::with_capacity(7);
+    for value in [brightness, contrast, 127] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    data.push(0);
+    crate::tagged::TaggedBlock::new(*b"brit", data)
+}
+
+/// Write the version-1 expA block without normalizing its raw floating-point values.
+///
+/// All f32 bits, including NaN payloads and signed zero, are preserved in the
+/// fourteen-byte payload. External tagged-block padding is not included.
+pub fn exposure_block(exposure: f32, offset: f32, gamma: f32) -> crate::tagged::TaggedBlock {
+    let mut data = Vec::with_capacity(14);
+    data.extend_from_slice(&1u16.to_be_bytes());
+    for value in [exposure, offset, gamma] {
+        data.extend_from_slice(&value.to_be_bytes());
+    }
+    crate::tagged::TaggedBlock::new(*b"expA", data)
+}
+
 /// The adjustment a layer applies.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Adjustment {
@@ -181,6 +207,22 @@ mod tests {
     use crate::descriptor::Value;
     use crate::io::WriteExt;
     use crate::tagged::TaggedBlock;
+
+    #[test]
+    fn raw_adjustment_writers_preserve_exact_payloads() {
+        let block = brightness_contrast_block(i16::MIN, i16::MAX);
+        assert_eq!(block.key, *b"brit");
+        assert_eq!(block.data, [0x80, 0, 0x7f, 0xff, 0, 0x7f, 0]);
+        assert_eq!(brightness_contrast_block(-1, 0).data, [0xff, 0xff, 0, 0, 0, 0x7f, 0]);
+        let block = exposure_block(0.0, -0.0, f32::INFINITY);
+        assert_eq!(block.key, *b"expA");
+        assert_eq!(block.data, [0, 1, 0, 0, 0, 0, 0x80, 0, 0, 0, 0x7f, 0x80, 0, 0]);
+        assert_eq!(
+            exposure_block(f32::NEG_INFINITY, f32::from_bits(0x7fc1_2345), f32::from_bits(0xffc5_4321)).data,
+            [0, 1, 0xff, 0x80, 0, 0, 0x7f, 0xc1, 0x23, 0x45, 0xff, 0xc5, 0x43, 0x21]
+        );
+        assert_eq!(exposure_block(1.0, -2.5, 0.125).data, [0, 1, 0x3f, 0x80, 0, 0, 0xc0, 0x20, 0, 0, 0x3e, 0, 0, 0]);
+    }
 
     fn layer(blocks: Vec<([u8; 4], Vec<u8>)>) -> LayerRecord {
         LayerRecord { blocks: blocks.into_iter().map(|(k, d)| TaggedBlock::new(k, d)).collect(), ..Default::default() }

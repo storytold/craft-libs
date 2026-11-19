@@ -290,8 +290,10 @@ impl Writer {
     fn cell_borders(&mut self, borders: Option<&craft_wordmodel::props::Borders>, borderless: bool, out: &mut String) {
         if let Some(b) = borders {
             for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
-                    self.write_border("clbrdr", side, border, out);
+                // A drawn line of width 0 (a DOCX table border without `w:sz`) at the thinnest
+                // line: RTF has no border that is drawn and takes no room.
+                if let Some(border) = opt.filter(|x| x.is_drawn()) {
+                    self.write_border("clbrdr", side, border.as_drawn(), out);
                 }
             }
         } else if !borderless {

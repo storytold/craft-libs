@@ -365,9 +365,10 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo, limits: &Limits) -> Result<Ve
             .par_iter()
             .map(|c| {
                 let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
-                let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
-                // a tile's frame is half its nominal width and height: a larger one (which the sample cap above would
-                // still let through when the tile is small) is no Sony tile
+                // a tile's frame is half its nominal width and height with four components, so it holds the tile's
+                // samples: no more are decoded, however small the tile (storytold/lightcraft#4024)
+                let f = ljpeg::decode(src, (c.width as usize).saturating_mul(c.height as usize))?;
+                // a frame of another shape is no Sony tile
                 if f.components != 4 || f.data.len() < f.width * f.height * 4 || f.width * 2 > c.width as usize || f.height * 2 > c.height as usize {
                     return Err(RawError::Corrupt(format!(
                         "lossless ARW tile: {} samples in a {}×{}×{} frame",
@@ -1705,6 +1706,31 @@ mod tests {
         };
         assert!(is_quad_tiled(&file, &info));
         assert_eq!(read_quad_tiles(&file, &info, &Limits::default()).unwrap(), mosaic);
+    }
+
+    /// storytold/lightcraft#4024: 256 tiles of 2×2 all pointing at one frame of 64×64×4 samples are refused before the
+    /// frame is decoded (at most a tile's samples), not after each tile has decoded 16,384 samples.
+    #[test]
+    fn tiny_quad_tiles_do_not_decode_a_large_frame() {
+        let frame = ljpeg::encode(&vec![300u16; 64 * 64 * 4], 64, 64, 4, 14, 1, 0);
+        let info = ImageInfo {
+            width: 32,
+            height: 32,
+            bits_per_sample: vec![14],
+            samples_per_pixel: 1,
+            compression: 7,
+            photometric: photometric::CFA,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 2, tile_height: 2 },
+            offsets: vec![0; 256],
+            byte_counts: vec![frame.len() as u64; 256],
+        };
+        // refused by the decoder's sample limit (a Limit), not by the shape check after a full decode (Corrupt)
+        let got = read_quad_tiles(&frame, &info, &Limits::default());
+        assert!(matches!(got, Err(RawError::Limit(_))), "{got:?}");
     }
 
     /// storytold/lightcraft#2561: a small file whose one-byte or packed 12-bit strip declares a large frame is refused before the full
