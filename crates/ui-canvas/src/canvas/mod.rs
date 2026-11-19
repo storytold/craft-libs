@@ -277,6 +277,8 @@ struct Settled {
     mark: Option<Pos2>,
     /// A press that stopped an autoscroll is down: it reaches no tool.
     swallowing: bool,
+    /// The screen point a wheel or pinch zoom of this pass kept still ([`CanvasSpace::zoom_anchor`]).
+    zoom_anchor: Option<Pos2>,
 }
 
 impl<'a> Canvas<'a> {
@@ -425,6 +427,8 @@ impl<'a> Canvas<'a> {
             }
         }
         let mut jumped = false;
+        // The screen point a wheel or pinch zoom of this pass kept still, before the clamp below can move the centre.
+        let mut zoom_anchor = None;
         let wheel = cx.take_wheel();
         let wheeled = wheel.is_some();
         if let Some(wheel) = wheel {
@@ -433,7 +437,11 @@ impl<'a> Canvas<'a> {
                 // The pointer the wheel came at: the canvas's own widget is not hovered where an app widget in its body
                 // covers it.
                 let at = wheel.at.unwrap_or_else(|| view.rect.center());
+                let (anchor, zoom) = (WheelNavigation::zoom_anchor(&view, action, at, size), view.zoom);
                 jumped |= WheelNavigation::apply(&mut view, action, at, size, pixels_per_point);
+                if view.zoom != zoom {
+                    zoom_anchor = anchor;
+                }
             }
             // A trackpad rotation or a twist of two fingers turns the view; a mirrored view turns the other way.
             if let Some(degrees) = WheelNavigation::rotation(&WheelInput::of(&wheel, WheelNavigation::LINE, os), &self.navigation) {
@@ -489,6 +497,10 @@ impl<'a> Canvas<'a> {
         }
         let before = view;
         if let Some((next, motion)) = self.view_commands(cx, Some(view)) {
+            // A view command's zoom keeps its own point (the centre), not the wheel's.
+            if next.zoom != view.zoom {
+                zoom_anchor = None;
+            }
             view = next;
             match motion {
                 CommandMotion::Ease if self.navigation.animated_zoom => {
@@ -516,7 +528,7 @@ impl<'a> Canvas<'a> {
         let easing = motion.animation.running();
         let mark = motion.autoscroll.mark();
         motion.restore(&ctx, id);
-        Settled { target, shown, easing, keys, mark, swallowing }
+        Settled { target, shown, easing, keys, mark, swallowing, zoom_anchor }
     }
 
     /// One pass of the middle button's autoscroll over `view`: a middle press on the background starts it under
@@ -596,11 +608,12 @@ impl<'a> Canvas<'a> {
 
     /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
     fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
-        let (shown, target, easing, keys) = match self.settled {
-            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
-            None => (self.given?, self.given?, false, BodyKeys::default()),
+        let (shown, target, easing, keys, zoom_anchor) = match self.settled {
+            Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys, settled.zoom_anchor),
+            None => (self.given?, self.given?, false, BodyKeys::default(), None),
         };
-        let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer);
+        let mut space =
+            CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer).with_zoom_anchor(zoom_anchor);
         space.set_view(target);
         if easing {
             space.ease_through(shown);

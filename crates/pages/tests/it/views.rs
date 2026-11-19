@@ -170,6 +170,24 @@ impl ZoomSeen {
 /// pass through a gutter between columns under the pointer on the way.
 #[trial]
 fn a_ctrl_wheel_zoom_keeps_the_point_under_the_pointer_and_settles_in_its_own_frame() {
+    // Far enough down that zooming out never meets the top of the document, whose clamp would move the place.
+    ctrl_wheel_zoom_out(vec2(1280.0, 760.0), 40.4 * 1056.0, 30, egui::Vec2::ZERO, 5);
+}
+
+/// The WordCraft app's case (#1340): a few pages down, the pointer just inside page 3, right of the gutter in the
+/// middle of the view, when the pages reflow from two columns to three, which moves page 3 down a row. The canvas
+/// zooms about the pointer, then keeps the pages (no wider than the view) centred: the place under the pointer, not
+/// the middle of the view, keeps its place, on page 3 and not page 2 across the gutter. Then three columns to four and
+/// five, before the top of the document stops the view.
+#[trial]
+fn a_ctrl_wheel_zoom_keeps_the_place_when_the_page_under_the_pointer_moves_down_a_row() {
+    ctrl_wheel_zoom_out(vec2(1280.0, 690.0), 3.2 * 1056.0, 3, vec2(7.0, 0.0), 4);
+}
+
+/// `notches` Ctrl + wheel notches out, 8 frames apart, in a page view `room` big from `top` (screen points at 100 %)
+/// with the pointer `nudge` from the middle of the area: every frame keeps the point under the pointer at the notch,
+/// which starts on page `least` or later.
+fn ctrl_wheel_zoom_out(room: egui::Vec2, top: f64, least: usize, nudge: egui::Vec2, notches: usize) {
     let state = Rc::new(RefCell::new(state_with(|s| {
         s.fit = Fit::None;
         s.zoom = 1.0;
@@ -193,27 +211,35 @@ fn a_ctrl_wheel_zoom_keeps_the_point_under_the_pointer_and_settles_in_its_own_fr
         *kept.borrow_mut() = now;
     });
     fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::NONE);
-    fixture.room(vec2(1280.0, 760.0));
+    fixture.room(room);
     fixture.settle();
-    // Far enough down that zooming out never meets the top of the document, whose clamp would move the place.
-    state.borrow_mut().offset.1 = 40.4 * 1056.0;
+    state.borrow_mut().offset.1 = top;
     fixture.settle();
-    let pointer = seen.borrow().area.center();
+    let pointer = seen.borrow().area.center() + nudge;
     fixture.frame(vec![egui::Event::PointerMoved(pointer)]).settle();
     let start = seen.borrow().clone();
-    let (page, _) = *start
-        .pages
-        .iter()
-        .min_by(|(_, a), (_, b)| a.distance_to_pos(pointer).total_cmp(&b.distance_to_pos(pointer)))
-        .expect("pages show");
-    assert!(page >= 30, "many pages down: page {page}");
-    let under = |seen: &ZoomSeen| seen.rect(page).map(|r| (pointer - r.min) / seen.scale as f32);
-    let at = under(&start).expect("the page shows");
+    // The page under the pointer, else the nearest; a reflow can put another page there, so each notch asks again.
+    let page_under = |seen: &ZoomSeen| {
+        let (page, _) = *seen
+            .pages
+            .iter()
+            .min_by(|(_, a), (_, b)| a.distance_to_pos(pointer).total_cmp(&b.distance_to_pos(pointer)))
+            .expect("pages show");
+        page
+    };
+    let mut page = page_under(&start);
+    assert!(page >= least, "pages down: page {page}");
+    let under = |seen: &ZoomSeen, page: usize| seen.rect(page).map(|r| (pointer - r.min) / seen.scale as f32);
+    let mut at = under(&start, page).expect("the page shows");
     let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
     fixture.frame(vec![egui::Event::ModifiersChanged(ctrl)]);
     let mut last = seen.borrow().clone();
-    for n in 0..40 {
+    for n in 0..notches * 8 {
         let notch = n % 8 == 0;
+        if notch {
+            page = page_under(&last);
+            at = under(&last, page).expect("the page under the pointer shows");
+        }
         let events = if notch {
             vec![egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
@@ -227,7 +253,7 @@ fn a_ctrl_wheel_zoom_keeps_the_point_under_the_pointer_and_settles_in_its_own_fr
         };
         fixture.frame(events);
         let now = seen.borrow().clone();
-        let here = under(&now).unwrap_or_else(|| panic!("frame {n}: page {page} shows"));
+        let here = under(&now, page).unwrap_or_else(|| panic!("frame {n}: page {page} shows"));
         let off = (here - at) * now.scale as f32;
         // Across, the place holds while the pages stay one a row; in rows they fit the window side by side.
         let across = now.columns() > start.columns() || off.x.abs() < 2.0;

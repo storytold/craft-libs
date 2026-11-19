@@ -10,6 +10,7 @@ mod list_manager;
 mod new_document;
 mod params;
 mod password;
+mod picker;
 mod preview;
 mod preview_width;
 mod save_for_web;

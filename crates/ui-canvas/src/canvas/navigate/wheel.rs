@@ -220,4 +220,14 @@ impl WheelNavigation {
         }
         *view != before
     }
+
+    /// The screen point [`apply`](Self::apply) keeps still when `action` zooms `view` with the pointer at `pointer`, for
+    /// a document of `size`; `None` for a pan.
+    pub fn zoom_anchor(view: &CanvasView, action: WheelAction, pointer: Pos2, size: Size) -> Option<Pos2> {
+        match action {
+            WheelAction::Zoom(_) => Some(zoom::wheel_anchor(view, pointer, size)),
+            WheelAction::SnapZoom(_) => Some(pointer),
+            WheelAction::Pan(_) => None,
+        }
+    }
 }
