@@ -51,6 +51,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
                 layer: ui.layer_id(),
                 layout,
                 pixels_per_point: ctx.pixels_per_point(),
+                env: crate::runtime::env::Env::of(ui).key,
             };
             let kept = lazy::measured(&ctx, id, place).map(|(size, reads)| {
                 // The page reads them again, as far as an edit later in the pass sees it.

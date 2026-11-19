@@ -16,7 +16,7 @@ use crate::docking::{
     frame, move_actions, stepped, with_area_rules,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
-use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
+use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
 use crate::runtime::memory::Remember as _;
@@ -29,7 +29,7 @@ use craft_behavior::overlay::Side;
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use craft_host::target::WindowKind;
 use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -247,6 +247,9 @@ struct Scene<'s, P> {
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
+    /// The key of what every region of the chrome shows of the pass beyond its own room ([`chrome_key`]); `None` when
+    /// the host gives no [`DockPanels::spec_version`], and the chrome runs every pass.
+    chrome: Option<u64>,
 }
 
 /// The spec of `panel` in `specs`, or an unnamed one.
@@ -291,6 +294,15 @@ struct Look {
     minimized: bool,
     section: Option<bool>,
     in_window: bool,
+}
+
+/// What a group's header shows besides its panels' bodies: the tab titles, the panel menu's rows and whether the host
+/// gave any, and the panel commands' states.
+struct GroupParts {
+    titles: Vec<PanelTitle>,
+    menu: Vec<PanelRow>,
+    hosted: bool,
+    states: Vec<(DockCommands, CommandState)>,
 }
 
 /// A dock to show: its window edge, its columns and its rect.
@@ -398,6 +410,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 hide,
                 maximized: maximized.as_ref(),
                 auto_collapse,
+                locked,
                 sizes,
                 rtl,
             };
@@ -496,6 +509,7 @@ struct Input<'i, P> {
     hide: HidePanels<'i, P>,
     maximized: Option<&'i P>,
     auto_collapse: bool,
+    locked: bool,
     sizes: DockSizes,
     rtl: bool,
 }
@@ -522,7 +536,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, locked, sizes, rtl } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let keys: HashMap<PanelKey, P> = current.layout.panels().into_iter().map(|panel| (PanelKey::of(panel), panel.clone())).collect();
@@ -531,6 +545,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
     let space = float_space(bounds, &sizes, config, specs);
+    let chrome = panels.spec_version().map(|version| chrome_key(layout, version, config, locked, auto_collapse));
     let scene = Scene {
         dock: id,
         sizes,
@@ -544,6 +559,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         rtl,
         floated: &current.floated,
+        chrome,
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -657,7 +673,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
 /// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
-fn register_bands<P: Clone + Eq + Hash + Send + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
+fn register_bands<P: Clone + Eq + Hash + Send + Sync + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
     if scene.layout.root.is_none() {
         return;
     }
@@ -690,6 +706,95 @@ fn float_space<P: Clone + PartialEq>(bounds: Rect, sizes: &DockSizes, config: &D
         }
     }
     space
+}
+
+/// The rows of the menu of `panel`'s group, and whether the host gave any (only then does the group show a menu
+/// button; a context request opens the menu either way): the host's rows, then the panel commands the config shows, with
+/// the Move Panel To submenu of the groups the panel can move to.
+fn panel_menu_rows<P: Clone + Eq + Hash>(
+    scene: &Scene<'_, P>,
+    panels: &mut dyn DockPanels<P>,
+    words: &MenuWords,
+    panel: &P,
+) -> (Vec<PanelRow>, bool) {
+    let config = scene.config;
+    let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
+    let floating = matches!(scene.layout.place(panel), Some(PanelPlace::Floating { .. }));
+    let mut group = vec![command(DockCommands::FloatPanel)];
+    if floating {
+        group.push(command(DockCommands::DockPanel));
+    }
+    let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
+    if scene.permissions(panel).movable && !targets.is_empty() {
+        let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
+        let name = Label::from(words.panel_move_to.as_str().to_owned());
+        group.push(PanelRow::Submenu(name, rows.collect()));
+    }
+    if config.close_menu_items {
+        group.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
+    }
+    if config.group_order_items && matches!(scene.layout.place(panel), Some(PanelPlace::Dock { .. })) {
+        group.extend([command(DockCommands::ToggleMinimized), command(DockCommands::StepGroupUp), command(DockCommands::StepGroupDown)]);
+    }
+    group.push(command(DockCommands::FloatGroup));
+    if config.close_others_item {
+        group.push(command(DockCommands::CloseOthers));
+    }
+    if config.maximize_item {
+        group.push(command(DockCommands::ToggleMaximize));
+    }
+    let mut rows = panels.panel_rows(panel);
+    let hosted = !rows.is_empty();
+    if hosted {
+        rows.push(PanelRow::Separator);
+    }
+    rows.extend(group);
+    (rows, hosted)
+}
+
+/// The key of what the chrome's regions show beyond their own room: the host's panel specs (`version`), the config,
+/// whether the workspace is locked, Auto-Collapse, and the shown arrangement: which panels each group, column and
+/// floating window holds, the shown tab, and the minimized, open, iconic and stepped states, which the panel menus'
+/// command states and move targets read across groups. Sizes are left out: a size reaches a region as its room.
+fn chrome_key<P: Hash>(layout: &Layout<P>, version: u64, config: &DockConfig, locked: bool, auto_collapse: bool) -> u64 {
+    use std::hash::Hasher;
+    fn column<P: Hash>(shown: &Column<P>, hasher: &mut impl Hasher) {
+        (shown.iconic, shown.steps, shown.groups.len()).hash(hasher);
+        for group in &shown.groups {
+            (&group.panels, group.active, group.minimized).hash(hasher);
+        }
+    }
+    fn node<P: Hash>(shown: &Node<P>, hasher: &mut impl Hasher) {
+        std::mem::discriminant(shown).hash(hasher);
+        match shown {
+            Node::Split { first, second, .. } => {
+                node(first, hasher);
+                node(second, hasher);
+            }
+            Node::Tabs { panels, active, .. } => (panels, active).hash(hasher),
+            Node::Stack { entries, .. } => {
+                for entry in entries {
+                    (&entry.panel, entry.open).hash(hasher);
+                }
+            }
+            Node::Dock { side, columns, .. } => {
+                side.hash(hasher);
+                columns.iter().for_each(|one| column(one, hasher));
+            }
+            // `Node` is non_exhaustive: a variant added later hashes only its discriminant until it is listed here.
+            _ => {}
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (version, config, locked, auto_collapse).hash(&mut hasher);
+    if let Some(root) = &layout.root {
+        node(root, &mut hasher);
+    }
+    for window in &layout.floating {
+        (window.id, window.edge).hash(&mut hasher);
+        column(&window.column, &mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Whether `spec` is a document's: its group shows its body edge to edge. Every other docked body fills its group's
@@ -735,44 +840,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
     }
 
-    /// The rows of the menu of `panel`'s group, and whether the host gave any (only then does the group show a menu
-    /// button; a context request opens the menu either way): the host's rows, then the panel commands the config shows, with
-    /// the Move Panel To submenu of the groups the panel can move to.
+    /// The rows of the menu of `panel`'s group, and whether the host gave any ([`panel_menu_rows`]).
     fn menu_rows(&mut self, body: &BodyCx<'_>, panel: &P) -> (Vec<PanelRow>, bool) {
-        let scene = self.scene;
-        let config = scene.config;
-        let command = |command: DockCommands| PanelRow::Command(CommandRef::from(command));
-        let floating = matches!(scene.layout.place(panel), Some(PanelPlace::Floating { .. }));
-        let mut group = vec![command(DockCommands::FloatPanel)];
-        if floating {
-            group.push(command(DockCommands::DockPanel));
-        }
-        let targets = scene.layout.move_targets(panel, |other| scene.permissions(other));
-        if scene.permissions(panel).movable && !targets.is_empty() {
-            let rows = targets.iter().enumerate().map(|(at, target)| PanelRow::Item(Entry::new(GroupItem::MoveTo(at), scene.spec(target).label)));
-            let name = Label::from(body.words::<MenuWords>().panel_move_to.as_str().to_owned());
-            group.push(PanelRow::Submenu(name, rows.collect()));
-        }
-        if config.close_menu_items {
-            group.extend([command(DockCommands::ClosePanel), command(DockCommands::CloseGroup)]);
-        }
-        if config.group_order_items && matches!(scene.layout.place(panel), Some(PanelPlace::Dock { .. })) {
-            group.extend([command(DockCommands::ToggleMinimized), command(DockCommands::StepGroupUp), command(DockCommands::StepGroupDown)]);
-        }
-        group.push(command(DockCommands::FloatGroup));
-        if config.close_others_item {
-            group.push(command(DockCommands::CloseOthers));
-        }
-        if config.maximize_item {
-            group.push(command(DockCommands::ToggleMaximize));
-        }
-        let mut rows = self.panels.panel_rows(panel);
-        let hosted = !rows.is_empty();
-        if hosted {
-            rows.push(PanelRow::Separator);
-        }
-        rows.extend(group);
-        (rows, hosted)
+        panel_menu_rows(self.scene, &mut *self.panels, &body.words::<MenuWords>(), panel)
     }
 
     /// Runs a panel command on `panel`: the event of a command the host carries out, else its actions. `source` is
@@ -821,40 +891,56 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let anchor = members.first()?;
         let active = active.min(members.len() - 1);
-        let viewed = match at {
-            // The view draws in a child `Ui` held to the group's rect and clipped to it: it lays out in the group's
-            // room, never in the room the area has left.
-            GroupAt::Show(rect) => {
-                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                    ui.shrink_clip_rect(rect);
-                    self.panels.group_view(members, active, ui, at, body)
-                })
-                .inner
-            }
-            GroupAt::Measure(_) => self.panels.group_view(members, active, ui, at, body),
-        };
-        if let Some(height) = viewed {
-            return matches!(at, GroupAt::Measure(_)).then_some(height);
+        if let GroupAt::Measure(_) = at
+            && let Some(height) = self.panels.group_view(members, active, ui, at, body)
+        {
+            return Some(height);
         }
-        let titles: Vec<PanelTitle> = members
-            .iter()
-            .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
-            .collect();
         let shown = &members[active];
-        let (menu, hosted) = self.menu_rows(body, shown);
-        let permissions = |panel: &P| scene.permissions(panel);
-        let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
+        let content = self.panels.content(shown);
+        // A host view settles as a panel body does, under the shown panel's content version (`DockPanels::content`):
+        // it runs again when that version, the group's panels or the shown tab change.
+        let view_version = content.map(|content| {
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (content, members, active).hash(&mut hasher);
+            hasher.finish()
+        });
+        // The group settles when the host versions its specs and the shown body: it runs again when the pass's chrome
+        // key, the body's version or how the group shows changes.
+        let version = scene.chrome.zip(content).map(|(chrome, content)| {
+            use std::hash::Hasher;
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (chrome, content, members, active, look.minimized, look.section, look.in_window).hash(&mut hasher);
+            hasher.finish()
+        });
+        let words = body.words::<MenuWords>();
         let panels = RefCell::new(&mut *self.panels);
+        // The tab titles, the menu rows and the panel commands' states, built when the group runs.
+        let parts: OnceCell<GroupParts> = OnceCell::new();
+        let parts_of = || {
+            parts.get_or_init(|| {
+                let titles = members
+                    .iter()
+                    .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+                    .collect();
+                let (menu, hosted) = panel_menu_rows(scene, &mut **panels.borrow_mut(), &words, shown);
+                let permissions = |panel: &P| scene.permissions(panel);
+                let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
+                GroupParts { titles, menu, hosted, states }
+            })
+        };
         // The group with `members[at]` shown: as it shows, or as it is measured.
         let make = |at: usize, minimized: bool| {
             let panels = &panels;
-            let mut group = DockGroup::new(anchor.clone(), &titles, PanelKey::of(&members[at]))
+            let GroupParts { titles, menu, hosted, states } = parts_of();
+            let mut group = DockGroup::new(anchor.clone(), titles, PanelKey::of(&members[at]))
                 .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())
                 .movable(scene.permissions(shown).movable)
                 .menu(menu.clone())
-                .panel_menu_shown(hosted)
+                .panel_menu_shown(*hosted)
                 .command_states(states.clone());
             if look.in_window {
                 group = group.in_window();
@@ -879,7 +965,50 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             }
             GroupAt::Show(rect) => rect,
         };
-        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
+        // One child `Ui` held to the group's rect, whether the group settles or not. It takes the parent's next id, as
+        // the group did before it settled, so a change of the group's first tab keeps every id inside; each Lazy is
+        // keyed by its `Ui`'s id, unique among the groups of a dock in a scroll area too. The host view runs first and
+        // settles; where the host leaves the group to the dock, the group shows in its place and settles under its own
+        // version.
+        let output = ui
+            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                let view = Lazy::new(ui.unique_id(), 0.0).settles(view_version.is_some());
+                let view = match view_version {
+                    Some(version) => view.content(version),
+                    None => view,
+                };
+                view.show_or(
+                    ui,
+                    |ui| {
+                        // The view draws held to the group's rect and clipped to it: it lays out in the group's room,
+                        // never in the room the area has left.
+                        let taken = ui
+                            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                                ui.shrink_clip_rect(rect);
+                                panels.borrow_mut().group_view(members, active, ui, at, body)
+                            })
+                            .inner;
+                        // The run covers the group, so the pointer over it runs the view again.
+                        taken.map(|_| ui.expand_to_include_rect(rect))
+                    },
+                    |ui| {
+                        let lazy = Lazy::new(ui.unique_id(), 0.0).settles(version.is_some());
+                        let lazy = match version {
+                            Some(version) => lazy.content(version),
+                            None => lazy,
+                        };
+                        lazy.show(ui, |ui| {
+                            let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
+                            // `show_at` takes no room in flow; the run covers the group, so the pointer over it runs it again.
+                            ui.expand_to_include_rect(rect);
+                            output
+                        })
+                    },
+                )
+            })
+            .inner;
+        // A host view took the group, or a settled view or group replayed its last run: nothing reached it.
+        let output = output.and_then(Result::err).flatten()?;
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
@@ -1053,25 +1182,31 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
         let work = if column.iconic {
-            let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+            let mut shown = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
                 .edge(edge)
                 .opens(opens)
                 .bar(bar)
                 .within(within)
-                .auto_collapse(scene.auto_collapse)
-                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
+                .auto_collapse(scene.auto_collapse);
+            if let Some(chrome) = scene.chrome {
+                shown = shown.content(chrome);
+            }
+            let output = shown.show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
             self.report.flyout.extend(output.edit.events);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
-            let output = DockColumn::new(name, dock, column, &spec)
+            let mut shown = DockColumn::new(name, dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
                 .arrow(self.arrow_of(column))
                 .within(within)
-                .auto_collapse(scene.auto_collapse)
-                .show_groups_at(ui, cell, |group, rect, ui, body| {
-                    self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
-                });
+                .auto_collapse(scene.auto_collapse);
+            if let Some(chrome) = scene.chrome {
+                shown = shown.content(chrome);
+            }
+            let output = shown.show_groups_at(ui, cell, |group, rect, ui, body| {
+                self.group_of(ui, body, group, GroupAt::Show(rect), in_window);
+            });
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
         };
         self.column_work(column, work);

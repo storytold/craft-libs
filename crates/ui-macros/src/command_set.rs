@@ -280,12 +280,15 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             holds.push(quote!((#id, #k::runtime::commands::CommandScope::new(#held))));
         }
         arms.push(quote!(#id => ::core::option::Option::Some(Self::#name)));
+        // One non-capturing closure per variant, collected in a table of function pointers: `defs`
+        // loops over the table, so its frame does not grow with the number of variants (a closure's
+        // frame is released when it returns) and the push code exists once.
         defs.push(quote! {
-            {
+            || {
                 let scope = Self::SCOPE.scope().ok_or_else(|| #k::runtime::commands::CommandDefError::scope(#id))?;
                 let mut def = #k::runtime::commands::CommandDef::new(#k::runtime::commands::CommandRef::new(#id), #label, scope) #chain;
                 #(#defaults)*
-                out.push(def);
+                ::core::result::Result::Ok(def)
             }
         });
         ids.push(id);
@@ -310,9 +313,9 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
 
             fn defs() -> ::core::result::Result<::std::vec::Vec<#k::runtime::commands::CommandDef>, #k::runtime::commands::CommandDefError> {
-                let mut out = ::std::vec::Vec::new();
-                #(#defs)*
-                ::core::result::Result::Ok(out)
+                type Build = fn() -> ::core::result::Result<#k::runtime::commands::CommandDef, #k::runtime::commands::CommandDefError>;
+                let table: &[Build] = &[#(#defs),*];
+                table.iter().map(|build| build()).collect()
             }
 
             fn no_default_on() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::Platform)> {

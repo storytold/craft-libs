@@ -4,12 +4,13 @@
 
 use crate::runtime::egui::areas::{self, Layer};
 use crate::runtime::egui::{files, pass, viewports};
-use crate::runtime::env::Label;
+use crate::runtime::env::{Env, EnvView, Label};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay::{self, LayerKeys};
 use crate::runtime::pass_state;
 use crate::runtime::windows::{self, WindowHost};
 use crate::runtime::{cursor, frame, pointer};
+use crate::style::UiTokens;
 use craft_behavior::keys::drop_operation;
 use craft_behavior::{Buttons, CancelReason, Cursor, CursorIcon, CursorPriority, DropOperation, PointerButton, PressCancel};
 use craft_keymap::Mods;
@@ -28,8 +29,11 @@ pub enum DragPreview {
     None,
     /// A badge with a short text ("3 files").
     Badge(Label),
-    /// A frame-sized outline centred on the pointer, with an optional label inside its top corner: the ghost of a
-    /// panel or window being moved.
+    /// Nothing beside the pointer: the payload's name shows inside the area of a region mark, as a panel or group
+    /// being moved names the place it would take. With no mark, nothing shows.
+    Named(Label),
+    /// An outline of `size` centred on the pointer, with an optional label inside its top corner: the ghost of a part
+    /// dragged out of a row (a thumbnail).
     #[non_exhaustive]
     Frame {
         /// The size of the frame, in points.
@@ -189,8 +193,10 @@ struct Session {
     /// A second payload of the same drag, which targets of its type take: a collection's row drag maps to it.
     also: Option<Arc<dyn Any + Send + Sync>>,
     preview: DragPreview,
+    /// The env of the region the drag started in, which its preview paints with; `None` for files from the OS.
+    env: Option<Env>,
     /// The mark of the target that would take a drop now, in screen space of the viewport that registered it.
-    mark: Option<(ViewportId, DropMark)>,
+    mark: Option<ShownMark>,
     /// The root frame in which the source viewport saw the release while a target in another window held the
     /// drop: the session lives until that window's pass takes it.
     released: Option<u64>,
@@ -203,6 +209,15 @@ struct Session {
     dropped: Option<u64>,
     /// The root frame the session started in, the only one in which [`amend`] changes its payload.
     began: u64,
+}
+
+/// The mark of the target that would take a drop, with the viewport that registered it and the tokens of the region
+/// the target lies in, which the mark paints with.
+#[derive(Clone)]
+struct ShownMark {
+    viewport: ViewportId,
+    mark: DropMark,
+    tokens: Arc<UiTokens>,
 }
 
 /// A drop a target took: the source's `drag_ended` reads it in the next frame.
@@ -229,6 +244,8 @@ struct Registration {
     /// The overlay layer whose body registered the target; `None` for the window's own content.
     scope: Option<Id>,
     mark: DropMark,
+    /// The tokens of the target's region.
+    tokens: Arc<UiTokens>,
     /// The target covers the whole window: any target over a component beats it.
     window: bool,
 }
@@ -244,11 +261,18 @@ fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
     pass_state::with::<Board, _>(ctx, f)
 }
 
-/// Starts a session for `source` with `payload`. A running session stays: one per context. A container shown in an OS
-/// window of its own runs in its parent's pass, but the press that starts its drag is its window's: the session follows
-/// that window's pointer.
+/// Starts a session for `source` with `payload`; `env` is the source's, which the preview paints with. A running
+/// session stays: one per context. A container shown in an OS window of its own runs in its parent's pass, but the
+/// press that starts its drag is its window's: the session follows that window's pointer.
 #[doc(hidden)]
-pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, also: Option<Arc<dyn Any + Send + Sync>>, preview: DragPreview) {
+pub fn start(
+    ctx: &Context,
+    source: Id,
+    env: &EnvView<'_>,
+    payload: Arc<dyn Any + Send + Sync>,
+    also: Option<Arc<dyn Any + Send + Sync>>,
+    preview: DragPreview,
+) {
     let viewport = WindowHost::of(ctx).viewport_of(source).unwrap_or_else(|| pass::current_viewport(ctx));
     let began = pass::root_frame_nr(ctx);
     board(ctx, |board| {
@@ -266,6 +290,7 @@ pub fn start(ctx: &Context, source: Id, payload: Arc<dyn Any + Send + Sync>, als
                 payload,
                 also,
                 preview,
+                env: Some(env.to_env()),
                 mark: None,
                 released: None,
                 taken: false,
@@ -325,7 +350,7 @@ pub fn started(ctx: &Context) -> u64 {
 /// The mark of the target that would take a drop now.
 #[doc(hidden)]
 pub fn mark(ctx: &Context) -> Option<DropMark> {
-    board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.map(|(_, mark)| mark)))
+    board(ctx, |board| board.session.as_ref().and_then(|session| session.mark.as_ref().map(|shown| shown.mark)))
 }
 
 /// Whether a session runs.
@@ -372,6 +397,7 @@ fn os_files(ctx: &Context) {
                 payload: Arc::new(OsFiles { files: seen.hovered }),
                 also: None,
                 preview: DragPreview::None,
+                env: None,
                 mark: None,
                 released: None,
                 taken: false,
@@ -462,7 +488,7 @@ pub fn moves(ctx: &Context, viewport: ViewportId) -> bool {
 /// of its own. For trials.
 #[cfg(feature = "testing")]
 pub(crate) fn begin_window_drag(ctx: &Context, source: Id) {
-    start(ctx, source, Arc::new(()), None, DragPreview::None);
+    start(ctx, source, &Env::of_root(ctx).view(), Arc::new(()), None, DragPreview::None);
 }
 
 /// Sets the mark of the target that would take a drop, as one in another window would. For trials.
@@ -470,15 +496,19 @@ pub(crate) fn begin_window_drag(ctx: &Context, source: Id) {
 pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
     board(ctx, |board| {
         if let Some(session) = &mut board.session {
-            session.mark = mark.map(|mark| (ViewportId::from_hash_of("testing.mark"), mark));
+            let tokens = Env::of_root(ctx).tokens.clone();
+            session.mark = mark.map(|mark| ShownMark { viewport: ViewportId::from_hash_of("testing.mark"), mark, tokens });
         }
     });
 }
 
-/// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space. A
-/// `window` target covers the whole window.
-pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, window: bool) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, owner, layer, mark, window));
+/// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space and the
+/// tokens of the target's region. A `window` target covers the whole window.
+pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, tokens: Arc<UiTokens>, window: bool) {
+    crate::runtime::replay::journal(ctx, || {
+        let tokens = tokens.clone();
+        move |ctx: &Context| register(ctx, owner, layer, mark, tokens.clone(), window)
+    });
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
         None => mark,
@@ -486,7 +516,7 @@ pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, w
     let scope = overlay::drawing_parent(ctx);
     PerViewport::<Targets>::with(ctx, pass::current_viewport(ctx), |targets| {
         let ordinal = targets.this.iter().filter(|registration| registration.owner == owner).count() as u32;
-        targets.this.push(Registration { owner, ordinal, layer, scope, mark, window });
+        targets.this.push(Registration { owner, ordinal, layer, scope, mark, tokens, window });
     });
 }
 
@@ -544,11 +574,13 @@ pub(crate) fn take_drop(ctx: &Context, owner: Id, ordinal: u32, op: DropOperatio
 
 /// `target` of `owner` over `zone`, for the payload whose type is `payload_type`: it accepts only where the pointer
 /// lies in the zone and no layer lies over the zone's layer there (the layer a dragged container moves is not over
-/// anything), and returns the drop in the pass of the release when it won the pass before.
+/// anything), and returns the drop in the pass of the release when it won the pass before. Its mark paints with
+/// `tokens`, the target's region's.
 pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     ctx: &Context,
     owner: Id,
     zone: DropZone,
+    tokens: Arc<UiTokens>,
     payload_type: TypeId,
     target: &T,
 ) -> Option<T::Drop> {
@@ -564,15 +596,16 @@ pub(crate) fn target_of<T: DropTarget<dyn Any + Send + Sync>>(
     let op = current_operation(ctx);
     let drop = target.accept(&*payload, at, op)?;
     let ordinal = next_ordinal(ctx, owner);
-    register(ctx, owner, zone.layer, target.mark(&drop), false);
+    register(ctx, owner, zone.layer, target.mark(&drop), tokens, false);
     take_drop(ctx, owner, ordinal, op, payload_type).then_some(drop)
 }
 
 /// `Pointer::drop_target` over a zone the caller names instead of its own visible rect: the drop of a payload of type
 /// `P` released over `zone`, with the same layer order, operation and mark as a component's own target. `owner` is the
-/// caller's stable id; it registers in every pass a drag may reach the zone.
-pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ctx: &Context, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop> {
-    target_of(ctx, owner, zone, TypeId::of::<P>(), &Typed::new(target))
+/// caller's stable id; it registers in every pass a drag may reach the zone. The mark paints in the tokens of `ui`, the
+/// `Ui` that draws the zone.
+pub fn zone_target<P: Send + Sync + 'static, T: DropTarget<P>>(ui: &egui::Ui, owner: Id, zone: DropZone, target: &T) -> Option<T::Drop> {
+    target_of(ui.ctx(), owner, zone, Env::of(ui).tokens.clone(), TypeId::of::<P>(), &Typed::new(target))
 }
 
 /// A target of payload type `P` seen through the payload's erased type.
@@ -627,8 +660,8 @@ pub(crate) fn end_pass(ctx: &Context) {
             .filter(|(at, _)| open[*at])
             .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
-        let best = best.map(|registration| ((registration.owner, registration.ordinal), registration.mark));
-        targets.winner = best.map(|(key, _)| key);
+        let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.tokens.clone())));
+        targets.winner = best.as_ref().map(|(key, _)| *key);
         targets.this.clear();
         best.map(|(_, mark)| mark)
     });
@@ -661,9 +694,9 @@ pub(crate) fn end_pass(ctx: &Context) {
             }
         }
         if let Some(session) = &mut board.session {
-            match winner {
-                Some(mark) => session.mark = Some((viewport, mark)),
-                None if session.mark.is_some_and(|(marked, _)| marked == viewport) => session.mark = None,
+            match &winner {
+                Some((mark, tokens)) => session.mark = Some(ShownMark { viewport, mark: *mark, tokens: tokens.clone() }),
+                None if session.mark.as_ref().is_some_and(|shown| shown.viewport == viewport) => session.mark = None,
                 None => {}
             }
         }
@@ -704,7 +737,10 @@ fn foreign_winner(ctx: &Context, viewport: ViewportId) -> bool {
 /// What the ghost layer paints: the session's preview and the mark of the target that would take a drop.
 pub(crate) struct Ghost {
     pub preview: DragPreview,
-    pub mark: Option<DropMark>,
+    /// The env of the region the drag started in.
+    pub env: Option<Env>,
+    /// The mark of the target that would take a drop, and the tokens of the target's region.
+    pub mark: Option<(DropMark, Arc<UiTokens>)>,
 }
 
 /// The running session's ghost data.
@@ -713,7 +749,8 @@ pub(crate) fn ghost(ctx: &Context) -> Option<Ghost> {
     board(ctx, |board| {
         board.session.as_ref().map(|session| Ghost {
             preview: session.preview.clone(),
-            mark: session.mark.and_then(|(marked, mark)| (marked == viewport).then_some(mark)),
+            env: session.env.clone(),
+            mark: session.mark.as_ref().filter(|shown| shown.viewport == viewport).map(|shown| (shown.mark, shown.tokens.clone())),
         })
     })
 }

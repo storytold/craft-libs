@@ -18,7 +18,7 @@ mod words;
 
 pub use access::Accessible;
 pub use body::BodyCx;
-pub(crate) use body::BodyOwner;
+pub(crate) use body::{BodyOwner, RegionShare};
 pub use context::{Activation, Cx, CxCore};
 pub(crate) use context::{RecordedText, Under, child_env};
 pub use edit::Edit;

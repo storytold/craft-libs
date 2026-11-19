@@ -1,11 +1,11 @@
-//! `IconSpec`: an icon to paint, and the SVG set it can name.
+//! `IconSpec`: an icon to paint, and the icon sets a theme's icon pack picks among.
 
 use super::svg_set;
 use super::textures::TextureCache;
-use crate::style::{DataColor, Ink, StyleColor, UiTokens, ink_color};
+use crate::style::{DataColor, Ink, StyleColor, UiTokens, ink_color, log_once};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
-use craft_theme::Srgba;
+use craft_theme::{IconPackId, Srgba};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, Painter, Rect, pos2, vec2};
 
@@ -95,8 +95,6 @@ pub struct IconSpec<'a> {
     pub color: Option<StyleColor>,
     /// Mirroring under right-to-left.
     pub mirror: Mirror,
-    /// The set an SVG icon is drawn from.
-    pub set: IconSet,
     /// A dot of a colour from data at the icon's bottom-trailing corner; see [`badge`](Self::badge).
     pub badge: Option<DataColor>,
 }
@@ -104,30 +102,23 @@ pub struct IconSpec<'a> {
 impl<'a> IconSpec<'a> {
     /// An icon of the SVG set or a tool icon, in the panel ink.
     pub fn svg(id: IconId) -> Self {
-        IconSpec { source: IconSource::Svg(id), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
+        IconSpec { source: IconSource::Svg(id), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, badge: None }
     }
 
     /// An icon whose glyph is the mark of the cursor `badge` (the plus or minus drawn at the cursor), painted by the
     /// one cursor-badge painter.
     pub fn mark(badge: craft_behavior::CursorBadge) -> IconSpec<'a> {
-        IconSpec { source: IconSource::Mark(badge), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
+        IconSpec { source: IconSource::Mark(badge), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, badge: None }
     }
 
     /// An icon of `glyph` in the panel ink.
     pub fn glyph(glyph: &'a dyn Glyph) -> Self {
-        IconSpec { source: IconSource::Glyph(glyph), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
+        IconSpec { source: IconSource::Glyph(glyph), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, badge: None }
     }
 
     /// A swatch of `color`, painted as [`Draw::swatch_well`](super::Draw::swatch_well) paints a well.
     pub fn swatch(color: Srgba) -> Self {
-        IconSpec {
-            source: IconSource::Swatch(Some(color)),
-            ink: Ink::OnPanel,
-            color: None,
-            mirror: Mirror::Never,
-            set: IconSet::default(),
-            badge: None,
-        }
+        IconSpec { source: IconSource::Swatch(Some(color)), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, badge: None }
     }
 
     /// The empty swatch of a colour the theme decides (a "Default" pasteboard colour): it keeps a swatch's place, so
@@ -140,13 +131,13 @@ impl<'a> IconSpec<'a> {
     /// none. A blank name shows an empty box.
     pub fn initial(name: &str) -> Self {
         let letter = name.trim_start().chars().next().map_or(' ', |first| first.to_uppercase().next().unwrap_or(first));
-        IconSpec { source: IconSource::Initial(letter), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default(), badge: None }
+        IconSpec { source: IconSource::Initial(letter), ink: Ink::OnPanel, color: None, mirror: Mirror::Never, badge: None }
     }
 
     /// A filled circle in the panel ink, or in the colour [`color`](Self::color) or [`data_color`](Self::data_color)
     /// sets (a status dot, a person's dot).
     pub fn disc() -> Self {
-        IconSpec { source: IconSource::Disc, ink: Ink::OnPanel, color: None, mirror: Mirror::Never, set: IconSet::default(), badge: None }
+        IconSpec { source: IconSource::Disc, ink: Ink::OnPanel, color: None, mirror: Mirror::Never, badge: None }
     }
 
     /// Sets the ink.
@@ -172,12 +163,6 @@ impl<'a> IconSpec<'a> {
     /// Sets the mirroring.
     pub fn mirror(mut self, mirror: Mirror) -> Self {
         self.mirror = mirror;
-        self
-    }
-
-    /// Sets the set an SVG icon is drawn from.
-    pub fn set(mut self, set: IconSet) -> Self {
-        self.set = set;
         self
     }
 
@@ -227,7 +212,7 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         }
         IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, rtl && glyph.directional() && spec.mirror == Mirror::Auto),
         IconSource::Svg(id) => {
-            if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.set, spec.mirror) {
+            if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.mirror) {
                 icon.paint(painter, square, color);
             }
         }
@@ -235,12 +220,12 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
     }
 }
 
-/// Logs an icon name the catalog and the app sets lack, once per name: the lookup repeats on every repaint.
-fn report_unresolved(name: &str) {
-    static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
-    let mut reported = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if reported.get_or_insert_with(Default::default).insert(name.to_owned()) {
-        log::error!("icon {name:?} is not in the catalog");
+impl IconSet {
+    /// The built-in set a theme's `icon_pack` names: `craft.` and the set's [`id`](IconSet::id), such as
+    /// `craft.tabler`; `None` for any other id.
+    pub fn of_pack(id: &IconPackId) -> Option<IconSet> {
+        let name = id.as_str().strip_prefix(craft_theme::RESERVED_PREFIX)?;
+        IconSet::ALL.into_iter().find(|set| set.id() == name)
     }
 }
 
@@ -254,15 +239,16 @@ pub(crate) struct SvgIcon {
 }
 
 impl SvgIcon {
-    /// The icon `id` of `set` at `side` points under `direction` and `mirror`; `None`, with a log line the first time, for a name the
-    /// catalog and the registered app sets lack.
-    pub(crate) fn of(tokens: &UiTokens, direction: Direction, side: f32, id: &IconId, set: IconSet, mirror: Mirror) -> Option<SvgIcon> {
+    /// The icon `id` in the set `tokens`' theme draws, at `side` points under `direction` and `mirror`; `None`, with a
+    /// log line the first time, for a name the catalog and the registered app sets lack.
+    pub(crate) fn of(tokens: &UiTokens, direction: Direction, side: f32, id: &IconId, mirror: Mirror) -> Option<SvgIcon> {
         let Some(entry) = svg_set::lookup(id.name()) else {
-            report_unresolved(id.name());
+            let name = id.name();
+            log_once(format!("icon:{name}"), || log::error!("icon {name:?} is not in the catalog"));
             return None;
         };
         let mirrored = direction == Direction::Rtl && svg_set::directional(entry) && mirror == Mirror::Auto;
-        Some(SvgIcon { entry, set, mirrored, stroke: stroke(tokens, side) })
+        Some(SvgIcon { entry, set: tokens.icons(), mirrored, stroke: stroke(tokens, side) })
     }
 
     /// The image's side in pixels and its stroke in 64ths of a pixel for a square of `side` points at `ppp`: the

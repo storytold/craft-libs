@@ -426,8 +426,14 @@ impl Fixture {
 
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
     pub fn frame_shapes(&mut self) -> Vec<egui::Shape> {
+        self.frame_shapes_with(Vec::new())
+    }
+
+    /// One frame with `events`; returns the shapes it painted, nested shapes flattened. What the frame that took the
+    /// input paints, not the one after it.
+    pub fn frame_shapes_with(&mut self, events: Vec<Event>) -> Vec<egui::Shape> {
         self.frames.record_paint();
-        self.frame(Vec::new());
+        self.frame(events);
         let mut shapes = Vec::new();
         let Some(mut paint) = self.frames.take_paint() else { return shapes };
         // Only the shapes are asked for: the texture changes since the first recorded frame go unrendered.

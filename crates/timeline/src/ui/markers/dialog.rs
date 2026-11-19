@@ -2,7 +2,7 @@
 
 use craft_ui::choice::{RadioGroup, Swatch};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{ButtonPlace, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::FormDialog;
@@ -113,7 +113,7 @@ impl StackDialog for MarkerDialog {
         let shown = FormDialog::new(words.title.clone(), Bind::bound(&mut self.draft))
             .outer_gesture(true)
             .extra_buttons(extras.iter().map(|(_, label)| FooterButton::new((*label).clone(), DialogRole::Other)))
-            .shaped(|dialog| dialog.side_buttons(true))
+            .shaped(|dialog| dialog.button_place(ButtonPlace::Side))
             .show(ui, |ui, form, draft| {
                 let timeline_words = Env::of(ui).words::<TimelineWords>();
                 let palette = label_palette(&form.env);

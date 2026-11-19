@@ -34,6 +34,22 @@ type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 
+/// Where a dialog's buttons stand. Wherever they stand, the dialog shows them: their roles, the platform's order,
+/// Enter and Escape, access keys, the close guard and `on_pick` are the dialog's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ButtonPlace {
+    /// Across the dialog's foot, in a row at the end edge.
+    #[default]
+    Foot,
+    /// In a column at the end edge, beside the whole body and at its top: `Accept`, `Cancel`, then the others, each as
+    /// wide as the widest, with the footer content under them.
+    Side,
+    /// In a column at the cell the body keeps for them with a `FooterSlot`, as wide as the cell: the Color Picker's
+    /// buttons above its second field group. The body shows exactly one slot.
+    Body,
+}
+
 /// A dialog on its own layer. It opens in the middle of the window, moves by its title band, scrolls its body when the
 /// window is smaller and traps the keyboard focus while it is open.
 ///
@@ -75,8 +91,8 @@ pub struct Dialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
-    /// The footer stands in a column at the end edge, beside the whole body.
-    side: bool,
+    /// Where the buttons stand.
+    place: ButtonPlace,
     closed: Option<CloseReason>,
     picked: Option<usize>,
     /// The body ran in this pass: the header region marks it.
@@ -113,7 +129,7 @@ impl<'a> Dialog<'a> {
             buttons: Vec::new(),
             enter: false,
             closable: true,
-            side: false,
+            place: ButtonPlace::Foot,
             closed: None,
             picked: None,
             body_shown: false,
@@ -245,8 +261,8 @@ impl<'a> Dialog<'a> {
         self.route_enter()
     }
 
-    /// The footer's content: the closure fills the start of the buttons' line (under the buttons with
-    /// [`side_buttons`](Dialog::side_buttons)), or a line of its own when there are no buttons.
+    /// The footer's content: the closure fills the start of the buttons' line (under the buttons' column with
+    /// [`ButtonPlace::Side`] and [`ButtonPlace::Body`]), or a line of its own when there are no buttons.
     #[must_use]
     pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut FooterCx<'_, '_, '_>) + 'a) -> Self {
         let region = self.footer_region();
@@ -255,13 +271,11 @@ impl<'a> Dialog<'a> {
         self.overlay(|overlay| overlay)
     }
 
-    /// The footer stands in a column at the end edge, beside the whole body and at its top, instead of across the
-    /// dialog's foot: the buttons go `Accept`, `Cancel`, then the others, each as wide as the widest, and the footer
-    /// content sits under them.
+    /// Where the buttons and the footer content stand; across the foot by default.
     #[must_use]
-    pub fn side_buttons(mut self, on: bool) -> Self {
-        self.side = on;
-        self.props.end = on.then_some(SIDE_BUTTONS);
+    pub fn button_place(mut self, place: ButtonPlace) -> Self {
+        self.place = place;
+        self.props.end = (place == ButtonPlace::Side).then_some(SIDE_BUTTONS);
         if self.props.footer.is_some() {
             let region = self.footer_region();
             self.props = self.props.footer(region);
@@ -269,9 +283,13 @@ impl<'a> Dialog<'a> {
         self
     }
 
-    /// The footer region: in the end region's column, else across the foot.
+    /// The footer region: in the end region's column, in the body's slot, or across the foot.
     fn footer_region(&self) -> FooterRegion {
-        if self.side { FooterRegion::new().place(FooterPlace::EndTop) } else { FOOTER }
+        match self.place {
+            ButtonPlace::Foot => FOOTER,
+            ButtonPlace::Side => FooterRegion::new().place(FooterPlace::EndTop),
+            ButtonPlace::Body => FooterRegion::new().place(FooterPlace::Body),
+        }
     }
 }
 
@@ -476,7 +494,7 @@ impl Container for Dialog<'_> {
             &self.buttons,
             self.enter,
             frame::FooterHost { picked: &mut self.picked, guard: &mut self.guard, on_pick: &mut self.on_pick, settle: &mut self.settle },
-            self.side,
+            self.place != ButtonPlace::Foot,
         );
     }
 

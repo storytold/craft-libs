@@ -406,7 +406,7 @@ impl Host<'_> {
         let pad = if kind == SurfaceKind::Panel { self.panel_pad } else { Pad::Regular };
         let mut stack = Stack::new().id(self.id).fill_width().room_height(self.room).surface(kind).pad(pad);
         if let Some(mode) = self.look.mode {
-            stack = stack.theme(ThemeScope::mode(mode));
+            stack = stack.theme(ThemeScope::new().mode(mode));
         }
         stack
     }

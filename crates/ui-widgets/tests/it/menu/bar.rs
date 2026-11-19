@@ -1,5 +1,6 @@
 //! The menu bar: what the help search finds.
 
+use craft_host::target::Os;
 use craft_i18n::Direction;
 use craft_ui::contract::Show as _;
 use craft_ui::menu::MenuItem;
@@ -37,9 +38,10 @@ fn rig(direction: Direction) -> Rig {
                 MenuItem::new("&About").show(ui);
             }),
         ];
-        let help = entries();
-        MenuBar::new("Main menu", titles).help(MenuHelp::new(2, &help)).show(ui);
+        MenuBar::new("Main menu", titles).help(MenuHelp::new(2, &entries)).show(ui);
     });
+    // The in-window menu bar and its Alt, F10 and letter keys are PC behaviour: a Mac app's menu bar is native.
+    fixture.os(Os::Linux);
     fixture.direction(direction).settle();
     Rig { fixture }
 }
@@ -83,6 +85,7 @@ fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
         })];
         MenuBar::new("Main menu", titles).show(ui);
     });
+    fixture.os(Os::Linux);
     fixture.settle();
     let file = fixture.by_label("File").expect("the File title");
     fixture.click(&file);
@@ -123,6 +126,7 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
             })];
             MenuBar::new("Main menu", titles).show(ui);
         });
+        fixture.os(Os::Linux);
         fixture.room(egui::vec2(480.0, 320.0)).scale(Scale::new(scale)).motion(MotionMode::Off).settle();
         let file = fixture.by_label("File").expect("the File title");
         fixture.click(&file);
@@ -145,4 +149,118 @@ fn a_pointer_move_over_menu_rows_lights_the_row_under_it_in_that_frame() {
             assert!(!fixture.repaint_requested(), "at {scale}x a pointer at rest on {name} asks for no frame");
         }
     }
+}
+
+/// A help search over built entries builds them only in a pass that shows the Help menu: a bar whose menus stay closed
+/// never runs the builder, an open File menu doesn't either, and the open Help menu searches what it built.
+#[trial]
+fn built_help_entries_are_collected_only_while_the_help_menu_shows() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let builds = Rc::new(Cell::new(0u32));
+    let counted = builds.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![
+            MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            }),
+            MenuTitle::new("&Help", |ui| {
+                MenuItem::new("&About").show(ui);
+            }),
+        ];
+        let counted = counted.clone();
+        let build = move || {
+            counted.set(counted.get() + 1);
+            entries()
+        };
+        MenuBar::new("Main menu", titles).help(MenuHelp::new(1, &build)).show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    fixture.settle();
+    assert_eq!(builds.get(), 0, "closed menus build nothing");
+
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "File is open");
+    assert_eq!(builds.get(), 0, "another open menu builds nothing");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+
+    let help = fixture.by_label("Help").expect("the Help title");
+    fixture.click(&help);
+    fixture.settle();
+    assert!(builds.get() > 0, "the open Help menu builds its entries");
+    let search = fixture.by_label("Search menus").expect("the search field");
+    fixture.click(&search);
+    fixture.type_text("duplic");
+    fixture.settle();
+    assert!(fixture.by_label("Copy").is_some(), "the search finds a built entry by its English label");
+}
+
+/// The level keeps its letters between passes and assigns them again when the rows' labels change: a row that read
+/// Save when the menu last opened and reads Open now takes O, so typing O runs it.
+#[trial]
+fn a_row_whose_label_changed_since_the_menu_last_opened_takes_its_new_letter() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let renamed = Rc::new(Cell::new(false));
+    let runs = Rc::new(Cell::new(0));
+    let (label, ran) = (renamed.clone(), runs.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let (label, ran) = (label.clone(), ran.clone());
+        let titles = vec![MenuTitle::new("&File", move |ui| {
+            MenuItem::new("Alpha").show(ui);
+            MenuItem::new("Beta").show(ui);
+            if MenuItem::new(if label.get() { "Open" } else { "Save" }).show(ui).ran {
+                ran.set(ran.get() + 1);
+            }
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("Save").is_some(), "File is open");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.by_label("Save").is_none(), "File is closed");
+
+    renamed.set(true);
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("Open").is_some(), "File is open again, the row reads Open");
+    fixture.type_key(Key::O, "o");
+    fixture.settle();
+    assert_eq!(runs.get(), 1, "O runs the row that reads Open");
+}
+
+/// A menu bar that settles (in a title bar slot with a content version) still takes its keys while it replays its
+/// last run: F10 takes the focus to the bar, and Alt with a title's marked letter opens that menu.
+#[trial]
+fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
+    use craft_ui::contract::Lazy;
+    let mut fixture = Fixture::new(|ui| {
+        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
+            let titles = vec![MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            })];
+            MenuBar::new("Main menu", titles).show(ui);
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle().idle(2);
+    assert!(fixture.focused_stop().is_none(), "nothing holds the focus at the start");
+    fixture.key(Key::F10, Modifiers::NONE);
+    fixture.settle();
+    assert!(fixture.focused_stop().is_some(), "F10 takes the focus to the bar");
+    fixture.key(Key::Escape, Modifiers::NONE);
+    fixture.settle().idle(2);
+    fixture.key(Key::F, Modifiers::ALT);
+    fixture.settle();
+    assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }

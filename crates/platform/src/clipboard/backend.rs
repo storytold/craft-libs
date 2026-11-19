@@ -165,21 +165,22 @@ mod presence {
         }
 
         pub(super) fn any(&mut self, mimes: &[&str]) -> bool {
-            use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeString, NSPasteboardTypeTIFF};
+            use objc2_app_kit::NSPasteboard;
+            use objc2_foundation::NSString;
             // `types` lists the formats on offer; no item's data is fetched.
-            let Some(types) = (unsafe { NSPasteboard::generalPasteboard().types() }) else { return false };
+            let Some(types) = NSPasteboard::generalPasteboard().types() else { return false };
             mimes.iter().any(|&mime| {
-                // Safety: the pasteboard type constants are valid for the life of the process.
-                let wanted = unsafe {
-                    match mime {
-                        TEXT => NSPasteboardTypeString,
-                        HTML => NSPasteboardTypeHTML,
-                        BITMAP | RGBA8 => NSPasteboardTypeTIFF,
-                        URI_LIST => NSPasteboardTypeFileURL,
-                        _ => return false,
-                    }
+                // The type identifiers AppKit's `NSPasteboardType…` constants hold; the constants are extern statics,
+                // which only `unsafe` can read, and the workspace forbids unsafe code.
+                let wanted = match mime {
+                    TEXT => "public.utf8-plain-text",
+                    HTML => "public.html",
+                    BITMAP | RGBA8 => "public.tiff",
+                    URI_LIST => "public.file-url",
+                    _ => return false,
                 };
-                types.iter().any(|offered| offered.isEqualToString(wanted))
+                let wanted = NSString::from_str(wanted);
+                types.iter().any(|offered| offered.isEqualToString(&wanted))
             })
         }
     }

@@ -67,9 +67,13 @@ pub enum BezierTool {
     /// Anchors drawn, not edited (PhotoCraft's Path Selection and Pen tools).
     Anchors,
     /// Add Anchor Point: a press on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
-    /// moves the new anchor, which is selected; ⌥ makes it Delete Anchor Point. Hover: the segment mark with the
-    /// anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor the arrow; the crosshair under the
-    /// canvas's precise cursor ([`CanvasSpace::precise`]).
+    /// moves the new anchor, which is selected. A press on an anchor or a shown handle selects and drags it as
+    /// [`BezierTool::Direct`] does (⇧ adds to the selection, ⌥ on a handle moves it alone), and a click on empty canvas
+    /// deselects the anchors and keeps the path. With ⌥ a click on a segment selects its whole subpath and a drag moves a
+    /// copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that takes no copies), and a press on
+    /// an anchor does nothing. Hover: the segment mark with the anchor a click adds ([`HitMark`]) and the pen with "+";
+    /// over an anchor the arrow; with ⌥ no mark and the arrow with "+"; the crosshair under the canvas's precise cursor
+    /// ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -572,17 +576,24 @@ impl<'a> BezierOverlay<'a> {
     }
 
     /// The target a press drags: for the tools that act on the press ([`BezierTool::clicks`]) an insert into a
-    /// segment they add to, a segment Delete Anchor drags, or the ⌥ pick of a subpath, else nothing; for the others [`target`](Self::target).
+    /// segment they add to, a segment Delete Anchor drags, an anchor or handle Add Anchor edits, or the ⌥ pick of a
+    /// subpath, else nothing; for the others [`target`](Self::target).
     fn press_target(&mut self, hit: BezierHit, start: PressStart, mods: Mods, paths: &[EditPath]) -> Target {
         if !self.tool.clicks() {
             return self.target(hit, start, mods, paths);
         }
         match hit {
+            // Add Anchor with ⌥ takes the whole subpath as Direct's ⌥ does (PhotoCraft #12709).
+            BezierHit::Segment { .. } if self.tool.takes_subpath(mods) => self.target(hit, start, mods, paths),
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
             }
             // Delete Anchor drags a segment as Direct does; only a press on an anchor is its click.
             BezierHit::Segment { .. } if self.tool == BezierTool::DeleteAnchor => self.target(hit, start, mods, paths),
+            // Add Anchor selects and edits the anchors and handles a path has, as Direct does (PhotoCraft #12708); ⌥
+            // on an anchor does nothing (PhotoCraft #12709).
+            BezierHit::Handle { .. } if self.tool == BezierTool::AddAnchor => self.target(hit, start, mods, paths),
+            BezierHit::Anchor { .. } if self.tool == BezierTool::AddAnchor && !mods.alt => self.target(hit, start, mods, paths),
             BezierHit::Anchor { path, knot } if self.tool.picks_subpath(mods) => Target::Pick { path, knot },
             _ => Target::Nothing,
         }
@@ -658,7 +669,7 @@ impl<'a> BezierOverlay<'a> {
                     self.report.select = Some(self.selecting(path, anchors.clone(), None));
                     // pc: crates/ui-egui/src/tools/direct_select.rs `alt_duplicates` (#13211): Photoshop was not
                     // measured with ⌘, Ctrl or ⇧ held too; those move the subpath.
-                    let copies = self.tool == BezierTool::Direct
+                    let copies = matches!(self.tool, BezierTool::Direct | BezierTool::AddAnchor)
                         && !mods.cmd
                         && !mods.ctrl
                         && !mods.shift
@@ -841,6 +852,10 @@ impl<'a> BezierOverlay<'a> {
             }
             if matches!(press.phase, PressPhase::Down { start, .. } if start.button == PointerButton::Primary) {
                 self.report.pressed_empty = true;
+                // Add Anchor's click off the paths deselects the anchors; the path stays the one being edited.
+                if self.tool == BezierTool::AddAnchor && (!self.selection.anchors.is_empty() || self.selection.segment.is_some()) {
+                    self.report.select = Some(self.deselected());
+                }
             }
         }
         // A press none of the parts carries any more (its part went with the paths) is over for the overlay.
@@ -1127,7 +1142,8 @@ pub struct BezierOutput {
     /// on an anchor reports that one anchor with `segments` false.
     pub delete: Option<AnchorDelete>,
     /// A press landed on empty canvas, outside every path, under Direct Selection (the press of its marquee), Add
-    /// Anchor or Delete Anchor. Under the other tools the canvas's tool takes such a press.
+    /// Anchor (which also deselects the anchors, [`select`](Self::select)) or Delete Anchor. Under the other tools the
+    /// canvas's tool takes such a press.
     pub pressed_empty: bool,
     /// A secondary click on a part of a path, with its screen position, for the host's path menu.
     pub context: Option<(BezierHit, Pos2)>,

@@ -1,6 +1,6 @@
 //! An icon id missing from the catalog draws nothing and raises no error at build time, so every id written as
-//! a literal in the workspace's sources must name a catalog icon. Ids built in match arms, tuple tables and struct
-//! fields are not scanned.
+//! a literal in the sources of a crate that uses icon ids must name a catalog icon. Ids built in match arms,
+//! tuple tables and struct fields are not scanned.
 
 use craft_behavior::IconId;
 use craft_ui::primitives::has_icon;
@@ -37,12 +37,24 @@ fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Whether a crate can name catalog icons: craft-behavior, which defines `IconId`, or a crate that depends on
+/// it or on a craft-ui crate. Elsewhere `icon("..")` is the crate's own, such as a plain-egui menu's glyph.
+fn uses_icon_ids(krate: &Path) -> bool {
+    let manifest = std::fs::read_to_string(krate.join("Cargo.toml")).unwrap_or_default();
+    manifest.lines().any(|line| {
+        let line = line.trim_start();
+        line == "name = \"craft-behavior\"" || line.starts_with("craft-behavior") || line.starts_with("craft-ui")
+    })
+}
+
 #[trial]
 fn every_icon_id_literal_in_the_workspace_names_a_catalog_icon() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut files = Vec::new();
     for krate in std::fs::read_dir(root.join("crates")).unwrap().flatten() {
-        sources(&krate.path().join("src"), &mut files);
+        if uses_icon_ids(&krate.path()) {
+            sources(&krate.path().join("src"), &mut files);
+        }
     }
     let mut seen = 0;
     let mut unknown = Vec::new();
