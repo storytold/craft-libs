@@ -257,11 +257,40 @@ pub(crate) fn flow_leaf<C: Show>(
     child: C,
     trailing: Option<Trailing<'_>>,
 ) -> C::Output {
+    // In a grid the row is the grid's next cell, read under its column's group, as `run` shows any other cell: the
+    // room before the row is the whole grid's, and a row placed there would stand under the one before it.
+    match crate::layout::grid_cell(ui) {
+        Some((grid, column, sized)) => {
+            let ctx = ui.ctx().clone();
+            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || flow_leaf_row(ui, (id, owner), under, label, side, child, trailing, true))
+        }
+        None => flow_leaf_row(ui, (id, owner), under, label, side, child, trailing, false),
+    }
+}
+
+/// `flow_leaf` for a row in the flow of `ui`; `in_cell`: the row is the next cell of the grid around it.
+#[expect(clippy::too_many_arguments, reason = "flow_leaf's arguments and whether its row is a grid cell")]
+fn flow_leaf_row<C: Show>(
+    ui: &mut Ui,
+    (id, owner): (Id, Id),
+    under: (bool, craft_theme::ControlSize),
+    label: Label,
+    side: SideLabel,
+    child: C,
+    trailing: Option<Trailing<'_>>,
+    in_cell: bool,
+) -> C::Output {
     let env = Env::of(ui);
     let mut child = child;
     let under = leaf_under(&env, &side, &child, under);
     let ideal = crate::contract::run::measure_under(&mut child, &*ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
-    let avail = ui.available_rect_before_wrap();
+    // A grid's cell; a probe offers it unbounded room, and the row then spans the grid's flow so it has an end edge.
+    let flow = ui.available_rect_before_wrap();
+    let avail = match crate::layout::flow_region(ui) {
+        region if in_cell && region.width().is_finite() => region,
+        region if in_cell => Rect::from_min_size(region.min, Vec2::new(flow.width(), region.height())),
+        _ => flow,
+    };
     // The child's own height: a stacked label pushes the control down, and the allocation below follows the placement.
     // The row spans the room's own edges: a room that scrolls along x is unbounded at its start edge, the left one
     // under RTL.
@@ -272,7 +301,7 @@ pub(crate) fn flow_leaf<C: Show>(
     // A row of a horizontal flow is as wide as its label and control: the room it has there is unbounded.
     // So is a grid's cell: the room before it is the whole grid's, and a row spanning it measures its column as wide
     // as the grid, so the grid could never set two such cells beside each other (two columns of check boxes).
-    let content = env.content.0 || ui.layout().is_horizontal() || crate::layout::grid_cell(ui).is_some();
+    let content = env.content.0 || ui.layout().is_horizontal() || in_cell;
     let control_width = if content { placed.control.width().min(ideal.x) } else { placed.control.width() };
     let rtl = env.direction.is_rtl();
     let cell = Rect::from_min_max(placed.control.min, egui::pos2(placed.control.max.x, placed.control.min.y + ideal.y));
@@ -314,7 +343,8 @@ pub(crate) fn flow_leaf<C: Show>(
     }
     let bottom = control.bottom().max(placed.label.bottom());
     placed.finish(ui.ctx());
-    alloc::space(ui, Vec2::new(extent, (bottom - row.top()).max(ideal.y)));
+    // The grid's cursor takes the row as its next cell (outside a grid, the next allocation of `ui`'s layout).
+    let _ = crate::layout::take_in_flow(ui, Vec2::new(extent, (bottom - row.top()).max(ideal.y)));
     output
 }
 
