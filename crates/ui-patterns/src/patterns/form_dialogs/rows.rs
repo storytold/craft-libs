@@ -283,6 +283,13 @@ impl Line<'_> {
         field.show(ui, |ui, _| body(ui));
     }
 
+    /// A scalar field with the parameter's declared unit drawn beside the existing editable text.
+    fn scalar_field(&self, units: &Units, value: f64, decimals: u32) -> NumberField<'static> {
+        let unit = self.param.unit;
+        let field = number_field(units, self.name.clone(), Some(value), decimals, unit);
+        if let Some(unit) = unit { field.unit_kind(unit) } else { field }
+    }
+
     /// Shows `body` across the form for a full-width row, without a label, or else beside the row's label.
     fn show_body(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
         if self.param.option().full_width() {
@@ -465,7 +472,7 @@ impl<'p> Pass<'p> {
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(0.0);
         line.show(ui, |ui| {
-            let mut field = number_field(self.units, line.name.clone(), Some(value), decimals, line.param.unit).step(step);
+            let mut field = line.scalar_field(self.units, value, decimals).step(step);
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
@@ -530,7 +537,7 @@ impl<'p> Pass<'p> {
         let random = line.param.option().randomize();
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                let mut field = number_field(self.units, line.name.clone(), Some(value as f64), WHOLE, line.param.unit).id_salt("field");
+                let mut field = line.scalar_field(self.units, value as f64, WHOLE).id_salt("field");
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
@@ -876,7 +883,7 @@ impl<'p> Pass<'p> {
                     }
                     None => {}
                 }
-                let field = number_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit).range(range.clone());
+                let field = line.scalar_field(self.units, last, decimals).range(range.clone());
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
                 let shown = field.show(ui);
                 self.alert(shown.out_of_range);
