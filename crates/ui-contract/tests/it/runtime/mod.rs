@@ -1,3 +1,4 @@
+mod activation;
 mod control_click;
 mod cursor;
 mod elapsed;
