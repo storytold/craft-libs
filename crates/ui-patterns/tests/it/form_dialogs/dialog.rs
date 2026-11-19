@@ -1,6 +1,6 @@
 //! `ParamDialog` and `HostedParamDialog`: the dialog's own undo history, the Preview box's hold-to-compare, Enter in
-//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, the host's notes and OK state,
-//! reopening under the same key, the
+//! a multi-line row and on a focused Cancel, Alt+Reset to `reset_to`, the held OK, the host's notes, OK state and row
+//! labels and shown states, reopening under the same key, the
 //! request slots and the rows an edit changed, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
@@ -286,6 +286,35 @@ fn notes_and_the_ok_state_the_host_sets_show_in_the_next_pass() {
     assert!(fixture.by_label(CHECKING).is_none(), "an empty list shows no note");
     let ok = fixture.by_label("OK").expect("the OK button");
     assert!(!fixture.tree().is_disabled_key(ok.node), "`Ok` leaves OK to the build again");
+}
+
+/// A row label the host's job words.
+const PAGES_3_TO_5: &str = "Smooth pages 3–5";
+
+// A row label and a hidden row the host sets between passes show in the next pass, over what `build` gives: the row
+// takes the host's words, and a hidden row is gone and refuses a set through automation until the host shows it.
+#[trial]
+fn a_row_label_and_shown_state_the_host_sets_show_in_the_next_pass() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    on_dialog(&host, |dialog| dialog.set_param_label("smooth", PAGES_3_TO_5));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_some(), "the row shows the host's label");
+    assert!(fixture.by_label("Smooth").is_none(), "the build's label is replaced");
+
+    on_dialog(&host, |dialog| dialog.set_param_shown("smooth", false));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_none(), "the hidden row is gone");
+    let ctx = fixture.ctx().clone();
+    assert!(host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "smooth", json!(true)).is_err(), "a hidden row refuses a set");
+    assert!(fixture.by_label("Radius").is_some(), "the other rows stay");
+
+    on_dialog(&host, |dialog| dialog.set_param_shown("smooth", true));
+    fixture.idle(1);
+    assert!(fixture.by_label(PAGES_3_TO_5).is_some(), "the row shows again");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "smooth", json!(true)), Ok(()));
 }
 
 // A dialog the app opens again under the same key, in the pass it takes the first one's Cancel, shows and answers.

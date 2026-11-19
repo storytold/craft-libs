@@ -559,6 +559,10 @@ pub struct Param {
     /// The row is shown only while every condition holds: `fields[key]` equals the value ([`Param::visible_when`]). A
     /// hidden row takes no space; its value stays in the fields and in the result.
     pub visible_when: Vec<(String, FieldValue)>,
+    /// Whether the row is shown at all, whatever the values ([`Param::shown`]): what decides it lies outside the
+    /// values, such as what a host's job found. A hidden row takes no space; its value stays in the fields and in the
+    /// result.
+    pub shown: bool,
     /// A Browse button after a [`ParamKind::Text`] field.
     pub browse: Option<PathKind>,
     /// The hint and tooltip, boxed so rows without them stay small.
@@ -577,6 +581,7 @@ impl Param {
             unit: None,
             enable: Enable::Always,
             visible_when: Vec::new(),
+            shown: true,
             browse: None,
             texts: None,
             options: None,
@@ -822,6 +827,16 @@ impl Param {
         self
     }
 
+    /// Whether the row is shown at all; a hidden row takes no space, as one whose
+    /// [`visible_when`](Param::visible_when) fails. For what the values do not decide; a
+    /// [`HostedParamDialog`](super::HostedParamDialog) host sets it between passes with
+    /// [`set_param_shown`](super::HostedParamDialog::set_param_shown).
+    #[must_use]
+    pub fn shown(mut self, shown: bool) -> Self {
+        self.shown = shown;
+        self
+    }
+
     /// The row takes input only while `fields[key]` equals `value`; otherwise it is shown disabled. The one-value case
     /// of [`enabled_when_in`](Param::enabled_when_in).
     #[must_use]
@@ -1017,7 +1032,7 @@ impl Param {
 
     /// Whether the row is shown with `fields`.
     pub fn visible(&self, fields: &DialogFields) -> bool {
-        self.visible_when.iter().all(|(key, value)| fields.get(key) == Some(value))
+        self.shown && self.visible_when.iter().all(|(key, value)| fields.get(key) == Some(value))
     }
 
     /// Whether the row takes input with `fields`.

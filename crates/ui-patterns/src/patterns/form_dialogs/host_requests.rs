@@ -1,10 +1,13 @@
 //! `HostRequests`: what a hosted dialog's rows ask of the host, kept until the host takes it.
 
+use super::fields::DialogFields;
+use super::param::{Param, ParamKind, edited_rows};
 use super::preview::PagerStep;
 use super::rows::ParamRowsOutput;
 use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, ListingRequest, PathRequest};
 use craft_theme::Srgba;
 use egui::Pos2;
+use serde_json::Value;
 use std::path::PathBuf;
 
 /// A request to render a preview of `options`, numbered so the host's answer can be matched to the settings it was
@@ -170,6 +173,22 @@ impl HostRequests {
                 self.edited.push(key);
             }
         }
+    }
+
+    /// Sets `field` of `fields` to `value` through automation, by the shared parameter-field rule
+    /// ([`set_param_field`](super::set_param_field)) over `params`, and files what an edit in the row files: the rows
+    /// it changed as edited, and the listing of a files row's new folder. A hosted dialog's `set_json_field` goes
+    /// through here, so its host reads the set as the user's edit and does not write its own value over it.
+    pub fn set_field(&mut self, params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
+        let before = fields.clone();
+        super::set_param_field(params, fields, field, value)?;
+        for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
+            if let Some(request) = param.listing_after(&before, fields) {
+                self.request_listing(request);
+            }
+        }
+        self.request_edited(edited_rows(params, &before, fields));
+        Ok(())
     }
 
     /// The row keys an edit changed since the last take.
