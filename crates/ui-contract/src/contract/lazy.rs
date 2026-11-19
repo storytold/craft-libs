@@ -3,6 +3,7 @@
 
 use crate::layout::{flow_region, take_in_flow};
 use crate::runtime::egui::alloc;
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
@@ -206,7 +207,7 @@ impl Lazy {
 struct Run {
     recording: bool,
     kept: bool,
-    layer: egui::LayerId,
+    layer: Layer,
 }
 
 impl Run {
