@@ -396,6 +396,11 @@ impl Fixture {
         self.frames.repaint_requested()
     }
 
+    /// The system cursor the latest frame's output asked for.
+    pub fn cursor_icon(&self) -> egui::CursorIcon {
+        self.frames.cursor_icon()
+    }
+
     /// The IME output of the latest frame.
     pub fn ime(&self) -> Option<&fixture::ImeSeen> {
         self.frames.ime()

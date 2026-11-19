@@ -6,7 +6,7 @@ use crate::contract::Notch;
 pub use crate::runtime::env::RowPressed;
 use crate::runtime::env::{Counted, Label};
 use crate::style::StyleCx;
-use craft_behavior::{Axis, ColumnKey, MiddleButton, ReorderKeys};
+use craft_behavior::{Axis, ColumnKey, CopyKeys, MiddleButton, ReorderKeys};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -29,8 +29,8 @@ pub enum SelectMode {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReorderRule {
-    /// Alt turns a drag into a copy (8.4).
-    pub copy_with_alt: bool,
+    /// The held key that turns a drag into a copy (8.4); `None`: a drag only moves.
+    pub copy: Option<CopyKeys>,
     /// In a tree, a drop or a stacking-key move may land inside a group, and `ReorderMove::parent` names the group. A row
     /// that `has_children` is a group; an open group without visible children takes items through the middle of its row.
     pub into_groups: bool,
@@ -41,7 +41,7 @@ pub struct ReorderRule {
 impl ReorderRule {
     /// A rule that only moves.
     pub const fn new() -> Self {
-        ReorderRule { copy_with_alt: false, into_groups: false, keys: ReorderKeys::Stacking }
+        ReorderRule { copy: None, into_groups: false, keys: ReorderKeys::Stacking }
     }
 
     /// The key scheme that reorders the items.
@@ -58,10 +58,11 @@ impl ReorderRule {
         self
     }
 
-    /// Alt copies.
+    /// A drag with `keys` held copies: [`CopyKeys::Alt`] in a design app's layers, [`CopyKeys::Platform`] (Ctrl off
+    /// macOS) in a file or page grid.
     #[must_use]
-    pub const fn copy_with_alt(mut self) -> Self {
-        self.copy_with_alt = true;
+    pub const fn copy_with(mut self, keys: CopyKeys) -> Self {
+        self.copy = Some(keys);
         self
     }
 }

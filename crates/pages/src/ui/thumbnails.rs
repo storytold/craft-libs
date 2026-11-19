@@ -24,7 +24,7 @@
 mod stories;
 
 use super::view::PageSource;
-use craft_behavior::{EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};
+use craft_behavior::{CopyKeys, EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};
 use craft_ui::contract::{
     Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, Props as _,
     ReorderMove, ReorderRule, Show as _, ShowCollection as _,
@@ -448,7 +448,8 @@ impl<'a> PageThumbnails<'a> {
             grid = grid.checks(true).action_place(TileActionPlace::Band);
         }
         if editable {
-            let rule = if organize { ReorderRule::new().copy_with_alt() } else { ReorderRule::new() };
+            // Pages copy as files do in a file manager: Ctrl off macOS, Option on macOS.
+            let rule = if organize { ReorderRule::new().copy_with(CopyKeys::Platform) } else { ReorderRule::new() };
             grid = grid
                 .reorder(rule)
                 .accepts(move |_, _, insert| insert <= new_page)

@@ -107,7 +107,7 @@ pub enum RotateZone {
     /// Only the band outside a corner (PhotoCraft's Move tool controls); the rest of the outside is the tool's.
     Band,
     /// A round handle on a stem above the box's top side, or below its bottom side when the canvas has no room above.
-    /// It rotates like the outside, and no outside region is declared.
+    /// It rotates like the outside under the grab pointer (grabbing while it turns), and no outside region is declared.
     Knob,
     /// Only within `points` screen points of the box's sides (PhotoCraft's type box with ⌘ held). The whole outside is
     /// still the box's: a press further out starts nothing and applies nothing, and reaches neither the content under
@@ -568,10 +568,14 @@ impl<'a> TransformBox<'a> {
         let turn = || Cursor::from(PaintedCursor::turn(quad::bisector(screen, corner)));
         let along = |from: usize| vec2_of(screen.quad[(from + 1) % 4] - screen.quad[from % 4]);
         match (kind, part) {
+            // The knob is a handle the pointer takes hold of and swings, not a stretch of the outside.
+            (BoxDrag::Rotate, BoxPart::Outside) if self.rotate_zone == RotateZone::Knob => {
+                if dragging { CursorIcon::Grabbing } else { CursorIcon::Grab }.into()
+            }
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
                 if dragging
-                    || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Knob | RotateZone::Border { .. })
+                    || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. })
                     || away <= style.rotate_reach
                 {
                     turn()

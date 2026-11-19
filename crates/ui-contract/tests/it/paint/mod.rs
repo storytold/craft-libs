@@ -1,5 +1,7 @@
 mod backdrop;
 
+mod draw_place;
+
 mod painters;
 
 mod surround;

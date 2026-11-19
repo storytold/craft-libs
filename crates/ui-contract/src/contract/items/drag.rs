@@ -18,7 +18,7 @@ use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer
 use crate::runtime::drag;
 use crate::runtime::env::Label;
 use craft_behavior::{
-    Axis, CancelReason, ColumnKey, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressCancel,
+    Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressCancel,
     PressPhase, ScrollPos,
 };
 use egui::{Pos2, Rect, Vec2};
@@ -243,15 +243,15 @@ struct Landed {
 
 struct RowDrop {
     spot: Option<Spot>,
-    /// Whether the held Alt may turn the drop into a copy.
-    copy_ok: bool,
+    /// The held key that turns the drop into a copy; `None`: the drop only moves.
+    copy: Option<CopyKeys>,
 }
 
 impl<K> DropTarget<ListDrag<K>> for RowDrop {
     type Drop = Landed;
 
     fn accept(&self, _: &ListDrag<K>, _: Pos2, op: DropOperation) -> Option<Landed> {
-        if matches!(op, DropOperation::Copy) && !self.copy_ok {
+        if matches!(op, DropOperation::Copy) && self.copy.is_none() {
             return None;
         }
         self.spot.map(|spot| Landed { spot, op })
@@ -259,6 +259,10 @@ impl<K> DropTarget<ListDrag<K>> for RowDrop {
 
     fn mark(&self, drop: &Landed) -> DropMark {
         drop.spot.mark
+    }
+
+    fn copy_keys(&self) -> CopyKeys {
+        self.copy.unwrap_or_default()
     }
 }
 
@@ -661,15 +665,15 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         .filter(|spot| comp.accepts(&payload, Some(&self.source.key(spot.over)), spot.insert))
                         .filter(|spot| !groups || !self.inside_dragged(&payload, spot.parent))
                 };
-                let copy_ok = rule.copy_with_alt;
+                let copy = rule.copy;
                 let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
-                if let Some(landed) = cx.drop_target::<ListDrag<C::Key>, _>(&RowDrop { spot, copy_ok }) {
+                if let Some(landed) = cx.drop_target::<ListDrag<C::Key>, _>(&RowDrop { spot, copy }) {
                     self.land(cx, &payload, landed, groups);
                 } else if let Some(spot) = spot
                     && drag::winning(&cx.core.ctx, cx.core.id, ordinal)
                 {
-                    let op = drag::current_operation(&cx.core.ctx);
-                    if copy_ok || !matches!(op, DropOperation::Copy) {
+                    let op = drag::current_operation(&cx.core.ctx, copy.unwrap_or_default());
+                    if copy.is_some() || !matches!(op, DropOperation::Copy) {
                         self.drags.pending = self.own_move(&payload, Landed { spot, op }, groups).map(|(_, after)| PendingDrop::Reorder(after));
                     }
                 }

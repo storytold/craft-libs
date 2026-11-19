@@ -393,8 +393,10 @@ pub fn member_gesture_running(ctx: &Context, viewport: ViewportId, arena: Id) ->
 /// Ends the press `owner` holds open the way Escape ends a captured press: the next lifecycle run of the arena it is
 /// open in reports `PressPhase::Cancel` with `PressCancel::Host`, and step 9 cancels the gesture the press carries
 /// (`CancelReason::HostChanged`). For a host whose own state no longer matches what the press acts on; it may ask
-/// inside or outside a pass. Nothing happens when `owner` holds no open press.
+/// inside or outside a pass. A drag session `owner` started ends with its press, without a drop. Nothing happens when
+/// `owner` holds no open press.
 pub fn cancel_press_of(ctx: &Context, owner: Id) {
+    crate::runtime::drag::cancel_of(ctx, owner);
     PerViewport::<Arenas>::each(ctx, |arenas| {
         for state in arenas.by_root.values_mut() {
             if state.machine.target().is_some_and(|target| target.owner == owner) {
