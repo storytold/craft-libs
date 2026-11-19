@@ -13,7 +13,7 @@ use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
 use craft_ui::runtime::env::{PageBandRoom, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, Title, TitleBar, slots};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::windows::NoWindows;
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -72,6 +72,51 @@ fn a_bar_in_a_top_slot_fills_it_and_centres_its_members_on_one_line() {
     for (name, rect) in [("the bar's member", member), ("the nested row's member", nested)] {
         assert!((rect.center().y - slot.center().y).abs() <= SLACK, "{name} {rect:?} sits on the middle of the slot {slot:?}");
     }
+}
+
+/// A top slot sized by its content (a ribbon: a strip over a taller group row) stacks its content, is as tall as both
+/// lines, gives the lower line the slot's width, and the body starts under it.
+#[trial]
+fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
+    let seen = Rc::new(Cell::new(None::<(Rect, Rect, Rect, Rect)>));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut strip, mut row) = (Rect::NOTHING, Rect::NOTHING);
+        let shown = AppShell::new(WindowKey::main())
+            .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
+                strip = Row::new()
+                    .show(ui, |ui, _| {
+                        Button::new("Home").show(ui);
+                        Button::new("Insert").show(ui);
+                    })
+                    .output
+                    .rect;
+                row = Row::new()
+                    .fill_width()
+                    .show(ui, |ui, _| {
+                        Stack::new().show(ui, |ui, _| {
+                            for line in ["Paste", "Cut", "Copy", "Format Painter"] {
+                                Button::new(line).show(ui);
+                            }
+                        });
+                    })
+                    .output
+                    .rect;
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "ribbon").map(|(_, rect)| *rect) {
+            out.set(Some((slot, strip, row, shown.regions.body)));
+        }
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    let (slot, strip, row, body) = seen.get().expect("the ribbon slot shows");
+    const SLACK: f32 = 1.0;
+    assert!(row.min.y >= strip.max.y - SLACK, "the row {row:?} lies under the strip {strip:?}, not beside it");
+    assert!(slot.min.y <= strip.min.y + SLACK && row.max.y <= slot.max.y + SLACK, "the slot {slot:?} holds the strip {strip:?} and the row {row:?}");
+    assert!(slot.height() >= strip.height() + row.height() - SLACK, "the slot {slot:?} is as tall as both lines, not one bar");
+    assert!((row.width() - slot.width()).abs() <= SLACK, "the row {row:?} takes the slot's width {slot:?}");
+    assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
 }
 
 /// A title bar in the title slot shows its leading content inside the slot, on the slot's middle.

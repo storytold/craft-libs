@@ -22,6 +22,11 @@ pub enum SlotSize {
     OptionsBarNarrow,
     /// `size.rail.width`: the default extent of a start or end slot.
     RailWidth,
+    /// As tall (a top or bottom slot) or as wide (a start or end slot) as its content: the extent the content took the
+    /// last time the slot showed, and the edge's default until it first shows. The slot stacks its content from its
+    /// outer edge instead of centring one line in it, so content of more than one line (a ribbon: a tab strip over a
+    /// group row) gets its own height and the slot's full width. Outside a shell it resolves to `size.bar.options`.
+    Content,
 }
 
 impl SlotSize {
@@ -37,7 +42,7 @@ impl SlotSize {
             SlotSize::TitleBar => size.bar.title,
             SlotSize::TabBar => size.bar.tab,
             SlotSize::StatusBar => size.bar.status,
-            SlotSize::OptionsBar => size.bar.options,
+            SlotSize::OptionsBar | SlotSize::Content => size.bar.options,
             SlotSize::OptionsBarNarrow => size.bar.options_narrow,
             SlotSize::RailWidth => size.rail.width,
         }

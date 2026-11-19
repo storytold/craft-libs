@@ -18,6 +18,7 @@ use crate::contract::{
     Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _,
     Role, ShellPane, ShowContainer as _, Sizing,
 };
+use crate::layout_components::Stack;
 use crate::notices::ToastStack;
 use crate::runtime::commands::{CommandAccess as _, CommandScope, CommandSet as _};
 use crate::runtime::egui::pass;
@@ -204,16 +205,66 @@ impl<S> Placed<'_, S> {
         }
     }
 
-    /// The slot's extent along its edge: its size, or the default of its edge.
-    fn extent(&self, tokens: &UiTokens) -> f32 {
-        let size = self.slot.slot_size().unwrap_or(match self.edge {
+    /// The default size of the slot's edge: the title bar for the title, else the options bar, the status bar or the
+    /// rail width.
+    fn edge_size(&self) -> SlotSize {
+        match self.edge {
             PaneEdge::Top if self.title => SlotSize::TitleBar,
             PaneEdge::Top => SlotSize::OptionsBar,
             PaneEdge::Bottom => SlotSize::StatusBar,
             _ => SlotSize::RailWidth,
-        });
-        size.resolve(tokens)
+        }
     }
+
+    /// Whether the slot is as large as its content ([`SlotSize::Content`]).
+    fn sized_by_content(&self) -> bool {
+        self.slot.slot_size() == Some(SlotSize::Content)
+    }
+
+    /// Whether the slot's extent runs along x: a start or end slot.
+    fn along_x(&self) -> bool {
+        matches!(self.edge, PaneEdge::Start | PaneEdge::End)
+    }
+
+    /// The slot's extent along its edge: its size, or the default of its edge. A slot sized by its content takes the
+    /// extent `measured` holds for it, the default of its edge until it has one.
+    fn extent(&self, tokens: &UiTokens, measured: &[(SlotKey, f32)]) -> f32 {
+        match self.slot.slot_size() {
+            Some(SlotSize::Content) => measured
+                .iter()
+                .find(|(key, _)| *key == self.slot.key())
+                .map(|(_, extent)| *extent)
+                .unwrap_or_else(|| self.edge_size().resolve(tokens)),
+            Some(size) => size.resolve(tokens),
+            None => self.edge_size().resolve(tokens),
+        }
+    }
+}
+
+/// How far a content slot's measure may move before the shell lays the window out again: less than a pixel at any
+/// scale.
+const MEASURE_SLACK: f32 = 0.5;
+
+/// Writes the extents content slots took this pass (`now`, the last of a key winning) into `kept`, and says whether any
+/// moved by more than [`MEASURE_SLACK`] from the one it was laid out at, or is new. A slot not shown this pass keeps
+/// its extent.
+fn remeasure(kept: &mut Vec<(SlotKey, f32)>, now: &[(SlotKey, f32)]) -> bool {
+    let mut moved = false;
+    for &(key, took) in now {
+        match kept.iter_mut().find(|(kept_key, _)| *kept_key == key) {
+            Some((_, extent)) => {
+                if (*extent - took).abs() > MEASURE_SLACK {
+                    *extent = took;
+                    moved = true;
+                }
+            }
+            None => {
+                kept.push((key, took));
+                moved = true;
+            }
+        }
+    }
+    moved
 }
 
 /// Whether `slot` covers the body instead of taking room from it: every slot of a body-only pass but the screen bar,
@@ -227,6 +278,8 @@ fn covers(slot: &Slot, only: bool) -> bool {
 struct ShellState {
     reveal: Reveal,
     screen: ScreenModeFollow,
+    /// The extent each slot sized by its content ([`SlotSize::Content`]) took when it last showed, by key.
+    measured: Vec<(SlotKey, f32)>,
 }
 
 /// What a pass of the shell leaves.
@@ -554,7 +607,7 @@ impl<'a, S> AppShell<'a, S> {
                     .map(|(placed, _)| Claim {
                         key: placed.slot.key(),
                         edge: placed.edge,
-                        extent: placed.extent(&tokens),
+                        extent: placed.extent(&tokens, &kept.measured),
                         overlay: covers(&placed.slot, only),
                     })
                     .collect();
@@ -612,6 +665,9 @@ impl<'a, S> AppShell<'a, S> {
             let panels_hidden = kept.reveal.panels_hidden();
 
             let rect_of = |key| regions.slots.iter().find(|(shown, _)| *shown == key).map_or(Rect::ZERO, |(_, rect)| *rect);
+            // The extents the content slots were laid out at, and what their content took in this pass.
+            let measured_before = kept.measured.clone();
+            let mut measured_now: Vec<(SlotKey, f32)> = Vec::new();
             let scope = shell.clone();
             let mut scope_region = ShellRegion::scope(shell).with_mode_set(mode_set).id_salt("shell");
             if content_room.is_some() {
@@ -642,22 +698,51 @@ impl<'a, S> AppShell<'a, S> {
                         if !*shown || covers(&placed.slot, only) != covering {
                             continue;
                         }
-                        let extent = placed.extent(&tokens);
+                        let extent = placed.extent(&tokens, &measured_before);
+                        let by_content = placed.sized_by_content();
+                        let along_x = placed.along_x();
                         let Placed { slot, edge, named, add, .. } = placed;
                         let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
                         // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
                         // the body.
                         let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
+                        // A slot sized by its content stacks it from the slot's outer edge: a top pane's own layout
+                        // centres one line in its height, which would lay a strip and the row under it side by side.
+                        if by_content {
+                            region.props = region.props.layout(BodyLayout::stack());
+                        }
                         if let Some(label) = slot.name().cloned().or_else(|| named.map(|name| name(&words))) {
                             region = region.label(label);
                         }
                         let content = slot.content_version();
-                        region.show(ui, |ui, bcx| match content {
+                        let key = slot.key();
+                        let mut fill = |ui: &mut Ui, bcx: &mut BodyCx<'_>| match content {
                             Some(version) => {
-                                Lazy::new(("slot", slot.key()), 0.0).settles(true).content(version).show(ui, |ui| add(ui, bcx, app));
+                                Lazy::new(("slot", key), 0.0).settles(true).content(version).show(ui, |ui| add(ui, bcx, app));
                             }
                             None => add(ui, bcx, app),
-                        });
+                        };
+                        if !by_content {
+                            region.show(ui, |ui, bcx| fill(ui, bcx));
+                            continue;
+                        }
+                        // The content's extent along the slot's edge: a top or bottom slot's content fills its width
+                        // and is as tall as it is; a rail's is as wide as it is.
+                        let took = region
+                            .show(ui, |ui, bcx| {
+                                let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
+                                let rect = stack.show(ui, |ui, _| fill(ui, bcx)).output.rect;
+                                if along_x { rect.width() } else { rect.height() }
+                            })
+                            .inner;
+                        eprintln!(
+                            "DIAG ribbon: slot {key:?} laid out at extent {extent} in {:?}, content took {took:?}, sizing {}",
+                            rect_of(key),
+                            ui.is_sizing_pass()
+                        );
+                        if let Some(took) = took.filter(|took| took.is_finite() && *took > 0.0) {
+                            measured_now.push((key, took));
+                        }
                     }
                 };
                 show_slots(ui, false, app);
@@ -686,6 +771,17 @@ impl<'a, S> AppShell<'a, S> {
                     dialogs.run(ui);
                 }
             });
+            // A content slot whose content took another extent than it was laid out at lays the window out again, so the
+            // slot and the body under it take their places in this frame: the slot never clips its content, nor leaves
+            // a band of its surface under it. Only a real run records: a measuring run's extent is not what shows.
+            let real = !measured_now.is_empty() && !ui.is_sizing_pass() && crate::runtime::measure::effect(&ctx, "shell::slot_extent");
+            if real && remeasure(&mut kept.measured, &measured_now) {
+                if crate::runtime::frame::discardable(&ctx) {
+                    crate::runtime::frame::discard_pass(&ctx, "craft_ui: a content slot's extent changed");
+                } else {
+                    crate::runtime::frame::request_own_repaint(&ctx);
+                }
+            }
             // What shows here counts for the shell around this one too, so a host reads it from its own shell.
             if scope.dialogs_shown() > 0
                 && !ui.is_sizing_pass()
