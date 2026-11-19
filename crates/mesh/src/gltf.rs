@@ -120,6 +120,16 @@ pub fn uri_decode(s: &str) -> String {
     String::from_utf8_lossy(&percent_decode(s)).into_owned()
 }
 
+/// Percent-decode a URI, rejecting decoded bytes that are not UTF-8.
+///
+/// As with [`uri_decode`], incomplete or non-hex escapes stay literal and `+` stays
+/// `+`. This does not validate or confine a filesystem path; callers must retain
+/// their own reference policy. Decoding is linear and output is no larger than input.
+/// Use this instead of the lossy decoder when a resolver requires exact UTF-8 names.
+pub fn uri_decode_strict(s: &str) -> Option<String> {
+    String::from_utf8(percent_decode(s)).ok()
+}
+
 /// [`uri_decode`] as bytes, so escaped bytes that are not UTF-8 survive.
 fn percent_decode(s: &str) -> Vec<u8> {
     let b = s.as_bytes();

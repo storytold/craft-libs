@@ -26,10 +26,14 @@ COMMANDS = [
 SOURCE = r"""
 set -euo pipefail
 unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES
-if [ "${RUNNER_OS:-}" = Windows ]; then
+if [[ "${RUNNER_OS:-}" = Windows ]]; then
   powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
 fi
-cargo fmt --check
+if [[ "${RUNNER_OS:-}" = Windows ]]; then
+  python scripts/ci-format-workspace.py
+else
+  cargo fmt --check
+fi
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
@@ -54,6 +58,7 @@ cargo() {
   if [ "$*" = "$FAIL" ]; then return 17; fi
 }
 powershell.exe() { printf 'print-queue\n'; }
+python() { test "$*" = "scripts/ci-format-workspace.py" || return 31; cargo fmt --check; }
 """
     return subprocess.run([BASH, "-c", mock + SOURCE], env=env,
                           capture_output=True, text=True, check=False)
@@ -89,11 +94,13 @@ class FullValidation(unittest.TestCase):
                                  (["print-queue"] if name == "Windows" else []) + COMMANDS)
 
     def test_every_failure_stops_the_gate(self):
-        for i, command in enumerate(COMMANDS):
-            with self.subTest(command=command):
-                p = run("Linux", command)
-                self.assertEqual(p.returncode, 17, p.stdout + p.stderr)
-                self.assertEqual(p.stdout.splitlines(), COMMANDS[:i + 1])
+        for name in ["Linux", "macOS", "Windows"]:
+            for i, command in enumerate(COMMANDS):
+                with self.subTest(os=name, command=command):
+                    p = run(name, command)
+                    self.assertEqual(p.returncode, 17, p.stdout + p.stderr)
+                    self.assertEqual(p.stdout.splitlines(),
+                                     (["print-queue"] if name == "Windows" else []) + COMMANDS[:i + 1])
 
     def test_workflow_preserves_fork_and_platform_boundaries(self):
         text = (ROOT / ".github/workflows/full-validation.yml").read_text()
@@ -118,6 +125,83 @@ class FullValidation(unittest.TestCase):
         self.assertIn("select-os: '[]'", pdf)
         self.assertIn("windows-latest", pdf)
         self.assertIn("macos-latest", pdf)
+
+
+
+class PackageFormatting(unittest.TestCase):
+    @staticmethod
+    def helper():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_format_workspace", ROOT / "scripts/ci-format-workspace.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def metadata():
+        return {"workspace_members": ["id-b", "id-a"], "workspace_default_members": ["id-a"],
+                "packages": [{"id": "id-a", "name": "craft-a"},
+                             {"id": "id-b", "name": "craft-b"},
+                             {"id": "external", "name": "not-a-member"}]}
+
+    def test_all_workspace_members_not_only_defaults_and_no_external_dependencies(self):
+        helper = self.helper()
+        self.assertEqual(helper.workspace_names(self.metadata()), ["craft-a", "craft-b"])
+
+    def test_new_package_automatically_included(self):
+        helper = self.helper()
+        data = self.metadata()
+        data["workspace_members"].append("id-new")
+        data["packages"].append({"id": "id-new", "name": "craft-new"})
+        self.assertEqual(helper.workspace_names(data), ["craft-a", "craft-b", "craft-new"])
+
+    def test_bad_inventory_fails_closed(self):
+        helper = self.helper()
+        for members in ([], ["id-a", "id-a"], ["missing"]):
+            data = self.metadata()
+            data["workspace_members"] = members
+            with self.subTest(members=members), self.assertRaises((ValueError, KeyError)):
+                helper.workspace_names(data)
+        for name in ("--all", "craft-a;echo injected", "craft-a", ""):
+            data = self.metadata()
+            data["packages"][1]["name"] = name
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                helper.workspace_names(data)
+
+    def test_calls_cargo_with_one_package_and_no_shell(self):
+        import json
+        helper = self.helper()
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps(self.metadata()))
+        with patch.object(helper.subprocess, "run", return_value=result) as execute:
+            helper.check_workspace()
+        self.assertEqual([call.args[0] for call in execute.call_args_list], [
+            ["cargo", "metadata", "--no-deps", "--offline", "--locked", "--format-version", "1"],
+            ["cargo", "fmt", "--check", "--package", "craft-a"],
+            ["cargo", "fmt", "--check", "--package", "craft-b"],
+        ])
+        self.assertEqual(execute.call_args_list[0].kwargs["encoding"], "utf-8")
+        for call in execute.call_args_list:
+            self.assertEqual(call.kwargs["cwd"], ROOT)
+            self.assertTrue(call.kwargs["check"])
+            self.assertNotIn("shell", call.kwargs)
+
+    def test_metadata_failure_prevents_formatting(self):
+        helper = self.helper()
+        failure = subprocess.CalledProcessError(17, ["cargo", "metadata"])
+        with patch.object(helper.subprocess, "run", side_effect=failure) as execute:
+            with self.assertRaises(subprocess.CalledProcessError):
+                helper.check_workspace()
+        self.assertEqual(execute.call_count, 1)
+
+    def test_first_format_failure_stops_later_packages(self):
+        import json
+        helper = self.helper()
+        result = subprocess.CompletedProcess([], 0, stdout=json.dumps(self.metadata()))
+        failure = subprocess.CalledProcessError(17, ["cargo", "fmt"])
+        with patch.object(helper.subprocess, "run", side_effect=[result, failure]) as execute:
+            with self.assertRaises(subprocess.CalledProcessError):
+                helper.check_workspace()
+        self.assertEqual(execute.call_count, 2)
 
 
 if __name__ == "__main__":

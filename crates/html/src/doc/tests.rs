@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn widthless_columns_do_not_change_cell_width_resolution() {
+    let widths = |columns: &str, cells: &str| {
+        let flow = parse(&format!("<table>{columns}<tr>{cells}</tr></table>"));
+        let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected table") };
+        table.widths.clone()
+    };
+    let partial = "<td width='400'>x</td><td>y</td>";
+    let widthless = "<colgroup><col><col></colgroup>";
+    assert!(widths("", partial).is_empty());
+    assert_eq!(widths(widthless, partial), widths("", partial));
+    let complete = "<td width='40'>x</td><td width='80'>y</td>";
+    assert_eq!(widths(widthless, complete), vec![30.0, 60.0]);
+    // An explicitly declared column still enables the existing average-fill rule.
+    assert_eq!(widths("<colgroup><col style='width:100pt'><col></colgroup>", "<td>x</td><td>y</td>"), vec![100.0, 100.0]);
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");
@@ -72,6 +89,17 @@ fn borderless_tables_export_without_cell_borders() {
         assert_eq!(table_style(&out).as_deref(), Some(if grid { "TableGrid" } else { "" }), "{src}");
         assert!(out.contains(">A</td>") && out.contains(">B</td>"), "{out}");
     }
+}
+
+/// storytold/wordcraft#5065: a DOCX bottom border without `w:sz` is width 0, and Word draws it at
+/// its thinnest line. An empty paragraph carrying one is the horizontal rule HTML has.
+#[test]
+fn a_blank_paragraph_with_a_width_0_bottom_border_is_still_a_rule() {
+    let mut p = craft_wordmodel::Paragraph::new();
+    p.props.borders = Some(craft_wordmodel::props::Borders { bottom: Some(craft_wordmodel::props::Border::single(0.0)), ..Default::default() });
+    let mut d = craft_wordmodel::Document::new();
+    d.body = vec![craft_wordmodel::para_block(p)];
+    assert!(export(&d).contains("<hr>"), "{}", export(&d));
 }
 
 #[test]
