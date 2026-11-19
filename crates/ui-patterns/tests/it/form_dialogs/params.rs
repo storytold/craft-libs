@@ -5,7 +5,7 @@ use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
 use craft_ui::patterns::presets::PresetRow;
-use craft_ui::runtime::env::{Label, UnitKind};
+use craft_ui::runtime::env::{Label, Scale, UnitKind};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
 use egui::{Key, Modifiers, Vec2};
@@ -199,6 +199,69 @@ fn a_blend_row_steps_and_picks_by_its_keys_inside_the_dialog() {
     }
     fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
     assert_eq!(held().as_deref(), Some("multiply"), "Down on the closed list skips the greyed mode");
+}
+
+#[trial]
+fn paired_parameter_fields_15539_keep_their_controls_and_values() {
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let modes = vec![
+            (BlendKeyEntry::new("normal".to_owned(), BlendShortcut::Normal), "Normal".into()),
+            (BlendKeyEntry::new("multiply".to_owned(), BlendShortcut::Multiply), "Multiply".into()),
+        ];
+        let params = vec![
+            Param::new("name", "Name", ParamKind::text("Layer 1")),
+            Param::new("mode", "Mode", ParamKind::blend(modes, Some("normal".into()))).beside_next(),
+            Param::new("opacity", "Opacity", ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)).enabled_when("mode", "multiply"),
+            Param::new("neutral", "Fill with neutral color", ParamKind::bool(false)).enabled_when_in("mode", ["multiply".to_owned()]),
+        ];
+        let _ = ParamDialog::new("newLayer", "New Layer", params).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.scale(Scale::new(1.25)).room(Vec2::new(1280.0, 800.0)).settle();
+
+    let mode = fixture.by_role(Role::COMBO_BOX).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Mode")).expect("mode");
+    let opacity =
+        fixture.by_role(Role::SPIN_BUTTON).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Opacity")).expect("opacity");
+    assert!((mode.center().y - opacity.center().y).abs() < 1.0, "Mode and Opacity share a row");
+    assert!(mode.rect.right() <= opacity.rect.left(), "Mode and Opacity have separate hit areas");
+
+    assert!(fixture.tree().is_disabled_key(opacity.node), "Normal has a disabled paired Opacity field");
+    fixture.click_at(opacity.center()).settle();
+    fixture.type_text("42").settle();
+    assert_eq!(values.borrow().number("opacity"), Some(100.0), "a disabled neighbor ignores input");
+
+    fixture.click(&mode).settle();
+    let multiply = fixture.by_label("Multiply").expect("the mode option");
+    fixture.click(&multiply).settle();
+    let opacity = fixture.by_label("Opacity").expect("the paired field remains present");
+    assert!(!fixture.tree().is_disabled_key(opacity.node), "the original predicate enables Opacity");
+    assert_eq!(values.borrow().text("mode"), Some("multiply"));
+    fixture.click(&opacity).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("42").key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(values.borrow().number("opacity"), Some(42.0));
+    assert_eq!(values.borrow().text("mode"), Some("multiply"));
+}
+
+#[trial]
+fn paired_parameter_fields_15539_leave_no_gap_when_both_are_hidden() {
+    let before = Param::new("before", "Before", ParamKind::text("one"));
+    let after = Param::new("after", "After", ParamKind::text("two"));
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let hidden = rows(
+        vec![
+            before.clone(),
+            Param::new("mode", "Mode", ParamKind::text("Normal")).visible_when("show", true).beside_next(),
+            Param::new("opacity", "Opacity", ParamKind::int(Some(0), Some(100), 100)).visible_when("show", true),
+            after.clone(),
+        ],
+        &values,
+    );
+    let center_y = |fixture: &Fixture, name: &str| fixture.by_label(name).expect(name).center().y;
+    let gap = |fixture: &Fixture| center_y(fixture, "After") - center_y(fixture, "Before");
+    assert!(hidden.by_label("Mode").is_none() && hidden.by_label("Opacity").is_none());
+    let absent = rows(vec![before, after], &Rc::new(RefCell::new(DialogFields::new())));
+    assert_eq!(gap(&hidden), gap(&absent), "a hidden pair uses no space");
 }
 
 /// A pattern row shows the first pattern for a stored id the rows lack without writing it, a pick writes the pattern's
