@@ -1396,14 +1396,12 @@ impl BodyHooks<'_> {
             content: max,
             axes: (scroll.horizontal_on(), scroll.vertical_on()),
             rtl,
-            anchor: self.anchor.map(|anchor| anchor.child),
-            reveal: self.glide.map(|glide| glide.child),
         };
         // Only the run that lays the content out for the view places its children; a measure lays it out for its
         // own question.
         let lays_out = run.real && !crate::runtime::measure::active(ctx);
         if lays_out {
-            crate::runtime::lazy::begin(ctx, id);
+            crate::runtime::lazy::begin(ctx, id, self.anchor.map(|anchor| anchor.child), self.glide.map(|glide| glide.child), view.axes);
         }
         let env = run.env.derive_local(|scoped| scoped.lazy = Some(view));
         let installed = Env::install_for(&region_ui, env.clone());

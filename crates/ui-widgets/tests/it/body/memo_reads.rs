@@ -8,7 +8,7 @@ use craft_ui::runtime::commands::{self, CommandInput, CommandRef};
 use craft_ui::runtime::env::{Env, EnvValue, with_env};
 use craft_ui::runtime::{frame, pointer};
 use craft_ui::testing::input::{key_press, text};
-use craft_ui::testing::layout::in_region;
+use craft_ui::testing::layout::{in_region, scroll_anchor, scroll_area};
 use craft_ui::testing::{Frames, MemoRun, last_pass_memo_runs, trial};
 use craft_ui_test_kit::body::Slab;
 use craft_ui_test_kit::windows::Windows;
@@ -307,14 +307,47 @@ fn rows(_: &mut Rows, ui: &mut Ui) {
     }
 }
 
-/// A view in a scrolling body whose rows decide by the scroll view runs when the body scrolls, though the pointer that
-/// scrolled it is beside the view, never over it; then it replays.
+/// A view of lazy rows in a fixed box, inside a scrolling body that moves down the screen: the view's room, clip and
+/// layer stay the same, but the body's view now meets other rows. It runs then, and replays after.
 #[trial]
-fn a_view_with_lazy_rows_runs_when_its_scroll_area_scrolls() {
+fn a_view_with_lazy_rows_runs_when_its_scroll_view_meets_other_rows() {
+    let top = Cell::new(10.0);
+    let fixed = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(100.0, 100.0));
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, top.get()), Vec2::new(300.0, 200.0)), |ui| {
+            Slab::new(ContainerProps::new().sizing(Sizing::Fill).scroll(Scroll::vertical())).id_salt("area").show(ui, |ui, _| {
+                in_region(ui, fixed, |ui| {
+                    ui.set_clip_rect(fixed);
+                    MemoView::new("rows", Rows, rows).show(ui);
+                });
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.frame(vec![pointer_away()], &mut show);
+    frames.idle(SETTLE, &mut show);
+    ROWS_RUNS.with(|runs| runs.set(0));
+    frames.frame(vec![], &mut show);
+    assert_eq!(ROWS_RUNS.with(Cell::get), 0, "an idle frame replays the rows");
+    top.set(300.0);
+    frames.frame(vec![], &mut show);
+    assert!(ROWS_RUNS.with(Cell::get) > 0, "the body's view meets rows the last run left out: the view of rows ran");
+    frames.idle(SETTLE, &mut show);
+    ROWS_RUNS.with(|runs| runs.set(0));
+    frames.frame(vec![], &mut show);
+    assert_eq!(ROWS_RUNS.with(Cell::get), 0, "the view settles under the moved view");
+}
+
+/// A replayed view reports its nested rows' places as its run did: after a scroll, the scroll area keeps the row its
+/// position is named by, frame after frame, while the view replays.
+#[trial]
+fn a_replayed_view_keeps_its_scroll_areas_anchor() {
+    let area = Cell::new(None);
     let view = Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 200.0));
     let mut show = |ui: &mut Ui| {
         in_region(ui, view, |ui| {
             Slab::new(ContainerProps::new().sizing(Sizing::Fill).scroll(Scroll::vertical())).id_salt("area").show(ui, |ui, _| {
+                area.set(scroll_area(ui));
                 MemoView::new("rows", Rows, rows).show(ui);
             });
         });
@@ -323,13 +356,16 @@ fn a_view_with_lazy_rows_runs_when_its_scroll_area_scrolls() {
     let mut frames = Frames::new();
     frames.frame(vec![craft_ui::testing::pointer::moved(beside)], &mut show);
     frames.idle(SETTLE, &mut show);
-    ROWS_RUNS.with(|runs| runs.set(0));
-    frames.frame(vec![], &mut show);
-    assert_eq!(ROWS_RUNS.with(Cell::get), 0, "an idle frame replays the rows");
     frames.frame(vec![craft_ui::testing::pointer::wheel(-200.0)], &mut show);
-    assert!(ROWS_RUNS.with(Cell::get) > 0, "the body scrolled: the view of rows ran");
+    frames.frame(vec![pointer_away()], &mut show);
     frames.idle(SETTLE, &mut show);
+    let area = area.get().expect("the scrolling body lays its content out for its scroll area");
+    let named = scroll_anchor(&frames.ctx, area);
+    assert!(named.is_some(), "the scrolled body names its position by a row");
     ROWS_RUNS.with(|runs| runs.set(0));
-    frames.frame(vec![], &mut show);
-    assert_eq!(ROWS_RUNS.with(Cell::get), 0, "the view settles at the new scroll position");
+    for frame in 0..SETTLE {
+        frames.frame(vec![], &mut show);
+        assert_eq!(scroll_anchor(&frames.ctx, area), named, "frame {frame}: the anchor stays on the row the run found");
+    }
+    assert_eq!(ROWS_RUNS.with(Cell::get), 0, "the view replayed in every frame once the pointer left");
 }

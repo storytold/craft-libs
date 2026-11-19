@@ -54,22 +54,9 @@ pub(crate) struct View {
     /// The axes the area scrolls along (x, y).
     pub(crate) axes: (bool, bool),
     pub(crate) rtl: bool,
-    /// The child the area's scroll position names.
-    pub(crate) anchor: Option<Id>,
-    /// The child the area glides to (`Lazy::reveal`).
-    pub(crate) reveal: Option<Id>,
 }
 
 impl View {
-    /// Whether the children of `a` and `b` decide alike (`decide`): the same area, view rect, content rect, axes,
-    /// direction and reveal. The anchor is the area's own record of where its children landed, not an input of theirs.
-    pub(crate) fn decides_alike(a: Option<View>, b: Option<View>) -> bool {
-        match (a, b) {
-            (Some(a), Some(b)) => View { anchor: None, ..a } == View { anchor: None, ..b },
-            (a, b) => a.is_none() && b.is_none(),
-        }
-    }
-
     /// How far `rect` starts from the content's start edge, along each axis.
     pub(crate) fn start_of(&self, rect: Rect) -> Vec2 {
         let x = if self.rtl { self.content.max.x - rect.max.x } else { rect.min.x - self.content.min.x };
@@ -95,6 +82,10 @@ pub(crate) struct Anchor {
 /// Where the children of a scroll area started in the real run that laid its content out, from the view's start.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Placed {
+    /// The child the area's scroll position names, the child it glides to (`Lazy::reveal`) and the axes it scrolls
+    /// along, as the area had them when the run began. They are the area's own state, not inputs of its children, so
+    /// a replayed child reports against the area's current ones.
+    names: (Option<Id>, Option<Id>, (bool, bool)),
     /// The place and extent of the child the area's anchor names, when the run reached it.
     pub(crate) anchor: Option<(Vec2, Vec2)>,
     /// The first child, in flow order, that starts at or after the view's start, and its place.
@@ -104,14 +95,23 @@ pub(crate) struct Placed {
 }
 
 impl Placed {
-    /// Notes that the child `id` took a place `at` from the view's start and is `extent` long, in a view whose area
-    /// scrolls along `axes` and names `anchor`.
-    pub(crate) fn note(&mut self, (anchor, axes): (Option<Id>, (bool, bool)), id: Id, at: Vec2, extent: Vec2) {
+    /// No places yet, for an area that names `anchor` as its scroll position, glides to `reveal` and scrolls along
+    /// `axes`.
+    pub(crate) fn named(anchor: Option<Id>, reveal: Option<Id>, axes: (bool, bool)) -> Placed {
+        Placed { names: (anchor, reveal, axes), ..Placed::default() }
+    }
+
+    /// Notes that the child `id` took a place `at` from the view's start and is `extent` long.
+    pub(crate) fn note(&mut self, id: Id, at: Vec2, extent: Vec2) {
+        let (anchor, reveal, axes) = self.names;
         if anchor == Some(id) {
             self.anchor = Some((at, extent));
         }
         if self.first.is_none() && (!axes.0 || at.x >= 0.0) && (!axes.1 || at.y >= 0.0) {
             self.first = Some((id, at));
+        }
+        if reveal == Some(id) {
+            self.reveal = Some(at);
         }
     }
 }
@@ -457,7 +457,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
 fn moved(ctx: &Context, settled: &Settled, view: Option<Option<View>>) -> bool {
     let facts = &settled.record.facts;
     inputs::moved(ctx, facts.inputs, &settled.seen)
-        || (facts.inputs.contains(Input::Scroll) && view.is_some_and(|view| !View::decides_alike(settled.view, view)))
+        || (facts.inputs.contains(Input::Scroll) && view.is_some_and(|view| settled.view != view))
         || crate::runtime::commands::queued_for(ctx, &facts.instances)
 }
 
@@ -602,22 +602,27 @@ pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) ->
     })
 }
 
-/// Starts the real run that lays out the content of the scroll area `owner`: the children it places report to it.
-pub(crate) fn begin(ctx: &Context, owner: Id) {
+/// Starts the real run that lays out the content of the scroll area `owner`, which names `anchor` as its scroll
+/// position, glides to `reveal` and scrolls along `axes`: the children it places report to it.
+pub(crate) fn begin(ctx: &Context, owner: Id, anchor: Option<Id>, reveal: Option<Id>, axes: (bool, bool)) {
     with(ctx, |store, _, _| {
-        store.placed.insert(owner, Placed::default());
+        store.placed.insert(owner, Placed::named(anchor, reveal, axes));
     });
 }
 
 /// Reports, in the real run that lays out the content of `view`'s area, that the child `id` took `rect`, run or not.
 pub(crate) fn place(ctx: &Context, view: &View, id: Id, rect: Rect) {
-    let at = view.start_of(rect) - view.start_of(view.rect);
+    note_place(ctx, view.owner, id, view.start_of(rect) - view.start_of(view.rect), rect.size());
+}
+
+/// Reports that the child `id` of the area `owner` took a place `at` from the view's start and is `extent` long. A
+/// settled run around the child that is replayed later reports it again: it replays only in the view it ran in, so
+/// the place holds, and the area's anchor and first child are the ones its real run found.
+fn note_place(ctx: &Context, owner: Id, id: Id, at: Vec2, extent: Vec2) {
+    replay::journal(ctx, || (owner, id, at, extent), |ctx, &(owner, id, at, extent)| note_place(ctx, owner, id, at, extent));
     with(ctx, |store, _, _| {
-        if let Some(placed) = store.placed.get_mut(&view.owner) {
-            placed.note((view.anchor, view.axes), id, at, rect.size());
-            if view.reveal == Some(id) {
-                placed.reveal = Some(at);
-            }
+        if let Some(placed) = store.placed.get_mut(&owner) {
+            placed.note(id, at, extent);
         }
     });
 }

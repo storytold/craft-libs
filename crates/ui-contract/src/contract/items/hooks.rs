@@ -844,13 +844,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         let named = self.anchor.map(|anchor| anchor.child);
-        let mut placed = lazy::Placed::default();
+        let mut placed = lazy::Placed::named(named, None, (false, true));
         // Frozen rows and section rows can stay put while the rows scroll: only a row that scrolls names the position.
         let first = layout.first_navigable();
         for at in self.visible.clone().filter(|&at| at >= first && layout.shown(at) && !self.source.section_stop(at)) {
             let row = layout.rect(at, offset);
             let item = sub(id, ("key", key_hash(&self.source.key(at))));
-            placed.note((named, (false, true)), item, Vec2::new(0.0, row.min.y), row.size());
+            placed.note(item, Vec2::new(0.0, row.min.y), row.size());
         }
         let moved = Vec2::new(0.0, (self.offset - self.offset_at_read) as f32);
         let room = (Vec2::new(0.0, self.offset as f32), Vec2::new(0.0, (self.max_offset(view.y) - self.offset) as f32));
