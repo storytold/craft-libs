@@ -59,11 +59,7 @@ fn hostile_seeds() -> [Vec<u8>; 3] {
 }
 
 // Partition parser calls, not the RNG: each original ordinal belongs to exactly one part.
-fn partitioned_parser(
-    part: usize,
-    parts: usize,
-    parse: impl Fn(&[u8]) + Send + Sync + 'static,
-) -> impl Fn(&[u8]) + Send + Sync + 'static {
+fn partitioned_parser(part: usize, parts: usize, parse: impl Fn(&[u8]) + Send + Sync + 'static) -> impl Fn(&[u8]) + Send + Sync + 'static {
     use std::sync::atomic::{AtomicUsize, Ordering};
     assert!(parts > 0 && part < parts, "invalid hostile-input partition");
     let ordinal = AtomicUsize::new(0);
