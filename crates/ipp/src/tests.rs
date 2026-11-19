@@ -884,3 +884,65 @@ fn a_slow_address_leaves_time_for_a_reachable_print_server() {
     assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
     listener.accept().unwrap();
 }
+
+fn fake_probe_responses(responses: Vec<(Vec<u8>, bool)>) -> (Endpoint, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        for (body, truncated) in responses {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let (mut line, mut length) = (String::new(), 0usize);
+            loop {
+                line.clear();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            let mut response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len() + usize::from(truncated)).into_bytes();
+            response.extend_from_slice(&body);
+            reader.into_inner().write_all(&response).unwrap();
+        }
+    });
+    (Endpoint::Tcp("127.0.0.1".into(), port), server)
+}
+
+#[test]
+fn a_truncated_optional_class_reply_is_not_hidden() {
+    let printers_reply = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes_reply = ipp(0, &[ok_header()]);
+    let (endpoint, server) = fake_probe_responses(vec![(printers_reply, false), (classes_reply, true)]);
+    let result = printers(&endpoint);
+    server.join().unwrap();
+    assert!(matches!(result, Err(Error::Protocol(_))), "accepted truncated optional classes: {result:?}");
+}
+
+#[test]
+fn a_truncated_optional_default_reply_is_not_hidden() {
+    let printers_reply = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let classes_reply = ipp(0, &[ok_header()]);
+    let default_reply = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let (endpoint, server) = fake_probe_responses(vec![(printers_reply, false), (classes_reply, false), (default_reply, true)]);
+    let result = printers(&endpoint);
+    server.join().unwrap();
+    assert!(matches!(result, Err(Error::Protocol(_))), "accepted truncated optional default: {result:?}");
+}
+
+#[test]
+fn optional_unsupported_operations_still_allow_listing_printers() {
+    let printers_reply = ipp(0, &[ok_header(), (TAG_PRINTER_GROUP, &[(TAG_NAME, "printer-name", &[b"Office"])])]);
+    let unsupported_classes = ipp(0x0501, &[ok_header()]);
+    let no_default = ipp(0x0406, &[ok_header()]);
+    let (endpoint, server) = fake_probe_responses(vec![(printers_reply, false), (unsupported_classes, false), (no_default, false)]);
+    let result = printers(&endpoint);
+    server.join().unwrap();
+    let printers = result.unwrap();
+    assert_eq!(printers.len(), 1);
+    assert_eq!(printers[0].name, "Office");
+    assert!(!printers[0].is_default);
+}
