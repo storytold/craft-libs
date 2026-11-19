@@ -140,7 +140,9 @@ fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
         shadow: set(e.shadow),
         emboss: set(e.emboss),
         engrave: set(e.engrave),
-        border: e.border.filter(|b| b.is_visible()),
+        // A border of width 0 (a DOCX one without `w:sz`) is drawn at the thinnest line, which is
+        // all a format with no width-0 border can keep of it (storytold/wordcraft#5065).
+        border: e.border.map(|b| b.as_drawn()).filter(|b| b.is_visible()),
         lang: e.lang.clone().filter(|l| !l.is_empty()),
         font_cs: e.font_cs.clone().filter(|f| !f.is_empty()),
         font_ea: e.font_ea.clone().filter(|f| !f.is_empty()),
@@ -248,7 +250,7 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
         Kind::Quote
     } else if is_code_style(doc, style) {
         Kind::Code
-    } else if blank && rp.borders.and_then(|b| b.bottom).is_some_and(|b| b.is_visible()) {
+    } else if blank && rp.borders.and_then(|b| b.bottom).is_some_and(|b| b.is_drawn()) {
         Kind::Rule
     } else {
         Kind::Normal
@@ -503,7 +505,9 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
     let list = flow_list(doc, kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
-    let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
+    // A side of width 0 (a DOCX border without `w:sz`) is drawn at the thinnest line here: no
+    // format below has a border that is drawn and still takes no room (storytold/wordcraft#5065).
+    let borders = if kind == Kind::Rule { None } else { p.props.borders.map(|b| b.as_drawn()).filter(|b| b.takes_room()) };
     let mut out = Para {
         kind,
         list,
@@ -1114,6 +1118,9 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
         // Word. Only Repeat as header row makes it one then.
         let header = r.props.header || (ri == 0 && style.is_some() && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
+        for _ in 0..r.first_grid() {
+            cells.push(Cell::default());
+        }
         for (ci, c) in r.cells.iter().enumerate() {
             let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
@@ -1159,6 +1166,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     Some(Box::new(crate::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
                 width: None,
+                vmerge_restart: c.props.vmerge == VMerge::Restart,
+                synthetic_covered: false,
             });
         }
         rows.push(cells);

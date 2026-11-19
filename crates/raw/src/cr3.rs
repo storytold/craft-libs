@@ -120,6 +120,23 @@ struct CameraLevels {
     white: Option<f32>,
 }
 
+/// The Kelvin scale of a body without colour matrices, from the presets in `ColorData` (see [`crate::cr2`] for the
+/// record layout): Daylight, Shade, Cloudy, Tungsten and Flash at their stated temperatures. Word positions from
+/// `exiftool -v3` run as a black-box tool on files of each version: versions 16-19 Daylight at word 136, 32 and 33 at
+/// 150, 34 and 48 at 205 (each with Flash thirty words after Daylight), 64 to 66 at 110 with Flash twenty-five
+/// after (no Auto / Measured / Kelvin records in these). Other versions give none.
+fn kelvin_presets(maker: Option<&Ifd>) -> Option<crate::kelvin::KelvinPresets> {
+    let v = maker?.u64s(COLOR_DATA)?;
+    let rows = match v.first().copied()? {
+        16..=19 => crate::cr2::preset_records(136, 166),
+        32 | 33 => crate::cr2::preset_records(150, 180),
+        34 | 48 => crate::cr2::preset_records(205, 235),
+        64..=66 => crate::cr2::preset_records(110, 135),
+        _ => return None,
+    };
+    crate::cr2::presets_at(&v, &rows)
+}
+
 /// Canon's versioned word arrays. Offsets are word indices from the published tag tables, not
 /// byte offsets. The four as-shot WB values are R, G, G, B, independent of the CFA layout.
 /// A version without a white-level offset takes its white level from the data (see `docs/cr3.md`).
@@ -253,7 +270,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.and_then(|i| i.u16(craft_tiff::tags::ORIENTATION)).unwrap_or(1)),
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets: kelvin_presets(color_maker), ..Default::default() },
         wb_multipliers: levels.wb,
         linearized: false,
         linearization_table: None,
@@ -374,6 +391,39 @@ mod tests {
     use super::*;
     use crate::shared::ASPECT_INFO;
     use craft_tiff::{IfdBuilder, Value};
+
+    /// The presets of each verified `ColorData` version read back at their stated temperatures; other versions, short
+    /// arrays and records that don't make a curve give none.
+    #[test]
+    fn color_data_presets_by_version() {
+        let records = [(2013u16, 1479u16, 5200u16), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
+        for (version, daylight, flash) in
+            [(16, 136, 166), (19, 136, 166), (32, 150, 180), (33, 150, 180), (34, 205, 235), (48, 205, 235), (64, 110, 135), (66, 110, 135)]
+        {
+            let mut words = vec![0u16; 300];
+            words[0] = version;
+            for (i, (r, b, k)) in records.into_iter().enumerate() {
+                let at = if i == 4 { flash } else { daylight + 5 * i };
+                words[at..at + 5].copy_from_slice(&[r, 1024, 1024, b, k]);
+            }
+            let ifd = |w: Vec<u16>| {
+                let b = IfdBuilder::new().with(COLOR_DATA, Value::Short(w));
+                let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
+                Tiff::parse(&bytes).unwrap().ifds.remove(0)
+            };
+            let p = kelvin_presets(Some(&ifd(words.clone()))).unwrap_or_else(|| panic!("{version}"));
+            let pts = p.points();
+            assert!(
+                pts.iter().any(|&(k, m)| k == 7000.0 && (m[0] - 2300.0 / 1024.0).abs() < 1e-6 && (m[2] - 1280.0 / 1024.0).abs() < 1e-6),
+                "{version}: {pts:?}"
+            );
+            assert_eq!(pts.len(), 5, "{version}");
+            assert!(kelvin_presets(Some(&ifd(words[..flash].to_vec()))).is_none(), "{version}: short");
+            words[0] = 255;
+            assert!(kelvin_presets(Some(&ifd(words))).is_none(), "{version}: unknown");
+        }
+        assert!(kelvin_presets(None).is_none());
+    }
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {
         let mut words = vec![0u16; white_at + 1];

@@ -115,25 +115,56 @@ fn wb_from_color_balance(v: &[u64]) -> Option<[f32; 3]> {
 /// Flash, in that order. Fluorescent is left out (a green light off the locus) and so is the Kelvin row (it holds the
 /// dial's last setting, and on some bodies a temperature that doesn't match its own levels: 6036 K with the camera at
 /// 5500 K on the PowerShot G1 X Mark III, Daylight's levels at 5213 K on the EOS 2000D). Positions from the ExifTool
-/// Canon tag-name documentation's `ColorData5` / `ColorData8` tables, confirmed with ExifTool run as a black-box tool
-/// on files of each version: -4 on a PowerShot G1 X Mark III (`ColorData5`: 8-word records, the second record after
-/// Daylight a repeat of it), 13, 14 and 15 on the CC0 corpus samples of the EOS 5D Mark IV, 2000D and 6D Mark II
-/// (`ColorData8`: 5-word records). Other versions give no presets.
-fn preset_rows(version: i16) -> Option<[(usize, usize); 5]> {
-    match version {
-        -4 => Some([(95, 102), (111, 118), (119, 126), (127, 134), (151, 158)]),
-        13..=15 => Some([(133, 137), (138, 142), (143, 147), (148, 152), (163, 167)]),
-        _ => None,
+/// Canon tag-name documentation's `ColorData1`–`ColorData8` tables, confirmed with ExifTool run as a black-box tool
+/// on files of each version and by reading the words of 453 CR2 files (reporters' samples and the CC0 corpus): -4 on
+/// a PowerShot G1 X Mark III (`ColorData5`: 8-word records, the second record after Daylight a repeat of it);
+/// everything else is 5-word records `R G G B Kelvin` in the order Daylight (5200 K), Shade (7000), Cloudy (6000),
+/// Tungsten (3200), Fluorescent, Kelvin, Flash (thirty words after Daylight): version 1 from word 78, 2–9 from 83, 10
+/// from 103 on the EOS 1200D family and from 128 on the others, 11 from 128, 12–15 from 133. A version with two
+/// layouts is read at the one whose Daylight record names 5200 K. Other versions give no presets.
+fn preset_rows(version: i16) -> &'static [[(usize, usize); 5]] {
+    const fn records(daylight: usize) -> [(usize, usize); 5] {
+        preset_records(daylight, daylight + 30)
     }
+    const G1X3: [(usize, usize); 5] = [(95, 102), (111, 118), (119, 126), (127, 134), (151, 158)];
+    const AT_78: [(usize, usize); 5] = records(78);
+    const AT_83: [(usize, usize); 5] = records(83);
+    const AT_103: [(usize, usize); 5] = records(103);
+    const AT_128: [(usize, usize); 5] = records(128);
+    const AT_133: [(usize, usize); 5] = records(133);
+    match version {
+        -4 => &[G1X3],
+        1 => &[AT_78],
+        2..=9 => &[AT_83],
+        10 => &[AT_103, AT_128],
+        11 => &[AT_128],
+        12..=15 => &[AT_133],
+        _ => &[],
+    }
+}
+
+/// The five preset records (Daylight, Shade, Cloudy, Tungsten, Flash) of a `ColorData` array whose Daylight record
+/// starts at word `daylight` and Flash record at `flash`: Daylight, Shade, Cloudy and Tungsten follow each other
+/// in 5-word records `R G G B Kelvin`. Also used by CR3 (`ColorData` words of the same record layout).
+pub(crate) const fn preset_records(daylight: usize, flash: usize) -> [(usize, usize); 5] {
+    [(daylight, daylight + 4), (daylight + 5, daylight + 9), (daylight + 10, daylight + 14), (daylight + 15, daylight + 19), (flash, flash + 4)]
 }
 
 /// The camera's planckian white-balance presets from the `ColorData` words ([`preset_rows`]) as a Kelvin curve;
 /// `None` for an unknown version, a short array or presets that don't make a curve.
 fn kelvin_presets_from_color_data(v: &[u64]) -> Option<crate::kelvin::KelvinPresets> {
     let version = *v.first()? as u16 as i16;
-    let rows = preset_rows(version)?;
+    let rows = match preset_rows(version) {
+        [one] => one,
+        many => many.iter().find(|rows| v.get(rows[0].1) == Some(&5200))?,
+    };
+    presets_at(v, rows)
+}
+
+/// The Kelvin curve of the preset records at `rows` ((levels word, temperature word) of each) in `v`.
+pub(crate) fn presets_at(v: &[u64], rows: &[(usize, usize); 5]) -> Option<crate::kelvin::KelvinPresets> {
     let mut points = Vec::with_capacity(rows.len());
-    for (at, temp_at) in rows {
+    for &(at, temp_at) in rows {
         let q = v.get(at..at + 4)?;
         let temp = *v.get(temp_at)? as f32;
         if let Some(wb) = wb_from_levels(q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32)
@@ -700,7 +731,7 @@ pub(crate) mod tests {
     fn color_data_with_presets(version: i16, presets: &[(u16, u16, u16)]) -> Vec<u64> {
         let mut v = vec![0u64; 400];
         v[0] = u64::from(version as u16);
-        for ((at, temp_at), &(r, b, k)) in preset_rows(version).unwrap().into_iter().zip(presets) {
+        for ((at, temp_at), &(r, b, k)) in preset_rows(version).first().unwrap().iter().copied().zip(presets) {
             v[at..at + 4].copy_from_slice(&[r.into(), 1024, 1024, b.into()]);
             v[temp_at] = k.into();
         }
@@ -720,9 +751,20 @@ pub(crate) mod tests {
         want.sort_by(|a, b| a.0.total_cmp(&b.0));
         assert_eq!(p.points(), want);
         let eos = [(2013, 1479, 5200), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, 6156)];
-        for version in [13, 14, 15] {
+        for version in [1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15] {
             assert!(kelvin_presets_from_color_data(&color_data_with_presets(version, &eos)).is_some(), "{version}");
         }
+        // version 10 has two layouts: the one whose Daylight record says 5200 K is read
+        let mut b = vec![0u64; 400];
+        b[0] = 10;
+        for (&(at, temp_at), &(r, bl, k)) in preset_rows(10)[1].iter().zip(&eos) {
+            b[at..at + 4].copy_from_slice(&[r.into(), 1024, 1024, bl.into()]);
+            b[temp_at] = k.into();
+        }
+        assert!(kelvin_presets_from_color_data(&b).is_some(), "10, second layout");
+        b[132] = 5000;
+        assert!(kelvin_presets_from_color_data(&b).is_none(), "10, neither layout names Daylight at 5200 K");
+        assert!(kelvin_presets_from_color_data(&[10]).is_none());
         // a preset that would turn the curve back (Flash cooler than Shade's levels say) is dropped, not fatal
         let mut odd = g1x3;
         odd[4] = (1500, 1300, 9000);
@@ -753,7 +795,7 @@ pub(crate) mod tests {
                     seed ^= seed << 13;
                     seed ^= seed >> 7;
                     seed ^= seed << 17;
-                    if i == 0 { [0xfffc, 13, 14, 15][(seed % 4) as usize] } else { seed % 70000 }
+                    if i == 0 { [0xfffc, 1, 10, 13, 14, 15][(seed % 6) as usize] } else { seed % 70000 }
                 })
                 .collect();
             let _ = kelvin_presets_from_color_data(&v);
