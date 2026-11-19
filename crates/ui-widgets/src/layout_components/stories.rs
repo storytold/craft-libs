@@ -11,7 +11,7 @@ use egui::Ui;
 /// The gap and padding tier the Row and Stack stories edit.
 fn spacing(data: &mut StoryData, gap: Gap, gaps: &'static [(&'static str, Gap)]) -> (Gap, Pad) {
     let gap = *data.choice("gap", gap, gaps);
-    let pad = *data.choice("pad", Pad::Regular, &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy)]);
+    let pad = *data.choice("pad", Pad::Regular, &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy), ("Page", Pad::Page)]);
     (gap, pad)
 }
 

@@ -135,6 +135,9 @@ pub enum Pad {
     Regular,
     /// `space.pad.roomy`.
     Roomy,
+    /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
+    /// File page's body stands off the window and its side menu.
+    Page,
 }
 
 /// The edges a container's padding tier applies to.
