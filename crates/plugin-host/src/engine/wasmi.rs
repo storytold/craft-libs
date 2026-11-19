@@ -44,11 +44,16 @@ struct MemLimiter {
 
 impl ResourceLimiter for MemLimiter {
     fn memory_growing(&mut self, _current: usize, desired: usize, maximum: Option<usize>) -> Result<bool, LimiterError> {
+        // The module's own maximum comes first: a grow past it returns -1 and the guest decides.
+        // wasmi 2.0.0 checked it before calling the limiter; 2.0.1 calls the limiter first.
+        if maximum.is_some_and(|m| desired > m) {
+            return Ok(false);
+        }
         if desired > self.cap {
             self.oom = true;
             return Err(LimiterError::ResourceLimiterDeniedAllocation);
         }
-        Ok(maximum.is_none_or(|m| desired <= m))
+        Ok(true)
     }
 
     fn table_growing(&mut self, _current: usize, desired: usize, maximum: Option<usize>) -> Result<bool, LimiterError> {
