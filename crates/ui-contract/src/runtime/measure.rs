@@ -309,6 +309,7 @@ pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
 /// What a settling child's decision was.
 #[cfg(feature = "testing")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Settle {
     /// The child ran.
     Ran,
@@ -321,7 +322,7 @@ pub enum Settle {
 /// The settled-test decisions of one pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-struct SettleLog {
+pub(crate) struct SettleLog {
     pass: u64,
     decisions: Vec<(Id, Settle)>,
 }
@@ -331,7 +332,7 @@ struct SettleLog {
 #[cfg(feature = "testing")]
 pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
     let pass = ctx.cumulative_pass_nr();
-    store::with::<SettleLog, _>(ctx, |log| {
+    pass_state::with::<SettleLog, _>(ctx, |log| {
         if log.pass != pass {
             *log = SettleLog { pass, decisions: Vec::new() };
         }
@@ -343,13 +344,13 @@ pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
 #[cfg(feature = "testing")]
 pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    store::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
+    pass_state::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
 }
 
 /// Bytes fed into memo keys in one pass, and the layouts and measure asks of that pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-struct PassTotals {
+pub(crate) struct PassTotals {
     pass: u64,
     key_bytes: usize,
     text_layouts: u32,
@@ -359,7 +360,7 @@ struct PassTotals {
 #[cfg(feature = "testing")]
 fn totals<R>(ctx: &Context, f: impl FnOnce(&mut PassTotals) -> R) -> R {
     let pass = ctx.cumulative_pass_nr();
-    store::with::<PassTotals, _>(ctx, |log| {
+    pass_state::with::<PassTotals, _>(ctx, |log| {
         if log.pass != pass {
             *log = PassTotals { pass, ..PassTotals::default() };
         }
@@ -370,7 +371,7 @@ fn totals<R>(ctx: &Context, f: impl FnOnce(&mut PassTotals) -> R) -> R {
 #[cfg(feature = "testing")]
 fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    store::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
+    pass_state::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
 }
 
 /// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
