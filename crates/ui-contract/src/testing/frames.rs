@@ -186,7 +186,8 @@ impl Frames {
     }
 
     /// One frame of `viewport`, a child window of the root while the root stays live, with `events`; `ui` runs once
-    /// per pass. Returns the number of passes.
+    /// per pass. Returns the number of passes. The child opens with its first frame and stays open, listed in the root's
+    /// frames too, until [`close_viewport`](Self::close_viewport) or a `ViewportCommand::Close` for it.
     pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize {
         set_input(&self.ctx, self.input());
         let mut passes = 0;
@@ -251,6 +252,11 @@ impl Frames {
     /// Moves the clock on by `seconds` before the next frame.
     pub fn advance(&mut self, seconds: f64) {
         self.time += seconds;
+    }
+
+    /// Closes the child window `viewport`, as its user would: later frames no longer list it.
+    pub fn close_viewport(&mut self, viewport: egui::ViewportId) {
+        fixture::close_viewport(&self.ctx, viewport);
     }
 
     /// `n` frames with no events.
