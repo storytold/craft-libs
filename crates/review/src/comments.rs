@@ -139,6 +139,10 @@ pub struct CommentThread {
     pub messages: Vec<CommentMessage>,
     /// Each reviewer's latest status, oldest first.
     pub statuses: Vec<ReviewerStatus>,
+    /// The statuses reviewers set on the thread's replies rather than on the comment: the search finds their text,
+    /// and the card shows only [`statuses`](Self::statuses).
+    #[serde(default)]
+    pub reply_statuses: Vec<ReviewerStatus>,
     /// Acrobat's per-comment checkmark.
     pub marked: bool,
     /// A locked thread can't be edited.
@@ -259,12 +263,12 @@ pub fn sort_threads(threads: &[CommentThread], sort: CommentSort, page_order: Pa
 }
 
 /// Whether `thread` matches the search `query`: in any message's text or author, the text of a
-/// reviewer's status reply, or the reader's name of the kind (`kind_name`), ignoring case (and the
+/// reviewer's status reply on the comment or on one of its replies, or the reader's name of the kind (`kind_name`), ignoring case (and the
 /// Turkish dotted and dotless i, as PdfCraft's `fold_case` does) through `folder`.
 // pdfcraft: crates/ui-egui/src/panels/comments_panel.rs:104 `matches`, `:107` `any_contains`.
 pub fn matches(thread: &CommentThread, query: &str, folder: &Folder, kind_name: impl Fn(AnnotationKind) -> String) -> bool {
     let has = |text: &str| folder.contains(text, query);
     thread.kind.is_some_and(|kind| has(&kind_name(kind)))
         || thread.messages.iter().any(|m| has(&m.text) || has(&m.author))
-        || thread.statuses.iter().any(|reviewer| has(&reviewer.text))
+        || thread.statuses.iter().chain(&thread.reply_statuses).any(|reviewer| has(&reviewer.text))
 }

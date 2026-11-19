@@ -27,6 +27,7 @@ fn thread(id: u64, page: usize, text: &str) -> CommentThread {
         color: None,
         messages: vec![message("Ana", text)],
         statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked: false,
         resolved: false,
@@ -280,6 +281,76 @@ fn host_rows_follow_the_cards_rows_and_report_their_value() {
     let export = fixture.by_label("Export comments").expect("the host row in the More menu");
     fixture.click(&export).settle();
     assert_eq!(ran.borrow().as_slice(), &[9_u32], "the More menu returns the host row that ran");
+}
+
+/// Each reply of a card is a node of its own, named by its author and text, inside the card and in message order;
+/// the card is named by its comment.
+#[trial]
+fn a_cards_replies_are_nodes_inside_it() {
+    let mut first = thread(1, 1, "Note 1.");
+    first.messages.extend([message("Bo", "A first reply."), message("Cy", "A second reply.")]);
+    let threads = vec![first];
+    let mut state = CommentsPanelState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.in_room(Room::Panel).settle();
+    let card = card(&fixture, "Note 1.").expect("the card");
+    let names = row_names(&fixture);
+    assert!(names.iter().all(|name| !name.contains("reply.")), "the card is named by its comment: {names:?}");
+    let reply = |author: &str, text: &str| {
+        fixture
+            .by_role(Role::GROUP)
+            .into_iter()
+            .find(|node| fixture.tree().name_of(node.node).is_some_and(|name| name.contains(author) && name.contains(text)))
+            .map(|node| node.rect)
+    };
+    let one = reply("Bo", "A first reply.").expect("the first reply's node");
+    let two = reply("Cy", "A second reply.").expect("the second reply's node");
+    assert!(card.contains_rect(one) && card.contains_rect(two), "the replies sit inside the card: {card:?} holds {one:?} and {two:?}");
+    assert!(one.bottom() <= two.top(), "the replies follow message order: {one:?} then {two:?}");
+}
+
+/// The search finds a comment by the text of a status set on one of its replies, which its card does not show.
+#[trial]
+fn the_search_finds_a_status_set_on_a_reply() {
+    let mut first = thread(1, 1, "Note 1.");
+    first.messages.push(message("Bo", "A reply."));
+    first.reply_statuses = vec![ReviewerStatus { reviewer: "Cy".into(), status: ReviewStatus::Accepted, text: "Reply-status token".into() }];
+    let threads = vec![first, thread(2, 1, "Note 2.")];
+    let mut state = CommentsPanelState::default();
+    state.search = "reply-status".into();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.in_room(Room::Panel).settle();
+    assert!(card(&fixture, "Note 1.").is_some(), "the comment whose reply has the status matches");
+    assert!(card(&fixture, "Note 2.").is_none(), "the other does not");
+}
+
+/// An editor the app opens takes the keyboard as it shows, once: after the focus goes elsewhere the editor does not
+/// take it back.
+#[trial]
+fn an_editor_the_app_opens_takes_the_focus_once() {
+    let state = Rc::new(RefCell::new(CommentsPanelState::default()));
+    let shown_state = state.clone();
+    let threads = vec![thread(1, 1, "Note 1.")];
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.in_room(Room::Panel).settle();
+    state.borrow_mut().edit(ThreadId(1), 0, String::new());
+    fixture.settle();
+    fixture.type_text("Typed").settle();
+    let draft = || state.borrow().editing.as_ref().map(|(_, _, text)| text.clone());
+    assert_eq!(draft().as_deref(), Some("Typed"), "the opened editor has the keyboard");
+    let add = fixture.by_label("Add a comment").expect("the add box");
+    fixture.click(&add).settle();
+    fixture.idle(3);
+    fixture.type_text("Elsewhere").settle();
+    assert_eq!(draft().as_deref(), Some("Typed"), "the editor does not take the keyboard back");
+    assert_eq!(state.borrow().new_comment, "Elsewhere", "the add box keeps it");
 }
 
 /// A panel over 120 threads on page 1, scrolled by a reveal to thread 100; the threads are shared so a trial can

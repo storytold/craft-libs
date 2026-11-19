@@ -18,7 +18,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Vec2, vec2};
 use super::list::{CardEvent, RowOut};
 use super::{CommentsWords, EDIT_LINES, Line, REPLY_LINES, age_text, status_label};
 use crate::annotate::AnnotationKind;
-use crate::comments::{CommentThread, ReviewStatus, ReviewerStatus, ThreadId};
+use crate::comments::{CommentMessage, CommentThread, ReviewStatus, ReviewerStatus, ThreadId};
 use crate::ui::avatar::paint_face;
 
 /// The style of a card or heading row.
@@ -122,10 +122,15 @@ trait Sink {
     fn badge_size(&mut self, slot: Slot, label: &str) -> Vec2;
     /// A status badge showing `label` in the tone of `status`.
     fn badge(&mut self, slot: Slot, rect: Rect, label: &str, status: ReviewStatus);
+    /// The extent of reply `index` (a message after the first), from its author line to the bottom of its text.
+    fn reply(&mut self, index: usize, rect: Rect);
 }
 
 /// The "..." button of message `index` of a card: a part of the row that opens the message's menu.
 pub(super) const MORE: PartKey = PartKey::new("more");
+
+/// Reply `index` of a card: the access node that names it.
+const REPLY: PartKey = PartKey::new("reply");
 
 /// A card or a heading of the card collection.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
@@ -144,6 +149,9 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
+    /// The inline editor takes the focus this pass, when the card shows one.
+    #[prop]
+    focus_editor: bool,
     /// The key that submits the reply box.
     submit_key: SubmitKey,
     words: Option<Arc<CommentsWords>>,
@@ -155,6 +163,8 @@ pub(crate) struct CommentRow<'r> {
     badges: Vec<Vec2>,
     /// The messages whose "..." button the parts step declared.
     mores: Vec<usize>,
+    /// Each reply's index and its rect on the screen, from the parts step.
+    replies: Vec<(usize, Rect)>,
     events: Vec<CardEvent>,
 }
 
@@ -171,12 +181,14 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
+            focus_editor: false,
             submit_key: SubmitKey::default(),
             words: None,
             heights: [0.0; 2],
             buttons: [Vec2::ZERO; 3],
             badges: Vec::new(),
             mores: Vec::new(),
+            replies: Vec::new(),
             events: Vec::new(),
         }
         .label(name)
@@ -316,6 +328,7 @@ impl CommentRow<'_> {
         y = self.statuses(thread, st, Line { at: Pos2::new(pad, y), room }, &words, sink);
         for index in 1..thread.messages.len() {
             let Some(message) = thread.messages.get(index) else { break };
+            let top = y;
             sink.avatar(square(Pos2::new(pad, y), h), &message.author);
             let x = pad + h + gap;
             let name_room = width - pad - h - gap - x;
@@ -337,7 +350,9 @@ impl CommentRow<'_> {
             };
             sink.button(Slot::More(index), square(Pos2::new(width - pad - h, y), h), "more", &words.more, false);
             y += h.max(head) + gap;
-            y = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink) + gap;
+            let bottom = self.message(index, thread, st, Line { at: Pos2::new(x, y), room: width - pad - x }, &words, sink);
+            sink.reply(index, Rect::from_min_max(Pos2::new(pad, top), Pos2::new(width - pad, bottom)));
+            y = bottom + gap;
         }
         if self.lead && self.editable {
             let field = sink.field(Slot::ReplyField, strip(Pos2::new(pad, y), room), &words.reply, self.reply, REPLY_LINES);
@@ -407,6 +422,8 @@ struct Measure<'a, 'b, 'r> {
     more: Vec<(usize, Rect)>,
     /// The size of each status badge, in the order the row lays them.
     badges: Vec<Vec2>,
+    /// The message index and left-to-right rect of each reply.
+    replies: Vec<(usize, Rect)>,
 }
 
 impl Sink for Measure<'_, '_, '_> {
@@ -454,6 +471,10 @@ impl Sink for Measure<'_, '_, '_> {
     }
 
     fn badge(&mut self, _: Slot, _: Rect, _: &str, _: ReviewStatus) {}
+
+    fn reply(&mut self, index: usize, rect: Rect) {
+        self.replies.push((index, rect));
+    }
 }
 
 /// Where the push button `slot`'s measured size is kept.
@@ -477,8 +498,9 @@ struct Paint<'a, 'b> {
     buttons: [Vec2; 3],
     badges: &'a [Vec2],
     reply_submit: SubmitKey,
-    /// Set when the reply box takes the focus as it shows: the context the request goes to.
-    focus_reply: Option<&'a egui::Context>,
+    /// The field that takes the focus as it shows (the reply box or the inline editor), and the context the request
+    /// goes to.
+    focus: Option<(Slot, &'a egui::Context)>,
     events: &'a mut Vec<CardEvent>,
 }
 
@@ -578,8 +600,8 @@ impl Sink for Paint<'_, '_> {
         if out.escaped && slot == Slot::EditField {
             self.events.push(CardEvent::EditCancel);
         }
-        if slot == Slot::ReplyField
-            && let Some(ctx) = self.focus_reply
+        if let Some((focused, ctx)) = self.focus
+            && focused == slot
         {
             focus::request(ctx, FocusTarget::Id(out.response.id));
         }
@@ -614,6 +636,8 @@ impl Sink for Paint<'_, '_> {
         let badge = Badge::new(label.to_owned()).variant(Variant::look(Emphasis::Soft, badge_tone(status)));
         let _ = self.ui.child(slot, self.place(rect), badge);
     }
+
+    fn reply(&mut self, _: usize, _: Rect) {}
 }
 
 impl Component for CommentRow<'_> {
@@ -627,9 +651,22 @@ impl Component for CommentRow<'_> {
                 access.node(MORE.at(index as u64), Role::BUTTON).name = craft_ui::contract::Name::Text(words.more.as_str().to_owned());
             }
         }
-        let Some(first) = self.thread.and_then(|thread| thread.messages.first()) else { return };
-        let age = age_text(&cx.env, first.modified.unwrap_or(first.created), self.now);
-        access.name(craft_ui::contract::Name::Joined(vec![cx.resolved.label.to_owned(), age]));
+        let Some(thread) = self.thread else { return };
+        let Some(first) = thread.messages.first() else { return };
+        let named = |name: String, message: &CommentMessage| {
+            let age = age_text(&cx.env, message.modified.unwrap_or(message.created), self.now);
+            craft_ui::contract::Name::Joined(if age.is_empty() { vec![name] } else { vec![name, age] })
+        };
+        access.name(named(cx.resolved.label.to_owned(), first));
+        // Each reply is a node of its own inside the card, named as the card is by its comment.
+        let Some(words) = &self.words else { return };
+        for &(index, rect) in &self.replies {
+            let Some(message) = thread.messages.get(index) else { continue };
+            let name = words.card_name.fill(&[("author", &message.author), ("text", &message.text)]);
+            let node = access.node(REPLY.at(index as u64), Role::GROUP);
+            node.name = named(name, message);
+            node.bounds(rect);
+        }
     }
 
     fn style(cx: &StyleCx<'_>, _: CommentRowStyleKey) -> CommentRowStyle {
@@ -661,7 +698,7 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let now = self.now;
         let age = |then: i64| age_text(&cx.env, then, now);
-        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; 3], more: Vec::new(), badges: Vec::new() };
+        let mut sink = Measure { cx, fields: [0.0; 2], buttons: [Vec2::ZERO; 3], more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
         let height = self.lay(cx.style, width, &age, &mut sink);
         self.heights = sink.fields;
         self.buttons = sink.buttons;
@@ -673,9 +710,10 @@ impl Component for CommentRow<'_> {
         self.words = Some(cx.words::<CommentsWords>());
         let (now, rtl) = (self.now, cx.flow.is_rtl());
         let age = |then: i64| age_text(&cx.env, then, now);
-        let mut sink = Measure { cx, fields: self.heights, buttons: self.buttons, more: Vec::new(), badges: Vec::new() };
+        let mut sink = Measure { cx, fields: self.heights, buttons: self.buttons, more: Vec::new(), badges: Vec::new(), replies: Vec::new() };
         self.lay(cx.style, rect.width(), &age, &mut sink);
         self.mores = sink.more.iter().map(|(index, _)| *index).collect();
+        self.replies = sink.replies.iter().map(|&(index, local)| (index, placed(rect.min, rect.width(), rtl, local))).collect();
         for (index, local) in sink.more {
             cx.part(MORE.at(index as u64), placed(rect.min, rect.width(), rtl, local))
                 .sense(Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS)
@@ -711,7 +749,11 @@ impl Component for CommentRow<'_> {
             buttons: self.buttons,
             badges: &self.badges,
             reply_submit: self.submit_key,
-            focus_reply: self.focus_reply.then_some(&cx.ctx),
+            focus: if self.focus_editor {
+                Some((Slot::EditField, &cx.ctx))
+            } else {
+                self.focus_reply.then_some((Slot::ReplyField, &cx.ctx))
+            },
             events: &mut events,
         };
         self.lay(st, rect.width(), &age, &mut sink);

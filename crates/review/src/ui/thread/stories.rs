@@ -27,6 +27,7 @@ fn thread() -> CommentThread {
         color: None,
         messages: vec![message("Ana", "Check @Bo before we ship.", NOW - 7_200), message("Bo", "On it.", NOW - 600)],
         statuses: Vec::new(),
+        reply_statuses: Vec::new(),
         marked: false,
         locked: false,
         resolved: false,
@@ -81,6 +82,14 @@ fn comment_composer_edit_draft(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
         .draft_kind(ComposerDraft::EditVerbatim)
         .close(ComposerClose::OnPostOrCancel)
         .show(ui);
+    opener.into()
+}
+
+#[story(CommentComposer<'static>, covers = [], drive = Drive::Never)]
+fn comment_composer_hint(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let opener = Button::new("Insert").show(ui);
+    let draft = data.value("draft", String::new());
+    let _ = CommentComposer::new(Some(pos2(40.0, 60.0)), draft).header("Inserted Text", "Ana").hint("Text to insert").show(ui);
     opener.into()
 }
 

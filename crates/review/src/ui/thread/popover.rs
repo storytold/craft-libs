@@ -243,6 +243,7 @@ pub struct CommentComposer<'a> {
     anchor: Option<Pos2>,
     draft: &'a mut String,
     header: Option<(Label, &'a str)>,
+    hint: Option<Label>,
     kind: ComposerDraft,
     close: ComposerClose,
 }
@@ -250,13 +251,21 @@ pub struct CommentComposer<'a> {
 impl<'a> CommentComposer<'a> {
     /// A composer at `anchor` (screen points; `None` hides it) that edits `draft`.
     pub fn new(anchor: Option<Pos2>, draft: &'a mut String) -> Self {
-        CommentComposer { anchor, draft, header: None, kind: ComposerDraft::New, close: ComposerClose::OnOutsidePress }
+        CommentComposer { anchor, draft, header: None, hint: None, kind: ComposerDraft::New, close: ComposerClose::OnOutsidePress }
     }
 
     /// A header of `title` and the `author` above the field; the card is named `title`.
     #[must_use]
     pub fn header(mut self, title: impl Into<Label>, author: &'a str) -> Self {
         self.header = Some((title.into(), author));
+        self
+    }
+
+    /// What the field asks for, in place of "Add a comment": its name and its placeholder ("Text to insert" for an
+    /// insertion).
+    #[must_use]
+    pub fn hint(mut self, hint: impl Into<Label>) -> Self {
+        self.hint = Some(hint.into());
         self
     }
 
@@ -325,7 +334,7 @@ pub struct CommentComposerOutput {
 impl CommentComposer<'_> {
     /// Shows the composer and reports whether the user posted or closed it.
     pub fn show(self, ui: &mut Ui) -> CommentComposerOutput {
-        let CommentComposer { anchor, draft, header, kind, close } = self;
+        let CommentComposer { anchor, draft, header, hint, kind, close } = self;
         let mut output = CommentComposerOutput::default();
         let Some(anchor) = anchor else { return output };
         let words = Env::of(ui).words::<ThreadWords>();
@@ -348,9 +357,10 @@ impl CommentComposer<'_> {
                         });
                     });
                 }
-                let field = TextField::new(words.add_comment.clone(), Bind::bound(&mut *draft))
+                let hint = hint.clone().unwrap_or_else(|| words.add_comment.clone());
+                let field = TextField::new(hint.clone(), Bind::bound(&mut *draft))
                     .lines(COMPOSER_ROWS)
-                    .placeholder(words.add_comment.clone())
+                    .placeholder(hint)
                     .submits()
                     .default_stop()
                     .show(ui);

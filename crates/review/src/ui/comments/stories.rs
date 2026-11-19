@@ -31,6 +31,7 @@ fn thread(id: u64, page: usize, text: &str, replies: usize) -> CommentThread {
         color: Some([255, 200, 0]),
         messages,
         statuses: if id == 1 { vec![reviewer("Bo", ReviewStatus::Accepted)] } else { Vec::new() },
+        reply_statuses: Vec::new(),
         marked: id == 3,
         locked: false,
         resolved: false,
