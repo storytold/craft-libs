@@ -1,7 +1,6 @@
 use super::{Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, Writer, props, xml};
 use crate::write::props::open_change;
 use craft_wordmodel::Document;
-use craft_wordmodel::props::Align;
 use craft_wordmodel::styles::TableStyleParts;
 
 /// Built-in names Word keeps in lower case in styles.xml.
@@ -301,9 +300,7 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
         LevelSuffix::Nothing => w.val("w:suff", "nothing"),
     }
     w.val("w:lvlText", &l.text);
-    // Numbering level justification only supports left, center, and right.
-    let align = if matches!(l.align, Align::Justify | Align::Distribute | Align::ThaiDistribute) { Align::Left } else { l.align };
-    w.val("w:lvlJc", props::align_val(align));
+    w.val("w:lvlJc", props::align_val(l.align));
     w.open("w:pPr", &[]);
     if let Some(t) = l.tab.filter(|t| t.is_finite()) {
         w.open("w:tabs", &[]);

@@ -76,7 +76,7 @@ fn thai_and_regular_distributed_alignments_remain_distinct() {
 }
 
 #[test]
-fn numbering_level_alignments_use_supported_values() {
+fn numbering_level_alignments_round_trip() {
     use craft_wordmodel::numbering::{AbstractNum, Level, Num};
 
     let mut doc = Document::new();
@@ -100,7 +100,15 @@ fn numbering_level_alignments_use_supported_values() {
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/numbering.xml").unwrap(), &mut xml).unwrap();
     let values: Vec<_> = xml.split("<w:lvlJc w:val=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
-    assert_eq!(values, ["left", "center", "right", "left", "left", "left", "left"]);
+    assert_eq!(values, ["left", "center", "right", "both", "distribute", "thaiDistribute", "thaiDistribute"]);
+
+    let reopened = craft_docx::read(&bytes).expect("read");
+    let numbering = reopened.numbering.abstracts.iter().find(|abstract_num| abstract_num.id == 1).unwrap();
+    assert_eq!(
+        numbering.levels.iter().take(6).map(|level| level.align).collect::<Vec<_>>(),
+        [Align::Left, Align::Center, Align::Right, Align::Justify, Align::Distribute, Align::ThaiDistribute,]
+    );
+    assert_eq!(reopened.numbering.nums.iter().find(|num| num.id == 1).unwrap().level_overrides[0].1.align, Align::ThaiDistribute);
 }
 
 /// A paragraph built from (text, props) runs.
