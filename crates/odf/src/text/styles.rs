@@ -968,14 +968,20 @@ fn paragraph_properties(a: &Attrs, s: &mut StyleInfo) {
     if let Some(c) = get(a, "style:contextual-spacing") {
         s.contextual = Some(c.trim() == "true");
     }
-    // `page` (the page's direction) is left to the section.
-    match get(a, "style:writing-mode").map(str::trim) {
-        Some("rl-tb" | "rl" | "tb-rl") => s.rtl = Some(true),
-        Some("lr-tb" | "lr" | "tb-lr") => s.rtl = Some(false),
-        _ => {}
+    if let Some(rtl) = paragraph_rtl(a) {
+        s.rtl = Some(rtl);
     }
     if let Some(bg) = get(a, "fo:background-color") {
         s.para_shading = Some(if bg.trim() == "transparent" { None } else { model::parse_color(bg) });
+    }
+}
+
+fn paragraph_rtl(attrs: &Attrs) -> Option<bool> {
+    // `page` (the page's direction) is left to the section.
+    match get(attrs, "style:writing-mode").map(str::trim) {
+        Some("rl-tb" | "rl" | "tb-rl") => Some(true),
+        Some("lr-tb" | "lr" | "tb-lr") => Some(false),
+        _ => None,
     }
 }
 
@@ -1104,6 +1110,8 @@ pub(super) struct Styles {
     default_size: Option<f32>,
     /// Spacing of `style:default-style` for paragraphs.
     default_spacing: Spacing,
+    /// The paragraph default's writing mode, when stated.
+    pub(super) default_rtl: Option<bool>,
     /// Tab stops are measured from the paragraph's indent (LibreOffice's `TabsRelativeToIndent`
     /// setting in `settings.xml`, on unless it says otherwise).
     pub(super) tabs_from_indent: bool,
@@ -1195,6 +1203,7 @@ impl Styles {
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
+                    self.default_rtl = paragraph_rtl(&a).or(self.default_rtl);
                     self.default_widows = widows(&a);
                     if let Some(d) = get(&a, "style:tab-stop-distance").and_then(length).filter(|d| d.is_finite() && *d > 0.0) {
                         self.default_tab = Some(d.clamp(1.0, MAX_LEN));
@@ -1720,7 +1729,10 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
-        let rtl = own().find_map(|(_, s)| s.rtl);
+        // Left to right only over a style under it that reads right to left: elsewhere it is the
+        // default.
+        let under_rtl = chain.iter().skip(kind_at).find_map(|(_, s)| s.rtl).or(self.default_rtl) == Some(true);
+        let rtl = own().find_map(|(_, s)| s.rtl).filter(|r| *r || under_rtl);
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
         let keep_lines = own().find_map(|(_, s)| s.keep_lines);
         let widow_control = own().find_map(|(_, s)| s.widow_control);

@@ -483,7 +483,7 @@ fn is_valid_bg_layer(layer: &BgLayer<'_>) -> bool {
 pub(super) fn apply_style(
     css: &str,
     f: &mut Fmt,
-    align: &mut Option<Align>,
+    (align, rtl): (&mut Option<Align>, &mut bool),
     preserve: &mut bool,
     page_break: &mut bool,
     page_break_after: &mut bool,
@@ -608,6 +608,11 @@ pub(super) fn apply_style(
                 f.sup = lv == "super";
                 f.sub = lv == "sub";
             }
+            "direction" => match lv.as_str() {
+                "rtl" => *rtl = true,
+                "ltr" => *rtl = false,
+                _ => {}
+            },
             "text-align" => {
                 *align = match lv.as_str() {
                     "center" => Some(Align::Center),

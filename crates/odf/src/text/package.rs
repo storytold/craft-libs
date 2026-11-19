@@ -156,8 +156,10 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if let Some(c) = pp.contextual_spacing {
             attrs.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        if pp.bidi == Some(true) {
-            attrs.push_str(" style:writing-mode=\"rl-tb\"");
+        match pp.bidi {
+            Some(true) => attrs.push_str(" style:writing-mode=\"rl-tb\""),
+            Some(false) => attrs.push_str(" style:writing-mode=\"lr-tb\""),
+            None => {}
         }
         // At the width each side is drawn at, as the paragraph's own borders already are by the
         // time the flow model holds them: ODF has no border that is drawn and takes no room
@@ -391,9 +393,14 @@ fn styles_xml(
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows}{writing_mode} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
+        writing_mode = match doc.styles.default_para.bidi {
+            Some(true) => " style:writing-mode=\"rl-tb\"",
+            Some(false) => " style:writing-mode=\"lr-tb\"",
+            None => "",
+        },
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
         // when unsaid, and readers differ: docs/odf-interpretation.md).
         widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { " fo:widows=\"0\" fo:orphans=\"0\"" },

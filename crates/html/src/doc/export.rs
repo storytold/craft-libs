@@ -238,6 +238,7 @@ fn trim_num(v: f32) -> String {
 }
 
 fn para_attrs(p: &Para) -> String {
+    let mut attrs = if p.rtl { " dir=\"rtl\"".to_string() } else { String::new() };
     let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
         css.push(a.to_string());
@@ -248,7 +249,10 @@ fn para_attrs(p: &Para) -> String {
     if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
         css.push(format!("background-color:#{}", bg.hex()));
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    if !css.is_empty() {
+        attrs.push_str(&format!(" style=\"{}\"", css.join(";")));
+    }
+    attrs
 }
 
 fn para_html(p: &Para) -> String {
@@ -362,7 +366,11 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             }
             let single = match c.blocks.as_slice() {
                 [FBlock::Para(p)]
-                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                    if p.kind == Kind::Normal
+                        && p.list.is_none()
+                        && !p.page_break
+                        && !p.rtl
+                        && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
                 {
                     Some(p)
                 }
