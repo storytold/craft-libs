@@ -55,6 +55,12 @@ struct Definition<'a> {
     default_bank: Option<String>,
 }
 
+enum Section<'map, 'text> {
+    Patch(&'map mut PatchList<'text>),
+    Instrument(&'map mut Definition<'text>),
+    Other,
+}
+
 /// Read the patch names and instrument profiles from UTF-8 or Windows-1252 Cakewalk .ins text.
 ///
 /// Controller names, note names and profiles requiring nonstandard bank-select methods are
@@ -73,7 +79,7 @@ pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
     };
     let mut patch_names = BTreeMap::<String, (&str, PatchList)>::new();
     let mut instruments = BTreeMap::<&str, Definition>::new();
-    let mut section = "";
+    let mut section = Section::Other;
     let mut heading = "";
     for line in text.trim_start_matches('\u{feff}').split(['\r', '\n']) {
         let line = line.trim();
@@ -82,40 +88,49 @@ pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
         }
         if let Some(value) = line.strip_prefix('.') {
             heading = value;
-            section = "";
+            section = Section::Other;
             continue;
         }
         if let Some(value) = line.strip_prefix('[').and_then(|name| name.strip_suffix(']')) {
-            section = value.trim();
+            let name = value.trim();
+            section = if !name.is_empty() && heading.eq_ignore_ascii_case("Patch Names") {
+                Section::Patch(&mut patch_names.entry(name.to_ascii_lowercase()).or_insert_with(|| (name, PatchList::default())).1)
+            } else if !name.is_empty() && heading.eq_ignore_ascii_case("Instrument Definitions") {
+                Section::Instrument(instruments.entry(name).or_default())
+            } else {
+                Section::Other
+            };
             continue;
         }
         let Some((key, value)) = line.split_once('=') else { continue };
         let key = key.trim();
         let value = value.trim();
-        if section.is_empty() || value.is_empty() {
+        if value.is_empty() {
             continue;
         }
-        if heading.eq_ignore_ascii_case("Patch Names") {
-            if key.eq_ignore_ascii_case("BasedOn") {
-                patch_names.entry(section.to_ascii_lowercase()).or_insert_with(|| (section, PatchList::default())).1.base =
-                    Some(value.to_ascii_lowercase());
-            } else if let Ok(program @ 0..=127) = key.parse::<u8>() {
-                patch_names.entry(section.to_ascii_lowercase()).or_insert_with(|| (section, PatchList::default())).1.programs.insert(program, value);
-            }
-        } else if heading.eq_ignore_ascii_case("Instrument Definitions") {
-            let def = instruments.entry(section).or_default();
-            if key.eq_ignore_ascii_case("BankSelMethod") {
-                def.method = Some(value);
-            } else if let Some((prefix, bank)) = key.split_once('[')
-                && prefix.eq_ignore_ascii_case("Patch")
-                && let Some(bank) = bank.strip_suffix(']').map(str::trim)
-            {
-                if bank == "*" {
-                    def.default_bank = Some(value.to_ascii_lowercase());
-                } else if let Ok(bank @ 0..=16_383) = bank.parse::<u16>() {
-                    def.banks.insert(bank, value.to_ascii_lowercase());
+        match &mut section {
+            Section::Patch(list) => {
+                if key.eq_ignore_ascii_case("BasedOn") {
+                    list.base = Some(value.to_ascii_lowercase());
+                } else if let Ok(program @ 0..=127) = key.parse::<u8>() {
+                    list.programs.insert(program, value);
                 }
             }
+            Section::Instrument(def) => {
+                if key.eq_ignore_ascii_case("BankSelMethod") {
+                    def.method = Some(value);
+                } else if let Some((prefix, bank)) = key.split_once('[')
+                    && prefix.eq_ignore_ascii_case("Patch")
+                    && let Some(bank) = bank.strip_suffix(']').map(str::trim)
+                {
+                    if bank == "*" {
+                        def.default_bank = Some(value.to_ascii_lowercase());
+                    } else if let Ok(bank @ 0..=16_383) = bank.parse::<u16>() {
+                        def.banks.insert(bank, value.to_ascii_lowercase());
+                    }
+                }
+            }
+            Section::Other => {}
         }
     }
     let roots = instruments
@@ -186,6 +201,17 @@ fn resolve_patch_lists<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reopened_patch_section_keeps_earlier_programs_and_first_spelling() -> Result<(), InsError> {
+        let input = b".Patch Names\n[Grand]\n0=Piano\n[Other]\n0=Strings\n[GRAND]\n1=Organ\n\
+            .Note Names\n[GRAND]\n2=Ignored\n.Instrument Definitions\n[Synth]\nPatch[0]=grand";
+        let instruments = read_ins(input)?;
+        let bank = &instruments[0].banks[&0];
+        assert_eq!(bank.name, "Grand");
+        assert_eq!(bank.programs, BTreeMap::from([(0, "Piano".into()), (1, "Organ".into())]));
+        Ok(())
+    }
 
     #[test]
     fn resolves_programs_by_profile_and_packed_bank() -> Result<(), InsError> {
