@@ -62,6 +62,9 @@
   },
   "apps": {
     "wordcraft": {
+      "shape": {
+        "button_radius": 4
+      },
       "light": {
         "accent.soft": "#dde3f8",
         "accent.solid": "#3b5bdb",
