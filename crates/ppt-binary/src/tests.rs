@@ -302,6 +302,23 @@ fn streams_with_title_masters(
     outline: &[Vec<u8>],
     extra: &[Vec<u8>],
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    streams_with_notes(token, times, master, slide, title_masters, outline, extra, notes(), &[])
+}
+
+/// As [`streams_with_title_masters`], with `notes` as the notes page (persist id 4) and
+/// `notes_outline` following its persist atom in the notes list.
+#[allow(clippy::too_many_arguments)]
+fn streams_with_notes(
+    token: u32,
+    times: usize,
+    master: Vec<u8>,
+    slide: Vec<u8>,
+    title_masters: Vec<Vec<u8>>,
+    outline: &[Vec<u8>],
+    extra: &[Vec<u8>],
+    notes: Vec<u8>,
+    notes_outline: &[Vec<u8>],
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let pictures = atom(0xF01E, 0x6E0, &[&[0u8; 17][..], &png()].concat());
     let mut fbse = vec![0u8; 36];
     fbse[0] = 6;
@@ -346,12 +363,12 @@ fn streams_with_title_masters(
             &(0..=title_masters.len() as u32).map(|k| persist(if k == 0 { 2 } else { 4 + k })).collect::<Vec<_>>(),
         ),
         container(rt::SLIDE_LIST_WITH_TEXT, 0, &[vec![persist(3); times], outline.to_vec()].concat()),
-        container(rt::SLIDE_LIST_WITH_TEXT, 2, &[persist(4)]),
+        container(rt::SLIDE_LIST_WITH_TEXT, 2, &[vec![persist(4)], notes_outline.to_vec()].concat()),
     ];
     let document = container(rt::DOCUMENT, 0, &[&parts[..], extra].concat());
     let mut stream = vec![];
     let mut offsets = vec![];
-    let parts: Vec<Vec<u8>> = [document, master, slide, notes()].into_iter().chain(title_masters).collect();
+    let parts: Vec<Vec<u8>> = [document, master, slide, notes].into_iter().chain(title_masters).collect();
     for part in &parts {
         offsets.push(stream.len() as u32);
         stream.extend_from_slice(part);
@@ -493,6 +510,40 @@ fn a_notes_page_goes_to_one_slide() {
     let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides.len(), 2);
     assert_eq!(p.slides[0].notes.text(), "Say hello\nThen wave");
+    assert_eq!(p.slides[1].notes.text(), "");
+}
+
+/// As [`a_notes_page_goes_to_one_slide`], with the notes body's text in the notes list's outline
+/// block: that block, too, is copied into the first slide's notes only.
+#[test]
+fn a_notes_pages_outline_text_goes_to_one_slide() {
+    let body = container(
+        rt::SP_CONTAINER,
+        0,
+        &[
+            fsp(1, 3074, 0xA00),
+            anchor(100, 0, 4000, 4000),
+            placeholder(0x0C),
+            container(rt::CLIENT_TEXTBOX, 0, &[atom(rt::OUTLINE_TEXT_REF, 0, &0u32.to_le_bytes())]),
+        ],
+    );
+    let notes = container(rt::NOTES, 0, &[atom(rt::NOTES_ATOM, 0, &le32(&[SLIDE_ID, 0])), drawing(None, &[body])]);
+    let outline = [atom(rt::TEXT_HEADER, 0, &2u32.to_le_bytes()), atom(rt::TEXT_CHARS, 0, &utf16("From the outline"))];
+    let again = container(rt::SLIDE_LIST_WITH_TEXT, 0, &[atom(rt::SLIDE_PERSIST_ATOM, 0, &le32(&[6, 0, 0, SLIDE_ID, 0]))]);
+    let (_, mut stream, pics) = streams_with_notes(0xE391_C05F, 1, master(), slide(), vec![], &[], &[again], notes, &outline);
+    let first_edit = stream.len() as u32 - 36;
+    let copy_at = stream.len() as u32;
+    stream.extend_from_slice(&slide());
+    let dir_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(rt::PERSIST_DIRECTORY, 0, &le32(&[6 | (1 << 20), copy_at])));
+    let edit_at = stream.len() as u32;
+    let mut edit = le32(&[0, 0x0300_03F4, first_edit, dir_at, 1, 7]);
+    edit.extend_from_slice(&[0; 4]);
+    stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
+    let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, edit_at, 0, 0]));
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    assert_eq!(p.slides.len(), 2);
+    assert_eq!(p.slides[0].notes.text(), "From the outline");
     assert_eq!(p.slides[1].notes.text(), "");
 }
 

@@ -208,6 +208,9 @@ struct MasterInfo {
     layout: Option<LayoutId>,
     /// This master's slide id, then its main master's for a title master.
     ids: Chain,
+    /// The placeholders of the defaults' title layout, taken before any title master adds layouts
+    /// of its own: what each title master's layout starts from. Empty when there is none.
+    title_base: Arc<Vec<Shape>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -282,9 +285,15 @@ impl<'a> Ctx<'a> {
         master.title_style = self.list_style(&styles, ty::TITLE, &scheme);
         master.body_style = self.list_style(&styles, ty::BODY, &scheme);
         master.other_style = self.list_style(&styles, ty::OTHER, &scheme);
+        let title_base = master
+            .layouts
+            .iter()
+            .find(|l| l.kind == LayoutType::Title)
+            .map(|l| l.shapes.iter().filter(|s| s.ph.is_some()).cloned().collect())
+            .unwrap_or_default();
         let index = self.p.masters.len();
         self.p.masters.push(Arc::new(master));
-        Some(MasterInfo { index, scheme, styles, layout: None, ids })
+        Some(MasterInfo { index, scheme, styles, layout: None, ids, title_base: Arc::new(title_base) })
     }
 
     /// A title master: a layout of its main master holding its background and shapes.
@@ -308,19 +317,11 @@ impl<'a> Ctx<'a> {
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let shapes: Vec<Shape> =
             drawing.shapes.iter().filter(|r| r.placeholder.is_none_or(|p| p.kind == 0)).filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
-        // Its placeholders follow the main master's own title layout (from the defaults), with ids
-        // of their own. A layout made for an earlier title master holds that one's shapes and
-        // placeholder boxes, so it is no base: with no title layout of the defaults' there is none.
-        let made: HashSet<LayoutId> = masters.values().filter_map(|m| m.layout).collect();
-        let base: Vec<Shape> = self
-            .p
-            .masters
-            .get(parent.index)
-            .and_then(|m| m.layouts.iter().find(|l| l.kind == LayoutType::Title && !made.contains(&l.id)))
-            .map(|l| l.shapes.iter().filter(|s| s.ph.is_some()).cloned().collect())
-            .unwrap_or_default();
-        let mut placeholders = Vec::with_capacity(base.len());
-        for mut s in base {
+        // Its placeholders follow the main master's own title layout (from the defaults, taken once
+        // when the main master was made), with ids of their own. A layout made for an earlier title
+        // master holds that one's shapes and placeholder boxes, so it is never the base.
+        let mut placeholders = Vec::with_capacity(parent.title_base.len());
+        for mut s in parent.title_base.iter().cloned() {
             let Some(id) = self.alloc() else { break };
             s.id = ShapeId(id);
             placeholders.push(s);
