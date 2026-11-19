@@ -137,6 +137,7 @@ fn type3_fonts_draw_their_glyphs() {
          /T3 T3 definefont pop /T3 findfont 20 scalefont setfont 10 20 moveto (AA) show");
     // Two glyphs, the second 12 points (600 units at 20 pt) to the right.
     assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    assert!(!c.contains("/ActualText"), "Type 3 procedures are not synthetic text spans: {c}");
     assert!(c.contains("22 20 m"), "{c}");
 }
 
@@ -469,6 +470,28 @@ fn actual_text_uses_the_selected_encoding_and_omits_unknown_names() {
 
     let (content, _) = run("/F /Helvetica findfont def F /Encoding get 65 /customGlyph put F 10 scalefont setfont 10 20 moveto (A) show");
     assert!(!content.contains("/ActualText"), "{content}");
+}
+
+#[test]
+fn composite_show_only_omits_text_for_selected_type3_glyphs() {
+    let setup = "/T3 8 dict dup begin /FontType 3 def /FontMatrix [0.001 0 0 0.001 0 0] def /FontBBox [0 0 1000 1000] def /Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for Encoding 65 /A put /BuildChar { pop pop 600 0 0 0 500 500 setcachedevice 0 0 500 500 rectfill } def end def /T3 T3 definefont pop /T0 8 dict dup begin /FontType 0 def /FMapType 2 def /FontMatrix [1 0 0 1 0 0] def /Encoding 256 array def 0 1 255 { Encoding exch /A put } for /FDepVector [ /Helvetica findfont /T3 findfont ] def end /T0 exch definefont pop /T0 findfont 20 scalefont setfont 10 20 moveto ";
+    let (standard, _) = run(&format!("{setup} <0041> show"));
+    assert!(standard.contains("/ActualText (AA)"), "{standard}");
+    let (mixed, _) = run(&format!("{setup} <00410141> show"));
+    assert!(!mixed.contains("/ActualText"), "{mixed}");
+    assert!(mixed.lines().any(|line| line == "f"), "the Type 3 glyph is still painted: {mixed}");
+}
+
+#[test]
+fn actual_text_starts_after_persistent_clip() {
+    let (content, _) = run(
+        "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip newpath /Helvetica findfont 12 scalefont setfont 10 10 moveto (Hi) show 0 0 100 100 rectfill",
+    );
+    let clip = content.find("\nW\n").unwrap();
+    let span = content.find("/ActualText (Hi)").unwrap();
+    let end = content.find("EMC").unwrap();
+    let restore = content.rfind("\nQ").unwrap();
+    assert!(clip < span && span < end && end < restore, "{content}");
 }
 
 #[test]
