@@ -15,8 +15,8 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::{in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{
-    Frames, MemoRun, last_frame_memo_runs, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, measuring_run,
-    trial,
+    Frames, MemoRun, last_frame_memo_runs, last_pass_measuring_runs, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs,
+    last_pass_text_layouts, measuring_run, trial,
 };
 use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
@@ -987,4 +987,48 @@ fn a_given_value_edit_runs_only_the_views_whose_props_hold_it() {
     assert_ne!(*scene.level, start, "the drag edited the level");
     assert!(runs.iter().all(|ran| ran.iter().all(|name| *name == "Level")), "only the level's view runs in a drag frame: {runs:?}");
     assert!(runs[1..].iter().all(|ran| !ran.is_empty()), "the level's view runs in each drag frame that edits: {runs:?}");
+}
+
+/// A view whose content is measured in a stack; `extra` is read by nothing inside, so a change of it runs the view and
+/// leaves the stack's inputs as they were.
+#[derive(MemoProps)]
+struct Measured {
+    extra: u32,
+}
+
+fn measured(props: &mut Measured, ui: &mut Ui) -> u32 {
+    Stack::new().show(ui, |ui, _| {
+        Text::new("A measured line").show(ui);
+        Text::new("Another measured line").show(ui);
+    });
+    props.extra
+}
+
+/// The memoized view `measured` with `extra`, in `STACK_ROOM`: the frame's measuring runs.
+fn measured_frame(frames: &mut Frames, extra: u32) -> usize {
+    frames.frame(vec![], |ui| {
+        in_region(ui, STACK_ROOM, |ui| {
+            MemoView::new("measured", Measured { extra }, measured).show(ui);
+        });
+    });
+    last_pass_measuring_runs(&frames.ctx).len()
+}
+
+/// A view that replays for frames keeps the layout memory its run kept: when it runs again with its content's inputs
+/// unchanged, its content is measured as little as in a run right after a run.
+#[trial]
+fn a_view_replayed_for_frames_keeps_the_layout_memory_it_kept() {
+    let mut frames = Frames::new();
+    for _ in 0..WARM {
+        measured_frame(&mut frames, 0);
+    }
+    let after_a_run = measured_frame(&mut frames, 1);
+    assert_eq!(runs_of(&frames, "Measured"), [MemoRun::Ran], "a new prop runs the view");
+    for _ in 0..WARM + 3 {
+        measured_frame(&mut frames, 1);
+        assert_eq!(runs_of(&frames, "Measured"), [MemoRun::Replayed], "an idle frame replays the view");
+    }
+    let after_replays = measured_frame(&mut frames, 2);
+    assert_eq!(runs_of(&frames, "Measured"), [MemoRun::Ran], "a new prop runs the view");
+    assert_eq!(after_replays, after_a_run, "the replays kept the stack's measurements alive");
 }

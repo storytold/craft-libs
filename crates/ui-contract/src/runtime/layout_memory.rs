@@ -430,7 +430,7 @@ pub(crate) fn read(ctx: &Context, id: Id) -> Option<Vec2> {
     if crate::runtime::measure::active(ctx) {
         return peeking(ctx, |read| read(id));
     }
-    journal_keep(ctx, id);
+    crate::runtime::replay::note_layout_keep(ctx, id);
     let moment = Moment::of(ctx);
     with(ctx, &moment, |memory| {
         let entry = memory.entries.entry(id).or_default();
@@ -459,7 +459,7 @@ pub(crate) fn peeking<R>(ctx: &Context, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec
 /// Records the size a block measured this pass. A change asks for a discard pass only under the tolerance
 /// rule: this pass placed with the old value, and the size did not also change in the previous frame.
 pub(crate) fn record(ctx: &Context, id: Id, real: Vec2) {
-    journal_keep(ctx, id);
+    crate::runtime::replay::note_layout_keep(ctx, id);
     let moment = Moment::of(ctx);
     let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(ctx));
     with(ctx, &moment, |memory| {
@@ -925,7 +925,7 @@ pub(crate) fn begin_measure(ctx: &Context, body: Id) {
 
 /// Closes the measuring run of `body` and keeps its transcript under the inputs `key` it ran under.
 pub(crate) fn end_measure<K: PartialEq + Send + Sync + 'static>(ctx: &Context, body: Id, key: K) {
-    journal_keep(ctx, body);
+    crate::runtime::replay::note_layout_keep(ctx, body);
     let moment = Moment::of(ctx);
     with(ctx, &moment, |memory| {
         let Some(at) = memory.measuring.iter().rposition(|open| matches!(open, Open::Body { id, .. } if *id == body)) else { return };
@@ -978,7 +978,7 @@ pub(crate) fn kept_serves<K: PartialEq + Send + Sync + 'static>(ctx: &Context, b
     if !reuse_allowed(ctx) || !crate::runtime::measure::outermost(ctx) {
         return false;
     }
-    journal_keep(ctx, body);
+    crate::runtime::replay::note_layout_keep(ctx, body);
     let moment = Moment::of(ctx);
     if with(ctx, &moment, |memory| memory.probing()) {
         return false;
@@ -1135,24 +1135,23 @@ pub(crate) fn ask_discard(ctx: &Context) {
     with(ctx, &moment, Entries::ask_discard);
 }
 
-/// Notes in the run records open around the running code that a replay keeps the entry and the kept transcript of
-/// `id`: the replayed run does not reach them, and an entry no pass touched in a frame is dropped.
-fn journal_keep(ctx: &Context, id: Id) {
-    crate::runtime::replay::journal(
-        ctx,
-        || id,
-        |ctx, id| {
-            let moment = Moment::of(ctx);
-            with(ctx, &moment, |memory| {
-                if let Some(entry) = memory.entries.get_mut(id) {
-                    entry.touched = moment.frame;
-                }
-                if let Some(kept) = memory.kept.get_mut(id) {
-                    kept.touched = moment.frame;
-                }
-            });
-        },
-    );
+/// Keeps the entries and kept transcripts of `ids` through this frame, for a replayed run that kept them
+/// (`replay::note_layout_keep`): the replay does not reach them, and an entry no pass touched in a frame is dropped.
+pub(crate) fn keep(ctx: &Context, ids: &[Id]) {
+    if ids.is_empty() {
+        return;
+    }
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| {
+        for id in ids {
+            if let Some(entry) = memory.entries.get_mut(id) {
+                entry.touched = moment.frame;
+            }
+            if let Some(kept) = memory.kept.get_mut(id) {
+                kept.touched = moment.frame;
+            }
+        }
+    });
 }
 
 /// The end hook: asks egui for at most one discard pass per frame, and for a repaint when a change cannot get one, so

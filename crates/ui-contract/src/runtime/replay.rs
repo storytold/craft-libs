@@ -144,6 +144,8 @@ pub(crate) struct Facts {
     /// The components whose memory owners registered in the run (`memory::register_owner`): a replay needs their
     /// shown-tier state still kept (`memory::ended_since`).
     pub(crate) owners: Vec<egui::Id>,
+    /// The layout memory entries the run kept (`note_layout_keep`): a replay keeps them (`layout_memory::keep`).
+    pub(crate) layout_keeps: Vec<egui::Id>,
     /// The framework inputs the run read outside its props (`runtime::inputs`).
     pub(crate) inputs: Inputs,
     /// The command scope instances that registered in the run (`commands::register_instance`): a command queued for one
@@ -214,6 +216,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.blocked |= open.facts.blocked;
             outer.facts.discards |= open.facts.discards;
             outer.facts.owners.extend(open.facts.owners.iter().copied());
+            outer.facts.layout_keeps.extend(open.facts.layout_keeps.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
             outer.facts.reads.extend(open.facts.reads.iter().copied());
             outer.facts.inputs.extend(open.facts.inputs);
@@ -225,6 +228,9 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     });
     let egui = ctx.pass_records_since(&open.egui);
     let mut facts = open.facts;
+    // Every measure of an entry keeps it again: the record keeps each one once.
+    facts.layout_keeps.sort_unstable_by_key(|id| id.value());
+    facts.layout_keeps.dedup();
     // A paint callback's output depends on what its closure holds, which neither a view's key nor a comparison sees:
     // its run is never replayed.
     facts.blocked |= egui.layers().any(|on| on != layer) || egui.paints_callback();
@@ -306,10 +312,12 @@ pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
     if noting {
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying = false);
     }
+    crate::runtime::layout_memory::keep(ctx, &record.facts.layout_keeps);
     if let Some(at) = record.facts.wake {
         crate::runtime::egui::repaint::request_after(ctx, crate::runtime::egui::pass::current_viewport(ctx), at - frame::clock(ctx));
     }
     with_open(ctx, |facts| {
+        facts.layout_keeps.extend(record.facts.layout_keeps.iter().copied());
         facts.reads.extend(record.facts.reads.iter().copied());
         facts.inputs.extend(record.facts.inputs);
         facts.wake = min_wake(facts.wake, record.facts.wake);
@@ -384,6 +392,12 @@ pub(crate) fn block(ctx: &Context) {
 /// measured changes): every other request is counted in egui's output (`close`).
 pub(crate) fn note_discard(ctx: &Context) {
     with_open(ctx, |facts| facts.discards = true);
+}
+
+/// Notes that the running code kept the layout memory entry and kept transcript of `id`: a replay of the records open
+/// around it keeps them too, as the replay reaches neither.
+pub(crate) fn note_layout_keep(ctx: &Context, id: egui::Id) {
+    with_open(ctx, |facts| facts.layout_keeps.push(id));
 }
 
 /// Notes that the memory owner `owner` registered in the running code.
