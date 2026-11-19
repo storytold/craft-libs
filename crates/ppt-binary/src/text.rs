@@ -166,11 +166,18 @@ pub fn read_pf(c: &mut Cursor) -> Option<Pf> {
     Some(pf)
 }
 
+/// Tab stops kept per paragraph exception or ruler. Every entry is still read past, so the fields
+/// after the list stay aligned; the rest are dropped, since each paragraph copies the list.
+const MAX_TABS: usize = 64;
+
 fn read_tabs(c: &mut Cursor) -> Option<Vec<(i16, u16)>> {
     let n = c.u16()?;
-    let mut v = Vec::with_capacity(usize::from(n).min(64));
+    let mut v = Vec::with_capacity(usize::from(n).min(MAX_TABS));
     for _ in 0..n {
-        v.push((c.i16()?, c.u16()?));
+        let tab = (c.i16()?, c.u16()?);
+        if v.len() < MAX_TABS {
+            v.push(tab);
+        }
     }
     Some(v)
 }
@@ -568,6 +575,26 @@ pub(crate) mod tests {
         assert!(read_style9(&[]).is_empty());
         assert_eq!(auto_number_scheme(3), "arabicPeriod");
         assert_eq!(auto_number_scheme(0), "alphaLcPeriod");
+    }
+
+    /// A paragraph exception with many tab stops keeps the first [`MAX_TABS`] and reads the
+    /// fields after the list where they are.
+    #[test]
+    fn tab_stops_are_capped_and_read_past() {
+        let mut b = ((1u32 << 20) | (1 << 21)).to_le_bytes().to_vec(); // tabStops + textDirection
+        b.extend_from_slice(&1000u16.to_le_bytes());
+        for i in 0..1000u16 {
+            b.extend_from_slice(&(i as i16).to_le_bytes());
+            b.extend_from_slice(&1u16.to_le_bytes());
+        }
+        b.extend_from_slice(&0x1234u16.to_le_bytes()); // textDirection
+        b.push(0xAB);
+        let mut c = Cursor::new(&b);
+        let pf = read_pf(&mut c).unwrap();
+        let tabs = pf.tabs.unwrap();
+        assert_eq!(tabs.len(), MAX_TABS);
+        assert_eq!(tabs[MAX_TABS - 1], (MAX_TABS as i16 - 1, 1));
+        assert_eq!(c.u8(), Some(0xAB), "the cursor stopped past textDirection");
     }
 
     #[test]

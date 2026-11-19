@@ -62,6 +62,9 @@ pub mod prop {
     pub const GROUP_BOOLS: u16 = 0x03BF;
 }
 
+/// UTF-16 units kept of a string property.
+pub const MAX_STRING: usize = 4096;
+
 /// One property value: the 32-bit operand and, for complex properties, the extra bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct PropVal<'a> {
@@ -147,10 +150,11 @@ impl<'a> Props<'a> {
         (v & (1 << (bit + 16)) != 0).then_some(v & (1 << bit) != 0)
     }
 
-    /// A UTF-16 string property (names, alt text).
+    /// A UTF-16 string property (names, alt text), at most [`MAX_STRING`] units: a master shape's
+    /// name is copied into every shape that inherits it.
     pub fn string(&self, id: u16) -> Option<String> {
         let b = self.complex(id)?;
-        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0).collect();
+        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take(MAX_STRING).take_while(|&u| u != 0).collect();
         Some(String::from_utf16_lossy(&units)).filter(|s| !s.is_empty())
     }
 
@@ -274,7 +278,8 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
         placeholder: None,
         text: None,
     };
-    // Tables in specificity order: primary, then secondary and tertiary.
+    // Tables in specificity order: primary (the last one first), then secondary and tertiary.
+    let mut primary: Vec<Rec> = vec![];
     let mut tables: Vec<Rec> = vec![];
     for r in sp.children() {
         match r.kind {
@@ -287,7 +292,7 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
                 s.flip_h = f & 0x40 != 0;
                 s.flip_v = f & 0x80 != 0;
             }
-            rt::FOPT => tables.insert(0, r),
+            rt::FOPT => primary.push(r),
             rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => tables.push(r),
             rt::FSPGR => s.group_rect = rect_i32(&r),
             rt::CHILD_ANCHOR => s.anchor = rect_i32(&r),
@@ -323,7 +328,7 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
             _ => {}
         }
     }
-    for t in &tables {
+    for t in primary.iter().rev().chain(&tables) {
         s.props.add_table(t);
     }
     s
@@ -399,6 +404,38 @@ mod tests {
         s.set(prop::FILL_COLOR, 2);
         r.inherit(&s);
         assert_eq!(r.get(prop::FILL_COLOR), Some(1));
+    }
+
+    /// A string property longer than [`MAX_STRING`] units is cut there.
+    #[test]
+    fn a_long_string_property_is_capped() {
+        let name: Vec<u8> = "x".repeat(10_000).encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let t = fopt(&[(0x8000 | prop::NAME, name.len() as u32)], &name);
+        let mut p = Props::default();
+        p.add_table(&Rec::at(&t, 0).unwrap());
+        assert_eq!(p.string(prop::NAME).map(|s| s.len()), Some(MAX_STRING));
+    }
+
+    /// A shape's later primary property table wins over its earlier one, and both over its
+    /// secondary table.
+    #[test]
+    fn the_last_primary_table_wins() {
+        let fsp = atom(rt::FSP, 1, &[1025u32.to_le_bytes(), 0u32.to_le_bytes()].concat());
+        let secondary = {
+            let mut b = vec![];
+            for (id, op) in [(prop::FILL_COLOR, 3u32), (prop::LINE_COLOR, 3)] {
+                b.extend_from_slice(&id.to_le_bytes());
+                b.extend_from_slice(&op.to_le_bytes());
+            }
+            atom(rt::SECONDARY_FOPT, 2, &b)
+        };
+        let sp = container(
+            rt::SP_CONTAINER,
+            0,
+            &[fsp, secondary, fopt(&[(prop::FILL_COLOR, 1), (prop::LINE_WIDTH, 1)], &[]), fopt(&[(prop::FILL_COLOR, 2)], &[])],
+        );
+        let s = shape(&Rec::at(&sp, 0).unwrap());
+        assert_eq!((s.props.get(prop::FILL_COLOR), s.props.get(prop::LINE_WIDTH), s.props.get(prop::LINE_COLOR)), (Some(2), Some(1), Some(3)));
     }
 
     #[test]

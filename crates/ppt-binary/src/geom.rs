@@ -184,6 +184,9 @@ pub fn geometry(shape_type: u16, props: &Props) -> Geom {
 
 /// Segments followed at most in one path.
 const MAX_SEGMENTS: usize = 1 << 16;
+/// Vertices used at most in one path. The path text is copied into every shape that inherits the
+/// vertices from a master shape, so it stays a bounded size.
+const MAX_POINTS: usize = 8192;
 
 /// A freeform's path in its geometry box.
 fn custom_path(props: &Props) -> Option<Vec<CustomPath>> {
@@ -193,12 +196,14 @@ fn custom_path(props: &Props) -> Option<Vec<CustomPath>> {
             .as_chunks::<8>()
             .0
             .iter()
+            .take(MAX_POINTS)
             .map(|c| (f64::from(i32::from_le_bytes([c[0], c[1], c[2], c[3]])), f64::from(i32::from_le_bytes([c[4], c[5], c[6], c[7]]))))
             .collect(),
         4 => verts
             .as_chunks::<4>()
             .0
             .iter()
+            .take(MAX_POINTS)
             .map(|c| (f64::from(i16::from_le_bytes([c[0], c[1]])), f64::from(i16::from_le_bytes([c[2], c[3]]))))
             .collect(),
         _ => return None,
@@ -324,6 +329,19 @@ mod tests {
         let Geom::Custom { paths } = geometry(0, &p) else { panic!("not custom") };
         assert_eq!(paths[0].d, "M 0 100 L 50 0 L 100 100 Z");
         assert_eq!((paths[0].w, paths[0].h), (100.0, 100.0));
+    }
+
+    /// A freeform with more vertices than [`MAX_POINTS`] draws through the first of them only.
+    #[test]
+    fn a_path_uses_at_most_max_points() {
+        let verts: Vec<u8> = (0..20_000u32).flat_map(|i| [(i as i16 % 100).to_le_bytes(), 0i16.to_le_bytes()].concat()).collect();
+        let v = array(4, &verts);
+        let t = props(&[(0x8000 | prop::VERTICES, v.len() as u32)], &v);
+        let mut p = Props::default();
+        p.add_table(&Rec::at(&t, 0).unwrap());
+        let Geom::Custom { paths } = geometry(0, &p) else { panic!("not custom") };
+        let d = &paths[0].d;
+        assert_eq!(d.matches('M').count() + d.matches('L').count(), MAX_POINTS);
     }
 
     #[test]

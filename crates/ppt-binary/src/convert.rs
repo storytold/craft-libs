@@ -6,7 +6,8 @@
 //! of its main master. Slide shapes keep their own boxes, and their text carries its formatting
 //! resolved against the master's text styles, so it draws the same whatever the layouts hold.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_pptx::style::{Dash, LineCap, LineEnd, LineJoin, PictureFill, PictureMode, Shadow};
@@ -60,6 +61,9 @@ struct Scope<'s, 'a> {
     outline: &'s [crate::record::Records<'a>],
     /// Each outline block's numbering (`StyleTextProp9Atom` entries), by outline index.
     numbering: &'s [Option<Vec<text::Pf9>>],
+    /// The outline blocks a shape has taken already. Each block is one shape's text: a second
+    /// shape pointing at it keeps its own, so a big block can't be copied into every shape.
+    used_outline: RefCell<HashSet<usize>>,
     master: bool,
     /// Where `hspMaster` shape ids are looked up: the slide's master, then a title master's main
     /// master.
@@ -147,15 +151,44 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
             notes_of.entry(id).or_insert(i);
         }
     }
+    // An unknown master falls back to the first main master. Title masters share their main
+    // master's index, so including them would tie, and HashMap order would pick the winner. Found
+    // once, as is each master's layout for each layout type: a search per slide would be slides ×
+    // masters (or layouts).
+    let first_main = masters.values().filter(|m| m.layout.is_none()).min_by_key(|m| m.index).cloned();
+    let layouts: Vec<LayoutTable> = cx.p.masters.iter().map(|m| layout_table(m)).collect();
+    let find = Find { masters: &masters, first_main: first_main.as_ref(), layouts: &layouts, notes_of: &notes_of };
     for s in &d.slides {
         if s.rec.kind != rt::SLIDE {
             continue;
         }
-        if let Some(slide) = cx.slide(d, s, &masters, &notes_of) {
+        if let Some(slide) = cx.slide(d, s, &find) {
             cx.p.slides.push(Arc::new(slide));
         }
     }
     cx.p
+}
+
+/// A master's first layout of each layout type, and its first layout.
+type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
+
+fn layout_table(m: &Master) -> LayoutTable {
+    let mut kinds: Vec<(LayoutType, LayoutId)> = vec![];
+    for l in &m.layouts {
+        // Layout types are few, so the list stays short.
+        if !kinds.iter().any(|(k, _)| *k == l.kind) {
+            kinds.push((l.kind, l.id));
+        }
+    }
+    (kinds, m.layouts.first().map(|l| l.id))
+}
+
+/// What a slide's master, layout and notes page are looked up in.
+struct Find<'f> {
+    masters: &'f HashMap<u32, MasterInfo>,
+    first_main: Option<&'f MasterInfo>,
+    layouts: &'f [LayoutTable],
+    notes_of: &'f HashMap<u32, usize>,
 }
 
 /// A converted master: where it went and what its slides inherit.
@@ -195,7 +228,8 @@ impl<'a> Ctx<'a> {
         let drawing = draw::drawing(&m.rec);
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), None];
-        let scope = Scope { scheme, styles: &styles, outline: &m.outline, numbering: &[], master: true, masters: ids };
+        let scope =
+            Scope { scheme, styles: &styles, outline: &m.outline, numbering: &[], used_outline: Default::default(), master: true, masters: ids };
         master.background = drawing.background.as_ref().and_then(|b| self.background(b, &scope));
         for raw in &drawing.shapes {
             if let Some(ph) = raw.placeholder.filter(|p| p.kind != 0) {
@@ -255,7 +289,15 @@ impl<'a> Ctx<'a> {
         let drawing = draw::drawing(&m.rec);
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), parent.ids[0]];
-        let scope = Scope { scheme, styles: &parent.styles, outline: &m.outline, numbering: &[], master: true, masters: ids };
+        let scope = Scope {
+            scheme,
+            styles: &parent.styles,
+            outline: &m.outline,
+            numbering: &[],
+            used_outline: Default::default(),
+            master: true,
+            masters: ids,
+        };
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let shapes: Vec<Shape> =
             drawing.shapes.iter().filter(|r| r.placeholder.is_none_or(|p| p.kind == 0)).filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
@@ -333,12 +375,9 @@ impl<'a> Ctx<'a> {
         ls
     }
 
-    fn slide(&mut self, d: &Doc<'a>, s: &Listed<'a>, masters: &HashMap<u32, MasterInfo>, notes_of: &HashMap<u32, usize>) -> Option<Slide> {
+    fn slide(&mut self, d: &Doc<'a>, s: &Listed<'a>, find: &Find) -> Option<Slide> {
         let atom = doc::slide_atom(&s.rec);
-        // An unknown master falls back to the first main master. Title masters share their main
-        // master's index, so including them would tie, and HashMap order would pick the winner.
-        let first_main = || masters.values().filter(|m| m.layout.is_none()).min_by_key(|m| m.index);
-        let info = masters.get(&atom.master_id).or_else(first_main).cloned();
+        let info = find.masters.get(&atom.master_id).or(find.first_main).cloned();
         let (index, master_scheme, styles, title_layout, ids) = match &info {
             Some(m) => (m.index, m.scheme, m.styles.clone(), m.layout, m.ids),
             None => (0, DEFAULT_SCHEME, Arc::new(StyleSheet::new(d.document.child(rt::ENVIRONMENT), None)), None, [None; 2]),
@@ -346,8 +385,8 @@ impl<'a> Ctx<'a> {
         let scheme = if atom.follow_master_scheme { master_scheme } else { scheme_of(&s.rec).unwrap_or(master_scheme) };
         let layout = title_layout.or_else(|| {
             let kind = layout_kind(atom.geom);
-            let m = self.p.masters.get(index)?;
-            m.layouts.iter().find(|l| l.kind == kind).or_else(|| m.layouts.first()).map(|l| l.id)
+            let (kinds, first) = find.layouts.get(index)?;
+            kinds.iter().find(|(k, _)| *k == kind).map(|(_, id)| *id).or(*first)
         })?;
         let id = SlideId(self.alloc()?);
         let drawing = draw::drawing(&s.rec);
@@ -364,7 +403,15 @@ impl<'a> Ctx<'a> {
                 self.numbering.get(&(s.slide_id, tt)).and_then(|v| v.get(n)).cloned()
             })
             .collect();
-        let scope = Scope { scheme, styles: &styles, outline: &s.outline, numbering: &numbering, master: false, masters: ids };
+        let scope = Scope {
+            scheme,
+            styles: &styles,
+            outline: &s.outline,
+            numbering: &numbering,
+            used_outline: Default::default(),
+            master: false,
+            masters: ids,
+        };
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let mut shapes: Vec<Shape> = drawing.shapes.iter().filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
         // The slide's own headers and footers, else the document's for every slide.
@@ -372,7 +419,7 @@ impl<'a> Ctx<'a> {
             self.footers(&mut shapes, &hf);
         }
         let hidden = s.rec.child(rt::SLIDE_SHOW_SLIDE_INFO).and_then(|i| i.u16(10)).is_some_and(|f| f & 0x4 != 0);
-        let notes = notes_of.get(&s.slide_id).and_then(|&i| d.notes.get(i)).map(|n| self.notes(n, &styles, scheme)).unwrap_or_default();
+        let notes = find.notes_of.get(&s.slide_id).and_then(|&i| d.notes.get(i)).map(|n| self.notes(n, &styles, scheme)).unwrap_or_default();
         Some(Slide { id, layout, shapes, background, hidden, show_master_shapes: atom.follow_master_objects, notes, ..Default::default() })
     }
 
@@ -417,7 +464,8 @@ impl<'a> Ctx<'a> {
     fn notes(&mut self, n: &Listed<'a>, styles: &StyleSheet, scheme: Scheme) -> TextBody {
         let drawing = draw::drawing(&n.rec);
         // Notes masters aren't imported, so there are no master shapes to inherit from.
-        let scope = Scope { scheme, styles, outline: &n.outline, numbering: &[], master: false, masters: [None; 2] };
+        let scope =
+            Scope { scheme, styles, outline: &n.outline, numbering: &[], used_outline: Default::default(), master: false, masters: [None; 2] };
         for raw in &drawing.shapes {
             let Some(block) = self.text_block(raw, &scope) else { continue };
             // The notes body placeholder; a slide number or header placeholder on the page isn't notes.
@@ -701,7 +749,7 @@ impl<'a> Ctx<'a> {
         let tb = raw.text?;
         let own = text::read_block(tb.children())?;
         match own.outline_ref {
-            Some(i) if own.chars.is_empty() => scope
+            Some(i) if own.chars.is_empty() && scope.used_outline.borrow_mut().insert(i as usize) => scope
                 .outline
                 .get(i as usize)
                 .and_then(|r| text::read_block(r.clone()))

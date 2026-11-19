@@ -978,3 +978,26 @@ fn outline_numbering_from_the_ppt9_tag() {
     assert!(matches!(paras[0].props.bullet, Some(Bullet::Char { .. })), "{:?}", paras[0].props.bullet);
     assert_eq!(paras[1].props.bullet, Some(Bullet::AutoNum { scheme: "arabicPeriod".into(), start_at: 4 }));
 }
+
+/// An outline block is one shape's text. A second shape pointing at the same block keeps its own
+/// (here none), so a hostile file can't copy one big block into every shape of the slide.
+#[test]
+fn an_outline_block_is_used_by_one_shape() {
+    let outline = [atom(rt::TEXT_HEADER, 0, &0u32.to_le_bytes()), atom(rt::TEXT_CHARS, 0, &utf16("Shared"))];
+    let referring = |spid: u32| {
+        container(
+            rt::SP_CONTAINER,
+            0,
+            &[
+                fsp(1, spid, 0xA00),
+                anchor(400, 500, 5260, 1200),
+                placeholder(0x0D),
+                container(rt::CLIENT_TEXTBOX, 0, &[atom(rt::OUTLINE_TEXT_REF, 0, &0u32.to_le_bytes())]),
+            ],
+        )
+    };
+    let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[referring(2049), referring(2050)])]);
+    let p = open_streams(streams_with_outline(0xE391_C05F, 1, slide, None, &outline));
+    let texts: Vec<String> = p.slides[0].shapes.iter().map(|s| s.text.as_ref().unwrap().text()).collect();
+    assert_eq!(texts, ["Shared", ""]);
+}

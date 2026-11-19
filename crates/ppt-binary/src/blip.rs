@@ -44,19 +44,40 @@ impl<'a> Store<'a> {
     /// for an entry that is empty, can't be read, was taken already, or would pass the budget.
     pub fn take(&mut self, index: usize) -> Option<Picture> {
         let blip = self.entries.get_mut(index)?.take()?;
-        let pic = decode(&blip, self.budget)?;
-        self.budget = self.budget.saturating_sub(pic.data.len());
-        Some(pic)
+        self.decode_charged(&blip)
     }
 
     /// A blip held in a shape's own property ([MS-ODRAW] §2.2.37: a complex `fillBlip` or `pib`
     /// whose extra bytes are the blip record itself), decoded within the same budget.
     pub fn decode_inline(&mut self, bytes: &[u8]) -> Option<Picture> {
         let blip = Rec::at(bytes, 0).filter(|r| (0xF018..=0xF117).contains(&r.kind))?;
-        let pic = decode(&blip, self.budget)?;
-        self.budget = self.budget.saturating_sub(pic.data.len());
-        Some(pic)
+        self.decode_charged(&blip)
     }
+
+    /// Decode `blip` and take its size from the budget. A compressed metafile that fails to
+    /// inflate is charged what the inflate may have produced before failing: many entries pointing
+    /// at one damaged stream would otherwise each inflate it again for free.
+    fn decode_charged(&mut self, blip: &Rec) -> Option<Picture> {
+        let pic = decode(blip, self.budget);
+        let cost = match &pic {
+            Some(p) => p.data.len(),
+            None => inflate_limit(blip, self.budget).unwrap_or(0),
+        };
+        self.budget = self.budget.saturating_sub(cost);
+        pic
+    }
+}
+
+/// The most bytes inflating `b` may produce within `limit`: `None` unless it is a compressed
+/// metafile (EMF or WMF, with one UID or, for instances 0x3D5 and 0x217, two).
+fn inflate_limit(b: &Rec, limit: usize) -> Option<usize> {
+    if !matches!(b.kind, 0xF01A | 0xF01B) {
+        return None;
+    }
+    let uids = if matches!(b.instance, 0x3D5 | 0x217) { 32 } else { 16 };
+    let h = b.data.get(uids..uids + 34)?;
+    let size = crate::record::u32_at(h, 0)? as usize;
+    (*h.get(32)? == 0).then(|| size.min(MAX_INFLATED).min(limit))
 }
 
 fn fbse<'a>(r: &Rec<'a>, pictures: &'a [u8]) -> Option<Rec<'a>> {
@@ -92,7 +113,7 @@ pub fn decode(b: &Rec, limit: usize) -> Option<Picture> {
             let compressed = *h.get(32)? == 0;
             let body = b.data.get(uids + 34..)?;
             let data = if compressed {
-                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(body, size.min(MAX_INFLATED).min(limit)).ok()?
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(body, inflate_limit(b, limit)?).ok()?
             } else {
                 body.get(..size.min(body.len())).filter(|d| within(d, 0))?.to_vec()
             };
@@ -170,6 +191,31 @@ mod tests {
         assert!(store.take(1).is_some());
         assert!(store.take(2).is_none(), "past the budget");
         assert!(store.take(99).is_none());
+    }
+
+    /// A compressed metafile that fails to inflate still costs the budget what it may have
+    /// inflated, so entries pointing at one damaged stream can't each inflate it again for free.
+    #[test]
+    fn a_failed_inflate_is_charged_to_the_budget() {
+        let mut header = vec![0u8; 34];
+        header[..4].copy_from_slice(&1000u32.to_le_bytes());
+        let damaged = atom(0xF01B, 0x216, &[&[0u8; 16][..], &header, &[0x78, 0x9C, 0xFF, 0xFF]].concat());
+        let mut fbse = vec![0u8; 36];
+        fbse[20..24].copy_from_slice(&(damaged.len() as u32).to_le_bytes());
+        let entries: Vec<Vec<u8>> = (0..3).map(|_| atom(rt::FBSE, 3, &fbse)).collect();
+        let dgg = container(rt::DGG_CONTAINER, 0, &[container(rt::BSTORE, 3, &entries)]);
+        let mut store = Store::new(Rec::at(&dgg, 0), &damaged);
+        store.budget = 2500;
+        assert!(store.take(0).is_none());
+        assert_eq!(store.budget, 1500);
+        assert!(store.take(1).is_none());
+        assert!(store.take(2).is_none());
+        assert_eq!(store.budget, 0, "the last attempt is charged what was left");
+        // A picture that isn't a compressed metafile costs nothing when it can't be read.
+        let mut store = Store::new(None, &[]);
+        store.budget = 10;
+        assert!(store.decode_inline(&atom(0xF01E, 0x6E0, &[0; 4])).is_none());
+        assert_eq!(store.budget, 10);
     }
 
     #[test]
