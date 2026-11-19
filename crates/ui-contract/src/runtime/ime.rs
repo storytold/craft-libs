@@ -17,8 +17,9 @@ const GUARD_FRAMES: u8 = 1;
 
 #[derive(Default)]
 struct Engine {
-    /// Events taken from raw input, delivered at the begin hook.
-    queue: Vec<os::Raw>,
+    /// Events taken from raw input, delivered at the begin hook, each with its place among the frame's other events
+    /// (`os::take_events`).
+    queue: Vec<(os::Raw, usize)>,
     owner: Option<Id>,
     /// The egui fork's input-method context tracker of this viewport: each end hook observes the owner once, and the
     /// tracker gives the output its context generation, its bounded surrounding text and the cause of a change.
@@ -38,8 +39,8 @@ struct Engine {
     /// The reset request `stale` waits for, as the pass that published it got it back. `None` before it is published,
     /// and once the integration reports it retired (`Event::ImeResetRetired`): the next pass with an owner asks again.
     reset: Option<egui::ImeResetId>,
-    /// Edits for `owner`, in arrival order, until its run of this pass takes them.
-    edits: Vec<EditorInput>,
+    /// Edits for `owner`, in arrival order, each with its event's place, until its run of this pass takes them.
+    edits: Vec<(EditorInput, usize)>,
     /// `owner` took its edits this pass; an owner not shown for a pass never does, and its edits are dropped.
     ran: bool,
     /// The preedit of the owner that lost focus, for its adapter to append as typed text.
@@ -146,15 +147,12 @@ fn current<R>(ctx: &Context, f: impl FnOnce(&mut Engine) -> R) -> R {
 /// the keys that would end the composition.
 pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: ViewportId) {
     with(ctx, viewport, |engine| {
-        if engine.owner.is_some() || engine.reset.is_some() {
-            engine.queue.extend(os::take_events(events));
-        }
+        let take = engine.owner.is_some() || engine.reset.is_some();
         let guarded = engine.composing || engine.guard > 0;
-        if guarded {
-            events.retain(|Arrived { event, .. }| {
-                !matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
-            });
-        }
+        let ends_composition =
+            |event: &Event| matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. });
+        let taken = os::take_events(events, take, |event| guarded && ends_composition(event));
+        engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);
     });
 }
@@ -174,7 +172,7 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
             // The tracker starts the new owner's context when the end hook observes it.
             engine.owner = owner;
         }
-        for raw in std::mem::take(&mut engine.queue) {
+        for (raw, place) in std::mem::take(&mut engine.queue) {
             match raw {
                 // A completion of an earlier request is stale: the latest request still fences.
                 os::Raw::ResetCompleted(id) => {
@@ -197,25 +195,33 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
                         at(range.start)..at(range.end)
                     });
                     engine.preedit = text.clone();
-                    engine.edits.push(EditorInput::preedit(text, cursor));
+                    engine.edits.push((EditorInput::preedit(text, cursor), place));
                 }
-                os::Raw::DeleteSurrounding { before, after } => engine.edits.push(EditorInput::delete_surrounding(before, after)),
-                os::Raw::DeleteSurroundingBytes { before, after } => engine.edits.push(EditorInput::delete_surrounding_bytes(before, after)),
+                os::Raw::DeleteSurrounding { before, after } => engine.edits.push((EditorInput::delete_surrounding(before, after), place)),
+                os::Raw::DeleteSurroundingBytes { before, after } => {
+                    engine.edits.push((EditorInput::delete_surrounding_bytes(before, after), place));
+                }
                 os::Raw::Commit(text) => {
                     engine.composing = false;
                     engine.preedit.clear();
                     engine.guard = GUARD_FRAMES;
-                    engine.edits.push(EditorInput::ImeCommit);
-                    engine.edits.push(EditorInput::Text(text.into()));
+                    engine.edits.push((EditorInput::ImeCommit, place));
+                    engine.edits.push((EditorInput::Text(text.into()), place));
                 }
             }
         }
     });
 }
 
-/// The edits waiting for `owner`; empty for any other component. A read-only owner takes none and never composes:
-/// a composition it was in is interrupted.
+/// The edits waiting for `owner`, in arrival order; empty for any other component. A read-only owner takes none and
+/// never composes: a composition it was in is interrupted.
 pub(crate) fn take(ctx: &Context, owner: Id, read_only: bool) -> Vec<EditorInput> {
+    take_placed(ctx, owner, read_only).into_iter().map(|(edit, _)| edit).collect()
+}
+
+/// `take`, each edit with its place among the frame's other events: the key stage's event places (`keys::Typed`)
+/// count the same events, so an editor part reads the edits and the keys in the order they arrived.
+pub(crate) fn take_placed(ctx: &Context, owner: Id, read_only: bool) -> Vec<(EditorInput, usize)> {
     current(ctx, |engine| {
         if engine.owner != Some(owner) {
             return Vec::new();

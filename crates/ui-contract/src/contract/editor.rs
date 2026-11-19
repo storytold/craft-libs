@@ -60,15 +60,22 @@ pub(crate) fn run<C: Component>(cx: &mut Cx<'_, C>, ui: &mut Ui, step: &mut supe
     let read_only = cx.core.resolved.read_only || !cx.core.resolved.enabled;
     let mut inputs = Vec::new();
     if focused {
-        inputs.extend(ime::take(&ctx, widget, read_only));
+        // Each input goes where its event arrived among the frame's events: an IME edit before the press or text that
+        // came after it, and keys and texts in their own order. An AccessKit selection comes after the IME edits that
+        // came before any key, and an intent of no one event (an Escape, a queued edit command) last, as routed.
+        let mut placed: Vec<((usize, u8), EditorInput)> = Vec::new();
+        placed.extend(ime::take_placed(&ctx, widget, read_only).into_iter().map(|(input, place)| ((place, 0), input)));
         while let Some(request) = cx.core.intents.take_access_where(text_access::is_text_request) {
             if let Some((anchor, focus)) = text_access::requested_selection(&ctx, id, &request) {
-                inputs.push(EditorInput::select(anchor, focus));
+                placed.push(((0, 1), EditorInput::select(anchor, focus)));
             }
         }
-        while let Some(input) = cx.core.intents.take_editor_input(keys.keep) {
-            inputs.push(input);
+        while let Some((input, place)) = cx.core.intents.take_editor_input(keys.keep) {
+            placed.push(((place.unwrap_or(usize::MAX), 2), input));
         }
+        // A stable sort: inputs of one place keep the order they were taken in.
+        placed.sort_by_key(|(order, _)| *order);
+        inputs.extend(placed.into_iter().map(|(_, input)| input));
     }
     if read_only {
         inputs.retain(EditorInput::is_read_only_safe);

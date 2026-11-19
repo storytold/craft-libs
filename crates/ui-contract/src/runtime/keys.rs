@@ -81,6 +81,8 @@ struct Press {
     /// The Space of the canvas a dialog keeps open (`runtime::sampler`): the canvas's press, which no component's
     /// routing reads, no focused stop holds and no field types.
     canvas: bool,
+    /// The press's place among the frame's events ([`Batch::place`]).
+    place: usize,
 }
 
 /// A key press, release or clipboard chord that the shortcut dispatcher may match, with the press that the
@@ -150,6 +152,10 @@ struct Batch {
     tabs: Vec<TabPress>,
     /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
     refused: bool,
+    /// The place of the event the strip reads now among the events the IME engine left in the frame's input: the
+    /// engine places its edits by the same count (`ime::take_placed`), so an editor part reads the two in the order
+    /// they arrived.
+    place: usize,
 }
 
 /// One text event of the pass.
@@ -159,6 +165,8 @@ struct Typed {
     claimed: bool,
     /// The text's place among the text events the strip left in egui's input, `None` when the strip took it.
     in_egui: Option<usize>,
+    /// The text's place among the frame's events ([`Batch::place`]).
+    place: usize,
 }
 
 /// A key press a following text event may belong to.
@@ -182,6 +190,9 @@ struct Item {
     intent: Intent,
     /// A physical left or right arrow: under right-to-left text it reads as the opposite logical move.
     horizontal: bool,
+    /// The place among the frame's events of the press or text it came from ([`Batch::place`]); `None` for an intent
+    /// of no one event.
+    place: Option<usize>,
 }
 
 #[derive(Clone, Default)]

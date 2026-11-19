@@ -138,7 +138,7 @@ impl Strip<'_> {
                     }
                 }
                 // Every text stays for now: the begin hook's routing decides which reader gets it (`route::begin`).
-                batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts) });
+                batch.texts.push(Typed { text, claimed, in_egui: Some(batch.egui_texts), place: batch.place });
                 batch.egui_texts += 1;
                 true
             }
@@ -282,7 +282,7 @@ impl Strip<'_> {
                 // The canvas has Space while the pointer is over it (`runtime::sampler`): only the shortcut dispatcher reads
                 // it, so the dialog's focused control does not activate, and a focused field neither types its space nor
                 // keeps its momentary command from firing (production pans under a dialog whatever has focus).
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true, place: batch.place });
                 if !repeat {
                     batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1), canvas: true, at });
                 }
@@ -301,7 +301,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::CtrlTab => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
                 false
             }
             PressUse::Pane(forward) => {
@@ -321,7 +321,7 @@ impl Strip<'_> {
                 false
             }
             PressUse::Press => {
-                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false, place: batch.place });
                 if !repeat {
                     batch.shortcuts.push(Shortcut {
                         input: *input,
@@ -500,7 +500,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;
+        let mut place = 0;
         events.retain(|arrived| {
+            // Every event the IME engine left counts, as the engine counts them (`ime::take_placed`).
+            batch.place = place;
+            place += 1;
             let read = raw_input::key_event(&arrived.event, os, latin);
             if !later.is_empty() || strip.ends_pass(&batch, &read) {
                 later.push(arrived.clone());

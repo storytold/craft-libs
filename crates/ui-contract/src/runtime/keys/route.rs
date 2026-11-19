@@ -63,6 +63,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
                 apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
+            stamp(&mut routed, press.place);
         }
         // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
@@ -82,6 +83,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             for (to, intent) in route {
                 push(&mut routed, Some(to), intent, false);
             }
+            stamp(&mut routed, typed.place);
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -173,7 +175,15 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
-    routed.entry(target).or_default().items.push(Item { intent, horizontal });
+    routed.entry(target).or_default().items.push(Item { intent, horizontal, place: None });
+}
+
+/// Gives the intents routed so far without a place the place `place` of the press or text they came from: routing
+/// stamps each event's intents right after it pushed them, so only that event's are without one.
+fn stamp(routed: &mut HashMap<Option<Id>, Routed>, place: usize) {
+    for item in routed.values_mut().flat_map(|routed| routed.items.iter_mut()) {
+        item.place.get_or_insert(place);
+    }
 }
 
 /// Who owns the keys at the stop `target`, whose scope chain is `scopes`: its own class and the class of the layer
@@ -310,7 +320,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     if current(ctx, |stage| super::input::focused_claims(&record, stage)).contains(&chord) {
         return true;
     }
-    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false };
+    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false, place: 0 };
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
     let taken = !matches!(route, PressRoute::Free);

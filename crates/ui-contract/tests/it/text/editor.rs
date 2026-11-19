@@ -1,7 +1,7 @@
 //! The editor contract: a component with an editor part receives one ordered input stream, a read-only editor
 //! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
 
-use craft_behavior::{EditorInput, PartKey, Sense, TextPos};
+use craft_behavior::{EditorInput, Granularity, PartKey, Sense, TextPos};
 use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
 use craft_ui::runtime::focus::KeyUse;
@@ -622,5 +622,54 @@ fn shift_tab_is_a_canvas_editors_back_tab_and_moves_focus_out_of_a_text_field() 
     field.frame(vec![Event::Text("x".into())]);
     let inputs = field.take();
     assert!(inputs.is_empty(), "Shift+Tab takes the keyboard out of the text field: {inputs:?}");
+}
+
+/// fwstub-1 (1): Shift+Delete reaches an editor as a delete that says Shift was held, so a word processor's page reads
+/// it as Cut (which deletes nothing without a selection) and a plain Delete stays a delete.
+#[trial]
+fn shift_delete_reaches_an_editor_with_its_shift() {
+    let mut rig = Rig::canvas_editor();
+    rig.focus();
+    rig.frame(vec![key_press(Key::Delete, Modifiers::SHIFT)]);
+    rig.frame(vec![key_press(Key::Delete, Modifiers::NONE)]);
+    let inputs = rig.take();
+    assert_eq!(
+        inputs,
+        [EditorInput::delete_with_shift(true, Granularity::Unit, true), EditorInput::delete(true, Granularity::Unit)],
+        "Shift+Delete and Delete arrive told apart"
+    );
+}
+
+/// fwstub-1 (2): the editor reads one frame's input-method edits, typed text and keys in the order they arrived, as
+/// `Cx::editor_input` says: a platform that sends a replacement's text before its commit has it read between the
+/// deletion and the commit, and a key between a deletion and its text comes between them.
+#[trial]
+fn one_frames_ime_edits_text_and_keys_reach_the_editor_in_arrival_order() {
+    for (name, mut rig) in [("a field's editor", Rig::new()), ("a canvas's editor", Rig::canvas_editor())] {
+        rig.focus();
+        let delete = || Event::Ime(ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 });
+        rig.frame(vec![delete(), Event::Text("Q".into()), commit("Q2"), commit("R")]);
+        let expected = [
+            EditorInput::delete_surrounding_bytes(1, 0),
+            EditorInput::Text("Q".into()),
+            EditorInput::ImeCommit,
+            EditorInput::Text("Q2".into()),
+            EditorInput::ImeCommit,
+            EditorInput::Text("R".into()),
+        ];
+        assert_eq!(rig.take(), expected, "{name}: the text comes where it arrived, between the deletion and the commits");
+        // A commit guards the keys that end a composition for a frame.
+        rig.frame(Vec::new());
+        rig.frame(Vec::new());
+        rig.take();
+
+        rig.frame(vec![delete(), key_press(Key::Delete, Modifiers::NONE), Event::Text("K".into())]);
+        let expected = [EditorInput::delete_surrounding_bytes(1, 0), EditorInput::delete(true, Granularity::Unit), EditorInput::Text("K".into())];
+        assert_eq!(rig.take(), expected, "{name}: the key comes between the deletion and the text");
+
+        rig.frame(vec![Event::Text("a".into()), key_press(Key::Backspace, Modifiers::NONE), Event::Text("b".into())]);
+        let expected = [EditorInput::Text("a".into()), EditorInput::delete(false, Granularity::Unit), EditorInput::Text("b".into())];
+        assert_eq!(rig.take(), expected, "{name}: a key between two texts stays between them");
+    }
 }
 

@@ -27,37 +27,42 @@ pub(crate) enum Raw {
     ResetRetired(egui::ImeResetId),
 }
 
-/// Removes the IME events from `events` and returns them in order.
-pub(crate) fn take_events(events: &mut Vec<Arrived>) -> Vec<Raw> {
+/// Removes the IME events from `events`, and the other events `drop` names, and returns the IME events in order, each
+/// with its place: how many of the events left in `events` arrived before it. The key stage numbers the events it
+/// reads by the same places (`keys::input_hook`), so an editor gets the two in the order they arrived.
+pub(crate) fn take_events(events: &mut Vec<Arrived>, take: bool, drop: impl Fn(&Event) -> bool) -> Vec<(Raw, usize)> {
     let mut taken = Vec::new();
-    events.retain(|Arrived { event, .. }| match event {
-        Event::Ime(ime) => {
-            match ime {
-                ImeEvent::Preedit { text, active_range_chars } => {
-                    taken.push(Raw::Preedit { text: text.clone(), cursor_chars: active_range_chars.clone() })
-                }
-                ImeEvent::Commit(text) => taken.push(Raw::Commit(text.clone())),
-                ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
-                    taken.push(Raw::DeleteSurrounding { before: *before_chars, after: *after_chars })
-                }
-                ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes } => {
-                    taken.push(Raw::DeleteSurroundingBytes { before: *before_bytes, after: *after_bytes })
-                }
-                _ => {}
-            }
-            false
+    let mut kept = 0;
+    events.retain(|Arrived { event, .. }| {
+        if let Some(raw) = take.then(|| raw_of(event)).flatten() {
+            taken.extend(raw.map(|raw| (raw, kept)));
+            return false;
         }
-        Event::ImeResetCompleted { request_id } => {
-            taken.push(Raw::ResetCompleted(*request_id));
-            false
-        }
-        Event::ImeResetRetired { request_id } => {
-            taken.push(Raw::ResetRetired(*request_id));
-            false
-        }
-        _ => true,
+        let keep = !drop(event);
+        kept += usize::from(keep);
+        keep
     });
     taken
+}
+
+/// What the IME engine reads from `event`: `None` for an event that is not the engine's, `Some(None)` for one it takes
+/// and ignores.
+fn raw_of(event: &Event) -> Option<Option<Raw>> {
+    let raw = match event {
+        Event::Ime(ime) => match ime {
+            ImeEvent::Preedit { text, active_range_chars } => Some(Raw::Preedit { text: text.clone(), cursor_chars: active_range_chars.clone() }),
+            ImeEvent::Commit(text) => Some(Raw::Commit(text.clone())),
+            ImeEvent::DeleteSurrounding { before_chars, after_chars } => Some(Raw::DeleteSurrounding { before: *before_chars, after: *after_chars }),
+            ImeEvent::DeleteSurroundingBytes { before_bytes, after_bytes } => {
+                Some(Raw::DeleteSurroundingBytes { before: *before_bytes, after: *after_bytes })
+            }
+            _ => None,
+        },
+        Event::ImeResetCompleted { request_id } => Some(Raw::ResetCompleted(*request_id)),
+        Event::ImeResetRetired { request_id } => Some(Raw::ResetRetired(*request_id)),
+        _ => return None,
+    };
+    Some(raw)
 }
 
 /// What the engine writes into `PlatformOutput.ime`.
