@@ -131,6 +131,14 @@ impl EditorHandle {
         ime::note_application_change(ctx, self.widget);
     }
 
+    /// Asks for the OS composition to be interrupted this pass, because this editor part refused an input method's
+    /// edit and the input method's view of the text is stale. The pass's change cause stays what its receipts prove:
+    /// a commit applied after the refusal is still the input method's. A composition still running is ended and its
+    /// late events are dropped until the reset completes; with none running, later input is not held back.
+    pub fn ime_interrupt(&self, ctx: &egui::Context) {
+        ime::request_interrupt(ctx, self.widget);
+    }
+
     /// The one editor report path: notes the caret, the composition, the undo state and the surrounding text with the
     /// IME engine, and returns the text facts when AccessKit reads the part.
     ///
@@ -184,6 +192,13 @@ impl<C: Component> Cx<'_, C> {
     pub fn ime_application_change(&self) {
         if let Some(handle) = self.editor_handle() {
             handle.ime_application_change(&self.core.ctx);
+        }
+    }
+
+    /// Asks for the OS composition to be interrupted this pass, as [`EditorHandle::ime_interrupt`].
+    pub fn ime_interrupt(&self) {
+        if let Some(handle) = self.editor_handle() {
+            handle.ime_interrupt(&self.core.ctx);
         }
     }
 
