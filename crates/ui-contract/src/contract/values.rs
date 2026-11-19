@@ -743,9 +743,9 @@ pub(crate) enum Checked {
 
 /// Write-through bindings to fields of a [`Tracked`](crate::contract::Tracked) value: `bind_tracked!(doc => size)`
 /// gives one [`Bind`], `bind_tracked!(doc => title, style.size)` a tuple with one per field path (field names and
-/// tuple indices only). Making and reading the bindings leaves the revision; an edit that changes a field moves it at
-/// the write, so bindings made every pass don't invalidate the value's readers. Each binding borrows its own field,
-/// so the paths must not overlap.
+/// tuple indices only), and `bind_tracked!(name)` one binding to the whole value. Making and reading the bindings
+/// leaves the revision; an edit that changes the bound value moves it at the write, so bindings made every pass don't
+/// invalidate the value's readers. Each binding borrows its own field, so the paths must not overlap.
 ///
 /// ```
 /// # extern crate craft_ui_contract as craft_ui;
@@ -760,6 +760,12 @@ pub(crate) enum Checked {
 /// let mut doc = Tracked::new(Doc { title: "a".into(), style: (12.0, false) });
 /// let (title, size) = bind_tracked!(doc => title, style.0);
 /// # let _ = (title, size);
+///
+/// let mut name = Tracked::new(String::from("a"));
+/// let before = name.revision();
+/// let whole = bind_tracked!(name);
+/// # let _ = whole;
+/// assert_eq!(name.revision(), before, "binding leaves the revision");
 /// ```
 ///
 /// Overlapping paths don't compile:
@@ -790,5 +796,9 @@ macro_rules! bind_tracked {
     ($tracked:expr => $($first:tt $(. $rest:tt)*),+ $(,)?) => {{
         let (model, count) = $tracked.__split_for_bind();
         ($($crate::contract::Bind::__tracked(&mut model.$first $(.$rest)*, count),)+)
+    }};
+    ($tracked:expr) => {{
+        let (model, count) = $tracked.__split_for_bind();
+        $crate::contract::Bind::__tracked(model, count)
     }};
 }

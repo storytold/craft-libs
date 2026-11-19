@@ -2077,6 +2077,8 @@ dependencies = [
  "craft-host",
  "craft-keymap",
  "craft-theme",
+ "craft-tracked",
+ "craft-ui-macros",
  "emath",
  "kurbo",
  "serde",

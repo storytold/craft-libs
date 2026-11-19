@@ -17,7 +17,7 @@ use super::{Probe, ShapeKind};
 use std::collections::BTreeMap;
 
 /// Where a type sits in the design system, in the order a viewer lists them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub enum Level {
     /// Colours, the edit lifecycle, stock egui.
