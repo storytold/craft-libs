@@ -69,6 +69,32 @@ fn rows(params: Vec<Param>, values: &Rc<RefCell<DialogFields>>) -> Fixture {
     fixture
 }
 
+/// The opt-in range keeps its numeric value and only opens its slider from the field's arrow.
+#[trial]
+fn a_popup_slider_opens_from_a_typed_range_row() {
+    let params = Param::parse_list(r#"{"scale":1..1000=100}"#);
+    let popup = vec![params[0].clone().popup_slider().unit(UnitKind::Percent)];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(popup.clone(), &values);
+    assert!(fixture.by_role(Role::SLIDER).is_empty(), "no permanent slider");
+    let chevron = fixture.by_label("Slider").expect("the slider arrow");
+    let unit = fixture.texts().iter().find(|run| run.text == "%").expect("the percent unit");
+    assert!(unit.rect.left() >= chevron.rect.right(), "the unit follows the arrow");
+    fixture.click(&chevron).settle();
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the popup slider");
+    fixture.click_at(slider.center()).settle();
+    let value = values.borrow().number("scale").unwrap();
+    assert!((value - 500.5).abs() <= 4.0, "linear midpoint: {value}");
+
+    assert!(set_param_field(&popup, &mut values.borrow_mut(), "scale", json!("125")).is_err());
+    assert!(set_param_field(&popup, &mut values.borrow_mut(), "scale", json!(1001)).is_err());
+    set_param_field(&popup, &mut values.borrow_mut(), "scale", json!(125.5)).unwrap();
+    assert_eq!(ParamDialog::remembered(&popup, &values.borrow()).number("scale"), Some(125.5));
+
+    let standard = rows(params, &Rc::new(RefCell::new(DialogFields::new())));
+    assert_eq!(standard.by_role(Role::SLIDER).len(), 1, "standard range uses its visible slider");
+}
+
 // A row with `visible_when` is there only while its condition holds, and one with `enabled_when` takes input only
 // while its condition holds; a tooltip is the description of its row.
 #[trial]

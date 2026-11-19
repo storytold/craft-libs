@@ -15,6 +15,7 @@ use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
     Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
 };
+use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
 use crate::layout_components::{Row, Stack};
@@ -24,11 +25,11 @@ use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
-use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
+use crate::text::{NumberField, RangeAlert, SelectableText, TextField, UnitPlacement};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
-use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec};
+use craft_behavior::{EditEvent, IconId, Mixed, NumberCodec, decimals_for_step};
 use craft_host::PickRequest;
 
 use craft_theme::Srgba;
@@ -433,7 +434,12 @@ impl<'p> Pass<'p> {
     /// A range row: inline beside its label in the row's field, or stacked under its own caption across the form.
     fn range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, scale: SliderScale) {
         let value = self.work.number(line.key).unwrap_or(*range.start());
-        let places = line.param.option().range_places();
+        let options = line.param.option();
+        let places = options.range_places();
+        if options.popup_slider {
+            self.popup_range(ui, line, range, value, places);
+            return;
+        }
         let layout = self.sliders;
         let mut show = |ui: &mut Ui| {
             let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(layout);
@@ -460,6 +466,36 @@ impl<'p> Pass<'p> {
             SliderFieldLayout::Stacked => show(ui),
             _ => line.show(ui, show),
         }
+    }
+
+    fn popup_range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, value: f64, places: Option<u32>) {
+        // Match the ordinary range row's number field precision when the caller sets no step.
+        let default_step = if range.end() - range.start() <= 10.0 { 0.01 } else { 1.0 };
+        let step = places.map_or(default_step, |places| 10f64.powi(-(places as i32)));
+        let unit = line.param.unit.map(|kind| (kind, self.units.symbol(kind)));
+        line.show(ui, |ui| {
+            Row::new().show(ui, |ui, _| {
+                let mut field = NumberField::new(line.name.clone(), Bind::given(Some(value)))
+                    .range(range.clone())
+                    .popup_slider(range.clone())
+                    .commit_decimals(decimals_for_step(step))
+                    .scrub_by_label();
+                if places.is_some() || default_step != 1.0 {
+                    field = field.step(step).snap_typed(places.is_some());
+                }
+                if let Some((kind, _)) = &unit {
+                    field = field.unit_kind(*kind).unit_placement(UnitPlacement::After);
+                }
+                let shown = field.show(ui);
+                if let Some((_, symbol)) = &unit {
+                    Text::new(symbol.clone()).show(ui);
+                }
+                self.alert(shown.out_of_range);
+                if let Some(value) = shown.edit.value().copied().flatten() {
+                    self.work.set(line.key, rounded(value, places));
+                }
+            });
+        });
     }
 
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
