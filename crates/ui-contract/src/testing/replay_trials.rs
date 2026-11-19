@@ -102,7 +102,7 @@ fn layer_scope_record(frames: &mut Frames, outer: Option<egui::Id>, entering: bo
         }
         replay::open(&ctx);
         focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
-        focus::push_scope_from(&ctx, scope, FocusPolicy::NONE, None, None, false, Some(entering));
+        focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(entering));
         focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
         focus::pop_scope(&ctx);
         record = Some(replay::close(&ctx, fixture::layer_of(ui)));
@@ -173,4 +173,28 @@ fn a_replayed_member_stacks_above_the_members_before_it() {
         let _ = shown(ui, true);
     });
     assert_eq!(hovered, Some([true, false]), "the replayed child is above the member that covers it");
+}
+
+// A popup scope that appears with nothing focused has no opener, and keeps none once focus moved into it: the opener is
+// taken when the scope first appears, never from a later pass's focus, which is a stop inside the scope itself. A
+// recorded first pass, the next real run and a replay then register the same.
+#[trial]
+fn a_scope_keeps_the_opener_of_the_pass_it_appeared_in() {
+    let mut frames = Frames::new();
+    let [scope, stop] = [fixture::named_id("popup"), fixture::named_id("inside")];
+    let mut openers = Vec::new();
+    let mut focused = Vec::new();
+    for first in [true, false, false] {
+        frames.frame(Vec::new(), |ui| {
+            let ctx = ui.ctx().clone();
+            focused.push(focus::focused_stop(&ctx));
+            focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
+            focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(first));
+            focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
+            focus::pop_scope(&ctx);
+            openers.push(focus::with(&ctx, |state| state.scopes.get(&scope).map(|rec| rec.opener)));
+        });
+    }
+    assert_eq!(focused[1], Some((stop, None)), "focus moved into the popup after its first pass");
+    assert_eq!(openers, vec![Some(None); 3], "the popup keeps the opener of its first pass");
 }

@@ -19,6 +19,7 @@ use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
 use egui::{Context, Id, ViewportId};
+use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -279,7 +280,8 @@ impl Transcript {
     }
 
     /// The transcript as a replay registers it with `outer` the innermost open scope: a record under the scope that
-    /// was open around the run goes under `outer`, and a replayed scope is no new scope (`entering` is false).
+    /// was open around the run goes under `outer`, a replayed scope is no new scope (`entering` is false), and its
+    /// opener is the focus service's, not the run's (`opener`).
     fn placed(&self, outer: Option<Id>) -> Transcript {
         let place = |scope: Option<Id>| if scope == self.outer { outer } else { scope };
         Transcript {
@@ -287,7 +289,9 @@ impl Transcript {
             scopes: self
                 .scopes
                 .iter()
-                .map(|(id, scope)| (*id, ScopeRec { parent: place(scope.parent), entering: scope.entering.map(|_| false), ..scope.clone() }))
+                .map(|(id, scope)| {
+                    (*id, ScopeRec { parent: place(scope.parent), entering: scope.entering.map(|_| false), opener: None, ..scope.clone() })
+                })
                 .collect(),
             groups: self.groups.clone(),
             row_sets: self.row_sets.clone(),
@@ -296,10 +300,25 @@ impl Transcript {
     }
 }
 
+impl Transcript {
+    /// The first record in which the replays of `self` and `other` differ (`placed`): the kind, its index and both
+    /// sides, `None` on a side that has fewer records. `None` when they register the same.
+    pub(crate) fn first_difference(&self, other: &Self) -> Option<String> {
+        fn first<T: PartialEq + fmt::Debug>(kind: &str, left: &[T], right: &[T]) -> Option<String> {
+            let index = left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))?;
+            Some(format!("{kind} {index}: left {:?} / right {:?}", left.get(index), right.get(index)))
+        }
+        let [a, b] = [self.placed(None), other.placed(None)];
+        first("stop", &a.stops, &b.stops)
+            .or_else(|| first("scope", &a.scopes, &b.scopes))
+            .or_else(|| first("roving group", &a.groups, &b.groups))
+            .or_else(|| first("row groups", &a.row_sets, &b.row_sets))
+    }
+}
+
 impl PartialEq for Transcript {
     fn eq(&self, other: &Self) -> bool {
-        let [a, b] = [self.placed(None), other.placed(None)];
-        (a.stops, a.scopes, a.groups, a.row_sets) == (b.stops, b.scopes, b.groups, b.row_sets)
+        self.first_difference(other).is_none()
     }
 }
 
@@ -336,9 +355,12 @@ pub(crate) fn transcript(ctx: &Context, mark: Mark) -> Transcript {
 /// as the run would have. A replayed scope is no new scope: it moves no focus when it shows again.
 pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
+    let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         let placed = transcript.placed(state.open.last().map(|(id, _)| *id));
-        for (id, scope) in placed.scopes {
+        for (id, mut scope) in placed.scopes {
+            // No replayed scope has a noted opener: an overlay, which notes one, blocks its record.
+            scope.opener = opener(state, id, None, focused);
             if scope.entering.is_none() {
                 state.seen.insert(id, frame);
             }
@@ -427,13 +449,23 @@ pub(crate) fn push_scope_from(
     let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         let parent = state.open.last().map(|(parent, _)| *parent);
-        let opener = noted.or_else(|| focused.and_then(|root| state.focused.get(&root).copied().or(Some((root, None)))));
-        let opener = state.last_scopes.get(&id).map_or(opener, |last| last.opener.or(opener));
+        let opener = opener(state, id, noted, focused);
         state.scopes.insert(id, ScopeRec { policy, parent, label, opener, closing, entering });
         state.scope_order.push(id);
         let first = state.stops.len();
         state.open.push((id, first));
     });
+}
+
+/// The opener of the scope `id` registered in the running pass, by a run or a replay alike: taken once, when the scope
+/// first appears, as the stop `noted` or else the stop of the focused widget `focused`; then kept from the pass before,
+/// with what focus entering it noted there (`note_entry`). It is never taken again from the focus of a later pass,
+/// which may be a stop inside the scope itself.
+fn opener(state: &State, id: Id, noted: Option<StopKey>, focused: Option<Id>) -> Option<StopKey> {
+    match state.last_scopes.get(&id) {
+        Some(last) => last.opener,
+        None => noted.or_else(|| focused.map(|root| state.focused.get(&root).copied().unwrap_or((root, None)))),
+    }
 }
 
 /// The innermost scope open in the running pass: the scope whose body is being shown.
