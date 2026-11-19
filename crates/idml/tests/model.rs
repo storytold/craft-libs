@@ -280,3 +280,132 @@ fn text_variable_decoration_uses_preference_and_falls_back_to_legacy_root_values
     let variable = craft_idml::model::TextVariableValues::from_el(&legacy);
     assert_eq!((variable.before.as_str(), variable.after.as_str()), ("of ", " pages"));
 }
+
+#[test]
+fn designmap_schema_elements_roundtrip_expected_attributes() {
+    use craft_idml::model::{
+        ConditionValues, KinsokuTableValues, LayerColorValue, LayerValues, MojikumiRow, MojikumiTableValues, NumberingListValues, SectionValues,
+        TextDateKind, TextVariableKind, TextVariableValues, default_languages, default_xref_text_variables, hyperlink_el,
+        hyperlink_page_destination_el, hyperlink_page_item_source_el, hyperlink_url_destination_el, root_color_group_el,
+    };
+
+    let langs = default_languages();
+    assert_eq!(langs[0].attr("Self"), Some("Language/$ID/[No Language]"));
+    assert_eq!(langs[1].attr("Self"), Some("Language/$ID/English%3a USA"));
+    assert_eq!(langs[1].attr("Id"), Some("269"));
+
+    let num_list = NumberingListValues::default_list().to_el();
+    assert_eq!(num_list.attr("Self"), Some("NumberingList/$ID/[Default]"));
+    assert_eq!(num_list.attr("ContinueNumbersAcrossDocuments"), Some("false"));
+
+    let kinsoku = KinsokuTableValues {
+        name: "My:Kinsoku".into(),
+        cant_begin_line_chars: "。".into(),
+        cant_end_line_chars: "「".into(),
+        cant_be_separated_chars: "…".into(),
+        hanging_punctuation_chars: "、".into(),
+    }
+    .to_el();
+    assert_eq!(kinsoku.attr("Self"), Some("KinsokuTable/My%3aKinsoku"));
+    assert_eq!(kinsoku.attr("CantBeginLineChars"), Some("。"));
+
+    let mojikumi = MojikumiTableValues {
+        name: "Custom%1".into(),
+        based_on: "Base".into(),
+        overrides: vec![MojikumiRow {
+            target_class: 1,
+            side_class: 2,
+            after: true,
+            minimum: 0.0,
+            desired: 0.25,
+            maximum: 0.5,
+            priority: 3,
+            does_not_float: false,
+        }],
+    }
+    .to_el();
+    assert_eq!(mojikumi.attr("Self"), Some("MojikumiTable/Custom%251"));
+    assert_eq!(mojikumi.attr("BasedOnMojikumiSet"), Some("Base"));
+    let row = mojikumi.child("Properties").and_then(|p| p.child("OverrideMojikumiAkiList")).and_then(|l| l.child("OverrideMojikumiAkiType")).unwrap();
+    assert_eq!(row.attr("TargetMojikumiClass"), Some("1"));
+    assert_eq!(row.attr("SideIsAfterTarget"), Some("true"));
+
+    let cond = ConditionValues { self_id: None, name: Some("A:B".into()), indicator_rgb: Some([10, 20, 30]), visible: true }.to_el();
+    assert_eq!(cond.attr("Self"), Some("Condition/A%3aB"));
+    assert_eq!(cond.attr("IndicatorColor"), Some("10 20 30"));
+    assert_eq!(cond.attr("Visible"), Some("true"));
+
+    let xrefs = default_xref_text_variables();
+    assert_eq!(xrefs[0].attr("VariableType"), Some("XrefChapterNumberType"));
+    assert_eq!(xrefs[1].attr("VariableType"), Some("XrefPageNumberType"));
+
+    let tv = TextVariableValues {
+        self_id: None,
+        name: "Mod".into(),
+        before: "Updated ".into(),
+        after: "!".into(),
+        kind: TextVariableKind::Date { kind: TextDateKind::Modification, format: "yyyy-MM-dd".into() },
+    }
+    .to_el();
+    assert_eq!(tv.attr("VariableType"), Some("ModificationDateType"));
+    let pref = tv.child("DateVariablePreference").unwrap();
+    assert_eq!(pref.attr("TextBefore"), Some("Updated "));
+    assert_eq!(pref.attr("TextAfter"), Some("!"));
+    assert_eq!(pref.attr("Format"), Some("yyyy-MM-dd"));
+}
+
+#[test]
+fn designmap_layers_sections_and_hyperlinks_roundtrip_expected_attributes() {
+    use craft_idml::model::{
+        LayerColorValue, LayerValues, SectionValues, hyperlink_el, hyperlink_page_destination_el, hyperlink_page_item_source_el,
+        hyperlink_url_destination_el, root_color_group_el,
+    };
+
+    let layer = LayerValues {
+        self_id: "u1".into(),
+        name: "Layer 1".into(),
+        visible: true,
+        locked: false,
+        ignore_wrap: false,
+        show_guides: true,
+        lock_guides: false,
+        printable: true,
+        color: LayerColorValue::Rgb([128.0, 64.0, 0.0]),
+    }
+    .to_el();
+    assert_eq!(layer.attr("Self"), Some("u1"));
+    assert_eq!(layer.attr("UI"), Some("true"));
+    let list_items: Vec<_> =
+        layer.child("Properties").and_then(|p| p.child("LayerColor")).map(|lc| lc.elements().map(|e| e.deep_text()).collect()).unwrap();
+    assert_eq!(list_items, ["128", "64", "0"]);
+
+    let section = SectionValues {
+        self_id: "u2".into(),
+        length: 4,
+        name: "A".into(),
+        continue_numbering: false,
+        include_section_prefix: true,
+        page_number_start: Some(1),
+        marker: "M".into(),
+        page_start: "u3".into(),
+        section_prefix: "A".into(),
+        alternate_layout: Some(("Phone".into(), 4)),
+        page_number_style: "Arabic".into(),
+    }
+    .to_el();
+    assert_eq!(section.attr("PageNumberStart"), Some("1"));
+    assert_eq!(section.attr("AlternateLayout"), Some("Phone"));
+
+    let url_dest = hyperlink_url_destination_el("HyperlinkURLDestination/u1", "Site", "https://example.com");
+    assert_eq!(url_dest.attr("DestinationURL"), Some("https://example.com"));
+    let page_dest = hyperlink_page_destination_el("HyperlinkPageDestination/p1", "Page", "u3");
+    assert_eq!(page_dest.attr("ViewSetting"), Some("FitPage"));
+    let item_src = hyperlink_page_item_source_el("HyperlinkPageItemSource/i1k0", "Link", "u4");
+    assert_eq!(item_src.attr("SourcePageItem"), Some("u4"));
+    let link = hyperlink_el("u5", "Link", "HyperlinkPageItemSource/i1k0", "HyperlinkURLDestination/u1", true, 0x1_0000_0007);
+    assert_eq!(link.attr("DestinationUniqueKey"), Some("7"));
+
+    let cg = root_color_group_el(&["Color/Black".into(), "Color/Paper".into()], "u10");
+    assert_eq!(cg.attr("IsRootColorGroup"), Some("true"));
+    assert_eq!(cg.elements().count(), 2);
+}
