@@ -123,23 +123,15 @@ pub(crate) fn escaped(field: &syn::Field, escape: &Escape) -> syn::Result<bool> 
 }
 
 /// The path of craft-tracked as the crate being compiled reaches it: a direct dependency (`::craft_tracked` in
-/// craft-tracked itself, which declares that name), else the facade's `tracked` module, else the framework's
-/// re-export in `contract`.
+/// craft-tracked itself, which declares that name), else the framework's re-export in `contract`. Through the
+/// facade that is `craft::ui::contract`, which every `ui` build has without the facade's `tracked` feature.
 fn tracked_crate() -> TokenStream {
     match crate_name("craft-tracked") {
         Ok(FoundCrate::Name(name)) => {
             let name = format_ident!("{name}");
-            return quote!(::#name);
+            quote!(::#name)
         }
-        Ok(FoundCrate::Itself) => return quote!(::craft_tracked),
-        Err(_) => {}
-    }
-    match crate_name("craft") {
-        Ok(FoundCrate::Name(name)) => {
-            let name = format_ident!("{name}");
-            quote!(::#name::tracked)
-        }
-        Ok(FoundCrate::Itself) => quote!(::craft::tracked),
+        Ok(FoundCrate::Itself) => quote!(::craft_tracked),
         Err(_) => {
             let k = ui_crate();
             quote!(#k::contract)

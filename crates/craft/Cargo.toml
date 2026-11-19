@@ -218,8 +218,6 @@ craft-xfa = { workspace = true, optional = true }
 [features]
 ui = [
     "dep:craft-ui",
-    # The framework's memoized views key app models by their `Tracked` revision.
-    "tracked",
     "dep:egui",
     "craft-automation?/ui",
     "craft-browse?/ui",
@@ -842,13 +840,13 @@ theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
 
-tracked = ["dep:craft-tracked"]
-
 time = ["dep:craft-time"]
 
 timeline = ["dep:craft-timeline", "keymap"]
 timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
+
+tracked = ["dep:craft-tracked"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]
