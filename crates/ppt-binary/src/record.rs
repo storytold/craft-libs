@@ -1,7 +1,17 @@
 //! The record framing shared by [MS-PPT] and [MS-ODRAW]: an 8-byte header (version, instance,
 //! type, length) followed by `len` bytes, which for a container (version `0xF`) are more records.
 
-use crate::cfb::{u16_at, u32_at};
+/// The little-endian `u16` at `at`, if `b` holds it.
+pub(crate) fn u16_at(b: &[u8], at: usize) -> Option<u16> {
+    let s = b.get(at..at.checked_add(2)?)?;
+    Some(u16::from_le_bytes([*s.first()?, *s.get(1)?]))
+}
+
+/// The little-endian `u32` at `at`, if `b` holds it.
+pub(crate) fn u32_at(b: &[u8], at: usize) -> Option<u32> {
+    let s = b.get(at..at.checked_add(4)?)?;
+    Some(u32::from_le_bytes([*s.first()?, *s.get(1)?, *s.get(2)?, *s.get(3)?]))
+}
 
 /// Containers nest at most this deep; deeper input is treated as damaged and skipped.
 pub const MAX_DEPTH: usize = 32;

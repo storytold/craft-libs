@@ -1,7 +1,7 @@
 //! Shape geometry: OfficeArt shape types (`MSOSPT`, [MS-ODRAW] §2.4.24) as DrawingML preset
 //! names, and freeform paths from the vertices and segment properties (§2.3.6).
 
-use deckcraft_model::{CustomPath, Geom};
+use craft_pptx::{CustomPath, Geom};
 
 use crate::draw::{Props, prop};
 
@@ -165,10 +165,10 @@ pub fn is_connector(shape_type: u16) -> bool {
     (32..=40).contains(&shape_type)
 }
 
-/// The geometry of a shape: its preset (checked against the presets DeckCraft draws, with a
+/// The geometry of a shape: its preset (checked against the presets `craft_drawingml` draws, with a
 /// rounded rectangle's corner carried over), else its freeform path, else a rectangle.
 pub fn geometry(shape_type: u16, props: &Props) -> Geom {
-    if let Some(name) = preset_name(shape_type).filter(|n| deckcraft_geom::preset::build(n, 100.0, 100.0, &[]).is_some()) {
+    if let Some(name) = preset_name(shape_type).filter(|n| craft_drawingml::preset::build(n, 100.0, 100.0, &[]).is_some()) {
         let mut adj = vec![];
         // A rounded rectangle's corner: a 21600 coordinate in OfficeArt, a 100000 fraction of the
         // shorter side in DrawingML.
@@ -295,10 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn every_mapped_preset_is_one_deckcraft_draws() {
+    fn every_mapped_preset_is_one_craft_drawingml_draws() {
         for t in 0..=255u16 {
             if let Some(name) = preset_name(t) {
-                assert!(deckcraft_geom::preset::build(name, 100.0, 100.0, &[]).is_some(), "type {t}: {name}");
+                assert!(craft_drawingml::preset::build(name, 100.0, 100.0, &[]).is_some(), "type {t}: {name}");
             }
         }
     }

@@ -1,13 +1,92 @@
 //! End-to-end tests over `.ppt` files built here from records (never files made by PowerPoint).
 #![allow(clippy::unwrap_used)]
 
-use deckcraft_model::text::{Align, Bullet, RunKind};
-use deckcraft_model::{Background, Fill, PhType, Presentation, Rgba, ShapeKind, Slide};
+use craft_pptx::text::{Align, Bullet, RunKind};
+use craft_pptx::{
+    Background, Defaults, Fill, Layout, LayoutId, LayoutType, Master, MasterId, PhType, Placeholder, Presentation, Rgba, Shape, ShapeId, ShapeKind,
+    Size, Slide, TextBody, Xfrm,
+};
 
 use crate::doc::rt;
 use crate::draw::prop;
 use crate::record::build::{atom, container};
 use crate::text::tests::{cf_bytes, pf_bytes};
+
+/// A default master as an application gives one: title, body and footer placeholders on the
+/// master, and the layouts `.ppt` layout types map to, each with its placeholders. The `.ppt`
+/// masters place and style these.
+struct AppDefaults;
+
+impl Defaults for AppDefaults {
+    fn master(&self, size: Size, after: u32) -> (Master, u32) {
+        let next = std::cell::Cell::new(after);
+        let id = || {
+            next.set(next.get() + 1);
+            next.get()
+        };
+        let (w, h) = (size.width, size.height);
+        let ph = |kind: PhType, name: &str, x: [f64; 4]| Shape {
+            id: ShapeId(id()),
+            name: name.into(),
+            xfrm: Some(Xfrm::new(x[0] * w, x[1] * h, x[2] * w, x[3] * h)),
+            ph: Some(Placeholder { kind, ..Default::default() }),
+            text: Some(TextBody::default()),
+            ..Default::default()
+        };
+        let title = || ph(PhType::Title, "Title", [0.06, 0.05, 0.88, 0.17]);
+        let footers = || {
+            vec![
+                ph(PhType::Date, "Date", [0.06, 0.92, 0.22, 0.05]),
+                ph(PhType::Footer, "Footer", [0.33, 0.92, 0.34, 0.05]),
+                ph(PhType::SlideNum, "Slide Number", [0.72, 0.92, 0.22, 0.05]),
+            ]
+        };
+        let mut shapes = vec![title(), ph(PhType::Body, "Text", [0.06, 0.25, 0.88, 0.62])];
+        shapes.extend(footers());
+        let kinds = [
+            (LayoutType::Title, "Title Slide"),
+            (LayoutType::TitleAndContent, "Title and Content"),
+            (LayoutType::TitleOnly, "Title Only"),
+            (LayoutType::TwoContent, "Two Content"),
+            (LayoutType::VerticalTitleAndText, "Vertical Title and Text"),
+            (LayoutType::TitleAndVerticalText, "Title and Vertical Text"),
+            (LayoutType::Blank, "Blank"),
+        ];
+        let layouts = kinds
+            .into_iter()
+            .map(|(kind, name)| {
+                let mut l: Vec<Shape> = if kind == LayoutType::Blank { vec![] } else { vec![title()] };
+                l.extend(footers());
+                Layout { id: LayoutId(id()), name: name.into(), kind, shapes: l, show_master_shapes: true, ..Default::default() }
+            })
+            .collect();
+        let master = Master { id: MasterId(id()), name: "Default".into(), shapes, layouts, ..Default::default() };
+        (master, next.get())
+    }
+}
+
+fn import(bytes: &[u8]) -> Result<Presentation, crate::PptError> {
+    crate::import(bytes, &AppDefaults)
+}
+
+fn import_checked(bytes: &[u8]) -> Result<(Presentation, Vec<String>), crate::PptError> {
+    crate::import_checked(bytes, &AppDefaults)
+}
+
+/// A version 3 compound file holding `streams` at its root.
+fn build(streams: &[(&str, &[u8])]) -> Vec<u8> {
+    craft_cfb::write_streams(craft_cfb::Version::V3, streams).unwrap()
+}
+
+/// With no default master of the caller's, a file's masters still read: the plain master has no
+/// placeholders for the file's to place, and the slides keep their own.
+#[test]
+fn plain_defaults_still_read_the_file() {
+    let p = crate::import(&file(), &craft_pptx::Plain).unwrap();
+    assert_eq!(p.slides.len(), 1);
+    assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().text(), "Hello\nWorld");
+    assert!(p.layout(p.slides[0].layout).is_some());
+}
 
 fn le32(v: &[u32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
@@ -273,7 +352,7 @@ fn streams_with_document(
 
 fn file_with(token: u32) -> Vec<u8> {
     let (cu, doc, pics) = streams(token);
-    crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])
+    build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])
 }
 
 fn file() -> Vec<u8> {
@@ -284,7 +363,7 @@ fn file() -> Vec<u8> {
 fn imports_a_presentation() {
     let bytes = file();
     assert!(crate::sniff(&bytes));
-    let p = crate::import(&bytes).unwrap();
+    let p = import(&bytes).unwrap();
     assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0));
     assert_eq!(p.slides.len(), 1);
     let s = &p.slides[0];
@@ -306,13 +385,13 @@ fn check_title_placeholder(s: &Slide) {
     assert_eq!(title.fill, Some(Fill::None));
     let t = title.text.as_ref().unwrap();
     assert_eq!(t.text(), "Hello\nWorld");
-    assert_eq!(t.body.anchor, Some(deckcraft_model::text::Anchor::Middle));
+    assert_eq!(t.body.anchor, Some(craft_pptx::text::Anchor::Middle));
     let p0 = &t.paragraphs[0];
     assert_eq!(p0.props.align, Some(Align::Center));
     assert_eq!(p0.props.bullet, Some(Bullet::None));
     let r = &p0.runs[0].props;
     assert_eq!((r.size, r.bold, r.font.as_deref()), (Some(44.0), Some(true), Some("Arial")));
-    assert_eq!(r.fill, Some(Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0x11, 0x22, 0x33)))));
+    assert_eq!(r.fill, Some(Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0x11, 0x22, 0x33)))));
     assert_eq!(s.title(), "Hello\nWorld");
 }
 
@@ -334,7 +413,7 @@ fn check_group(s: &Slide) {
     let e = children[0].xfrm.unwrap();
     assert_eq!((e.x, e.y, e.w, e.h, e.flip_h), (437.5, 200.0, 62.5, 100.0, false));
     assert_eq!(children[0].geom.preset_name(), Some("ellipse"));
-    assert_eq!(children[0].fill, Some(Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0, 0xFF, 0)))));
+    assert_eq!(children[0].fill, Some(Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0, 0xFF, 0)))));
     assert_eq!(children[0].line.as_ref().and_then(|l| l.width), Some(2.0));
 }
 
@@ -354,9 +433,9 @@ fn check_text_box(s: &Slide) {
 fn check_master(p: &Presentation, s: &Slide) {
     // The master: its background, colours and decoration.
     let m = &p.masters[0];
-    assert_eq!(m.background, Some(Background::Fill { fill: Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))) }));
-    assert_eq!(m.theme.colors.get(deckcraft_model::SchemeSlot::Accent1), Rgba::rgb(0, 0xCC, 0));
-    assert!(m.shapes.iter().any(|sh| sh.ph.is_none() && sh.fill == Some(Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0, 0xCC, 0))))));
+    assert_eq!(m.background, Some(Background::Fill { fill: Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))) }));
+    assert_eq!(m.theme.colors.get(craft_pptx::SchemeSlot::Accent1), Rgba::rgb(0, 0xCC, 0));
+    assert!(m.shapes.iter().any(|sh| sh.ph.is_none() && sh.fill == Some(Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0, 0xCC, 0))))));
     assert_eq!(m.title_style.level(0).and_then(|l| l.run.size), Some(44.0));
     assert!(p.layout(s.layout).is_some());
 }
@@ -366,8 +445,8 @@ fn check_master(p: &Presentation, s: &Slide) {
 #[test]
 fn a_slide_listed_again_is_imported_once() {
     let (cu, doc, pics) = streams_listing(0xE391_C05F, 3);
-    let bytes = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
-    let p = crate::import(&bytes).unwrap();
+    let bytes = build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
+    let p = import(&bytes).unwrap();
     assert_eq!(p.slides.len(), 1);
     assert_eq!(
         p.slides[0].notes.text(),
@@ -398,9 +477,9 @@ fn many_character_runs_are_not_quadratic() {
     );
     let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[shape])]);
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
-    let bytes = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
+    let bytes = build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
     let t = std::time::Instant::now();
-    let p = crate::import(&bytes).unwrap();
+    let p = import(&bytes).unwrap();
     assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
     let runs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs;
     assert_eq!(runs.iter().filter(|r| r.kind == RunKind::Break).count(), N / 2);
@@ -414,9 +493,9 @@ fn a_slide_with_an_unknown_master_falls_back_the_same_way_every_time() {
     let title_master = container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &[])]);
     let slide = container(rt::SLIDE, 0, &[slide_atom(1, 0x8000_0099, 0x7), drawing(None, &[])]);
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, Some(title_master));
-    let bytes = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
+    let bytes = build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)]);
     for _ in 0..30 {
-        let p = crate::import(&bytes).unwrap();
+        let p = import(&bytes).unwrap();
         assert_eq!(p.masters[0].layouts.iter().filter(|l| l.name == "Title Master").count(), 1, "the title master became a layout");
         let (_, layout) = p.layout(p.slides[0].layout).unwrap();
         assert_ne!(layout.name, "Title Master");
@@ -429,7 +508,7 @@ fn a_slide_with_an_unknown_master_falls_back_the_same_way_every_time() {
 #[test]
 fn a_damaged_current_user_falls_back_to_the_scan() {
     let (cu, doc, pics) = streams(0xE391_C05F);
-    let open = |cu: &[u8], doc: &[u8]| crate::import(&crate::cfb::build(&[("Current User", cu), ("PowerPoint Document", doc), ("Pictures", &pics)]));
+    let open = |cu: &[u8], doc: &[u8]| import(&build(&[("Current User", cu), ("PowerPoint Document", doc), ("Pictures", &pics)]));
     // Truncated after the header and two bytes, so the token can't be read.
     let truncated = atom(rt::CURRENT_USER, 0, &[0x14, 0]);
     assert_eq!(open(&truncated, &doc).unwrap().slides.len(), 1);
@@ -475,15 +554,15 @@ fn nested_persist_directories_are_read_within_the_stream() {
 
 #[test]
 fn an_encrypted_presentation_says_so() {
-    assert!(matches!(crate::import(&file_with(0xF3D1_C4DF)), Err(crate::PptError::Encrypted)));
+    assert!(matches!(import(&file_with(0xF3D1_C4DF)), Err(crate::PptError::Encrypted)));
 }
 
 #[test]
 fn other_files_are_not_ppt() {
     assert!(!crate::sniff(b"PK\x03\x04"));
-    assert!(!crate::sniff(&crate::cfb::build(&[("WordDocument", b"x")])));
-    assert!(matches!(crate::import(b"not a presentation"), Err(crate::PptError::NotPpt)));
-    assert!(matches!(crate::import(&crate::cfb::build(&[("Workbook", b"x")])), Err(crate::PptError::NotPpt)));
+    assert!(!crate::sniff(&build(&[("WordDocument", b"x")])));
+    assert!(matches!(import(b"not a presentation"), Err(crate::PptError::NotPpt)));
+    assert!(matches!(import(&build(&[("Workbook", b"x")])), Err(crate::PptError::NotPpt)));
 }
 
 /// Damaged input never panics, loops or allocates without bound: every 4-byte word of the
@@ -495,43 +574,14 @@ fn hostile_documents_never_panic() {
         for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF, 0x0000_FFFF, 0xF00F_000F] {
             let mut d = doc.clone();
             d[at..at + 4].copy_from_slice(&v.to_le_bytes());
-            let f = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &d), ("Pictures", &pics)]);
-            let _ = crate::import(&f);
+            let f = build(&[("Current User", &cu), ("PowerPoint Document", &d), ("Pictures", &pics)]);
+            let _ = import(&f);
         }
     }
     for cut in (0..doc.len()).step_by(7) {
-        let f = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc[..cut]), ("Pictures", &pics[..cut.min(pics.len())])]);
-        let _ = crate::import(&f);
+        let f = build(&[("Current User", &cu), ("PowerPoint Document", &doc[..cut]), ("Pictures", &pics[..cut.min(pics.len())])]);
+        let _ = import(&f);
     }
-}
-
-/// File > Open on a `.ppt` gives an untitled-to-disk copy: Save asks where to save instead of
-/// writing DeckCraft's own format under the `.ppt` name.
-#[test]
-fn the_app_opens_a_ppt_and_save_asks_for_a_new_name() {
-    let dir = std::env::temp_dir().join(format!("deckcraft-ppt-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Lecture.ppt");
-    std::fs::write(&path, file()).unwrap();
-    let mut s = deckcraft_engine::Session::new();
-    let r = s.execute("file.open", &serde_json::json!({"path": path.to_string_lossy()})).unwrap();
-    assert_eq!(r["slides"], 1);
-    let st = s.doc().unwrap();
-    assert_eq!(st.path, None);
-    assert_eq!(st.title(), "Lecture");
-    let saved = s.execute("file.save", &serde_json::json!({})).unwrap();
-    assert_eq!(saved["needsPath"], true);
-    // Saved as .pptx, it opens again with its slide.
-    let out = dir.join("Lecture.pptx");
-    s.execute("file.saveAs", &serde_json::json!({"path": out.to_string_lossy()})).unwrap();
-    let back = deckcraft_engine::cmd::file::open_presentation("Lecture.pptx", &std::fs::read(&out).unwrap()).unwrap();
-    assert_eq!(back.slides.len(), 1);
-    assert_eq!(back.slides[0].shapes[0].text.as_ref().unwrap().text(), "Hello\nWorld");
-    std::fs::remove_dir_all(&dir).ok();
-
-    // Password-protected: the same message as for a .pptx.
-    let err = deckcraft_engine::cmd::file::open_presentation("Locked.ppt", &file_with(0xF3D1_C4DF)).unwrap_err().to_string();
-    assert!(err.contains("Locked.ppt is password-protected"), "{err}");
 }
 
 /// A slide shape that inherits from a master shape (`hspMaster`) takes it from its own master.
@@ -548,8 +598,8 @@ fn a_master_shape_id_is_looked_up_in_the_slides_own_master() {
     let inheriting = container(rt::SP_CONTAINER, 0, &[fsp(1, 2049, 0xA00), fopt(&[(prop::HSP_MASTER, 1026)]), anchor(0, 0, 100, 100)]);
     let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[inheriting])]);
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, Some(title_master));
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
-    assert_eq!(p.slides[0].shapes[0].fill, Some(Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0, 0xCC, 0)))));
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    assert_eq!(p.slides[0].shapes[0].fill, Some(Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0, 0xCC, 0)))));
 }
 
 /// A run's shadow bit (TextCFException fontStyle bit 4) gives the run a shadow in the colour
@@ -572,28 +622,28 @@ fn a_shadowed_run_keeps_its_shadow() {
     );
     let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[tb])]);
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
     let runs = &p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs;
     assert_eq!(runs[0].text, "Hi ");
     let shadow = runs[0].props.shadow.as_ref().expect("the first run is shadowed");
-    assert_eq!(shadow.color, deckcraft_model::ColorRef::rgb(Rgba::rgb(0x80, 0x80, 0x80)));
+    assert_eq!(shadow.color, craft_pptx::ColorRef::rgb(Rgba::rgb(0x80, 0x80, 0x80)));
     assert!(runs[1].props.shadow.is_none());
 }
 
-/// `tests/fixtures/old-talk.pps`: a one-slide `.pps` built here from records, for tests in other
-/// crates that need real 97–2003 bytes (`ui-egui`'s show-on-open test). Run this test with
-/// `DECKCRAFT_WRITE_PPT_FIXTURE=1` to rebuild the file after changing the builders.
+/// `tests/fixtures/old-talk.pps`: a one-slide `.pps` built here from records, for applications'
+/// tests that need real 97–2003 bytes (DeckCraft's show-on-open test). Run this test with
+/// `CRAFT_WRITE_PPT_FIXTURE=1` to rebuild the file after changing the builders.
 #[test]
 fn the_pps_fixture_is_a_built_presentation() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/old-talk.pps");
-    if std::env::var_os("DECKCRAFT_WRITE_PPT_FIXTURE").is_some() {
+    if std::env::var_os("CRAFT_WRITE_PPT_FIXTURE").is_some() {
         let title =
             container(rt::SP_CONTAINER, 0, &[fsp(1, 2049, 0xA00), anchor(400, 500, 5260, 1200), placeholder(0x0D), text_box(0, "Old talk", &[])]);
         let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[title])]);
         let (cu, doc, pics) = streams_of(0xE391_C05F, 1, slide, None);
-        std::fs::write(path, crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+        std::fs::write(path, build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
     }
-    let p = crate::import(&std::fs::read(path).unwrap()).unwrap();
+    let p = import(&std::fs::read(path).unwrap()).unwrap();
     assert_eq!(p.slides.len(), 1);
     assert!(!p.slides[0].hidden);
     let title = p.slides[0].shapes[0].text.as_ref().unwrap();
@@ -638,7 +688,7 @@ fn placeholder_text_can_come_from_the_slide_list() {
     );
     let slide = container(rt::SLIDE, 0, &[slide_atom(1, MASTER_ID, 0x7), drawing(None, &[only_ref, header_and_ref])]);
     let (cu, doc, pics) = streams_with_outline(0xE391_C05F, 1, slide, None, &outline);
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
     let shapes = &p.slides[0].shapes;
     let title = shapes[0].text.as_ref().expect("the title has the outline text");
     let runs = &title.paragraphs[0].runs;
@@ -667,7 +717,7 @@ fn a_later_edit_replaces_a_slide() {
     edit.extend_from_slice(&[0; 4]);
     stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
     let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, edit_at, 0, 0]));
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides.len(), 1);
     assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs[0].text, "Edited");
     // The master, from the first edit's directory, is still there.
@@ -675,7 +725,7 @@ fn a_later_edit_replaces_a_slide() {
 }
 
 /// An edit whose "previous edit" points back at itself cuts the older edits off the chain, and
-/// with them the document, master and notes (#1137 review: such a file opened as an empty deck).
+/// with them the document, master and notes (storytold/deckcraft#1137 review: such a file opened as an empty deck).
 /// Every edit in the stream is read instead, the newest still winning.
 #[test]
 fn a_broken_edit_chain_is_recovered_from_every_edit() {
@@ -690,15 +740,14 @@ fn a_broken_edit_chain_is_recovered_from_every_edit() {
     edit.extend_from_slice(&[0; 4]);
     stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
     let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, edit_at, 0, 0]));
-    let (p, lost) =
-        crate::import_checked(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    let (p, lost) = import_checked(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
     assert_eq!(p.slides.len(), 1);
     assert_eq!(p.slides[0].shapes[0].text.as_ref().unwrap().paragraphs[0].runs[0].text, "Edited");
     assert_eq!(p.masters.len(), 1);
     assert!(lost.is_empty(), "{lost:?}");
 }
 
-/// A slide the list names but whose object is gone is reported as lost, so the app and the CLI
+/// A slide the list names but whose object is gone is reported as lost, so an application can
 /// say so instead of opening a deck that silently misses it.
 #[test]
 fn a_slide_without_its_object_is_reported_lost() {
@@ -707,16 +756,10 @@ fn a_slide_without_its_object_is_reported_lost() {
     // 36-byte edit; point the slide's entry past the end of the stream.
     let slide_entry = stream.len() - 36 - 8;
     stream[slide_entry..slide_entry + 4].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());
-    let bytes = crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)]);
-    let (p, lost) = crate::import_checked(&bytes).unwrap();
+    let bytes = build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)]);
+    let (p, lost) = import_checked(&bytes).unwrap();
     assert!(p.slides.is_empty());
     assert_eq!(lost, vec![format!("slide {SLIDE_ID}")]);
-
-    let mut s = deckcraft_engine::Session::new();
-    let data = deckcraft_engine::cmd::base64_encode(&bytes);
-    let r = s.execute("file.openBytes", &serde_json::json!({"name": "Damaged.ppt", "data": data})).unwrap();
-    assert_eq!(r["lostSlides"].as_array().map(Vec::len), Some(1));
-    assert!(s.doc().unwrap().title().ends_with("(Repaired)"));
 }
 
 /// Two more signs of an encrypted file besides the Current User token: an edit record long enough
@@ -725,7 +768,7 @@ fn a_slide_without_its_object_is_reported_lost() {
 fn encryption_is_found_in_the_edit_and_the_persist_directory() {
     let open = |doc: &[u8], pics: &[u8]| {
         let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, doc.len() as u32 - 36, 0, 0]));
-        crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", doc), ("Pictures", pics)]))
+        import(&build(&[("Current User", &cu), ("PowerPoint Document", doc), ("Pictures", pics)]))
     };
     let (_, stream, pics) = streams(0xE391_C05F);
     assert!(open(&stream, &pics).is_ok());
@@ -740,7 +783,7 @@ fn encryption_is_found_in_the_edit_and_the_persist_directory() {
     edit.extend_from_slice(&6u32.to_le_bytes()); // encryptSessionPersistIdRef
     long_edit.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
     let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, edit_at as u32, 0, 0]));
-    let r = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &long_edit), ("Pictures", &pics)]));
+    let r = import(&build(&[("Current User", &cu), ("PowerPoint Document", &long_edit), ("Pictures", &pics)]));
     assert!(matches!(r, Err(crate::PptError::Encrypted)), "{:?}", r.err());
     // A CryptSession container given a persist id by a later edit.
     let mut crypt = stream.clone();
@@ -784,10 +827,10 @@ fn title_masters_and_slides_that_dont_follow_the_master() {
         container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x0), drawing(Some(solid_background(0x0000_FF00)), &[scheme_filled(3000)])]);
     let on_title = container(rt::SLIDE, 0, &[slide_atom(0, TITLE_MASTER_ID, 0x7), drawing(None, &[])]);
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, on_title, Some(title_master));
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
     let (_, layout) = p.layout(p.slides[0].layout).unwrap();
     assert_eq!(layout.name, "Title Master");
-    assert_eq!(layout.background, Some(Background::Fill { fill: Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0, 0xFF, 0))) }));
+    assert_eq!(layout.background, Some(Background::Fill { fill: Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0, 0xFF, 0))) }));
     assert!(!layout.show_master_shapes);
     assert!(layout.shapes.iter().any(|sh| sh.ph.is_none()), "the title master's own shape");
     assert_eq!(p.slides[0].background, None, "the slide follows its master's background");
@@ -798,22 +841,22 @@ fn title_masters_and_slides_that_dont_follow_the_master() {
         &[slide_atom(1, MASTER_ID, 0x0), scheme_with_fill([0x11, 0x22, 0xCC]), drawing(Some(solid_background(0x0000_00FF)), &[scheme_filled(2049)])],
     );
     let (cu, doc, pics) = streams_of(0xE391_C05F, 1, alone, None);
-    let p = crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap();
     let s = &p.slides[0];
-    assert_eq!(s.background, Some(Background::Fill { fill: Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))) }));
+    assert_eq!(s.background, Some(Background::Fill { fill: Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))) }));
     assert!(!s.show_master_shapes);
-    assert_eq!(s.shapes[0].fill, Some(Fill::solid(deckcraft_model::ColorRef::rgb(Rgba::rgb(0x11, 0x22, 0xCC)))), "the slide's own scheme");
+    assert_eq!(s.shapes[0].fill, Some(Fill::solid(craft_pptx::ColorRef::rgb(Rgba::rgb(0x11, 0x22, 0xCC)))), "the slide's own scheme");
 }
 
 fn open_streams((cu, doc, pics): (Vec<u8>, Vec<u8>, Vec<u8>)) -> Presentation {
-    crate::import(&crate::cfb::build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap()
+    import(&build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])).unwrap()
 }
 
-/// A picture frame that says nothing about its fill or line draws neither (#1137 review): the
+/// A picture frame that says nothing about its fill or line draws neither (storytold/deckcraft#1137 review): the
 /// drawing defaults' fill would cover a picture's transparent parts, or an OLE chart's preview.
 #[test]
 fn a_picture_frame_has_no_fill_or_line_of_its_own() {
-    let p = crate::import(&file()).unwrap();
+    let p = import(&file()).unwrap();
     let picture = &p.slides[0].shapes[1];
     assert!(matches!(picture.kind, ShapeKind::Picture { .. }));
     assert_eq!(picture.fill, Some(Fill::None));
@@ -821,7 +864,7 @@ fn a_picture_frame_has_no_fill_or_line_of_its_own() {
 }
 
 /// A picture fill whose blip is held in the shape's own `fillBlip` property (complex, with fBid),
-/// as table cells with a picture have it (#1137 review), shows that picture.
+/// as table cells with a picture have it (storytold/deckcraft#1137 review), shows that picture.
 #[test]
 fn a_picture_held_in_the_fill_property_is_read() {
     let blip = atom(0xF01E, 0x6E0, &[&[0u8; 17][..], &png()].concat());
@@ -839,7 +882,7 @@ fn a_picture_held_in_the_fill_property_is_read() {
     assert!(media.data.starts_with(b"\x89PNG"));
 }
 
-/// The headers and footers the document sets for its slides (#1137 review: the date, footer and
+/// The headers and footers the document sets for its slides (storytold/deckcraft#1137 review: the date, footer and
 /// slide number were missing) become the slide's footer placeholders, placed and styled as the
 /// master's are on every layout.
 #[test]
@@ -889,7 +932,7 @@ fn headers_and_footers_become_footer_placeholders() {
     }
 }
 
-/// Numbered paragraphs (#1137 review: drawn with the bullet character) take their numbering from
+/// Numbered paragraphs (storytold/deckcraft#1137 review: drawn with the bullet character) take their numbering from
 /// the document's `___PPT9` tag: the slide's outline block of that text type, and the entry the
 /// run's `pp9rt` names. The tag's name ends in a NUL here, as some writers add one.
 #[test]

@@ -157,8 +157,8 @@ impl<'a> Props<'a> {
     /// An `IMsoArray` property: element size and the elements' bytes.
     pub fn array(&self, id: u16) -> Option<(usize, &'a [u8])> {
         let b = self.complex(id)?;
-        let n = usize::from(crate::cfb::u16_at(b, 0)?);
-        let size = crate::cfb::u16_at(b, 4)?;
+        let n = usize::from(crate::record::u16_at(b, 0)?);
+        let size = crate::record::u16_at(b, 4)?;
         // 0xFFF0 marks 4-byte elements stored as two 2-byte halves.
         let size = if size == 0xFFF0 { 4 } else { usize::from(size) };
         if size == 0 {
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(p.flag(prop::LINE_BOOLS, 3), None);
     }
 
-    /// A boolean word inherits the flags it doesn't set (#1137 review): a text box that sets only
+    /// A boolean word inherits the flags it doesn't set (storytold/deckcraft#1137 review): a text box that sets only
     /// `fNoFillHitTest` (bit 4 is `fFilled`, bit 0 `fNoFillHitTest`) still gets "not filled"
     /// from below, and its own flags win over the inherited ones.
     #[test]

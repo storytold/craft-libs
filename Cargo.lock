@@ -2968,6 +2968,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ppt-binary"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-pptx",
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pptx"
 version = "0.1.0"
 dependencies = [

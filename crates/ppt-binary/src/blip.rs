@@ -8,7 +8,7 @@ use crate::record::Rec;
 /// Largest picture inflated from a compressed metafile.
 const MAX_INFLATED: usize = 64 << 20;
 /// Most bytes all of a file's pictures may decode to together: 2 GiB, the total a `.pptx` package
-/// may inflate to (`MAX_TOTAL` in `deckcraft-pptx`'s `opc`). Pictures are the only part of a `.ppt`
+/// may inflate to (`craft_pptx::MAX_TOTAL`). Pictures are the only part of a `.ppt`
 /// that inflates, so a small hostile file can't make the import hold more than a `.pptx` could.
 /// It also fits a 32-bit `usize` (wasm32), where a 4 GiB constant wraps to 0.
 const MAX_TOTAL: usize = 2 << 30;
@@ -88,7 +88,7 @@ pub fn decode(b: &Rec, limit: usize) -> Option<Picture> {
         // EMF, WMF: a metafile header then (usually deflated) data.
         0xF01A | 0xF01B => {
             let h = b.data.get(uids..uids + 34)?;
-            let size = crate::cfb::u32_at(h, 0)? as usize;
+            let size = crate::record::u32_at(h, 0)? as usize;
             let compressed = *h.get(32)? == 0;
             let body = b.data.get(uids + 34..)?;
             let data = if compressed {
@@ -112,11 +112,11 @@ pub fn decode(b: &Rec, limit: usize) -> Option<Picture> {
 
 /// A device-independent bitmap with the 14-byte file header a `.bmp` needs in front.
 fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
-    let header = crate::cfb::u32_at(dib, 0)? as usize;
+    let header = crate::record::u32_at(dib, 0)? as usize;
     let (bits, compression, used) = if header == 12 {
-        (usize::from(crate::cfb::u16_at(dib, 10)?), 0, 0)
+        (usize::from(crate::record::u16_at(dib, 10)?), 0, 0)
     } else {
-        (usize::from(crate::cfb::u16_at(dib, 14)?), crate::cfb::u32_at(dib, 16)?, crate::cfb::u32_at(dib, 32)? as usize)
+        (usize::from(crate::record::u16_at(dib, 14)?), crate::record::u32_at(dib, 16)?, crate::record::u32_at(dib, 32)? as usize)
     };
     let entry = if header == 12 { 3 } else { 4 };
     let colors = if used > 0 {

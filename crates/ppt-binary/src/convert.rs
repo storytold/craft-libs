@@ -1,20 +1,21 @@
-//! Building the DeckCraft model from the parsed `.ppt` structure.
+//! Building a `craft_pptx` presentation from the parsed `.ppt` structure.
 //!
-//! Each main master becomes a DeckCraft master (with the standard layouts, its own colours,
-//! fonts, text styles, background and decorative shapes); a title master becomes a layout of its
-//! main master. Slide shapes keep their own boxes, and their text carries its formatting resolved
-//! against the master's text styles, so it draws the same whatever DeckCraft's layouts hold.
+//! Each main master becomes a master: the caller's default master (its layouts and placeholders),
+//! with the file's colours, fonts, text styles, background and decorative shapes, and the file's
+//! placeholder boxes on the placeholders the default master has. A title master becomes a layout
+//! of its main master. Slide shapes keep their own boxes, and their text carries its formatting
+//! resolved against the master's text styles, so it draws the same whatever the layouts hold.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use deckcraft_color::{ColorTransform, Rgba, SchemeSlot};
-use deckcraft_model::style::{Dash, LineCap, LineEnd, LineJoin, PictureFill, PictureMode, Shadow};
-use deckcraft_model::text::{Align, Anchor as TextAnchor, AutoFit, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing, TabStop};
-use deckcraft_model::{
-    Background, ColorRef, Effects, Fill, Layout, LayoutId, LayoutType, Line, MediaId, Paragraph, PhType, Placeholder, Presentation, Run, RunProps,
-    Shape, ShapeId, ShapeKind, Size, Slide, SlideId, TextBody, Theme, Xfrm, defaults,
+use craft_pptx::style::{Dash, LineCap, LineEnd, LineJoin, PictureFill, PictureMode, Shadow};
+use craft_pptx::text::{Align, Anchor as TextAnchor, AutoFit, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing, TabStop};
+use craft_pptx::{
+    Background, ColorRef, Defaults, Effects, Fill, Layout, LayoutId, LayoutType, Line, Master, MediaId, Paragraph, PhType, Placeholder, Presentation,
+    Run, RunProps, Shape, ShapeId, ShapeKind, Size, Slide, SlideId, TextBody, Theme, Xfrm,
 };
+use craft_pptx::{ColorTransform, Rgba, SchemeSlot};
 
 use crate::doc::{self, Doc, Listed, rt};
 use crate::draw::{self, Props, RawShape, prop};
@@ -83,15 +84,17 @@ struct Ctx<'a> {
     /// (`hspMaster`). Keyed by master too, so a shape id repeated in another master can't replace
     /// this master's shape.
     master_props: HashMap<(u32, u32), Props<'a>>,
+    /// The caller's defaults: the master each of the file's masters starts from.
+    app: &'a dyn Defaults,
 }
 
-pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8]) -> Presentation {
+pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Presentation {
     let atom = d.document_atom();
     let side =
         |v: Option<i32>, fallback: f64| v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback);
     let size = Size::new(side(atom.as_ref().map(|a| a.slide_w), 720.0), side(atom.as_ref().map(|a| a.slide_h), 540.0));
-    let mut p = defaults::blank_presentation(size, Theme::default(), false);
-    p.masters.clear();
+    // Ids above 256, as a new presentation's are.
+    let mut p = Presentation { slide_size: size, default_text_style: app.default_text_style(), next_id: 256, ..Default::default() };
     p.notes_size = Size::new(side(atom.as_ref().map(|a| a.notes_w), 540.0), side(atom.as_ref().map(|a| a.notes_h), 720.0));
     p.first_slide_number = atom.as_ref().map_or(1, |a| u32::from(a.first_slide_number));
     let dgg = d.document.child(rt::DRAWING_GROUP).and_then(|g| g.child(rt::DGG_CONTAINER));
@@ -104,10 +107,11 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8]) -> Presentation {
         numbering: doc::outline_numbering(&d.document),
         defaults: draw::default_props(dgg),
         master_props: HashMap::new(),
+        app,
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document) {
-        cx.p.header_footer = deckcraft_model::HeaderFooter {
+        cx.p.header_footer = craft_pptx::HeaderFooter {
             date: hf.date,
             slide_number: hf.slide_number,
             footer: hf.footer,
@@ -126,8 +130,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8]) -> Presentation {
         }
     }
     if cx.p.masters.is_empty() {
-        let (m, next) = defaults::build_master(size, Theme::default(), cx.p.next_id.max(1));
-        cx.p.next_id = next;
+        let m = cx.default_master(size, None);
         cx.p.masters.push(Arc::new(m));
     }
     for m in d.masters.iter().filter(|m| m.rec.kind == rt::SLIDE) {
@@ -172,12 +175,23 @@ impl<'a> Ctx<'a> {
         self.p.alloc_id()
     }
 
+    /// The caller's default master for slides of `size`, with ids above every id handed out so
+    /// far. With `theme`, the master wears it and is named after it.
+    fn default_master(&mut self, size: Size, theme: Option<Theme>) -> Master {
+        let (mut master, last) = self.app.master(size, self.p.next_id);
+        self.p.next_id = self.p.next_id.max(last);
+        if let Some(theme) = theme {
+            master.name = theme.name.clone();
+            master.theme = theme;
+        }
+        master
+    }
+
     fn main_master(&mut self, m: &Listed<'a>, environment: Option<Rec<'a>>, size: Size) -> Option<MasterInfo> {
         let scheme = scheme_of(&m.rec).unwrap_or(DEFAULT_SCHEME);
         let styles = Arc::new(StyleSheet::new(environment, Some(&m.rec)));
         let theme = self.theme(&scheme, &styles);
-        let (mut master, next) = defaults::build_master(size, theme, self.p.next_id.max(1));
-        self.p.next_id = next;
+        let mut master = self.default_master(size, Some(theme));
         let drawing = draw::drawing(&m.rec);
         self.remember_master_props(m.slide_id, &drawing.shapes, 0);
         let ids = [Some(m.slide_id), None];
@@ -585,7 +599,7 @@ impl<'a> Ctx<'a> {
             },
             // Gradients.
             t @ 4..=8 => {
-                use deckcraft_model::style::{Gradient, GradientShape};
+                use craft_pptx::style::{Gradient, GradientShape};
                 let focus = props.get(prop::FILL_FOCUS).map_or(0, |v| v as i32).clamp(-100, 100);
                 let stops = gradient_stops(focus, &fg, &bg);
                 let shape = if matches!(t, 5 | 6) {
@@ -594,7 +608,7 @@ impl<'a> Ctx<'a> {
                 } else {
                     GradientShape::Linear { angle: linear_angle(props.fixed(prop::FILL_ANGLE).unwrap_or(0.0)), scaled: false }
                 };
-                Fill::Gradient(Gradient { stops, shape, flip: None, rotate_with_shape: true, tile: [0.0; 4] })
+                Fill::Gradient(Gradient { stops, shape: Some(shape), flip: None, rotate_with_shape: Some(true), tile: [0.0; 4] })
             }
             9 => Fill::Background,
             _ => Fill::solid(fg),
@@ -624,11 +638,11 @@ impl<'a> Ctx<'a> {
             .into(),
         });
         l.compound = props.get(prop::LINE_STYLE).map(|v| match v {
-            1 => deckcraft_model::style::Compound::Double,
-            2 => deckcraft_model::style::Compound::ThickThin,
-            3 => deckcraft_model::style::Compound::ThinThick,
-            4 => deckcraft_model::style::Compound::Triple,
-            _ => deckcraft_model::style::Compound::Single,
+            1 => craft_pptx::style::Compound::Double,
+            2 => craft_pptx::style::Compound::ThickThin,
+            3 => craft_pptx::style::Compound::ThinThick,
+            4 => craft_pptx::style::Compound::Triple,
+            _ => craft_pptx::style::Compound::Single,
         });
         l.join = props.get(prop::LINE_JOIN).map(|v| match v {
             0 => LineJoin::Bevel,
@@ -934,8 +948,8 @@ fn text_shadow(scheme: &Scheme) -> Shadow {
 /// A shaded fill's stops ([MS-ODRAW] `fillFocus`: the position of the last colour, the back
 /// colour). Focus 0 starts at the back colour and ends at the fill colour, ±100 the other way; in
 /// between, the back colour sits at that point with the fill colour at both ends.
-fn gradient_stops(focus: i32, fg: &ColorRef, bg: &ColorRef) -> Vec<deckcraft_model::style::GradientStop> {
-    use deckcraft_model::style::GradientStop;
+fn gradient_stops(focus: i32, fg: &ColorRef, bg: &ColorRef) -> Vec<craft_pptx::style::GradientStop> {
+    use craft_pptx::style::GradientStop;
     let stop = |pos: f64, c: &ColorRef| GradientStop { pos, color: c.clone() };
     match focus {
         0 => vec![stop(0.0, bg), stop(1.0, fg)],
@@ -1010,7 +1024,7 @@ fn default_name(raw: &RawShape) -> String {
     }
 }
 
-/// `PlaceholderEnum` as a DeckCraft placeholder type.
+/// `PlaceholderEnum` as a placeholder type.
 fn ph_type(kind: u8) -> Option<PhType> {
     Some(match kind {
         0x01 | 0x0D | 0x11 => PhType::Title,
@@ -1038,7 +1052,7 @@ fn same_family(a: PhType, b: PhType) -> bool {
     a == b || (title(a) && title(b))
 }
 
-/// `SlideLayoutType` as a DeckCraft layout.
+/// `SlideLayoutType` as a layout type.
 fn layout_kind(geom: u32) -> LayoutType {
     match geom {
         0 => LayoutType::Title,
@@ -1058,11 +1072,11 @@ mod tests {
     use super::*;
 
     /// [MS-ODRAW] `fillFocus` is where the back colour sits; LibreOffice draws 0° from the top
-    /// (#1137 review: the linear gradient's colours were reversed, the radial one inside out).
+    /// (storytold/deckcraft#1137 review: the linear gradient's colours were reversed, the radial one inside out).
     #[test]
     fn shaded_fills_put_the_back_colour_at_the_focus() {
         let (fg, bg) = (ColorRef::rgb(Rgba::rgb(255, 0, 0)), ColorRef::rgb(Rgba::rgb(0, 0, 255)));
-        let at = |stops: &[deckcraft_model::style::GradientStop]| stops.iter().map(|s| (s.pos, s.color == fg)).collect::<Vec<_>>();
+        let at = |stops: &[craft_pptx::style::GradientStop]| stops.iter().map(|s| (s.pos, s.color == fg)).collect::<Vec<_>>();
         assert_eq!(at(&gradient_stops(0, &fg, &bg)), [(0.0, false), (1.0, true)]);
         assert_eq!(at(&gradient_stops(100, &fg, &bg)), [(0.0, true), (1.0, false)]);
         assert_eq!(at(&gradient_stops(-50, &fg, &bg)), [(0.0, true), (0.5, false), (1.0, true)]);
