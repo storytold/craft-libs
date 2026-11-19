@@ -20,6 +20,7 @@ The fork maintains strict synchronization with official upstream (`storytold/cra
 4. **Comprehensive East Asian Typographical Classification & Localization (`craft-font-manager`)**: Introduces full CJK font classification heuristics, Photoshop-parity Japanese font name localization, and canonical Kana sample previews.
 5. **Title Bar Leading Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)**: Enables the menu bar in integrated title bars to declare its titles width, preventing Window and Help menus from falling into the overflow menu while avoiding unwanted empty gaps before the bar.
 6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Enforces finite positive inline header width reservation in `wanted_width`, preventing child body layout collapse in content-sized containers.
+7. **Localized Tool Rail Names (`craft-ui-panels`)**: Gives the tool rail a translator for the names it shows, so the flyout rows, tooltips and AccessKit names follow the language the host's window draws in instead of showing the commands' English labels in every language.
 
 All modifications conform to workspace layering rules, compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`, and pass all test suites across affected crates.
 
@@ -37,6 +38,7 @@ All modifications conform to workspace layering rules, compile with zero warning
 | **`craft-ui-shell`** | `src/shell/title_bar/bar.rs`<br>`tests/it/shell/menu_bar_room.rs` | Integrated title bar's leading region previously applied declared width to the caption header (`props.header`), creating an unwanted 380pt empty region before the menu bar on Windows. | Directs `leading_width` strictly to the leading content via `allocate_ui_with_layout`, keeping the caption header at its natural measured width (0pt on Windows) with zero leading offset. | Fork baseline; 94 tests passing. |
 | **`craft-ui-widgets`** & **`craft-menu`** | `craft-ui-widgets/src/menu/bar.rs`<br>`craft-menu/src/bar.rs` | Menu bar filled entire row by default, squeezing trailing titles into overflow menu when embedded beside a title strip. | Added `MenuBar::own_width` / `MenuBarUi::width` to lay out titles at declared width and report `titles_width`, allowing host to preserve full menu rows without overflow. | Fork baseline; 3 tests passing. |
 | **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | `wanted_width` did not count finite positive declared inline header widths, risking child body collapse in content-sized containers, and did not match `regions.rs` zero-width fallback. | Incorporates finite positive declared inline widths (`width.is_finite() && *width > 0.0`) in `wanted_width` while treating zero as no declaration (falling back to measured header). | Fork baseline; 269 tests passing. |
+| **`craft-ui-panels`** | `src/rails/flyout.rs`<br>`src/rails/tool.rs` | `FlyoutButton` built its flyout rows, tooltip and AccessKit name from `ResolvedCommand::label`, the command's own English label. Menus translate because the host passes a label function; the rail had no such hook, so a Japanese window showed an English tool flyout. | Adds `RailLabels` (`Arc<dyn Fn(&str) -> String>`) and `ToolRail::labels` / `FlyoutButton::labels`, mapping each command's label to the one to show in the rows, tooltip and accessible name; without a translator the command's label shows unchanged. | Fork baseline; 220 tests passing (2 pre-existing `Space` failures, see §4). |
 
 ---
 
@@ -351,6 +353,59 @@ pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
 
 ---
 
+### 3.7. Localized Tool Rail Names (`craft-ui-panels`)
+
+#### Problem Statement
+A tool rail names its slots from the commands behind them. `FlyoutButton::overlay` built one `MenuItem::command(..)` per tool, `parts` set the tooltip from the same `ResolvedCommand`, and `access` set the AccessKit name the same way, so every one of them showed `ResolvedCommand::label` — the label the command was declared with, which is English.
+
+Every other surface around the toolbar was translated: menus resolve their labels through the label function the host passes to the layout (`craft-menu`'s `LayoutOptions::label`), and the app's own strings go through its catalog. The rail had no equivalent hook, so a window drawn in Japanese showed an English tool flyout beside Japanese menus — a mixed-language window, not a missing translation: the catalog already carries `Lasso Tool` → `投げ縄ツール` and the rest.
+
+Publishing a translated command title from the host is not an option: the command board's `publish` is `pub(crate)` to `craft-ui-contract`, and a command's label is a `&'static str` decided at declaration.
+
+#### Implementation & Architecture
+1. **A translator the host supplies** (`crates/ui-panels/src/rails/flyout.rs`):
+   ```rust
+   /// A host's translator for the names a rail shows: a command's own label, and the label to show instead of it.
+   pub type RailLabels<'a> = std::sync::Arc<dyn Fn(&str) -> String + 'a>;
+   ```
+   `FlyoutButton::labels(Option<RailLabels<'a>>)` stores it, and `shown_label` is the one place a name passes through it:
+   ```rust
+   /// `label` in the caller's language, the label itself when the host gave no translator.
+   fn shown_label(&self, label: &str) -> String {
+       match &self.labels {
+           Some(labels) => labels(label),
+           None => label.to_owned(),
+       }
+   }
+   ```
+   With no translator the rail behaves exactly as before, so the framework's own stories and fixtures are unaffected.
+
+2. **All three name surfaces go through it**:
+   - the tooltip, which appends the chord: `face.tooltip(..)` now formats `shown_label(resolved.label)` with the chord rather than the raw label;
+   - the flyout rows: the pass collects `names` from the laid-out resolutions once, and each row is `MenuItem::command(..).label(name)` when a name is known, so the row keeps its command binding, chord, radio mark and enabled state and changes only its text;
+   - the accessible name in `access`, so a screen reader hears the same word the row shows.
+
+3. **The rail forwards it to every slot** (`crates/ui-panels/src/rails/tool.rs`):
+   `ToolRail::labels(RailLabels<'a>)` stores it on the rail, `Draw` carries a clone (the struct is no longer `Copy`, so the pass binds its fields individually instead of destructuring `*self` by value), and every slot's `FlyoutButton` is built with that translator.
+
+4. **The host passes a language, never a fixed one** (PhotoCraft, `crates/ui-egui/src/panels/toolbar.rs`):
+   ```rust
+   let lang = crate::i18n::current();
+   let labels = std::sync::Arc::new(move |label: &str| crate::i18n::tr(lang, label).to_string());
+   let rail = ToolRail::new(Label::Empty, slots, current, remembered)
+       .opens(opens)
+       .labels(labels)
+       .edit_toolbar(tl!("Edit Toolbar…").to_string());
+   ```
+   The rail is built once per frame, so `current()` is the language the window is drawing in that frame: a Japanese window lists Japanese tool names, an English window lists English ones, and switching the language in Preferences changes the rail on the next frame without any rail state to migrate.
+
+#### Verification & Tests
+- `cargo clippy -p craft-ui-panels --all-targets -- -D warnings`: clean (`RailLabels` keeps the closure out of every signature, so `clippy::type_complexity` stays quiet).
+- `cargo test -p craft-ui-panels`: **220 passed; 2 failed**. Both failures (`Space fires it`, `Space activates the focused member through the group`) reproduce with these changes stashed, so they are the pre-existing Space/activation divergence carried in this fork, not a regression of the rail.
+- PhotoCraft, offscreen render with the pointer's right click on the marquee slot (`cargo run -p photocraft-ui-egui --example snapshot -- --right-click-at 28,147`): the flyout reads 長方形選択ツール / 楕円形選択ツール / 一行選択ツール / 一列選択ツール with their `M` chords, from the same English command labels.
+
+---
+
 ## 4. Verification & Quality Assurance Suite
 
 All changes in the fork are validated using the MSVC x64 developer toolchain.
@@ -364,6 +419,7 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-ui-shell'
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-menu'
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-pages --features screen-testing'
+cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-ui-panels'
 ```
 
 ### Measured Test Results
@@ -373,6 +429,7 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 - `craft-ui-shell`: **94 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-menu`: **3 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-pages` (screen testing): **112 passed; 0 failed**
+- `craft-ui-panels`: **220 passed; 2 failed** (`Space fires it`, `Space activates the focused member through the group` — reproduce without the fork changes, pre-existing)
 - Clippy across all workspace crates: **0 warnings, exit code 0**
 
 ---
