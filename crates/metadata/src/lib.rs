@@ -40,7 +40,7 @@ mod xmp_merge;
 
 pub use container::{Embedded, JpegInspection, embedded, inspect_jpeg, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
-pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
+pub use exif::{from_tiff, ifd0_orientation_compat, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use fuji::{FujiRecipe, FujiRow, might_hold_fuji_recipe, read_recipe_file, recipe_from_bytes, recipe_from_exif};
 pub use geom::{Orientation, Point, Rect};

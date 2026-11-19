@@ -176,6 +176,8 @@ pub(super) struct Writer {
     pub(super) named_text: std::collections::BTreeSet<String>,
     /// Text boxes written so far (their frames' names).
     boxes: usize,
+    /// Export stacking orders, also used by the header/footer writer.
+    pub(super) stacking: super::frames::Stacking,
     /// Notes written so far (their ids), and footnotes and endnotes among them (their numbers).
     notes: usize,
     footnotes: u32,

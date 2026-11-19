@@ -28,6 +28,7 @@ pub mod classic;
 pub mod image;
 pub mod makernote;
 pub mod packbits;
+pub mod probe;
 mod reader;
 pub mod tags;
 pub mod writer;
