@@ -4326,6 +4326,22 @@ exit 0
             app
         }
 
+        /// Runs `hdiutil` with `args` (the caller holds its [`macos::disk_image_turn`]). The disk-image
+        /// helper can turn a request away with EAGAIN ("Resource temporarily unavailable") while it
+        /// is busy elsewhere, as on shared CI runners; that reply alone is retried, up to five
+        /// attempts over about eight seconds. Any other result returns at once.
+        fn hdiutil(args: &[&std::ffi::OsStr]) -> std::process::Output {
+            let mut output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            for wait_ms in [500, 1000, 2000, 4000] {
+                if output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("Resource temporarily unavailable") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(wait_ms));
+                output = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            }
+            output
+        }
+
         /// A release-style disk image holding a `PhotoCraft.app` that reports `version`. The tests,
         /// in this process and in others, ask the disk-image helper one at a time; when a program
         /// that is not one of these tests keeps it busy, the test fails with what `hdiutil create`
@@ -4335,12 +4351,17 @@ exit 0
             bundle(&src, version);
             let dmg = dir.join(format!("photocraft-{version}-macos-universal.dmg"));
             let _one_at_a_time = macos::disk_image_turn();
-            let output = std::process::Command::new("hdiutil")
-                .args(["create", "-quiet", "-format", "UDZO", "-volname", "PhotoCraft", "-srcfolder"])
-                .arg(&src)
-                .arg(&dmg)
-                .output()
-                .unwrap();
+            let output = hdiutil(&[
+                "create".as_ref(),
+                "-quiet".as_ref(),
+                "-format".as_ref(),
+                "UDZO".as_ref(),
+                "-volname".as_ref(),
+                "PhotoCraft".as_ref(),
+                "-srcfolder".as_ref(),
+                src.as_os_str(),
+                dmg.as_os_str(),
+            ]);
             assert!(output.status.success(), "hdiutil create failed: {}", String::from_utf8_lossy(&output.stderr).trim());
             dmg
         }
@@ -4722,12 +4743,16 @@ exit 0
             // One request at a time, as in `dmg`.
             let output = {
                 let _one_at_a_time = macos::disk_image_turn();
-                std::process::Command::new("hdiutil")
-                    .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-noverify", "-mountpoint"])
-                    .arg(&mount)
-                    .arg(&image)
-                    .output()
-                    .unwrap()
+                hdiutil(&[
+                    "attach".as_ref(),
+                    "-nobrowse".as_ref(),
+                    "-readonly".as_ref(),
+                    "-noautoopen".as_ref(),
+                    "-noverify".as_ref(),
+                    "-mountpoint".as_ref(),
+                    mount.as_os_str(),
+                    image.as_os_str(),
+                ])
             };
             let _attached = Attached(mount.clone());
             assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
