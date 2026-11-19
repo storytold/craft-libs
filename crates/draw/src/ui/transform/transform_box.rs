@@ -383,6 +383,11 @@ pub struct TransformBox<'a> {
     /// Crate-private: the public entry is `TransformOverlay::reach`.
     #[prop(vis = "pub(crate)")]
     reach: TransformReach,
+    /// Whether the reference point's pointer shows before a drag where an Alt press places the point and over the
+    /// shown point; off (the default) keeps the drag's pointers there. Crate-private: the public entry is
+    /// `TransformOverlay::reference_point_pointer`.
+    #[prop(vis = "pub(crate)")]
+    reference_point_pointer: bool,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
     /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
@@ -409,6 +414,7 @@ impl<'a> TransformBox<'a> {
             centre_mark: false,
             line: None,
             reach: TransformReach::Box,
+            reference_point_pointer: false,
             pivot_held: false,
             dragging: false,
             report: Report::default(),
@@ -547,11 +553,12 @@ impl<'a> TransformBox<'a> {
             }
     }
 
-    /// The pointer for `part` at `pointer`, `dragging` during its drag. Before a drag, where a press would place the
+    /// The pointer for `part` at `pointer`, `dragging` during its drag. With the
+    /// [reference point's pointer](Self::reference_point_pointer) on, before a drag, where a press would place the
     /// reference point ([`alt_places_pivot`](Self::alt_places_pivot)) and over the shown reference point, it is the
     /// system arrow with the target mark beside it.
     fn cursor(&self, look: &CursorLook<'_>, part: BoxPart, pointer: Pos2, mods: Mods, dragging: bool) -> Cursor {
-        if !dragging && (part == BoxPart::Pivot || self.alt_places_pivot(look.screen, part, mods, pointer)) {
+        if self.reference_point_pointer && !dragging && (part == BoxPart::Pivot || self.alt_places_pivot(look.screen, part, mods, pointer)) {
             return PaintedCursor::badged(CursorIcon::Default, CursorBadge::Target).into();
         }
         let Some(kind) = self.rules.drag_kind(part, mods) else { return CursorIcon::Default.into() };

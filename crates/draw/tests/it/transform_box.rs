@@ -1,7 +1,7 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
+use craft_behavior::geometry::quad::{BoxAllow, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, Cursor, CursorBadge, CursorIcon, EditEvent, PaintedCursor, RulerUnits, Ticks};
@@ -57,6 +57,8 @@ struct Config {
     targets: Vec<SnapTarget>,
     /// egui runs each frame twice and gives the frame's input to its first pass only.
     twice: bool,
+    /// Free Transform's reference point pointer (`TransformOverlay::reference_point_pointer`).
+    reference_pointer: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -102,6 +104,7 @@ fn defaults() -> Config {
         line: None,
         targets: Vec::new(),
         twice: false,
+        reference_pointer: false,
     }
 }
 
@@ -177,6 +180,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
+                    .reference_point_pointer(config.reference_pointer)
             };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
@@ -1047,9 +1051,18 @@ fn hovered_cursor(h: &mut Harness, at: Point) -> (Option<BoxPart>, Option<Cursor
     (h.host.borrow().hovered, cursor_of(h))
 }
 
-/// Before a drag, with Alt held inside the box and outside it (near a corner, where it turns, and far out), and over
-/// the shown reference point with or without Alt, the pointer is the reference point's: a press there places the point.
-/// Alt over a corner or an edge keeps that handle's scale pointer, and without Alt the box keeps its pointers.
+/// A Free Transform box: the reference point's pointer on, `setup` for the rest.
+fn free_transform(setup: impl FnOnce(&mut Config)) -> Harness {
+    harness(BoxState::from_rect(RECT), |config| {
+        config.reference_pointer = true;
+        setup(config);
+    })
+}
+
+/// Free Transform before a drag, with Alt held inside the box and outside it (near a corner, where it turns, and far
+/// out), and over the shown reference point with or without Alt: the pointer is the reference point's, as a press
+/// there places the point. Alt over a corner or an edge keeps that handle's scale pointer, and without Alt the box
+/// keeps its pointers.
 #[trial]
 fn alt_and_the_shown_reference_point_show_the_reference_point_pointer_and_the_handles_keep_theirs() {
     let inside = Point::new(150.0, 120.0);
@@ -1058,8 +1071,8 @@ fn alt_and_the_shown_reference_point_show_the_reference_point_pointer_and_the_ha
     let pivot = RECT.center();
     let corner = Point::new(RECT.x1, RECT.y1);
     let edge = Point::new(RECT.x1, 110.0);
-    let mut plain = upright();
-    let mut alt = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    let mut plain = free_transform(|_| {});
+    let mut alt = free_transform(|config| config.mods = Some(Mods::ALT));
 
     for (at, part, what) in
         [(inside, BoxPart::Inside, "inside"), (near, BoxPart::Outside, "outside near a corner"), (far, BoxPart::Outside, "far outside")]
@@ -1087,7 +1100,7 @@ fn alt_and_the_shown_reference_point_show_the_reference_point_pointer_and_the_ha
     }
 
     // A hidden reference point: an Alt press in the middle places it (pinned above), so the pointer says so.
-    let mut hidden = harness(BoxState::from_rect(RECT), |config| {
+    let mut hidden = free_transform(|config| {
         config.reference_point = false;
         config.mods = Some(Mods::ALT);
     });
@@ -1098,7 +1111,7 @@ fn alt_and_the_shown_reference_point_show_the_reference_point_pointer_and_the_ha
 /// point's there, and past the reach, where the press does nothing, it stays the plain arrow.
 #[trial]
 fn alt_past_a_border_zones_reach_keeps_the_plain_arrow() {
-    let mut h = harness(BoxState::from_rect(RECT), |config| {
+    let mut h = free_transform(|config| {
         config.zone = RotateZone::border(28.0);
         config.mods = Some(Mods::ALT);
     });
@@ -1129,18 +1142,17 @@ fn a_drag_keeps_its_pointer_with_or_without_alt() {
         frame(h, Vec::new());
         cursor
     };
-    let mut alt = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    let mut alt = free_transform(|config| config.mods = Some(Mods::ALT));
     assert_eq!(held(&mut alt, Point::new(150.0, 120.0), None), Some(Cursor::System(CursorIcon::Crosshair)), "an Alt drag from inside");
-    let mut plain = upright();
+    let mut plain = free_transform(|_| {});
     assert_eq!(held(&mut plain, RECT.center(), None), Some(Cursor::System(CursorIcon::Crosshair)), "a drag of the shown point");
-    let mut moving = upright();
+    let mut moving = free_transform(|_| {});
     assert_eq!(held(&mut moving, Point::new(150.0, 120.0), Some(Mods::ALT)), Some(Cursor::System(CursorIcon::Move)), "Alt during a move");
 }
 
-/// A box that offers only its move reach moves with Alt too, so its pointer stays the move pointer.
-#[trial]
-fn a_move_only_reach_keeps_the_move_pointer_with_alt() {
-    let session = TransformSession::<()>::new(RECT);
+/// A `TransformOverlay` over `session` on a canvas, with the modifiers the frames hold (no `mods`, as PhotoCraft
+/// shows Free Transform), and the view it shows.
+fn overlay(session: TransformSession<()>, reach: TransformReach, reference_pointer: bool) -> (Fixture, Rc<RefCell<CanvasView>>) {
     let settings = TransformSettings::default();
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
     let shown_view = Rc::clone(&view);
@@ -1149,15 +1161,105 @@ fn a_move_only_reach_keeps_the_move_pointer_with_alt() {
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
         Canvas::new("Document").view(at).show(ui, |ui, body| {
-            TransformOverlay::new("Type transform", &session, &settings)
-                .reach(TransformReach::MoveOnly { points: 38.0 })
-                .mods(Some(Mods::ALT))
-                .show_at(ui, body.rect)
+            TransformOverlay::new("Transform", &session, &settings).reach(reach).reference_point_pointer(reference_pointer).show_at(ui, body.rect)
         });
     });
     fixture.settle();
-    let at = view.borrow().to_screen(Point::new(RECT.x1 + 24.0, 150.0));
-    fixture.frame(vec![pointer::moved(at)]);
+    (fixture, view)
+}
+
+/// The cursor after hovering the document point `at` with `held` down in the frames.
+fn overlay_cursor(fixture: &mut Fixture, view: &RefCell<CanvasView>, at: Point, held: egui::Modifiers) -> Option<Cursor> {
+    let to = view.borrow().to_screen(at);
+    fixture.hold(held);
+    fixture.frame(vec![pointer::moved(to)]);
     fixture.frame(Vec::new());
-    assert_eq!(craft_ui::runtime::cursor::current(fixture.ctx()), Some(Cursor::System(CursorIcon::Move)));
+    craft_ui::runtime::cursor::current(fixture.ctx())
+}
+
+/// The Free Transform overlay reads Alt from the frame's own modifiers (the host passes no `mods`): held, the pointer
+/// inside and outside is the reference point's; let go, the move pointer and the turn arrow come back.
+#[trial]
+fn the_overlay_takes_alt_from_the_held_modifiers() {
+    let (mut fixture, view) = overlay(TransformSession::new(RECT), TransformReach::Box, true);
+    let (inside, near) = (Point::new(150.0, 120.0), Point::new(RECT.x1 + 10.0, RECT.y1 + 10.0));
+    assert_eq!(overlay_cursor(&mut fixture, &view, inside, egui::Modifiers::ALT), Some(reference_pointer()), "Alt inside");
+    assert_eq!(overlay_cursor(&mut fixture, &view, near, egui::Modifiers::ALT), Some(reference_pointer()), "Alt outside");
+    assert_eq!(overlay_cursor(&mut fixture, &view, inside, egui::Modifiers::NONE), Some(Cursor::System(CursorIcon::Move)), "inside");
+    let turn = overlay_cursor(&mut fixture, &view, near, egui::Modifiers::NONE);
+    assert!(matches!(turn, Some(Cursor::Painted(PaintedCursor::Turn { .. }))), "outside: {turn:?}");
+}
+
+/// A box that offers only its move reach moves with Alt too, so its pointer stays the move pointer.
+#[trial]
+fn a_move_only_reach_keeps_the_move_pointer_with_alt() {
+    let (mut fixture, view) = overlay(TransformSession::new(RECT), TransformReach::MoveOnly { points: 38.0 }, true);
+    let at = Point::new(RECT.x1 + 24.0, 150.0);
+    assert_eq!(overlay_cursor(&mut fixture, &view, at, egui::Modifiers::ALT), Some(Cursor::System(CursorIcon::Move)));
+}
+
+// Without the reference point's pointer (every box but Free Transform's), Alt keeps today's pointers, though an Alt
+// press inside or outside still places the reference point.
+
+/// Inside, near a corner and far out from `RECT`, in document units.
+const INSIDE: Point = Point::new(150.0, 120.0);
+const NEAR: Point = Point::new(RECT.x1 + 10.0, RECT.y1 + 10.0);
+const FAR: Point = Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0);
+
+fn turns(cursor: &Option<Cursor>) -> bool {
+    matches!(cursor, Some(Cursor::Painted(PaintedCursor::Turn { .. })))
+}
+
+/// A scale-only session overlay (rotate, skew and distort refused, as Content-Aware Scale has it), Alt held in the
+/// frames: `Move` inside, the plain arrow outside.
+#[trial]
+fn alt_keeps_todays_pointers_on_a_scale_only_overlay() {
+    let scale_only = TransformSession::new(RECT).allow(BoxAllow::new(false, false, false).with_warp(false));
+    let (mut fixture, view) = overlay(scale_only, TransformReach::Box, false);
+    let alt = egui::Modifiers::ALT;
+    assert_eq!(overlay_cursor(&mut fixture, &view, INSIDE, alt), Some(Cursor::System(CursorIcon::Move)), "Alt inside");
+    assert_eq!(overlay_cursor(&mut fixture, &view, NEAR, alt), Some(Cursor::System(CursorIcon::Default)), "Alt outside");
+}
+
+/// A box without the reference point and the inside move (the Frame tool's), Alt held: the turn arrow near a corner,
+/// `Alias` further out.
+#[trial]
+fn alt_keeps_todays_pointers_on_a_box_without_reference_point_or_inside_move() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.reference_point = false;
+        config.inside_moves = false;
+        config.mods = Some(Mods::ALT);
+    });
+    let (part, cursor) = hovered_cursor(&mut h, NEAR);
+    assert!(part == Some(BoxPart::Outside) && turns(&cursor), "Alt near a corner: {cursor:?}");
+    assert_eq!(hovered_cursor(&mut h, FAR), (Some(BoxPart::Outside), Some(Cursor::System(CursorIcon::Alias))), "Alt far out");
+}
+
+/// The rotate band without the reference point and the inside move (the Move tool's transform controls), Alt held:
+/// the turn arrow in the band at every corner.
+#[trial]
+fn alt_keeps_the_turn_arrow_in_the_rotate_band() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.zone = RotateZone::Band;
+        config.reference_point = false;
+        config.inside_moves = false;
+        config.mods = Some(Mods::ALT);
+    });
+    for (corner, at) in BoxState::from_rect(RECT).quad.iter().enumerate() {
+        let out = (*at - RECT.center()).normalize() * 14.0;
+        let (part, cursor) = hovered_cursor(&mut h, *at + out);
+        assert!(part == Some(BoxPart::Outside) && turns(&cursor), "Alt at corner {corner}: {cursor:?}");
+    }
+}
+
+/// The default box without the opt-in, Alt held: `Move` inside and the crosshair over the shown reference point.
+#[trial]
+fn alt_keeps_todays_pointers_on_the_default_box() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    assert_eq!(hovered_cursor(&mut h, INSIDE), (Some(BoxPart::Inside), Some(Cursor::System(CursorIcon::Move))), "Alt inside");
+    assert_eq!(
+        hovered_cursor(&mut h, RECT.center()),
+        (Some(BoxPart::Pivot), Some(Cursor::System(CursorIcon::Crosshair))),
+        "the shown reference point"
+    );
 }
