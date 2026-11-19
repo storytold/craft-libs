@@ -263,6 +263,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             let lead = gap.clamp(-1.0, 1.0) * side * distance;
             let chevron = cx.style::<Region>().map_or(0.0, |style| style.chevron);
             let least = cx.style::<Region>().map_or(0.0, |style| style.body);
+            let title_line = cx.style::<Region>().map_or(0.0, |style| style.title);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
                 .show(ui, |ui, _| {
@@ -270,7 +271,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
                     let slot = base.with("ribbon.body");
                     let last = with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0);
                     let row = Row::new().scroll(Scroll::horizontal()).fill_width().show(ui, |ui, _| {
-                        let mut row = RibbonRow { ui, base, groups: Vec::new(), body: last.max(least), tallest: 0.0 };
+                        let mut row = RibbonRow { ui, base, groups: Vec::new(), body: last.max(least), title_line, tallest: 0.0 };
                         body(&mut row, key);
                         (row.groups, row.tallest)
                     });
@@ -362,6 +363,8 @@ pub struct RibbonRow<'a> {
     groups: Vec<Rect>,
     /// The height under each open group's top at which its title row sits: the tallest content of the last pass.
     body: f32,
+    /// The height of every group's title line, the launcher's side: one line of the caption role.
+    title_line: f32,
     /// The tallest open group content of this run, every level the row measured included.
     tallest: f32,
 }
@@ -403,6 +406,9 @@ struct RegionStyle {
     /// The least height of the group row's body, under which each group's title sits: three controls stacked with the
     /// row gap between them, the ribbon's three rows of small buttons. Taller content lowers every title with it.
     body: f32,
+    /// The height of a group's title line, directly under its body: one line of the caption role
+    /// (`typography.caption.line_height`), which the dialog launcher's square also takes.
+    title: f32,
 }
 
 /// What a row region reports.
@@ -461,7 +467,8 @@ impl Component for Region {
 
     fn style(cx: &StyleCx<'_>, _: RegionStyleKey) -> RegionStyle {
         let body = 3.0 * cx.control().height + 2.0 * cx.tokens.space.gap.row;
-        RegionStyle { metrics: Metrics::new(), slide: cx.tokens.motion.slide as f32, chevron: cx.tokens.size.hit.target, body }
+        let title = cx.tokens.typography.caption.line_height;
+        RegionStyle { metrics: Metrics::new(), slide: cx.tokens.motion.slide as f32, chevron: cx.tokens.size.hit.target, body, title }
     }
 
     fn sense(&self) -> Sense {

@@ -5,7 +5,7 @@ use std::hash::Hash;
 use craft_behavior::IconId;
 use craft_keymap::CommandRef;
 use craft_ui::buttons::{Arrangement, Button, ControlPlace, IconButton};
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft_ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::layout::levelled_unit;
 use craft_ui::layout_components::{Row, Stack};
@@ -14,7 +14,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label, with_env};
 use craft_ui::runtime::memory::key_salt;
 use craft_ui::style::TypeRole;
-use egui::{Id, Rect, Ui, Vec2};
+use egui::{Id, Pos2, Rect, Ui, Vec2};
 
 use super::{GroupLevel, RibbonRow};
 
@@ -51,26 +51,46 @@ impl<'a> RibbonGroup<'a> {
         self
     }
 
-    /// The group's content over its title row; the title row carries the launcher. The title row sits `body` under the
-    /// content's top whatever the content's height, so every group's title shares one line at the foot of the row; a
-    /// taller content pushes it down. Returns the content's height, which sets `body` for the row's next pass.
-    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), body: f32) -> f32 {
+    /// The group's content over its title row, with no gap between them: the title sits directly under the content,
+    /// `body` under the content's top whatever the content's height, so every group's title shares one line at the foot
+    /// of the row; a taller content pushes it down. Returns the content's height, which sets `body` for the row's next
+    /// pass, and the height of the whole group, which its separator takes.
+    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), body: f32, line: f32) -> (f32, f32) {
         let mut took = 0.0;
-        Stack::new().show(ui, |ui, _| {
+        let mut title = Rect::NOTHING;
+        let side = if self.launcher.is_some() && line.is_finite() { line.max(0.0) } else { 0.0 };
+        let shown = Stack::new().gap(Gap::None).show(ui, |ui, _| {
             took = Row::new().show(ui, |ui, _| add(ui)).output.rect.height();
             // Every group places this spacer, an empty one too, so each has the same gaps above its title.
             let rest = if (body - took).is_finite() { (body - took).max(0.0) } else { 0.0 };
             craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, rest));
-            Row::new().show(ui, |ui, _| {
-                Text::new(self.title.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
-                if let Some(command) = &self.launcher {
-                    let words = Env::of(ui).words::<GroupWords>();
-                    let name = words.launcher.fill(&[("title", self.title.as_str())]);
-                    IconButton::command(IconId::new("maximize_2"), command.clone()).label(name).show(ui);
-                }
-            });
+            // The title on a line `line` high in every group, so the titles of groups with and without a launcher
+            // share one line; the row keeps room for the launcher after the title.
+            title = Row::new()
+                .gap(Gap::None)
+                .show(ui, |ui, _| {
+                    craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, line.max(0.0)));
+                    Text::new(self.title.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
+                    craft_ui::layout::place_in_flow(ui, Vec2::new(side, 0.0));
+                })
+                .output
+                .rect;
         });
-        took
+        let group = shown.output.rect;
+        // The dialog launcher: a square as high as the title line, at the group's end edge on that line, as the old
+        // ribbon placed it. It shows at its place, not in the flow, so it never makes its group's title line taller.
+        if let Some(command) = &self.launcher
+            && group.is_finite()
+            && title.is_finite()
+        {
+            let rtl = Env::of(ui).direction.is_rtl();
+            let x = if rtl { group.min.x } else { group.max.x - side };
+            let at = Rect::from_min_size(Pos2::new(x, title.center().y - side / 2.0), Vec2::splat(side));
+            let words = Env::of(ui).words::<GroupWords>();
+            let name = words.launcher.fill(&[("title", self.title.as_str())]);
+            IconButton::command(IconId::new("maximize_2"), command.clone()).label(name).show_at(ui, at);
+        }
+        (took, group.height())
     }
 
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
@@ -92,20 +112,25 @@ impl<'a> RibbonGroup<'a> {
     }
 
     /// The group as the row shows it at `level`: one container `id`, a group node named by the title (a labelled
-    /// `Row` reports `Role::GROUP`), holding the body and the divider after it. An open group's title sits `body`
-    /// under its top (`open`). Returns the rect it took and the height of its open content (none when collapsed).
-    fn unit(&self, ui: &mut Ui, id: Id, add: &mut dyn FnMut(&mut Ui), level: GroupLevel, body: f32) -> (Rect, Option<f32>) {
+    /// `Row` reports `Role::GROUP`), holding the body and the separator after it. An open group's title sits `body`
+    /// under its top on a line `line` high (`open`). The separator is as long as the group is high: a line that filled
+    /// the row would take whatever room the row was offered, and every group would set the ribbon's height by it.
+    /// Returns the rect it took and the height of its open content (none when collapsed).
+    fn unit(&self, ui: &mut Ui, id: Id, add: &mut dyn FnMut(&mut Ui), level: GroupLevel, room: TitleRoom) -> (Rect, Option<f32>) {
         let mut content = None;
         let rect = Row::new()
             .id(id)
             .label(self.title.clone())
             .show(ui, |ui, _| {
-                if level == GroupLevel::Collapsed {
+                let high = if level == GroupLevel::Collapsed {
                     self.collapsed(ui, add);
+                    room.body + room.line
                 } else {
-                    content = Some(self.open(ui, add, body));
-                }
-                Divider::vertical().show(ui);
+                    let (took, high) = self.open(ui, add, room.body, room.line);
+                    content = Some(took);
+                    high
+                };
+                Divider::vertical().length(high).show(ui);
             })
             .output
             .rect;
@@ -118,6 +143,13 @@ impl<'a> RibbonGroup<'a> {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct BodyHeight(pub(super) f32);
 
+/// Where a group's title goes: `body` under the group's top, on a line `line` high.
+#[derive(Clone, Copy, Debug)]
+struct TitleRoom {
+    body: f32,
+    line: f32,
+}
+
 impl RibbonRow<'_> {
     /// Adds `group` to the row, at the level the row's fit gives it; `add` fills its content.
     ///
@@ -129,7 +161,7 @@ impl RibbonRow<'_> {
     pub fn group(&mut self, group: RibbonGroup<'_>, mut add: impl FnMut(&mut Ui)) -> &mut Self {
         let id = self.base.with(("ribbon.group", group.key));
         let mut shown = None;
-        let body = self.body;
+        let room = TitleRoom { body: self.body, line: self.title_line };
         let mut tallest = self.tallest;
         levelled_unit(self.ui, id, LEVELS.len(), |ui, at| {
             let level = LEVELS.get(at).copied().unwrap_or(GroupLevel::Collapsed);
@@ -140,7 +172,7 @@ impl RibbonRow<'_> {
                     overrides.values.set(level);
                     overrides.values.set(ControlPlace::Ribbon);
                 },
-                |ui| group.unit(ui, id, &mut add, level, body),
+                |ui| group.unit(ui, id, &mut add, level, room),
             );
             if let Some(content) = content.filter(|height| height.is_finite()) {
                 tallest = tallest.max(content);

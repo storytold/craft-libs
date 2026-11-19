@@ -10,7 +10,7 @@ use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
 use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab, plan};
 use craft_ui::buttons::{Arrangement, Button, SplitButton};
-use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::menu::MenuItem;
 use craft_ui::runtime::env::{Direction, Env};
@@ -327,6 +327,43 @@ fn every_open_groups_title_sits_on_one_line() {
     let (short, rows, big) = (baseline("Short"), baseline("Rows"), baseline("Big"));
     assert!((short - rows).abs() < 0.5, "a one-button group's title is on the line of a three-row group's: {short} against {rows}");
     assert!((big - rows).abs() < 0.5, "a stacked button group's title is on the same line: {big} against {rows}");
+}
+
+/// A group's title sits directly under its body on one line shared by groups with and without a dialog launcher, the
+/// launcher sits on that line at the group's end, and each group, its separator with it, is no taller than its body
+/// and title: in a room much taller than the ribbon, no group takes more height than that.
+#[trial]
+fn a_groups_title_sits_under_its_body_and_the_group_ends_with_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("plain", "Plain", IconId::new("list").into()), |ui| {
+                Stack::new().show(ui, |ui, _| {
+                    for label in ["First", "Second", "Third"] {
+                        Button::new(label).show(ui);
+                    }
+                });
+            });
+            row.group(RibbonGroup::new("launched", "Launched", IconId::new("list").into()).launcher(CommandRef::new("group.dialog")), |ui| {
+                Button::new("Large").arrangement(Arrangement::Stacked).show(ui);
+            });
+        });
+    });
+    fixture.room(vec2(900.0, 700.0));
+    fixture.settle();
+    let run = |title: &str| fixture.texts().iter().find(|run| run.text == title).cloned().expect("the title shows");
+    let (plain, launched) = (run("Plain"), run("Launched"));
+    assert!((plain.baseline - launched.baseline).abs() < 0.5, "a launcher does not move its group's title: {} against {}", plain.baseline, launched.baseline);
+    let third = fixture.by_label("Third").expect("the third row").rect;
+    assert!(plain.rect.top() >= third.bottom() - 0.5, "the title {:?} is under the body {third:?}", plain.rect);
+    assert!(plain.rect.top() - third.bottom() < plain.rect.height(), "the title {:?} sits directly under the body {third:?}", plain.rect);
+    let launcher = fixture.by_label("Launched settings").expect("the launcher").rect;
+    assert!((launcher.center().y - launched.rect.center().y).abs() <= 1.0, "the launcher {launcher:?} is on the title's line {:?}", launched.rect);
+    assert!(launcher.left() >= launched.rect.right() - 0.5, "the launcher {launcher:?} is after the title {:?}", launched.rect);
+    let foot = plain.rect.bottom().max(launcher.bottom());
+    for group in fixture.by_role(Role::GROUP).iter().filter(|group| group.rect.contains(plain.rect.center()) || group.rect.contains(launched.rect.center())) {
+        assert!(group.rect.bottom() <= foot + 2.0, "the group {:?} ends with its title (at {foot}), not further down the room", group.rect);
+    }
 }
 
 /// Presses and releases the secondary button at `at`, a frame each.
