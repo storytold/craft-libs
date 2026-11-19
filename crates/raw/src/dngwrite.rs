@@ -339,15 +339,16 @@ fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions, lossy: Option<LossyTi
     // files (#3191). Real-world float DNGs use whole-number saturation limits (e.g. 1, 15488).
     // Fractional white levels are rejected rather than rescaled to avoid calibration and opcode
     // table drift (e.g. OpcodeList1 gain maps).
-    if !(0..cpp).all(|s| (raw.white_at(s) - raw.white_at(s).round()).abs() < 1e-4) {
-        return Err(RawError::Unsupported("fractional white level".into()));
-    }
     if matches!(raw.data, RawData::F32(_)) && (0..cpp).any(|s| raw.white_at(s) >= u32::MAX as f32) {
         return Err(RawError::Unsupported("white level above LONG range".into()));
     }
-    // Clamp to minimum 1.0: WhiteLevel must be strictly positive to avoid division by zero
-    // during linear normalization.
-    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s).round().clamp(1.0, u32::MAX as f32) as u32).collect();
+    if !(0..cpp).all(|s| {
+        let w = raw.white_at(s);
+        w.is_finite() && w >= 1.0 && w.fract() == 0.0
+    }) {
+        return Err(RawError::Unsupported("fractional white level".into()));
+    }
+    let white: Vec<u32> = (0..cpp).map(|s| raw.white_at(s) as u32).collect();
     let max_white = white.iter().copied().max().unwrap_or(0);
     ifd.set(t::WHITE_LEVEL, Value::Long(white));
     // A table still to be applied (OpcodeList1 has to run on the stored codes first) is written

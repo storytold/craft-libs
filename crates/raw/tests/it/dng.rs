@@ -610,9 +610,14 @@ fn non_finite_float_samples_decode_as_levels() {
 fn fractional_white_level_is_rejected() {
     let mut raw = synthetic(16, 12, None, 1);
     raw.data = RawData::F32(vec![0.5; 16 * 12]);
-    raw.white = vec![0.75];
-    let err = write_dng(&raw, &DngWriteOptions::default()).unwrap_err();
-    assert!(matches!(err, craft_raw::RawError::Unsupported(ref msg) if msg.contains("fractional white level")));
+    for bad in [0.75, 1.0 / 32768.0, 1.5, 0.0, -1.0, 1e-5] {
+        raw.white = vec![bad];
+        let err = write_dng(&raw, &DngWriteOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, craft_raw::RawError::Unsupported(ref msg) if msg.contains("fractional white level")),
+            "failed to reject bad white: {bad}"
+        );
+    }
 }
 
 #[test]
