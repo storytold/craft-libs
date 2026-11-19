@@ -291,6 +291,10 @@ impl TryFrom<crate::rawvideo::Frame> for VideoFrame {
             Kind::Yuv422 => (ColorFamily::YCbCr, Subsampling::S422),
             Kind::Rgb => (ColorFamily::Rgb, Subsampling::S444),
         };
+        let max_val = if bits < 16 { (1u16 << bits) - 1 } else { u16::MAX };
+        if a.iter().any(|&s| s > max_val) || b.iter().any(|&s| s > max_val) || c.iter().any(|&s| s > max_val) {
+            return Err(FrameError::Plane("sample value exceeds bit depth"));
+        }
         let (cw, ch) = sub.chroma_size(w, h);
         let planes = vec![
             Plane::packed(w, h, bits, Samples::U16(a))?,

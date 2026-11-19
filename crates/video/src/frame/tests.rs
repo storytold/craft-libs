@@ -366,6 +366,18 @@ fn a_rawvideo_frame_with_short_planes_is_an_error() {
 
 #[cfg(feature = "rawvideo")]
 #[test]
+fn rawvideo_rejects_samples_exceeding_bit_depth() {
+    use crate::rawvideo::{Frame as R, Kind};
+    let mut rgb = R::new(1, 1, Kind::Rgb, 8).unwrap();
+    rgb.planes[0][0] = 255;
+    assert!(VideoFrame::try_from(rgb.clone()).is_ok());
+
+    rgb.planes[0][0] = 256;
+    assert_eq!(VideoFrame::try_from(rgb), Err(FrameError::Plane("sample value exceeds bit depth")));
+}
+
+#[cfg(feature = "rawvideo")]
+#[test]
 fn a_decoded_v210_picture_converts() {
     use crate::rawvideo::{Layout, decode};
     // 6 pixels of v210 are one 16-byte group: 48 wide gives 8 groups per row.
