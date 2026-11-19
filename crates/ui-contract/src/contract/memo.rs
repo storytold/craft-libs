@@ -870,6 +870,26 @@ impl MemoProps for craft_behavior::IconId {
 }
 
 /// Derived `Hash` (`#[non_exhaustive]`).
+/// Every field (`#[non_exhaustive]`, so a field added later is listed here by hand): the screen rect, the document
+/// point at its centre, the zoom, the turn, the mirror and the pixel aspect.
+impl MemoProps for craft_behavior::canvas::CanvasView {
+    fn key(&self, key: &mut MemoKey) {
+        self.rect.key(key);
+        for value in [self.center.x, self.center.y, self.zoom, self.rotation, self.aspect] {
+            value.key(key);
+        }
+        self.flip_x.key(key);
+    }
+}
+
+/// The width and the height.
+impl MemoProps for craft_behavior::kurbo::Size {
+    fn key(&self, key: &mut MemoKey) {
+        self.width.key(key);
+        self.height.key(key);
+    }
+}
+
 impl MemoProps for craft_behavior::fit::FitKeep {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);

@@ -3,9 +3,10 @@
 use super::model::{Document, Layer, Panel, Tool};
 use super::tools::{MarqueeTool, MoveTool, Tools};
 use super::words::MockWords;
+use craft_behavior::CanvasView;
 use craft_behavior::dock::Permissions;
 use craft_behavior::geometry::Directions;
-use craft_behavior::kurbo::Rect as DocRect;
+use craft_behavior::kurbo::{Rect as DocRect, Size};
 use craft_behavior::{ColumnKey, ColumnWidth, PixelSize, RulerUnits, Ticks, keyed};
 use craft_ui::canvas::{
     Canvas, CanvasScrollbars, CanvasSpace, NoTool, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost,
@@ -14,8 +15,8 @@ use craft_ui::canvas::{
 use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
-    SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
+    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
+    ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
 use craft_ui::list::{ListRow, ToggleCell};
@@ -114,8 +115,8 @@ impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
-                let size = self.document.size;
-                let _ = NavigatorPanel::new("Navigator", Bind::bound(&mut self.document.view), size).show(ui);
+                let props = NavigatorProps { view: Bind::bound(&mut self.document.view), size: self.document.size };
+                let _ = MemoView::new("navigator", props, navigator).show(ui);
             }
             Panel::Layers => layers(ui, cx, self.document),
             Panel::Canvas | Panel::Tools => {}
@@ -267,6 +268,18 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
 
 /// The layer table: an eye column and a name column over the layers, top first, with several layers selectable and
 /// the lead being the current layer.
+/// What the Navigator shows: the document's view, which it pans and zooms, and the document's size.
+#[derive(MemoProps)]
+struct NavigatorProps<'a> {
+    view: Bind<'a, CanvasView>,
+    size: Size,
+}
+
+/// The Navigator, a memoized view: it runs when the view or the document's size changes or the pointer is over it.
+fn navigator(props: &mut NavigatorProps<'_>, ui: &mut Ui) {
+    let _ = NavigatorPanel::new("Navigator", props.view.reborrowed(), props.size).show(ui);
+}
+
 fn layers(ui: &mut Ui, cx: &mut BodyCx<'_>, document: &mut Document) {
     let columns = vec![
         ColumnSpec::new(VISIBLE, "Visible", ColumnWidth::Controls(1.5)).kind(ColumnKind::Toggle(ToggleColumn::sweepable())),

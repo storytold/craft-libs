@@ -1,17 +1,17 @@
-//! The app shell's named slots: a bar in a top or bottom slot fills it
-//! with its members on the slot's middle, and a slot with a content version settles.
+//! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
+//! slot whose content is a memoized view runs only when its props change.
 
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::{MemoProps, MemoView, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::{AppShell, Title, TitleBar, slots};
+use craft_ui::shell::{AppShell, Slot, Title, TitleBar};
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
-use egui::{Rect, Vec2};
-use std::cell::Cell;
+use egui::{Rect, Ui, Vec2};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// What the options-bar trial saw: the slot, the bar, a member of the bar and a member of a row nested in it.
@@ -102,38 +102,67 @@ fn a_title_bar_in_the_title_slot_shows_its_content_there() {
     assert!((member.center().y - slot.center().y).abs() <= 1.0, "the member {member:?} sits on the slot's middle {slot:?}");
 }
 
-/// A status slot that gives a content version runs only in the frame its version changes: frames with no input and a
-/// click in the body leave it settled.
+thread_local! {
+    /// The memoized slots that ran on this trial's thread, in order.
+    static SLOT_RUNS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Takes the memoized slots that ran since the last call.
+fn slot_runs() -> Vec<&'static str> {
+    SLOT_RUNS.with(|runs| std::mem::take(&mut *runs.borrow_mut()))
+}
+
+/// What a memoized slot shows.
+#[derive(MemoProps)]
+struct SlotText {
+    name: &'static str,
+    text: String,
+}
+
+fn slot_text(props: &mut SlotText, ui: &mut Ui) {
+    SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
+    Text::new(props.text.clone()).show(ui);
+}
+
+/// Slots whose content is a memoized view run only when their props change: at rest and for a click in the body they
+/// replay, a new status runs the status slot alone, once, and a slot the app does not memoize runs every pass.
 #[trial]
-fn a_slot_with_a_content_version_runs_only_when_its_version_changes() {
-    let (runs, version, body) = (Cell::new(0), Cell::new(1), Cell::new(Rect::NOTHING));
+fn memoized_slots_run_only_when_their_props_change() {
+    let (version, plain, body) = (Cell::new(1), Cell::new(0), Cell::new(Rect::NOTHING));
     let frame = |frames: &mut Frames, events| {
-        runs.set(0);
+        plain.set(0);
         frames.frame(events, |ui| {
             let out = AppShell::new(WindowKey::main())
-                .status(true, |ui, _, _: &mut ()| {
-                    runs.set(runs.get() + 1);
-                    Text::new("Ready").show(ui);
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", SlotText { name: "options", text: "Options".to_owned() }, slot_text).show(ui);
                 })
-                .content(slots::STATUS, version.get())
+                .status(true, |ui, _, _| {
+                    let _ = MemoView::new("status", SlotText { name: "status", text: format!("Ready {}", version.get()) }, slot_text).show(ui);
+                })
+                .start(Slot::new("tools"), |ui, _, _| {
+                    plain.set(plain.get() + 1);
+                    Text::new("Tools").show(ui);
+                })
                 .body(|ui, _, _| {
                     Button::new("Body").show(ui);
                 })
                 .show(ui, &mut ());
             body.set(out.regions.body);
         });
-        runs.get()
+        (slot_runs(), plain.get())
     };
     let mut frames = Frames::new();
     for _ in 0..30 {
         frame(&mut frames, vec![]);
     }
-    assert_eq!(frame(&mut frames, vec![]), 0, "the status slot settles");
+    let (ran, plain_runs) = frame(&mut frames, vec![]);
+    assert_eq!(ran, Vec::<&str>::new(), "the memoized slots replay at rest");
+    assert!(plain_runs > 0, "the slot the app does not memoize runs every pass");
     let at = body.get().center();
     for events in [vec![press(at)], vec![release(at)], vec![]] {
-        assert_eq!(frame(&mut frames, events.clone()), 0, "a click in the body ({events:?}) leaves the slot settled");
+        assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "a click in the body ({events:?}) leaves the slots replaying");
     }
     version.set(2);
-    assert!(frame(&mut frames, vec![]) > 0, "a new version runs the slot");
-    assert_eq!(frame(&mut frames, vec![]), 0, "and it settles at it");
+    assert_eq!(frame(&mut frames, vec![]).0, vec!["status"], "a new status runs the status slot alone, once");
+    assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
 }

@@ -17,7 +17,7 @@ use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::hash::Hash;
 
 /// What a dock drag moves: one panel, or the whole group, floating window or column of a panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DragUnit<P> {
     /// The panel alone.

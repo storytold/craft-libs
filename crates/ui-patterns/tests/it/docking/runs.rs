@@ -1,17 +1,18 @@
-//! The runs of a settled docked layout: each group adds the same runs whatever its tab count, a closed menu, the
-//! group's header controls and its tabs add none, and a panel body with a content version runs only when it changes.
-//! With a host spec version the groups' chrome settles too: it runs only for the pointer, an arrangement or spec
-//! change, or a body without a version.
+//! The runs of a settled docked layout. Each group adds the same runs whatever its tab count, and a closed menu, the
+//! group's header controls and its tabs add none. The dock's chrome (each group's tab row, each column's bar) and the
+//! host's memoized bodies are memoized views: at rest they replay, and a change runs only the views it reaches.
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
-use craft_ui::contract::{Bind, BodyCx, Role};
-use craft_ui::docking::{DockConfig, DockPanels, GroupAt, PanelDrag, PanelSpec};
+use craft_behavior::dock::{Column, DockEdge, Group};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, BodyCx, MemoProps, MemoView, Role, Show as _};
+use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec};
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::{Fixture, last_pass_runs, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_pass_memo_runs, last_pass_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -77,133 +78,47 @@ fn a_settled_dock_group_runs_the_same_whatever_its_tab_count() {
     assert!(parts.is_empty(), "a settled dock ran header parts as runs: {parts:?}");
 }
 
-/// Two panels in two groups: panel 0 gives the content version `version`, panel 1 none. Each body counts its runs.
-struct Versioned {
-    runs: Rc<[Cell<usize>; 2]>,
-    version: Rc<Cell<u64>>,
+thread_local! {
+    /// The panels whose memoized bodies ran on this trial's thread, in order.
+    static BODY_RUNS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
-impl DockPanels<usize> for Versioned {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
-    fn body(&mut self, panel: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {
-        self.runs[*panel].set(self.runs[*panel].get() + 1);
-    }
-
-    fn content(&self, panel: &usize) -> Option<u64> {
-        (*panel == 0).then(|| self.version.get())
-    }
+/// Takes the panels whose bodies ran since the last call.
+fn body_runs() -> Vec<usize> {
+    BODY_RUNS.with(|runs| std::mem::take(&mut *runs.borrow_mut()))
 }
 
-/// A panel body with a content version runs in the frame its version changes and settles otherwise; a body without one
-/// runs every frame.
-#[trial]
-fn a_panel_body_with_a_content_version_runs_only_when_its_version_changes() {
-    let (runs, version): (Rc<[Cell<usize>; 2]>, _) = (Rc::default(), Rc::new(Cell::new(1)));
-    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1], 0));
-    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
-    let mut panels = Versioned { runs: Rc::clone(&runs), version: Rc::clone(&version) };
-    let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
-    });
-    fixture.room(Vec2::new(1200.0, 600.0)).settle();
-    let mut frame = || {
-        runs.iter().for_each(|runs| runs.set(0));
-        fixture.frame(Vec::new());
-        [runs[0].get(), runs[1].get()]
-    };
-    let [versioned, plain] = frame();
-    assert!(versioned == 0 && plain > 0, "the versioned body settles, the other runs: {versioned}, {plain}");
-    version.set(2);
-    assert!(frame()[0] > 0, "a new version runs the versioned body");
-    assert_eq!(frame()[0], 0, "and it settles at it");
+/// What a panel's memoized body shows.
+#[derive(MemoProps)]
+struct BodyProps {
+    panel: usize,
 }
 
-/// Panel 0's group is the host's view and panel 1's the dock's; both panels give the content version `version`. The
-/// view counts its runs where it shows, the bodies theirs.
-struct Hosted {
-    views: Rc<Cell<usize>>,
-    bodies: Rc<Cell<usize>>,
-    version: Rc<Cell<u64>>,
+fn panel_body(props: &mut BodyProps, ui: &mut Ui) {
+    BODY_RUNS.with(|runs| runs.borrow_mut().push(props.panel));
+    Button::new(format!("Body {}", props.panel)).show(ui);
 }
 
-impl DockPanels<usize> for Hosted {
-    fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
-    }
-
-    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {
-        self.bodies.set(self.bodies.get() + 1);
-    }
-
-    fn content(&self, _: &usize) -> Option<u64> {
-        Some(self.version.get())
-    }
-
-    fn group_view(&mut self, panels: &[usize], _: usize, _: &mut Ui, at: GroupAt, _: &mut BodyCx<'_>) -> Option<f32> {
-        if !panels.contains(&0) {
-            return None;
-        }
-        match at {
-            GroupAt::Measure(_) => Some(0.0),
-            GroupAt::Show(rect) => {
-                self.views.set(self.views.get() + 1);
-                Some(rect.height())
-            }
-        }
-    }
-}
-
-/// A host view settles as a panel body does: it runs in the frame its panel's version changes or the pointer comes
-/// over it, and not in a settled frame. The group the host leaves to the dock keeps showing beside it.
-#[trial]
-fn a_host_view_with_a_content_version_runs_only_when_its_version_changes() {
-    let (views, bodies, version) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)), Rc::new(Cell::new(1)));
-    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1], 0));
-    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
-    let mut panels = Hosted { views: Rc::clone(&views), bodies: Rc::clone(&bodies), version: Rc::clone(&version) };
-    let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
-    });
-    fixture.room(Vec2::new(1200.0, 600.0)).settle();
-    let mut frame = |events: Vec<egui::Event>| {
-        views.set(0);
-        bodies.set(0);
-        fixture.frame(events);
-        (views.get(), bodies.get())
-    };
-    assert_eq!(frame(Vec::new()), (0, 0), "a settled frame runs neither the view nor the versioned body");
-    assert_eq!(frame(Vec::new()), (0, 0), "nor the next one");
-    version.set(2);
-    let (viewed, bodied) = frame(Vec::new());
-    assert!(viewed > 0 && bodied > 0, "a new version runs the view and the body: {viewed}, {bodied}");
-    assert_eq!(frame(Vec::new()), (0, 0), "both settle at it");
-    assert!(frame(vec![moved(Pos2::new(300.0, 300.0))]).0 > 0, "the pointer over the view runs it");
-    assert!(fixture.by_label("Panel 1").is_some(), "the dock's group shows beside the view");
-}
-
-/// Panels whose specs and bodies all have versions, so the dock's chrome settles; `plain` is a panel whose body has
-/// none.
-struct Settling {
-    spec: Rc<Cell<u64>>,
+/// Panels whose bodies are memoized views, named by `labels`; `plain` is a panel whose body is not, which counts its
+/// runs in `plain_runs`.
+struct Memo {
+    labels: Rc<RefCell<Vec<String>>>,
     plain: Option<usize>,
+    plain_runs: Rc<Cell<u32>>,
 }
 
-impl DockPanels<usize> for Settling {
+impl DockPanels<usize> for Memo {
     fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(format!("Panel {panel}"))
+        PanelSpec::new(self.labels.borrow()[*panel].clone())
     }
 
-    fn body(&mut self, _: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {}
-
-    fn content(&self, panel: &usize) -> Option<u64> {
-        (self.plain != Some(*panel)).then_some(1)
-    }
-
-    fn spec_version(&self) -> Option<u64> {
-        Some(self.spec.get())
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if self.plain == Some(*panel) {
+            self.plain_runs.set(self.plain_runs.get() + 1);
+            Button::new("Plain").show(ui);
+            return;
+        }
+        let _ = MemoView::new(("body", *panel), BodyProps { panel: *panel }, panel_body).show(ui);
     }
 
     fn panel_rows(&mut self, _: &usize) -> Vec<PanelRow> {
@@ -211,27 +126,36 @@ impl DockPanels<usize> for Settling {
     }
 }
 
-/// A settled dock whose panels are [`Settling`].
-struct SettledDock {
+/// A settled dock whose panels are [`Memo`].
+struct MemoDock {
     fixture: Fixture,
-    /// The spec version the panels report.
-    spec: Rc<Cell<u64>>,
-    /// The workspace the dock shows.
+    labels: Rc<RefCell<Vec<String>>>,
+    plain_runs: Rc<Cell<u32>>,
     workspace: Rc<RefCell<Workspace<usize>>>,
+    /// The panel each pass of the dock reported picked.
+    picked: Rc<RefCell<Vec<usize>>>,
 }
 
-/// A settled dock over `layout` whose panels are [`Settling`].
-fn settling(layout: Layout<usize>, plain: Option<usize>) -> SettledDock {
-    let spec = Rc::new(Cell::new(1));
+/// A settled dock over `layout` whose panels are [`Memo`], with `plain` a body that is not memoized.
+fn memo_dock(layout: Layout<usize>, plain: Option<usize>) -> MemoDock {
+    let labels = Rc::new(RefCell::new((0..32).map(|panel| format!("Panel {panel}")).collect::<Vec<_>>()));
+    let plain_runs = Rc::new(Cell::new(0));
     let workspace = Rc::new(RefCell::new(Workspace::new(layout)));
-    let mut panels = Settling { spec: Rc::clone(&spec), plain };
-    let shown = Rc::clone(&workspace);
+    let picked = Rc::new(RefCell::new(Vec::new()));
+    let mut panels = Memo { labels: Rc::clone(&labels), plain, plain_runs: Rc::clone(&plain_runs) };
+    let (shown, seen) = (Rc::clone(&workspace), Rc::clone(&picked));
     let mut fixture = Fixture::new(move |ui| {
-        DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
+        let output = DockArea::new("Dock", Bind::bound(&mut *shown.borrow_mut()), &mut panels, DockConfig::default()).show(ui);
+        seen.borrow_mut().extend(output.picked);
     });
     fixture.room(Vec2::new(1200.0, 600.0)).settle().idle(1);
-    SettledDock { fixture, spec, workspace }
+    body_runs();
+    picked.borrow_mut().clear();
+    MemoDock { fixture, labels, plain_runs, workspace, picked }
 }
+
+/// Idle frames that settle a view after a change: its animations have ended.
+const SETTLE: usize = 30;
 
 /// `groups` groups side by side, two tabs each.
 fn side_by_side(groups: usize) -> Layout<usize> {
@@ -240,74 +164,173 @@ fn side_by_side(groups: usize) -> Layout<usize> {
     Layout::new(Some(root), Vec::new())
 }
 
+/// `groups` groups side by side, then a dock at the end edge with a column of panel 20 and an iconic column of panel
+/// 21, and a floating window of panel 22.
+fn full(groups: usize) -> Layout<usize> {
+    let mut iconic = Column::new(vec![Group::new(vec![21], 0)]).with_width(240.0);
+    iconic.iconic = true;
+    let columns = vec![Column::new(vec![Group::new(vec![20], 0)]).with_width(240.0), iconic];
+    let root = side_by_side(groups).root.expect("the groups");
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.7), root, Node::dock(DockEdge::End, columns));
+    let window = Floating::single(vec![22], 0, Rect::from_min_size(Pos2::new(200.0, 300.0), Vec2::new(300.0, 200.0)));
+    Layout::new(Some(root), vec![window])
+}
+
+/// How the last pass's memoized views took part, by the short name of their props type: `(name, ran, replayed)`.
+fn memo_runs(fixture: &Fixture) -> Vec<(&'static str, u32, u32)> {
+    let mut by_name: Vec<(&'static str, u32, u32)> = Vec::new();
+    for (name, _, run) in last_pass_memo_runs(fixture.ctx()) {
+        let name = short(name);
+        let at = match by_name.iter().position(|(seen, _, _)| *seen == name) {
+            Some(at) => at,
+            None => {
+                by_name.push((name, 0, 0));
+                by_name.len() - 1
+            }
+        };
+        match run {
+            MemoRun::Ran => by_name[at].1 += 1,
+            MemoRun::Replayed => by_name[at].2 += 1,
+            _ => {}
+        }
+    }
+    by_name
+}
+
+/// The memoized views of `name` that ran and replayed in the last pass.
+fn memo_of(fixture: &Fixture, name: &str) -> (u32, u32) {
+    memo_runs(fixture).iter().find(|(seen, _, _)| *seen == name).map_or((0, 0), |(_, ran, replayed)| (*ran, *replayed))
+}
+
+/// The memoized views that ran in the last pass.
+fn ran(fixture: &Fixture) -> u32 {
+    memo_runs(fixture).iter().map(|(_, ran, _)| ran).sum()
+}
+
 /// How many runs of the types named `names` the last pass made.
 fn runs_of(fixture: &Fixture, names: &[&str]) -> u32 {
     last_pass_runs(fixture.ctx()).iter().filter(|(ty, _)| names.contains(&short(ty))).map(|(_, runs)| runs).sum()
 }
 
-const CHROME: &[&str] = &["DockGroup", "TabStrip", "Tab", "GroupGrip"];
-
-/// At rest a dock whose host versions its specs and bodies runs none of its groups' chrome, however many groups it
-/// shows, and still paints their tabs.
+/// At rest a dock with groups, a column, an iconic column and a floating window runs none of its memoized views: every
+/// tab row, bar and body replays, the replays grow by the same count per group, and each group runs its container
+/// once, whatever its panel count. The replayed tabs still paint their titles.
 #[trial]
-fn a_settled_dock_runs_no_group_chrome_at_rest() {
+fn an_idle_dock_runs_no_memo_view() {
+    let mut replays = Vec::new();
     for groups in 1..=3 {
-        let SettledDock { mut fixture, .. } = settling(side_by_side(groups), None);
+        let MemoDock { mut fixture, .. } = memo_dock(full(groups), None);
         fixture.frame(Vec::new());
-        assert_eq!(runs_of(&fixture, CHROME), 0, "{groups} settled groups ran chrome: {:?}", last_pass_runs(fixture.ctx()));
+        assert_eq!(ran(&fixture), 0, "{groups} groups ran memoized views: {:?}", memo_runs(&fixture));
+        assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
+        // The side-by-side groups, the column's, the iconic column's flyout is closed, the window's.
+        assert_eq!(memo_of(&fixture, "TabRow").1 as usize, groups + 2, "every shown group's tab row replays");
+        assert_eq!(memo_of(&fixture, "BarProps").1, 2, "the column's bar and the iconic column's bar replay");
+        assert_eq!(runs_of(&fixture, &["DockGroup"]) as usize, groups + 2, "each shown group runs its container once");
+        assert_eq!(runs_of(&fixture, &["TabStrip", "Tab", "GroupGrip", "Menu"]), 0, "{:?}", last_pass_runs(fixture.ctx()));
         let painted = |title: &str| fixture.texts().iter().any(|text| text.text == title);
         assert!((0..2 * groups).all(|panel| painted(&format!("Panel {panel}"))), "the replayed tabs paint their titles");
+        replays.push(memo_runs(&fixture).iter().map(|(_, _, replayed)| replayed).sum::<u32>());
+    }
+    assert_eq!(replays[2] - replays[1], replays[1] - replays[0], "the replays per group grow: {replays:?}");
+    // A group's container runs once whatever its panel count.
+    let three_tabs = Layout::new(Some(Node::tabs(vec![0, 1, 2], 0)), Vec::new());
+    let MemoDock { mut fixture, .. } = memo_dock(three_tabs, None);
+    fixture.frame(Vec::new());
+    assert_eq!(runs_of(&fixture, &["DockGroup"]), 1, "a group of three panels runs its container once");
+}
+
+/// The pointer over one panel's body runs that body alone; the tab rows and the other bodies replay.
+#[trial]
+fn the_pointer_over_a_body_runs_only_that_body() {
+    let MemoDock { mut fixture, .. } = memo_dock(side_by_side(3), None);
+    let body = fixture.by_label("Body 2").expect("the second group's body").center();
+    fixture.frame(vec![moved(body)]);
+    assert_eq!(body_runs(), vec![2], "only panel 2's body ran");
+    assert_eq!(memo_of(&fixture, "TabRow").0, 0, "no tab row ran: {:?}", memo_runs(&fixture));
+}
+
+/// Picking a tab from outside the dock runs that group's tab row and the body it now shows; every other view replays,
+/// and the frame after settles.
+#[trial]
+fn a_tab_switch_runs_only_its_group() {
+    let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(3), None);
+    workspace.borrow_mut().apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
+    fixture.frame(Vec::new());
+    assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "only the second group's tab row ran: {:?}", memo_runs(&fixture));
+    assert_eq!(body_runs(), vec![3], "only the newly shown body ran");
+    // The tab strip's indicator moves to the new tab, which runs the row while it animates.
+    fixture.idle(SETTLE).frame(Vec::new());
+    assert_eq!(ran(&fixture), 0, "and they settle at it: {:?}", memo_runs(&fixture));
+}
+
+/// A new label for one panel runs only its group's tab row: the other groups' menus, which name it, are built only
+/// while open.
+#[trial]
+fn a_label_change_runs_only_its_groups_chrome() {
+    let MemoDock { mut fixture, labels, .. } = memo_dock(side_by_side(3), None);
+    labels.borrow_mut()[4] = "Renamed".to_owned();
+    fixture.frame(Vec::new());
+    assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "only the third group's tab row ran: {:?}", memo_runs(&fixture));
+    assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
+    assert!(fixture.texts().iter().any(|text| text.text == "Renamed"), "the tab shows the new label");
+    fixture.idle(SETTLE).frame(Vec::new());
+    assert_eq!(ran(&fixture), 0, "and it settles at it: {:?}", memo_runs(&fixture));
+}
+
+/// A body the host does not memoize runs every pass while the memoized views replay.
+#[trial]
+fn an_unconverted_body_runs_every_pass_while_the_others_replay() {
+    let MemoDock { mut fixture, plain_runs, .. } = memo_dock(side_by_side(2), Some(0));
+    for _ in 0..3 {
+        plain_runs.set(0);
+        fixture.frame(Vec::new());
+        assert_eq!(plain_runs.get(), 1, "the plain body runs once per pass");
+        assert_eq!(ran(&fixture), 0, "the memoized views replay: {:?}", memo_runs(&fixture));
     }
 }
 
-/// The pointer over one group's tab runs that group alone; the others replay.
+/// A click on a tab of a tab row that replayed reaches the dock once, through the row's outbox: idle frames that replay
+/// the rows report no pick, the click reports one, and the frames after it (the focus stays on the strip, which runs
+/// the row) report no other.
 #[trial]
-fn hovering_a_tab_runs_only_its_group() {
-    let SettledDock { mut fixture, .. } = settling(side_by_side(3), None);
-    let tab = fixture.by_label("Panel 4").expect("the third group's tab");
-    fixture.frame(vec![egui::Event::PointerMoved(tab.center())]);
-    assert_eq!(runs_of(&fixture, &["DockGroup"]), 1, "{:?}", last_pass_runs(fixture.ctx()));
+fn a_click_on_a_replayed_tab_row_is_picked_once() {
+    let MemoDock { mut fixture, picked, workspace, .. } = memo_dock(side_by_side(2), None);
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert_eq!(memo_of(&fixture, "TabRow"), (0, 2), "both tab rows replay before the click");
+    }
+    assert_eq!(*picked.borrow(), Vec::<usize>::new(), "an idle replay picks nothing");
+    let tab = fixture.by_label("Panel 1").expect("the first group's second tab");
+    fixture.click(&tab).idle(3);
+    assert_eq!(*picked.borrow(), vec![1], "the click picked panel 1 once");
+    fixture.frame(vec![egui::Event::PointerGone]).idle(SETTLE);
+    assert_eq!(*picked.borrow(), vec![1], "no frame after the click picks again");
+    let layout = &workspace.borrow().layout;
+    assert!(matches!(layout.root.as_ref(), Some(Node::Split { first, .. }) if matches!(&**first, Node::Tabs { active: 1, .. })), "panel 1 is shown");
 }
 
-/// An edit of the arrangement (a tab picked from outside the dock) runs every group (its measuring runs included), and
-/// a change of the host's spec version does too; the frame after settles again.
+/// A double click on a replayed column bar collapses the column: the bar's view sends it through its outbox.
 #[trial]
-fn an_arrangement_or_spec_change_runs_every_group() {
-    let SettledDock { mut fixture, spec, workspace } = settling(side_by_side(3), None);
-    workspace.borrow_mut().apply(Action::activate(1), false, |_| Permissions::ALL).expect("panel 1 is shown");
+fn a_double_click_on_a_replayed_column_bar_collapses_its_column() {
+    let columns = vec![Column::new(vec![Group::new(vec![20], 0)]).with_width(240.0)];
+    let layout =
+        Layout::new(Some(Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![0], 0), Node::dock(DockEdge::End, columns))), Vec::new());
+    let MemoDock { mut fixture, workspace, .. } = memo_dock(layout, None);
     fixture.frame(Vec::new());
-    assert!(runs_of(&fixture, &["DockGroup"]) >= 3, "the edit runs every group: {:?}", last_pass_runs(fixture.ctx()));
-    fixture.frame(Vec::new());
-    assert_eq!(runs_of(&fixture, &["DockGroup"]), 0, "and they settle at it");
-    spec.set(2);
-    fixture.frame(Vec::new());
-    assert!(runs_of(&fixture, &["DockGroup"]) >= 3, "a new spec version runs every group: {:?}", last_pass_runs(fixture.ctx()));
-    fixture.frame(Vec::new());
-    assert_eq!(runs_of(&fixture, &["DockGroup"]), 0, "and they settle at it");
-}
-
-/// A group whose shown body has no content version runs every pass, as its body does; the others settle.
-#[trial]
-fn a_group_whose_body_has_no_version_keeps_running() {
-    let SettledDock { mut fixture, .. } = settling(side_by_side(2), Some(0));
-    fixture.frame(Vec::new());
-    assert_eq!(runs_of(&fixture, &["DockGroup"]), 1, "{:?}", last_pass_runs(fixture.ctx()));
-}
-
-/// A floating window's groups settle as the docked ones do.
-#[trial]
-fn a_settled_floating_window_runs_no_group_chrome() {
-    let window = Floating::single(vec![9], 0, Rect::from_min_size(Pos2::new(600.0, 100.0), Vec2::new(300.0, 300.0)));
-    let SettledDock { mut fixture, .. } = settling(Layout::new(Some(Node::tabs(vec![0], 0)), vec![window]), None);
-    fixture.frame(Vec::new());
-    assert_eq!(runs_of(&fixture, CHROME), 0, "{:?}", last_pass_runs(fixture.ctx()));
+    assert_eq!(memo_of(&fixture, "BarProps"), (0, 1), "the bar replays before the click");
+    let band = fixture.by_label("Move panel column").expect("the column's band").center();
+    fixture.click_at(band).click_at(band).settle();
+    let layout = &workspace.borrow().layout;
+    let Some(Node::Split { second, .. }) = layout.root.as_ref() else { panic!("the split") };
+    assert!(matches!(&**second, Node::Dock { columns, .. } if columns[0].iconic), "the column collapsed to icons: {layout:?}");
 }
 
 /// A tab dragged straight onto the strip of a group that replayed its last run finds the group's drop spot in the
 /// frame it arrives: the replay registered the spots again.
 #[trial]
 fn a_tab_dropped_on_a_settled_group_lands_there() {
-    let SettledDock { mut fixture, workspace, .. } = settling(side_by_side(3), None);
+    let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(3), None);
     let (from, to) = (fixture.by_label("Panel 0").expect("a tab").center(), fixture.by_label("Panel 4").expect("a tab").center());
     fixture.frame(vec![moved(from)]).frame(vec![press(from)]).frame(vec![moved(from + Vec2::new(0.0, 12.0))]);
     assert!(drag::active::<PanelDrag>(fixture.ctx()).is_some(), "the tab drag started");
@@ -323,7 +346,7 @@ fn a_tab_dropped_on_a_settled_group_lands_there() {
 /// group: the command the menu queued for the group reaches it.
 #[trial]
 fn close_in_a_settled_groups_panel_menu_closes_the_panel() {
-    let SettledDock { mut fixture, workspace, .. } = settling(side_by_side(2), None);
+    let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(2), None);
     let buttons: Vec<_> =
         fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
     assert_eq!(buttons.len(), 2, "each group shows its panel menu button");

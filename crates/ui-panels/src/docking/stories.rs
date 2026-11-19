@@ -106,7 +106,7 @@ fn open_panel_menu(fixture: &mut Fixture) {
 fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
-    DockGroup::new(LAYERS, &panels, panels[0].key).menu(rows).show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, &panels, panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]
