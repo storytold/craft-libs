@@ -488,3 +488,6 @@ mod tests {
         assert_eq!(black.blend(white, f32::NAN), black);
     }
 }
+
+mod compat;
+pub use compat::parse_rgba_compat;
