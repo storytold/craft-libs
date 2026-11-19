@@ -307,3 +307,27 @@ fn face_list_skips_empty_outlines_while_allowing_mapped_whitespace_and_color_gly
     assert_eq!(face("\u{3000}").as_deref(), Some("WithSpace"));
     assert_eq!(face("😀").as_deref(), Some("ColorEmoji"));
 }
+
+#[trial]
+fn face_list_rejects_unusable_colr_and_overflowing_svg_ranges() {
+    let mut faces = FaceList::default();
+    let bad_colr_offset = super::synthetic_bad_colr_ttf("BadColrOffset", '😀', false);
+    let empty_colr_layer = super::synthetic_bad_colr_ttf("EmptyColrLayer", '😀', true);
+    let good_colr = super::synthetic_ttf("GoodColr", &[('😀', false)], true);
+    let overflow_svg = super::synthetic_svg_ttf("OverflowSvg", '🚀', u32::MAX - 1, 10, &[]);
+    let valid_svg = super::synthetic_svg_ttf("ValidSvg", '🚀', 14, 6, b"<svg/>");
+
+    faces.insert("BadColrOffset", FontData::from_owned(bad_colr_offset));
+    faces.insert("EmptyColrLayer", FontData::from_owned(empty_colr_layer));
+    faces.insert("GoodColr", FontData::from_owned(good_colr));
+    faces.insert("OverflowSvg", FontData::from_owned(overflow_svg));
+    faces.insert("ValidSvg", FontData::from_owned(valid_svg));
+
+    faces.set_chain(
+        FontRef::proportional(),
+        vec!["BadColrOffset".into(), "EmptyColrLayer".into(), "GoodColr".into(), "OverflowSvg".into(), "ValidSvg".into()],
+    );
+    let face = |cluster| faces.font_for(&FallbackRequest { cluster, family: &FontFamily::Proportional }).map(|insert| insert.name);
+    assert_eq!(face("😀").as_deref(), Some("GoodColr"));
+    assert_eq!(face("🚀").as_deref(), Some("ValidSvg"));
+}

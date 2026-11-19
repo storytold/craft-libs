@@ -10,6 +10,10 @@ pub(crate) mod stack;
 /// When `colr` is `true`, every mapped glyph also carries a COLRv0 record (and a `CPAL` table)
 /// so colour-font handling can be tested even with empty `glyf` outlines.
 pub(super) fn synthetic_ttf(family: &str, glyphs: &[(char, bool)], colr: bool) -> Vec<u8> {
+    synthetic_ttf_with(family, glyphs, colr, &[])
+}
+
+pub(super) fn synthetic_ttf_with(family: &str, glyphs: &[(char, bool)], colr: bool, extra: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     let mut sorted: Vec<(u32, bool)> = glyphs.iter().map(|&(c, outline)| (u32::from(c), outline)).collect();
     sorted.sort_by_key(|&(code, _)| code);
 
@@ -37,8 +41,14 @@ pub(super) fn synthetic_ttf(family: &str, glyphs: &[(char, bool)], colr: bool) -
         }
         be32(&mut loca, glyf.len() as u32);
     }
+    let layer_gid = (1 + sorted.len()) as i32;
+    if colr {
+        // Dedicated layer glyph with outline data so base glyphs can stay empty.
+        glyf.extend_from_slice(&boxed);
+        be32(&mut loca, glyf.len() as u32);
+    }
 
-    let num_glyphs = (1 + sorted.len()) as i32;
+    let num_glyphs = (1 + sorted.len() + usize::from(colr)) as i32;
     let mut head = Vec::new();
     for x in [0x0001_0000, 0x0001_0000, 0, 0x5F0F_3CF5] {
         be32(&mut head, x);
@@ -96,16 +106,16 @@ pub(super) fn synthetic_ttf(family: &str, glyphs: &[(char, bool)], colr: bool) -
         be16(&mut colr_table, 0);
         be16(&mut colr_table, count as i32);
         be32(&mut colr_table, 14);
-        be16(&mut colr_table, count as i32);
         be32(&mut colr_table, 14 + 6 * count);
+        be16(&mut colr_table, count as i32);
         for i in 0..count {
             let gid = (i + 1) as i32;
             be16(&mut colr_table, gid);
             be16(&mut colr_table, i as i32);
             be16(&mut colr_table, 1);
         }
-        for i in 0..count {
-            be16(&mut colr_table, (i + 1) as i32);
+        for _ in 0..count {
+            be16(&mut colr_table, layer_gid);
             be16(&mut colr_table, 0);
         }
         let mut cpal = Vec::new();
@@ -128,6 +138,11 @@ pub(super) fn synthetic_ttf(family: &str, glyphs: &[(char, bool)], colr: bool) -
         (b"maxp", maxp),
         (b"name", name),
     ]);
+    for (tag, data) in extra {
+        tables.retain(|(existing, _)| existing != tag);
+        tables.push((*tag, data.clone()));
+    }
+    tables.sort_by_key(|(tag, _)| *tag);
 
     let n = tables.len() as u16;
     let entry_selector = n.ilog2() as u16;
@@ -152,4 +167,88 @@ pub(super) fn synthetic_ttf(family: &str, glyphs: &[(char, bool)], colr: bool) -
         font.resize(font.len().next_multiple_of(4), 0);
     }
     font
+}
+
+/// Builds a font for `c` with an empty `glyf` outline and a `COLR` table whose `layerRecordsOffset`
+/// points past the end of the table, or whose layer points to an empty glyph when `empty_layer` is `true`.
+pub(super) fn synthetic_bad_colr_ttf(family: &str, c: char, empty_layer: bool) -> Vec<u8> {
+    let mut colr = Vec::new();
+    colr.extend(0u16.to_be_bytes());
+    colr.extend(1u16.to_be_bytes());
+    colr.extend(14u32.to_be_bytes());
+    if empty_layer {
+        colr.extend(20u32.to_be_bytes());
+        colr.extend(1u16.to_be_bytes());
+        // Base glyph 1: firstLayerIndex = 0, numLayers = 1.
+        colr.extend(1u16.to_be_bytes());
+        colr.extend(0u16.to_be_bytes());
+        colr.extend(1u16.to_be_bytes());
+        // Layer 0 points back to glyph 1 (which has an empty outline).
+        colr.extend(1u16.to_be_bytes());
+        colr.extend(0u16.to_be_bytes());
+    } else {
+        // Point layerRecordsOffset past the end of the table.
+        colr.extend(0xFFFFu32.to_be_bytes());
+        colr.extend(1u16.to_be_bytes());
+        colr.extend(1u16.to_be_bytes());
+        colr.extend(0u16.to_be_bytes());
+        colr.extend(1u16.to_be_bytes());
+    }
+    let mut cpal = Vec::new();
+    for x in [0u16, 1, 1, 1] {
+        cpal.extend(x.to_be_bytes());
+    }
+    cpal.extend(14u32.to_be_bytes());
+    cpal.extend(0u16.to_be_bytes());
+    cpal.extend([0xFF, 0x00, 0x00, 0xFF]);
+    synthetic_ttf_with(family, &[(c, false)], false, &[(b"COLR", colr), (b"CPAL", cpal)])
+}
+
+/// Builds a font for `c` with an empty `glyf` outline and an `SVG ` table with the given document
+/// offset/length (allowing overflow-range tests when `payload` is empty).
+pub(super) fn synthetic_svg_ttf(family: &str, c: char, doc_offset: u32, doc_len: u32, payload: &[u8]) -> Vec<u8> {
+    let mut svg = Vec::new();
+    svg.extend(0u16.to_be_bytes());
+    svg.extend(10u32.to_be_bytes());
+    svg.extend(0u32.to_be_bytes());
+    // SVGDocumentList at offset 10:
+    svg.extend(1u16.to_be_bytes());
+    svg.extend(1u16.to_be_bytes());
+    svg.extend(1u16.to_be_bytes());
+    svg.extend(doc_offset.to_be_bytes());
+    svg.extend(doc_len.to_be_bytes());
+    svg.extend_from_slice(payload);
+    synthetic_ttf_with(family, &[(c, false)], false, &[(b"SVG ", svg)])
+}
+
+/// Builds a font for `c` with an empty `glyf` outline and an 8bpp 1x1 `EBLC`/`EBDT` bitmap glyph.
+pub(super) fn synthetic_bitmap_ttf(family: &str, c: char) -> Vec<u8> {
+    let mut ebdt = Vec::new();
+    ebdt.extend(0x0002_0000u32.to_be_bytes());
+    ebdt.extend([1, 1, 0, 1, 1, 0xFF]);
+
+    let mut eblc = Vec::new();
+    eblc.extend(0x0002_0000u32.to_be_bytes());
+    eblc.extend(1u32.to_be_bytes());
+    // BitmapSize (48 bytes):
+    eblc.extend(56u32.to_be_bytes());
+    eblc.extend(24u32.to_be_bytes());
+    eblc.extend(1u32.to_be_bytes());
+    eblc.extend(0u32.to_be_bytes());
+    eblc.extend([0u8; 24]);
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend([16, 16, 8, 1]);
+    // IndexSubtableRecord (8 bytes):
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend(8u32.to_be_bytes());
+    // IndexSubtable1 (16 bytes):
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend(1u16.to_be_bytes());
+    eblc.extend(4u32.to_be_bytes());
+    eblc.extend(0u32.to_be_bytes());
+    eblc.extend(6u32.to_be_bytes());
+
+    synthetic_ttf_with(family, &[(c, false)], false, &[(b"EBLC", eblc), (b"EBDT", ebdt)])
 }

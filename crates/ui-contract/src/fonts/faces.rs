@@ -251,11 +251,50 @@ fn has_outline_contour(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) ->
     outline.draw(settings, &mut pen).is_ok() && pen.0 > 0
 }
 
+/// Whether `font` stores a readable, non-empty `COLR` glyph for `glyph_id`.
+fn has_color_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    if font.color_glyphs().get_with_format(glyph_id, skrifa::color::ColorGlyphFormat::ColrV1).is_some() {
+        return true;
+    }
+    let Ok(colr) = font.colr() else { return false };
+    let Ok(Some(range)) = colr.v0_base_glyph(glyph_id) else { return false };
+    let Some(layers) = colr.layer_records().and_then(Result::ok) else { return false };
+    let Some(slice) = layers.get(range) else { return false };
+    !slice.is_empty() && slice.iter().any(|layer| layer.glyph_id().to_u16() != 0 && has_outline_contour(font, layer.glyph_id().into()))
+}
+
+/// Whether `font` stores a non-empty bitmap strike glyph for `glyph_id`.
+fn has_bitmap_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    font.bitmap_strikes().glyph_for_size(skrifa::instance::Size::unscaled(), glyph_id).is_some_and(|bitmap| bitmap.width > 0 && bitmap.height > 0)
+}
+
+/// Whether `font` stores a non-empty `SVG ` document slice for `glyph_id` with valid bounds.
+fn has_svg_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
+    let Ok(svg) = font.svg() else { return false };
+    let Ok(list) = svg.svg_document_list() else { return false };
+    let Ok(glyph_id) = skrifa::raw::types::GlyphId16::try_from(glyph_id) else { return false };
+    let records = list.document_records();
+    let Ok(index) = records.binary_search_by(|record| {
+        if record.start_glyph_id() > glyph_id {
+            std::cmp::Ordering::Greater
+        } else if record.end_glyph_id() < glyph_id {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }) else {
+        return false;
+    };
+    let Some(record) = records.get(index) else { return false };
+    let Ok(start) = usize::try_from(record.svg_doc_offset()) else { return false };
+    let Ok(len) = usize::try_from(record.svg_doc_length()) else { return false };
+    let Some(end) = start.checked_add(len) else { return false };
+    list.offset_data().as_bytes().get(start..end).is_some_and(|data| !data.is_empty())
+}
+
 /// Whether `font` stores colour, bitmap or SVG glyph data for `glyph_id`.
 fn has_non_outline_glyph(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) -> bool {
-    font.color_glyphs().get(glyph_id).is_some()
-        || font.bitmap_strikes().glyph_for_size(skrifa::instance::Size::unscaled(), glyph_id).is_some()
-        || font.svg().ok().and_then(|svg| svg.glyph_data(glyph_id).ok().flatten()).is_some_and(|data| !data.is_empty())
+    has_color_glyph(font, glyph_id) || has_bitmap_glyph(font, glyph_id) || has_svg_glyph(font, glyph_id)
 }
 
 /// Maps `c` to a non-`.notdef` glyph ID in `font`.
@@ -263,11 +302,18 @@ fn mapped_glyph_id(font: &skrifa::FontRef<'_>, c: char) -> Option<skrifa::GlyphI
     font.charmap().map(c).filter(|&id| id != skrifa::GlyphId::NOTDEF)
 }
 
-/// Whether `font` maps `c` to a non-`.notdef` glyph with a drawable outline (or any mapped glyph
-/// for whitespace, which draws no contours).
-pub(crate) fn font_has_outline(font: &skrifa::FontRef<'_>, c: char) -> bool {
+/// Whether `font` maps `c` to a non-`.notdef` glyph that the active renderer draws
+/// (a drawable outline, or when `color_fonts` is enabled a `COLR` or bitmap glyph, or any
+/// mapped glyph for whitespace).
+pub(crate) fn font_is_drawable(font: &skrifa::FontRef<'_>, c: char) -> bool {
     let Some(id) = mapped_glyph_id(font, c) else { return false };
-    c.is_whitespace() || has_outline_contour(font, id)
+    if c.is_whitespace() || has_outline_contour(font, id) {
+        return true;
+    }
+    #[cfg(feature = "color_fonts")]
+    return has_color_glyph(font, id) || has_bitmap_glyph(font, id);
+    #[cfg(not(feature = "color_fonts"))]
+    false
 }
 
 /// Whether the face maps `c` to a non-`.notdef` glyph with a drawable outline (or colour, bitmap

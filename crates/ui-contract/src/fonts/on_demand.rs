@@ -16,7 +16,7 @@ use egui::{Context, FontData, Shape};
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FileRef, TableProvider as _};
 
-use super::faces::{baseline_fallback, font_has_outline, set_weight};
+use super::faces::{baseline_fallback, font_is_drawable, set_weight};
 use super::script::{EMOJI, MATH, SYMBOLS, script_of};
 use super::stack::is_cjk;
 use crate::runtime::egui::fonts as egui_fonts;
@@ -401,13 +401,13 @@ fn face_is_readable(bytes: &[u8], index: u32) -> bool {
 }
 
 /// The index of the first face in `bytes` (a font or a collection) that maps `c` to a drawable
-/// glyph (non-empty outline, or any mapped glyph for whitespace). `None` for fonts without it
-/// and for data that doesn't parse.
+/// glyph supported by the active renderer (or any mapped glyph for whitespace). `None` for fonts
+/// without it and for data that doesn't parse.
 fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
     match FileRef::new(bytes).ok()? {
-        FileRef::Font(font) => font_has_outline(&font, c).then_some(0),
+        FileRef::Font(font) => font_is_drawable(&font, c).then_some(0),
         FileRef::Collection(collection) => {
-            collection.iter().position(|font| font.is_ok_and(|font| font_has_outline(&font, c))).and_then(|i| u32::try_from(i).ok())
+            collection.iter().position(|font| font.is_ok_and(|font| font_is_drawable(&font, c))).and_then(|i| u32::try_from(i).ok())
         }
     }
 }
@@ -427,7 +427,7 @@ fn regional_face(bytes: &[u8], c: char, region: Han) -> Option<u32> {
     };
     let index = collection.iter().position(|font| {
         font.is_ok_and(|font| {
-            font_has_outline(&font, c)
+            font_is_drawable(&font, c)
                 && font
                     .localized_strings(skrifa::string::StringId::FAMILY_NAME)
                     .english_or_first()
