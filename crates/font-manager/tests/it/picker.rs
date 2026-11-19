@@ -325,3 +325,39 @@ fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
 }
 
+/// The width of a plain picker over "Inter" in a ribbon group's place, in a row beside a block that leaves it 60 pt of
+/// the window, so the row shrinks it to its least.
+fn squeezed_ribbon_picker_width() -> f32 {
+    use craft_ui::contract::ShowContainer as _;
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut fx = Fixture::new(move |ui| {
+        let mut family = "Inter".to_owned();
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::Ribbon);
+            },
+            |ui| {
+                let rest = ui.available_width() - 60.0;
+                craft_ui::layout_components::Row::new().show(ui, |ui, _| {
+                    let _ = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).show(ui);
+                    craft_ui::testing::layout::Block::new(egui::Vec2::new(rest, 20.0)).show(ui);
+                });
+            },
+        );
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.by_label("Font family").expect("the picker").rect.width()
+}
+
+/// A ribbon row that lacks room narrows its font box no further than its least: a name field the short field length
+/// (`size.length.short`) wide, about the old ribbon's font name, plus its menu arrow; never to an arrow alone.
+#[trial]
+fn a_squeezed_ribbon_font_box_keeps_a_short_fields_name() {
+    let squeezed = squeezed_ribbon_picker_width();
+    let short = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.short;
+    assert!(squeezed > short, "the squeezed font box keeps a name field {short} wide and its arrow: {squeezed}");
+    assert!(squeezed <= picker_width("Inter", true) + 0.5, "and is no wider than where the room allows");
+}
+
