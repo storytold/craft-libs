@@ -434,6 +434,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A layer hung from an opener or a rect is at least as wide as its overlay asks for, in the measuring run too,
         // so the rows of a content-sized list inside it are placed at that width.
         let took = Vec2::new(overlay_of(&props).map_or(took.x, |overlay| took.x.max(crate::contract::overlay::anchor_floor(overlay))), took.y);
+        // The least width holds in the measure a parent places it by, as in its own extent (`wanted_width`): a row
+        // measuring a side menu among its children gave it only its content's width, so the menu shrank to its widest
+        // row's name.
+        let took = Vec2::new(took.x.max(self.least_width + pad.x), took.y);
         self.overflow = (took.x - self.room.x).max(0.0);
         // A body wider than the room overflows it, or scrolls along it; either way the container keeps to the room.
         Vec2::new(took.x.min(self.room.x), if vertical { took.y.min(self.room.y) } else { took.y })
