@@ -169,6 +169,11 @@ fn detection_finds_each_format() {
         assert_eq!(detect(text.as_bytes(), ext), Some(format), "{format:?} with its extension");
     }
     assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\nx\n", None), Some(Format::Srt));
+    // Cue text containing literal SubViewer markers must not hijack SRT detection
+    assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\nHere is a [SUBTITLE] tag\n", None), Some(Format::Srt));
+    assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\n[INFORMATION] about movie\n", None), Some(Format::Srt));
+    // Genuine SubViewer with only [SUBTITLE] header
+    assert_eq!(detect(b"[SUBTITLE]\n00:00:01.00,00:00:02.00\nText\n", None), Some(Format::SubViewer));
     assert_eq!(detect(b"just some prose\n", Some("txt")), None);
 }
 

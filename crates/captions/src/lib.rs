@@ -331,7 +331,7 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("<sami")) {
         return Some(Format::Sami);
     }
-    if head.starts_with("[INFORMATION]") || head.contains("[SUBTITLE]") {
+    if subviewer::is_header(head) {
         return Some(Format::SubViewer);
     }
     if realtext::is_realtext(head) {

@@ -19,6 +19,16 @@ use crate::text::{escape_markup, plain_lines, tick_to_ms};
 use crate::time::Tick;
 use crate::{Cue, Document, Error, Result, parse_clock};
 
+/// Returns true if `head` begins with a genuine SubViewer header structure.
+pub(crate) fn is_header(head: &str) -> bool {
+    let mut lines = head.lines().map(str::trim).filter(|l| !l.is_empty());
+    match lines.next() {
+        Some("[INFORMATION]") => lines.any(|l| l == "[SUBTITLE]" || l == "[END INFORMATION]" || (l.starts_with('[') && l.ends_with(']'))),
+        Some("[SUBTITLE]") => true,
+        _ => false,
+    }
+}
+
 /// `h:mm:ss.cc,h:mm:ss.cc` as its two times.
 pub(crate) fn parse_timing(line: &str) -> Option<(Tick, Tick)> {
     let (a, b) = line.trim().split_once(',')?;
