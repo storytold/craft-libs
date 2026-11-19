@@ -24,8 +24,8 @@ fn patterns() -> Vec<PresetRow<String>> {
 }
 
 /// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
-/// multi-line text row, a searchable choice, a radio row with a disabled option, a blend row, a pattern row, a files
-/// row in folder mode and a section of read-only rows.
+/// multi-line text row, a searchable choice, a radio row with a disabled option, a radio row with its options in a row,
+/// a blend row, a pattern row, a files row in folder mode and a section of read-only rows.
 fn params() -> Vec<Param> {
     let mut params = Param::parse_list(SPEC);
     let blend = vec![
@@ -39,6 +39,7 @@ fn params() -> Vec<Param> {
     params.push(Param::files("files", "Files").folder_mode(true));
     params.push(Param::new("size", "Size", ParamKind::choice(sizes(), None)).searchable());
     params.push(Param::new("scale", "Scale", ParamKind::radio(sizes(), None)).disabled_options(["large"]));
+    params.push(Param::new("fit", "Fit", ParamKind::radio(sizes(), Some("medium".to_owned()))).options_in_row());
     params.push(Param::new("angle", "Angle", ParamKind::angle(30.0)));
     params.push(Param::new("centre", "Centre", ParamKind::point([50.0, 50.0])));
     params.push(Param::section("Output"));

@@ -467,6 +467,8 @@ pub(crate) struct RowOptions {
     eyedropper: bool,
     eyedropper_armed: bool,
     full_width: bool,
+    /// A radio row's options stand in one row with no caption ([`Param::options_in_row`]).
+    options_in_row: bool,
     not_remembered: bool,
     /// The lines a multi-line text row shows.
     lines: Option<usize>,
@@ -834,6 +836,14 @@ impl Param {
         self
     }
 
+    /// For a [`ParamKind::Radio`] row: the options stand side by side in one row, with no caption over them; the label
+    /// still names the group for assistive technology. Other kinds are unchanged.
+    #[must_use]
+    pub fn options_in_row(mut self) -> Self {
+        self.options.get_or_insert_default().options_in_row = true;
+        self
+    }
+
     /// A [`ParamKind::Text`] row without a Browse button edits multi-line text in a field `lines` lines tall: Enter
     /// inserts a line break and the dialog's default button leaves it to the field. `lines` below 2 keeps a
     /// single-line field, whose Enter answers the default button. Other kinds are unchanged.
@@ -989,6 +999,11 @@ impl RowOptions {
     /// Whether a custom row spans the width of the form.
     pub(crate) fn full_width(&self) -> bool {
         self.full_width
+    }
+
+    /// Whether a radio row's options stand in one row with no caption.
+    pub(crate) fn options_in_row(&self) -> bool {
+        self.options_in_row
     }
 
     /// The lines of a multi-line text row; `None` for a single line.

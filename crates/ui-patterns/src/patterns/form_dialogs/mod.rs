@@ -61,7 +61,7 @@ pub use new_document::{
 mod about;
 
 pub use about::{
-    AboutAppTab, AboutDialog, AboutInfo, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits,
+    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutOutput, AboutTab, AboutWords, CommitShare, Contributor, ContributorSort, Credits,
     HostedAbout, ModelCredit, NameMode,
 };
 
