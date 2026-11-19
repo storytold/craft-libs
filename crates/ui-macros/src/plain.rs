@@ -39,23 +39,66 @@ pub(crate) struct Escape {
     pub(crate) keyword: &'static str,
 }
 
+/// The escape a derive allows for one type parameter, `#[<attr>(<keyword>)]`: the parameter is bound by `bound`
+/// instead of the derive's trait.
+pub(crate) struct ParamEscape {
+    /// The attribute's name (`memo_props`).
+    pub(crate) attr: &'static str,
+    /// The one flag it takes (`stateless`).
+    pub(crate) keyword: &'static str,
+    /// What the parameter is bound by instead (`'static`).
+    pub(crate) bound: TokenStream,
+}
+
 /// Requires `trait_path` of every field of `input` (structs, tuple structs, enums; a union is an error). The impl
 /// bounds each type parameter by `trait_path`; every field is checked under those bounds by a generated
 /// `check::<Field>()` spanned at the field's type, so a rejected field (`Cell<T>` included) is an error at the derive
 /// that names the field, and a recursive type (a node holding `Vec<Self>` or `Vec<Node<T>>`) does not make its impl
 /// require itself. A field type written with `Self` is checked as the type itself. A field carrying `escape` is not
-/// checked.
-pub(crate) fn field_checks(input: &DeriveInput, trait_path: &TokenStream, escape: Option<&Escape>) -> syn::Result<FieldChecks> {
+/// checked. A type parameter carrying `param_escape` is bound by its `bound` instead of `trait_path`; its fields are
+/// still checked under that bound.
+pub(crate) fn field_checks(
+    input: &DeriveInput,
+    trait_path: &TokenStream,
+    escape: Option<&Escape>,
+    param_escape: Option<&ParamEscape>,
+) -> syn::Result<FieldChecks> {
     let fields: Vec<&syn::Field> = match &input.data {
         Data::Struct(data) => data.fields.iter().collect(),
         Data::Enum(data) => data.variants.iter().flat_map(|variant| variant.fields.iter()).collect(),
         Data::Union(data) => return Err(syn::Error::new(data.union_token.span(), "a union cannot hold only plain data")),
     };
     let mut generics = input.generics.clone();
-    let params: Vec<syn::Ident> = input.generics.type_params().map(|param| param.ident.clone()).collect();
+    if let Some(param_escape) = param_escape {
+        for param in &generics.params {
+            let attrs = match param {
+                syn::GenericParam::Type(_) => continue,
+                syn::GenericParam::Lifetime(param) => &param.attrs,
+                syn::GenericParam::Const(param) => &param.attrs,
+            };
+            if let Some(attr) = attrs.iter().find(|attr| attr.path().is_ident(param_escape.attr)) {
+                let ParamEscape { attr: name, keyword, .. } = param_escape;
+                return Err(syn::Error::new_spanned(attr, format!("`#[{name}({keyword})]` marks a type parameter")));
+            }
+        }
+    }
+    let mut bounds = Vec::new();
+    for param in generics.type_params_mut() {
+        let escaped = match param_escape {
+            Some(param_escape) => param_escaped(param, param_escape)?,
+            None => false,
+        };
+        // A derive's helper attributes are not attributes of the impl.
+        param.attrs.clear();
+        let ident = &param.ident;
+        bounds.push(match param_escape {
+            Some(ParamEscape { bound, .. }) if escaped => quote!(#ident: #bound),
+            _ => quote!(#ident: #trait_path),
+        });
+    }
     let where_clause = generics.make_where_clause();
-    for param in &params {
-        where_clause.predicates.push(syn::parse2(quote!(#param: #trait_path))?);
+    for bound in bounds {
+        where_clause.predicates.push(syn::parse2(bound)?);
     }
     let ident = &input.ident;
     let (_, type_generics, _) = input.generics.split_for_impl();
@@ -101,6 +144,21 @@ impl VisitMut for ReplaceSelf<'_> {
     }
 }
 
+/// Whether `param` carries `#[<attr>(<keyword>)]`. Any other content of the attribute is an error.
+fn param_escaped(param: &syn::TypeParam, escape: &ParamEscape) -> syn::Result<bool> {
+    let mut found = false;
+    for attr in param.attrs.iter().filter(|attr| attr.path().is_ident(escape.attr)) {
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident(escape.keyword) {
+                return Err(meta.error(format!("expected `#[{}({})]`", escape.attr, escape.keyword)));
+            }
+            found = true;
+            Ok(())
+        })?;
+    }
+    Ok(found)
+}
+
 /// Whether `field` carries `#[<attr>(<keyword> = "reason")]`. Any other content of the attribute, or an empty
 /// reason, is an error.
 pub(crate) fn escaped(field: &syn::Field, escape: &Escape) -> syn::Result<bool> {
@@ -144,7 +202,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let input: DeriveInput = syn::parse2(input)?;
     let k = tracked_crate();
     let trait_path = quote!(#k::PlainData);
-    let FieldChecks { generics, checks } = field_checks(&input, &trait_path, Some(&Escape { attr: "plain_data", keyword: "assume" }))?;
+    let FieldChecks { generics, checks } = field_checks(&input, &trait_path, Some(&Escape { attr: "plain_data", keyword: "assume" }), None)?;
     let ident = &input.ident;
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, type_generics, _) = input.generics.split_for_impl();

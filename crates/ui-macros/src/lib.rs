@@ -1,10 +1,11 @@
-//! Macros of craft-ui: `#[derive(Component, Pattern, Props, ComponentStyle, TokenGroup, CommandSet, EnvValue, PlainData)]`,
+//! Macros of craft-ui: `#[derive(Component, Pattern, Props, ComponentStyle, TokenGroup, CommandSet, EnvValue, PlainData, MemoProps)]`,
 //! `words!`, `#[story]`, `#[craft_ui::testing::trial]` and `register_contract!`.
 #![warn(missing_docs)]
 
 mod command_set;
 mod component;
 mod env;
+mod memo;
 mod pattern;
 mod plain;
 mod props;
@@ -91,6 +92,20 @@ pub fn derive_props(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(PlainData, attributes(plain_data))]
 pub fn derive_plain_data(input: TokenStream) -> TokenStream {
     expanded(plain::derive(input.into()))
+}
+
+/// Writes `MemoProps`: every field feeds the memo key, in order (an enum's variant index first), and every field's type
+/// must implement `MemoProps`, so a field holding interior mutability, a closure, a trait object or a raw pointer is a
+/// compile error at that field. Works on structs, tuple structs and enums. A field of a foreign plain type without an
+/// implementation carries `#[memo_props(hash = "why the type is plain")]`: it feeds the key through its `Hash`, and its
+/// type must be `Hash + Sync` (which keeps out raw pointers, `NonNull`, `Cell` and `RefCell`), with a `Hash` that covers
+/// everything the view shows and is prefix-free (two different values never feed bytes of which one starts the
+/// other); the reason is required. A type parameter is bound by `MemoProps`, except one marked
+/// `#[memo_props(stateless)]`: the type of a callback held as `Stateless<E>`, which no fn item or closure implements
+/// `MemoProps` for, is bound by `'static` only (`struct Bar<#[memo_props(stateless)] E> { english: Stateless<E> }`).
+#[proc_macro_derive(MemoProps, attributes(memo_props))]
+pub fn derive_memo_props(input: TokenStream) -> TokenStream {
+    expanded(memo::derive(input.into()))
 }
 
 /// Writes `ComponentStyle` from `#[style(surface)]`, `#[style(focus)]` and `#[style(metrics)]` fields (one each),

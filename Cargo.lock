@@ -4218,6 +4218,8 @@ dependencies = [
  "log",
  "proc-macro2",
  "serde",
+ "serde_json",
+ "siphasher",
  "skrifa 0.44.0",
  "smallvec",
  "syn 2.0.119",
