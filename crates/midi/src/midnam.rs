@@ -1,56 +1,74 @@
 //! MIDINameDocument patch names, for an existing MIDI destination.
 
 use craft_xml::{Doctype, El, Limits, Options};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::sync::Arc;
 
+/// Maximum encoded size in bytes of a MIDINameDocument.
 pub const MAX_MIDNAM_BYTES: usize = 2 * 1024 * 1024;
-const MAX_PATCH_REFERENCES: usize = 65_536;
+const MAX_PATCH_VISITS: usize = 1_048_576;
 const MAX_OUTPUT_NAME_BYTES: usize = 16 * 1024 * 1024;
 const NAME_SEPARATOR: &str = " · ";
 
+/// Patch names for one named channel set.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MidnamProfile {
+    /// Channel set name, prefixed with the device number and model for multiple devices.
     pub name: String,
-    /// Bit zero is MIDI channel 1. None means there was no channel hint.
+    /// Bit zero is MIDI channel 1. Assignments from all custom modes are combined.
+    /// Without an assignment, use AvailableForChannels when present. None means no hint.
     pub channels: Option<u16>,
     /// Bank number is MSB * 128 + LSB.
     pub banks: BTreeMap<u16, MidnamBank>,
 }
 
+/// Programs at one MIDI bank address.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MidnamBank {
+    /// Display label from the first patch bank to populate this address.
     pub name: String,
-    pub programs: BTreeMap<u8, String>,
+    /// Shared program labels keyed by MIDI Program Change number (0–127).
+    pub programs: Arc<BTreeMap<u8, String>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum MidnamError {
+    /// The file is malformed XML or exceeds an XML parser limit.
     #[error(transparent)]
     Xml(#[from] craft_xml::Error),
+    /// The document contains no supported banks with named programs.
     #[error("No named MIDI banks found")]
     NoBanks,
-    #[error("Too many MIDI patch references")]
+    /// Resolving the lists would visit too many patch entries.
+    #[error("Too many MIDI patches to resolve")]
     TooManyPatches,
+    /// Profile, bank, or program names exceed the allocated name budget.
     #[error("Expanded MIDI patch names exceed the size limit")]
     OutputTooLarge,
 }
 
-/// Reads channel sets from master device definitions and the default custom mode when provided.
+/// Reads channel sets from master device definitions and named lists across custom modes.
+/// Duplicate list names and duplicate program labels at a bank address use the last entry.
 /// Patch numbers are read from ProgramChange, never from the display Number field.
 /// A DOCTYPE reference is tolerated without loading it. Internal DTD subsets are rejected.
 pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
+    if bytes.len() > MAX_MIDNAM_BYTES {
+        return Err(craft_xml::Error::TooLarge(MAX_MIDNAM_BYTES).into());
+    }
+    let text = decode_declared_encoding(bytes);
     let root = Options {
         doctype: Doctype::RejectInternalSubset,
         drop_blank_text: true,
-        ..Options::local().strict().with_limits(Limits { max_input: MAX_MIDNAM_BYTES, max_depth: 32, ..Limits::DEFAULT })
+        ..Options::local().strict().with_limits(Limits { max_input: text.len().max(MAX_MIDNAM_BYTES), max_depth: 32, ..Limits::DEFAULT })
     }
-    .parse(bytes)?;
+    .parse(&text)?;
     if root.name != "MIDINameDocument" {
         return Err(MidnamError::NoBanks);
     }
     let mut profiles = Vec::new();
-    let mut remaining = MAX_PATCH_REFERENCES;
+    let mut remaining = MAX_PATCH_VISITS;
     let mut name_bytes = MAX_OUTPUT_NAME_BYTES;
     let multiple = root.children("MasterDeviceNames").nth(1).is_some();
     for (index, device) in root.children("MasterDeviceNames").enumerate() {
@@ -60,19 +78,18 @@ pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
         } else {
             None
         };
-        let mode = device.child("CustomDeviceMode");
-        let lists = device.children("PatchNameList").chain(mode.into_iter().flat_map(|mode| mode.children("PatchNameList")));
+        let lists = device.children("PatchNameList").chain(device.children("CustomDeviceMode").flat_map(|mode| mode.children("PatchNameList")));
         let lists: BTreeMap<_, _> = lists.filter_map(|list| Some((list.attr("Name")?, list))).collect();
-        let assignments = mode.and_then(|mode| mode.child("ChannelNameSetAssignments"));
+        let mut cache = BTreeMap::new();
+        let mut assignments = None;
         for set in device.children("ChannelNameSet") {
             let Some(name) = set.attr("Name").filter(|name| !name.is_empty()) else { continue };
-            let channels =
-                assignments.map(|node| mask(node.children("ChannelNameSetAssign").filter(|a| a.attr("NameSet") == Some(name)))).or_else(|| {
+            let banks = read_banks(set, &lists, &mut cache, &mut remaining, &mut name_bytes)?;
+            if !banks.is_empty() {
+                let channels = assignments.get_or_insert_with(|| channel_masks(device)).get(name).copied().or_else(|| {
                     set.child("AvailableForChannels")
                         .map(|node| mask(node.children("AvailableChannel").filter(|a| a.attr("Available") != Some("false"))))
                 });
-            let banks = read_banks(set, &lists, &mut remaining, &mut name_bytes)?;
-            if !banks.is_empty() {
                 let prefix_len = model.as_ref().map_or(0, |model| model.len() + NAME_SEPARATOR.len());
                 charge_name_bytes(&mut name_bytes, prefix_len + name.len())?;
                 profiles.push(MidnamProfile {
@@ -86,8 +103,50 @@ pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
     if profiles.is_empty() { Err(MidnamError::NoBanks) } else { Ok(profiles) }
 }
 
+fn decode_declared_encoding(bytes: &[u8]) -> Cow<'_, [u8]> {
+    let prefix = bytes.get(..bytes.len().min(512)).unwrap_or_default();
+    let encoding = std::str::from_utf8(prefix.split(|&byte| byte == b'>').next().unwrap_or_default())
+        .ok()
+        .and_then(|tag| tag.strip_prefix("<?xml "))
+        .and_then(|declaration| declaration.split_once("encoding"))
+        .and_then(|(_, value)| value.trim_start().strip_prefix('='))
+        .map(str::trim_start)
+        .and_then(|value| {
+            let quote = value.chars().next().filter(|&c| matches!(c, '\'' | '"'))?;
+            value.get(1..)?.split_once(quote).map(|(name, _)| name)
+        });
+    match encoding {
+        Some(name) if name.eq_ignore_ascii_case("ISO-8859-1") => Cow::Owned(bytes.iter().copied().map(char::from).collect::<String>().into_bytes()),
+        Some(name) if name.eq_ignore_ascii_case("windows-1252") => {
+            Cow::Owned(bytes.iter().copied().map(craft_codepage::cp1252).collect::<String>().into_bytes())
+        }
+        _ => Cow::Borrowed(bytes),
+    }
+}
+
+fn channel_masks(device: &El) -> BTreeMap<&str, u16> {
+    let mut masks = BTreeMap::new();
+    for assignment in device
+        .children("CustomDeviceMode")
+        .flat_map(|mode| mode.children("ChannelNameSetAssignments"))
+        .flat_map(|set| set.children("ChannelNameSetAssign"))
+    {
+        if let Some(name) = assignment.attr("NameSet")
+            && let Some(bit) = channel_bit(assignment)
+        {
+            *masks.entry(name).or_default() |= bit;
+        }
+    }
+    masks
+}
+
+fn channel_bit(node: &El) -> Option<u16> {
+    let n = node.attr_u32("Channel").filter(|n| (1..=16).contains(n))?;
+    Some(1 << (n - 1))
+}
+
 fn mask<'a>(nodes: impl Iterator<Item = &'a El>) -> u16 {
-    nodes.filter_map(|node| node.attr_u32("Channel")).filter(|n| (1..=16).contains(n)).fold(0, |mask, n| mask | (1 << (n - 1)))
+    nodes.filter_map(channel_bit).fold(0, |mask, bit| mask | bit)
 }
 
 fn byte(el: &El, attr: &str) -> Option<u8> {
@@ -110,39 +169,74 @@ fn charge_name_bytes(remaining: &mut usize, bytes: usize) -> Result<(), MidnamEr
     Ok(())
 }
 
-fn read_banks(
+type Programs = Arc<BTreeMap<u8, String>>;
+type ResolvedList = BTreeMap<u16, Programs>;
+
+fn read_banks<'a>(
     set: &El,
-    lists: &BTreeMap<&str, &El>,
+    lists: &BTreeMap<&'a str, &El>,
+    cache: &mut BTreeMap<(&'a str, u16), ResolvedList>,
     remaining: &mut usize,
     name_bytes: &mut usize,
 ) -> Result<BTreeMap<u16, MidnamBank>, MidnamError> {
-    let mut banks = BTreeMap::new();
+    let mut banks = BTreeMap::<u16, MidnamBank>::new();
     for bank in set.children("PatchBank") {
         let Some(address) = bank_select(bank.child("MIDICommands"), 0) else { continue };
         let name = bank.attr("Name").unwrap_or_default();
-        let list = bank.child("PatchNameList").or_else(|| lists.get(bank.child_attr("UsesPatchNameList", "Name")?).copied());
-        for patch in list.into_iter().flat_map(|node| node.children("Patch")) {
-            *remaining = remaining.checked_sub(1).ok_or(MidnamError::TooManyPatches)?;
-            let Some(label) = patch.attr("Name").filter(|label| !label.is_empty()) else { continue };
-            let commands = patch.child("PatchMIDICommands");
-            let Some(program) =
-                commands.and_then(|node| node.child("ProgramChange")).and_then(|pc| byte(pc, "Number")).or_else(|| byte(patch, "ProgramChange"))
-            else {
-                continue;
-            };
-            let Some(address) = bank_select(commands, address) else { continue };
-            let bank = match banks.entry(address) {
+        let inline;
+        let resolved = if let Some(list) = bank.child("PatchNameList") {
+            inline = resolve_list(list, address, remaining, name_bytes)?;
+            &inline
+        } else {
+            let Some(reference) = bank.child_attr("UsesPatchNameList", "Name").and_then(|key| lists.get_key_value(key)) else { continue };
+            match cache.entry((*reference.0, address)) {
                 Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry.insert(resolve_list(reference.1, address, remaining, name_bytes)?),
+            }
+        };
+        for (&address, programs) in resolved {
+            match banks.entry(address) {
                 Entry::Vacant(entry) => {
                     charge_name_bytes(name_bytes, name.len())?;
-                    entry.insert(MidnamBank { name: name.to_owned(), programs: BTreeMap::new() })
+                    entry.insert(MidnamBank { name: name.to_owned(), programs: Arc::clone(programs) });
                 }
-            };
-            charge_name_bytes(name_bytes, label.len())?;
-            bank.programs.insert(program, label.to_owned());
+                Entry::Occupied(mut entry) => {
+                    let current = &mut entry.get_mut().programs;
+                    if Arc::ptr_eq(current, programs) {
+                        continue;
+                    }
+                    if Arc::strong_count(current) > 1 {
+                        charge_programs(name_bytes, current)?;
+                    }
+                    charge_programs(name_bytes, programs)?;
+                    Arc::make_mut(current).extend(programs.iter().map(|(&program, label)| (program, label.clone())));
+                }
+            }
         }
     }
     Ok(banks)
+}
+
+fn charge_programs(remaining: &mut usize, programs: &BTreeMap<u8, String>) -> Result<(), MidnamError> {
+    charge_name_bytes(remaining, programs.values().map(|label| label.len() + std::mem::size_of::<(u8, String)>()).sum())
+}
+
+fn resolve_list(list: &El, address: u16, remaining: &mut usize, name_bytes: &mut usize) -> Result<ResolvedList, MidnamError> {
+    let mut banks = BTreeMap::<u16, BTreeMap<u8, String>>::new();
+    for patch in list.children("Patch") {
+        *remaining = remaining.checked_sub(1).ok_or(MidnamError::TooManyPatches)?;
+        let Some(label) = patch.attr("Name").filter(|label| !label.is_empty()) else { continue };
+        let commands = patch.child("PatchMIDICommands");
+        let Some(program) =
+            commands.and_then(|node| node.child("ProgramChange")).and_then(|pc| byte(pc, "Number")).or_else(|| byte(patch, "ProgramChange"))
+        else {
+            continue;
+        };
+        let Some(address) = bank_select(commands, address) else { continue };
+        charge_name_bytes(name_bytes, label.len() + std::mem::size_of::<(u8, String)>())?;
+        banks.entry(address).or_default().insert(program, label.to_owned());
+    }
+    Ok(banks.into_iter().map(|(address, programs)| (address, Arc::new(programs))).collect())
 }
 
 #[cfg(test)]
@@ -164,8 +258,68 @@ mod tests {
             </MasterDeviceNames></MIDINameDocument>"#)?;
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].channels, Some(1 << 9));
-        assert_eq!(profiles[0].banks[&16256].programs, BTreeMap::from([(0, "Room & Ride".into())]));
-        assert_eq!(profiles[0].banks[&16257].programs, BTreeMap::from([(7, "Big".into())]));
+        assert_eq!(*profiles[0].banks[&16256].programs, BTreeMap::from([(0, "Room & Ride".into())]));
+        assert_eq!(*profiles[0].banks[&16257].programs, BTreeMap::from([(7, "Big".into())]));
+        Ok(())
+    }
+
+    #[test]
+    fn reads_shared_workstation_patch_lists() -> Result<(), MidnamError> {
+        use std::fmt::Write;
+        let mut xml = String::from("<MIDINameDocument><MasterDeviceNames>");
+        for bank in 0..48 {
+            write!(xml, r#"<PatchNameList Name="List {bank}">"#).unwrap();
+            for program in 0..128 {
+                write!(xml, r#"<Patch Name="Voice {bank}-{program}" ProgramChange="{program}"/>"#).unwrap();
+            }
+            xml.push_str("</PatchNameList>");
+        }
+        for channel in 1..=16 {
+            write!(xml, r#"<ChannelNameSet Name="Part {channel}">"#).unwrap();
+            for bank in 0..48 {
+                write!(xml, r#"<PatchBank><MIDICommands><ControlChange Control="32" Value="{bank}"/></MIDICommands><UsesPatchNameList Name="List {bank}"/></PatchBank>"#).unwrap();
+            }
+            xml.push_str("</ChannelNameSet>");
+        }
+        xml.push_str("</MasterDeviceNames></MIDINameDocument>");
+        let profiles = read_midnam(xml.as_bytes())?;
+        assert_eq!(profiles.len(), 16);
+        for profile in profiles {
+            assert_eq!(profile.banks.len(), 48);
+            assert_eq!(profile.banks[&47].programs[&127], "Voice 47-127");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn combines_valid_channel_assignments_across_custom_modes() -> Result<(), MidnamError> {
+        let profiles = read_midnam(br#"<MIDINameDocument><MasterDeviceNames>
+          <CustomDeviceMode><ChannelNameSetAssignments>
+            <ChannelNameSetAssign Channel="1" NameSet="Normal"/>
+            <ChannelNameSetAssign Channel="0" NameSet="Drums"/>
+          </ChannelNameSetAssignments></CustomDeviceMode>
+          <CustomDeviceMode><ChannelNameSetAssignments>
+            <ChannelNameSetAssign Channel="10" NameSet="Drums"/>
+            <ChannelNameSetAssign Channel="17" NameSet="Normal"/>
+            <ChannelNameSetAssign Channel="2" NameSet="Normal"/>
+          </ChannelNameSetAssignments></CustomDeviceMode>
+          <ChannelNameSet Name="Normal"><PatchBank><PatchNameList><Patch Name="Piano" ProgramChange="0"/></PatchNameList></PatchBank></ChannelNameSet>
+          <ChannelNameSet Name="Drums"><PatchBank><PatchNameList><Patch Name="Kit" ProgramChange="0"/></PatchNameList></PatchBank></ChannelNameSet>
+          <ChannelNameSet Name="Other"><AvailableForChannels><AvailableChannel Channel="4"/></AvailableForChannels><PatchBank><PatchNameList><Patch Name="Flute" ProgramChange="0"/></PatchNameList></PatchBank></ChannelNameSet>
+        </MasterDeviceNames></MIDINameDocument>"#)?;
+        assert_eq!((profiles[0].channels, profiles[1].channels, profiles[2].channels), (Some(3), Some(1 << 9), Some(1 << 3)));
+        Ok(())
+    }
+
+    #[test]
+    fn retains_declared_latin1_patch_names() -> Result<(), MidnamError> {
+        let profiles = read_midnam(
+            b"<?xml version='1.0' encoding='ISO-8859-1'?>\
+            <MIDINameDocument><MasterDeviceNames><ChannelNameSet Name='Normal'>\
+            <PatchBank><PatchNameList><Patch Name='Pi\xe9no' ProgramChange='0'/></PatchNameList></PatchBank>\
+            </ChannelNameSet></MasterDeviceNames></MIDINameDocument>",
+        )?;
+        assert_eq!(profiles[0].banks[&0].programs[&0], "Piéno");
         Ok(())
     }
 
@@ -182,7 +336,7 @@ mod tests {
             format!(r#"<MIDINameDocument><MasterDeviceNames><PatchNameList Name="Shared"><Patch Name="{label}" ProgramChange="0"/></PatchNameList>"#);
         for index in 0..65 {
             xml.push_str(&format!(
-                r#"<ChannelNameSet Name="Set {index}"><PatchBank Name="Shared Bank"><UsesPatchNameList Name="Shared"/></PatchBank></ChannelNameSet>"#
+                r#"<ChannelNameSet Name="Set {index}"><PatchBank Name="Shared Bank"><MIDICommands><ControlChange Control="32" Value="{index}"/></MIDICommands><UsesPatchNameList Name="Shared"/></PatchBank></ChannelNameSet>"#
             ));
         }
         xml.push_str("</MasterDeviceNames></MIDINameDocument>");

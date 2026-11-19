@@ -7,6 +7,7 @@ so the crate builds for wasm32.
 |---|---|---|
 | Standard MIDI File (`.mid`, `.midi`), formats 0 and 1 | yes | format 0 or 1 |
 | Standard MIDI File, format 2 | best effort (all tracks share one timeline) | no |
+| MIDINameDocument (`.midnam`) | Named channel sets, banks and programs | no |
 
 RIFF-wrapped MIDI (`.rmi`), System Exclusive dumps (`.syx`) and karaoke lyrics are not here; no
 app reads or writes them.
@@ -93,3 +94,14 @@ These wire helpers are extracted from LoopCraft's `crates/midi/src/sync.rs` at
 The source history credits bflatastic. Transport state and scheduling remain app-owned.
 Tests cover known wire vectors, truncated/invalid input, all song-position input values and
 legacy conversion behavior. No application consumer cutover is claimed by this library addition.
+
+## MIDINameDocument
+
+The reader accepts UTF-8, declared ISO-8859-1 and declared Windows-1252. It combines
+channel assignments across custom modes, falling back to the set's AvailableForChannels.
+An external DOCTYPE is ignored and internal subsets are rejected. Input is limited to
+2 MiB, XML depth to 32, expanded names to 16 MiB, and list expansion to 1,048,576 patch
+visits. Shared patch maps are cached per list and bank address. Bank keys are
+MSB × 128 + LSB. Program Change numbers are used instead of display numbers.
+The last definition for a duplicate list or program number wins. Extended device
+definitions, standard device modes, and note or controller name lists are outside this reader.
