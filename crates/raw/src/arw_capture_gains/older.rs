@@ -614,6 +614,11 @@ mod tests {
     }
 
     fn fixture_payload(order: craft_tiff::ByteOrder, include: bool, plain: &[u8]) -> Vec<u8> {
+        fixture_copies(order, include, plain, 1)
+    }
+
+    /// The gain entry written `copies` times, every copy pointing at the same block.
+    fn fixture_copies(order: craft_tiff::ByteOrder, include: bool, plain: &[u8], copies: u16) -> Vec<u8> {
         use craft_tiff::{IfdBuilder, ImageData, Tiff, TiffWriter, tags as t};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -625,11 +630,13 @@ mod tests {
         raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
         raw.set(t::COMPRESSION, Value::Short(vec![1]));
         let mut maker = Vec::new();
-        order.put_u16(&mut maker, 1);
-        order.put_u16(&mut maker, if include { 0x9405 } else { 0xffff });
-        order.put_u16(&mut maker, 7);
-        order.put_u32(&mut maker, plain.len() as u32);
-        order.put_u32(&mut maker, 0);
+        order.put_u16(&mut maker, copies);
+        for _ in 0..copies {
+            order.put_u16(&mut maker, if include { 0x9405 } else { 0xffff });
+            order.put_u16(&mut maker, 7);
+            order.put_u32(&mut maker, plain.len() as u32);
+            order.put_u32(&mut maker, 0);
+        }
         order.put_u32(&mut maker, 0);
         let n = note(plain);
         let Value::Undefined(payload) = &n.entries[0].value else { panic!("test payload") };
@@ -639,10 +646,25 @@ mod tests {
         let mut bytes = TiffWriter::new(order, false).write(&[raw]).unwrap();
         let tiff = Tiff::parse(&bytes).unwrap();
         let start = tiff.exif().unwrap().get(t::MAKER_NOTE).unwrap().offset as usize;
-        let mut address = Vec::new();
-        order.put_u32(&mut address, (start + 18) as u32);
-        bytes[start + 10..start + 14].copy_from_slice(&address);
+        let payload = start + 6 + 12 * usize::from(copies);
+        for i in 0..usize::from(copies) {
+            let mut address = Vec::new();
+            order.put_u32(&mut address, payload as u32);
+            bytes[start + 10 + 12 * i..start + 14 + 12 * i].copy_from_slice(&address);
+        }
         bytes
+    }
+
+    #[test]
+    fn a_repeated_q12_tag_drops_the_record_in_header_and_full_decode() {
+        for order in [craft_tiff::ByteOrder::Little, craft_tiff::ByteOrder::Big] {
+            for (copies, kept) in [(1, true), (2, false)] {
+                let file = fixture_copies(order, true, &plain(), copies);
+                let (header, full) = (crate::probe_info(&file).unwrap(), crate::decode(&file).unwrap());
+                assert_eq!(header.lens_metadata.sony_capture_gains_q12.is_some(), kept, "{order:?} {copies}");
+                assert_eq!(full.lens_metadata.sony_capture_gains_q12.is_some(), kept, "{order:?} {copies}");
+            }
+        }
     }
 
     #[test]
@@ -655,10 +677,10 @@ mod tests {
                     let raw = crate::decode(&bytes).unwrap();
                     let header = crate::probe_info(&bytes).unwrap();
                     assert_eq!(header.lens_metadata, raw.lens_metadata);
-                    assert_eq!(
-                        header.lens_metadata.sony_capture_gains_q12,
-                        read(&note(&plain)).map(|g| SonyCaptureGainsQ12 { source_bits: Some(16), ..g })
-                    );
+                    let expected = read(&note(&plain)).expect("a supported revision has a record");
+                    // an absent native slot drops that table only
+                    assert_eq!(expected.native_shading.is_some(), present, "{revision:#x}");
+                    assert_eq!(header.lens_metadata.sony_capture_gains_q12, Some(SonyCaptureGainsQ12 { source_bits: Some(16), ..expected }));
                 }
             }
         }
@@ -672,8 +694,8 @@ mod tests {
                 let full = crate::decode(&bytes).unwrap();
                 let header = crate::probe_info(&bytes).unwrap();
                 assert_eq!(header.lens_metadata, full.lens_metadata);
-                let capture = read(&note(&if legacy { legacy_plain() } else { plain() }));
-                assert_eq!(header.lens_metadata.sony_capture_gains_q12, capture.map(|g| SonyCaptureGainsQ12 { source_bits: Some(16), ..g }));
+                let capture = read(&note(&if legacy { legacy_plain() } else { plain() })).expect("a capture record");
+                assert_eq!(header.lens_metadata.sony_capture_gains_q12, Some(SonyCaptureGainsQ12 { source_bits: Some(16), ..capture }));
                 assert!(header.lens_metadata.sony_capture_gains.is_none());
                 assert_eq!(full.data, crate::decode(&fixture(order, false, legacy)).unwrap().data);
                 assert!(full.opcodes.list1.is_empty() && full.opcodes.list2.is_empty() && full.opcodes.list3.is_empty());
@@ -689,21 +711,22 @@ mod tests {
         let rows: Vec<serde_json::Value> = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
         assert!(!rows.is_empty());
         let mut samples = 0usize;
-        for row in &rows {
+        // failures and progress name the inventory row, never the local path or file name
+        for (i, row) in rows.iter().enumerate() {
             let path = row["path"].as_str().unwrap();
             let bytes = std::fs::read(path).unwrap();
             let hash = Sha256::digest(&bytes);
             let header = crate::probe_info(&bytes).unwrap();
             let raw = crate::decode(&bytes).unwrap();
-            assert_eq!(header.lens_metadata, raw.lens_metadata, "{path}");
+            assert_eq!(header.lens_metadata, raw.lens_metadata, "row {i}");
             let got = header.lens_metadata.sony_capture_gains_q12.as_ref().expect("older capture record");
-            assert_eq!(serde_json::to_value(got.gains_q12).unwrap(), row["q12_gains"], "{path}");
-            assert_eq!(serde_json::to_value(got.parameters).unwrap(), row["tail_words"], "{path}");
-            assert_eq!(serde_json::to_value(got.native_shading).unwrap(), row["lens_words"], "{path}");
+            assert_eq!(serde_json::to_value(got.gains_q12).unwrap(), row["q12_gains"], "row {i}");
+            assert_eq!(serde_json::to_value(got.parameters).unwrap(), row["tail_words"], "row {i}");
+            assert_eq!(serde_json::to_value(got.native_shading).unwrap(), row["lens_words"], "row {i}");
             assert!(header.lens_metadata.sony_capture_gains.is_none());
             samples += raw.width * raw.height * raw.cpp;
-            assert_eq!(Sha256::digest(std::fs::read(path).unwrap()), hash, "original changed: {path}");
-            eprintln!("Q12 original/header/full passed: {}", std::path::Path::new(path).file_name().unwrap().to_string_lossy());
+            assert_eq!(Sha256::digest(std::fs::read(path).unwrap()), hash, "original changed: row {i}");
+            eprintln!("Q12 original/header/full passed: row {i}");
         }
         eprintln!("Q12 survey: {} originals, {samples} samples, all hashes unchanged", rows.len());
     }

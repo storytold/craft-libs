@@ -3,10 +3,26 @@
 //! array in product decoding or treat these values as automatic correction opcodes.
 
 use crate::lens_metadata::{SonyCaptureGains, SonyCaptureGainsQ11, SonyNativeShading};
-use craft_tiff::{Ifd, Value};
+use craft_tiff::{ByteOrder, Ifd, Value};
 
 mod older;
 pub(super) use older::{read as read_q12, read_early_rx1, read_slt_nominal};
+
+/// Whether a capture-gain tag (`0x9416`, `0x9405`) occurs more than once in the maker-note directory at `ifd` of
+/// `data`. The TIFF reader keeps only the first of repeated entries, so the readers' own duplicate checks never see
+/// the others; a repeated tag drops the record instead of keeping whichever copy comes first.
+pub(super) fn gain_tag_repeated(data: &[u8], ifd: u64, order: ByteOrder) -> bool {
+    let Some(at) = usize::try_from(ifd).ok() else { return false };
+    let Some(n) = order.read_u16(data, at) else { return false };
+    let mut seen = [0u8; 2];
+    for i in 0..usize::from(n) {
+        let Some(tag) = at.checked_add(2 + 12 * i).and_then(|entry| order.read_u16(data, entry)) else { break };
+        for (count, gain) in seen.iter_mut().zip([0x9416, 0x9405]) {
+            *count = count.saturating_add(u8::from(tag == gain));
+        }
+    }
+    seen.iter().any(|&count| count > 1)
+}
 
 fn encoded_record(note: &Ifd) -> Option<&[u8]> {
     let mut fields = note.entries.iter().filter(|e| e.tag == 0x9416);
@@ -327,6 +343,11 @@ mod tests {
     }
 
     fn fixture(order: craft_tiff::ByteOrder, include: bool) -> Vec<u8> {
+        fixture_with(order, include, 1)
+    }
+
+    /// The gain entry written `copies` times, every copy pointing at the same block.
+    fn fixture_with(order: craft_tiff::ByteOrder, include: bool, copies: u16) -> Vec<u8> {
         use craft_tiff::{IfdBuilder, ImageData, Tiff, TiffWriter, tags as t};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -338,11 +359,13 @@ mod tests {
         raw.set(t::PHOTOMETRIC, Value::Short(vec![t::photometric::CFA]));
         raw.set(t::COMPRESSION, Value::Short(vec![1]));
         let mut maker = Vec::new();
-        order.put_u16(&mut maker, 1);
-        order.put_u16(&mut maker, if include { 0x9416 } else { 0xffff });
-        order.put_u16(&mut maker, 7);
-        order.put_u32(&mut maker, 4416);
-        order.put_u32(&mut maker, 0); // Patch to an absolute offset once the writer locates the note.
+        order.put_u16(&mut maker, copies);
+        for _ in 0..copies {
+            order.put_u16(&mut maker, if include { 0x9416 } else { 0xffff });
+            order.put_u16(&mut maker, 7);
+            order.put_u32(&mut maker, 4416);
+            order.put_u32(&mut maker, 0); // Patch to an absolute offset once the writer locates the note.
+        }
         order.put_u32(&mut maker, 0);
         maker.extend(encode(&plain()));
         raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::MAKER_NOTE, Value::Undefined(maker)));
@@ -350,10 +373,26 @@ mod tests {
         let mut bytes = TiffWriter::new(order, false).write(&[raw]).unwrap();
         let tiff = Tiff::parse(&bytes).unwrap();
         let start = tiff.exif().unwrap().get(t::MAKER_NOTE).unwrap().offset as usize;
-        let mut address = Vec::new();
-        order.put_u32(&mut address, (start + 18) as u32);
-        bytes[start + 10..start + 14].copy_from_slice(&address);
+        let payload = start + 6 + 12 * usize::from(copies);
+        for i in 0..usize::from(copies) {
+            let mut address = Vec::new();
+            order.put_u32(&mut address, payload as u32);
+            bytes[start + 10 + 12 * i..start + 14 + 12 * i].copy_from_slice(&address);
+        }
         bytes
+    }
+
+    #[test]
+    fn a_repeated_gain_tag_drops_the_record_in_header_and_full_decode() {
+        // the TIFF reader keeps the first of repeated entries; the record must not survive on that copy
+        for order in [craft_tiff::ByteOrder::Little, craft_tiff::ByteOrder::Big] {
+            for (copies, kept) in [(1, true), (2, false)] {
+                let file = fixture_with(order, true, copies);
+                let (header, full) = (crate::probe_info(&file).unwrap(), crate::decode(&file).unwrap());
+                assert_eq!(header.lens_metadata.sony_capture_gains.is_some(), kept, "{order:?} {copies}");
+                assert_eq!(full.lens_metadata.sony_capture_gains.is_some(), kept, "{order:?} {copies}");
+            }
+        }
     }
 
     #[test]
