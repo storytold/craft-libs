@@ -78,6 +78,40 @@ fn due_picks_dirty_changed_documents_each_interval() {
     assert_eq!(timer.deadline(), None);
 }
 
+// The deadline wakes the window only while something waits to be autosaved: none when every
+// document is clean, autosaved or being written; back on an edit or a failed write.
+#[test]
+fn the_deadline_is_none_while_nothing_waits_to_be_autosaved() {
+    let minute = Duration::from_secs(60);
+    let t0 = Instant::now();
+    let mut timer = Autosave::new(Some(minute));
+    timer.due(t0, [doc(1, 1, false)]);
+    assert_eq!(timer.deadline(), None, "a clean document has nothing to save");
+    timer.due(t0 + minute / 2, [doc(1, 2, true)]);
+    assert!(timer.deadline().is_some(), "an edit brings the deadline back");
+    assert_eq!(timer.due(t0 + minute, [doc(1, 2, true)]).save, vec![1]);
+    assert_eq!(timer.deadline(), None, "the revision is being written");
+    assert_eq!(timer.finished(1, 2, Ok(())), None);
+    timer.due(t0 + minute * 2, [doc(1, 2, true)]);
+    assert_eq!(timer.deadline(), None, "the revision is autosaved");
+    timer.due(t0 + minute * 5 / 2, [doc(1, 3, true)]);
+    assert!(timer.deadline().is_some());
+    assert_eq!(timer.due(t0 + minute * 3, [doc(1, 3, true)]).save, vec![1]);
+    assert!(timer.finished(1, 3, Err("disk full".into())).is_some());
+    assert!(timer.deadline().is_some(), "a failed revision is tried again");
+}
+
+// An autosave after the recovery folder was removed (a cleaner, the user) makes it again.
+#[test]
+fn a_write_after_the_folder_was_removed_makes_it_again() {
+    let scratch = Scratch::new();
+    let dir = scratch.0.join("Recovery");
+    let store = RecoveryStore::open(&dir).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    store.write(1, &meta("a.psd", 1), b"work").unwrap();
+    assert_eq!(std::fs::read(dir.join(format!("{}.pcraft", store.key(1)))).unwrap(), b"work");
+}
+
 // A copy written by a run that is gone is a leftover; one of a live instance (its lock held) is
 // not; discard removes copy and sidecar.
 #[test]

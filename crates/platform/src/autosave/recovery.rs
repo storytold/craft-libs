@@ -168,8 +168,11 @@ impl RecoveryStore {
         adopted.get(&id).cloned().unwrap_or_else(|| format!("doc-{}-{id}", self.session))
     }
 
-    /// Writes a copy of document `id`; call from a job.
+    /// Writes a copy of document `id`; call from a job. Makes the folder again if it was removed
+    /// since the store opened.
+    // pdfcraft: crates/ui-egui/src/persist/recovery.rs:215 (create_dir before the write)
     pub fn write(&self, id: u64, meta: &RecoveryMeta, bytes: &[u8]) -> std::io::Result<()> {
+        create_private_dir(&self.dir)?;
         let key = self.key(id);
         let mut meta = meta.clone();
         meta.extension = sanitize_extension(&meta.extension);

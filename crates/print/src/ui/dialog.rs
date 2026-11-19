@@ -16,7 +16,7 @@ use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{
-    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamRows, set_color_field, set_param_field,
+    DialogFields, FieldValue, FormDialog, HostRequests, PagerStep, PanePager, Param, ParamKind, ParamRows, set_color_field,
 };
 use craft_ui::primitives::{ContentPainterCx, TextRun, Wrap, fill_polygon};
 use craft_ui::runtime::env::{Env, Label};
@@ -1231,7 +1231,9 @@ impl StackDialog for HostedPrint {
     }
 
     /// The `Settings` keys (`printer`, `copies`, `duplex`, `grayscale`, `collate`) and each section parameter's value as
-    /// [`DialogFields`] serializes it. `printer` is the printer's name, or `null` for Save as PDF.
+    /// [`DialogFields`] serializes it. `printer` is the printer's name, or `null` for Save as PDF. With a preview pager,
+    /// `sheet` is the sheet it shows (from 1) and `sheets` how many there are. `notes` lists the keys of the sections'
+    /// read-only text rows ([`Param::read_only_text`]) the values show, in order: what the dialog tells the user.
     fn json_fields(&self) -> Option<serde_json::Value> {
         let mut map = match serde_json::to_value(&self.fields).ok()? {
             serde_json::Value::Object(map) => map,
@@ -1247,6 +1249,13 @@ impl StackDialog for HostedPrint {
         map.insert("duplex".to_owned(), duplex_json(settings.duplex));
         map.insert("grayscale".to_owned(), settings.grayscale.into());
         map.insert("collate".to_owned(), settings.collate.into());
+        if let Some(pager) = &self.preview_pager {
+            map.insert("sheet".to_owned(), pager.shown.into());
+            map.insert("sheets".to_owned(), pager.count.into());
+        }
+        let notes = self.sections.iter().flat_map(|section| &section.params);
+        let notes = notes.filter(|param| matches!(param.kind, ParamKind::ReadOnlyText { .. }) && param.visible(&self.fields));
+        map.insert("notes".to_owned(), notes.map(|param| serde_json::Value::from(param.key.clone())).collect());
         if let Some(form) = &self.json_form {
             form(&self.fields, &mut map);
         }
@@ -1255,7 +1264,9 @@ impl StackDialog for HostedPrint {
 
     /// Sets a `Settings` key, or a section parameter through the shared parameter-field rule. `printer` takes a listed
     /// printer's name, or `null` for Save as PDF where the layout offers it; the write is a choice the app takes with
-    /// [`take_printer_chosen`](HostedPrint::take_printer_chosen).
+    /// [`take_printer_chosen`](HostedPrint::take_printer_chosen). A section parameter's set is recorded as an edit of its
+    /// row, as the user's is ([`HostRequests::set_field`]): the app reads it with `take_edited` in its next pass, so
+    /// the app's own value does not overwrite it.
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
         match field {
             "printer" => {
@@ -1281,7 +1292,7 @@ impl StackDialog for HostedPrint {
                 let section =
                     self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));
                 let section = section.ok_or_else(|| FieldRefusal::Unknown.message(field))?;
-                return set_param_field(&section.params, &mut self.fields, field, value);
+                return self.requests.set_field(&section.params, &mut self.fields, field, value);
             }
         }
         Ok(())

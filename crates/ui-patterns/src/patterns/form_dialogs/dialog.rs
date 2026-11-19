@@ -7,7 +7,7 @@ use crate::runtime::requests::{ColorRequest, EyedropperRequest, HostAnswer, List
 
 use super::form::{FormDialog, FormDialogWords};
 use super::host_requests::HostRequests;
-use super::param::{Param, ParamKind, edited_rows, open_fields, set_color_field};
+use super::param::{Param, ParamKind, open_fields, set_color_field};
 use super::preview::{PagerStep, PaneOverlay, PanePager, PreviewPane, PreviewState, PreviewView, PreviewZoom};
 
 use super::rows::{ParamRows, ParamRowsOutput};
@@ -1082,7 +1082,9 @@ type Build = dyn for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send;
 ///   capture a picture that changes; [`is_previewing`](HostedParamDialog::is_previewing) and
 ///   [`is_comparing`](HostedParamDialog::is_comparing) say what to render.
 /// - What the host's jobs find about the values comes the same way: the lines under the rows from
-///   [`set_notes`](HostedParamDialog::set_notes), and whether OK can be pressed from
+///   [`set_notes`](HostedParamDialog::set_notes), a row's label and whether it shows from
+///   [`set_param_label`](HostedParamDialog::set_param_label) and [`set_param_shown`](HostedParamDialog::set_param_shown),
+///   and whether OK can be pressed from
 ///   [`set_ready`](HostedParamDialog::set_ready). What the values alone decide stays in `build`.
 /// - With [`held_ok`](HostedParamDialog::held_ok), OK files its answer for the host to check
 ///   ([`take_ok`](HostedParamDialog::take_ok)) and the dialog waits, OK disabled, for
@@ -1120,6 +1122,8 @@ pub struct HostedParamDialog {
     tint: Option<DataColor>,
     /// The lines under the rows the host last gave (`set_notes`).
     notes: Vec<Label>,
+    /// The row labels and shown states the host last gave (`set_param_label`, `set_param_shown`).
+    rows: HostRows,
     /// Whether the host lets OK be pressed, and why not (`set_ready`).
     ready: Result<(), Label>,
     /// The tab a tabbed dialog shows: bound to the dialog's `tab` prop, so the host sets it before a pass.
@@ -1140,6 +1144,44 @@ pub struct HostedParamDialog {
 struct ShownState {
     comparing: bool,
     centre: Option<Pos2>,
+}
+
+/// What a [`HostedParamDialog`]'s host says about rows `build` makes, by row key: the label, and whether the row shows.
+#[derive(Default)]
+struct HostRows {
+    labels: Vec<(String, Label)>,
+    shown: Vec<(String, bool)>,
+}
+
+impl HostRows {
+    /// Puts `value` under `key`, replacing what `key` had.
+    fn put<T>(list: &mut Vec<(String, T)>, key: String, value: T) {
+        match list.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, old)) => *old = value,
+            None => list.push((key, value)),
+        }
+    }
+
+    /// Gives the rows of `dialog`, shared and in every tab, the host's labels and shown states.
+    fn apply(&self, dialog: &mut ParamDialog<'_>) {
+        if self.labels.is_empty() && self.shown.is_empty() {
+            return;
+        }
+        let apply = |params: &mut [Param]| {
+            for param in params {
+                if let Some((_, label)) = self.labels.iter().find(|(key, _)| *key == param.key) {
+                    param.label = label.clone();
+                }
+                if let Some((_, shown)) = self.shown.iter().find(|(key, _)| *key == param.key) {
+                    param.shown = *shown;
+                }
+            }
+        };
+        apply(dialog.params.to_mut());
+        for tab in &mut dialog.tabs {
+            apply(&mut tab.params);
+        }
+    }
 }
 
 impl HostedParamDialog {
@@ -1174,6 +1216,7 @@ impl HostedParamDialog {
             overlay: None,
             tint: None,
             notes: Vec::new(),
+            rows: HostRows::default(),
             ready: Ok(()),
             tab: 0,
             shown: ShownState::default(),
@@ -1267,6 +1310,19 @@ impl HostedParamDialog {
     /// as they change. An empty list shows none.
     pub fn set_notes(&mut self, notes: Vec<Label>) {
         self.notes = notes;
+    }
+
+    /// Sets the label of the row `key` from the next pass on, over the one `build` gives: when the words come from the
+    /// host's jobs (the pages a box applies to), which `build` cannot capture as they change.
+    pub fn set_param_label(&mut self, key: impl Into<String>, label: impl Into<Label>) {
+        HostRows::put(&mut self.rows.labels, key.into(), label.into());
+    }
+
+    /// Sets whether the row `key` shows from the next pass on, over `build`'s [`Param::shown`]: when the host's jobs
+    /// decide it (a box offered only when a check finds something). A hidden row takes no space and refuses a set
+    /// through automation, as one hidden by [`Param::visible_when`]; its value stays in the fields and the result.
+    pub fn set_param_shown(&mut self, key: impl Into<String>, shown: bool) {
+        HostRows::put(&mut self.rows.shown, key.into(), shown);
     }
 
     /// Sets whether the host lets OK be pressed from the next pass on: `Err` disables OK, Enter and `confirm`, with
@@ -1499,6 +1555,7 @@ impl StackDialog for HostedParamDialog {
         // A measuring run keeps the centre: the real run of the pass takes it.
         let centre = if measuring { self.centre } else { self.centre.take() };
         let mut dialog = (self.build)(&mut self.fields);
+        self.rows.apply(&mut dialog);
         self.previews = dialog.previews;
         dialog = dialog
             .preview_on(Bind::bound(&mut self.preview_on))
@@ -1621,20 +1678,16 @@ impl StackDialog for HostedParamDialog {
     /// Keeps `value` when the row `field` names (a parameter or its unit choice) is shown, takes input, and takes
     /// the value ([`set_param_field`]).
     fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
-        let ParamDialog { params, tabs, read_only, .. } = (self.build)(&mut self.fields);
+        let (params, read_only) = {
+            let mut dialog = (self.build)(&mut self.fields);
+            self.rows.apply(&mut dialog);
+            let ParamDialog { params, tabs, read_only, .. } = dialog;
+            (every_param(params, &tabs).into_owned(), read_only)
+        };
         if read_only {
             return Err(FieldRefusal::Inactive.message(field));
         }
-        let params = every_param(params, &tabs).into_owned();
-        let before = self.fields.clone();
-        set_param_field(&params, &mut self.fields, field, value)?;
-        for param in params.iter().filter(|param| matches!(param.kind, ParamKind::Files { .. })) {
-            if let Some(request) = param.listing_after(&before, &self.fields) {
-                self.requests.request_listing(request);
-            }
-        }
-        self.requests.request_edited(edited_rows(&params, &before, &self.fields));
-        Ok(())
+        self.requests.set_field(&params, &mut self.fields, field, value)
     }
 
     /// Shows a child picker's live colour in the colour row `key`, as [`HostedParamDialog::preview_color`] does.

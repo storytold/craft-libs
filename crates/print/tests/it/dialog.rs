@@ -6,11 +6,12 @@ use std::sync::mpsc::channel;
 
 use craft_behavior::EditEvent;
 use craft_print::ui::{
-    Destination, DriverControls, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSheet, Printer, Settings, SheetPage, State,
+    Destination, DriverControls, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSection, PrintSheet, Printer, Settings, SheetPage,
+    State,
 };
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, PanePager, Param};
 use craft_ui::primitives::TextureCache;
 use craft_ui::runtime::env::{Label, Scale};
 use craft_ui::testing::{Fixture, trial};
@@ -127,6 +128,38 @@ fn the_json_form_adds_to_the_listing() {
     let listed = dialog.json_fields().expect("a listing");
     assert_eq!(listed["paper"], serde_json::json!([432.0, 792.0]));
     assert!(listed.get("copies").is_some(), "the settings keys stay");
+}
+
+/// The listing carries the preview pager's sheet and count, and the keys of the note rows the values show: a note
+/// whose row is hidden is not listed.
+#[trial]
+fn the_listing_carries_the_pager_and_the_shown_notes() {
+    let notes = vec![
+        Param::read_only_text("note.shown", Label::default(), "Printed as asked."),
+        Param::read_only_text("note.hidden", Label::default(), "Two-sided is off.").visible_when("two_sided", FieldValue::Bool(true)),
+        Param::parse_list(r#"{"range":1..9=1}"#).remove(0),
+    ];
+    let mut dialog = HostedPrint::new(State::default(), DialogFields::default(), vec![PrintSection::new("Paper", notes)]);
+    dialog.set_preview_pager(Some(PanePager { shown: 2, count: 3, ..PanePager::default() }));
+    let listed = dialog.json_fields().expect("a listing");
+    assert_eq!((listed["sheet"].as_u64(), listed["sheets"].as_u64()), (Some(2), Some(3)));
+    assert_eq!(listed["notes"], serde_json::json!(["note.shown"]), "only the shown note rows, and no other row");
+
+    dialog.fields_mut().set("two_sided", FieldValue::Bool(true));
+    assert_eq!(dialog.json_fields().expect("a listing")["notes"], serde_json::json!(["note.shown", "note.hidden"]));
+}
+
+/// A section value set through automation is recorded as an edit of its row, as the user's edit is, so the app's pass
+/// that writes its own values back leaves it; a settings key is no row.
+#[trial]
+fn a_section_value_set_through_automation_is_an_edit() {
+    let rows = PrintSection::new("Pages", Param::parse_list(r#"{"range":1..9=1}"#));
+    let mut dialog = HostedPrint::new(State::default(), DialogFields::default(), vec![rows]);
+    let ctx = egui::Context::default();
+    dialog.set_json_field(&ctx, "range", serde_json::json!(4)).expect("the range row takes a number");
+    dialog.set_json_field(&ctx, "copies", serde_json::json!(2)).expect("copies takes a count");
+    assert_eq!(dialog.requests_mut().take_edited(), ["range"]);
+    assert_eq!(dialog.fields_mut().number("range"), Some(4.0));
 }
 
 /// A held print dialog over the printer "Office", in a `DialogHost` run every pass. While `twice` is on, egui runs each
