@@ -32,8 +32,8 @@ fn selected(alpha_selected: bool, barrier: Arc<Barrier>) {
     assert!(registry.install_story_sets());
     let mut fixture = Fixture::new(|_| {});
     fixture.settle();
-    let alpha_label = resolve(fixture.ctx(), Alpha::Run).label;
-    let beta_label = resolve(fixture.ctx(), Beta::Run).label;
+    let alpha_label = resolve(fixture.ctx(), Alpha::Run).label.clone();
+    let beta_label = resolve(fixture.ctx(), Beta::Run).label.clone();
     assert_eq!(alpha_label.as_ref() == "Subset Alpha", alpha_selected);
     assert_eq!(beta_label.as_ref() == "Subset Beta", !alpha_selected);
 }
