@@ -460,6 +460,16 @@ pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand
     board::resolve_global(ctx, &command.into())
 }
 
+/// A resolver for the commands as the context of `ui` shows them, as [`Commands::resolve_command`] does for a
+/// component's context: the label, icon, chord and state with the scoped bindings of the scopes above `ui`, `None`
+/// for a scoped command with no instance above. For a memoized view, which has no component context to ask; the
+/// answer is a tracked read of the command's state.
+pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<ResolvedCommand> + 'static {
+    let ctx = ui.ctx().clone();
+    let chain = crate::runtime::env::Env::of(ui).view().command_chain().clone();
+    move |command| board::resolve_scoped(&ctx, &chain, &command)
+}
+
 /// The keys `command` has in the runtime's keymap: its defaults under the user's overrides (`CommandInput`), on the
 /// window's platform, double presses included. Empty before the first frame.
 pub fn bindings(ctx: &Context, command: &CommandRef) -> Vec<Binding> {

@@ -890,6 +890,27 @@ impl MemoProps for craft_behavior::kurbo::Size {
     }
 }
 
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::Axis {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::overlay::Side {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_behavior::PixelSize {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 impl MemoProps for craft_behavior::fit::FitKeep {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);

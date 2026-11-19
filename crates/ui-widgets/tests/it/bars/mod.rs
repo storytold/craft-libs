@@ -4,4 +4,5 @@ mod bar;
 mod breadcrumb;
 mod constraint_fields;
 mod items;
+mod memo;
 mod overflow;
