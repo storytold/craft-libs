@@ -178,13 +178,19 @@ impl<'a> Msg<'a> {
     fn f32s(&self, num: u64, max: usize) -> Option<Vec<f32>> {
         let mut out = Vec::new();
         for v in self.all(num) {
+            // checked before copying, so an oversized packed record is refused without being copied
+            let count = match v {
+                Val::Fixed32(_) => 1,
+                Val::Bytes(b) if b.len() % 4 == 0 => b.len() / 4,
+                _ => return None,
+            };
+            if count > max.saturating_sub(out.len()) {
+                return None;
+            }
             match v {
                 Val::Fixed32(x) => out.push(f32::from_bits(x)),
-                Val::Bytes(b) if b.len() % 4 == 0 => out.extend(b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c))),
+                Val::Bytes(b) => out.extend(b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c))),
                 _ => return None,
-            }
-            if out.len() > max {
-                return None;
             }
         }
         Some(out)
@@ -734,6 +740,11 @@ mod tests {
         assert_eq!(grid_gains(&long, &[(0, 1.0)], 0), None);
         let ragged = [bytes(3, &floats(&want)[..35])];
         assert_eq!(grid_gains(&ragged, &[(0, 1.0)], 0), None);
+        // a record is measured against the room left before it is copied: exactly `max` fits, one more doesn't
+        let m = [f32f(1, 1.0), bytes(1, &floats(&[2.0; 8]))].concat();
+        let m = Msg::parse(&m).unwrap();
+        assert_eq!(m.f32s(1, 9).map(|v| v.len()), Some(9));
+        assert_eq!(m.f32s(1, 8), None);
     }
 
     /// The mirror position and the grids' keys are signed: read unsigned, a grid at -5 was 2^64 - 5, the farthest
