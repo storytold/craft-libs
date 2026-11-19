@@ -13,11 +13,10 @@ mod stories;
 
 use std::ops::RangeInclusive;
 
-use craft_behavior::{EditEvent, NumberCodec};
+use craft_behavior::{ColumnWidth, EditEvent, NumberCodec};
 use craft_theme::variant::Tone;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{Bind, EditResponse, Entry, FieldLayout, Pattern, Props, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger};
-use craft_behavior::ColumnWidth;
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::{Grid, Row};
