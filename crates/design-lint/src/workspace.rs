@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::contract::RuleScope;
+use crate::contract::{FS, RuleScope};
 use crate::graph::{Metadata, Package};
 use crate::layers::{LayerMaps, relative};
 use crate::resolve::Index;
@@ -118,6 +118,99 @@ fn places(key: &str) -> Vec<Place> {
         "test/kit" => vec![place("craft-ui-contract", &["testing"])],
         _ => Vec::new(),
     }
+}
+
+/// Locations of `contract/no-global-state` where everything is allowed, as path prefixes relative to the repository
+/// root, as in findings.
+const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
+    // Framework runtime: the state the memoized views read through environment keys.
+    "crates/ui-contract/src/runtime",
+    // Test helpers.
+    "crates/ui-contract/src/testing",
+    // Compile-time code, not a view: the proc macro reads the compiling crate's Cargo.toml.
+    "crates/ui-macros/src/component.rs",
+];
+
+/// The reviewed per-item allowlist of `contract/no-global-state`: a file and what it may hold, either the identifier of
+/// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact or environment key that
+/// covers it, or the later task of craft-libs#2336 that removes the state. A new item in these files is flagged.
+const NO_GLOBAL_STATE: &[(&str, &str)] = &[
+    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
+    ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
+    // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
+    ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "UBUNTU_LIGHT"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "NOTO_EMOJI"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "EMOJI_ICON_FONT"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "INTER_REGULAR"),
+    ("crates/ui-contract/src/fonts/defaults.rs", "INTER_SEMIBOLD"),
+    // Environment fact (font environment): the system font index and the locale list derived from it, the font
+    // providers, the system UI face and its repaint waiters.
+    ("crates/ui-contract/src/fonts/system/fontique.rs", "INDEX"),
+    ("crates/ui-contract/src/fonts/system/fontique.rs", "HAN_LOCALES"),
+    ("crates/ui-contract/src/fonts/system/mod.rs", "PROVIDERS"),
+    ("crates/ui-contract/src/fonts/system/ui_face.rs", "FACE"),
+    ("crates/ui-contract/src/fonts/system/ui_face.rs", "WAITING"),
+    // Environment fact (font environment): the scan of the font folders and the font files read from them.
+    ("crates/ui-contract/src/fonts/on_demand/files.rs", "FILES"),
+    ("crates/ui-contract/src/fonts/on_demand/files.rs", "SCAN"),
+    ("crates/ui-contract/src/fonts/on_demand/files.rs", FS),
+    ("crates/ui-contract/src/fonts/on_demand.rs", FS),
+    // Environment fact: the icon-set registry, filled at app start before the first pass.
+    ("crates/ui-contract/src/primitives/svg_set.rs", "APPS"),
+    // Settled fact: the thumbnail texture cache, keyed by its content.
+    ("crates/ui-contract/src/primitives/textures/thumbnails.rs", "MADE"),
+    // Settled fact: the log-once set of unknown token names; it has no effect on output.
+    ("crates/ui-contract/src/style/tokens.rs", "REPORTED"),
+    // Settled fact: the viewer's component catalog, computed once from compile-time input and immutable after init.
+    ("crates/ui-gallery/src/viewer/catalog.rs", "CATALOG"),
+    // Settled fact: reads a file the user dropped, in the drop handler and not during the pass.
+    ("crates/ui-gallery/src/chrome/shell.rs", FS),
+    // Settled fact: the fallback text format, computed once from constants and immutable after init.
+    ("crates/ui-canvas/src/canvas/tool.rs", "FALLBACK"),
+    // Settled fact: the identity curve, computed once from constants and immutable after init.
+    ("crates/imaging/src/ui/curve/preview.rs", "IDENTITY"),
+    // Settled fact: the default layer-style draft and its preview paint, computed once from constants.
+    ("crates/imaging/src/ui/layer_style/hosted.rs", "DRAFT"),
+    ("crates/imaging/src/ui/layer_style/hosted.rs", "PAINT"),
+    // Settled fact: a test fake of the font store; it writes a temporary folder.
+    ("crates/font-manager/src/store/fake.rs", FS),
+    // later task of #2336: the dock node id counter is hidden state.
+    ("crates/behavior/src/dock/node.rs", "NEXT"),
+    // later task of #2336: the brush trail id counter is hidden state.
+    ("crates/ui-canvas/src/canvas_controls/brush/trail.rs", "NEXT_ID"),
+    // later task of #2336: the outline hover generation counter is hidden state.
+    ("crates/ui-canvas/src/canvas_controls/outline/hover.rs", "GENERATIONS"),
+    // later task of #2336: the texture serial counter is hidden state.
+    ("crates/imaging/src/ui/transform_preview/textures.rs", "SERIAL"),
+    // later task of #2336: the mock image read cache is hidden state.
+    ("crates/imaging/src/ui/mock_image.rs", "READS"),
+    // later task of #2336: the ranking cache is hidden state.
+    ("crates/font-manager/src/picker/rank.rs", "CACHE"),
+    // later task of #2336: the face loader reads file sizes during the pass.
+    ("crates/font-manager/src/panel/faces.rs", FS),
+    // later task of #2336: the gallery's set of seen names is hidden state.
+    ("crates/ui-gallery/src/viewer/layout.rs", "NAMES"),
+    // later task of #2336: the LUT picker reads the process clock and scans folders during the pass.
+    ("crates/color-ui/src/ui/lut_picker.rs", "START"),
+    ("crates/color-ui/src/ui/lut_picker.rs", FS),
+];
+
+/// Files that may read a clock (`contract/motion:clock`) beyond the runtime's motion module. A file key, because
+/// color-ui has no layer map.
+const MOTION_CLOCK_FILES: &[&str] = &[
+    // later task of #2336: the LUT picker reads the process clock during the pass.
+    "crates/color-ui/src/ui/lut_picker.rs",
+];
+
+/// Whether `what` (an item identifier or [`FS`]) may be declared or used in `file` for `contract/no-global-state`.
+/// Stories hold constant demo data and pure caches of it (the owner's rule allows caches of pure test data).
+fn no_global_state_allows(what: &str, file: &Path) -> bool {
+    NO_GLOBAL_STATE_PREFIXES.iter().any(|prefix| file.starts_with(prefix))
+        || file.components().any(|c| c.as_os_str() == "stories")
+        || file.file_stem().is_some_and(|stem| stem == "stories")
+        || NO_GLOBAL_STATE.iter().any(|(path, item)| *item == what && file == Path::new(path))
 }
 
 struct CrateInfo {
@@ -287,6 +380,12 @@ fn has_prefix(path: &[String], prefix: &[&str]) -> bool {
 impl RuleScope for WorkspaceScope {
     fn allows(&self, key: &str, file: &Path) -> bool {
         let Some(krate) = self.crate_of(file) else { return false };
+        if let Some(what) = key.strip_prefix("contract/no-global-state:") {
+            return no_global_state_allows(what, file);
+        }
+        if key == "contract/motion:clock" && MOTION_CLOCK_FILES.iter().any(|f| file == Path::new(f)) {
+            return true;
+        }
         if key == "test/layout" {
             return file.starts_with(krate.dir.join("tests").join("it"));
         }
@@ -335,6 +434,20 @@ pub fn check_workspace(root: &Path, config: &Config, meta: &Metadata) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_global_state_allowlist_is_per_item() {
+        let memo = Path::new("crates/ui-contract/src/contract/memo.rs");
+        assert!(no_global_state_allows("MemoProps", memo));
+        assert!(!no_global_state_allows("MemoProps", Path::new("crates/ui-contract/src/contract/entry.rs")));
+        assert!(!no_global_state_allows("SOMETHING", memo));
+        let file = Path::new("crates/imaging/src/ui/curve/preview.rs");
+        assert!(no_global_state_allows("IDENTITY", file));
+        assert!(!no_global_state_allows("SECOND", file), "a new static in an allowlisted file is flagged");
+        assert!(!no_global_state_allows(FS, file));
+        assert!(no_global_state_allows("ANYTHING", Path::new("crates/ui-contract/src/runtime/focus.rs")));
+        assert!(no_global_state_allows("ANYTHING", Path::new("crates/x/src/ui/stories.rs")));
+    }
 
     fn package(name: &str, features: &str, dependencies: &[&str]) -> String {
         format!(r#"{{"name":"{name}","features":{{{features}}},"dependencies":[{}],"targets":[]}}"#, dependencies.join(","))
