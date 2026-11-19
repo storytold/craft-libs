@@ -12,7 +12,7 @@ use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
-use craft_ui::runtime::commands::{self, CommandRef, FirePhase, FireSource};
+use craft_ui::runtime::commands::{self, AppCatalog, Binding, CommandDef, CommandInput, CommandRef, CommandSet as _, FirePhase, FireSource, Scope};
 use craft_ui::runtime::frame;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::NumberField;
@@ -311,6 +311,57 @@ fn the_view_commands_a_canvas_runs_are_in_the_frame_output_whatever_fired_them()
         delivered,
         [(CommandRef::from(ViewCommands::FitOnScreen), FireSource::Key), (CommandRef::from(ViewCommands::ZoomIn), FireSource::Menu)]
     );
+}
+
+/// The app command the zoom-chord trials bind to Cmd/Ctrl+=, as a word processor's Subscript.
+const SUBSCRIPT: &str = "canvasTrial.subscript";
+
+/// What Cmd/Ctrl+= does with a focused canvas, over a document with `document` (without one the canvas offers no view
+/// command), under an app catalog binding it to `SUBSCRIPT` that drops Zoom In's default chords with `dropped`: the app
+/// commands it fired, and whether the canvas zoomed in.
+fn ctrl_equals(document: bool, dropped: bool) -> (Vec<String>, bool) {
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").view(given);
+        let canvas = if document { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        shown.set(canvas.show(ui, |_, _| {}).output.view.unwrap_or(given));
+    });
+    fixture.os(Platform::Linux);
+    let binding = Binding::parse("Cmd+=").expect("the trial's chord parses");
+    let catalog = AppCatalog::new(vec![CommandDef::new(SUBSCRIPT, "Subscript", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    let catalog = if dropped { catalog.replace_defaults(ViewCommands::ZoomIn.id(), Vec::new()) } else { catalog };
+    fixture.commands(CommandInput::new().catalog(catalog));
+    fixture.settle();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    fixture.click(&canvas);
+    frame::take_output(fixture.ctx());
+    let before = view.get().zoom;
+    fixture.key(Key::Equals, Modifiers::COMMAND);
+    fixture.frame(vec![]);
+    let fired = frame::take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect();
+    (fired, view.get().zoom > before)
+}
+
+/// By default a focused canvas's Zoom In takes Cmd/Ctrl+= from the app's binding of it: its scope is around the focus.
+#[trial]
+fn a_focused_canvas_zooms_in_on_its_chord_by_default() {
+    assert_eq!(ctrl_equals(true, false), (Vec::new(), true));
+}
+
+/// An app whose own command owns the chord (Word's Ctrl+= is Subscript) drops Zoom In's default through its catalog:
+/// the chord is the app's while the canvas has the focus, and the canvas's Zoom In stays for menus and buttons.
+#[trial]
+fn an_app_catalog_drops_the_canvas_s_zoom_chord_for_its_own_command() {
+    assert_eq!(ctrl_equals(true, true), (vec![SUBSCRIPT.to_owned()], false));
+}
+
+/// A canvas that offers no Zoom In (no document) leaves its chord to the app's binding instead of swallowing it.
+#[trial]
+fn a_canvas_s_unavailable_view_command_leaves_its_chord_to_the_app() {
+    assert_eq!(ctrl_equals(false, false), (vec![SUBSCRIPT.to_owned()], false));
 }
 
 #[trial]
