@@ -97,16 +97,25 @@ impl Lazy {
     }
 
     /// [`show`](Self::show) for a child that may leave its room to other content: `add` runs first and settles; when
-    /// it returns `None`, `otherwise` runs in the same child `Ui` and the run is not kept, so a settling child runs
-    /// again in the next pass rather than replay it. A dock group's host view is one: where the host leaves the group
-    /// to the dock, the dock's group shows in its place and settles by its own rules. `None` when the child did not
-    /// run: it replayed a run of `add`, or was out of view.
+    /// it returns `None`, `otherwise` runs in the child's room and the run is not kept, so a settling child runs again
+    /// in the next pass rather than replay it. A dock group's host view is one: where the host leaves the group to the
+    /// dock, the dock's group shows in its place and settles by its own rules. `None` when the child did not run: it
+    /// replayed a run of `add`, or was out of view.
+    ///
+    /// `add` runs in a `Ui` of its own that takes room only when it shows, so `otherwise` takes the child's whole room
+    /// from its start, and the child's extent is the same whether `otherwise` runs or replays.
     pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>> {
-        self.run(ui, |ui, run| match add(ui) {
-            Some(shown) => Ok(shown),
-            None => {
-                run.unkept(ui.ctx());
-                Err(otherwise(ui))
+        self.run(ui, |ui, run| {
+            let mut own = alloc::child(ui, UiBuilder::new().max_rect(ui.max_rect()).layout(*ui.layout()));
+            match add(&mut own) {
+                Some(shown) => {
+                    alloc::advance_past(ui, own.min_rect());
+                    Ok(shown)
+                }
+                None => {
+                    run.unkept(ui.ctx());
+                    Err(otherwise(ui))
+                }
             }
         })
     }
