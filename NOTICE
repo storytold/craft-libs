@@ -108,6 +108,14 @@ Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors. The format imp
 clean-room work based on their public specifications; dependency licences and X.Org's `rgb.txt`
 attribution are listed in ATTRIBUTION.md.
 
+crates/develop (craft-develop) is moved from LightCraft, module by module:
+- src/inpaint.rs and src/inpaint/ from crates/inpaint (lightcraft-inpaint), with its tests, revision a75497d6.
+  https://github.com/storytold/lightcraft
+  Copyright (c) 2026 ArtCraft Team and the LightCraft contributors.
+  That crate ports the inpainting (PatchMatch completion) and Poisson membrane fill code of PhotoCraft
+  (https://github.com/storytold/photocraft, crates/algo/src/inpaint.rs and poisson.rs), Copyright the PhotoCraft
+  contributors, MIT OR Apache-2.0; the port was modified by the LightCraft contributors (2026).
+
 crates/raw (craft-raw) is moved from LightCraft, with behaviour ported from two other readers:
 - LightCraft, crates/raw (src/lib.rs, dng.rs, dngwrite.rs, tiffraw.rs, unpack.rs, ljpeg.rs, jxl.rs,
   opcodes.rs, profile.rs, gaintable.rs, semantic.rs, preview.rs, vendor/crw.rs, vendor/hasselblad.rs,
