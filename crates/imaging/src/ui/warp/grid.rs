@@ -26,8 +26,8 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
 
-/// How far from an anchor or a handle end a press takes it, in hit targets (12.5 at an 8 target).
-const REACH_IN_TARGETS: f32 = 1.5625;
+/// How far from an anchor or a handle end a press takes it, in hit targets (12.25 at an 8 target).
+const REACH_IN_TARGETS: f32 = 1.53125;
 
 /// Where the pointer acts in the document: half a document pixel up and left of it. A dragged point
 /// goes there and a split cuts there.
@@ -141,7 +141,7 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach (12.5 at an 8 target) drags that
+/// - Pointer: the nearest anchor or handle within the hit reach (12.25 at an 8 target) drags that
 ///   point, which jumps to the pointer, half a document pixel up and left of it; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
