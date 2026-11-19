@@ -174,6 +174,18 @@ fn tab_strip_ribbon_end_items_narrow(ui: &mut Ui, data: &mut StoryData) -> Story
     })
 }
 
+/// End items as framed buttons: two outlined, the menu one with its chevron, and the last filled with the accent.
+#[story(TabStrip<'static, usize>, covers = [], drive = Drive::Never)]
+fn tab_strip_ribbon_end_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = comment_rows();
+    let items = [
+        StripEnd::command("Comments", IconId::new("list").into(), EditCommands::Paste).variant(craft_theme::Variant::SECONDARY),
+        StripEnd::menu("Editing", IconId::new("list").into(), &rows).variant(craft_theme::Variant::SECONDARY),
+        StripEnd::command("Share", IconId::new("link").into(), EditCommands::Copy).variant(craft_theme::Variant::PRIMARY),
+    ];
+    ribbon(ui, data, TabStrip::new("Ribbon").trailing(&items), &PLAIN)
+}
+
 /// The contextual tab is listed for the first frames and then dropped by the source: it fades out at its slot. The
 /// story reads the frame it is in rather than counting its runs, so a measuring run or a second pass of one frame
 /// lists the same tabs as the frame's other runs.
