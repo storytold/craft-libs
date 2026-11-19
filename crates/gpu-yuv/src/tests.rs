@@ -178,6 +178,19 @@ fn unpack_refuses_a_layout_that_was_changed_after_it_was_made() {
 }
 
 #[test]
+fn sizes_of_a_changed_layout_saturate_instead_of_overflowing() {
+    let mut l = FrameLayout::new(Format::I420, 4, 2).unwrap();
+    let huge = PlaneLayout { width: u32::MAX, height: u32::MAX, texel_bytes: 4, offset: 0, bytes_per_row: 0 };
+    assert_eq!(huge.row_bytes(), u32::MAX);
+    l.planes = vec![PlaneLayout { height: 1, ..huge }];
+    let full = usize::try_from(u64::from(u32::MAX) * 4).unwrap_or(usize::MAX);
+    assert_eq!(l.frame_bytes(), full, "a row past u32::MAX bytes counts in full");
+    l.planes = vec![huge; 3];
+    assert_eq!(l.frame_bytes(), usize::MAX);
+    assert_eq!(l.unpack(&[], &mut []), Err(Error::Layout));
+}
+
+#[test]
 fn an_enlarged_solid_color_keeps_its_codes() {
     for format in ALL {
         let c = Conversion::new(format, Matrix::Bt709, Range::Limited);

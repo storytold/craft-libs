@@ -18,9 +18,9 @@ pub struct PlaneLayout {
 }
 
 impl PlaneLayout {
-    /// Bytes of one row in a packed frame.
+    /// Bytes of one row in a packed frame, or `u32::MAX` when the fields give more.
     pub fn row_bytes(&self) -> u32 {
-        self.width * self.texel_bytes
+        self.width.saturating_mul(self.texel_bytes)
     }
 }
 
@@ -83,8 +83,12 @@ impl FrameLayout {
     }
 
     /// Bytes of one tightly packed frame: the planes one after another, each row without padding.
+    /// Fields changed after [`FrameLayout::new`] that give more than `usize::MAX` give
+    /// `usize::MAX`.
     pub fn frame_bytes(&self) -> usize {
-        self.planes.iter().map(|p| p.row_bytes() as usize * p.height as usize).sum()
+        self.planes
+            .iter()
+            .fold(0usize, |n, p| n.saturating_add((p.width as usize).saturating_mul(p.texel_bytes as usize).saturating_mul(p.height as usize)))
     }
 
     /// Copy the planes from `padded` (a mapped read-back buffer, from the offset it was copied to)
