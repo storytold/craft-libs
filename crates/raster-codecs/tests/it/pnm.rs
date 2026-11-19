@@ -184,7 +184,7 @@ fn pnm_valid_variants() {
 
 /// `Limits::max_alloc` budgets the decoded pixels, so the decoder must not build a wider scratch
 /// copy next to them (it once collected a `u32` per sample). Reads the process's peak RSS, so it
-/// runs alone: `cargo test -p craft-raster-codecs --test pnm -- --ignored --test-threads 1`.
+/// runs alone: `cargo test -p craft-raster-codecs --test it -- pnm::pnm_decode_peak_memory_stays_near_the_output_size --exact --ignored`.
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "measures the peak RSS of the process; run it alone"]
