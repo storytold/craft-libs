@@ -1794,7 +1794,9 @@ name = "craft-develop"
 version = "0.1.0"
 dependencies = [
  "craft-develop-model",
+ "craft-render-parity",
  "proptest",
+ "rayon",
  "serde",
 ]
 
