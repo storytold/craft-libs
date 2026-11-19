@@ -163,6 +163,8 @@ struct Step {
     hold: Option<Hold>,
     /// Files the step hovers over the window, or drops.
     pub files: Option<InjectedFiles>,
+    /// The serial of the request that queued the step ([`Injected::requests`]).
+    request: u64,
 }
 
 /// Files an injected step hovers over a window, and whether the step after it drops them.
@@ -277,6 +279,8 @@ struct Lane {
     entered: Option<u64>,
     queue: VecDeque<Step>,
     flight: Option<Flight>,
+    /// The request of the latest step handed to the input: a withdrawal keeps the rest of it once that step's pass ran.
+    running: Option<u64>,
     /// The application withdrew the lane's input ([`withdraw`]); the next input hook carries it out.
     withdrawn: bool,
 }
@@ -287,6 +291,8 @@ struct Injected {
     lanes: HashMap<ViewportId, Lane>,
     /// What the steps handed to the input hold, per viewport; it outlives the lanes.
     held: HashMap<ViewportId, Held>,
+    /// How many requests were queued: the serial of the latest.
+    requests: u64,
     withdrawn: bool,
     /// The Caps Lock state injected input sets in place of the platform's.
     caps_lock: Option<bool>,
@@ -375,11 +381,14 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
                 return false;
             }
             lane.withdrawn = false;
-            if !lane.queue.is_empty() {
-                lane.queue.clear();
+            // The request whose step ran keeps its rest (a key's own release); the requests behind it go.
+            let running = lane.running;
+            let queued = lane.queue.len();
+            lane.queue.retain(|step| Some(step.request) == running);
+            if lane.queue.len() != queued {
                 injected.withdrawn = true;
             }
-            if lane.flight.is_none() {
+            if lane.flight.is_none() && lane.queue.is_empty() {
                 injected.lanes.remove(&viewport);
                 return false;
             }
@@ -414,6 +423,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
             let held = injected.held.entry(viewport).or_default();
             let before = held.clone();
             held.apply(&step);
+            lane.running = Some(step.request);
             lane.flight = Some(Flight { step, pass: pass_nr, focus: focused, until, before });
             lane.entered = Some(frame);
             return !lane.queue.is_empty();
@@ -431,7 +441,9 @@ fn queue(ctx: &Context, viewport: ViewportId, request: impl FnOnce(&mut Request)
     Service::<Injected>::run(ctx, |injected| {
         let mut writing = Request::new(injected.projected(viewport));
         request(&mut writing);
-        injected.lane(viewport).queue.extend(writing.steps);
+        injected.requests = injected.requests.wrapping_add(1);
+        let serial = injected.requests;
+        injected.lane(viewport).queue.extend(writing.steps.into_iter().map(|step| Step { request: serial, ..step }));
     });
     repaint::request_of(ctx, viewport);
 }
@@ -750,7 +762,8 @@ pub(crate) fn pen(ctx: &Context) -> Option<PointerSample> {
 /// Withdraws the injected input of `viewport`: the application's document changed. The keys held with no event end at
 /// once. The viewport's next input hook carries out the rest per step: a step handed to the input whose pass has not
 /// run leaves the input with the queue behind it, and what was held before it is held again; after a step whose pass
-/// has run, only the queue is dropped. Anything dropped counts as withdrawn ([`take_withdrawn`]). The application
+/// has run, the rest of that step's request still runs (a key press's own release, when the press opened a dialog) and
+/// the requests queued behind it are dropped. Anything dropped counts as withdrawn ([`take_withdrawn`]). The application
 /// withdraws from its raw input hook, which runs right before the framework's, so every request queued before that
 /// hook is dropped with the rest.
 pub(crate) fn withdraw(ctx: &Context, viewport: ViewportId) {

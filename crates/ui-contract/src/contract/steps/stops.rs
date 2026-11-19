@@ -31,6 +31,8 @@ pub(crate) struct StopsIn<'a> {
     pub group: Option<Id>,
     /// The roving group of the innermost body this component is shown in, whether or not it joined it.
     pub body: Option<Id>,
+    /// The arena root this component is shown in, whether or not it joined the arena.
+    pub arena: Option<Id>,
     /// The roving group of the collection row the component is shown in: stops with no group of their own join it.
     pub row: Option<Id>,
     /// The component is the collection item of its row: its parts join the row's group instead of a group of their own.
@@ -93,7 +95,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
         focus::register_group(ctx, if let Some(arrival) = arrival { group.selected(arrival) } else { group });
     }
     let own = || {
-        let stop = Stop::new(input.id, input.keys).root(input.holder).role(input.role).in_body(input.body);
+        let stop = Stop::new(input.id, input.keys).root(input.holder).role(input.role).in_body(input.body).in_arena(input.arena);
         let stop = if input.default_stop { stop.default_stop() } else { stop };
         let stop = if input.press_only { stop.press_only() } else { stop };
         if input.text { stop.text() } else { stop }

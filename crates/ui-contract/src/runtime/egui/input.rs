@@ -1,6 +1,7 @@
 //! Raw input in the input hook, key events converted to craft-keymap's key types, `InputOptions`.
 
 use super::control_click::ControlClick;
+use crate::runtime::commands::ClipContent;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::pen::PenPass;
 use craft_behavior::one_press::split_after_first_press;
@@ -8,6 +9,7 @@ use craft_behavior::{Buttons, PointerButton, PointerEvent, PointerKind, PointerS
 use craft_host::target::Os;
 use craft_keymap::{KeyInput, Mods};
 use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, Pos2, TouchPhase, Vec2, ViewportId};
+use std::sync::Arc;
 
 pub use egui::RawInput;
 
@@ -153,8 +155,8 @@ pub(crate) enum KeyEvent {
     Release { input: KeyInput },
     /// Typed text.
     Text(String),
-    /// egui's own clipboard events; a paste carries its text.
-    Clip { command: craft_behavior::EditCommand, text: Option<String> },
+    /// egui's own clipboard events; a paste carries its text or image.
+    Clip { command: craft_behavior::EditCommand, pasted: Option<ClipContent> },
     /// A pointer press, which ends keyboard modality.
     PointerPress,
     /// An AccessKit action request.
@@ -186,9 +188,17 @@ pub(crate) fn key_event(event: &Event, os: Os, latin: &[(egui::Key, char)]) -> K
         Event::Key { pressed: false, .. } => read(event).map_or(KeyEvent::Other, |input| KeyEvent::Release { input }),
         Event::Text(text) => KeyEvent::Text(text.clone()),
         Event::ModifiersChanged(modifiers) => KeyEvent::Modifiers(Mods::from_egui(modifiers, os)),
-        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, text: None },
-        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, text: None },
-        Event::Paste(text) => KeyEvent::Clip { command: craft_behavior::EditCommand::Paste, text: Some(text.clone()) },
+        Event::Copy => KeyEvent::Clip { command: craft_behavior::EditCommand::Copy, pasted: None },
+        Event::Cut => KeyEvent::Clip { command: craft_behavior::EditCommand::Cut, pasted: None },
+        // A pasted image is the same Paste as pasted text: the command runs, and its reader takes the image.
+        Event::Paste(text) => KeyEvent::Clip {
+            command: craft_behavior::EditCommand::Paste,
+            pasted: Some(ClipContent { text: Some(Arc::from(text.as_str())), ..ClipContent::default() }),
+        },
+        Event::PasteImage(image) => KeyEvent::Clip {
+            command: craft_behavior::EditCommand::Paste,
+            pasted: Some(ClipContent { image: Some(Arc::clone(image)), ..ClipContent::default() }),
+        },
         Event::PointerButton { pressed: true, .. } => KeyEvent::PointerPress,
         Event::AccessKitActionRequest(request) => KeyEvent::Access(Action(request.clone())),
         _ => KeyEvent::Other,

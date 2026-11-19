@@ -47,6 +47,8 @@ struct Strip<'a> {
     no_stops: bool,
     /// egui holds a label text selection, which a copy or cut event copies.
     label_selection: bool,
+    /// The focus is in a menu (`FocusedRecord::menu`).
+    in_menu: bool,
 }
 
 impl Strip<'_> {
@@ -125,16 +127,22 @@ impl Strip<'_> {
                 batch.egui_texts += 1;
                 true
             }
-            KeyEvent::Clip { command, text } if (self.edits)(command) => {
+            KeyEvent::Clip { command, pasted } if (self.edits)(command) => {
                 batch.clips.push(command);
-                if text.is_some() {
-                    batch.paste = text;
+                // A paste of text and one of an image in the same pass are one paste of both.
+                if let Some(pasted) = pasted {
+                    let content = batch.paste.get_or_insert_default();
+                    content.text = pasted.text.or(content.text.take());
+                    content.image = pasted.image.or(content.image.take());
                 }
                 false
             }
             KeyEvent::Clip { .. } if self.foreign => true,
             KeyEvent::Clip { command, .. } if self.canvas.is_some_and(|canvas| canvas.edits.contains(command)) => true,
             KeyEvent::Clip { command: EditCommand::Copy | EditCommand::Cut, .. } if self.label_selection => true,
+            // A clipboard event behind an open menu reaches nothing: the menu keeps it, as a platform menu does. The
+            // chord's own key press still runs its command, which closes the menu.
+            KeyEvent::Clip { .. } if self.in_menu => false,
             KeyEvent::Clip { command, .. } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
                 // web sends the chord's press as well.
@@ -466,6 +474,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             canvas,
             no_stops,
             label_selection: record.label_selection,
+            in_menu: record.menu.is_some(),
         };
         let mut batch = Batch::default();
         let mut visible = None;

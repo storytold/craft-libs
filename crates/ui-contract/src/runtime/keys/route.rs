@@ -2,7 +2,7 @@
 
 use super::input::chrome_toggle_of;
 use super::{Batch, Item, MenuKey, Node, Press, Routed, Shortcuts, Taken, current, with};
-use crate::runtime::commands::{self, FirePhase};
+use crate::runtime::commands::{self, ClipContent, FirePhase};
 use crate::runtime::egui::input::{Action, ActionKind};
 use crate::runtime::focus::{self, StopRec};
 use crate::runtime::frame::request_chrome_toggle;
@@ -22,15 +22,17 @@ use std::sync::Arc;
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
-    let (batch, nodes, captures, held_claims) = current(ctx, |stage| {
+    let (batch, nodes, captures, held_claims, fired_claims) = current(ctx, |stage| {
         stage.routed.clear();
         stage.contexts.clear();
         stage.claimed.clear();
         stage.activated.clear();
         let held_claims = std::mem::take(&mut stage.claims);
+        stage.last_claims.clone_from(&held_claims);
         stage.last_open_edits = std::mem::take(&mut stage.open_edits);
         stage.last_nodes = std::mem::take(&mut stage.nodes);
-        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims)
+        let fired = std::mem::take(&mut stage.fired_claims);
+        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims, fired)
     });
     let modal = overlay::any_open(ctx, overlay::OpenFilter::Modal);
     let stale_repeat = |stale: &mut bool, press: &Press| {
@@ -49,6 +51,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
     let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
+    // With nothing focused, the window's document canvas is the key target unless a modal layer is open.
+    let canvas = if target.is_some() || modal { None } else { focus::document_canvas(ctx) };
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
@@ -85,21 +89,21 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
         // edit or a dialog's default button takes it. The arrows nudge the window's canvas content (a tool or the
         // session control on a canvas), unless a modal layer is open. The window's document canvas is its key target
-        // (`focus::host_canvas`): Page Up and Down, Home and End page it as they do while it has the focus.
-        let canvas = if modal { None } else { focus::document_canvas(ctx) };
+        // (`focus::host_canvas`): Page Up and Down, Home and End page it as they do while it has the focus. What the
+        // canvas takes is its alone, as while it has the focus: the app's shortcuts do not run with it too.
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
             } else if !modal && let Some(nudge) = nudge_of(press.key, press.mods) {
                 routed.entry(None).or_default().nudge = Some(nudge);
-                *taken = Taken::Yes;
+                *taken = if canvas.is_some() { Taken::Canvas } else { Taken::Yes };
             } else if let Some(canvas) = &canvas
                 && let Some(Intent::Move(mv @ (NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End), mods)) =
                     keys::intent(os, press.key, press.mods, canvas.stop.role)
             {
                 push(&mut routed, Some(canvas.stop.id), Intent::Move(mv, mods), false);
-                *taken = Taken::Yes;
+                *taken = Taken::Canvas;
             }
         }
     }
@@ -117,8 +121,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
     let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts);
-    withdraw_taken(ctx, target.as_ref(), &batch, &held, &withdrawn_texts);
-    let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
+    // The app's own widget, focused or the window's canvas, reads its keys from egui.
+    let host = target.as_ref().or(canvas.as_ref()).is_some_and(|rec| rec.stop.host);
+    withdraw_taken(ctx, host, &batch, &held, &withdrawn_texts);
+    let pasted = batch.paste.clone().zip(focused).map(|(content, id)| (id, content));
     let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
     for _ in 0..escapes.to_components {
         // A row's child that claims Escape keeps it; any other returns focus to its row.
@@ -130,8 +136,9 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         }
         push(&mut routed, focused, Intent::Cancel, false);
     }
-    // A text opener's list keys arrive as claimed chords, withheld from its text part: they go to the list.
-    let mut claimed = Vec::new();
+    // A text opener's list keys arrive as claimed chords, withheld from its text part: they go to the list. The chords
+    // fired commands stood for go to the owners of their claims.
+    let mut claimed = fired_claims;
     for chord in &batch.claimed {
         match driven.and_then(|driven| driven.intent_of(chord)) {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
@@ -208,8 +215,11 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         .presses
         .iter()
         .zip(consumed)
-        // The canvas's Space is never the focused stop's.
-        .map(|(press, taken)| !press.canvas && holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+        // The canvas's Space is never the focused stop's; a press the unfocused window's canvas took is the canvas's.
+        .map(|(press, taken)| {
+            !press.canvas
+                && (*taken == Taken::Canvas || holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+        })
         .collect();
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
     // its modifiers, as its press would.
@@ -328,11 +338,10 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
 
 /// Takes what the framework handed to one taker out of the running pass's egui input, where the app and egui's text
 /// widgets read their keys: one press, one action, and one text, one reader. `held` marks the presses the focused
-/// component holds; the app's own widget (`Stop::host`) reads its keys from egui, so its presses stay. `texts` are the
-/// places in `Batch::texts` of the texts a claim or a framework taker took. A held press whose release has not come yet
-/// leaves its release to the strip.
-fn withdraw_taken(ctx: &Context, target: Option<&StopRec>, batch: &Batch, held: &[bool], texts: &[usize]) {
-    let host = target.is_some_and(|rec| rec.stop.host);
+/// component (or the unfocused window's canvas) holds; the app's own widget (`Stop::host`, `host`) reads its keys from
+/// egui, so its presses stay. `texts` are the places in `Batch::texts` of the texts a claim or a framework taker took.
+/// A held press whose release has not come yet leaves its release to the strip.
+fn withdraw_taken(ctx: &Context, host: bool, batch: &Batch, held: &[bool], texts: &[usize]) {
     let presses: Vec<&Press> =
         batch.presses.iter().zip(held).filter(|(press, held)| !host && **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
     if presses.is_empty() && texts.is_empty() {
@@ -387,9 +396,14 @@ pub(crate) fn queue_edit(ctx: &Context, command: EditCommand) -> bool {
     true
 }
 
+/// The paste the focused component `id` takes this pass.
+pub(crate) fn pasted(ctx: &Context, id: Id) -> Option<ClipContent> {
+    current(ctx, |stage| stage.pasted.as_ref().filter(|(owner, _)| *owner == id).map(|(_, content)| content.clone()))
+}
+
 /// The text of the paste the focused component `id` takes this pass.
 pub(crate) fn pasted_text(ctx: &Context, id: Id) -> Option<Arc<str>> {
-    current(ctx, |stage| stage.pasted.as_ref().filter(|(owner, _)| *owner == id).map(|(_, text)| Arc::clone(text)))
+    pasted(ctx, id).and_then(|content| content.text)
 }
 
 /// The collection that takes the list keys of the focused stop: the collection of an open `KeepAnchor` dropdown whose

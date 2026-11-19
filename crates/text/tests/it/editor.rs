@@ -9,9 +9,15 @@ use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
 use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostCx, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
-use craft_ui::canvas::Canvas;
-use craft_ui::contract::{Bind, FacesCx as _, Show as _, ShowContainer as _};
+use craft_behavior::CancelReason;
+use craft_ui::buttons::Button;
+use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, tool_pass};
+use craft_ui::contract::{Bind, FacesCx as _, Props as _, Show as _, ShowContainer as _};
 use craft_ui::fonts::{FaceBytes, FaceState};
+use craft_ui::primitives::Draw;
+use craft_ui::runtime::focus::FocusRequest;
+use craft_ui::testing::focus::key_release;
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Event, FontId, ImeEvent, Key, Modifiers, Rect, pos2, vec2};
 
@@ -449,4 +455,84 @@ fn the_host_lays_its_text_out_in_a_document_face_it_asks_the_editor_for() {
     let Some(FaceState::Ready(face)) = state.clone() else { panic!("the face is ready once the editor settles: {state:?}") };
     let font = FontId::new(14.0, face.family());
     assert!(editor.fixture.ctx().fonts_mut(|fonts| fonts.has_glyph(&font, 'a')), "the face's family lays the text out");
+}
+
+/// A tool whose click opens a box (`opened`), and that counts the Escapes the canvas offers it as `Cancel`.
+struct Leaver {
+    opened: Rc<Cell<bool>>,
+    cancels: usize,
+}
+
+impl CanvasTool for Leaver {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.opened.set(true);
+    }
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        if *key != ToolKey::Cancel {
+            return false;
+        }
+        self.cancels += 1;
+        true
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the leaver's form")
+    }
+}
+
+/// A box a tool's click opens in the canvas body, its editor focused as it opens (a typed-text box): the first Escape
+/// cancels the editor, which closes, and the next reaches the tool as `Cancel` (it leaves for Select). Each Escape
+/// comes up in the frame it went down in.
+#[trial]
+fn after_escape_closes_a_focused_editor_in_the_canvas_body_the_next_escape_reaches_the_tool() {
+    let opened = Rc::new(Cell::new(false));
+    let open = Rc::new(Cell::new(false));
+    let tool = Rc::new(RefCell::new(Leaver { opened: Rc::clone(&opened), cancels: 0 }));
+    let (asked, shown, shown_tool) = (Rc::clone(&opened), Rc::clone(&open), Rc::clone(&tool));
+    let (mut host, mut selection) = (Host::default(), TextSelection::caret_at(0));
+    let mut fixture = Fixture::new(move |ui| {
+        let room = Rect::from_min_size(ui.max_rect().min, vec2(400.0, 300.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(room), |ui| {
+            Canvas::new("Document").show(ui, |ui, body| {
+                // The box opens in the pass after the click, focused as it first shows.
+                let fresh = asked.take();
+                if fresh {
+                    shown.set(true);
+                }
+                if shown.get() {
+                    let rect = Rect::from_min_size(body.rect.min + vec2(20.0, 20.0), vec2(120.0, 20.0));
+                    let editor = TextEditor::new("Text to place", &mut host, Bind::bound(&mut selection)).esc_commits(false);
+                    let editor = if fresh { editor.request_focus(FocusRequest::Take) } else { editor };
+                    if editor.show_at(ui, rect).ended == Some(EditorEnd::Cancel) {
+                        shown.set(false);
+                    }
+                }
+                if let Some(pass) = tool_pass(&body.env) {
+                    let _ = ToolHost::new().run(ui, &pass, &mut *shown_tool.borrow_mut());
+                }
+            });
+        });
+        // A control after the canvas in the window's Tab order: the stop after the editor.
+        let _ = Button::new("After").show(ui);
+    });
+    let escape = || vec![key_press(Key::Escape, Modifiers::NONE), key_release(Key::Escape, Modifiers::NONE)];
+    fixture.settle();
+    fixture.click_at(pos2(200.0, 200.0)).settle();
+    assert!(open.get(), "the click opened the box");
+    fixture.frame(escape()).settle();
+    assert!(!open.get(), "the first Escape cancels the editor");
+    assert_eq!(tool.borrow().cancels, 0, "the editor's Escape is not the tool's");
+    fixture.frame(escape()).settle();
+    assert_eq!(tool.borrow().cancels, 1, "the next Escape reaches the tool");
 }

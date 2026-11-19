@@ -5,7 +5,9 @@ use craft_ui::buttons::{Button, IconButton, PopupMark};
 use craft_ui::contract::{Bind, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Trigger};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::popover::Popover;
+use craft_ui::runtime::commands::{self, CommandSet as _, EditCommands, FireSource};
 use craft_ui::runtime::env::Direction;
+use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Rect, Shape, pos2};
 use std::cell::Cell;
@@ -99,6 +101,32 @@ fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
     right_click(&mut fixture, second);
     let after = menu_rect(&fixture).expect("the menu is open after the second right-click");
     assert!(after.min.x > before.min.x + 40.0, "the menu moved to the second point: {before:?} then {after:?}");
+}
+
+/// With a context menu open, a paste event (the platform's answer to ⌘V) behind it reaches nothing: no Paste runs
+/// and the menu stays. Edit ▸ Paste from a native menu, which no component of the window fires, closes the menu, as a
+/// key's command does, and runs.
+#[trial]
+fn a_paste_behind_a_context_menu_runs_nothing_and_a_native_edit_paste_closes_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let target = Button::new("Target").show(ui);
+        Menu::context("Target menu", &target).show(ui, |ui, _| {
+            MenuItem::new("Copy").show(ui);
+        });
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("the target").center();
+    right_click(&mut fixture, at);
+    assert!(menu_rect(&fixture).is_some(), "the context menu is open");
+    let fired = |fixture: &Fixture| take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect::<Vec<_>>();
+    fired(&fixture);
+    fixture.frame(vec![egui::Event::Paste("clipboard text".to_owned())]).settle();
+    assert!(fired(&fixture).is_empty(), "the paste behind the menu ran nothing");
+    assert!(menu_rect(&fixture).is_some(), "the menu stays open");
+    commands::fire(fixture.ctx(), EditCommands::Paste, FireSource::Menu);
+    fixture.settle();
+    assert!(menu_rect(&fixture).is_none(), "Edit ▸ Paste closed the menu");
+    assert_eq!(fired(&fixture), [EditCommands::Paste.id()], "and ran");
 }
 
 /// An icon button that opens a menu hangs the dropdown arrow under the end edge of its glyph, inside the button and

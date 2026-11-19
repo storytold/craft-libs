@@ -599,6 +599,35 @@ fn a_window_focus_loss_releases_injected_held_keys() {
     assert_eq!(held.get(), (false, false), "nothing stays held after the click");
 }
 
+/// A withdrawal after a step whose pass ran keeps the rest of that step's request (a key press's own release, when the
+/// press opened a dialog that changed the document) and drops the requests queued behind it.
+#[trial]
+fn a_withdrawal_keeps_the_rest_of_the_request_whose_step_ran() {
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let (a_down, b_pressed) = (Cell::new(false), Cell::new(false));
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            ui.ctx().input(|input| {
+                a_down.set(input.key_down(egui::Key::A));
+                b_pressed.set(b_pressed.get() || input.key_pressed(egui::Key::B));
+            });
+        });
+    };
+    frame();
+    host.inject_key(ViewportId::ROOT, Key::A, Mods::NONE, false);
+    host.inject_key(ViewportId::ROOT, Key::B, Mods::NONE, false);
+    frame();
+    assert!(a_down.get(), "the press of A ran");
+    host.withdraw_injected(ViewportId::ROOT);
+    for _ in 0..6 {
+        frame();
+    }
+    assert!(!a_down.get(), "A's own release still came");
+    assert!(!b_pressed.get(), "the request behind it was dropped");
+    assert!(host.injected_idle());
+}
+
 /// Injected input with a NaN or infinite point queues nothing, as a window never reports one, and a release at such a
 /// point still lets the held button go.
 #[trial]

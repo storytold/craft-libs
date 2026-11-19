@@ -34,6 +34,9 @@ pub struct Stop {
     pub group: Option<Id>,
     /// The roving group of the innermost body the stop sits in, whether or not the stop joined it.
     pub body: Option<Id>,
+    /// The arena root the stop is shown in (a canvas whose body holds it), whether or not it joined the arena: a text
+    /// stop keeps its own egui widget. A removed stop hands focus back to it.
+    pub arena: Option<Id>,
     /// The app's own egui widget (`focus::host_canvas`), which reads its keys from egui's input: the key stage leaves
     /// the presses it routes to the stop there.
     pub host: bool,
@@ -54,6 +57,7 @@ impl Stop {
             name: None,
             group: None,
             body: None,
+            arena: None,
             host: false,
         }
     }
@@ -109,6 +113,12 @@ impl Stop {
     /// Sits in the body of the roving group `group`, if any.
     pub fn in_body(mut self, group: Option<Id>) -> Self {
         self.body = group;
+        self
+    }
+
+    /// Sits in the arena of the root `arena` (a canvas body), if any, whether or not it joined it.
+    pub fn in_arena(mut self, arena: Option<Id>) -> Self {
+        self.arena = arena;
         self
     }
 

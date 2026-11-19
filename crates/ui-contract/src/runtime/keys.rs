@@ -2,14 +2,13 @@
 //! every key event of the pass, the begin hook turns them into the `Intents` of the focused component,
 //! and claims, menu-bar keys and AccessKit action requests are routed from the same record.
 
-use crate::runtime::commands::FirePhase;
+use crate::runtime::commands::{ClipContent, FirePhase};
 use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
 use egui::{Context, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 mod claims;
 mod input;
@@ -21,7 +20,7 @@ mod route;
 pub use claims::capture;
 #[doc(hidden)]
 pub use claims::claim;
-pub(crate) use claims::hold_escape;
+pub(crate) use claims::{fire_claimed, hold_escape};
 #[doc(hidden)]
 pub use claims::take_claimed;
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
@@ -45,7 +44,7 @@ pub(crate) use intents::{
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, routed_to, take_shortcuts};
+pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +103,9 @@ enum Taken {
     No,
     /// The press became an intent, a focus move or an activation.
     Yes,
+    /// With nothing focused, the window's document canvas took the press (a nudge or a page move): it is the canvas's
+    /// alone, as while the canvas has the focus, and no app shortcut runs with it.
+    Canvas,
 }
 
 /// The key events the owner leaves to the app this pass, with the facts the matching needs.
@@ -125,8 +127,8 @@ struct Batch {
     /// How many key presses the strip left in egui's input.
     egui_presses: usize,
     shortcuts: Vec<Shortcut>,
-    /// The text of the paste the focused component takes.
-    paste: Option<String>,
+    /// The content of the paste the focused component takes.
+    paste: Option<ClipContent>,
     /// Every text event of the pass, in order.
     texts: Vec<Typed>,
     /// How many text events the strip left in egui's input.
@@ -217,6 +219,10 @@ pub(crate) struct Stage {
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,
+    /// The state-dependent claims the running pass holds: those registered in the pass before.
+    last_claims: Vec<(Id, Chord)>,
+    /// The claimed chords fired commands stand for (`fire_claimed`), for their owners in the next pass.
+    fired_claims: Vec<(Id, Chord)>,
     /// Chords a container holds for itself while focus is anywhere in the viewport (a window mode), from the
     /// pass that registered them.
     captures: Vec<(Id, Chord)>,
@@ -233,8 +239,8 @@ pub(crate) struct Stage {
     /// The keys whose press the strip took and whose release it is still to drop.
     consumed: Vec<Key>,
     shortcuts: Shortcuts,
-    /// The paste text the focused component reads through its clipboard handle.
-    pasted: Option<(Id, Arc<str>)>,
+    /// The paste the focused component reads through its clipboard handle.
+    pasted: Option<(Id, ClipContent)>,
     /// Edit commands fired from the queue for the focused component.
     queued_edits: Vec<EditCommand>,
     /// The components that asked for a context menu in this pass, with the rect it opens at.

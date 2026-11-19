@@ -32,6 +32,8 @@ pub enum ClipItem {
 pub struct ClipContent {
     /// The clipboard's text, when it holds any.
     pub text: Option<Arc<str>>,
+    /// The clipboard's image, when it holds one.
+    pub image: Option<Arc<ColorImage>>,
 }
 
 /// Why a paste has no content.
@@ -48,8 +50,8 @@ pub struct ClipboardHandle {
 
 impl ClipboardHandle {
     pub(crate) fn new(ctx: &Context, owner: Option<Id>) -> Self {
-        let slot = match owner.and_then(|id| keys::pasted_text(ctx, id)) {
-            Some(text) => Pending::Ready(ClipContent { text: Some(text) }),
+        let slot = match owner.and_then(|id| keys::pasted(ctx, id)) {
+            Some(content) => Pending::Ready(content),
             None => Pending::Loading { progress: None },
         };
         ClipboardHandle { ctx: ctx.clone(), slot }

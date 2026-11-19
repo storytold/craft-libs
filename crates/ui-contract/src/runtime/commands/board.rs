@@ -956,8 +956,16 @@ fn queue(ctx: &Context, fired: Fired) {
             observed.push(fired.command.clone());
         }
     });
-    // An edit command goes to the focused component that lists it; otherwise it goes to the instance that declared
-    // it or, with none, stays an app command.
+    // A command whose key the focused component claims reaches it as that key, as the key's press does; an edit command
+    // goes to the focused component that lists it; otherwise it goes to the instance that declared it or, with none,
+    // stays an app command.
+    if fired.phase != FirePhase::Release {
+        let chords: Vec<Chord> =
+            bindings(ctx, &fired.command).into_iter().filter(|binding| !binding.trigger.double).map(|binding| binding.trigger.chord).collect();
+        if keys::fire_claimed(ctx, &chords) {
+            return;
+        }
+    }
     if fired.phase != FirePhase::Release
         && let Some(edit) = with(ctx, |board| board.registry.edit_of(&fired.command.id))
         && keys::queue_edit(ctx, edit)
@@ -970,11 +978,23 @@ fn queue(ctx: &Context, fired: Fired) {
 }
 
 /// An undo or redo a text part or editor had nothing to do for goes to the instance that declares the command or,
-/// with none, to the app command of the same id (11.3).
+/// with none, to the app command of the same id (11.3), when it is enabled there as its key would be: the gate and the
+/// modal rule hold, so an undo in a dialog's field never undoes the document under the dialog.
 pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) {
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
-    let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).0.instance);
+    // The focused component already declined the command: it answers for it no more.
+    let from = with(ctx, |board| Vantage { edits: Some(EditSet::NONE), inactive: Some(EditSet::NONE), ..board.here.clone() });
+    let (app, instance) = with(ctx, |board| board.target_of(ctx, &command, &from));
+    if !app && instance.is_none() {
+        return;
+    }
+    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Focus, Some(&from));
+    if !resolved.enabled {
+        return;
+    }
+    // An app-scope command a modal layer's instance declares is delivered to that instance.
+    let target = if app { resolved.instance } else { instance };
     let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press, pass::now(ctx)) };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
@@ -1016,6 +1036,10 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     }
     // An app-scope command a modal layer's instance declares is delivered to that instance.
     let target = if app { resolved.instance } else { instance };
+    // A command fired from no component of the window (a native menu, the palette) closes the open popups, as a key's
+    // command and a menu pick do, except the popup its instance is in and the popups it was opened from.
+    let inside: Vec<Id> = with(ctx, |board| target.and_then(|target| board.instances.iter().find(|i| i.id == target)?.layer).into_iter().collect());
+    overlay::close_popups_outside(ctx, &inside);
     queue(ctx, Fired { target, ..Fired::new(command.clone(), source, FirePhase::Press, pass::now(ctx)) });
     true
 }

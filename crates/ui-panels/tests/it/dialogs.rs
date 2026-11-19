@@ -9,7 +9,11 @@ use craft_ui::dialog::{
     Alert, Dialog, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
     UnsavedChangesDialog, dialog_id,
 };
+use craft_ui::contract::Bind;
+use craft_ui::runtime::commands::{CommandSet as _, EditCommands};
+use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
+use craft_ui::text::TextField;
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::{Fixture, Frames, Story, StoryData, StoryOutput, trial};
@@ -326,4 +330,35 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     let again = host.open(Probe::<1>::new("picker"));
     assert_eq!(again, id, "the reopened dialog has the same id");
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
+}
+
+/// The commands an Undo fired that a focused, unedited name field had nothing to do for, the field in a modal dialog
+/// or in the window.
+fn undo_with_nothing_to_undo(modal: bool) -> Vec<String> {
+    let mut name = String::new();
+    let mut fixture = Fixture::new(move |ui| {
+        if modal {
+            Dialog::new("Rename").show(ui, |ui, _| {
+                TextField::new("Name", Bind::bound(&mut name)).show(ui);
+            });
+        } else {
+            TextField::new("Name", Bind::bound(&mut name)).show(ui);
+        }
+    });
+    fixture.settle();
+    if !modal {
+        let field = fixture.by_label("Name").expect("the field shows");
+        fixture.click(&field).settle();
+    }
+    take_output(fixture.ctx());
+    fixture.key(egui::Key::Z, Modifiers::COMMAND).settle();
+    take_output(fixture.ctx()).fired.into_iter().map(|fired| fired.command.id).collect()
+}
+
+/// An Undo a focused text field has nothing to do for runs the window's Undo (11.3), but not past a modal dialog the
+/// field is in: the modal rule holds for it as for the key itself, so the document under the dialog stays.
+#[trial]
+fn an_undo_a_dialogs_field_leaves_runs_no_command_under_the_dialog() {
+    assert_eq!(undo_with_nothing_to_undo(false), [EditCommands::Undo.id()], "in the window, the field's leftover Undo is the app's");
+    assert!(undo_with_nothing_to_undo(true).is_empty(), "under the dialog it reaches no command");
 }

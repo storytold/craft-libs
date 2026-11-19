@@ -18,6 +18,8 @@ use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAccess, ToolAction, ToolClai
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
+use craft_ui::runtime::commands::{self, EditCommands, FireSource};
+use craft_ui::runtime::frame::take_output;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::focus::{AccessActionKind, key_release};
 use craft_ui::testing::input::key_press;
@@ -94,6 +96,26 @@ fn a_tool_whose_release_opens_an_outline_takes_alt_backspace_in_the_next_frame()
     canvas.fixture().frame(vec![key_press(Key::Backspace, Modifiers::ALT)]).frame(vec![key_release(Key::Backspace, Modifiers::ALT)]);
     canvas.fixture().hold(Modifiers::NONE).settle();
     assert_eq!(canvas.tool().seen, [Seen::Delete { forward: false }], "the outline the release opened takes Alt+Backspace");
+}
+
+/// Edit ▸ Delete from a menu or the palette, while the focused canvas's tool claims Delete, reaches the tool as that
+/// key, as the key does, and runs no app command; a tool that claims no delete gets none.
+#[trial]
+fn a_fired_command_whose_key_the_tool_claims_reaches_the_tool_as_that_key() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    canvas.fixture().key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.fixture().focused(), Some(canvas.canvas_id()), "Tab focuses the canvas");
+    take_output(canvas.fixture().ctx());
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "the tool took Edit ▸ Delete as its Delete");
+    assert!(take_output(canvas.fixture().ctx()).fired.is_empty(), "no app command ran");
+    canvas.tool_mut().keeps = false;
+    canvas.fixture().settle();
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen.len(), 1, "a tool that claims no delete gets none");
 }
 
 /// A tool that takes every key the host offers it.

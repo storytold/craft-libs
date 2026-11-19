@@ -551,6 +551,11 @@ impl State {
         {
             return Some(owner);
         }
+        // A removed stop in an arena (an editor or control in a canvas body) hands focus back to the arena root's own
+        // stop (the canvas), not to the next stop after the arena.
+        if let Some(arena) = gone.stop.arena.and_then(|arena| self.stops.iter().find(|rec| rec.stop.id == arena && rec.stop.part.is_none())) {
+            return Some(arena.clone());
+        }
         // Press-only stops (selectable text) are outside the Tab order, so focus never falls to them either.
         let order: Vec<StopKey> = self
             .last_stops
