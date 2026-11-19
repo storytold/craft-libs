@@ -152,13 +152,6 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
     assert!(fixture.by_label("Paste").is_none(), "the group is collapsed");
     let button = fixture.by_label("Clipboard").expect("the collapsed group's button");
     fixture.click(&button).idle(3);
-    eprintln!(
-        "DIAG a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used: clicked {:?}; after: Clipboard {:?} Paste {:?} Wide {:?}",
-        button.rect,
-        fixture.by_label("Clipboard").map(|target| target.rect),
-        fixture.by_label("Paste").map(|target| target.rect),
-        fixture.by_label("Wide").map(|target| target.rect)
-    );
     assert!(fixture.by_label("Paste").is_some(), "the button opens the group's popover");
     fixture.key(Key::ArrowDown, Modifiers::ALT).idle(3);
     fixture.key(Key::Enter, Modifiers::NONE).idle(3);

@@ -748,11 +748,6 @@ impl<'a, S> AppShell<'a, S> {
                             })
                             .inner
                             .flatten();
-                        eprintln!(
-                            "DIAG ribbon: slot {key:?} laid out at extent {extent} in {:?}, content took {took:?}, sizing {}",
-                            rect_of(key),
-                            ui.is_sizing_pass()
-                        );
                         if let Some(took) = took.filter(|took| took.is_finite() && *took > 0.0) {
                             measured_now.push((key, took));
                         }

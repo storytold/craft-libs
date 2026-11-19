@@ -282,16 +282,8 @@ fn story(registration: &'static StoryRegistration, surface: Surface, env: &RootE
     }
     let story = &registration.story;
     if let (true, Drive::Custom(open)) = (story.covers.contains(&Required::Open), story.drive) {
-        let before = layer_rects(fixture.ctx()).len();
         open(&mut fixture);
         settle(&mut fixture);
-        eprintln!(
-            "DIAG story-open {}: layers {before} -> {}, root {:?}, focused {:?}",
-            story.name,
-            layer_rects(fixture.ctx()).len(),
-            fixture.root_id(),
-            fixture.focused()
-        );
     }
     (fixture, flow.get())
 }

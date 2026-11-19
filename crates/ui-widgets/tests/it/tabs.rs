@@ -597,11 +597,6 @@ fn a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades() {
     picked.borrow_mut().clear();
     fixture.click_at(table.center());
     assert!(picked.borrow().is_empty(), "a click on the departed tab's slot selects nothing: {:?}", picked.borrow());
-    eprintln!(
-        "DIAG a_contextual_tab_that_leaves_is_not_hit_or_listed_while_it_fades: after the click painted={} tabs back={:?}",
-        painted(&fixture),
-        hidden.iter().filter(|name| !tab_rects(fixture.tree(), name).is_empty()).collect::<Vec<_>>()
-    );
     fixture.idle(30);
     assert!(!painted(&fixture), "the departed tab is gone once the fade ends");
     assert!(hidden.iter().any(|name| !tab_rects(fixture.tree(), name).is_empty()), "the strip refits once the exit ends: {hidden:?}");
