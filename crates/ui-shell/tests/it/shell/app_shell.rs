@@ -6,7 +6,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{MemoProps, MemoView, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::runtime::env::WindowKey;
+use craft_ui::runtime::env::{Env, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::shell::{AppShell, Slot, Title, TitleBar};
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
@@ -165,4 +165,49 @@ fn memoized_slots_run_only_when_their_props_change() {
     version.set(2);
     assert_eq!(frame(&mut frames, vec![]).0, vec!["status"], "a new status runs the status slot alone, once");
     assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
+}
+
+/// What a slot that registers a revealed rect shows: the rect.
+#[derive(MemoProps)]
+struct Revealing {
+    at: Rect,
+}
+
+fn revealing(props: &mut Revealing, ui: &mut Ui) {
+    SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
+    if let Some(shell) = Env::of(ui).view().get::<ShellEntry>().0 {
+        shell.reveal_rect(ui.ctx(), RevealEdge::Start, props.at);
+    }
+    Text::new("Tools").show(ui);
+}
+
+/// A memoized view in a slot that registers a revealed rect registers it again when it replays: the shell reads the
+/// same rects in a replayed pass as in the run.
+#[trial]
+fn a_replayed_view_in_a_slot_registers_its_revealed_rects() {
+    let at = Rect::from_min_size(egui::pos2(0.0, 40.0), Vec2::new(40.0, 120.0));
+    let seen = RefCell::new(Vec::new());
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            AppShell::new(WindowKey::main())
+                .start(Slot::new("tools"), |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("tools", Revealing { at }, revealing).show(ui);
+                })
+                .body(|ui, bcx, _| {
+                    *seen.borrow_mut() = bcx.shell().map(|shell| shell.revealed_rects(ui.ctx())).unwrap_or_default();
+                })
+                .show(ui, &mut ());
+        });
+        (slot_runs(), seen.borrow().clone())
+    };
+    let mut frames = Frames::new();
+    let (ran, first) = frame(&mut frames);
+    assert!(ran.contains(&"revealing"), "the slot runs in its first frame");
+    assert_eq!(first, vec![(RevealEdge::Start, at)], "its run registers the rect");
+    for _ in 0..30 {
+        frame(&mut frames);
+    }
+    let (ran, replayed) = frame(&mut frames);
+    assert_eq!(ran, Vec::<&str>::new(), "the slot replays");
+    assert_eq!(replayed, first, "the replay registers the same rects as the run");
 }

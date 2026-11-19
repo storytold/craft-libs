@@ -1218,6 +1218,7 @@ pub(crate) mod guard {
         ("runtime::windows::Shared", "window shells: read"),
         ("runtime::windows::Record", "window records: read"),
         ("runtime::windows::hit::Exclusive", "exclusive windows: read"),
+        ("runtime::env::shell::RevealedRects", "revealed rects: read; registered in real runs only"),
         ("runtime::focus::State", "focus: read; stops register in real runs only"),
         ("runtime::keys::Stage", "key stage: read"),
         ("primitives::sensing::Arenas", "arenas: read; members join in real runs only"),

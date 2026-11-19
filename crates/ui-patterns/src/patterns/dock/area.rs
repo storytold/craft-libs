@@ -589,8 +589,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
                 let Some(path) = scene.layout.dock_path(edge) else { continue };
                 let Some(Node::Dock { columns, .. }) = scene.layout.root.as_ref().and_then(|root| node_at(root, &path)) else { continue };
                 leaves.push((path.clone(), rect));
-                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed() && crate::runtime::measure::effect(ctx, "shell::reveal_rect")) {
-                    shell.reveal_rect(if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
+                if let Some(shell) = shell.as_ref().filter(|shell| shell.revealed()) {
+                    shell.reveal_rect(ctx, if edge == DockEdge::Start { RevealEdge::Start } else { RevealEdge::End }, rect);
                 }
                 pass.dock(ui, split, DockPlan { edge, columns, rect, flow, open: open.clone() });
             }

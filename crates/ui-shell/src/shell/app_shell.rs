@@ -23,6 +23,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::env::{AppValues, BodyMode, Env, Label, RevealEdge, ShellCx, ShellEntry, ShellRegions, WindowKey};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::frame::{note_shell, take_chrome_toggles};
+use crate::runtime::memory::sub;
 use crate::runtime::overlay::{OpenFilter, any_open};
 use crate::runtime::pointer;
 use crate::runtime::windows::{WindowAction, WindowHost};
@@ -493,7 +494,8 @@ impl<'a, S> AppShell<'a, S> {
             let mut shell = ShellCx::new(window.clone(), if only { BodyMode::Only } else { BodyMode::Normal }, regions.clone())
                 .with_tabs(tabs)
                 .with_tab_reveal(kept.reveal.tab())
-                .with_panels_hidden(kept.reveal.panels_hidden());
+                .with_panels_hidden(kept.reveal.panels_hidden())
+                .with_reveals_key(sub(cx.id, "reveals"));
             // The room an embedded shell shows: its rect less what a scroll or a parent clips. Its dialogs are contained in
             // it.
             let region = cx.rect.intersect(ui.clip_rect());
@@ -579,7 +581,7 @@ impl<'a, S> AppShell<'a, S> {
                     slots.iter().find(|placed| placed.slot.key() == *key).and_then(|placed| placed.edge.reveal_edge()).map(|edge| (edge, *rect))
                 })
                 .collect();
-            edges.extend(scope.revealed_rects());
+            edges.extend(scope.revealed_rects(ui.ctx()));
             kept.reveal.record(edges);
             let revealed = only && !regions.slots.is_empty();
             *cx.keep::<ShellState>() = kept;
