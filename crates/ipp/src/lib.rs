@@ -166,9 +166,8 @@ impl Endpoint {
             #[cfg(not(unix))]
             Endpoint::Unix(path) => Err(Error::Unreachable(format!("{}: Unix sockets are not available here", path.display()))),
             Endpoint::Tcp(host, port) => {
-                let addr = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?.next();
-                let addr = addr.ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
-                open_tcp(host, *port, addr, |addr| TcpStream::connect_timeout(&addr, CONNECT))
+                let addrs = (host.as_str(), *port).to_socket_addrs().map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
+                open_tcp(host, *port, addrs, |addr, timeout| TcpStream::connect_timeout(&addr, timeout))
             }
         }
     }
@@ -200,14 +199,40 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Open one address and put the request timeouts on it. The connect call is a parameter so the
-/// refusal path can be tested at all: no port is guaranteed to stay free between picking one and
-/// using it, and what a refused connect reported is what the caller is supposed to hear.
-fn open_tcp(host: &str, port: u16, addr: SocketAddr, open: impl FnOnce(SocketAddr) -> std::io::Result<TcpStream>) -> Result<Stream> {
-    let s = open(addr).map_err(|e| Error::Unreachable(format!("{host}:{port}: {e}")))?;
-    let _ = s.set_read_timeout(Some(REQUEST));
-    let _ = s.set_write_timeout(Some(REQUEST));
-    Ok(Stream::Tcp(s))
+/// Try the resolved addresses within one connection budget, so an unreachable IPv6 address does
+/// not hide a working IPv4 address. The connector is a parameter so refusals can be tested without
+/// racing to claim a port; the last failed attempt still reports why it failed.
+fn open_tcp(
+    host: &str,
+    port: u16,
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    mut open: impl FnMut(SocketAddr, Duration) -> std::io::Result<TcpStream>,
+) -> Result<Stream> {
+    let mut addrs = addrs.into_iter();
+    let first = addrs.next().ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    let started = std::time::Instant::now();
+    let mut last_error = None;
+    for addr in std::iter::once(first).chain(addrs) {
+        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+        let timeout = CONNECT.saturating_sub(started.elapsed());
+        // Browser Wasm has neither std sockets nor a monotonic clock: let connect report unsupported.
+        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+        let timeout = CONNECT;
+        if timeout.is_zero() {
+            break;
+        }
+        match open(addr, timeout) {
+            Ok(s) => {
+                let _ = s.set_read_timeout(Some(REQUEST));
+                let _ = s.set_write_timeout(Some(REQUEST));
+                return Ok(Stream::Tcp(s));
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let cause = last_error.map(|error| error.to_string()).unwrap_or_else(|| "connection timed out".into());
+    Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
 }
 
 enum Stream {
@@ -486,6 +511,10 @@ fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
         }
         let n = stream.read(&mut buf).map_err(|e| Error::Protocol(format!("reading: {e}")))?;
         if n == 0 {
+            // A Content-Length body is complete only after every promised byte (RFC 9112).
+            if expected.is_some() && !chunked {
+                return Err(Error::Protocol("incomplete HTTP body".into()));
+            }
             return Ok(raw);
         }
         raw.extend_from_slice(buf.get(..n).unwrap_or_default());
@@ -525,9 +554,14 @@ fn http_response(raw: &[u8]) -> Result<(u16, Headers, &[u8])> {
     let head = String::from_utf8_lossy(raw.get(..end).unwrap_or(&[]));
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
-    let status: u16 = status_line
-        .split_whitespace()
-        .nth(1)
+    let mut words = status_line.split_whitespace();
+    let version = words.next().unwrap_or_default().as_bytes();
+    let code = words.next().unwrap_or_default();
+    // RFC 9112 requires an HTTP version and three status digits, not merely a parseable number.
+    let valid_version = matches!(version, [b'H', b'T', b'T', b'P', b'/', major, b'.', minor] if major.is_ascii_digit() && minor.is_ascii_digit());
+    let status: u16 = valid_version
+        .then_some(code)
+        .filter(|s| s.len() == 3 && s.bytes().all(|b| b.is_ascii_digit()))
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| Error::Protocol(format!("bad status line `{status_line}`")))?;
     let headers = lines.filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_ascii_lowercase())).collect();
@@ -554,6 +588,10 @@ fn chunked_complete(body: &[u8], resume: &mut usize) -> bool {
         // (checked, so `ffffffffffffffff` cannot overflow the slice arithmetic).
         let Some(end) = size.checked_add(2).filter(|_| size <= MAX_REPLY) else { return true };
         let Some(rest) = b.get(end..) else { return false };
+        // A full malformed separator must reach dechunk now, even if the server stays open.
+        if b.get(size..end) != Some(b"\r\n") {
+            return true;
+        }
         b = rest;
     }
 }
@@ -575,7 +613,8 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
         if out.len() > MAX_REPLY {
             return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
         }
-        b = b.get(size + 2..).ok_or_else(|| Error::Protocol("cut chunk end".into()))?;
+        // RFC 9112 requires a CRLF separator after each nonempty chunk.
+        b = b.get(size..).and_then(|rest| rest.strip_prefix(b"\r\n")).ok_or_else(|| Error::Protocol("invalid chunk end".into()))?;
     }
 }
 
@@ -690,8 +729,10 @@ pub fn print_job(endpoint: &Endpoint, job: &Job<'_>) -> Result<u32> {
         .iter()
         .find(|a| a.name == "job-id")
         .and_then(Attribute::int)
-        .map(|id| id.max(0) as u32)
-        .ok_or_else(|| Error::Protocol("no job id in the reply".into()))
+        // RFC 8011 requires job-id to be an integer in 1..=i32::MAX.
+        .filter(|id| *id > 0)
+        .map(|id| id as u32)
+        .ok_or_else(|| Error::Protocol("no valid job id in the reply".into()))
 }
 
 /// A request as a server sees it: the operation (the request's status field), its attributes
