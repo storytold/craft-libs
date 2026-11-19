@@ -319,33 +319,55 @@ pub enum MemoRun {
     OutOfView,
 }
 
-/// How each memoized view took part in one pass.
+/// How each memoized view took part in one pass (real runs only), and in every pass of one frame (every call, the
+/// calls of sizing and measuring runs included).
 #[cfg(feature = "testing")]
 #[derive(Default)]
 pub(crate) struct MemoLog {
     pass: u64,
     runs: Vec<(&'static str, Id, MemoRun)>,
+    frame: u64,
+    frame_runs: Vec<(&'static str, Id, MemoRun)>,
 }
 
-/// Counts how the view `name` (`id`) took part in this pass. Fed by `contract::Lazy`'s one runner, which memoized views
-/// share.
+/// Counts how the view `name` (`id`) took part in a call of this pass; `real` for a call in a real run. Fed by
+/// `contract::Lazy`'s one runner, which memoized views share.
 #[cfg(feature = "testing")]
-pub(crate) fn count_memo_run(ctx: &Context, name: &'static str, id: Id, run: MemoRun) {
+pub(crate) fn count_memo_run(ctx: &Context, name: &'static str, id: Id, run: MemoRun, real: bool) {
     let pass = ctx.cumulative_pass_nr();
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
     pass_state::with::<MemoLog, _>(ctx, |log| {
-        if log.pass != pass {
-            *log = MemoLog { pass, runs: Vec::new() };
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_runs.clear();
         }
-        log.runs.push((name, id, run));
+        log.frame_runs.push((name, id, run));
+        if real {
+            if log.pass != pass {
+                log.pass = pass;
+                log.runs.clear();
+            }
+            log.runs.push((name, id, run));
+        }
     });
 }
 
-/// How the memoized views (by name, `"Lazy"` for a `Lazy` child) took part in the last pass, in the order they were
-/// decided; empty when that pass decided none.
+/// How the memoized views (by name, `"Lazy"` for a `Lazy` child) took part in the real run of the last pass, in the
+/// order they were decided; empty when that pass decided none.
 #[cfg(feature = "testing")]
 pub fn last_pass_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
     pass_state::with::<MemoLog, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
+}
+
+/// How the memoized views took part in every pass of the last frame, in order: every call, those of sizing and
+/// measuring runs included (a `Ran` there is a measuring run, which keeps no record). Empty when that frame decided
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_frame_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
+    let viewport = super::egui::pass::current_viewport(ctx);
+    let last = super::egui::pass::frame_nr(ctx, viewport).saturating_sub(1);
+    pass_state::with::<MemoLog, _>(ctx, |log| if log.frame == last { log.frame_runs.clone() } else { Vec::new() })
 }
 
 /// Bytes fed into memo keys in one pass, and the layouts and measure asks of that pass.

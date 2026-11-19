@@ -2,7 +2,7 @@
 //! button, over the body of the active panel. The band and the button are the group's own parts.
 
 use super::commands::DockCommands;
-use super::drop::{self, DragUnit, start_group_drag, start_icon_drag};
+use super::drop::{self, DragUnit, start_group_drag};
 use super::targets::{DockSizes, DockSpot, DockTargets, ZoneRule};
 use super::words::DockWords;
 use super::{PanelDrag, PanelKey, PanelTitle};
@@ -57,7 +57,9 @@ impl Outcome for GroupGripOutput {
 }
 
 /// The handle a group is dragged by: an unmarked band over the empty room of the group's header. A drag starts through [`start_group_drag`] with the grip's unit; a double
-/// click is reported for the group to minimize.
+/// click is reported for the group to minimize. The drag starts with no extent: a caller whose unit has one sets it on
+/// the drag (`GroupDrag::source`, or `strip` for a collapsed column's icons) with `drag::amend` in the pass the grip
+/// reports `drag_started`. A grip in a memoized view so holds no size in its props, which a measuring run sees as zero.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(probe(GroupGrip<usize>))]
 pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
@@ -65,16 +67,12 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
     common: Common,
     unit: DragUnit<P>,
     active: PanelKey,
-    /// The unit's extent where the drag starts and the name its drop region shows.
+    /// The name the unit's drop region shows.
     #[prop]
-    ghost: Option<(Vec2, Label)>,
+    ghost: Option<Label>,
     /// A drag on the grip drags the unit.
     #[prop]
     movable: bool,
-    /// The grip is a collapsed column's: its drag is an icon drag ([`start_icon_drag`]) whose strip is the ghost's
-    /// extent, so a float of the unit lands collapsed under the pointer.
-    #[prop]
-    icons: bool,
     double: bool,
     started: bool,
 }
@@ -82,7 +80,7 @@ pub struct GroupGrip<P: Clone + Send + Sync + 'static> {
 impl<P: Clone + Send + Sync + 'static> GroupGrip<P> {
     /// The grip of `unit`, whose shown panel is `active`.
     pub fn new(unit: DragUnit<P>, active: PanelKey) -> Self {
-        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, icons: false, double: false, started: false }
+        GroupGrip { common: Common::new(), unit, active, ghost: None, movable: true, double: false, started: false }
     }
 }
 
@@ -109,11 +107,7 @@ impl<P: Clone + Send + Sync + 'static> Component for GroupGrip<P> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         self.double = cx.press().double_pressed();
         if self.movable && matches!(cx.press().phase, PressPhase::DragStart { .. }) {
-            match self.ghost.clone() {
-                Some((strip, label)) if self.icons => start_icon_drag(cx, self.unit.clone(), self.active, strip, label),
-                // The ghost's extent is the group's own.
-                ghost => start_group_drag(cx, self.unit.clone(), self.active, ghost.as_ref().map(|(size, _)| *size), ghost.map(|(_, label)| label)),
-            }
+            start_group_drag(cx, self.unit.clone(), self.active, None, self.ghost.clone());
             self.started = true;
         }
     }
@@ -529,7 +523,6 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     closable: self.closable,
                     wheel_selects: self.wheel_selects_tabs,
                     dock: self.dock,
-                    size: self.size,
                     sent: Outbox::new(&mut sent),
                 };
                 // The env around the tab row holds only values its key follows (the shell, the dock's arrangement, a
@@ -542,6 +535,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         if surface_pressed && let Some(strip) = strip {
             focus::request(ui.ctx(), FocusTarget::Id(strip));
         }
+        let size = self.size;
         let reported = &mut self.reported;
         for event in sent {
             match event {
@@ -552,10 +546,14 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                 // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
                 TabEvent::EmptyDrag => reported.empty_drag = true,
                 TabEvent::EmptyDouble => reported.toggle_minimized = true,
-                // The tab's drag records the arrangement it started on, which only the group reads.
+                // The tab's drag records the arrangement it started on and the group's size, which only the group reads:
+                // the tab row's measuring runs see no size.
                 TabEvent::DragStarted => {
                     reported.drag_started = true;
-                    crate::runtime::drag::amend::<PanelDrag>(ui.ctx(), |drag| drag.started = started);
+                    crate::runtime::drag::amend::<PanelDrag>(ui.ctx(), |drag| {
+                        drag.started = started;
+                        drag.source = Some(size);
+                    });
                 }
             }
         }
@@ -592,7 +590,6 @@ struct TabRow<'a, P> {
     closable: bool,
     wheel_selects: bool,
     dock: Option<Id>,
-    size: Vec2,
     sent: Outbox<'a, TabEvent>,
 }
 
@@ -601,7 +598,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
     let env = crate::runtime::env::Env::of(ui);
     let name = Label::from(env.words::<DockWords>().panels.as_str().to_owned());
     let rtl = env.direction.is_rtl();
-    let (panels, active, closable, size) = (row.panels, row.active, row.closable, row.size);
+    let (panels, active, closable) = (row.panels, row.active, row.closable);
     let from = PanelKey::of(&row.anchor);
     let drags = crate::runtime::drag::started(ui.ctx());
     let source = keyed(panels, |panel: &PanelTitle| panel.key).with_text(|panel| Cow::Borrowed(panel.title.as_str()));
@@ -612,7 +609,7 @@ fn tab_row<P: Clone + PartialEq + Debug + Hash + Send + Sync + 'static>(row: &mu
         .shown(active)
         .tear_off()
         .natural_height(true)
-        .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: Some(size), started: None }));
+        .drag_payload(move |drag: &ListDrag<PanelKey>| Some(PanelDrag { panel: drag.grabbed, from, source: None, started: None }));
     if row.wheel_selects {
         strip = strip.wheel_selects();
     }

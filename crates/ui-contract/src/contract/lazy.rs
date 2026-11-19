@@ -143,9 +143,9 @@ impl Lazy {
                     layout_memory::backstop(&ctx, id, size);
                     lazy::replay(&ctx, id);
                     lazy::place(&ctx, &view, id, took);
-                    #[cfg(feature = "testing")]
-                    count_memo_run(&ctx, name, id, MemoRun::OutOfView);
                 }
+                #[cfg(feature = "testing")]
+                count_memo_run(&ctx, name, id, MemoRun::OutOfView, real);
                 return Shown::OutOfView;
             }
         }
@@ -173,11 +173,11 @@ impl Lazy {
                 if let Some(view) = view {
                     lazy::place(&ctx, &view, id, took);
                 }
-                #[cfg(feature = "testing")]
-                count_memo_run(&ctx, name, id, MemoRun::Replayed);
             } else if memo {
                 kept = lazy::kept_output(&ctx, id);
             }
+            #[cfg(feature = "testing")]
+            count_memo_run(&ctx, name, id, MemoRun::Replayed, real);
             return Shown::Replayed(kept);
         }
         let mark = focus::mark(&ctx);
@@ -213,8 +213,8 @@ impl Lazy {
             lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, seen, view, output: run.output.take() });
         }
         #[cfg(feature = "testing")]
-        if real && self.settles {
-            count_memo_run(&ctx, name, id, MemoRun::Ran);
+        if self.settles {
+            count_memo_run(&ctx, name, id, MemoRun::Ran, real);
         }
         // The name is read by the count trials only.
         let _ = name;

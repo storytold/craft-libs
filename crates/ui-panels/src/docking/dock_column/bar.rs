@@ -6,7 +6,7 @@ use crate::buttons::icon_button::IconButtonStyleKey;
 use crate::contract::overlay::Trigger;
 use crate::contract::{Access, MemoProps, MemoView, Name, Outbox, PaintUi, Props as _, Role, Show as _, ShowContainer as _};
 use crate::docking::group::GroupGrip;
-use crate::docking::{ColumnArrow, DockWords, DragUnit, PanelKey, PanelSpec};
+use crate::docking::{ColumnArrow, DockWords, DragUnit, GroupDrag, PanelKey, PanelSpec};
 use crate::menu::{GroupItem, Menu, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::env::Label;
 use craft_behavior::PartKey;
@@ -34,6 +34,8 @@ enum BarEvent {
     Iconic(bool),
     /// A dock row of the column menu.
     Picked(GroupItem),
+    /// A drag of the column started on the band.
+    DragStarted,
 }
 
 /// The grip of a column bar's band: what a drag on it moves and shows.
@@ -113,7 +115,7 @@ pub(in crate::docking) fn show_bar<P: Clone + Hash + Send + Sync + 'static>(
     let Some(ColumnGrip { unit, active, ghost, name }) = grip.filter(|_| band.is_positive()) else { return record };
     let mut sent = Vec::new();
     ui.scope_builder(UiBuilder::new().max_rect(band), |ui| {
-        let props = BarProps { expanded, auto_collapse, arrow, icons, unit, active, ghost, name, sent: Outbox::new(&mut sent) };
+        let props = BarProps { expanded, auto_collapse, arrow, unit, active, ghost: ghost.1, name, sent: Outbox::new(&mut sent) };
         // Keyed by its column's scope id: unique among the bars of a scroll area's columns. As for the tab row, the env
         // around it holds only values its key follows, so it replays at rest.
         let _ = MemoView::new(ui.scope_id(), props, column_bar::<P>).show(ui);
@@ -122,6 +124,17 @@ pub(in crate::docking) fn show_bar<P: Clone + Hash + Send + Sync + 'static>(
         match event {
             BarEvent::Iconic(iconic) => record.iconic = Some(iconic),
             BarEvent::Picked(item) => record.picked = Some(item),
+            // The column's extent goes on the drag here, outside the view, whose measuring runs see no extent: a
+            // collapsed column's drag floats it collapsed with its icons under the pointer.
+            BarEvent::DragStarted => {
+                crate::runtime::drag::amend::<GroupDrag<P>>(ui.ctx(), |drag| {
+                    if icons {
+                        drag.strip = Some(ghost.0);
+                    } else {
+                        drag.source = Some(ghost.0);
+                    }
+                });
+            }
         }
     }
     record
@@ -133,11 +146,11 @@ struct BarProps<'a, P> {
     expanded: bool,
     auto_collapse: bool,
     arrow: ColumnArrow,
-    icons: bool,
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
     unit: DragUnit<P>,
     active: PanelKey,
-    ghost: (Vec2, Label),
+    /// The name the column's drop region shows.
+    ghost: Label,
     name: Label,
     sent: Outbox<'a, BarEvent>,
 }
@@ -148,8 +161,11 @@ fn column_bar<P: Clone + Hash + Send + Sync + 'static>(props: &mut BarProps<'_, 
     let env = crate::runtime::env::Env::of(ui);
     let (words, menu_words) = (env.words::<DockWords>(), env.words::<MenuWords>());
     let toggle = ColumnArrow::Collapse.name(&words, props.expanded);
-    let grip = GroupGrip::new(props.unit.clone(), props.active).ghost(props.ghost.clone()).label(props.name.clone()).icons(props.icons);
+    let grip = GroupGrip::new(props.unit.clone(), props.active).ghost(props.ghost.clone()).label(props.name.clone());
     let held = grip.show_at(ui, band);
+    if held.drag_started {
+        props.sent.send(BarEvent::DragStarted);
+    }
     if held.double_pressed {
         props.sent.send(BarEvent::Iconic(props.expanded));
     }

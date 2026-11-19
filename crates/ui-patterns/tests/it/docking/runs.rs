@@ -12,7 +12,7 @@ use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::{Fixture, MemoRun, last_pass_memo_runs, last_pass_runs, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -178,8 +178,24 @@ fn full(groups: usize) -> Layout<usize> {
 
 /// How the last pass's memoized views took part, by the short name of their props type: `(name, ran, replayed)`.
 fn memo_runs(fixture: &Fixture) -> Vec<(&'static str, u32, u32)> {
+    tally(last_pass_memo_runs(fixture.ctx()))
+}
+
+/// How the memoized views took part in every pass of the last frame, sizing and measuring calls included, by the short
+/// name of their props type: `(name, ran, replayed)`.
+fn frame_memo_runs(fixture: &Fixture) -> Vec<(&'static str, u32, u32)> {
+    tally(last_frame_memo_runs(fixture.ctx()))
+}
+
+/// The views of `name` that ran in the last frame, by id, one entry per call that ran.
+fn frame_ran_ids(fixture: &Fixture, name: &str) -> Vec<egui::Id> {
+    last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(of, _, run)| short(of) == name && *run == MemoRun::Ran).map(|(_, id, _)| id).collect()
+}
+
+/// `runs` counted by the short name of their props type: `(name, ran, replayed)`.
+fn tally(runs: Vec<(&'static str, egui::Id, MemoRun)>) -> Vec<(&'static str, u32, u32)> {
     let mut by_name: Vec<(&'static str, u32, u32)> = Vec::new();
-    for (name, _, run) in last_pass_memo_runs(fixture.ctx()) {
+    for (name, _, run) in runs {
         let name = short(name);
         let at = match by_name.iter().position(|(seen, _, _)| *seen == name) {
             Some(at) => at,
@@ -257,7 +273,13 @@ fn a_tab_switch_runs_only_its_group() {
     let MemoDock { mut fixture, workspace, .. } = memo_dock(side_by_side(3), None);
     workspace.borrow_mut().apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
     fixture.frame(Vec::new());
-    assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "only the second group's tab row ran: {:?}", memo_runs(&fixture));
+    let rows_ran = frame_ran_ids(&fixture, "TabRow");
+    assert!(
+        rows_ran.len() == 1,
+        "only the second group's tab row ran, once: {:?}",
+        frame_memo_runs(&fixture)
+    );
+    assert_eq!(memo_of(&fixture, "TabRow"), (0, 3), "the last pass replays every tab row: {:?}", memo_runs(&fixture));
     assert_eq!(body_runs(), vec![3], "only the newly shown body ran");
     // The tab strip's indicator moves to the new tab, which runs the row while it animates.
     fixture.idle(SETTLE).frame(Vec::new());
@@ -271,7 +293,13 @@ fn a_label_change_runs_only_its_groups_chrome() {
     let MemoDock { mut fixture, labels, .. } = memo_dock(side_by_side(3), None);
     labels.borrow_mut()[4] = "Renamed".to_owned();
     fixture.frame(Vec::new());
-    assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "only the third group's tab row ran: {:?}", memo_runs(&fixture));
+    let rows_ran = frame_ran_ids(&fixture, "TabRow");
+    assert!(
+        rows_ran.len() == 1,
+        "only the third group's tab row ran, once: {:?}",
+        frame_memo_runs(&fixture)
+    );
+    assert_eq!(memo_of(&fixture, "TabRow"), (0, 3), "the last pass replays every tab row: {:?}", memo_runs(&fixture));
     assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
     assert!(fixture.texts().iter().any(|text| text.text == "Renamed"), "the tab shows the new label");
     fixture.idle(SETTLE).frame(Vec::new());
