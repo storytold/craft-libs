@@ -362,7 +362,8 @@ pub struct CurveGraph<'a> {
     /// Accessible values in percent of the levels.
     #[prop(flag)]
     percent: bool,
-    /// A press takes a point up to two hit targets from it, as in Photoshop's Curves dialog, instead of one.
+    /// A plain press takes a point up to two hit targets from it, as in Photoshop's Curves dialog, instead of one. A
+    /// right click or a Cmd/Ctrl press still deletes within one.
     #[prop(flag)]
     wide_grab: bool,
     /// The active channel's histogram, drawn behind the curve.
@@ -600,7 +601,10 @@ impl Component for CurveGraph<'_> {
                 let command = press.mods.cmd || press.mods.ctrl;
                 let points = curve.points().map(<[_]>::to_vec).unwrap_or_default();
                 let before = selected;
-                match frame.map.hit(&points, origin, grab) {
+                // The wide grab is for a plain press, the one Photoshop was measured for: a right click or a
+                // Cmd/Ctrl press deletes within one hit target.
+                let radius = if secondary || command { cx.style.hit } else { grab };
+                match frame.map.hit(&points, origin, radius) {
                     Some(i) if secondary || command => {
                         if let Some(next) = CurveRules::deleted(&curve, i) {
                             cx.set(next);

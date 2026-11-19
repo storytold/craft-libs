@@ -7,9 +7,9 @@ use craft_imaging::ui::adjust::{AdjustContext, CurvesPanel, ToneChannels, ToneCu
 use craft_imaging::ui::curve::{Curve, CurveChannel, CurveEditor};
 use craft_theme::{Contrast, Mode};
 use craft_ui::contract::Bind;
-use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::pointer::{moved, press, release, secondary};
 use craft_ui::testing::{Fixture, Room, style, trial};
-use egui::{Pos2, Vec2, pos2, vec2};
+use egui::{Modifiers, Pos2, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -207,6 +207,34 @@ fn a_wide_grab_still_adds_a_point_thirty_px_away() {
     let points = rig.points();
     assert_eq!(points.len(), 4, "{points:?}");
     assert_eq!(rig.selected.get(), Some(2), "the new point is selected: {points:?}");
+}
+
+/// A right click and a Ctrl press delete a point within one hit target only, with the wide grab on too: Photoshop was
+/// measured for plain clicks. 7 px stays clear of the 8 px boundary, which screen coordinates round across.
+#[trial]
+fn a_wide_grab_keeps_the_delete_reach_of_one_hit_target() {
+    let mut wrong = Vec::new();
+    for (ctrl, by, deletes) in [(false, 7.0, true), (false, 13.0, false), (true, 7.0, true), (true, 13.0, false)] {
+        let mut rig = rig_with(&MIDDLE, true);
+        let pos = rig.at([128.0, 128.0]) + vec2(by, 0.0);
+        rig.fixture.frame(vec![moved(pos)]);
+        if ctrl {
+            rig.fixture.hold(Modifiers::CTRL);
+            rig.fixture.frame(vec![press(pos)]);
+            rig.fixture.frame(vec![release(pos)]);
+            rig.fixture.hold(Modifiers::NONE);
+        } else {
+            rig.fixture.frame(vec![secondary(pos, true)]);
+            rig.fixture.frame(vec![secondary(pos, false)]);
+        }
+        rig.fixture.idle(1);
+        let kept = if deletes { vec![[0.0, 0.0], [255.0, 255.0]] } else { MIDDLE.to_vec() };
+        let how = if ctrl { "a Ctrl press" } else { "a right click" };
+        if rig.points() != kept {
+            wrong.push(format!("{how} {by} px from the point left {:?}", rig.points()));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// Without the wide grab the editor keeps one hit target: a press 13 px from a point adds a second one.

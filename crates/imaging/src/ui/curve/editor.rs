@@ -83,7 +83,8 @@ struct Memory {
 /// stays strictly between its neighbours' inputs.
 ///
 /// Pointer: a press on a point selects and drags it; a press on the empty plot adds a point there and drags it, as one
-/// gesture. A press takes a point within one hit target of it, or two with [`wide_grab`](CurveEditor::wide_grab).
+/// gesture. A press takes a point within one hit target of it; a plain press within two with
+/// [`wide_grab`](CurveEditor::wide_grab).
 /// Dragged more than the handle reach off the plot an interior point is removed, and comes back on re-entry within the
 /// drag. A right click or a Cmd/Ctrl press on a point deletes it.
 ///
@@ -134,8 +135,8 @@ pub struct CurveEditor<'a> {
     /// Points can be corner points.
     #[prop(flag)]
     corners: bool,
-    /// A press takes a point up to two hit targets from it (`size.hit.target`; 16 at 8), as in Photoshop's Curves
-    /// dialog, instead of one.
+    /// A plain press takes a point up to two hit targets from it (`size.hit.target`; 16 at 8), as in Photoshop's
+    /// Curves dialog, instead of one. A right click or a Cmd/Ctrl press still deletes within one.
     #[prop(flag)]
     wide_grab: bool,
     /// The active channel's histogram, drawn behind the curve.
