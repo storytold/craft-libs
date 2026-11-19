@@ -61,7 +61,7 @@ pub(crate) fn fade(ui: &Ui, env: &Env, core: &mut CxCore<'_>) -> Option<Fade> {
 /// filling the clip the paint step set (the component's rect grown by its paint outset) with its surface's corners.
 /// Over the ground the component sits on, each colour under it shows mixed toward that ground by the disabled share.
 /// A range that painted nothing adds no veil; a later range of the same component moves the veil to its own end, so
-/// one veil covers all the component paints. The veil is a shape of the paint list, so a settled region's record,
+/// one veil covers all the component paints. The veil is a shape of the paint list, so a settled view's record,
 /// taken when the region closes, keeps it.
 pub(crate) fn unfade(ui: &Ui, core: &mut CxCore<'_>, fade: Option<Fade>) {
     core.fade = None;

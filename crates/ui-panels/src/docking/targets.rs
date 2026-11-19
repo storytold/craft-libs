@@ -461,8 +461,8 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     }
 }
 
-/// The registrations of a pass. A settled region's run record keeps each one to make it again and compares it with a
-/// real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
+/// The registrations of a pass. A settled memoized view's run record keeps each one to make it again and compares it
+/// with a real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
 impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
     /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
@@ -516,7 +516,7 @@ impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
         Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
     }
 
-    /// Notes a registration in the records of the settling regions around the running code, so a region that settles
+    /// Notes a registration in the records of the memoized views around the running code, so a region that settles
     /// registers its drop spots again when it replays its last run.
     fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
     where

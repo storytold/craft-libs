@@ -306,7 +306,7 @@ pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<LeastRuns, _>(ctx, |log| log.runs.clone())
 }
 
-/// How a memoized view, or a settling or scrolled `Lazy` child, took part in a pass.
+/// How a memoized view, or a scrolled `Lazy` child, took part in a pass.
 #[cfg(feature = "testing")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

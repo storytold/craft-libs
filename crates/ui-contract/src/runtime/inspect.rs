@@ -290,8 +290,8 @@ fn write(ctx: &Context, key: Id, edit: impl FnOnce(&mut Kept) -> bool) {
     }
 }
 
-/// Notes an edit of the record `read` that `editor` made: a settled region that read it runs, and so does the pass when
-/// something read it earlier in the pass.
+/// Notes an edit of the record `read` that `editor` made: a settled memoized view that read it runs, and so does the
+/// pass when something read it earlier in the pass.
 fn edited(ctx: &Context, read: BindKey, editor: Id) {
     crate::runtime::lazy::note_edit(ctx, read);
     if reads::earlier(ctx, read, editor).other {

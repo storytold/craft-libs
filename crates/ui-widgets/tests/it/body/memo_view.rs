@@ -1,14 +1,15 @@
 //! Memoized views (`MemoView`): a view runs only when its props key or a settled rule changes. Count trials: how views
 //! took part in a pass (`last_pass_memo_runs`), as relations.
 
+use crate::values::kit::Scrub;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, MemoProps, MemoView, Show as _, ShowContainer as _, Tracked};
+use craft_ui::contract::{Bind, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Text;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
-use craft_ui::runtime::inspect;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
+use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::{in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
@@ -854,4 +855,129 @@ fn a_view_cut_by_its_clip_runs_when_it_moves_under_it() {
     assert_eq!(settle(&mut frames, 70.0, 1), [MemoRun::Replayed]);
     let both = clip.translate(Vec2::new(0.0, 32.0));
     assert_eq!(moving_frame(&mut frames, moving_room(102.0), Some(both), 1).runs, [MemoRun::Replayed], "a cut run moved with its clip replays");
+}
+
+/// A props type's name without its path and generics: `Reader` for `it::body::memo_settled::Reader<'_>`.
+fn short_name(name: &'static str) -> &'static str {
+    let name = name.split('<').next().unwrap_or(name);
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+/// A view that asks for a repaint in each run while `asks` holds.
+#[derive(MemoProps)]
+struct Asking {
+    asks: bool,
+}
+
+fn asking(props: &mut Asking, ui: &mut Ui) {
+    if props.asks {
+        frame::request_repaint(ui.ctx());
+    }
+    Button::new("Asking").show(ui);
+}
+
+/// A view of the app's level.
+#[derive(MemoProps)]
+struct Level<'a> {
+    level: &'a Tracked<f32>,
+}
+
+fn level(props: &mut Level<'_>, ui: &mut Ui) {
+    Button::new(format!("Level {}", **props.level)).show(ui);
+}
+
+/// The app state of the repaint and edit trials: a level that a scrub outside every view edits as a given value, a view
+/// of the level, a view that asks for repaints while `asks` holds, and the title view, which holds neither. The app
+/// asks for a repaint outside every view while `app_asks` holds.
+struct Repaints {
+    level: Tracked<f32>,
+    asks: bool,
+    app_asks: bool,
+}
+
+impl Repaints {
+    fn new() -> Repaints {
+        Repaints { level: Tracked::new(10.0), asks: false, app_asks: false }
+    }
+
+    fn show(&mut self, ui: &mut Ui) {
+        if self.app_asks {
+            frame::request_repaint(ui.ctx());
+        }
+        let edited = Scrub::new(Bind::given(*self.level)).id_salt("level").show_at(ui, OUTSIDE);
+        for event in edited.events {
+            if let Some(value) = event.value().copied() {
+                self.level.edit(|level| *level = value);
+            }
+        }
+        in_region(ui, region(0), |ui| MemoView::new("title", Title { title: "Title".to_owned() }, title).show(ui));
+        in_region(ui, region(1), |ui| MemoView::new("level", Level { level: &self.level }, level).show(ui));
+        in_region(ui, region(2), |ui| MemoView::new("asking", Asking { asks: self.asks }, asking).show(ui));
+    }
+
+    /// One frame with `events`; returns the views that ran in any of its passes, by props type name, measuring runs
+    /// included.
+    fn frame(&mut self, frames: &mut Frames, events: Vec<egui::Event>) -> Vec<&'static str> {
+        frames.frame(events, |ui| self.show(ui));
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect()
+    }
+
+    fn settle(&mut self, frames: &mut Frames) {
+        for _ in 0..SETTLE {
+            self.frame(frames, vec![]);
+        }
+    }
+}
+
+/// An app repaint request outside every view runs none of them: every view replays in that frame and the next. What
+/// the app changed reaches a view through its props.
+#[trial]
+fn an_app_repaint_outside_every_view_leaves_every_view_replaying() {
+    let mut scene = Repaints::new();
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    scene.app_asks = true;
+    assert_eq!(scene.frame(&mut frames, vec![]), Vec::<&str>::new(), "the frame the app asks in runs no view");
+    let replayed = last_pass_memo_runs(&frames.ctx).iter().filter(|(_, _, run)| *run == MemoRun::Replayed).count();
+    assert_eq!(replayed, 3, "every view replays");
+    scene.app_asks = false;
+    assert_eq!(scene.frame(&mut frames, vec![]), Vec::<&str>::new(), "nor does the frame after it");
+}
+
+/// A repaint asked in a view's run runs that view again in the next frame, and only it; once it stops asking, it runs
+/// once more for the props change and then replays.
+#[trial]
+fn a_repaint_asked_inside_a_view_runs_only_that_view() {
+    let mut scene = Repaints::new();
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    scene.asks = true;
+    for frame in 0..4 {
+        assert_eq!(scene.frame(&mut frames, vec![]), ["Asking"], "frame {frame}: only the view that asks runs");
+    }
+    scene.asks = false;
+    assert_eq!(scene.frame(&mut frames, vec![]), ["Asking"], "the view runs for its props change");
+    assert_eq!(scene.frame(&mut frames, vec![]), Vec::<&str>::new(), "and then replays");
+}
+
+/// A drag of a scrub outside every view that shows the app's level as a given value: the app writes each edit into
+/// its `Tracked` level, which runs the view whose props hold it in the same frame; the other views replay.
+#[trial]
+fn a_given_value_edit_runs_only_the_views_whose_props_hold_it() {
+    let mut scene = Repaints::new();
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let from = Pos2::new(OUTSIDE.left() + 10.0, OUTSIDE.center().y);
+    scene.frame(&mut frames, vec![moved(from)]);
+    assert_eq!(scene.frame(&mut frames, vec![press(from)]), Vec::<&str>::new(), "the press runs no view");
+    let start = *scene.level;
+    let mut runs = Vec::new();
+    for step in 1..=4 {
+        runs.push(scene.frame(&mut frames, vec![moved(from + Vec2::new(12.0 * step as f32, 0.0))]));
+    }
+    scene.frame(&mut frames, vec![release(from + Vec2::new(48.0, 0.0))]);
+    assert_ne!(*scene.level, start, "the drag edited the level");
+    assert!(runs.iter().all(|ran| ran.iter().all(|name| *name == "Level")), "only the level's view runs in a drag frame: {runs:?}");
+    assert!(runs[1..].iter().all(|ran| !ran.is_empty()), "the level's view runs in each drag frame that edits: {runs:?}");
 }

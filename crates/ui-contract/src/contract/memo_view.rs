@@ -13,10 +13,20 @@ use std::sync::Arc;
 /// A memoized view: its content is a `fn`, which captures nothing, and its props ([`MemoProps`]) are its only input
 /// besides the `Ui`, so the framework sees every input it reads. While its props key equals the key of its last run,
 /// it adds that run again (paint, widgets, accessibility nodes, focus stops and the other per-pass
-/// registrations) and returns what that run returned. It runs in a pass where its key differs, or where one of the
-/// settled rules of [`Lazy::settles`] breaks: the pointer over it, focus in it, an intent routed to it, an animation in
-/// it, an edit of a bound value it read, a move, or a change of its environment. Input elsewhere in the window and
-/// repaint requests outside it do not run it: what they change in the data it shows reaches it through its props.
+/// registrations) and returns what that run returned. It runs in a pass where its key differs, or where any of these
+/// holds:
+/// - the pointer is over it or was in its last run, a press started on it, or one of its widgets is dragged or holds
+///   focus, or did;
+/// - an intent of the pass is routed to a component in it (an AccessKit request on one of its nodes);
+/// - an animation in it is not at its end, a texture it shows is still loading, something in it asked for a repaint
+///   (`frame::request_repaint`), or a wake time it asked for came;
+/// - a bound value, inspection record or command state it read changed;
+/// - its place differs from its last run (see below), or the shown life of a component it showed ended;
+/// - its last run asked for a discard pass or did something a replay cannot repeat (an overlay, paint on another
+///   layer).
+///
+/// Input elsewhere in the window and repaint requests outside it do not run it: what they change in the data it shows
+/// reaches it through its props.
 ///
 /// A run that ran in an earlier pass of the same frame is replayed too, when nothing it read was edited after it
 /// started and it asked for no discard pass: a discard pass that another view's new size asked for replays every view
@@ -82,9 +92,7 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
     /// outside every scroll area. A second view with its id in one pass is reported (a debug assertion, as for other
     /// duplicate ids).
     pub fn new(id: impl Hash, props: P, show: fn(&mut P, &mut Ui) -> R) -> MemoView<P, R> {
-        let mut lazy = Lazy::new(id, 0.0);
-        lazy.settles = true;
-        MemoView { lazy, props, show }
+        MemoView { lazy: Lazy::new(id, 0.0), props, show }
     }
 
     /// Runs the view in a child `Ui` placed in flow in `ui`, or adds its last run again. Returns what the run returned,

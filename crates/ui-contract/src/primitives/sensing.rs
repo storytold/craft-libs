@@ -401,11 +401,11 @@ pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
     with_arena(ctx, arena, pass_nr, |state| state.layer = Some(layer));
 }
 
-// The arena registrations below are hit records like the shape record (`pointer::record_shapes`): a settled region
-// that replays its last run (`runtime::replay`) makes them again, so the arenas it shows resolve the next pass's
+// The arena registrations below are hit records like the shape record (`pointer::record_shapes`): a settled memoized
+// view that replays its last run (`runtime::replay`) makes them again, so the arenas it shows resolve the next pass's
 // press over the members, parts and roots it shows. Without them a replayed pass leaves its members out of the arena
-// around it, and an arena inside it is dropped once it has not run for two passes, while the shape record still
-// names their shapes as the press winner.
+// around it, and an arena inside it is dropped once it has not run for two passes, while the shape record still names
+// their shapes as the press winner.
 
 crate::stays!(ArenaId);
 

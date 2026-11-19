@@ -8,14 +8,14 @@ use craft_i18n::Direction;
 use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisplay};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, Entry, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Divider, Elide, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, trial};
 use craft_ui::value_drag::Slider;
 use egui::{Pos2, Rect, Shape, Ui, Vec2};
 use std::cell::Cell;
@@ -196,27 +196,32 @@ fn a_rule_before_a_member_the_bar_hides_is_not_drawn() {
     assert!(!draws_rule(&cut, rects), "the rule before the hidden button is drawn");
 }
 
-/// A settled region holding a bar whose rule was taken back replays the bar without the rule.
+/// A view holding the rule bar `width` wide.
+#[derive(MemoProps)]
+struct RuleBar {
+    width: f32,
+}
+
+fn rule_bar_view(props: &mut RuleBar, ui: &mut Ui) {
+    rule_bar(ui, props.width, &Cell::new((Rect::NOTHING, Rect::NOTHING)));
+}
+
+/// A settled memoized view holding a bar whose rule was taken back replays the bar without the rule.
 #[trial]
 fn a_settled_bar_replays_the_rule_it_took_back() {
     let (_, wide) = rule_bar_shapes(900.0);
     let width = cutting_width(wide);
-    let runs = std::cell::Cell::new(0);
-    let rects = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING));
     let scene = |ui: &mut Ui| {
-        Lazy::new("bar", 0.0).settles(true).show(ui, |ui| {
-            runs.set(runs.get() + 1);
-            rule_bar(ui, width, &rects);
-        });
+        MemoView::new("bar", RuleBar { width }, rule_bar_view).show(ui);
     };
+    let runs = |frames: &Frames| last_frame_memo_runs(&frames.ctx).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count();
     let mut frames = Frames::new();
     frames.frame(vec![], scene);
-    assert!(runs.get() > 0, "the first frame runs the region");
+    assert!(runs(&frames) > 0, "the first frame runs the view");
     frames.idle(30, scene);
     for frame in 0..4 {
-        runs.set(0);
         let shapes = frames.frame_shapes(scene);
-        assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
+        assert_eq!(runs(&frames), 0, "settled frame {frame} ran the view");
         assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays the rule the run took back");
     }
 }

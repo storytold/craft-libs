@@ -79,8 +79,6 @@ pub(crate) struct Board {
     numbers: HashMap<String, u32>,
     this: HashMap<StateKey, CommandState>,
     last: HashMap<StateKey, CommandState>,
-    /// What the frame's input changed, under the root frame it arrived for (`set_input`).
-    changed: (u64, InputChanges),
     /// Scoped commands waiting for their instance.
     queue: Vec<Fired>,
     /// App-scope commands for the next `FrameOutput`.
@@ -115,14 +113,6 @@ pub(crate) struct Board {
     shown: ShownMap,
     /// The scope each child scope is declared inside: an instance of the child is also an instance of the parent.
     parents: HashMap<&'static str, &'static str>,
-}
-
-/// What `set_input` changed for the readers of command states, which each pass of the frame notes before any component
-/// runs (`begin`).
-#[derive(Clone, Default)]
-struct InputChanges {
-    /// The keymap was rebuilt: any chord shown may differ.
-    keymap: bool,
 }
 
 /// Whether a resolution finds the same state under `a` and `b`: no state is the default one.
@@ -163,8 +153,8 @@ fn keep_shown(shown: &mut ShownMap, key: StateKey, viewport: ViewportId, reader:
 }
 
 /// Notes, in the read record, that the running code showed the state under `key`, and keeps what `reader` was shown: a
-/// settled region that showed it runs when `begin` resolves the command from the same reader to something else (a
-/// state, the gate, a modal layer or an instance changed), and a change published after it in the pass runs the pass
+/// settled memoized view that showed it runs when `begin` resolves the command from the same reader to something else
+/// (a state, the gate, a modal layer or an instance changed), and a change published after it in the pass runs the pass
 /// again.
 fn note_read(ctx: &Context, key: Option<StateKey>, reader: Reader, resolved: &ResolvedCommand) {
     let Some((number, instance)) = key else { return };
@@ -607,7 +597,6 @@ pub(crate) fn platform(ctx: &Context) -> Platform {
 /// `begin`, which resolves again what each was shown.
 pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
     let platform = platform(ctx);
-    let frame = pass::root_frame_nr(ctx);
     let generation = input.catalog.as_ref().map(AppCatalog::generation);
     let shadowed = with(ctx, |board| {
         let mut states = HashMap::new();
@@ -642,7 +631,6 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
                 }
             }
         }
-        board.changed = (frame, InputChanges { keymap: stale });
         shadowed
     });
     for id in shadowed {
@@ -911,11 +899,11 @@ fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> 
 
 /// fx.F23: resolves every command a reader of `viewport` was shown again, from that reader's own vantage under this
 /// pass's gate, states, modal facts and instances, and notes an edit of the state key of each whose resolution differs
-/// in any shown part (label, chord, enabled, checked, marked, hint), so a settled region that shows it runs; the entry
-/// keeps the new resolution. Readers of regions that did not run keep their entries: a settled region is the reader
-/// this exists for. It reads no input: a second pass of a frame compares against what the first pass's runs were shown
-/// and what the first pass's call kept, so it wakes only the readers whose resolution the first pass changed (a modal
-/// layer it opened or closed), once.
+/// in any shown part (label, chord, enabled, checked, marked, hint), so a settled memoized view that shows it runs; the
+/// entry keeps the new resolution. Readers of regions that did not run keep their entries: a settled memoized view is
+/// the reader this exists for. It reads no input: a second pass of a frame compares against what the first pass's runs
+/// were shown and what the first pass's call kept, so it wakes only the readers whose resolution the first pass changed
+/// (a modal layer it opened or closed), once.
 fn wake_shown(ctx: &Context, viewport: ViewportId) {
     let mut shown = with(ctx, |board| std::mem::take(&mut board.shown));
     let mut changed = Vec::new();
@@ -1030,7 +1018,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
 }
 
 /// Publishes `state` of `command` for the innermost instance in `chain`. A state other than the one resolved so far in
-/// the frame is an edit of it: a settled region that read it runs, and so does the pass, when something read it
+/// the frame is an edit of it: a settled memoized view that read it runs, and so does the pass, when something read it
 /// earlier in the pass.
 ///
 /// A publish is a board effect, which a measuring run skips as it skips registration: the real run of the same content
@@ -1196,10 +1184,6 @@ impl Returning {
 /// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
 /// through the gate, to their commands.
 pub(crate) fn begin(ctx: &Context) {
-    let (arrived, changed) = with(ctx, |board| board.changed.clone());
-    if arrived == pass::root_frame_nr(ctx) && changed.keymap {
-        lazy::unsettle(ctx);
-    }
     let viewport = pass::current_viewport(ctx);
     let focused = focus::record(ctx, viewport).focused;
     let shortcuts = keys::take_shortcuts(ctx);

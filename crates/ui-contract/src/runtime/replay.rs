@@ -1,14 +1,15 @@
-//! Run records: what a real run of a settling region (`Lazy::settles`) added to its pass, so a later pass adds it again
-//! in place of running the region. A measuring run of a measure-only child (a page `Pages` holds out of view) opens a
-//! record too; only its facts are kept, so a later pass takes its size in place of measuring it again. A record holds the region's paint, egui widget rects and AccessKit nodes (egui's
-//! pass records), what it registered with the focus service (`focus::Transcript`), and a journal of every other
-//! registration the services below take per pass: each service that keeps one notes it here while a record is open,
-//! as the call that makes it again. Records nest: a region's record holds the records its settled regions replayed.
+//! Run records: what a real run of a memoized view (`contract::MemoView`) added to its pass, so a later pass adds it
+//! again in place of running the view. A measuring run of a measure-only child (a page `Pages` holds out of view) opens
+//! a record too; only the values it read are kept, so a later run in the pass takes its size and notes them. A record
+//! holds the view's paint, egui widget rects and AccessKit nodes (egui's pass records), what it registered with the
+//! focus service (`focus::Transcript`), and a journal of every other registration the services below take per pass:
+//! each service that keeps one notes it here while a record is open, as the call that makes it again. Records nest: a
+//! view's record holds the records of the views inside it that replayed.
 //!
 //! The record also holds the facts the settled test reads (`runtime::lazy`): the values the run read, whether
 //! something in it still moves (an animation that is not at its end, a repaint request) and the earliest time it asked
 //! to be shown again, and whether it did something a replay cannot repeat (an overlay it shows, paint on another
-//! layer, a label scope open around it). Such a record is never replayed: the region runs.
+//! layer, a label scope open around it). Such a record is never replayed: the view runs.
 
 use crate::runtime::egui::areas::Layer;
 use crate::runtime::focus::{self, Transcript};
@@ -252,8 +253,8 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
 /// registers it again. `args` builds the arguments only while a record is open. `again` captures nothing (a function
 /// or a closure without captures; a capture does not compile), so everything the registration depends on is in the
 /// arguments, and two notes of the same `again` with equal arguments are the same registration. A replay at another
-/// place calls `again` with the arguments moved there (`Shift`). A service outside
-/// this crate that keeps registrations per pass (a dock's drop spots) notes each one here, so a settled region's replay
+/// place calls `again` with the arguments moved there (`Shift`). A service outside this crate that keeps registrations
+/// per pass (a dock's drop spots) notes each one here, so a settled view's replay
 /// makes it again.
 pub fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
 where

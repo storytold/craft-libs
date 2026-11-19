@@ -9,11 +9,10 @@
 //! its scroll position names (`Anchor`) and the first child at or after the view's start, so the area keeps the
 //! content in view in place when extents before it change.
 //!
-//! A settling child (`Lazy::settles`) also keeps its last real run (`runtime::replay`): while it is settled, it adds
-//! that run to the pass again in place of running, in view or not, inside a scroll area or not. It is settled when
-//! nothing the framework tracks has changed for it since that run, its content version included (`settled`). A
-//! memoized view (`contract::MemoView`) is a settling child keyed by its props: its key replaces the content version,
-//! it also replays in a later pass of the frame it ran in, and its entry outlives a few frames of absence.
+//! A memoized view (`contract::MemoView`) also keeps its last real run (`runtime::replay`): while it is settled, it
+//! adds that run to the pass again in place of running, in view or not, inside a scroll area or not, in a later frame
+//! or a later pass of the frame it ran in. It is settled when its props key is the one of that run and nothing else the
+//! framework tracks has changed for it since (`settled`). Its entry outlives a few frames of absence.
 
 use crate::runtime::egui::areas::Layer;
 use crate::runtime::egui::{focus as focus_state, input as input_state, pass};
@@ -32,13 +31,11 @@ use std::sync::Arc;
 /// What a memoized view's run returned, kept for its replays.
 pub(crate) type Output = Arc<dyn Any + Send + Sync>;
 
-/// What a settling child's runs are keyed by.
+/// What a child's runs are keyed by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Key {
-    /// Nothing: input other than pointer motion runs it (`Lazy::settles` alone).
+    /// Nothing: a `Lazy` child or a collection row, which runs whenever it is in view.
     None,
-    /// The version of the app data it shows (`Lazy::content`).
-    Version(u64),
     /// A memoized view's props key (`contract::MemoView`), taken again after each run.
     Memo(u128),
 }
@@ -145,11 +142,11 @@ struct Entry {
     focus: Arc<Transcript>,
     /// Whether this pass skips the child, under the pass number that decided it.
     decided: Option<(u64, bool)>,
-    /// The last real run of a settling child.
+    /// The last real run of a memoized view.
     settled: Option<Arc<Settled>>,
     /// The last measuring run of a measure-only child (`measured`).
     measured: Option<MeasuredRun>,
-    /// Whether this pass replays the settling child's last run, under the pass number that decided it.
+    /// Whether this pass replays the memoized view's last run, under the pass number that decided it.
     replays: Option<(u64, bool)>,
     /// The last frame that read or wrote the entry.
     touched: u64,
@@ -164,7 +161,7 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
 }
 
-/// Where a settling child ran: it replays only at a place of the same size, layer, layout and environment, and its
+/// Where a memoized view ran: it replays only at a place of the same size, layer, layout and environment, and its
 /// record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
@@ -220,15 +217,14 @@ impl Place {
 /// out of view.
 #[derive(Clone)]
 struct MeasuredRun {
-    facts: replay::Facts,
-    /// The pass and the frame it ran in.
+    /// The values it read.
+    reads: Vec<BindKey>,
+    /// The pass it ran in.
     pass: u64,
-    frame: u64,
-    place: Place,
     size: Vec2,
 }
 
-/// The last real run of a settling child.
+/// The last real run of a memoized view.
 struct Settled {
     record: Record,
     /// The frame it ran in.
@@ -238,7 +234,7 @@ struct Settled {
     rect: Rect,
     /// The pointer was over it, or one of its stops held focus: it runs again to show that they left.
     engaged: bool,
-    /// What it ran for: its content version or its memoized view's props key after the run.
+    /// What it ran for: its props key after the run.
     key: Key,
     /// The pass it ran in.
     pass: u64,
@@ -257,17 +253,9 @@ struct Settled {
     view: Option<View>,
 }
 
-/// What changed in the frame for every settling child.
+/// The bound values edited in the frame, which the memoized views that read them follow.
 #[derive(Default)]
 struct Changes {
-    /// Every settling child runs through this frame: an app's repaint request outside every settling child or an edit
-    /// of a given value unsettles every child for that frame and the next.
-    unsettled_through: u64,
-    /// Every settling child with no content version runs through this frame: a frame with input other than pointer
-    /// motion unsettles them for that frame and the next.
-    input_through: u64,
-    /// The pass whose input was looked at.
-    scanned: u64,
     /// The values changed in a frame, each with the serial of its last edit, and the frame.
     edited: (u64, HashMap<BindKey, u64>),
     /// The serial of the last edit (`note_edit`).
@@ -284,19 +272,6 @@ impl Changes {
 /// Of the values `edited` in a frame, the ones whose last edit came after the edit serial `since`.
 fn edited_since(edited: Option<&HashMap<BindKey, u64>>, since: u64) -> Option<HashSet<BindKey>> {
     edited.map(|edited| edited.iter().filter(|(_, serial)| **serial > since).map(|(key, _)| *key).collect())
-}
-
-impl Changes {
-    /// Looks at the input of the pass `pass_nr` of `frame` once: input other than pointer motion unsettles the children
-    /// with no content version for this frame and the next.
-    fn scan(&mut self, pass_nr: u64, frame: u64, input: bool) {
-        if self.scanned != pass_nr {
-            self.scanned = pass_nr;
-            if input {
-                self.input_through = self.input_through.max(frame + 1);
-            }
-        }
-    }
 }
 
 #[derive(Default)]
@@ -410,17 +385,16 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
-/// Whether the settling child `id` adds its last real run to this pass in place of running, the extent that run
-/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), the rect the
-/// kept real run takes now and the shift its record moves by. The first run of a pass decides from what changed since
-/// that run; a real run also needs a `place` the run can move to (`Place::shift_to`), which a measuring run cannot
-/// tell. A sizing run of a pass that replays takes the extent the last sizing run measured of
-/// the content the kept run showed (its key) in the room it offers now; when that sizing run showed other content or
-/// had another room, or there was none, it runs once as a measuring run, which keeps no record and leaves the decision
-/// of the pass alone, so the real run still replays.
+/// Whether the memoized view `id` adds its last real run to this pass in place of running, the extent that run took in
+/// a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), the rect the kept real
+/// run takes now and the shift its record moves by. The first run of a pass decides from what changed since that run; a
+/// real run also needs a `place` the run can move to (`Place::shift_to`), which a measuring run cannot tell. A sizing
+/// run of a pass that replays takes the extent the last sizing run measured of the content the kept run showed (its
+/// key) in the room it offers now; when that sizing run showed other content or had another room, or there was none, it
+/// runs once as a measuring run, which keeps no record and leaves the decision of the pass alone, so the real run still
+/// replays.
 ///
-/// It replays when its last run was in an earlier frame, or, for a memoized view, in an earlier pass of this frame, and
-/// since then:
+/// It replays when its last run was in an earlier pass, of this frame or an earlier one, and since then:
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
 /// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
@@ -429,22 +403,15 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no intent of this pass is routed to a component in it (an AccessKit request on one of its nodes);
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`), or,
 ///   replaying a run of this frame, after that run started;
-/// - its key is the one of its last run (its content version, or its memoized view's props key after that run), and
-///   its environment (theme, density, scale, language, window active) the one it ran in;
-/// - for a child that is not a memoized view, no frame unsettled every child (`unsettle`): an app's repaint request
-///   outside every settling child or an edit of a given value, this frame or the one before;
-/// - for a child with no key: no input other than pointer motion this frame or the one before;
+/// - its key is the one of its last run (its props key after that run), and its environment (theme, density, scale,
+///   language, window active) the one it ran in;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`) and asked for no discard pass: what it added is
 ///   what the pass was thrown away for;
 /// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is
-///   gone.
-///
-/// - for a memoized view: no framework input its run read outside its props has moved (`runtime::inputs`), the
-///   scroll view a nested `Lazy` child of it decided by is the same (moved with it, `moved`), and no command waits for a command scope instance
-///   of it.
-///
-/// A memoized view's props hold every input it reads, so the two rules that infer a change of app data (input
-/// arrived, a repaint was asked) do not apply to it.
+///   gone;
+/// - no framework input its run read outside its props has moved (`runtime::inputs`), the scroll view a nested `Lazy`
+///   child of it decided by is the same (moved with it, `moved`), and no command waits for a command scope instance of
+///   it.
 pub(crate) fn settled(
     ctx: &Context,
     owner: Option<Id>,
@@ -454,40 +421,33 @@ pub(crate) fn settled(
     view: Option<View>,
     key: Key,
 ) -> Option<(Vec2, Rect, RecordShift)> {
-    let input = ctx.input(|input| {
-        input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
-    });
     let targets = focus::targets(ctx);
     let routed = crate::runtime::keys::routed_to(ctx);
     let now = frame::clock(ctx);
     let held = (input_state::dragged(ctx), focus_state::focused(ctx));
-    let memo = matches!(key, Key::Memo(_));
     let transformed = place.is_some_and(|place| ctx.layer_transform_to_global(place.layer).is_some());
     let settled = with(ctx, |store, pass_nr, frame| {
-        store.changes.scan(pass_nr, frame, input);
         let changes = &store.changes;
         // Usually `None`: only the values written this frame.
         let edited = changes.edited_in(frame);
-        let unsettled = !memo && (changes.unsettled_through >= frame || (key == Key::None && changes.input_through >= frame));
         let entry = store.touch(owner, id, frame);
         let replays = match entry.replays {
             Some((decided_in, replays)) if decided_in == pass_nr => replays,
             _ => {
-                let replays = !unsettled
-                    && entry.settled.as_ref().is_some_and(|settled| {
-                        let facts = &settled.record.facts;
-                        // A run of this frame read the values edited before it started.
-                        let edited = edited_since(edited.as_ref(), if settled.frame < frame { 0 } else { settled.edits });
-                        (settled.frame < frame || (memo && settled.pass < pass_nr))
-                            && settled.key == key
-                            && !settled.engaged
-                            && !facts.blocked
-                            && !facts.discards
-                            && facts.quiet(now, edited.as_ref())
-                            && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)) || routed.contains(&stop))
-                            && !routed.iter().any(|id| settled.record.widgets.contains(id))
-                            && ![held.0, held.1].iter().flatten().any(|widget| settled.record.widgets.contains(widget))
-                    });
+                let replays = entry.settled.as_ref().is_some_and(|settled| {
+                    let facts = &settled.record.facts;
+                    // A run of this frame read the values edited before it started.
+                    let edited = edited_since(edited.as_ref(), if settled.frame < frame { 0 } else { settled.edits });
+                    (settled.frame < frame || settled.pass < pass_nr)
+                        && settled.key == key
+                        && !settled.engaged
+                        && !facts.blocked
+                        && !facts.discards
+                        && facts.quiet(now, edited.as_ref())
+                        && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)) || routed.contains(&stop))
+                        && !routed.iter().any(|id| settled.record.widgets.contains(id))
+                        && ![held.0, held.1].iter().flatten().any(|widget| settled.record.widgets.contains(widget))
+                });
                 entry.replays = Some((pass_nr, replays));
                 replays
             }
@@ -519,7 +479,7 @@ pub(crate) fn settled(
     let view = place.and_then(|_| with_clip.then(|| (settled.view.map(|ran| ran.moved(shift.offset)), view)));
     if engaged(ctx, settled.place.layer, rect.intersect(shift.clip))
         || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
-        || (memo && moved(ctx, &settled, view))
+        || moved(ctx, &settled, view)
     {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
@@ -548,8 +508,8 @@ fn engaged(ctx: &Context, layer: Layer, rect: Rect) -> bool {
     ctx.rect_contains_pointer(layer, rect) || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin))
 }
 
-/// Adds the last real run of the settling child `id` to the running pass, in place of running it, at the place `shift`
-/// names (`settled`), and returns what a memoized view's run returned, as the run left it: the caller moves it.
+/// Adds the last real run of the memoized view `id` to the running pass, in place of running it, at the place `shift`
+/// names (`settled`), and returns what its run returned, as the run left it: the caller moves it.
 pub(crate) fn replay_settled(ctx: &Context, id: Id, shift: &RecordShift) -> Option<Output> {
     let settled = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone()))?;
     replay::replay(ctx, &settled.record, shift);
@@ -573,8 +533,8 @@ pub(crate) fn keep(ctx: &Context, owner: Option<Id>, id: Id) {
     });
 }
 
-/// What a settling child's real run found besides its record: what it ran for, the edit serial and the framework
-/// inputs' generations when it started (`edits`, `inputs::seen`), the scroll view around it and what a memoized view's
+/// What a memoized view's real run found besides its record: what it ran for, the edit serial and the framework
+/// inputs' generations when it started (`edits`, `inputs::seen`), the scroll view around it and what its
 /// run returned.
 pub(crate) struct Ran {
     pub(crate) key: Key,
@@ -584,7 +544,7 @@ pub(crate) struct Ran {
     pub(crate) output: Option<Output>,
 }
 
-/// Keeps the real run `record` of the settling child `id`, which ran at `place` and took `rect`.
+/// Keeps the real run `record` of the memoized view `id`, which ran at `place` and took `rect`.
 pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, seen, view, output }: Ran) {
     let targets = focus::targets(ctx);
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
@@ -600,41 +560,25 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     });
 }
 
-/// Whether the measure-only child `id` takes the size its last measuring run at `place` found, in place of measuring
-/// again, and that size. It does when that run was in this pass, or in an earlier frame and since then none of the
-/// settled rules a measure reads has broken (`settled`): nothing in it moves or asked to be shown again, no value it
-/// read changed, no frame unsettled every child, and the frame and the one before had no input other than pointer
-/// motion. A measure-only child has no place on screen, no stops and no widgets, so the pointer, the focus and what a
-/// replay repeats do not count. Returns the values that run read with the size: the caller notes them as read again,
-/// so an edit of one later in the pass reruns it.
-pub(crate) fn measured(ctx: &Context, id: Id, place: Place) -> Option<(Vec2, Vec<BindKey>)> {
-    let input = ctx.input(|input| {
-        input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
-    });
-    let now = frame::clock(ctx);
+/// The size this pass's measuring run of the measure-only child `id` found, and the values it read: a later run in the
+/// pass takes that size, whatever room it has, so the pass places by one size. The caller notes the values as read
+/// again, so an edit of one later in the pass reruns it. A run of an earlier pass is not reused: the content's inputs
+/// are not tracked, so it is measured again in each pass.
+pub(crate) fn measured(ctx: &Context, id: Id) -> Option<(Vec2, Vec<BindKey>)> {
     with(ctx, |store, pass_nr, frame| {
-        store.changes.scan(pass_nr, frame, input);
-        let changes = &store.changes;
-        let edited = edited_since(changes.edited_in(frame).as_ref(), 0);
-        let unsettled = changes.unsettled_through >= frame || changes.input_through >= frame;
         let run = store.touch(None, id, frame).measured.as_ref()?;
-        let same_pass = run.pass == pass_nr;
-        let quiet = !unsettled && run.frame < frame && run.facts.quiet(now, edited.as_ref());
-        // This pass's measuring run found the size the pass places by: a later run in the pass takes it, whatever room it
-        // has.
-        (same_pass || (run.place == place && quiet)).then(|| (run.size, run.facts.reads.iter().copied().collect()))
+        (run.pass == pass_nr).then(|| (run.size, run.reads.clone()))
     })
 }
 
-/// Keeps the measuring run of the measure-only child `id` at `place`: what its record found (`replay::close`) and the
-/// size it took.
-pub(crate) fn measured_run(ctx: &Context, id: Id, facts: replay::Facts, place: Place, size: Vec2) {
+/// Keeps the measuring run of the measure-only child `id` in this pass: the values it read and the size it took.
+pub(crate) fn measured_run(ctx: &Context, id: Id, reads: Vec<BindKey>, size: Vec2) {
     with(ctx, |store, pass_nr, frame| {
-        store.touch(None, id, frame).measured = Some(MeasuredRun { facts, pass: pass_nr, frame, place, size });
+        store.touch(None, id, frame).measured = Some(MeasuredRun { reads, pass: pass_nr, size });
     });
 }
 
-/// Notes that the value `key` changed in this frame: a settling child that read it runs.
+/// Notes that the value `key` changed in this frame: a memoized view that read it runs.
 pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
     with(ctx, |store, _, frame| {
         let changes = &mut store.changes;
@@ -644,12 +588,6 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
         changes.serial += 1;
         changes.edited.1.insert(key, changes.serial);
     });
-}
-
-/// Unsettles every settling child for this frame and the next: a change of app data the framework cannot attribute to
-/// a child.
-pub(crate) fn unsettle(ctx: &Context) {
-    with(ctx, |store, _, frame| store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1));
 }
 
 /// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it

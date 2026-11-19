@@ -239,22 +239,31 @@ fn a_row_whose_label_changed_since_the_menu_last_opened_takes_its_new_letter() {
     assert_eq!(runs.get(), 1, "O runs the row that reads Open");
 }
 
-/// A menu bar that settles (in a title bar slot with a content version) still takes its keys while it replays its
-/// last run: F10 takes the focus to the bar, and Alt with a title's marked letter opens that menu.
+/// A view of a menu bar with a File menu.
+#[derive(craft_ui::contract::MemoProps)]
+struct MainMenu {}
+
+fn main_menu(_: &mut MainMenu, ui: &mut egui::Ui) {
+    let titles = vec![MenuTitle::new("&File", |ui| {
+        MenuItem::new("&New").show(ui);
+    })];
+    MenuBar::new("Main menu", titles).show(ui);
+}
+
+/// A menu bar in a memoized view still takes its keys while the view replays its last run: F10 takes the focus to the
+/// bar, and Alt with a title's marked letter opens that menu.
 #[trial]
 fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
-    use craft_ui::contract::Lazy;
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs};
     let mut fixture = Fixture::new(|ui| {
-        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
-            let titles = vec![MenuTitle::new("&File", |ui| {
-                MenuItem::new("&New").show(ui);
-            })];
-            MenuBar::new("Main menu", titles).show(ui);
-        });
+        MemoView::new("title", MainMenu {}, main_menu).show(ui);
     });
     fixture.os(Os::Linux);
     fixture.settle().idle(2);
     assert!(fixture.focused_stop().is_none(), "nothing holds the focus at the start");
+    let runs = last_frame_memo_runs(fixture.ctx());
+    assert!(runs.iter().all(|(_, _, run)| *run == MemoRun::Replayed) && !runs.is_empty(), "the bar's view replays: {runs:?}");
     fixture.key(Key::F10, Modifiers::NONE);
     fixture.settle();
     assert!(fixture.focused_stop().is_some(), "F10 takes the focus to the bar");

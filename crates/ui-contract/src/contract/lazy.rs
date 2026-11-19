@@ -1,5 +1,5 @@
-//! `Lazy`: a child of a scroll area that runs only while it is in view, and a child that runs only when something it
-//! shows changed (`runtime::lazy`).
+//! `Lazy`: a child of a scroll area that runs only while it is in view, and the runner a memoized view shares with it
+//! (`runtime::lazy`).
 
 use crate::layout::{flow_region, take_cell, take_in_flow};
 use crate::runtime::egui::alloc;
@@ -30,15 +30,14 @@ use std::hash::Hash;
 /// `Lazy::new(key, estimate).show(ui, |ui| ..)` around each large child (a card, a section of a panel) in the scroll
 /// body.
 ///
-/// A settling child ([`Lazy::settles`]) also keeps what its last run painted and registered, and while it is settled
-/// it adds that again in place of running, in view or not.
+/// A memoized view (`MemoView`) is a `Lazy` child keyed by its props: it also keeps what its last run painted and
+/// registered, and while its key and the framework inputs it read are unchanged it adds that again in place of running,
+/// in view or not.
 #[must_use]
 pub struct Lazy {
     key: u64,
     estimate: f32,
     reveal: bool,
-    pub(super) settles: bool,
-    content: Option<u64>,
 }
 
 impl Lazy {
@@ -48,7 +47,7 @@ impl Lazy {
         use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
-        Lazy { key: hasher.finish(), estimate, reveal: false, settles: false, content: None }
+        Lazy { key: hasher.finish(), estimate, reveal: false }
     }
 
     /// When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
@@ -59,57 +58,17 @@ impl Lazy {
         self
     }
 
-    /// When `settles` holds, the child runs only when something it shows may have changed, inside a scroll area or
-    /// not. Otherwise it repaints its last run and registers again what that run registered (its stops, hit shapes,
-    /// widgets and accessibility nodes), as if it ran. It runs in a frame where any of these holds:
-    /// - the pointer is over it or was in its last run, a press started on it, or it holds focus or held it;
-    /// - an animation in it is not at its end, something in it asked for a repaint, or a wake time it asked for came;
-    /// - a bound value it read was written;
-    /// - its place, room, clip or scale differs from its last run, or its environment does: the theme, density, language
-    ///   or the window's active state;
-    /// - its [`content`](Self::content) version differs from its last run;
-    /// - the app asked for a repaint outside every settling child (`frame::request_repaint`), or a given value was
-    ///   edited: the framework cannot see which children show that app data, so every child runs then;
-    /// - for a child with no content version: the frame or the one before had input other than pointer motion, which
-    ///   may have changed app data it shows;
-    /// - its last run showed an overlay or painted on another layer.
-    ///
-    /// A bound value is known by where it lives, so a settled reader needs a binding that stays in place between
-    /// frames: a value copied into a local each frame and bound there is a new place each frame, and an edit of it
-    /// does not reach the reader until the next frame it runs.
-    pub fn settles(mut self, settles: bool) -> Lazy {
-        self.settles = settles;
-        self
-    }
-
-    /// The version of the app data a settling child shows that the framework does not track (a document's revision,
-    /// a job's progress): the child runs when it differs from the version of its last run. A child with a version
-    /// does not run for input that reaches other parts of the window: what that input changes in the data it shows
-    /// moves the version, or reaches it as a command or app repaint request.
-    pub fn content(mut self, version: u64) -> Lazy {
-        self.content = Some(version);
-        self
-    }
-
     /// Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
     /// run.
     pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-        self.run(ui, |ui, _| add(ui))
-    }
-
-    fn run<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Option<R> {
-        let key = match self.content {
-            Some(version) => Key::Version(version),
-            None => Key::None,
-        };
-        match self.run_keyed(ui, "Lazy", key, add) {
+        match self.run_keyed(ui, "Lazy", Key::None, |ui, _| add(ui)) {
             Shown::Ran(out) => Some(out),
             Shown::Replayed(..) | Shown::OutOfView => None,
         }
     }
 
     /// The one runner of a `Lazy` child and a memoized view (`MemoView`), named `name` in the count trials: runs `add`,
-    /// replays the kept run of a settling child keyed `key`, or takes the extent of a child out of view.
+    /// replays the kept run of a memoized view keyed `key`, or takes the extent of a child out of view.
     pub(super) fn run_keyed<R>(self, ui: &mut Ui, name: &'static str, key: Key, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Shown<R> {
         let ctx = ui.ctx().clone();
         let view = Env::of(ui).view().lazy_view();
@@ -159,34 +118,28 @@ impl Lazy {
         if real && memo {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
-        if self.settles
-            && let Some((size, ran_at, shift)) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
-        {
-            let took = if memo {
-                // A real replay is where the run's content went, moved with the room.
-                let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
-                place_view(ui, rect)
-            } else {
-                take_in_flow(ui, size).0
-            };
-            let mut kept = None;
-            if real {
+        if memo && let Some((size, ran_at, shift)) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key) {
+            // A real replay is where the run's content went, moved with the room.
+            let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
+            let took = place_view(ui, rect);
+            let kept = if real {
                 layout_memory::backstop(&ctx, id, size);
-                kept = lazy::replay_settled(&ctx, id, &shift);
+                let kept = lazy::replay_settled(&ctx, id, &shift);
                 if let Some(view) = view {
                     lazy::place(&ctx, &view, id, took);
                 }
-            } else if memo {
-                kept = lazy::kept_output(&ctx, id);
-            }
+                kept
+            } else {
+                lazy::kept_output(&ctx, id)
+            };
             #[cfg(feature = "testing")]
             count_memo_run(&ctx, name, id, MemoRun::Replayed, real);
             return Shown::Replayed(kept, shift);
         }
         let mark = focus::mark(&ctx);
-        let mut run = Run { recording: self.settles && real, output: None };
+        let mut run = Run { recording: memo && real, output: None };
         let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
-        let seen = if run.recording && matches!(key, Key::Memo(_)) { crate::runtime::inputs::seen(&ctx) } else { Default::default() };
+        let seen = if run.recording { crate::runtime::inputs::seen(&ctx) } else { Default::default() };
         if run.recording {
             replay::open(&ctx);
         }
@@ -205,7 +158,7 @@ impl Lazy {
         } else {
             alloc::advance_past(ui, rect);
         }
-        if view.is_some() || self.settles {
+        if view.is_some() || memo {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
             lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
         }
@@ -220,7 +173,7 @@ impl Lazy {
             lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, seen, view, output: run.output.take() });
         }
         #[cfg(feature = "testing")]
-        if self.settles {
+        if memo {
             count_memo_run(&ctx, name, id, MemoRun::Ran, real);
         }
         // The name is read by the count trials only.

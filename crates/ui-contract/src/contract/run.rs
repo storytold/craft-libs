@@ -1350,7 +1350,7 @@ pub(crate) fn close_bar_line(ctx: &Context, line: Id) {
     }
 }
 
-/// Empties the shapes of `held` painted this pass. The run record of a settling region is taken when it closes, after
+/// Empties the shapes of `held` painted this pass. The run record of a memoized view is taken when it closes, after
 /// this, so a replay repeats the line as it shows.
 fn take_back(ctx: &Context, held: &[HeldRule]) {
     let pass = ctx.cumulative_pass_nr();
