@@ -52,7 +52,7 @@ fn scrub_warp<C: Component>(cx: &mut Cx<'_, C>, drag: &ValueDrag, pos: Pos2) -> 
     if warp.pending() {
         return shift;
     }
-    let Some(screen) = crate::runtime::pointer::frame(&ctx).pos else { return shift };
+    let Some(screen) = crate::runtime::pointer::frame_raw(&ctx).pos else { return shift };
     let hosts = WindowHost::of(&ctx);
     if let (Some(by), Some(desktop)) = (drag.warp_by(screen, ctx.content_rect()), hosts.desktop_pointer())
         && hosts.warp_pointer(desktop + by)

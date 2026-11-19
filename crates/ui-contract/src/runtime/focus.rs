@@ -603,6 +603,7 @@ pub(crate) fn stop_rec(ctx: &Context, key: StopKey) -> Option<StopRec> {
 /// The registration of the stop focus is on.
 #[doc(hidden)]
 pub fn focused_rec(ctx: &Context) -> Option<StopRec> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Focus);
     let focused = egui_focus::focused(ctx);
     with(ctx, |state| {
         state.focus_now = focused;
@@ -848,6 +849,11 @@ pub(crate) fn scope_chain(ctx: &Context, rec: &StopRec) -> Vec<Id> {
         }
         chain
     })
+}
+
+/// Where key focus is, as the tracked input `Focus` compares it: the focused widget and whether its ring shows.
+pub(crate) fn focus_state(ctx: &Context) -> (Option<Id>, bool) {
+    (egui_focus::focused(ctx), with(ctx, |state| state.visible))
 }
 
 /// Whether focus sits inside a menu and arrived by keyboard.

@@ -13,6 +13,7 @@
 use crate::runtime::egui::areas::Layer;
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame;
+use crate::runtime::inputs::{Input, Inputs};
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
 use egui::{Context, IdSet};
@@ -122,6 +123,11 @@ pub(crate) struct Facts {
     /// The components whose memory owners registered in the run (`memory::register_owner`): a replay needs their
     /// shown-tier state still kept (`memory::ended_since`).
     pub(crate) owners: Vec<egui::Id>,
+    /// The framework inputs the run read outside its props (`runtime::inputs`).
+    pub(crate) inputs: Inputs,
+    /// The command scope instances that registered in the run (`commands::register_instance`): a command queued for one
+    /// is taken only by a run, so a replay waits until the queue holds none.
+    pub(crate) instances: Vec<egui::Id>,
 }
 
 /// What one real run of a region added to its pass.
@@ -166,6 +172,8 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.owners.extend(open.facts.owners.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
             outer.facts.reads.extend(open.facts.reads.iter().copied());
+            outer.facts.inputs.extend(open.facts.inputs);
+            outer.facts.instances.extend(open.facts.instances.iter().copied());
         } else {
             recorder.journal.clear();
         }
@@ -207,6 +215,7 @@ pub(crate) fn replay(ctx: &Context, record: &Record) {
     }
     with_open(ctx, |facts| {
         facts.reads.extend(record.facts.reads.iter().copied());
+        facts.inputs.extend(record.facts.inputs);
         facts.wake = min_wake(facts.wake, record.facts.wake);
     });
 }
@@ -247,6 +256,16 @@ pub(crate) fn note_read(ctx: &Context, key: BindKey) {
     with_open(ctx, |facts| {
         facts.reads.insert(key);
     });
+}
+
+/// Notes that the running code read the framework input `input`.
+pub(crate) fn note_input(ctx: &Context, input: Input) {
+    with_open(ctx, |facts| facts.inputs.insert(input));
+}
+
+/// Notes that the command scope instance `id` registered in the running code.
+pub(crate) fn note_instance(ctx: &Context, id: egui::Id) {
+    with_open(ctx, |facts| facts.instances.push(id));
 }
 
 /// Notes that something in the running code still moves.

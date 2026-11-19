@@ -75,7 +75,7 @@ pub(super) fn dismissal(
 
 /// Whether a primary press landed outside the layer, its anchor and the layers opened from inside it.
 fn press_outside(ctx: &Context, layer: &Layer<'_>, rect: Rect, anchor: Rect) -> bool {
-    let Some(press) = pointer::frame(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
+    let Some(press) = pointer::frame_raw(ctx).press.filter(|press| press.button == craft_behavior::PointerButton::Primary).map(|press| press.origin)
     else {
         return false;
     };
@@ -118,8 +118,9 @@ impl<C: Component> Cx<'_, C> {
         self.core.injected = Some(source);
     }
 
-    /// The modifiers held this frame, Alt alone included.
+    /// The modifiers held this frame, Alt alone included. A tracked input: a memoized view that reads them runs when
+    /// they change.
     pub fn modifiers(&self) -> Mods {
-        pointer::frame(&self.core.ctx).mods
+        pointer::mods(&self.core.ctx)
     }
 }

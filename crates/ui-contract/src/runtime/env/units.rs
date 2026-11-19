@@ -52,7 +52,7 @@ const PERCENT: f64 = 100.0;
 
 /// The size of a point, the Point/Pica Size of the Units preference. An app sets it once on its root env with
 /// `RootEnv::values`; `Units` reads it for typed Points and Picas and for their conversion to other lengths.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, crate::contract::MemoProps)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum PointSize {

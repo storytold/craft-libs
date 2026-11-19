@@ -3,6 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
+use crate::runtime::env::{Env, Scoped};
 use egui::Ui;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -24,6 +25,21 @@ use std::sync::Arc;
 /// `&mut Tracked<T>` model, a [`Bind`](super::Bind)) moves its key: its record keeps the key from before the run, so the
 /// view runs once more, reads the written value, and replays from then on. A write costs one more run, never a stale
 /// replay.
+///
+/// Its other inputs are the framework's, and each reaches the key or the settled test:
+/// - its place: the room it is given, the clip, the layer, the layout, the scale and the scope's style inputs (tokens,
+///   theme, density, direction, language, window active), compared for every view;
+/// - what the scope around it hands down beyond those (enabled, read-only, size, ink, the command chain, motion, every
+///   app value, and the rest of `Scoped::scope_key`), in the key;
+/// - the framework inputs it reads outside its props (`runtime::inputs`: the modifiers, the pointer, the keys held, the
+///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the scroll view of a nested
+///   `Lazy`): a change of one runs only the views that read it;
+/// - the clock, read through `frame::stepped_clock`: the view runs at the next step;
+/// - commands sent to a command scope instance inside it: it runs while one waits.
+///
+/// Its content is a layout room of its own, as a pane's is: the flow of the body around it (a row's shrink, a column's
+/// sweep, a grid's cursor) does not reach in, so the room it is given reaches it only through its place. To the body
+/// around it the view is one unit, sized by its content's measure.
 ///
 /// What `show` returns holds layout facts only (a size, which part took the room). A replay returns the kept value
 /// again, so an event returned through it would arrive once per pass. Events leave a view through its bindings, its
@@ -72,9 +88,13 @@ impl<P: MemoProps, R: Clone + PartialEq + Send + Sync + 'static> MemoView<P, R> 
     pub fn show(self, ui: &mut Ui) -> Option<R> {
         let MemoView { lazy, mut props, show } = self;
         let ctx = ui.ctx().clone();
-        let key = Self::key(&ctx, &props, show);
+        let env = Env::of(ui);
+        let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
+            // The content is a layout room of its own: the flow of the body around it does not reach in.
+            let installed = Env::install_for(ui, env.derive_local(Scoped::start_room));
             let out = show(&mut props, ui);
+            Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));
             out
         });
@@ -85,12 +105,14 @@ impl<P: MemoProps, R: Clone + PartialEq + Send + Sync + 'static> MemoView<P, R> 
         }
     }
 
-    /// The key of `props` shown through `show`: the props type, the `fn`'s address and the props' inputs. Two `fn`s
-    /// the compiler merged into one address differ in their props type or show the same.
-    fn key(ctx: &egui::Context, props: &P, show: fn(&mut P, &mut Ui) -> R) -> u128 {
+    /// The key of `props` shown through `show` in the scope `env`: the props type, the `fn`'s address, the props' inputs
+    /// and what the scope hands down beyond its style inputs (`Scoped::scope_key`). Two `fn`s the compiler merged into
+    /// one address differ in their props type or show the same.
+    fn key(ctx: &egui::Context, env: &Env, props: &P, show: fn(&mut P, &mut Ui) -> R) -> u128 {
         let mut key = MemoKey::of_view(ctx);
         key.feed_hash(&P::identity());
         key.write(&(show as usize).to_le_bytes());
+        key.write(&env.scope_key().to_le_bytes());
         props.key(&mut key);
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_memo_key_bytes(ctx, key.bytes());

@@ -543,7 +543,24 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
     })
 }
 
-/// The running pass's time in seconds, read once by the begin hook.
+/// The pass clock in seconds rounded down to a multiple of `step`, for content that changes with time (a rescan every
+/// few seconds, a "5 minutes ago"): the running view is shown again at the next multiple. Between two steps a run
+/// shows what the last one showed, so a memoized view that reads it replays until the next step and runs then. A
+/// `step` of zero or less returns the clock and shows the view again in every pass.
+pub fn stepped_clock(ctx: &Context, step: f64) -> f64 {
+    let now = clock(ctx);
+    if step <= 0.0 {
+        crate::runtime::motion::note_unsettled(ctx);
+        return now;
+    }
+    let at = (now / step).floor() * step;
+    crate::runtime::motion::wake_at(ctx, at + step);
+    at
+}
+
+/// The running pass's time in seconds, read once by the begin hook. Content that changes with time reads
+/// [`stepped_clock`], which shows it again when the value it read changes; this read notes nothing, for timing
+/// events in the component that has the pointer or the focus.
 #[doc(hidden)]
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {

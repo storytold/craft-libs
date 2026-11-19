@@ -53,6 +53,14 @@ impl<G: GroupKind> PartialEq for GroupHandle<G> {
     }
 }
 
+/// A handle to group state its members write during the pass: a key cannot follow it, so a view under a group runs in
+/// every pass.
+impl<G: GroupKind> crate::contract::MemoProps for GroupHandle<G> {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        key.changes_every_pass();
+    }
+}
+
 impl<G: GroupKind> EnvValue for GroupHandle<G> {
     fn root() -> Self {
         GroupHandle { state: None, kind: PhantomData }

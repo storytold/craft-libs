@@ -162,6 +162,13 @@ pub fn snap_tolerance(view: &CanvasView, mods: Mods, os: Platform, tool_reads_co
 #[derive(Clone, PartialEq)]
 struct InCanvasSnap(Option<Snap>);
 
+/// A context the canvas rebuilds each pass: a view under it runs in every pass.
+impl crate::contract::MemoProps for InCanvasSnap {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        key.changes_every_pass();
+    }
+}
+
 impl EnvValue for InCanvasSnap {
     fn root() -> Self {
         InCanvasSnap(None)

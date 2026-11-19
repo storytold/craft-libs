@@ -69,6 +69,8 @@ pub(crate) struct Board {
     /// The commands the app defines at run time, from this frame's input.
     app: Option<AppCatalog>,
     keymap: Option<KeymapCache>,
+    /// How many keymaps the board built: the keymap's generation (`runtime::inputs::Input::Keymap`).
+    keymaps: u64,
     gate: Option<CommandGate>,
     /// The gate's answers in this frame, by command key (`CommandRef::key`). The gate answers from what the app knew
     /// before the frame, so the board asks it once per command per frame, whichever readers and passes resolve it.
@@ -633,6 +635,7 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
             let BuiltKeymap { keymap, edit_chords, window_shortcuts } =
                 keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref());
             board.keymap = Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, edit_chords, window_shortcuts });
+            board.keymaps += 1;
             for def in input.catalog.as_ref().map_or(&[][..], AppCatalog::defs) {
                 if board.registry.get(&def.command.id).is_some() && board.shadowed.insert(def.command.id.clone()) {
                     shadowed.push(def.command.id.clone());
@@ -653,18 +656,31 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
 }
 
+/// The generation of the window's keymap: it moves each time a new keymap is built.
+pub(crate) fn keymap_generation(ctx: &Context) -> u64 {
+    with(ctx, |board| board.keymaps)
+}
+
+/// Whether the queue holds a command for one of `instances`: only a run of the view they registered in takes it.
+pub(crate) fn queued_for(ctx: &Context, instances: &[Id]) -> bool {
+    !instances.is_empty() && with(ctx, |board| board.queue.iter().any(|fired| fired.target.is_some_and(|target| instances.contains(&target))))
+}
+
 /// The bindings the window's keymap gives `command`; none before the first frame builds one.
 pub(crate) fn bindings(ctx: &Context, command: &CommandRef) -> Vec<craft_keymap::Binding> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.bindings(command)).unwrap_or_default())
 }
 
 /// The chord the window's keymap shows for `command` (`Keymap::shown_chord`); none before the first frame builds one.
 pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command)))
 }
 
 /// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
 pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
 }
 
@@ -686,6 +702,7 @@ pub(crate) fn take_delivered(ctx: &Context) -> Vec<Fired> {
 /// Whether the component that holds key focus sits inside the instance `id`.
 #[doc(hidden)]
 pub fn focus_within(ctx: &Context, id: Id) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Focus);
     with(ctx, |board| board.here.focused.iter().any(|(_, chain)| chain.contains(&id)))
 }
 
@@ -697,6 +714,7 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
 /// `register_instance` in the layer `layer`, which a replay of the registration keeps.
 fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
     crate::runtime::replay::journal(ctx, || (scope, id, layer), |ctx, &(scope, id, layer)| register_in(ctx, scope, id, layer));
+    crate::runtime::replay::note_instance(ctx, id);
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
     with(ctx, |board| match board.instances.iter_mut().find(|i| i.id == id) {
@@ -797,6 +815,8 @@ fn resolve_in(
     reach: Reach<'_>,
     from: Option<&Vantage>,
 ) -> (ResolvedCommand, Option<StateKey>) {
+    // The resolved command carries the chord the keymap shows.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     let ((mut resolved, key), first_unknown, gate) = with(ctx, |board| {
         let first_unknown = board.def(&command.id).is_none() && board.unknown.insert(command.id.clone());
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.

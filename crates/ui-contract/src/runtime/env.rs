@@ -89,6 +89,8 @@ pub struct Scoped {
     /// The key of everything above that the style cache depends on.
     #[doc(hidden)]
     pub key: EnvKey,
+    /// The key of what a memoized view shown in the scope inherits beyond `key` (`scope_key`), once a view asked.
+    scope_key: std::sync::OnceLock<u128>,
     /// Ambient control size; the root default is `Md`.
     pub size: ControlSize,
     /// How the icon-only buttons of the scope show their glyph; the root default and a layer's is `Control`.
@@ -235,6 +237,8 @@ pub struct Inherited {
     pub(crate) host: Option<Arc<Host>>,
     #[doc(hidden)]
     pub values: AppValues,
+    /// The context the env was built in: the accessors of tracked inputs note their reads into its records.
+    pub(crate) ctx: Context,
 }
 
 impl Deref for Scoped {
@@ -386,6 +390,41 @@ impl Scoped {
         self.offered = None;
     }
 
+    /// The key of everything a memoized view shown in this scope inherits beyond `key` (the style inputs, which its
+    /// place compares): the scope's state (enabled, read-only, size, glyphs, ink, surface, wheel, directions), the
+    /// containers around it (arena, roving group, transform, collection item and row, inside label, footer slot, line
+    /// length, scroll owner and axes), the command chain, motion, the host's formats and date, and every app value. The
+    /// flow fields of the enclosing body are not in it: a memoized view's content starts a layout room of its own
+    /// (`start_room`). Computed once per scope, on the first view that asks; the bytes it fed are counted then.
+    pub(crate) fn scope_key(&self) -> u128 {
+        *self.scope_key.get_or_init(|| {
+            use crate::contract::{MemoKey, MemoProps as _};
+            let mut key = MemoKey::of_view(&self.ctx);
+            key.feed_hash(&(self.enabled, self.read_only, self.size, self.glyphs, self.ink, self.surface, self.wheel));
+            key.feed_hash(&(self.direction, self.text_direction, self.ids_stable, self.cell_fills, self.least, self.unbounded));
+            key.feed_hash(&(self.arena, self.roving, self.item, self.row, self.scroll_owner.map(|owner| (owner.id, owner.view))));
+            self.transform.map(|transform| (transform.scale, transform.offset)).key(&mut key);
+            self.footer_slot.map(|slot| (slot.owner, slot.size)).key(&mut key);
+            self.measure.key(&mut key);
+            // State a key cannot follow, rebuilt each pass: a view under it runs in every pass.
+            if self.item_facts.is_some() || self.inside_label.is_some() {
+                key.changes_every_pass();
+            }
+            for id in self.commands.ids() {
+                id.key(&mut key);
+            }
+            key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
+            key.feed_hash(&(Arc::as_ptr(&self.format) as usize, Arc::as_ptr(&self.dates) as usize));
+            key.feed_hash(&self.host.as_ref().map(|host| Arc::as_ptr(host) as usize));
+            let value_bytes = self.values.key(&mut key);
+            #[cfg(feature = "testing")]
+            crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);
+            #[cfg(not(feature = "testing"))]
+            let _ = value_bytes;
+            key.finish()
+        })
+    }
+
     /// The facts the collection recorded for the item `id`.
     pub(crate) fn facts_of(&self, id: Id) -> Option<&ItemFacts> {
         self.item_facts.as_deref().filter(|facts| facts.item == id)
@@ -458,6 +497,9 @@ impl Env {
         let shell = Arc::new(windows::shell_of(ctx, pass::current_viewport(ctx)));
         let active = shell.window.active;
         let keyboard = Arc::new(crate::runtime::keys::layout_of(ctx));
+        // The window facts and the layout are tracked inputs: a view that read them runs when they change.
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Shell, (*shell).clone());
+        crate::runtime::inputs::observe(ctx, crate::runtime::inputs::Input::Keyboard, (*keyboard).clone());
         let words = host_words(ctx, host.as_ref());
         let key = EnvKey::new(tokens.key(), root.direction, scale, os, active, root.values.style_hash())
             .with_line(line_ratio)
@@ -483,8 +525,10 @@ impl Env {
                     canvas_pattern: root.canvas_pattern,
                     host,
                     values: root.values.clone(),
+                    ctx: ctx.clone(),
                 }),
                 key,
+                scope_key: std::sync::OnceLock::new(),
                 ink: Ink::default(),
                 surface: SurfaceKind::Background,
                 size: ControlSize::Md,
@@ -579,6 +623,7 @@ impl Env {
     pub(crate) fn derive(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
         scoped.key = EnvKey::new(scoped.tokens.key(), scoped.direction, scoped.scale, scoped.os, scoped.active, scoped.values.style_hash())
             .with_line(scoped.line_ratio)
             .with_words(scoped.words.generation());
@@ -602,6 +647,7 @@ impl Env {
     pub(crate) fn derive_local(&self, f: impl FnOnce(&mut Scoped)) -> Env {
         let mut scoped = (*self.scoped).clone();
         f(&mut scoped);
+        scoped.scope_key = std::sync::OnceLock::new();
         Env { scoped: Arc::new(scoped) }
     }
 

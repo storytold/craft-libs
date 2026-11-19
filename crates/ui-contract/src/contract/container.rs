@@ -686,7 +686,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 

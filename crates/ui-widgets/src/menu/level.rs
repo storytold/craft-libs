@@ -97,6 +97,13 @@ pub(crate) struct MenuLevel {
     state: Option<Arc<Mutex<LevelState>>>,
 }
 
+/// A handle to the level's state, which its rows write during the pass: a view under a menu level runs in every pass.
+impl crate::contract::MemoProps for MenuLevel {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        key.changes_every_pass();
+    }
+}
+
 impl PartialEq for MenuLevel {
     fn eq(&self, other: &Self) -> bool {
         match (&self.state, &other.state) {

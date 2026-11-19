@@ -299,6 +299,11 @@ impl MemoKey {
         MemoKey { context: Some(ctx.clone()), ..MemoKey::default() }
     }
 
+    /// An empty key of the same view as this one.
+    pub(crate) fn child(&self) -> MemoKey {
+        MemoKey { context: self.context.clone(), ..MemoKey::default() }
+    }
+
     /// The context of the view that takes the key; `None` for a key taken outside a view (`MemoKey::of`).
     pub(crate) fn context(&self) -> Option<&egui::Context> {
         self.context.as_ref()
@@ -309,6 +314,16 @@ impl MemoKey {
         let mut key = MemoKey::new();
         props.key(&mut key);
         key.finish()
+    }
+
+    /// Feeds an input whose value a key cannot follow (a handle to state shared and written elsewhere, a context a
+    /// container rebuilds each pass): a view whose key holds it runs in every pass. Outside a view's key it feeds
+    /// nothing.
+    pub fn changes_every_pass(&mut self) {
+        if let Some(ctx) = &self.context {
+            let pass = ctx.cumulative_pass_nr();
+            self.write(&pass.to_le_bytes());
+        }
     }
 
     /// Feeds `bytes`.

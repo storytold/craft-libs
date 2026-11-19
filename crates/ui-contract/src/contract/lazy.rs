@@ -154,6 +154,8 @@ impl Lazy {
         // A run around this one that is replayed later keeps the child's entry.
         replay::journal(&ctx, || (owner, id), |ctx, &(owner, id)| lazy::keep(ctx, owner, id));
         if let Some(view) = view {
+            // A run around this child decides it by the scroll view: it replays only while the view is the same.
+            replay::note_input(&ctx, crate::runtime::inputs::Input::Scroll);
             let at = |size: Vec2| {
                 let x = if rtl { available.max.x - size.x } else { available.min.x };
                 Rect::from_min_size(Pos2::new(x, available.min.y), size)
@@ -187,7 +189,7 @@ impl Lazy {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
         if self.settles
-            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), key)
+            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), view, key)
         {
             let (took, _) = take_in_flow(ui, size);
             let memo = matches!(key, Key::Memo(_));
@@ -208,6 +210,7 @@ impl Lazy {
         let mark = focus::mark(&ctx);
         let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer, output: None };
         let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
+        let seen = if run.recording && matches!(key, Key::Memo(_)) { crate::runtime::inputs::seen(&ctx) } else { Default::default() };
         if run.recording {
             replay::open(&ctx);
         }
@@ -237,7 +240,7 @@ impl Lazy {
         if let Some(record) = record {
             // The key from before the run: a run that wrote through its props moved the key, so the view runs once more,
             // from the written value, before it replays.
-            lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, output: run.output.take() });
+            lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, seen, view, output: run.output.take() });
         }
         #[cfg(feature = "testing")]
         if real && self.settles {

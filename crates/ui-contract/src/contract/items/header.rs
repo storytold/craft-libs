@@ -560,7 +560,7 @@ impl Header {
             if sortable && ((phase.is_click() && primary) || (keyed && active == Some(at))) {
                 self.sort(&key);
             }
-            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary) {
+            if cx.part(HEADER.at(hash)).hovered && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary) {
                 self.ask_menu(&ctx, Some(key.clone()), ctx.pointer_latest_pos().unwrap_or(rect.left_bottom()));
             }
             if movable && primary && matches!(phase, PressPhase::DragStart { .. }) {
@@ -606,7 +606,7 @@ impl Header {
         }
         if let Some(room) = self.room
             && cx.part(ROOM).hovered
-            && crate::runtime::pointer::frame(&ctx).release == Some(PointerButton::Secondary)
+            && crate::runtime::pointer::frame_raw(&ctx).release == Some(PointerButton::Secondary)
         {
             self.ask_menu(&ctx, None, ctx.pointer_latest_pos().unwrap_or(room.left_bottom()));
         }

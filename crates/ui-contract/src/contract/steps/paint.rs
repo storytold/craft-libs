@@ -30,6 +30,12 @@ pub(crate) struct Fade {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct UnderVeil(pub Option<Layer>);
 
+impl crate::contract::MemoProps for UnderVeil {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        key.feed_hash(&self.0);
+    }
+}
+
 impl EnvValue for UnderVeil {
     fn root() -> Self {
         UnderVeil(None)

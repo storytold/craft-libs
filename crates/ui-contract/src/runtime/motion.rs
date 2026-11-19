@@ -224,7 +224,7 @@ pub fn now() -> web_time::Instant {
 }
 
 /// Marks the running viewport as having an animation that is not at its end value.
-fn note_unsettled(ctx: &Context) {
+pub(crate) fn note_unsettled(ctx: &Context) {
     crate::runtime::replay::note_unsettled(ctx);
     PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.unsettled = true);
 }
@@ -396,7 +396,7 @@ impl Driver<'_> {
 }
 
 /// Asks for a pass of the running viewport at `at`; the earliest request wins.
-fn wake_at(ctx: &Context, at: f64) {
+pub(crate) fn wake_at(ctx: &Context, at: f64) {
     crate::runtime::replay::note_wake(ctx, at);
     PerViewport::<Wanted>::with(ctx, pass::current_viewport(ctx), |wanted| wanted.wake = Some(wanted.wake.map_or(at, |old| old.min(at))));
 }

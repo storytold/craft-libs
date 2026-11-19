@@ -350,6 +350,13 @@ pub(crate) fn context_menu<C: Component>(cx: &mut Cx<'_, C>, part: impl Into<Par
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct InCanvas(Option<CanvasSpace>);
 
+/// A context the canvas rebuilds each pass: a view under it runs in every pass.
+impl crate::contract::MemoProps for InCanvas {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        key.changes_every_pass();
+    }
+}
+
 impl EnvValue for InCanvas {
     fn root() -> Self {
         InCanvas(None)

@@ -30,6 +30,7 @@ pub(crate) use board::{
 #[doc(hidden)]
 pub use board::{bound_around, take_around};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
+pub(crate) use board::{keymap_generation, queued_for};
 
 use craft_behavior::CommandFlags;
 use craft_behavior::edit_history::Step;

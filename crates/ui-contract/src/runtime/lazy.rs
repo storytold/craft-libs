@@ -19,6 +19,7 @@ use crate::runtime::egui::areas::Layer;
 use crate::runtime::egui::{focus as focus_state, input as input_state, pass};
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
+use crate::runtime::inputs::{self, Input};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
 use crate::style::EnvKey;
@@ -60,6 +61,15 @@ pub(crate) struct View {
 }
 
 impl View {
+    /// Whether the children of `a` and `b` decide alike (`decide`): the same area, view rect, content rect, axes,
+    /// direction and reveal. The anchor is the area's own record of where its children landed, not an input of theirs.
+    pub(crate) fn decides_alike(a: Option<View>, b: Option<View>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => View { anchor: None, ..a } == View { anchor: None, ..b },
+            (a, b) => a.is_none() && b.is_none(),
+        }
+    }
+
     /// How far `rect` starts from the content's start edge, along each axis.
     pub(crate) fn start_of(&self, rect: Rect) -> Vec2 {
         let x = if self.rtl { self.content.max.x - rect.max.x } else { rect.min.x - self.content.min.x };
@@ -186,6 +196,12 @@ struct Settled {
     output: Option<Output>,
     /// The generation of ended shown lives after the run (`memory::ended_generation`).
     lives: u64,
+    /// The generation of each framework input when the run started (`runtime::inputs`): a memoized view whose run read
+    /// one replays only while it is the same.
+    seen: inputs::Seen,
+    /// The view of the scroll area around it when it ran: a run that decided a nested `Lazy` child by it replays only
+    /// while it is the same.
+    view: Option<View>,
 }
 
 /// What changed in the frame for every settling child.
@@ -365,9 +381,13 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is
 ///   gone.
 ///
+/// - for a memoized view: no framework input its run read outside its props has moved (`runtime::inputs`), the
+///   scroll view a nested `Lazy` child of it decided by is the same, and no command waits for a command scope instance
+///   of it.
+///
 /// A memoized view's props hold every input it reads, so the two rules that infer a change of app data (input
 /// arrived, a repaint was asked) do not apply to it.
-pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, key: Key) -> Option<Vec2> {
+pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, view: Option<View>, key: Key) -> Option<Vec2> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -413,10 +433,13 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         let kind = usize::from(!sizing);
         settled.map(|settled| (entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(settled.rect.size()), settled))
     });
-    // The pointer over it, a press that started on it, and the memory of the components it showed are read outside the
-    // store.
+    // The pointer over it, a press that started on it, the memory of the components it showed, the framework inputs it
+    // read and the commands queued for its instances are read outside the store.
     let (size, settled) = settled?;
-    if engaged(ctx, &settled) || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives) {
+    if engaged(ctx, &settled)
+        || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
+        || (memo && moved(ctx, &settled, place.map(|_| view)))
+    {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
                 entry.replays = Some((pass_nr, false));
@@ -425,6 +448,17 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         return None;
     }
     Some(size)
+}
+
+/// Whether something a memoized view's run read outside its props moved since: a framework input it read has another
+/// generation, the scroll view a nested `Lazy` child decided by is another (`view`, in a real run: a measuring run
+/// lays the content out from offset zero, so its view is not the one the real run decided by), or a command waits for
+/// one of its instances.
+fn moved(ctx: &Context, settled: &Settled, view: Option<Option<View>>) -> bool {
+    let facts = &settled.record.facts;
+    inputs::moved(ctx, facts.inputs, &settled.seen)
+        || (facts.inputs.contains(Input::Scroll) && view.is_some_and(|view| !View::decides_alike(settled.view, view)))
+        || crate::runtime::commands::queued_for(ctx, &facts.instances)
 }
 
 /// Whether the pointer is over the rect the settled run took on its layer, or a press that is held started there.
@@ -459,20 +493,23 @@ pub(crate) fn keep(ctx: &Context, owner: Option<Id>, id: Id) {
     });
 }
 
-/// What a settling child's real run found besides its record: what it ran for, the edit serial when it started
-/// (`edits`) and what a memoized view's run returned.
+/// What a settling child's real run found besides its record: what it ran for, the edit serial and the framework
+/// inputs' generations when it started (`edits`, `inputs::seen`), the scroll view around it and what a memoized view's
+/// run returned.
 pub(crate) struct Ran {
     pub(crate) key: Key,
     pub(crate) edits: u64,
+    pub(crate) seen: inputs::Seen,
+    pub(crate) view: Option<View>,
     pub(crate) output: Option<Output>,
 }
 
 /// Keeps the real run `record` of the settling child `id`, which ran at `place` and took `rect`.
-pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, output }: Ran) {
+pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, seen, view, output }: Ran) {
     let targets = focus::targets(ctx);
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
     let lives = crate::runtime::memory::ended_generation(ctx);
-    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives };
+    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives, seen, view };
     settled.engaged |= engaged(ctx, &settled);
     with(ctx, |store, pass_nr, frame| {
         settled.frame = frame;

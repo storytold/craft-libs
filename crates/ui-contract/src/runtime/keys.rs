@@ -28,7 +28,7 @@ pub use claims::take_claimed;
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 #[doc(hidden)]
 pub use input::{down, keyed};
-pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
+pub(crate) use input::{input_hook, keys_state, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;

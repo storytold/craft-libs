@@ -237,7 +237,7 @@ impl<P> Outcome for DropActionOutput<P> {
 }
 
 /// Whether an accepted drag is over the enclosing drop slot, which the slot's body reads to show its child enabled.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct Accepting(bool);
 
 impl EnvValue for Accepting {

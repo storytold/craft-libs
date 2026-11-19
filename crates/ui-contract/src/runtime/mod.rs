@@ -10,6 +10,7 @@ pub mod env;
 pub mod focus;
 pub mod frame;
 pub mod ime;
+pub(crate) mod inputs;
 pub mod inspect;
 pub mod install;
 pub mod keys;

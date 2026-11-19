@@ -317,6 +317,28 @@ impl ShellCx {
 #[doc(hidden)]
 pub struct ShellEntry(#[doc(hidden)] pub Option<ShellCx>);
 
+/// The shell's input fields: the window, the body's mode, the reveal and visibility flags, the regions and the float
+/// bounds. The registries the body writes into (revealed rects, the dialog count) are its output, not an input.
+impl crate::contract::MemoProps for ShellEntry {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        let Some(shell) = &self.0 else { return key.write_u32(0) };
+        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, revealed_rects: _, dialog: _ } =
+            &*shell.inner;
+        key.write_u32(1);
+        key.feed_hash(window);
+        key.feed_hash(&std::mem::discriminant(mode));
+        (*tab_reveal, *edges, *tabs, *panels_hidden).key(key);
+        regions.body.key(key);
+        key.write_u32(regions.slots.len() as u32);
+        for (slot, rect) in &regions.slots {
+            slot.key(key);
+            rect.key(key);
+        }
+        float_bounds.key(key);
+        region.key(key);
+    }
+}
+
 impl EnvValue for ShellEntry {
     fn root() -> Self {
         ShellEntry(None)

@@ -522,12 +522,20 @@ fn note_down(down: &mut Vec<Key>, event: &KeyEvent) {
 /// down).
 #[doc(hidden)]
 pub fn down(ctx: &Context) -> Vec<Key> {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.down.clone())
+}
+
+/// The key state, as the tracked input `Keys` compares it: the keys down, whether a key arrived and Caps Lock.
+pub(crate) fn keys_state(ctx: &Context) -> (Vec<Key>, bool, bool) {
+    let (down, keyed) = current(ctx, |stage| (stage.down.clone(), stage.keyed));
+    (down, keyed, crate::runtime::lock_keys::caps_on(ctx))
 }
 
 /// Whether the running viewport's input hook read a key press, typed text or a clipboard event in this pass, the ones
 /// the key stage took from egui's input included: an app that redraws state after input asks this, not egui's events.
 pub fn keyed(ctx: &Context) -> bool {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keys);
     current(ctx, |stage| stage.keyed)
 }
 
