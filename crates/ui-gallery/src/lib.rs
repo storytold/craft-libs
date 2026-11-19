@@ -72,9 +72,8 @@ pub fn register_all(registry: &mut craft_ui::testing::Registry) {
 }
 
 /// The registry of the viewer and the crates whose stories it shows.
-pub fn registry() -> &'static craft_ui::testing::Registry {
-    static REGISTRY: std::sync::OnceLock<craft_ui::testing::Registry> = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| craft_ui::testing::Registry::of(&[register_all]))
+pub fn registry() -> craft_ui::testing::Registry {
+    craft_ui::testing::Registry::of(&[register_all])
 }
 
 /// How many registrations each selected crate contributes, and how many stories there are in all.

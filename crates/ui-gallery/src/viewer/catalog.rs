@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 #[non_exhaustive]
 pub struct Entry {
     /// The registration.
-    pub registration: &'static StoryRegistration,
+    pub registration: StoryRegistration,
     /// The registered name of the type the story shows.
     pub type_name: &'static str,
 }
@@ -109,7 +109,8 @@ pub fn fold_filter(filter: &str) -> String {
 pub(crate) fn linked_catalog() -> &'static contract::Catalog {
     static CATALOG: OnceLock<contract::Catalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let registrations: Vec<_> = crate::registry().registrations().iter().collect();
+        let registry = crate::registry();
+        let registrations: Vec<_> = registry.registrations().iter().collect();
         contract::catalog(&registrations)
     })
 }
@@ -121,7 +122,7 @@ pub fn display_name(type_name: &str) -> String {
 
 /// Every story linked into the viewer, ordered by type then story name.
 pub fn entries() -> Vec<Entry> {
-    crate::registry().stories().iter().map(|registration| Entry { registration, type_name: (registration.type_name)() }).collect()
+    crate::registry().stories().iter().map(|registration| Entry { registration: *registration, type_name: (registration.type_name)() }).collect()
 }
 
 /// What a registration says about a type: where it is declared and what it is for.
@@ -133,7 +134,7 @@ pub struct Declared {
     /// The first sentence of the type's doc comment.
     pub purpose: &'static str,
     /// The component probe; `None` for a pattern.
-    pub probe: Option<&'static Probe>,
+    pub probe: Option<Probe>,
 }
 
 /// The registration of each registered component and pattern type, by the type's registered name.
@@ -142,7 +143,7 @@ pub fn declared() -> HashMap<&'static str, Declared> {
     for registration in crate::registry().registrations() {
         match registration {
             Registration::Component(probe) => {
-                out.insert(probe.type_name(), Declared { module: probe.module, purpose: probe.purpose, probe: Some(probe) });
+                out.insert(probe.type_name(), Declared { module: probe.module, purpose: probe.purpose, probe: Some(*probe) });
             }
             Registration::Pattern(probe) => {
                 out.insert(probe.type_name(), Declared { module: probe.module, purpose: probe.purpose, probe: None });

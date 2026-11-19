@@ -135,6 +135,8 @@ const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
 /// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact or environment key that
 /// covers it, or the later task of craft-libs#2336 that removes the state. A new item in these files is flagged.
 const NO_GLOBAL_STATE: &[(&str, &str)] = &[
+    // Compile-time registry discovery reads the defining crate's source, never a view input.
+    ("crates/ui-macros/src/registry.rs", FS),
     // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
     ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.

@@ -178,6 +178,7 @@ impl Story {
 
 /// A story registered by `#[story]`, linked to its type by the type's registered name.
 #[doc(hidden)]
+#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct StoryRegistration {
     /// The package that declares the story.
