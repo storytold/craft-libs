@@ -2,12 +2,14 @@
 
 use super::svg_set;
 use super::textures::TextureCache;
+use crate::contract::{MemoKey, MemoProps};
 use crate::style::{DataColor, Ink, StyleColor, UiTokens, ink_color, log_once};
 use craft_behavior::IconId;
 use craft_i18n::Direction;
 use craft_theme::{IconPackId, Srgba};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, Painter, Rect, pos2, vec2};
+use std::any::Any;
 
 pub use super::svg_set::IconSet;
 
@@ -23,8 +25,9 @@ pub enum Mirror {
 }
 
 /// A value glyph: an icon drawn from a value. It is `Sync` because container props that show one are kept with a
-/// body's measurement in layout memory.
-pub trait Glyph: Sync {
+/// body's measurement in layout memory. It is props ([`MemoProps`]): an icon keys a memoized view by the glyph's type,
+/// then by what the glyph feeds, so a glyph owns what it draws from (`'static`).
+pub trait Glyph: Any + MemoProps + Sync {
     /// Whether the glyph has a reading direction (an arrow) and so flips under right-to-left.
     fn directional(&self) -> bool {
         false
@@ -42,7 +45,7 @@ pub enum IconSource<'a> {
     /// An SVG-set or tool icon, by its egui-free key.
     Svg(IconId),
     /// A value glyph.
-    Glyph(&'a dyn Glyph),
+    Glyph(&'a (dyn Glyph + 'static)),
     /// A colour from data, painted as a swatch (a guide colour, a matte colour); `None` paints the empty swatch of a
     /// colour the theme decides.
     Swatch(Option<Srgba>),
@@ -54,6 +57,37 @@ pub enum IconSource<'a> {
     Initial(char),
     /// The mark of a cursor badge, painted by the cursor-badge painter in the spec's colour or ink.
     Mark(craft_behavior::CursorBadge),
+}
+
+/// By variant, then what it draws: a glyph by its type, then by what it feeds.
+impl MemoProps for IconSource<'_> {
+    fn key(&self, key: &mut MemoKey) {
+        match self {
+            IconSource::Svg(id) => {
+                key.write_u32(0);
+                id.key(key);
+            }
+            IconSource::Glyph(glyph) => {
+                key.write_u32(1);
+                let any: &dyn Any = *glyph;
+                key.feed_hash(&any.type_id());
+                glyph.key(key);
+            }
+            IconSource::Swatch(color) => {
+                key.write_u32(2);
+                color.key(key);
+            }
+            IconSource::Disc => key.write_u32(3),
+            IconSource::Initial(letter) => {
+                key.write_u32(4);
+                letter.key(key);
+            }
+            IconSource::Mark(badge) => {
+                key.write_u32(5);
+                key.feed_hash(badge);
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for IconSource<'_> {
@@ -85,7 +119,7 @@ impl PartialEq for IconSource<'_> {
 }
 
 /// An icon to paint.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct IconSpec<'a> {
     /// The drawing.
     pub source: IconSource<'a>,
@@ -112,7 +146,7 @@ impl<'a> IconSpec<'a> {
     }
 
     /// An icon of `glyph` in the panel ink.
-    pub fn glyph(glyph: &'a dyn Glyph) -> Self {
+    pub fn glyph(glyph: &'a (dyn Glyph + 'static)) -> Self {
         IconSpec { source: IconSource::Glyph(glyph), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, badge: None }
     }
 

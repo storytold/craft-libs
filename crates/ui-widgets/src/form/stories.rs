@@ -66,17 +66,16 @@ fn field_with_refused_value(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Field, covers = [], drive = Drive::Never)]
 fn field_with_cross_field_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = *data.value("start_day", Some(20.0));
-    let end_before_start = move |end: &Option<f64>| match end {
+    let end_before_start = |start: &Option<f64>, end: &Option<f64>| match end {
         Some(end) if start.is_some_and(|start| *end < start) => Validity::Refuse(Message::new("The end day comes before the start day")),
         _ => Validity::Ok,
     };
     let mut out = None;
     FieldGroup::new("Period").show(ui, |ui, _| {
         Field::new("Start day").show(ui, |ui, _| NumberField::new("Start day", Bind::bound(data.value("start_day", Some(20.0)))).show(ui));
-        out = Some(
-            Field::new("End day")
-                .show(ui, |ui, _| NumberField::new("End day", Bind::bound(data.value("end_day", Some(5.0))).check(end_before_start)).show(ui)),
-        );
+        out = Some(Field::new("End day").show(ui, |ui, _| {
+            NumberField::new("End day", Bind::bound(data.value("end_day", Some(5.0))).check_with(start, end_before_start)).show(ui)
+        }));
     });
     out.map(StoryOutput::from).unwrap_or_default()
 }

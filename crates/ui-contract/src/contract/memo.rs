@@ -259,6 +259,15 @@ pub use craft_ui_macros::MemoProps;
 pub trait MemoProps {
     /// Feeds every input the view reads into `key`.
     fn key(&self, key: &mut MemoKey);
+
+    /// The props type with its lifetimes erased (`Props<'a>` and `Props<'b>` are one type): a memoized view seeds its
+    /// key with it, so two views at one id whose props feed the same bytes, such as two empty props types, key apart.
+    fn identity() -> TypeId
+    where
+        Self: Sized,
+    {
+        typeid::of::<Self>()
+    }
 }
 
 /// A 128-bit hash of a memoized view's props (SipHash-1-3 with a 128-bit output, a fixed key). A collision has a chance
@@ -604,6 +613,15 @@ impl<T: PlainData> MemoProps for Tracked<T> {
     }
 }
 
+/// A view's write access to a model: by revision, as `Tracked<T>`. The view takes its key again after it runs, so a
+/// write it makes is part of what it settles on and does not run it again. `&mut` of any other type is not props: a
+/// write to it would not move a key.
+impl<T: PlainData> MemoProps for &mut Tracked<T> {
+    fn key(&self, key: &mut MemoKey) {
+        self.revision().key(key);
+    }
+}
+
 /// A callback in props: a fn item or a capture-free closure, which is zero-sized, so its type alone says what it
 /// does, and its `TypeId` keys it. A capturing closure is not zero-sized and fails to build where `Stateless::new` is
 /// called (not at `cargo check`: the assertion is evaluated when the call is compiled):
@@ -679,6 +697,18 @@ impl MemoProps for crate::runtime::env::Label {
 impl MemoProps for craft_i18n::Word {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
+    }
+}
+
+impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
+    fn key(&self, key: &mut MemoKey) {
+        match self {
+            craft_behavior::Mixed::Same(value) => {
+                key.write_u32(0);
+                value.key(key);
+            }
+            craft_behavior::Mixed::Mixed => key.write_u32(1),
+        }
     }
 }
 

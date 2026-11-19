@@ -68,7 +68,7 @@ impl From<Cow<'static, str>> for IconId {
 }
 
 /// A mark beside a painted cursor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CursorBadge {
     /// A plus.
@@ -100,7 +100,7 @@ pub enum CursorBadge {
 }
 
 /// The kind of a [`CursorBadge::Count`] mark.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CountMark {
     /// A point is added.

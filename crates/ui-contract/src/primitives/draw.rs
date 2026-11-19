@@ -28,7 +28,7 @@ pub enum PaintShape {
 }
 
 /// A line width from the theme, so content never picks a literal one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum StrokeWidth {
     /// One physical pixel.

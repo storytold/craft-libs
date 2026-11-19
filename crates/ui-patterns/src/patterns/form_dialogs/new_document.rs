@@ -457,7 +457,7 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
     }
     if right.save {
         let name = session.naming.clone().unwrap_or_default();
-        if details::refusal(&library, &name).is_none() {
+        if details::refusal(&library.names(), &name).is_none() {
             let preset = DocumentOptions { name: name.trim().to_owned(), ..values.clone() };
             if let Ok(id) = library.add(&GroupPath::root(), &name, preset) {
                 changed = true;

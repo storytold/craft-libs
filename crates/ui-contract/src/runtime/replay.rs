@@ -114,6 +114,9 @@ pub(crate) struct Facts {
     pub(crate) wake: Option<f64>,
     /// The run did something a replay cannot repeat.
     pub(crate) blocked: bool,
+    /// The run asked for the frame's discard pass: it laid out by a measure that changed, so the pass that follows
+    /// runs it again rather than replay it.
+    pub(crate) discards: bool,
 }
 
 /// What one real run of a region added to its pass.
@@ -154,6 +157,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
         if let Some(outer) = recorder.open.last_mut() {
             outer.facts.unsettled |= open.facts.unsettled;
             outer.facts.blocked |= open.facts.blocked;
+            outer.facts.discards |= open.facts.discards;
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
             outer.facts.reads.extend(open.facts.reads.iter().copied());
         } else {
@@ -249,4 +253,9 @@ pub(crate) fn note_wake(ctx: &Context, at: f64) {
 /// Notes that the running code did something a replay cannot repeat.
 pub(crate) fn block(ctx: &Context) {
     with_open(ctx, |facts| facts.blocked = true);
+}
+
+/// Notes that the running code asked for the frame's discard pass (`layout_memory`).
+pub(crate) fn note_discard(ctx: &Context) {
+    with_open(ctx, |facts| facts.discards = true);
 }

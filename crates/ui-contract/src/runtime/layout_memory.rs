@@ -243,10 +243,18 @@ pub(crate) struct Entries {
     /// The drafts open, innermost last.
     drafts: Vec<Draft>,
     ask: bool,
+    /// How many times a discard pass was asked, so a record open around the asking run notes it (`with`).
+    asks: u64,
     asked: Option<u64>,
 }
 
 impl Entries {
+    /// Asks for the frame's discard pass.
+    fn ask_discard(&mut self) {
+        self.ask = true;
+        self.asks += 1;
+    }
+
     /// A real run found the content changed: drops the kept transcripts of `body` and of every body the real run is
     /// inside, up to the first boundary, and asks for the discard pass.
     fn changed(&mut self, frame: u64, body: Option<Id>) {
@@ -268,7 +276,7 @@ impl Entries {
                 break;
             }
         }
-        self.ask = true;
+        self.ask_discard();
     }
 
     /// The innermost open transcript: a body's or a boundary, past the measure calls open inside it.
@@ -403,7 +411,16 @@ impl Moment {
 }
 
 fn with<R>(ctx: &Context, moment: &Moment, f: impl FnOnce(&mut Entries) -> R) -> R {
-    PerViewport::<Entries>::with(ctx, moment.viewport, f)
+    let (out, asked) = PerViewport::<Entries>::with(ctx, moment.viewport, |memory| {
+        let asks = memory.asks;
+        let out = f(memory);
+        (out, memory.asks != asks)
+    });
+    // A run that asked for the discard pass laid out by a measure that changed: the pass that follows runs it.
+    if asked {
+        crate::runtime::replay::note_discard(ctx);
+    }
+    out
 }
 
 /// The size entry under `id` as this pass places by it. A placement that read the entry (`None` on a block's
@@ -454,7 +471,7 @@ pub(crate) fn record(ctx: &Context, id: Id, real: Vec2) {
             && measured_change_asks_for_discard(recorded, real, changed_last_frame, tolerance)
         {
             log::debug!(target: sizing::RERUN_LOG, "{id:?} measured {real:?}; the pass placed it by {recorded:?}");
-            memory.ask = true;
+            memory.ask_discard();
         }
         let entry = memory.entries.entry(id).or_default();
         let differs = previous.is_none_or(|old| (old - real).abs().max_elem() > tolerance);
@@ -1111,7 +1128,7 @@ pub fn forget_kept(ctx: &Context) {
 pub(crate) fn ask_discard(ctx: &Context) {
     log::debug!(target: sizing::RERUN_LOG, "a discard asked at {}", std::panic::Location::caller());
     let moment = Moment::of(ctx);
-    with(ctx, &moment, |memory| memory.ask = true);
+    with(ctx, &moment, Entries::ask_discard);
 }
 
 /// Notes in the run records open around the running code that a replay keeps the entry and the kept transcript of

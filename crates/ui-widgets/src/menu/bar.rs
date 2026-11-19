@@ -234,7 +234,7 @@ struct BarState {
 struct Query(String, u32, bool);
 
 /// What the bar published for `is_open` and `is_focused`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {
     open: bool,
     focused: bool,

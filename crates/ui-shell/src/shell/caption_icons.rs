@@ -59,6 +59,16 @@ pub struct CaptionIcons {
     render: Arc<RenderIconFn>,
 }
 
+/// By the theme and the generation: the generation changes whenever `render` may answer differently (`new`), so equal
+/// keys draw the same glyphs.
+impl crate::contract::MemoProps for CaptionIcons {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        let CaptionIcons { theme, generation, render: _ } = self;
+        crate::contract::MemoProps::key(theme, key);
+        crate::contract::MemoProps::key(generation, key);
+    }
+}
+
 impl CaptionIcons {
     /// Icons of `theme` rendered by `render`. `generation` changes whenever `render` may answer differently (a
     /// reinstalled theme, a size that finished rendering); the textures made from it follow. Use 0 for icons that

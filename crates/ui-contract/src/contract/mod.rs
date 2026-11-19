@@ -21,6 +21,7 @@ mod level;
 mod level_table;
 mod looks;
 mod memo;
+mod memo_view;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -94,6 +95,7 @@ pub use lazy::Lazy;
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use memo::{MemoKey, MemoProps, Stateless};
+pub use memo_view::MemoView;
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
@@ -106,7 +108,7 @@ pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, Patter
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindMut, EditResponse, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;

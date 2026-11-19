@@ -306,8 +306,8 @@ fn selection_past_the_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut host = data.value("text", SAMPLE.to_owned()).clone();
     let end = host.chars().count();
     let selection = data.value("selection", TextSelection::caret_at(end + 1));
-    let inside = move |selection: &TextSelection| {
-        if selection.caret > end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
+    let inside = |end: &usize, selection: &TextSelection| {
+        if selection.caret > *end { Validity::Refuse(Message::new("The selection is past the text")) } else { Validity::Ok }
     };
-    over_canvas(ui, &mut host, Bind::bound(&mut *selection).check(inside))
+    over_canvas(ui, &mut host, Bind::bound(&mut *selection).check_with(end, inside))
 }

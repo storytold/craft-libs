@@ -306,45 +306,46 @@ pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<LeastRuns, _>(ctx, |log| log.runs.clone())
 }
 
-/// What a settling child's decision was.
+/// How a memoized view, or a settling or scrolled `Lazy` child, took part in a pass.
 #[cfg(feature = "testing")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum Settle {
-    /// The child ran.
+pub enum MemoRun {
+    /// It ran.
     Ran,
-    /// The child's last run was replayed in place of running.
+    /// Its last run was replayed in place of running.
     Replayed,
-    /// The child is out of view and took its last extent without running.
+    /// It is out of view and took its last extent without running.
     OutOfView,
 }
 
-/// The settled-test decisions of one pass.
+/// How each memoized view took part in one pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-pub(crate) struct SettleLog {
+pub(crate) struct MemoLog {
     pass: u64,
-    decisions: Vec<(Id, Settle)>,
+    runs: Vec<(&'static str, Id, MemoRun)>,
 }
 
-/// Counts the decision about the settling child `id` in this pass. Fed by `lazy::settled` (ran, replayed) and
-/// `lazy::decide` (out of view); a rename of that decision point moves both calls.
+/// Counts how the view `name` (`id`) took part in this pass. Fed by `contract::Lazy`'s one runner, which memoized views
+/// share.
 #[cfg(feature = "testing")]
-pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
+pub(crate) fn count_memo_run(ctx: &Context, name: &'static str, id: Id, run: MemoRun) {
     let pass = ctx.cumulative_pass_nr();
-    pass_state::with::<SettleLog, _>(ctx, |log| {
+    pass_state::with::<MemoLog, _>(ctx, |log| {
         if log.pass != pass {
-            *log = SettleLog { pass, decisions: Vec::new() };
+            *log = MemoLog { pass, runs: Vec::new() };
         }
-        log.decisions.push((id, what));
+        log.runs.push((name, id, run));
     });
 }
 
-/// The settled-test decisions of the last pass, by child id, in the order they were made; empty when that pass made none.
+/// How the memoized views (by name, `"Lazy"` for a `Lazy` child) took part in the last pass, in the order they were
+/// decided; empty when that pass decided none.
 #[cfg(feature = "testing")]
-pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
+pub fn last_pass_memo_runs(ctx: &Context) -> Vec<(&'static str, Id, MemoRun)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    pass_state::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
+    pass_state::with::<MemoLog, _>(ctx, |log| if log.pass == last { log.runs.clone() } else { Vec::new() })
 }
 
 /// Bytes fed into memo keys in one pass, and the layouts and measure asks of that pass.
@@ -374,8 +375,7 @@ fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R
     pass_state::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
 }
 
-/// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
-/// per call with a content version).
+/// Counts `bytes` fed into a memo key in this pass: a memoized view's key, before its run and after it.
 #[cfg(feature = "testing")]
 pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
     totals(ctx, |log| log.key_bytes += bytes);

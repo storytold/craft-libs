@@ -804,9 +804,13 @@ impl<T> Default for FactRecord<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> Facts<T> {
-    /// Registers `fact` for the next pass of the running viewport.
+    /// Registers `fact` for the next pass of the running viewport. A settled view's replay registers it again.
     #[doc(hidden)]
-    pub fn register(ctx: &Context, fact: T) {
+    pub fn register(ctx: &Context, fact: T)
+    where
+        T: PartialEq + std::fmt::Debug,
+    {
+        crate::runtime::replay::journal(ctx, || fact.clone(), |ctx, fact| Self::register(ctx, fact.clone()));
         Self::with_record(ctx, |record| record.this.push(fact));
     }
 

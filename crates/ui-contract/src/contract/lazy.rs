@@ -7,7 +7,9 @@ use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Decision, Place};
+use crate::runtime::lazy::{self, Decision, Key, Place};
+#[cfg(feature = "testing")]
+use crate::runtime::measure::{MemoRun, count_memo_run};
 use crate::runtime::memory::sub;
 use crate::runtime::replay;
 use egui::{Pos2, Rect, Ui, UiBuilder, Vec2};
@@ -36,7 +38,7 @@ pub struct Lazy {
     key: u64,
     estimate: f32,
     reveal: bool,
-    settles: bool,
+    pub(super) settles: bool,
     content: Option<u64>,
 }
 
@@ -123,6 +125,19 @@ impl Lazy {
     }
 
     fn run<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Option<R> {
+        let key = match self.content {
+            Some(version) => Key::Version(version),
+            None => Key::None,
+        };
+        match self.run_keyed(ui, "Lazy", key, add) {
+            Shown::Ran(out) => Some(out),
+            Shown::Replayed(_) | Shown::OutOfView => None,
+        }
+    }
+
+    /// The one runner of a `Lazy` child and a memoized view (`MemoView`), named `name` in the count trials: runs `add`,
+    /// replays the kept run of a settling child keyed `key`, or takes the extent of a child out of view.
+    pub(super) fn run_keyed<R>(self, ui: &mut Ui, name: &'static str, key: Key, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Shown<R> {
         let ctx = ui.ctx().clone();
         let view = Env::of(ui).view().lazy_view();
         let id = match view {
@@ -153,8 +168,10 @@ impl Lazy {
                     layout_memory::backstop(&ctx, id, size);
                     lazy::replay(&ctx, id);
                     lazy::place(&ctx, &view, id, took);
+                    #[cfg(feature = "testing")]
+                    count_memo_run(&ctx, name, id, MemoRun::OutOfView);
                 }
-                return None;
+                return Shown::OutOfView;
             }
         }
         let layout = *ui.layout();
@@ -167,20 +184,27 @@ impl Lazy {
             env: Env::of(ui).key,
         };
         if self.settles
-            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), self.content)
+            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), key)
         {
             let (took, _) = take_in_flow(ui, size);
+            let memo = matches!(key, Key::Memo(_));
+            let mut kept = None;
             if real {
                 layout_memory::backstop(&ctx, id, size);
-                lazy::replay_settled(&ctx, id);
+                kept = lazy::replay_settled(&ctx, id);
                 if let Some(view) = view {
                     lazy::place(&ctx, &view, id, took);
                 }
+                #[cfg(feature = "testing")]
+                count_memo_run(&ctx, name, id, MemoRun::Replayed);
+            } else if memo {
+                kept = lazy::kept_output(&ctx, id);
             }
-            return None;
+            return Shown::Replayed(kept);
         }
         let mark = focus::mark(&ctx);
-        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer };
+        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer, after: None, output: None };
+        let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
         if run.recording {
             replay::open(&ctx);
         }
@@ -208,17 +232,39 @@ impl Lazy {
             lazy::place(&ctx, &view, id, rect);
         }
         if let Some(record) = record {
-            lazy::ran(&ctx, id, record, place, rect, self.content);
+            let key = run.after.map_or(key, Key::Memo);
+            lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, output: run.output.take() });
         }
-        Some(out)
+        #[cfg(feature = "testing")]
+        if real && self.settles {
+            count_memo_run(&ctx, name, id, MemoRun::Ran);
+        }
+        // The name is read by the count trials only.
+        let _ = name;
+        Shown::Ran(out)
     }
 }
 
+/// What a child came to in a pass.
+pub(super) enum Shown<R> {
+    /// It ran and returned this.
+    Ran(R),
+    /// It took the extent of its kept run, and added that run again in a real run; with what a memoized view's run
+    /// returned.
+    Replayed(Option<lazy::Output>),
+    /// It is out of view in its scroll area.
+    OutOfView,
+}
+
 /// The run of a child: whether it records what it adds for a replay, and whether it is kept.
-struct Run {
+pub(super) struct Run {
     recording: bool,
     kept: bool,
     layer: Layer,
+    /// A memoized view's props key after its run: what the run wrote through its props is part of what it settles on.
+    pub(super) after: Option<u128>,
+    /// What a memoized view's run returned, which its replays return.
+    pub(super) output: Option<lazy::Output>,
 }
 
 impl Run {

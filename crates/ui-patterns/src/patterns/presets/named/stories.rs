@@ -1,6 +1,6 @@
 //! Stories of `NamedPresetRow`.
 
-use super::{NamedPresetRow, NamedPresetStyle, PresetError};
+use super::{NameCheck, NamedPresetRow, NamedPresetStyle, PresetError};
 use crate::contract::Bind;
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PickerField, PresetExport, PresetFiles, PresetPicker, PresetRow, PresetState};
@@ -10,8 +10,13 @@ use egui::Ui;
 
 const TRACE: [&str; 6] = ["Default", "High Fidelity Photo", "Low Fidelity Photo", "3 Colors", "Sketched Art", "Line Art"];
 
-fn taken(rows: &[PresetRow<u32>], name: &str) -> Option<PresetError> {
-    rows.iter().any(|row| row.label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
+fn taken(names: &Vec<String>, name: &str) -> Option<PresetError> {
+    names.iter().any(|label| label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
+}
+
+/// The rows' names, as the inputs of the name check.
+fn names(rows: &[PresetRow<u32>]) -> Vec<String> {
+    rows.iter().map(|row| row.label.clone()).collect()
 }
 
 /// The contour editor's row: a thumbnail picker, then Load…, Save… and New… as buttons.
@@ -27,7 +32,7 @@ fn contour_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NamedPresetRow::new("Contour", picker)
         .style(NamedPresetStyle::Buttons)
         .suggest_name("Contour 5")
-        .check_name(|name| taken(&rows, name))
+        .check_name(NameCheck::new(names(&rows), taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)
@@ -45,7 +50,7 @@ fn trace_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NamedPresetRow::new("Trace preset", picker)
         .style(NamedPresetStyle::Menu)
         .suggest_name("Preset 7")
-        .check_name(|name| taken(&rows, name))
+        .check_name(NameCheck::new(names(&rows), taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)

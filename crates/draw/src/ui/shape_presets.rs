@@ -84,6 +84,13 @@ impl ShapePreset {
     }
 }
 
+/// A preset glyph keys by its preset: a fieldless enum whose derived `Hash` is its variant.
+impl craft_ui::contract::MemoProps for ShapePreset {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Presets never mirror: each glyph shows the document shape its tool creates, and document geometry does not follow
 /// the reading direction.
 impl Glyph for ShapePreset {

@@ -399,13 +399,12 @@ impl<T> PresetLibrary<T> {
     /// Why `name` cannot be a new preset's name, if it cannot: blank, or taken ignoring case.
     /// For a named row's `check_name`.
     pub fn name_error(&self, name: &str) -> Option<PresetError> {
-        if name.trim().is_empty() {
-            Some(PresetError::EmptyName)
-        } else if self.is_taken(name.trim()) {
-            Some(PresetError::NameTaken)
-        } else {
-            None
-        }
+        name_error(self.items().iter().map(|item| item.name.as_str()), name)
+    }
+
+    /// The presets' names, as the inputs of a name check in a binding or a named row (`check_with`).
+    pub fn names(&self) -> PresetNames {
+        PresetNames(self.items().iter().map(|item| item.name.clone()).collect())
     }
 
     /// The number of presets.
@@ -449,6 +448,38 @@ impl<T> PresetLibrary<T> {
             return base.to_owned();
         }
         (2..).map(|i| format!("{base} {i}")).find(|n| !self.is_taken(n)).unwrap_or_else(|| base.to_owned())
+    }
+}
+
+/// The names of a library's presets (`PresetLibrary::names`): what a check of a new name reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, craft_ui::contract::MemoProps)]
+pub struct PresetNames(Vec<String>);
+
+impl PresetNames {
+    /// Why `name` cannot be a new preset's name, as [`PresetLibrary::name_error`] says.
+    pub fn name_error(&self, name: &str) -> Option<PresetError> {
+        name_error(self.0.iter().map(String::as_str), name)
+    }
+
+    /// How many presets there are.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether there are none.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Why `name` cannot be a new name among `names`: blank, or taken ignoring case.
+fn name_error<'n>(mut names: impl Iterator<Item = &'n str>, name: &str) -> Option<PresetError> {
+    if name.trim().is_empty() {
+        Some(PresetError::EmptyName)
+    } else if names.any(|taken| same_name(taken, name.trim())) {
+        Some(PresetError::NameTaken)
+    } else {
+        None
     }
 }
 
