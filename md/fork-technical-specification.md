@@ -156,12 +156,13 @@ The fork establishes a clear separation between keyboard navigation (`Enter`) an
    ```rust
    // Space activates only a stop that asks for it with `ActivateKeys::Space` or `ActivateKeys::Both`
    // (e.g. a reading view turning a column on Space). `ActivateKeys::Space` enables Space without also
-   // enabling Enter, while `ActivateKeys::Both` enables both. Every other stop declares Enter, so Space
-   // stays the canvas's Hand key where the app has a canvas.
+   // enabling Enter, while `ActivateKeys::Both` enables both. Other stops do not opt into Space (Pointer
+   // controls default to Enter, while Text and Editor controls default to Neither), so Space stays the
+   // canvas's Hand key where the app has a canvas.
    None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
    None if press.key == Key::Space => PressRoute::Free,
    ```
-   Because `ActivateKeys::space()` returns `true` for both `ActivateKeys::Space` and `ActivateKeys::Both`, a component can opt in to `Space` activation either alongside `Enter` (`ActivateKeys::Both`) or exclusively without enabling `Enter` (`ActivateKeys::Space`).
+   Because `ActivateKeys::space()` returns `true` for both `ActivateKeys::Space` and `ActivateKeys::Both`, a component can opt in to `Space` activation either alongside `Enter` (`ActivateKeys::Both`) or exclusively without enabling `Enter` (`ActivateKeys::Space`). Stops that do not opt into Space (pointer stops default to `ActivateKeys::Enter`, while `Input::Text` and `Input::Editor` default to `ActivateKeys::Neither`) leave `Space` unconsumed, allowing it to pass through to the host canvas as the Hand tool shortcut.
 
 4. **Preserved Opt-in for Reading View**:
    In `crates/pages/src/ui/reading.rs`:

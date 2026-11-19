@@ -127,13 +127,10 @@ impl<'a> TitleBar<'a> {
         }
     }
 
-    /// The width `leading` declares for itself (`HeaderRegion::inline_width`): a menu bar lays its titles out at
+    /// The width `leading` declares for itself: a menu bar lays its titles out at
     /// their own width rather than the room the line happens to offer.
     pub fn leading_width(mut self, width: Option<f32>) -> Self {
         self.leading_width = width;
-        if let Some(header) = self.props.header {
-            self.props = self.props.header(header.inline_width(width));
-        }
         self
     }
 
@@ -149,9 +146,18 @@ impl<'a> TitleBar<'a> {
         let native_hidden =
             !self.title_when_native && matches!(self.frame.clone().unwrap_or_else(|| WindowHost::of(ui.ctx()).frame()), Frame::Native);
         self.title = Some(title.clone());
+        let leading_width = self.leading_width;
         self.trailing(trailing)
             .show(ui, |ui, cx| {
-                leading(ui, cx);
+                if let Some(width) = leading_width {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(width, ui.available_height()),
+                        *ui.layout(),
+                        |ui| leading(ui, cx),
+                    );
+                } else {
+                    leading(ui, cx);
+                }
                 if !native_hidden {
                     let rtl = cx.env.direction().is_rtl();
                     let margin = cx.gap().unwrap_or_default();

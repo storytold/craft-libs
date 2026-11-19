@@ -244,7 +244,11 @@ impl<'b> BodyHooks<'b> {
     /// The width the regions ask for in a content-sized container: what they took together in this pass's measuring run.
     pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
         self.measured_body.map(|body| {
-            let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
+            let (mut header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
+            // A finite declared inline width is the header's reserved width, as `regions` places the header at it.
+            if let Some(declared) = props.header.filter(|header| header.inline).and_then(|header| header.inline_width).filter(|width| width.is_finite()) {
+                header.x = declared;
+            }
             let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
             overlay_of(props).map_or(wanted, |overlay| wanted.max(crate::contract::overlay::anchor_floor(overlay)))
         })

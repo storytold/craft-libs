@@ -45,17 +45,17 @@ fn bar_rect(width: f32, declared: Option<f32>) -> Rect {
     seen.get()
 }
 
-/// A leading region that declares 380 points gets that room on the line, so the bar starts after it, and the bar is
-/// no longer squeezed into the share of the line the empty title strip leaves: without a declaration the bar fills
-/// the line and its last titles cannot fit (#the window and help menus fell into the overflow menu).
+/// A menu bar in a title bar's leading region takes the room it declares without an empty region before it:
+/// without a declaration the bar fills the line and its last titles cannot fit (#the window and help menus
+/// fell into the overflow menu).
 #[trial]
 fn a_declared_leading_width_is_the_menu_bars_room() {
     let undeclared = bar_rect(1600.0, None);
     let narrow = bar_rect(1600.0, Some(380.0));
     assert!(undeclared.width() > 1500.0, "no declaration: the line less the padding, {}", undeclared.width());
-    // The declared 380 points sit before the bar, less the line's own start inset, and the bar then keeps its titles
-    // at their own width instead of filling the rest of the line.
-    let offset = narrow.min.x - undeclared.min.x;
-    assert!(offset > 300.0 && offset < 400.0, "a declaration of 380 points is the room before the bar, {offset}");
-    assert!(narrow.width() < 900.0, "the bar keeps its titles, not the rest of the line, {}", narrow.width());
+    // The bar starts at the leading edge without an empty region before it, taking its declared width instead of
+    // filling the rest of the line.
+    let offset = (narrow.min.x - undeclared.min.x).abs();
+    assert!(offset < 1.0, "the bar starts at the leading edge without an empty region before it, {offset}");
+    assert!(narrow.width() <= 380.0 + 1.0, "the bar keeps its declared width, {}", narrow.width());
 }
