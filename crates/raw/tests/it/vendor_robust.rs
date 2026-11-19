@@ -241,8 +241,7 @@ fn raf() -> Vec<u8> {
 }
 
 /// An Olympus ORF (TIFF with an `IIRO` magic) or Panasonic RW2 (`IIU\0`), raw image in IFD0.
-fn magic_tiff(magic: &[u8; 4], make: &str) -> Vec<u8> {
-    let px = (W * H) as usize;
+fn magic_tiff(magic: &[u8; 4], make: &str, strip: Vec<u8>) -> Vec<u8> {
     let mut ifd = IfdBuilder::new();
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![W]));
     ifd.set(t::IMAGE_LENGTH, Value::Long(vec![H]));
@@ -250,18 +249,36 @@ fn magic_tiff(magic: &[u8; 4], make: &str) -> Vec<u8> {
     ifd.set(t::COMPRESSION, Value::Short(vec![1]));
     ifd.set(t::PHOTOMETRIC, Value::Short(vec![1]));
     ifd.set(t::MAKE, Value::Ascii(make.into()));
-    ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![(0..px * 2).map(|i| (i * 13) as u8).collect()] });
+    ifd.set_image(ImageData::Strips { rows_per_strip: H, strips: vec![strip] });
     let mut b = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
     b[..4].copy_from_slice(magic);
     b
 }
 
+/// The measured compressed ORF header and independently hand-coded zero residuals. Contexts
+/// reset each row: the first three pixels of each parity use four remainder bits, then two.
+fn compressed_orf() -> Vec<u8> {
+    let mut bits = Vec::new();
+    for _ in 0..H {
+        for x in 0..W {
+            bits.extend([false; 3]);
+            bits.push(true);
+            bits.extend(std::iter::repeat_n(false, if x < 6 { 4 } else { 2 }));
+        }
+    }
+    let mut strip = vec![0, 0, 0, 0, 1, 0, 0];
+    strip.extend(bits.chunks(8).map(|chunk| chunk.iter().enumerate().fold(0u8, |v, (i, b)| v | (u8::from(*b) << (7 - i)))));
+    magic_tiff(b"IIRO", "OLYMPUS", strip)
+}
+
+/// Collect synthetic raw containers for the shared truncation and corruption checks.
 fn samples() -> Vec<Vec<u8>> {
     vec![
         cfa_tiff("SONY", 32767, 12, ByteOrder::Little),
         cfa_tiff("SONY", 1, 14, ByteOrder::Little),
         cfa_tiff("SONY", 32766, 14, ByteOrder::Little),
-        magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP."),
+        magic_tiff(b"IIRO", "OLYMPUS IMAGING CORP.", (0..(W * H * 2) as usize).map(|i| (i * 13) as u8).collect()),
+        compressed_orf(),
         raf(),
         rw2(),
         cr2(),

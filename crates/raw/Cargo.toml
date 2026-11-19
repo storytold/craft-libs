@@ -1,6 +1,6 @@
 [package]
 name = "craft-raw"
-description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW so far."
+description = "Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed and measured lossless compression), Sony ARW, Canon CR3 and Canon CRW so far."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -42,7 +42,7 @@ nef = []
 rw2 = []
 ## Fujifilm RAF: uncompressed Bayer and X-Trans, lossless and lossy compressed, in-file lens corrections.
 raf = []
-## Olympus / OM System ORF: the uncompressed layouts. Compressed ORF is refused (its embedded preview still reads).
+## Olympus / OM System ORF: uncompressed layouts and measured lossless compressed 12-bit streams.
 orf = []
 ## Sony ARW, SR2 and SRF: uncompressed, ARW2 (cRAW), lossless JPEG tiles, ARW6 (Compressed RAW 2, RDD 34 LLVC), the encrypted SR2SubIFD, in-file lens corrections.
 arw = []
