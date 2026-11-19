@@ -1,5 +1,10 @@
 //! Borrowed CMS wire prefixes. These do not validate signed attributes or authenticate signers.
 //! Optional/remaining fields are explicit cursors, governed by the parent inspection bounds.
+//!
+//! Each `parse` starts a new depth root. Callers traversing nested structures must retain their
+//! whole-document work/depth policy; reparsing a slice does not carry a previous cursor's budget.
+//! The required wire tags and exact SignedData OID are this view's structural profile, not a
+//! replacement for a consumer's acceptance or diagnostic policy. Existing parsers remain unchanged.
 
 use super::{Cursor, Element, InspectionError};
 use crate::der::tag;

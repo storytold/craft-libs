@@ -54,3 +54,58 @@ fn signer_prefix_does_not_hide_optional_tail_or_consume_next_signer() {
     assert_eq!(view.remaining_fields.next_element(), Err(InspectionError::Malformed));
     assert_eq!(view.remaining_fields.remaining(), &[0xa1]);
 }
+
+// Ordinary optional sets and complete trailing TLVs, never interpreted as trust evidence here.
+fn optional_fixture(certificate_count: usize, with_crl: bool, tails: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let certificate = craft_pkcs7::x509::load_certificates(include_bytes!("../data/ca.crt.pem")).unwrap().remove(0).raw;
+    let (base, signer) = fixture(false, true);
+    let (view, _) = SignedDataView::parse(&base).unwrap();
+    let certificates = der::tlv(tag::ctx(0), &certificate.repeat(certificate_count));
+    let crl = if with_crl { der::tlv(tag::ctx(1), &der::seq(&[])) } else { vec![] };
+    let tail = if tails { der::tlv(tag::NULL, &[]) } else { vec![] };
+    let signed_data = der::seq(&[
+        view.version.raw(),
+        view.digest_algorithms.raw(),
+        view.encapsulated_content.raw(),
+        &certificates,
+        &crl,
+        &der::set_of(&[&signer]),
+        &tail,
+    ]);
+    let wrapped = der::tlv(tag::ctx(0), &[signed_data, tail.clone()].concat());
+    let content = der::seq(&[&der::oid("1.2.840.113549.1.7.2"), &wrapped, &tail]);
+    ([content, tail].concat(), certificate, crl)
+}
+
+#[test]
+fn optional_certificate_crl_sets_and_all_tails_remain_visible() {
+    for with_crl in [false, true] {
+        let (bytes, cert, crl) = optional_fixture(2, with_crl, true);
+        let (mut view, rest) = SignedDataView::parse(&bytes).unwrap();
+        assert_eq!(rest, &[5, 0]);
+        let certs = view.remaining_fields.next_element().unwrap().unwrap();
+        assert_eq!(certs.tag(), tag::ctx(0));
+        assert_eq!(certs.value(), cert.repeat(2));
+        if with_crl {
+            assert_eq!(view.remaining_fields.next_element().unwrap().unwrap().raw(), crl);
+        }
+        assert_eq!(view.remaining_fields.next_element().unwrap().unwrap().tag(), tag::SET);
+        for cursor in [&mut view.remaining_fields, &mut view.remaining_explicit_fields, &mut view.remaining_content_info_fields] {
+            assert_eq!(cursor.next_element().unwrap().unwrap().raw(), &[5, 0]);
+            assert_eq!(cursor.next_element(), Ok(None));
+        }
+    }
+}
+
+#[test]
+fn signer_unsigned_attributes_remain_raw_and_separate_from_signed_attributes() {
+    let (_, signer) = fixture(true, true);
+    let fields = der::Tlv::parse_all(&signer).unwrap();
+    let unsigned = der::tlv(tag::ctx(1), &der::seq(&[]));
+    let bytes = der::seq(&[fields.value, &unsigned]);
+    let (mut view, rest) = SignerInfoView::parse(&bytes).unwrap();
+    assert!(rest.is_empty());
+    assert_eq!(view.signed_attributes.unwrap().tag(), tag::ctx(0));
+    assert_eq!(view.remaining_fields.next_element().unwrap().unwrap().raw(), unsigned);
+    assert_eq!(view.remaining_fields.next_element(), Ok(None));
+}
