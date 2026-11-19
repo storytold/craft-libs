@@ -609,6 +609,10 @@ impl Files for FileService {
         Ok(false)
     }
 
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
     fn last_folder(&self, purpose: &str) -> Option<PathBuf> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).last_folder.get(purpose).cloned()
     }
@@ -769,6 +773,23 @@ mod service_tests {
         panels.pump(NONE);
         assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
         assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // `FileService::exists` checks the real file system, so batch writers on desktop see files already on disk.
+    #[trial]
+    fn exists_checks_the_file_system() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-exists-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let present = dir.join("present.pdf");
+        let missing = dir.join("missing.pdf");
+        let _ = std::fs::remove_file(&present);
+        let _ = std::fs::remove_file(&missing);
+        let (service, _panels) = FileService::new(Wake::none());
+        assert!(!service.exists(&present));
+        assert_eq!(service.write(&present, b"data", WriteIntent::SaveAs), Ok(false));
+        assert!(service.exists(&present));
+        assert!(!service.exists(&missing));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

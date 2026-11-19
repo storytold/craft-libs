@@ -213,7 +213,7 @@ fn a_heading_folds_its_page_and_a_double_click_edits_a_card() {
         let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
     });
     fixture.settle();
-    let page_one = heading(&fixture, "Page 1").expect("page 1's heading");
+    let page_one = heading(&fixture, "Page 1, 1").expect("page 1's heading");
     fixture.click_at(page_one.center()).settle();
     assert_eq!(state.borrow().collapsed_pages, vec![1], "the click folds page 1");
     assert!(card(&fixture, "Note 1.").is_none(), "a folded page hides its cards");
@@ -224,7 +224,7 @@ fn a_heading_folds_its_page_and_a_double_click_edits_a_card() {
     assert_eq!(state.borrow().selected.items, vec![ThreadId(1)], "the reveal selects only its thread");
     assert!(card(&fixture, "Note 1.").is_some(), "the revealed card is drawn");
 
-    let page_one = heading(&fixture, "Page 1").expect("page 1's heading");
+    let page_one = heading(&fixture, "Page 1, 1").expect("page 1's heading");
     fixture.click_at(page_one.center()).settle();
     assert_eq!(state.borrow().collapsed_pages, vec![1], "the reveal was taken once: later passes do not unfold the page again");
 
@@ -390,6 +390,44 @@ fn a_card_out_of_view_that_grows_is_rebuilt_at_its_size_when_scrolled_back() {
     let second = card(&fixture, "Note 2.").expect("card 2 is in view below it");
     assert!(first.height() > second.height(), "card 1 is rebuilt at its grown size: {first:?} then {second:?}");
     assert!(second.top() >= first.bottom(), "the card below starts under the grown card: {first:?} then {second:?}");
+}
+
+/// Each group heading puts its count in its access name: under Page sort, the unfiltered count of that page's threads
+/// even when search hides some of them; under another sort, the shown count of that group.
+#[trial]
+fn a_heading_puts_its_count_in_its_access_name() {
+    let threads = vec![
+        thread(1, 1, "Needle on page one."),
+        thread(2, 1, "Other on page one."),
+        thread(3, 1, "Third on page one."),
+        thread(4, 2, "Needle on page two."),
+    ];
+    let mut initial = CommentsPanelState::default();
+    initial.search = "needle".into();
+    let state = Rc::new(RefCell::new(initial));
+    let shown_state = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut state = shown_state.borrow_mut();
+        let _ = CommentsPanel::new("Comments", &threads, &mut state).show(ui);
+    });
+    fixture.in_room(Room::Panel).settle();
+    let names = row_names(&fixture);
+    assert!(
+        names.iter().any(|name| name.contains("Page 1") && name.contains('3')),
+        "Page 1's heading carries its unfiltered count 3: {names:?}"
+    );
+    assert!(
+        names.iter().any(|name| name.contains("Page 2") && name.contains('1')),
+        "Page 2's heading carries its unfiltered count 1: {names:?}"
+    );
+
+    state.borrow_mut().sort = CommentSort::Type;
+    fixture.settle();
+    let names = row_names(&fixture);
+    assert!(
+        names.iter().any(|name| !name.contains("Needle") && name.contains('2')),
+        "under Type sort, the group heading carries its shown count 2: {names:?}"
+    );
 }
 
 /// An editor opened on card 1, far above the cards in view: the cards in view do not jump, and scrolled back to the

@@ -2,13 +2,14 @@
 
 use craft_behavior::{CancelReason, CanvasView, EditEvent};
 use craft_keymap::Mods;
-use craft_review::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, SLIP_MOVE};
+use craft_review::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, SLIP_MOVE, ShiftLock};
 use craft_review::ui::annotate::{
     DrawOptions, EmptyPress, EraseMode, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions, ToggleMods,
 };
 use craft_review::ui::{AnnotateTool, AnnotateWords};
 use craft_ui::testing::{ToolFixture, pointer, trial};
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect as ScreenRect, vec2};
+use egui::epaint::ColorMode;
+use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect as ScreenRect, Shape, vec2};
 use kurbo::{Point, Rect, Vec2};
 
 /// Frames past the double-click time (0.3 s at 1/60 s a frame), so the next press is a click of its own.
@@ -520,4 +521,221 @@ fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
     rig.double_press_at(note);
     let edits = values(&rig);
     assert!(edits.contains(&AnnotationEdit::Open(AnnotationId(2))), "a double press on the note opens it by the same rule: {edits:?}");
+}
+
+/// Presses at `from`, drags to `to` with `modifiers` held and leaves the button down, so the next frame paints the
+/// live preview.
+fn hold_drag(rig: &mut ToolFixture<AnnotateTool>, from: Point, to: Point, modifiers: Modifiers) {
+    let (start, end) = (on_screen(rig, from), on_screen(rig, to));
+    let fixture = rig.fixture();
+    fixture.hold(modifiers);
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![button(start, true, modifiers)]);
+    for step in 1..=3 {
+        fixture.frame(vec![pointer::moved(start + (end - start) * (step as f32 / 3.0))]);
+    }
+}
+
+/// Releases the drag held by [`hold_drag`] at `to`.
+fn release_drag(rig: &mut ToolFixture<AnnotateTool>, to: Point, modifiers: Modifiers) {
+    let end = on_screen(rig, to);
+    let fixture = rig.fixture();
+    fixture.frame(vec![button(end, false, modifiers)]);
+    fixture.hold(Modifiers::NONE);
+    fixture.idle(PAST_DOUBLE_CLICK);
+}
+
+/// Clicks at `at` with `modifiers` held, then waits past the double-click time.
+fn click_holding(rig: &mut ToolFixture<AnnotateTool>, at: Point, modifiers: Modifiers) {
+    let pos = on_screen(rig, at);
+    let fixture = rig.fixture();
+    fixture.hold(modifiers);
+    fixture.frame(vec![pointer::moved(pos)]);
+    fixture.frame(vec![button(pos, true, modifiers)]);
+    fixture.frame(vec![button(pos, false, modifiers)]);
+    fixture.hold(Modifiers::NONE);
+    fixture.idle(PAST_DOUBLE_CLICK);
+}
+
+/// The painted path shapes in `shapes` stroked in `color`.
+fn colored_paths(shapes: &[Shape], color: Color32) -> Vec<&egui::epaint::PathShape> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::Path(path) if path.stroke.color == ColorMode::Solid(color) => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// New Line, Arrow and PolyLine/Polygon drawings honour `SelectOptions::shift_lock`: under `LevelOrPlumb`, Shift holds
+/// a line, an arrow, a polygon side and their live previews level or plumb (while hovering a polygon's first corner
+/// still previews the closing side); under the default `Angle45`, Shift snaps to 45-degree steps.
+#[trial]
+fn new_lines_arrows_and_poly_sides_honour_shift_lock() {
+    let mut ortho = SelectOptions::default();
+    ortho.shift_lock = ShiftLock::LevelOrPlumb;
+    let color = [0x10, 0x80, 0xE0];
+    let stroke_color = Color32::from_rgb(color[0], color[1], color[2]);
+
+    // Line: mostly across -> level, mostly down -> plumb; preview while held is level too.
+    let mut tool = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Line), 0).select_options(ortho);
+    tool.color = color;
+    let mut line_rig = rig(tool);
+    let origin = Point::new(40.0, 100.0);
+    let tilted = Point::new(140.0, 145.0);
+    hold_drag(&mut line_rig, origin, tilted, Modifiers::SHIFT);
+    let shapes = line_rig.fixture().frame_shapes();
+    let paths = colored_paths(&shapes, stroke_color);
+    let expected_end = on_screen(&line_rig, Point::new(140.0, 100.0));
+    assert!(
+        paths.iter().any(|p| p.points.len() == 2 && (p.points[1] - expected_end).length() < 0.5),
+        "line preview with LevelOrPlumb stays level: {paths:?}"
+    );
+    release_drag(&mut line_rig, tilted, Modifiers::SHIFT);
+    drag_holding(&mut line_rig, Point::new(200.0, 40.0), Point::new(215.0, 150.0), Modifiers::SHIFT);
+    drag_holding(&mut line_rig, Point::new(40.0, 160.0), Point::new(140.0, 190.0), Modifiers::NONE);
+    let made = created(&line_rig);
+    assert_eq!(made.len(), 3, "{made:?}");
+    assert!(near(made[0].points[1], Point::new(140.0, 100.0)), "mostly across stays level: {:?}", made[0].points);
+    assert!(near(made[1].points[1], Point::new(200.0, 150.0)), "mostly down stays plumb: {:?}", made[1].points);
+    assert!(near(made[2].points[1], Point::new(140.0, 190.0)), "without Shift stays free: {:?}", made[2].points);
+
+    // Arrow honours LevelOrPlumb too.
+    let mut arrow_rig = rig(AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Arrow), 0).select_options(ortho));
+    drag_holding(&mut arrow_rig, Point::new(260.0, 180.0), Point::new(150.0, 170.0), Modifiers::SHIFT);
+    let made = created(&arrow_rig);
+    assert_eq!(made.len(), 1);
+    assert!(near(made[0].points[1], Point::new(150.0, 180.0)), "arrow stays level: {:?}", made[0].points);
+
+    // PolyLine: each Shift click is held level or plumb with the corner before; plain click is free.
+    let mut poly_rig = rig(AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::PolyLine), 0).select_options(ortho));
+    click_holding(&mut poly_rig, Point::new(20.0, 20.0), Modifiers::NONE);
+    click_holding(&mut poly_rig, Point::new(90.0, 30.0), Modifiers::SHIFT);
+    click_holding(&mut poly_rig, Point::new(95.0, 80.0), Modifiers::SHIFT);
+    click_holding(&mut poly_rig, Point::new(130.0, 60.0), Modifiers::NONE);
+    poly_rig.fixture().key(Key::Enter, Modifiers::NONE);
+    let made = created(&poly_rig);
+    assert_eq!(made.len(), 1);
+    let pts = &made[0].points;
+    assert_eq!(pts.len(), 4, "{pts:?}");
+    assert!(
+        near(pts[1], Point::new(90.0, 20.0)) && near(pts[2], Point::new(90.0, 80.0)) && near(pts[3], Point::new(130.0, 60.0)),
+        "polyline Shift clicks hold level/plumb: {pts:?}"
+    );
+
+    // Polygon rubber band: held level/plumb away from the start, but closes directly to the first corner when near it.
+    let mut polygon = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Polygon), 0).select_options(ortho);
+    polygon.color = color;
+    let mut polygon_rig = rig(polygon);
+    for p in [Point::new(40.0, 40.0), Point::new(140.0, 40.0), Point::new(140.0, 140.0)] {
+        click(&mut polygon_rig, p);
+    }
+    let away = on_screen(&polygon_rig, Point::new(80.0, 155.0));
+    polygon_rig.fixture().hold(Modifiers::SHIFT).frame(vec![pointer::moved(away)]);
+    let shapes = polygon_rig.fixture().frame_shapes();
+    let paths = colored_paths(&shapes, stroke_color);
+    let expected_ortho = on_screen(&polygon_rig, Point::new(80.0, 140.0));
+    assert!(
+        paths.iter().any(|p| p.points.len() == 4 && (p.points[3] - expected_ortho).length() < 0.5),
+        "polygon rubber band holds level with Shift: {paths:?}"
+    );
+    let near_first = on_screen(&polygon_rig, Point::new(41.0, 41.0));
+    polygon_rig.fixture().frame(vec![pointer::moved(near_first)]);
+    let shapes = polygon_rig.fixture().frame_shapes();
+    let paths = colored_paths(&shapes, stroke_color);
+    let first_screen = on_screen(&polygon_rig, Point::new(40.0, 40.0));
+    assert!(
+        paths.iter().any(|p| p.points.len() == 4 && (p.points[3] - first_screen).length() < 0.5),
+        "over the first corner, the rubber band closes to it even with Shift: {paths:?}"
+    );
+    polygon_rig.fixture().hold(Modifiers::NONE);
+
+    // Default Angle45 still snaps a diagonal line to 45 degrees.
+    let mut angle45_rig = rig_for(AnnotationKind::Line);
+    drag_holding(&mut angle45_rig, Point::new(40.0, 40.0), Point::new(140.0, 120.0), Modifiers::SHIFT);
+    let made = created(&angle45_rig);
+    assert_eq!(made.len(), 1);
+    let d = made[0].points[1] - made[0].points[0];
+    assert!((d.x - d.y).abs() < 0.5 && d.x > 50.0, "default Angle45 snaps near-diagonal to 45 degrees: {:?}", made[0].points);
+}
+
+/// Place drags (TextBox and Callout) and Eraser drags (both Path swath and Strokes marching ants) paint their live
+/// preview while the button is held and clear it once released.
+#[trial]
+fn place_and_erase_drags_paint_their_preview_while_held() {
+    let color = [0x10, 0x80, 0xE0];
+    let stroke_color = Color32::from_rgb(color[0], color[1], color[2]);
+
+    // TextBox place drag: closed 4-corner outline in the tool's colour while held, gone on release.
+    let mut tb = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::TextBox), 0);
+    tb.color = color;
+    let mut tb_rig = rig(tb);
+    let (from, to) = (Point::new(50.0, 50.0), Point::new(160.0, 120.0));
+    hold_drag(&mut tb_rig, from, to, Modifiers::NONE);
+    let held_shapes = tb_rig.fixture().frame_shapes();
+    let held_paths = colored_paths(&held_shapes, stroke_color);
+    assert!(
+        held_paths.iter().any(|p| p.points.len() == 5 && (p.points[0] - on_screen(&tb_rig, from)).length() < 0.5),
+        "TextBox drag paints its box preview while held: {held_paths:?}"
+    );
+    release_drag(&mut tb_rig, to, Modifiers::NONE);
+    let after_shapes = tb_rig.fixture().frame_shapes();
+    assert!(colored_paths(&after_shapes, stroke_color).is_empty(), "TextBox preview clears after release");
+
+    // Callout place drag: leader line in the tool's colour from tip to box while held, gone on release.
+    let mut callout = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Callout), 0);
+    callout.color = color;
+    let mut callout_rig = rig(callout);
+    hold_drag(&mut callout_rig, from, to, Modifiers::NONE);
+    let held_shapes = callout_rig.fixture().frame_shapes();
+    let held_paths = colored_paths(&held_shapes, stroke_color);
+    assert!(
+        held_paths
+            .iter()
+            .any(|p| p.points.len() == 2 && (p.points[0] - on_screen(&callout_rig, from)).length() < 0.5 && (p.points[1] - on_screen(&callout_rig, to)).length() < 0.5),
+        "Callout drag paints its leader preview while held: {held_paths:?}"
+    );
+    release_drag(&mut callout_rig, to, Modifiers::NONE);
+    let after_shapes = callout_rig.fixture().frame_shapes();
+    assert!(colored_paths(&after_shapes, stroke_color).is_empty(), "Callout preview clears after release");
+
+    // Path eraser: swath stroke width matches 2 * eraser_radius while held, gone on release.
+    for radius in [6.0_f32, 36.0_f32] {
+        let mut options = DrawOptions::default();
+        options.erase = EraseMode::Path;
+        options.eraser_radius = radius;
+        let mut eraser_rig = rig(AnnotateTool::new(AnnotationTool::Eraser, 0).draw_options(options));
+        let swath_widths = |shapes: &[Shape]| -> Vec<f32> {
+            shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Path(path) if path.points.len() >= 2 && (path.stroke.width - 2.0 * radius).abs() < 0.1 => Some(path.stroke.width),
+                    _ => None,
+                })
+                .collect()
+        };
+        hold_drag(&mut eraser_rig, Point::new(60.0, 100.0), Point::new(220.0, 100.0), Modifiers::NONE);
+        let held_shapes = eraser_rig.fixture().frame_shapes();
+        assert_eq!(swath_widths(&held_shapes).len(), 1, "radius {radius}: swath painted at twice the radius while held");
+        let cap_circles = held_shapes
+            .iter()
+            .filter(|shape| matches!(shape, Shape::Circle(c) if (c.radius - radius).abs() < 0.1))
+            .count();
+        assert!(cap_circles >= 2, "radius {radius}: swath paints round dots along its path: {cap_circles}");
+        release_drag(&mut eraser_rig, Point::new(220.0, 100.0), Modifiers::NONE);
+        let after_shapes = eraser_rig.fixture().frame_shapes();
+        assert!(swath_widths(&after_shapes).is_empty(), "radius {radius}: swath clears after release");
+    }
+
+    // Strokes eraser: marching ants while held, gone on release.
+    let mut strokes_eraser = rig(AnnotateTool::new(AnnotationTool::Eraser, 0));
+    let ant_shapes = |shapes: &[Shape]| shapes.iter().filter(|shape| matches!(shape, Shape::Mesh(_) | Shape::LineSegment { .. })).count();
+    let baseline_ants = ant_shapes(&strokes_eraser.fixture().frame_shapes());
+    hold_drag(&mut strokes_eraser, Point::new(60.0, 100.0), Point::new(220.0, 100.0), Modifiers::NONE);
+    let held_ants = ant_shapes(&strokes_eraser.fixture().frame_shapes());
+    assert!(held_ants > baseline_ants, "strokes eraser paints marching ants while held: {held_ants} vs {baseline_ants}");
+    release_drag(&mut strokes_eraser, Point::new(220.0, 100.0), Modifiers::NONE);
+    let after_ants = ant_shapes(&strokes_eraser.fixture().frame_shapes());
+    assert_eq!(after_ants, baseline_ants, "strokes eraser preview clears after release");
 }
