@@ -130,11 +130,20 @@ pub struct ToolRail<'a, T: Value + 'static> {
     #[prop]
     hidden: &'a [T],
     footer: Option<FooterFn<'a>>,
+    /// Names the slots' rows, tooltips and accessible names in the caller's language (`FlyoutButton::labels`).
+    labels: Option<super::flyout::RailLabels<'a>>,
     /// The columns the rail lays out in this pass.
     columns: usize,
 }
 
 impl<'a, T: Value + 'static> ToolRail<'a, T> {
+    /// Names the slots' rows, tooltips and accessible names in the caller's language: `labels` maps a command's own
+    /// label to the one to show, so the rail follows the language of the window it draws in.
+    pub fn labels(mut self, labels: super::flyout::RailLabels<'a>) -> Self {
+        self.labels = Some(labels);
+        self
+    }
+
     /// A one-column rail named `label` over `slots`, with `current` the host's tool and `last_used` what the slots
     /// showed last.
     pub fn new(label: impl Into<Label>, slots: &'a [ToolSlot<T>], current: &'a T, last_used: &'a LastUsed<T>) -> Self {
@@ -158,6 +167,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             editing: false,
             hidden: &[],
             footer: None,
+            labels: None,
             columns: 1,
         }
         .label(label)
@@ -194,6 +204,7 @@ impl<'a, T: Value + 'static> ToolRail<'a, T> {
             edit_label: self.edit_toolbar.clone(),
             opens: self.opens,
             columns: self.columns,
+            labels: self.labels.clone(),
         }
     }
 }
@@ -208,12 +219,15 @@ struct Draw<'a, T> {
     edit_label: Option<Label>,
     opens: Side,
     columns: usize,
+    labels: Option<super::flyout::RailLabels<'a>>,
 }
 
 impl<T: Value + 'static> Draw<'_, T> {
     /// The grid of buttons in rows of `columns`, with the pass's results in `collected`.
     fn run(&self, ui: &mut Ui, cx: &mut BodyCx<'_>, collected: &mut Collected<T>) {
-        let Draw { slots, current, last_used, hidden, editing, columns, opens, .. } = *self;
+        let labels = self.labels.clone();
+        let (slots, current, last_used, hidden, editing, columns, opens) =
+            (self.slots, self.current, self.last_used, self.hidden, self.editing, self.columns, self.opens);
         *collected = Collected::default();
         let visible = visible_slots(slots, hidden);
         let cells = visible.len() + usize::from(self.edit_label.is_some());
@@ -235,6 +249,7 @@ impl<T: Value + 'static> Draw<'_, T> {
                                             let selected = tools.iter().any(|tool| tool.id == *current);
                                             let mut button = FlyoutButton::new(&owned, &shown.id)
                                                 .id_salt(("slot", slot.id))
+                                                .labels(labels.clone())
                                                 .selected(selected)
                                                 .enabled(tools.iter().any(|tool| enabled(tool)))
                                                 .opens(opens);

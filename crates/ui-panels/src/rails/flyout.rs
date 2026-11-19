@@ -18,6 +18,9 @@ use egui::{Rect, Response, Vec2};
 #[cfg(feature = "testing")]
 mod stories;
 
+/// A host's translator for the names a rail shows: a command's own label, and the label to show instead of it.
+pub type RailLabels<'a> = std::sync::Arc<dyn Fn(&str) -> String + 'a>;
+
 /// The face over the whole button.
 const FACE: PartKey = PartKey::new("face");
 /// The corner mark: a press on it opens the flyout at once, and releasing over a row picks it.
@@ -123,6 +126,9 @@ pub struct FlyoutButton<'a, T: Value + 'static> {
     /// drag away, a right click or the Menu key.
     #[prop(into)]
     click: Option<CommandRef>,
+    /// Names the rows and the tooltip in the caller's language: it maps a command's own label to the one to show,
+    /// so a host draws the rail in the language its window is in.
+    labels: Option<RailLabels<'a>>,
     laid: Option<Laid>,
     picked: Option<T>,
     open: bool,
@@ -141,11 +147,27 @@ impl<'a, T: Value + 'static> FlyoutButton<'a, T> {
             opens: Side::End,
             edit: None,
             click: None,
+            labels: None,
             laid: None,
             picked: None,
             open: false,
             double: false,
             dropped: None,
+        }
+    }
+
+    /// Names the rows, the tooltip and the accessible name in the caller's language: `labels` maps a command's own
+    /// label to the one to show. Without it the command's label shows as it is.
+    pub fn labels(mut self, labels: Option<RailLabels<'a>>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    /// `label` in the caller's language, the label itself when the host gave no translator.
+    fn shown_label(&self, label: &str) -> String {
+        match &self.labels {
+            Some(labels) => labels(label),
+            None => label.to_owned(),
         }
     }
 
@@ -222,9 +244,10 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         let os = cx.env.shell().os;
         let face = cx.part(FACE, rect).priority(HitPriority::new(HitLevel::Body, 0));
         if let Some(resolved) = self.lead(&laid) {
+            let name = self.shown_label(resolved.label.as_ref());
             face.tooltip(match &resolved.chord {
-                Some(chord) => Label::from(format!("{} ({})", resolved.label, chord.display(os))),
-                None => Label::Shared(resolved.label.clone()),
+                Some(chord) => Label::from(format!("{} ({})", name, chord.display(os))),
+                None => Label::from(name),
             });
         }
         if self.has_flyout() {
@@ -323,6 +346,13 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         }
         let popup = cx.popup("menu");
         let (tools, shown) = (self.tools, self.shown);
+        // The rows in the caller's language: the command's own label is what the translator was given,
+        // so a rail in a Japanese window lists Japanese tool names and an English one lists English names.
+        let names: Vec<Option<String>> = self
+            .laid
+            .as_ref()
+            .map(|laid| laid.resolved.iter().map(|resolved| resolved.as_ref().map(|resolved| self.shown_label(resolved.label.as_ref()))).collect())
+            .unwrap_or_default();
         let name = self.laid.as_ref().and_then(|laid| laid.resolved.get(laid.shown)).and_then(Option::as_ref).map(|resolved| resolved.label.clone());
         let name = name.map_or(Label::Empty, Label::Shared);
         let layer = menu::layer(false).place(Place::anchored(Anchor::Response, self.opens, Align::Start));
@@ -331,7 +361,11 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
                 .show(ui, |ui, _| {
                     let mut ran = None;
                     for (at, tool) in tools.iter().enumerate() {
-                        if MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown).show(ui).ran {
+                        let mut row = MenuItem::command(tool.command.clone()).radio_mark(tool.id == *shown);
+                        if let Some(Some(name)) = names.get(at) {
+                            row = row.label(name.clone());
+                        }
+                        if row.show(ui).ran {
                             ran = Some(at);
                         }
                     }
@@ -350,7 +384,7 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         let resolved = self.laid.as_ref().and_then(|laid| self.lead(laid));
         // A command that does not resolve leaves the button's own label as its name.
         let own = (!cx.resolved.label.is_empty()).then(|| cx.resolved.label.to_owned());
-        let name = resolved.map(|resolved| resolved.label.as_ref().to_owned()).or(own);
+        let name = resolved.map(|resolved| self.shown_label(resolved.label.as_ref())).or(own);
         if let Some(name) = &name {
             access.name(Name::Text(name.clone()));
         }
