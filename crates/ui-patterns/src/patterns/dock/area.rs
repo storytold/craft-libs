@@ -980,10 +980,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 view.show_or(
                     ui,
                     |ui| {
-                        // The view draws in a `Ui` held to the group's rect, clipped to it: it lays out in the group's
-                        // room, never in the room the area has left.
-                        ui.shrink_clip_rect(rect);
-                        let taken = panels.borrow_mut().group_view(members, active, ui, at, body);
+                        // The view draws held to the group's rect and clipped to it: it lays out in the group's room,
+                        // never in the room the area has left.
+                        let taken = ui
+                            .scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                                ui.shrink_clip_rect(rect);
+                                panels.borrow_mut().group_view(members, active, ui, at, body)
+                            })
+                            .inner;
                         // The run covers the group, so the pointer over it runs the view again.
                         taken.map(|_| ui.expand_to_include_rect(rect))
                     },
