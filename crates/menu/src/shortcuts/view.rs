@@ -130,7 +130,7 @@ fn app_tabs(ui: &mut Ui, env: &mut Env<'_>, state: &mut DialogState) -> Option<u
         state.set_tab(None);
     }
     let shown = current.map_or(0, |i| i + 1);
-    let picked = Stack::new().enabled(!state.modal()).show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", &titles, shown)).inner.flatten();
+    let picked = Stack::new().fill_width().enabled(!state.modal()).show(ui, |ui, _| tab_strip(ui, "shortcuts.tab", &titles, shown)).inner.flatten();
     let shown = match picked {
         Some(i) => {
             state.set_tab(i.checked_sub(1).and_then(|k| ids.get(k).copied()));
