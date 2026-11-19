@@ -24,16 +24,40 @@ pub struct AiAssistantPanel {
     pub query: String,
     pub search_results: Vec<HelpSearchResult>,
     pub app_id: String,
+    pub locale: String,
     pub custom_tours: Option<Vec<craft_guide::Tour>>,
 }
 
 impl AiAssistantPanel {
     pub fn new(app_id: impl Into<String>) -> Self {
-        Self { is_open: false, query: String::new(), search_results: Vec::new(), app_id: app_id.into(), custom_tours: None }
+        Self { is_open: false, query: String::new(), search_results: Vec::new(), app_id: app_id.into(), locale: "he".into(), custom_tours: None }
     }
 
     pub fn with_tours(app_id: impl Into<String>, tours: Vec<craft_guide::Tour>) -> Self {
-        Self { is_open: false, query: String::new(), search_results: Vec::new(), app_id: app_id.into(), custom_tours: Some(tours) }
+        Self {
+            is_open: false,
+            query: String::new(),
+            search_results: Vec::new(),
+            app_id: app_id.into(),
+            locale: "he".into(),
+            custom_tours: Some(tours),
+        }
+    }
+
+    /// Sets the initial UI/search locale (builder style, defaults to `"he"`).
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = locale.into();
+        self
+    }
+
+    /// Updates the UI/search locale and refreshes the search results list.
+    pub fn set_locale(&mut self, locale: impl Into<String>) {
+        self.locale = locale.into();
+        self.refresh_results();
+    }
+
+    fn resolved_tours(&self) -> Vec<craft_guide::Tour> {
+        self.custom_tours.clone().unwrap_or_else(|| craft_guide::app_catalog::tours_for_app_locale(&self.app_id, &self.locale))
     }
 
     /// Toggles the assistant window open/closed (e.g. via F1 or Ribbon button).
@@ -44,9 +68,9 @@ impl AiAssistantPanel {
         }
     }
 
-    /// Evaluates user query against available tours in the app catalog.
+    /// Evaluates user query against available tours in the app catalog (active locale + English fallback).
     pub fn refresh_results(&mut self) {
-        let tours = self.custom_tours.clone().unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
+        let tours = self.resolved_tours();
         let q = self.query.trim().to_lowercase();
 
         if q.is_empty() {
@@ -55,11 +79,14 @@ impl AiAssistantPanel {
             return;
         }
 
+        let en_tours = if self.custom_tours.is_none() { craft_guide::app_catalog::tours_for_app_locale(&self.app_id, "en") } else { Vec::new() };
+
         self.search_results = tours
             .into_iter()
             .filter_map(|t| {
-                let matches_title = t.title.to_lowercase().contains(&q);
-                let matches_summary = t.summary.to_lowercase().contains(&q);
+                let en_match = en_tours.iter().find(|e| e.id == t.id);
+                let matches_title = t.title.to_lowercase().contains(&q) || en_match.is_some_and(|e| e.title.to_lowercase().contains(&q));
+                let matches_summary = t.summary.to_lowercase().contains(&q) || en_match.is_some_and(|e| e.summary.to_lowercase().contains(&q));
                 if matches_title || matches_summary {
                     let score = if matches_title { 2.0 } else { 1.0 };
                     Some(HelpSearchResult { tour_id: t.id, title: t.title, summary: t.summary, relevance_score: score })
@@ -79,7 +106,11 @@ impl AiAssistantPanel {
         }
 
         let mut open = self.is_open;
-        Window::new("🤖 סייען אינטראקטיבי ושאלות נפוצות").open(&mut open).default_size(Vec2::new(420.0, 480.0)).resizable(true).show(ctx, |ui| {
+        let window_title = format!("🤖 {}", craft_guide::app_catalog::tr_locale(&self.locale, "Interactive Assistant & FAQ"));
+        let list_header = craft_guide::app_catalog::tr_locale(&self.locale, "Available quick walkthroughs:");
+        let start_label = format!("▶ {}", craft_guide::app_catalog::tr_locale(&self.locale, "Start on-screen guide"));
+
+        Window::new(window_title).open(&mut open).default_size(Vec2::new(420.0, 480.0)).resizable(true).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("🔍");
                 let text_edit = ui.text_edit_singleline(&mut self.query);
@@ -89,7 +120,7 @@ impl AiAssistantPanel {
             });
 
             ui.separator();
-            ui.label(RichText::new("מדריכים זמינים לביצוע מהיר:").strong());
+            ui.label(RichText::new(list_header).strong());
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 let mut triggered_tour_id = None;
@@ -98,23 +129,44 @@ impl AiAssistantPanel {
                     ui.group(|ui| {
                         ui.heading(&res.title);
                         ui.label(&res.summary);
-                        if ui.button("▶ התחל הדרכה על המסך").clicked() {
+                        if ui.button(&start_label).clicked() {
                             triggered_tour_id = Some(res.tour_id.clone());
                         }
                     });
                 }
 
-                if let Some(tid) = triggered_tour_id {
-                    let tours = self.custom_tours.clone().unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
-                    if let Some(t) = tours.into_iter().find(|t| t.id == tid) {
-                        guide_controller.start_tour(t);
-                        self.is_open = false;
-                    }
+                if let Some(tid) = triggered_tour_id
+                    && let Some(t) = self.resolved_tours().into_iter().find(|t| t.id == tid)
+                {
+                    guide_controller.start_tour(t);
+                    self.is_open = false;
                 }
             });
         });
 
         self.is_open = self.is_open && open;
+    }
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::*;
+
+    #[test]
+    fn with_locale_and_set_locale_switch_ui_and_search_results() {
+        let mut panel = AiAssistantPanel::new("wordcraft").with_locale("en");
+        panel.refresh_results();
+        assert!(!panel.search_results.is_empty());
+        assert!(panel.search_results.iter().all(|r| r.title.is_ascii()));
+        assert_eq!(craft_guide::app_catalog::tr_locale("en", "Interactive Assistant & FAQ"), "Interactive Assistant & FAQ");
+
+        panel.set_locale("he");
+        assert!(panel.search_results.iter().any(|r| !r.title.is_ascii()));
+        // Searching with an English keyword still finds localized Hebrew walkthroughs.
+        panel.query = "table".into();
+        panel.refresh_results();
+        assert!(panel.search_results.iter().any(|r| r.tour_id == "wordcraft.insert_table" && r.title.contains("טבלה")));
+        assert_eq!(craft_guide::app_catalog::tr_locale("he", "Start on-screen guide"), "התחל הדרכה על המסך");
     }
 }
 

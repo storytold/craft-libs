@@ -98,6 +98,9 @@ const HE_CATALOG: &str = concat!(
     "\tRazor tool\tכלי החיתוך (Razor)\n",
     "\tClick on the timeline at the desired cut point.\tלחץ על ציר הזמן בנקודת החיתוך המבוקשת.\n",
     "\tKeyboard shortcut: C\tקיצור מקשים: C\n",
+    "\tInteractive Assistant & FAQ\tסייען אינטראקטיבי ושאלות נפוצות\n",
+    "\tAvailable quick walkthroughs:\tמדריכים זמינים לביצוע מהיר:\n",
+    "\tStart on-screen guide\tהתחל הדרכה על המסך\n",
 );
 
 static GUIDE_CATALOG: &Embedded = &[("he", "", HE_CATALOG)];
@@ -327,6 +330,13 @@ pub fn tours_for_app_locale(app_id: &str, locale: &str) -> Vec<Tour> {
 /// Returns all built-in walkthrough tours for any specified app in the ArtCraft suite.
 pub fn tours_for_app(app_id: &str) -> Vec<Tour> {
     tours_for_app_locale(app_id, "he")
+}
+
+/// Translates a guide UI label `source` into `locale`, falling back to English.
+pub fn tr_locale(locale: &str, source: &str) -> String {
+    let i18n = default_i18n();
+    let lang = i18n.from_code(locale).unwrap_or(Lang::EN);
+    i18n.t(lang, source).into()
 }
 
 #[cfg(test)]

@@ -17,5 +17,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 log = "0.4"
 
 [features]
-default = []
+default = ["app-catalog"]
+app-catalog = []
 serde = ["dep:serde"]

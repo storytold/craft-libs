@@ -9,6 +9,7 @@
 //! `FigCraft`, `DeckCraft`, `GridCraft`, `SoundCraft`, and `Craft Launcher`.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+#[cfg(feature = "app-catalog")]
 pub mod app_catalog;
 use egui::{Color32, Pos2, Rect, Response, Vec2};
 use std::collections::HashMap;
