@@ -31,6 +31,7 @@ pub(crate) mod replay;
 pub mod requests;
 pub mod sampler;
 pub mod toast;
+pub(crate) mod toggle_sweep;
 pub mod wheel;
 pub mod windows;
 pub mod words;
