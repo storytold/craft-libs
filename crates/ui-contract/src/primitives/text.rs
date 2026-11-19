@@ -939,7 +939,12 @@ mod memo_tests {
             assert!(Arc::ptr_eq(&first.galley, &second.galley));
             assert!(first.runs.value.get().is_none());
             assert!(first.full.value.get().is_none());
+            let mut cold = first.clone();
+            cold.full.push('?');
+            cold.runs.clear();
+            assert!(cold.runs().is_empty());
             assert_eq!(first.full(), "a label long enough to elide");
+            assert_ne!(cold.full(), first.full());
             assert!(second.full.value.get().is_some());
             let _ = first.runs();
             assert!(second.runs.value.get().is_some());
