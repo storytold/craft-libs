@@ -399,7 +399,7 @@ To merge upstream updates while preserving all fork-specific architectural featu
    git merge upstream/next -m "Merge remote-tracking branch 'upstream/next' into next (preserve fork features)"
    ```
 3. **Execute Verification Gate**:
-   Execute the four test commands listed in Section 4. Ensure 0 failures and 0 warnings.
+   Execute all six test commands listed in Section 4. Ensure 0 failures and 0 warnings.
 4. **Push to Fork Remote**:
    ```bash
    git push fork next
