@@ -537,12 +537,18 @@ impl Draw<'_> {
         if let Some(s) = &shortcut {
             button = button.shortcut_text(s.as_str());
         }
-        if self.style.highlight_checked && it.kind.checked() == Some(true) {
+        let highlighted = self.style.highlight_checked && it.kind.checked() == Some(true);
+        if highlighted {
             button = button.selected(true).frame_when_inactive(true);
         }
         let press = self.press;
-        let hit = nav.row(ui, depth - 1, enabled, Some(&it.command), mnemonic, |ui, _| {
+        let hit = nav.row(ui, depth - 1, enabled, Some(&it.command), mnemonic, |ui, nav| {
             let r = ui.add_enabled(enabled, button);
+            if highlighted && nav.lit {
+                // The selection fill hides the lit row's own fill: outline it instead.
+                let visuals = ui.visuals();
+                ui.painter().rect_stroke(r.rect, visuals.widgets.hovered.corner_radius, visuals.selection.stroke, egui::StrokeKind::Inside);
+            }
             access(&r, role, label, mnemonic, it.kind.checked(), shortcut.as_deref());
             let hit = r.clicked() || released_on(ui, &r, press);
             (r, hit)

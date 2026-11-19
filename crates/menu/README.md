@@ -156,7 +156,7 @@ egui::Panel::top("menu-bar").show(ui, |ui| {
   items with their state, disabled items, and each item's shortcut and mnemonic (`access_key`).
 - **Style:** `BarStyle::from_style(ui.style())` by default; `.style(..)` sets title padding and
   color, the menu width, separator room and the check and radio marks, and `highlight_checked` fills
-  the rows of checked and selected items with the selection color.
+  the rows of checked and selected items with the selection color (the lit one is outlined).
 
 ## macOS
 
