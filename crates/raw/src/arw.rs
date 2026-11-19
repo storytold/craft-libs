@@ -632,11 +632,14 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
     (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
 }
 
+/// The raw image IFD: the largest CFA image or IFD with Sony's tone curve, else the largest four-sample IFD with Sony's
+/// pixel-shift photometric (32892), so a composite written without the curve is still found ([`pixel_shift_layout`]
+/// then checks it) without ever displacing a CFA image.
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
-    tiff.all_ifds()
-        .into_iter()
-        .filter(|i| i.u16(t::PHOTOMETRIC) == Some(photometric::CFA) || i.contains(TONE_CURVE))
-        .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
+    let ifds = tiff.all_ifds();
+    let area = |i: &&Ifd| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0));
+    let raw = ifds.iter().copied().filter(|i| i.u16(t::PHOTOMETRIC) == Some(photometric::CFA) || i.contains(TONE_CURVE)).max_by_key(area);
+    raw.or_else(|| ifds.iter().copied().filter(|i| i.u16(t::PHOTOMETRIC) == Some(32892) && i.u16(t::SAMPLES_PER_PIXEL) == Some(4)).max_by_key(area))
 }
 
 fn valid_arw2_curve(curve: &[u64]) -> bool {
@@ -1134,25 +1137,47 @@ mod tests {
 
     #[test]
     fn a_pixel_shift_composite_reports_no_assumed_cfa() {
-        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        // with and without the tone curve every composite seen so far carries: the image IFD is found either way
+        for tone_curve in [true, false] {
+            let file = craft_tiff::TiffWriter::default().write(&[pixel_shift_composite(4, tone_curve)]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&file, mode, &Limits::default()).unwrap();
+                // three-channel RGB: no CFA is used, so none was assumed
+                assert_eq!((image.cpp, image.cfa.is_none(), image.notices.assumed_cfa), (3, true, false), "{tone_curve} {mode:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_composite_without_a_tone_curve_does_not_displace_a_cfa_image() {
+        use craft_tiff::{IfdBuilder, Value};
+        let mut cfa = IfdBuilder::new();
+        cfa.set(t::IMAGE_WIDTH, Value::Long(vec![2]));
+        cfa.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
+        cfa.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        let file = craft_tiff::TiffWriter::default().write(&[pixel_shift_composite(8, false), cfa]).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        assert_eq!(raw_ifd(&tiff).and_then(|i| i.u16(t::PHOTOMETRIC)), Some(photometric::CFA));
+    }
+
+    /// A 2-row ILCE-7RM3 pixel-shift composite `width` pixels wide: R, G1, G2, B, 14 bits, Sony's photometric 32892.
+    fn pixel_shift_composite(width: u32, tone_curve: bool) -> craft_tiff::IfdBuilder {
+        use craft_tiff::{IfdBuilder, ImageData, Value};
         let mut raw = IfdBuilder::new();
         raw.set(t::MAKE, Value::Ascii("SONY".into()));
         raw.set(t::MODEL, Value::Ascii("ILCE-7RM3".into()));
-        raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![width]));
         raw.set(t::IMAGE_LENGTH, Value::Long(vec![2]));
         raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14, 14, 14, 14]));
         raw.set(t::SAMPLES_PER_PIXEL, Value::Short(vec![4]));
         raw.set(t::PHOTOMETRIC, Value::Short(vec![32892]));
         raw.set(t::COMPRESSION, Value::Short(vec![1]));
-        raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
-        let words: Vec<u8> = std::iter::repeat_n(600u16.to_le_bytes(), 4 * 2 * 4).flatten().collect();
-        raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![words] });
-        let file = TiffWriter::default().write(&[raw]).unwrap();
-        for mode in [Mode::Header, Mode::Full] {
-            let image = decode(&file, mode, &Limits::default()).unwrap();
-            // three-channel RGB: no CFA is used, so none was assumed
-            assert_eq!((image.cpp, image.cfa.is_none(), image.notices.assumed_cfa), (3, true, false), "{mode:?}");
+        if tone_curve {
+            raw.set(TONE_CURVE, Value::Short(vec![8000, 10400, 12900, 14100]));
         }
+        let words: Vec<u8> = std::iter::repeat_n(600u16.to_le_bytes(), width as usize * 2 * 4).flatten().collect();
+        raw.set_image(ImageData::Strips { rows_per_strip: 2, strips: vec![words] });
+        raw
     }
 
     #[test]
