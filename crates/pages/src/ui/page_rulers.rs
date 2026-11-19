@@ -177,8 +177,9 @@ impl Component for VerticalRuler<'_> {
         VerticalRulerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            fill: cx.color(colors.surface.chrome),
-            margin: cx.color(colors.surface.sunken),
+            // As `TextRuler`'s: the text range is the light well, the margins are shaded as the desk round the page.
+            fill: cx.color(colors.surface.sunken),
+            margin: cx.color(colors.surface.canvas),
             tick: cx.color(colors.text.muted),
             marker: cx.color(colors.text.normal),
             label: TextLook::new(TypeRole::Caption, craft_ui::style::Stateful::new(cx.color(colors.text.muted))),

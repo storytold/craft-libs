@@ -491,8 +491,10 @@ impl Component for TextRuler<'_> {
         TextRulerStyle {
             metrics: Metrics::new(),
             focus: cx.focus_look(),
-            fill: cx.color(colors.surface.chrome),
-            margin: cx.color(colors.surface.sunken),
+            // The column is the light well the text goes in; the margins are shaded as the desk round the page, so the
+            // column reads lighter than the margins in both modes.
+            fill: cx.color(colors.surface.sunken),
+            margin: cx.color(colors.surface.canvas),
             tick: cx.color(colors.text.muted),
             marker_fill: cx.color(colors.surface.raised),
             marker_off: cx.color(colors.text.faint),

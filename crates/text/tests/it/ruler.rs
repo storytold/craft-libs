@@ -195,6 +195,84 @@ fn ruler_numbers_skip_margins_and_markers_thin_out_mirror_for_rtl_and_keep_clear
     }
 }
 
+/// A ruler cut to an extent (a page's x range) paints its ticks over that extent only: the tick rule's labelled step
+/// beyond each end stays off the strip, as nothing of the ruler shows past the page.
+#[trial]
+fn a_ruler_cut_to_an_extent_paints_no_tick_past_it() {
+    const FROM: f32 = 100.0;
+    const TO: f32 = 300.0;
+    let values = Rc::new(RefCell::new(RulerValues::default()));
+    let strip_at: Rc<RefCell<Option<egui::Rect>>> = Rc::new(RefCell::new(None));
+    let seen = strip_at.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let stage = craft_ui::testing::stage(ui);
+        let (strip, _) = Rulers::strips(ui, stage);
+        *seen.borrow_mut() = Some(strip);
+        TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), 140.0)
+            .unit(DocUnit::new(UnitKind::Inches, 96.0))
+            .origin(strip.min.x + 130.0)
+            .extent(egui::Rangef::new(strip.min.x + FROM, strip.min.x + TO))
+            .scale(1.0)
+            .show_at(ui, strip);
+    });
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let strip = strip_at.borrow().expect("the ruler showed");
+    let (from, to) = (strip.min.x + FROM - 0.5, strip.min.x + TO + 0.5);
+    let ticks: Vec<egui::Rect> = shapes
+        .iter()
+        .map(egui::Shape::visual_bounding_rect)
+        .filter(|rect| rect.is_finite() && rect.width() <= 2.0 && rect.height() > 0.0)
+        .filter(|rect| rect.min.y >= strip.min.y - 0.5 && rect.max.y <= strip.max.y + 0.5)
+        .collect();
+    assert!(ticks.iter().any(|rect| rect.center().x > from && rect.center().x < to), "the ruler paints ticks over its extent");
+    let past: Vec<&egui::Rect> = ticks.iter().filter(|rect| rect.center().x < from || rect.center().x > to).collect();
+    assert!(past.is_empty(), "no tick past the extent {from}..{to}: {past:?}");
+}
+
+/// The ruler's column (the text's width) is lighter than its margins, as a word processor's ruler reads: the column
+/// takes the light well colour and the margins the shade of the desk round the page.
+#[trial]
+fn the_ruler_column_is_lighter_than_its_margins() {
+    const FROM: f32 = 100.0;
+    const TO: f32 = 300.0;
+    const ORIGIN: f32 = 130.0;
+    const WIDTH: f32 = 140.0;
+    let values = Rc::new(RefCell::new(RulerValues::default()));
+    let strip_at: Rc<RefCell<Option<egui::Rect>>> = Rc::new(RefCell::new(None));
+    let seen = strip_at.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let stage = craft_ui::testing::stage(ui);
+        let (strip, _) = Rulers::strips(ui, stage);
+        *seen.borrow_mut() = Some(strip);
+        TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH)
+            .origin(strip.min.x + ORIGIN)
+            .extent(egui::Rangef::new(strip.min.x + FROM, strip.min.x + TO))
+            .scale(1.0)
+            .show_at(ui, strip);
+    });
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let strip = strip_at.borrow().expect("the ruler showed");
+    // The fill of the filled rect that spans the strip's depth over exactly `from..to` (strip x).
+    let fill_over = |from: f32, to: f32| {
+        shapes.iter().find_map(|shape| match shape {
+            egui::Shape::Rect(r)
+                if (r.rect.min.x - (strip.min.x + from)).abs() < 0.6
+                    && (r.rect.max.x - (strip.min.x + to)).abs() < 0.6
+                    && (r.rect.height() - strip.height()).abs() < 0.6 =>
+            {
+                Some(r.fill)
+            }
+            _ => None,
+        })
+    };
+    let luma = |c: egui::Color32| 0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b());
+    let column = fill_over(ORIGIN, ORIGIN + WIDTH).expect("the column is filled");
+    let margins = fill_over(FROM, TO).expect("the ruler's extent is filled with the margin shade");
+    assert!(luma(column) > luma(margins), "the column {column:?} is lighter than the margins {margins:?}");
+}
+
 /// Only the primary button starts a stop drag; Escape cancels it; a release well away from the strip clears the stop and
 /// one near the strip keeps it.
 #[trial]

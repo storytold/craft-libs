@@ -118,7 +118,15 @@ impl TextRuler<'_> {
             f64::from(g.scale),
             (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc),
         );
-        let marks: Vec<Tick> = ticks.iter().map(|tick| Tick::new(g.x((tick.value / per_doc) as f32) - g.strip.min.x, tick.rank)).collect();
+        // The tick rule adds a labelled step beyond each end; a ruler cut to its extent (a page's) shows none past it.
+        let covered = g.visible().x_range();
+        let marks: Vec<Tick> = ticks
+            .iter()
+            .map(|tick| g.x((tick.value / per_doc) as f32))
+            .zip(&ticks)
+            .filter(|(x, _)| covered.contains(*x))
+            .map(|(x, tick)| Tick::new(x - g.strip.min.x, tick.rank))
+            .collect();
         ui.content_painter(cx).ticks(g.strip, TickEdge::Bottom, &marks);
         let draw = ui.draw();
         let color: StyleColor = cx.resolve(&style.label.color);
