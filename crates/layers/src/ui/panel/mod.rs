@@ -11,7 +11,7 @@ mod events;
 mod footer;
 mod menu;
 mod row;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use drag::{LayersDrag, document_hash};

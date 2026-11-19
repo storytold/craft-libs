@@ -203,5 +203,5 @@ impl Component for Rating<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;

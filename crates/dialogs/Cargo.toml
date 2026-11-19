@@ -45,6 +45,7 @@ log = "0.4"
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # `craft_dialogs::ui`: `PathField` and the other egui parts of the file service.
 ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
@@ -52,7 +53,7 @@ ui = ["dep:craft-behavior", "dep:craft-ui", "dep:egui"]
 screen-testing = ["ui", "craft-ui/testing"]
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 
 [lints]
 workspace = true

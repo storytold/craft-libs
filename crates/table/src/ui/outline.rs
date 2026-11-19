@@ -12,7 +12,7 @@ use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 
 use super::grid::{CellAt, CellRange, SheetGeometry, column_letters};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

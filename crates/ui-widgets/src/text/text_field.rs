@@ -1,6 +1,6 @@
 //! `TextField<C>`: a text field over a codec, with the search form and the adornment layout.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::adorn::{self, Adornment};

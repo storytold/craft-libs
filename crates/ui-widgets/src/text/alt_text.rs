@@ -1,6 +1,6 @@
 //! `AltTextField`: an object's description for people who cannot see it, with a Mark as decorative check.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::{FieldStyle, text_part};

@@ -11,7 +11,7 @@ use egui::{Response, Ui};
 
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor, ScreenPickGesture};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The setup closure of the picker in the popover.

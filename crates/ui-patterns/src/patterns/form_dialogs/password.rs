@@ -21,7 +21,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

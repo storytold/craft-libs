@@ -6,7 +6,7 @@ pub mod edges;
 pub mod properties;
 pub mod selection;
 pub mod size_picker;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use edges::{BorderEdges, BorderPreset, EdgeKey, EdgePicker, EdgePickerStyle, EdgePickerWords};

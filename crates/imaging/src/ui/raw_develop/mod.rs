@@ -19,7 +19,7 @@ mod mixer;
 mod preview;
 mod scopes;
 mod source;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

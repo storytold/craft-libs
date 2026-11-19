@@ -9,7 +9,7 @@
 //! The bars measure the view along the screen axes, so on a rotated view they show the extent of the unrotated
 //! document.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::words::CanvasWords;

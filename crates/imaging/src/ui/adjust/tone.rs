@@ -5,7 +5,7 @@
 //! The library reports the sample; turning it into a Levels or Curves value needs the document's
 //! colour management and mode, so the app does that, as with the Eyedropper.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{CancelReason, Cursor, IconId, PaintedCursor};

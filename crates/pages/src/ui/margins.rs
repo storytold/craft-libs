@@ -2,7 +2,7 @@
 //! each ruler is the margin, the white the text area; the pointer over an edge shows a resize cursor and the margin's
 //! name, and a drag moves the margin as one edit gesture (one undo step).
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::ops::RangeInclusive;

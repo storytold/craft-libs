@@ -13,7 +13,7 @@ use craft_theme::Mix as _;
 use egui::{CornerRadius, Rect, Response, Ui};
 use std::f32::consts::TAU;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The period of the pulse in seconds: a sine of four radians per second.

@@ -2,7 +2,7 @@
 //! control (20.6). The strips and the corner are parts at handle priority in the canvas's arena. A drag from a strip
 //! reports a guide being placed; a drag from the corner moves the zero point.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod ticks;
 

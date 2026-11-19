@@ -34,7 +34,7 @@ use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, SwatchesWo
 use crate::palette::{SwatchColor, SwatchGroup};
 
 mod paint_list;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use paint_list::{PaintLink, PaintLinkKind, PaintList, PaintListEvent, PaintListOptions, PaintListOutput, PaintRow};

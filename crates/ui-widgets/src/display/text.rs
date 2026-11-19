@@ -8,7 +8,7 @@ use craft_behavior::{Metrics, Proposal, Sense};
 use craft_theme::{Stateful, States, variant::Tone};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// How strongly the text reads against its surface.

@@ -8,7 +8,7 @@ use craft_theme::variant::{Emphasis, Tone};
 use craft_theme::{Stateful, Variant};
 use egui::{CornerRadius, Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Seconds for the unknown-extent segment to cross the track.

@@ -10,7 +10,7 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of the layout components: no minimum size, and padding only at the start edge, one

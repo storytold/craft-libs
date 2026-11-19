@@ -370,12 +370,12 @@ impl Registration {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 inventory::collect!(Registration);
 
 /// Every registration in the running binary, by crate, module and type name.
 #[doc(hidden)]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub fn registrations() -> Vec<&'static Registration> {
     let mut all: Vec<_> = inventory::iter::<Registration>().collect();
     all.sort_by_key(|registration| match registration {
@@ -390,7 +390,7 @@ pub fn registrations() -> Vec<&'static Registration> {
 /// and the `$purpose` line of its doc comment.
 #[doc(hidden)]
 #[macro_export]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 macro_rules! __register_contract {
     ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [], $purpose:expr) => {
         const _: () = {
@@ -416,7 +416,7 @@ macro_rules! __register_contract {
 /// The registration static of `__register_contract!`; `$with` is the probe's further builder calls.
 #[doc(hidden)]
 #[macro_export]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 macro_rules! __register_probe {
     ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], $purpose:expr, $($with:tt)*) => {
         const EXEMPT: &[$crate::contract::Exemption] = &[$($crate::contract::Exemption::new($case, $reason)),*];
@@ -434,7 +434,7 @@ macro_rules! __register_probe {
 /// `PatternProbe` constructor of its kind: `PatternProbe::of`, `canvas::tool_probe` or `dialog::dialog_probe`.
 #[doc(hidden)]
 #[macro_export]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 macro_rules! __register_pattern {
     ($ty:ty, $purpose:expr) => {
         $crate::__register_pattern!($ty, $purpose, $crate::contract::PatternProbe::of);
@@ -448,18 +448,18 @@ macro_rules! __register_pattern {
     };
 }
 
-/// Registers the pattern type `$ty`; without the `testing` feature there is nothing to register.
+/// Registers the pattern type `$ty`; without the `suite` feature there is nothing to register.
 #[doc(hidden)]
 #[macro_export]
-#[cfg(not(feature = "testing"))]
+#[cfg(not(feature = "suite"))]
 macro_rules! __register_pattern {
     ($ty:ty, $purpose:expr $(, $($probe:tt)+)?) => {};
 }
 
-/// Registers the component type `$ty`; without the `testing` feature there is nothing to register.
+/// Registers the component type `$ty`; without the `suite` feature there is nothing to register.
 #[doc(hidden)]
 #[macro_export]
-#[cfg(not(feature = "testing"))]
+#[cfg(not(feature = "suite"))]
 macro_rules! __register_contract {
     ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [$($sample:path)?], $purpose:expr) => {};
 }

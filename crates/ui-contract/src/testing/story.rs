@@ -144,12 +144,14 @@ impl Story {
 
     /// The name of the story's group as a story of the type whose display name is `type_name`: its group, else its
     /// caption.
+    #[cfg(feature = "suite")]
     pub fn group_name(&self, type_name: &str) -> String {
         self.group.map_or_else(|| self.caption(type_name), str::to_owned)
     }
 
     /// The story's caption as a story of the type whose display name is `type_name`: its title, else the one its
     /// name makes ([`crate::contract::story_title`]).
+    #[cfg(feature = "suite")]
     pub fn caption(&self, type_name: &str) -> String {
         self.title.map_or_else(|| crate::contract::story_title(type_name, self.name), str::to_owned)
     }
@@ -206,11 +208,13 @@ impl StoryRegistration {
     }
 }
 
+#[cfg(feature = "suite")]
 inventory::collect!(StoryRegistration);
 
 /// Every story linked into the running binary, by type name; of each type, the stories of the package that registers
 /// it first, then those other packages declare; each in the order they are declared in.
 #[doc(hidden)]
+#[cfg(feature = "suite")]
 pub fn stories() -> Vec<&'static StoryRegistration> {
     let homes: HashMap<&str, &str> = crate::contract::registrations()
         .into_iter()

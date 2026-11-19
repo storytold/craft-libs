@@ -18,7 +18,7 @@ mod commands;
 mod lines;
 mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;

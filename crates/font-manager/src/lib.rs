@@ -40,5 +40,6 @@ pub use panel::{
 /// The registered stories and trials of this crate.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }

@@ -24,7 +24,7 @@ mod catalog;
 mod parameters;
 mod session;
 mod stack;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tree;
 mod words;

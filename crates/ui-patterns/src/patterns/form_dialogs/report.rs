@@ -16,7 +16,7 @@ use craft_theme::variant::Tone;
 use egui::{Response, Ui};
 use serde_json::{Value, json};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

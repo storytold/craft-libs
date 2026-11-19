@@ -15,7 +15,7 @@
 //! }
 //! ```
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::path::{Path, PathBuf};

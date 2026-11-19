@@ -1,6 +1,6 @@
 //! A monitor's transport bar and the compact media controls.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{EditEvents, IconId};

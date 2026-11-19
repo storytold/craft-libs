@@ -23,7 +23,7 @@ mod free_view;
 mod icon;
 mod list;
 mod search;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::cell::RefCell;

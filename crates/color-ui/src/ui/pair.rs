@@ -18,7 +18,7 @@ use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, 
 use super::popover::compact_picker;
 use super::{ColorPicker, PickedColor, ScreenPickGesture};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// One of the wells, `WELL.at(0)` the primary and `WELL.at(1)` the secondary.

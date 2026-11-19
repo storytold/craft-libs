@@ -1,7 +1,7 @@
 //! `LinkedFields`: number fields joined by a link toggle that keeps their values in proportion (width and height) or
 //! equal (four sides).
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::NumberField;

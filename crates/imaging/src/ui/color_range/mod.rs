@@ -13,7 +13,7 @@
 mod dialog;
 mod hosted;
 mod labels;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod value;
 

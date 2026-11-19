@@ -14,7 +14,7 @@ mod place;
 mod tool;
 mod words;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::EditEvent;

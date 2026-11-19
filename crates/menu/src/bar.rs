@@ -8,7 +8,7 @@
 //! choice reaches the app as a fired command with [`craft_ui::runtime::commands::FireSource::Menu`].
 //! `Builtin::Quit` and `Builtin::Minimize` act on the root window through the runtime.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_keymap::{CommandRef, Platform};

@@ -58,6 +58,7 @@ pub mod ui;
 /// The stories and trials of the crate's UI, registered in craft-ui's registry.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

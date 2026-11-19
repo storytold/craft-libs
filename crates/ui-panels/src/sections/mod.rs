@@ -2,7 +2,7 @@
 
 pub(crate) mod footer;
 mod group_box;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod sample;
 mod section;
 mod stack;

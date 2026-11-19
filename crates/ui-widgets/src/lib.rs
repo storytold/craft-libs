@@ -30,7 +30,7 @@ pub mod menu;
 pub mod notices;
 pub mod pickers;
 pub mod popover;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub mod story_kit;
 pub mod table;
@@ -43,8 +43,10 @@ pub mod value_drag;
 /// `story_props`.
 #[cfg(feature = "testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     pub use crate::story_kit::{props, story_props};
     pub use craft_ui_contract::testing::*;
 
+    #[cfg(feature = "suite")]
     crate::testing_registered!();
 }

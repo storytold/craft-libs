@@ -1,7 +1,7 @@
 //! [`LevelsPanel`]: the Levels adjustment around the [`LevelsEditor`]: the point pickers, the
 //! Channel select, Auto and the editor over the shown channel's histogram.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::sync::Arc;

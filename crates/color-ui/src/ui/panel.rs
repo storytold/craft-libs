@@ -29,7 +29,7 @@ use super::{
 };
 use crate::{CmykModel, GrayModel, not_web_safe};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

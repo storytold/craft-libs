@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 mod canvas;
 mod image;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize};

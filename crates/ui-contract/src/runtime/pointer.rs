@@ -511,7 +511,7 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
 }
 
 /// Whether the part `part` of `owner` (the arena root or a member) senses all of `sense` in last pass's shape record.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn part_senses(ctx: &Context, owner: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> bool {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
@@ -546,7 +546,7 @@ fn owned_part_bounds(ctx: &Context, owner: impl Fn(Id) -> bool, part: craft_beha
 /// The bounds of the part `part` that senses `sense`, on a component other than `subject` and lying inside the
 /// subject's own shapes in last pass's shape record: where a component's child keeps the part a drive acts on. When
 /// several children match, the first by top edge, then start edge, then root id.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn child_part_bounds(ctx: &Context, subject: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> Option<egui::Rect> {
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |record| {

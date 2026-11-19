@@ -27,7 +27,7 @@ mod draw;
 mod editor;
 mod new_plane;
 mod planes;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
 mod words;

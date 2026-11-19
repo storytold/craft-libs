@@ -17,7 +17,7 @@ pub mod mock;
 mod panel;
 mod prompt;
 mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

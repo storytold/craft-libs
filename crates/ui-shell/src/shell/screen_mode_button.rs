@@ -7,7 +7,7 @@ use crate::rails::{FlyoutButton, RailTool};
 use crate::runtime::env::Env;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away

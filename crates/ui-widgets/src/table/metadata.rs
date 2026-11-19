@@ -325,7 +325,7 @@ impl<'a> MetadataTable<'a> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The rows stamp of a filter query: the same query keeps the layout, another one rebuilds it.

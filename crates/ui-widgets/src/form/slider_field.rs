@@ -1,6 +1,6 @@
 //! `SliderField`: a slider and a number field over one value.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use crate::contract::{

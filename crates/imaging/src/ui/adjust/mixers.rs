@@ -3,7 +3,7 @@
 mod black_white;
 mod channel_mixer;
 mod selective_color;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use black_white::{BlackWhite, BlackWhiteEditor, BlackWhiteOutput};

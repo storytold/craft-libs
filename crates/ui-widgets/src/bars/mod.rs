@@ -8,7 +8,7 @@ mod items;
 mod lead;
 mod status;
 mod status_readout;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

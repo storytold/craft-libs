@@ -18,7 +18,7 @@ use craft_ui::style::SurfaceKind;
 use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

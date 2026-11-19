@@ -19,7 +19,7 @@
 //! ```
 
 mod pictures;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use self::pictures::{PageMetrics, PagePictures};

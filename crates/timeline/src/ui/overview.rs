@@ -1,6 +1,6 @@
 //! The whole timeline in miniature (N1.13).
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{Axis, Metrics, PointerButton, PressPhase, Sense};

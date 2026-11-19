@@ -19,7 +19,7 @@ mod background;
 mod bar;
 mod overlay;
 mod properties;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tool;
 mod words;

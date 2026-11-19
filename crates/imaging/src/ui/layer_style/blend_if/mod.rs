@@ -1,6 +1,6 @@
 //! `BlendIfBar`: one Blend If slider (This Layer or Underlying Layer) with its four handles, over `ThumbRow`.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{EditEvents, Mixed};

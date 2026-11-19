@@ -17,6 +17,8 @@ pub mod testing {
     use egui::accesskit::NodeId;
     use egui::{Context, Rect};
 
+    #[cfg(feature = "suite")]
+
     craft_ui::testing_registered!();
 
     /// The rect of the thumbnail that shows `part` of the layer `info`, in the row whose node is `row`, as the row

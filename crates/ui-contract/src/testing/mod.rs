@@ -13,24 +13,31 @@ pub mod dump;
 pub mod fixture;
 pub mod focus;
 pub mod frames;
+#[cfg(feature = "suite")]
 mod host_key_trials;
+#[cfg(feature = "suite")]
 mod icon_trials;
+#[cfg(feature = "suite")]
 pub mod index;
 pub mod input;
+#[cfg(feature = "suite")]
 mod key_trials;
 pub mod layout;
 pub mod memory;
 pub mod pictures;
 pub mod pointer;
 pub mod relations;
+#[cfg(feature = "suite")]
 mod replay_trials;
 pub mod sensing;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub mod snapshot;
 mod stage;
+#[cfg(feature = "suite")]
 mod stories;
 pub mod story;
 pub mod style;
+#[cfg(feature = "suite")]
 pub mod suite;
 pub mod surface;
 pub mod text;
@@ -48,9 +55,11 @@ pub use craft_ui_macros::{story, trial};
 pub use fixture::{Fixture, Impure, Room, Target};
 pub use frames::Frames;
 pub use stage::{room_height, stage, stage_fitting, stage_width};
+#[cfg(feature = "suite")]
+pub use story::stories;
 #[doc(hidden)]
 pub use story::{
-    CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item, stories,
+    CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item,
 };
 pub use windows::install_spec;
 
@@ -88,9 +97,11 @@ impl Trial {
     }
 }
 
+#[cfg(feature = "suite")]
 inventory::collect!(Trial);
 
 /// Every `#[trial]` linked into the running binary, by full name.
+#[cfg(feature = "suite")]
 pub fn trials() -> Vec<&'static Trial> {
     let mut all: Vec<_> = inventory::iter::<Trial>().collect();
     all.sort_by_key(|trial| trial.full_name());
@@ -100,6 +111,7 @@ pub fn trials() -> Vec<&'static Trial> {
 /// Runs a test executable and exits: the `#[trial]`s declared in the crate whose root module is `crate_root` or in
 /// `package`'s library crate, and the suite's trials over `registered`. Every test executable's `main` calls it, with
 /// its own `module_path!()`.
+#[cfg(feature = "suite")]
 pub fn run(crate_root: &str, package: &'static str, registered: &[&'static Registration]) -> ! {
     let library = package.replace('-', "_");
     let own = |module: &str| {
@@ -126,6 +138,7 @@ pub fn run(crate_root: &str, package: &'static str, registered: &[&'static Regis
 
 /// Every registration declared in the library crate of the package `crate_name` and linked into the running
 /// binary, by module and type name. Types declared in the package's integration binaries are fixtures, not the package's.
+#[cfg(feature = "suite")]
 pub fn registered_in(crate_name: &str) -> Vec<&'static Registration> {
     let library = crate_name.replace('-', "_");
     crate::contract::registrations()
@@ -148,6 +161,7 @@ macro_rules! testing_registered {
     };
 }
 
+#[cfg(feature = "suite")]
 testing_registered!();
 
 #[doc(hidden)]

@@ -19,7 +19,7 @@ use egui::{Response, Ui};
 use std::cell::Cell;
 
 mod picker;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use picker::{NamedStyleRow, StylePreview, style_rows};

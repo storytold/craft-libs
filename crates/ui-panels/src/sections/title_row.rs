@@ -20,7 +20,7 @@ use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Stateful, States};
 use egui::{Id, Rect, Response, Ui, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// How much weight a header carries.

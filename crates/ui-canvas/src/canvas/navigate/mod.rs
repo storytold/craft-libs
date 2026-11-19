@@ -9,7 +9,7 @@
 mod bar;
 mod keys;
 mod options;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod wheel;
 

@@ -18,7 +18,7 @@
 //!                +----------------------+
 //! ```
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::app_shell::{RegionBody, ShellRegion};

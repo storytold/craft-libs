@@ -2,7 +2,7 @@
 //! Files preview and VectorCraft's Place PDF page choice show it: the page as large as fits, "Page 3 of 12" under it,
 //! the arrow and Page keys to step from anywhere in the preview, Escape or Close to leave.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::view::PageSource;

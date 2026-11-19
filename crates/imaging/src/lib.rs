@@ -16,6 +16,7 @@ pub mod wide_angle;
 /// The registered stories and suite cases of the widgets, for `tests/it`.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

@@ -2,7 +2,7 @@
 //! selection band or an outline being drawn over the canvas, mapped from document geometry through the canvas's view.
 //! It takes no pointer and no key: the press, the drag and the modifier rules are the canvas tool's.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(super) mod stories;
 
 use super::words::CanvasControlWords;

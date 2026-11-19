@@ -34,6 +34,7 @@ pub mod ui;
 /// The registrations of this crate's UI types, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

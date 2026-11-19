@@ -250,5 +250,5 @@ impl Component for Segment {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;

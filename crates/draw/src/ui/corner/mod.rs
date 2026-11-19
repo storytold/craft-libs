@@ -6,7 +6,7 @@
 //! arc the app's engine draws.
 
 mod geometry;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
 mod widgets;

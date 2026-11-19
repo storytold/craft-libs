@@ -7,7 +7,7 @@ mod grid;
 mod headers;
 mod layout;
 mod slider;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tile;
 mod words;

@@ -10,9 +10,9 @@
 mod layout;
 mod new_guide;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod trials;
 
 pub use layout::{GuideGroup, GuideLayoutError, GuideLayoutOptions, GuideLayoutPreset, GuideLength, GuideRect, GuideTarget, GuideUnits, MAX_COUNT};

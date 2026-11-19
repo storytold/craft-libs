@@ -5,13 +5,13 @@ mod findings;
 mod predicate;
 #[doc(hidden)]
 pub mod row;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod toggle;
 mod tree;
 mod undo;
 mod view;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod view_stories;
 mod view_words;
 mod words;

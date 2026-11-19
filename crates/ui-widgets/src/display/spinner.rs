@@ -10,7 +10,7 @@ use craft_theme::Stateful;
 use egui::{Pos2, Response, Vec2, vec2};
 use std::f32::consts::{PI, TAU};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// How long the spinner takes for a turn, in seconds.

@@ -21,7 +21,7 @@ use egui::load::SizedTexture;
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The well: a drag on it pans the picture and a click centres the view on the point clicked.

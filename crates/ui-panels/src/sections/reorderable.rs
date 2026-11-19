@@ -16,7 +16,7 @@ use egui::{Response, Ui};
 use std::cell::RefCell;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The commands of a section, run on the section that holds the focus: its header menu rows and any chord the keymap

@@ -788,5 +788,5 @@ pub fn crop_to_form(words: &CropWords, frame: &CropBox) -> ParamDialog<'static> 
     ParamDialog::command(CROP_TO_KEY, words.crop_to.clone(), params)
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;

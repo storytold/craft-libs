@@ -7,7 +7,7 @@
 
 mod calendar;
 mod codec;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use calendar::{Calendar, CalendarOutput, CalendarStyle, CalendarView, local_month_grid, month_grid};

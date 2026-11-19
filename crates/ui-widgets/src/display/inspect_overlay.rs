@@ -10,7 +10,7 @@ use craft_theme::Opacity;
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Which drawings an [`InspectOverlay`] shows.

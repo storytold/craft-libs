@@ -412,7 +412,7 @@ pub fn family(ctx: &Context, id: Id) -> SmallVec<[Id; 4]> {
 }
 
 /// Every layer of the running viewport shown last frame, not exiting, parent first.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn open_entries(ctx: &Context) -> Vec<OpenEntry> {
     with_pass(ctx, |pass| pass.last.iter().filter(|entry| !entry.exiting).cloned().collect())
 }

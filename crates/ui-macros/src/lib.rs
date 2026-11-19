@@ -135,9 +135,12 @@ pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
     let ident = &sig.ident;
     let name = ident.to_string();
+    let gate = component::registration_gate();
     quote! {
+        #gate
         #func
 
+        #gate
         #k::testing::__private::inventory::submit! {
             #k::testing::Trial::#register(module_path!(), #name, #ident)
         }
@@ -213,9 +216,12 @@ pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
     let title = args.title.as_ref().map(|title| quote!(.title(#title)));
     let group = args.group.as_ref().map(|group| quote!(.group(#group)));
     let commands = args.commands.as_ref().map(|commands| quote!(.commands(#commands)));
+    let gate = component::registration_gate();
     quote! {
+        #gate
         #func
 
+        #gate
         #k::testing::__private::inventory::submit! {
             #k::testing::StoryRegistration::new(
                 env!("CARGO_PKG_NAME"),

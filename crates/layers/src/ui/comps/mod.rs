@@ -3,7 +3,7 @@
 
 mod body;
 mod events;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

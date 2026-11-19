@@ -31,7 +31,7 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.

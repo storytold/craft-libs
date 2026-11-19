@@ -4,7 +4,7 @@
 mod cards;
 mod details;
 mod presets;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::form::{read_bind, write_bind};

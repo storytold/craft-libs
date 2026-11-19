@@ -9,7 +9,7 @@
 // The derives' output names the crate as `craft_ui`, here as in every other crate.
 extern crate self as craft_ui;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub use craft_ui_widgets::story_kit;
 #[cfg(feature = "testing")]
@@ -43,5 +43,6 @@ pub mod testing {
         pub use crate::testing_internals::*;
     }
 
+    #[cfg(feature = "suite")]
     crate::testing_registered!();
 }

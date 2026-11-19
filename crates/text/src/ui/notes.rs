@@ -5,7 +5,7 @@
 //!
 //! The notes are the app's; [`NotesText`] is the shape the editor reads and writes.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 mod text;

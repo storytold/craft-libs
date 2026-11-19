@@ -1,6 +1,6 @@
 //! The tabs and search, the filters, the sample toolbar and the list of family cards.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 mod cards;

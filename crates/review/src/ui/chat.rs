@@ -14,7 +14,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 
 use crate::collab::CollabRequest;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

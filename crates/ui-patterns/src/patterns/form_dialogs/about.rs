@@ -3,7 +3,7 @@
 
 mod contributors;
 mod credits;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};

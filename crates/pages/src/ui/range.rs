@@ -2,7 +2,7 @@
 //! page choices, showing the pages back in the same format; and `PageRangeOptions`, the All pages / Pages from-to / Subset rows of
 //! Acrobat's Page Range Options.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{Codec, NotAValue, NumberCodec};

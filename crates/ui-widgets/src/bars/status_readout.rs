@@ -15,7 +15,7 @@ use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize};
 use egui::{Response, Ui};
 use std::time::Duration;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Shown for an item whose value the host does not know.

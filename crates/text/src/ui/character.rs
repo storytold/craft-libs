@@ -32,7 +32,7 @@ use egui::{Response, Ui};
 pub(crate) mod paragraph;
 mod paragraph_dialog;
 pub(crate) mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod style_options;
 

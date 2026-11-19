@@ -5,7 +5,7 @@
 //! commits the name, Escape or Cancel closes it, and a name the host refuses shows its message under the field and
 //! keeps the prompt open.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::event::PresetEvent;

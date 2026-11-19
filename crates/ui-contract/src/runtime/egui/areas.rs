@@ -416,19 +416,19 @@ pub(crate) fn popup_open(ctx: &Context) -> bool {
 }
 
 /// A host's own egui popup `id` at `at`, shown while egui's memory holds it open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup(ui: &Ui, id: egui::Id, at: Pos2) {
     egui::Popup::new(id, ui.ctx().clone(), at, ui.layer_id()).open_memory(None).show(|ui| ui.allocate_space(ui.spacing().interact_size));
 }
 
 /// Opens the host's egui popup `id`.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn open_host_popup(ctx: &Context, id: egui::Id) {
     egui::Popup::open_id(ctx, id);
 }
 
 /// Whether the host's egui popup `id` is open.
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) fn host_popup_open(ctx: &Context, id: egui::Id) -> bool {
     egui::Popup::is_id_open(ctx, id)
 }

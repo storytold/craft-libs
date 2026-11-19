@@ -12,7 +12,7 @@ use crate::Catalog;
 use crate::FaceInfo;
 use crate::panel::faces::{self, Owner, Shown};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The ink of a sample: the text colour for a face that drew, the muted one for the interface face standing in.

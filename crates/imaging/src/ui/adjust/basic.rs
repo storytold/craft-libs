@@ -3,7 +3,7 @@
 mod brightness_contrast;
 mod color_balance;
 mod photo_filter;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod threshold;
 

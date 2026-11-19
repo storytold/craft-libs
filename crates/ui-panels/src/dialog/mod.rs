@@ -14,10 +14,10 @@ mod prompts;
 mod recovery;
 mod serde_fields;
 mod stack;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub mod stories;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod trials;
 mod unsaved;
 mod words;

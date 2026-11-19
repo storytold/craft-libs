@@ -92,5 +92,5 @@ impl Component for Checkbox<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;

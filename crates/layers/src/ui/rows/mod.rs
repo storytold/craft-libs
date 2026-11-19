@@ -1,6 +1,6 @@
 //! `BlendRows`: Blend mode, Opacity, Lock and Fill as one block.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{EditEvent, EditEvents, IconId};

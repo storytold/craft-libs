@@ -18,7 +18,7 @@
 mod badge;
 mod dialog;
 mod list;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use badge::StatusBadge;

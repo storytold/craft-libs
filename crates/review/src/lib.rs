@@ -20,6 +20,7 @@ pub mod ui;
 /// The stories and word sets the integration tests register.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

@@ -1,6 +1,6 @@
 //! `ColorReadout`: a colour as a hex field and editable R, G and B fields (the readout of a Color panel).
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};

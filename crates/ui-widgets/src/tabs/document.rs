@@ -2,7 +2,7 @@
 //! strip through the drag session, and tear off when released over no strip; the host areas at both ends of the strip
 //! are the caller's closures. Files from the OS drop between the tabs when the host takes them.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::{Tab, TabStrip};

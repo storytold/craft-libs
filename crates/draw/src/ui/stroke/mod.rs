@@ -8,7 +8,7 @@
 mod button;
 mod editor;
 mod preview;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

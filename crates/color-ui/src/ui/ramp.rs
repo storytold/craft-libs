@@ -17,7 +17,7 @@ use egui::{Color32, CornerRadius, Mesh, Pos2, Rect, Response, Vec2, pos2};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The bar: a press picks the colour under the pointer.

@@ -5,7 +5,7 @@ use craft_ui::primitives::{DataStrokeWidth, Draw, PaintShape, TextRun};
 use craft_ui::style::{DataColor, StyleColor};
 use egui::{CornerRadius, Pos2, Rect, pos2, vec2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A document line width never shrinks below this share of its width at 100 % zoom (a zoom floor, not a size).

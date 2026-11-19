@@ -5,7 +5,7 @@ use crate::style::{ComponentStyle, RuleWidth, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a divider.

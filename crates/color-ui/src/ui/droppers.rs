@@ -31,7 +31,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::requests::EyedropperRequest;
 use egui::{Pos2, Response, Ui, Vec2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The pipette icon's tip, in the icon's own 24-unit box.

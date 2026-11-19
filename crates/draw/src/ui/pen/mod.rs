@@ -9,7 +9,7 @@ pub(crate) mod bezier;
 mod curvature_mode;
 mod mode;
 mod options;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;

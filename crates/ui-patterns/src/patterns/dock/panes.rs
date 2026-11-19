@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Where a pane is shown.

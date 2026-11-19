@@ -12,7 +12,7 @@ mod mesh;
 mod model;
 pub mod perspective;
 pub mod pin;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use cylinder::{CylinderHandle, CylinderValues, CylinderWarp, CylinderWarpOutput, CylinderWarpStyle};

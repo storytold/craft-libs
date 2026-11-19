@@ -1,7 +1,7 @@
 //! `SmartGuides`: the alignment lines and distances shown while something moves, a canvas control that only paints
 //! (20.6). It has no parts, so a press never lands on it.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use crate::canvas::{CanvasRulers, canvas_space};

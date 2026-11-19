@@ -12,7 +12,7 @@ use egui::{Response, Ui};
 
 use crate::collab::{CollabRequest, CollabTransport, JoinState};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

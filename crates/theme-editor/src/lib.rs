@@ -10,7 +10,7 @@ mod detail;
 mod layer;
 mod problems;
 mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod subject;
 mod words;
@@ -26,6 +26,7 @@ pub use words::summary;
 /// The stories this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

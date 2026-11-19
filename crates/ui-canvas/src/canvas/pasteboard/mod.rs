@@ -3,7 +3,7 @@
 //! preferences; the default colour is the canvas surround. Artboards show their names above them, and a click on a
 //! name selects the artboard.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::space::canvas_space;

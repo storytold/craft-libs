@@ -13,7 +13,7 @@ use egui::{Response, Ui};
 
 use crate::collab::{CollabRequest, CollabTransport, VoteScope};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Votes per person a new vote starts with.

@@ -2,7 +2,7 @@
 //! boundaries (violet) and the baseline grid (light blue, from its zoom threshold) are hairlines drawn over the
 //! pages, under the selection.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::view::PlacedPage;

@@ -16,7 +16,7 @@ use egui::{CornerRadius, Response, Ui, Vec2};
 
 use crate::revisions::{Revision, RevisionAction, RevisionKind};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The detail lines a card shows.

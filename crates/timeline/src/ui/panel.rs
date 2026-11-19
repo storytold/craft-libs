@@ -872,7 +872,7 @@ pub struct TopStripStyle {
     metrics: Metrics,
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The model of the pattern's registration probe: no tracks.

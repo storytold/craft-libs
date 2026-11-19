@@ -9,7 +9,7 @@ use crate::sections::{HeaderAction, HeaderStrength, MenuRows, Panel, PanelOutput
 use craft_theme::variant::Tone;
 use egui::{AsIdSalt, IdSalt, Ui};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A properties panel: a `Panel` whose header names the target (icon and name, and the kind at the end), and whose body

@@ -12,7 +12,7 @@ use crate::style::{ComponentStyle, Corners, Insets, Stateful, StyleCx, SurfaceKi
 use craft_behavior::{Metrics, Proposal, Sense};
 use egui::{Rect, Response};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a drop veil: the scrim comes from the surface kind; the card is a child.

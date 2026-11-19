@@ -14,7 +14,7 @@
 mod arrange;
 mod caption;
 mod pill;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod style;
 mod tile;

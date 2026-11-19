@@ -38,7 +38,7 @@ use std::sync::Arc;
 mod bar;
 mod dialogs;
 mod overlay;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tool;
 mod words;

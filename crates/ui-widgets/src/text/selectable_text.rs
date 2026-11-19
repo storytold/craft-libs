@@ -1,6 +1,6 @@
 //! `SelectableText`: read-only text the user can focus, select and copy.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, Styled as _};

@@ -15,6 +15,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["testing", "craft-ui-panels/suite"]
 default = []
 # `shell::app`: the eframe entry point.
 app = ["dep:eframe", "craft-window/ui"]
@@ -45,7 +46,7 @@ web-time = "1.1"
 craft-window = { workspace = true, features = ["appkit"] }
 
 [dev-dependencies]
-craft-ui-shell = { path = ".", features = ["testing"] }
+craft-ui-shell = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-host = { workspace = true }
 craft-theme = { workspace = true }

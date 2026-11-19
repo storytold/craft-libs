@@ -22,7 +22,7 @@ use super::avatar::Avatar;
 use super::chat::{BubbleLook, paint_chat_bubble};
 use crate::collab::{CHAT_FADE_S, CHAT_HOLD_S, CollabRequest, CollabTransport, Participant, ParticipantId, chat_alpha};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Most selection outlines drawn for one person.

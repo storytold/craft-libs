@@ -6,7 +6,7 @@
 
 mod kind;
 mod node;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use kind::{NodeEvent, NodeId, NodeKind, PortRef, Wire, WireDrag};

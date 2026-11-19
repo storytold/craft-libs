@@ -2,7 +2,7 @@
 //! corners, edges, reference point, inside and outside are parts in the canvas's arena; the value is the box in
 //! document units.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};

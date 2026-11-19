@@ -15,7 +15,7 @@ pub(crate) mod full_window_parts;
 mod march;
 mod readout;
 mod space;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 #[cfg(feature = "testing")]
 pub(crate) mod testing;

@@ -1,6 +1,6 @@
 //! `WorkspaceSwitcher`: a select over the workspace set's names with the workspace commands in its list.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, Sizing};

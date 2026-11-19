@@ -20,7 +20,7 @@ use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

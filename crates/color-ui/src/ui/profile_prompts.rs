@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::display::MonitorProblem;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

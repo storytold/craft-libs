@@ -12,7 +12,7 @@ use craft_keymap::{Chord, Layout, ReturnGlyph, Trigger};
 use craft_theme::Stateful;
 use egui::{Rect, Response, Vec2, pos2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a chord.

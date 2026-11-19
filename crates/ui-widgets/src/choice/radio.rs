@@ -223,5 +223,5 @@ impl<T: Value + 'static> Component for Radio<T> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;

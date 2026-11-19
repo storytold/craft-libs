@@ -1,7 +1,7 @@
 //! `ColorChoice`: a choice among named colours with a custom colour, as Photoshop's pasteboard colour
 //! (Preferences, Interface), the Crop shield colour and the Note colour.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_theme::Srgba;

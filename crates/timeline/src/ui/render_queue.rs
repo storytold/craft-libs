@@ -1,6 +1,6 @@
 //! The render (export) queue list.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::borrow::Cow;

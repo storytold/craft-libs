@@ -1,7 +1,7 @@
 //! `HexField`: a text field over a colour's hex digits, the `#` side label its row shows before it, and `HexCodec`,
 //! the codec behind it.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::TextField;

@@ -23,7 +23,7 @@ use craft_ui::text::{NumberField, NumberOutput};
 use egui::{Pos2, Rect, Ui, Vec2, pos2, vec2};
 use std::cell::Cell;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The most columns PowerPoint takes; the

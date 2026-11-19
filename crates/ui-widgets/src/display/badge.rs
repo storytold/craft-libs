@@ -12,7 +12,7 @@ use craft_theme::{
 use egui::{Response, Vec2};
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The largest count a count badge shows; more reads `99+`.

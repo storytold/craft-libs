@@ -7,7 +7,7 @@
 mod bars;
 mod detail;
 mod header;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod table;
 

@@ -26,7 +26,7 @@ mod cursor;
 mod falloff;
 mod resize;
 mod source_marker;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tip;
 mod trail;

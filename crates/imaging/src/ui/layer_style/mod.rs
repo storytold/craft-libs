@@ -30,7 +30,7 @@ mod hosted;
 mod labels;
 mod list;
 mod page;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod styles;
 

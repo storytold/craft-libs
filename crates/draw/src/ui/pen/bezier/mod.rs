@@ -5,7 +5,7 @@ mod hit_test;
 mod mark;
 mod model;
 mod ops;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod style;
 mod tools;

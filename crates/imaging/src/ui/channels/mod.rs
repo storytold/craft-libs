@@ -7,7 +7,7 @@ mod menu;
 mod model;
 mod panel;
 mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use footer::ChannelsFooterButton;

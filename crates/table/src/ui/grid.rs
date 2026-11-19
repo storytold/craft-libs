@@ -26,7 +26,7 @@ mod model;
 mod paint;
 mod reference;
 mod row;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use geometry::{GridLayout, HEADER_MIN_ZOOM, SheetGeometry, SheetMetrics};

@@ -7,7 +7,7 @@ mod settings;
 mod toasts;
 mod words;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use center::{NoticeCenter, NoticeCenterOutput, NoticeEnd, PostedNotice};

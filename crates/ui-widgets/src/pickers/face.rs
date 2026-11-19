@@ -249,7 +249,7 @@ impl Component for SelectFace<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// Opens the popup of a picker whose face part toggles it, from the keyboard: Enter and Space (an activation by key)

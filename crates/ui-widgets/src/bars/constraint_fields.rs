@@ -16,7 +16,7 @@ use egui::{Response, Ui};
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The three kinds of [`Constraint`], as the Style select lists them.

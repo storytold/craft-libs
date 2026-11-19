@@ -215,6 +215,7 @@ craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
 
 [features]
+suite = ["screen-testing", "craft-ui/suite", "craft-automation?/suite", "craft-browse?/suite", "craft-color-ui?/suite", "craft-dialogs?/suite", "craft-draw?/suite", "craft-font-manager?/suite", "craft-imaging?/suite", "craft-layers?/suite", "craft-menu?/suite", "craft-pages?/suite", "craft-print?/suite", "craft-review?/suite", "craft-table?/suite", "craft-text?/suite", "craft-theme-editor?/suite", "craft-theme-store?/suite", "craft-timeline?/suite", "craft-update?/suite"]
 ui = [
     "dep:craft-ui",
     "dep:egui",

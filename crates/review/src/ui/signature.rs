@@ -28,7 +28,7 @@ use egui::{ColorImage, Pos2, Rect, Vec2};
 
 use crate::signature::{MAX_IMAGE_BYTES, MAX_IMAGE_SIDE, MAX_SIGNATURE_CHARS, SavedSignature, SignatureDraft, SignatureImage, SignatureTab};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The pad's width over its height.

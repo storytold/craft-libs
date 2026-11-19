@@ -29,7 +29,7 @@ use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
 #[cfg(feature = "font-picker")]
 use crate::ui::character::FontPickerSource;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

@@ -22,7 +22,7 @@ use craft_behavior::{Axis, DockSide, Flow, Metrics, PartKey, Sense, Value};
 use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::hash::Hash;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 mod bar;

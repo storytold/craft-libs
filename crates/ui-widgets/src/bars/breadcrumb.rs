@@ -17,7 +17,7 @@ use craft_behavior::fit::{FitItem, FitKeep, fit_items};
 use craft_behavior::{Axis, CursorIcon, Flow, IconId, Metrics, NavShape, PartKey, PartRef, Roving, Sense, Value};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 const HIDDEN: PartKey = PartKey::new("hidden");

@@ -1,7 +1,7 @@
 //! `NewWorkspaceDialog` and `DeleteWorkspaceDialog`: the questions `run_workspace` returns as `WorkspaceAsk::Name`
 //! and `WorkspaceAsk::Which`.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::words::WorkspaceDialogWords;

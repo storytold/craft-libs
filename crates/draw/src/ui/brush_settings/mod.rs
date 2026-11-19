@@ -19,7 +19,7 @@ mod preview;
 mod rows;
 mod sections;
 mod size_field;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

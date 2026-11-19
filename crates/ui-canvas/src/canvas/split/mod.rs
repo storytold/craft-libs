@@ -7,7 +7,7 @@
 //! the [`SplitAt`] the caller binds ([`SplitAt::placed`]). A linked pane follows the active view's zoom and position
 //! ([`SplitViews::follow`]).
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::words::SplitWords;

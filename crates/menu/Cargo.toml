@@ -25,6 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 screen-testing = ["craft-ui/testing"]
 
 [dev-dependencies]
@@ -35,7 +36,7 @@ egui = { workspace = true }
 name = "it"
 path = "tests/it/main.rs"
 harness = false
-required-features = ["screen-testing"]
+required-features = ["suite"]
 
 # AppKit end to end: runs on the main thread, so no harness; on other platforms it does nothing.
 [[test]]

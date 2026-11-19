@@ -131,5 +131,6 @@ pub use theme::{THEME_COMMAND, ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
 #[cfg(feature = "screen-testing")]
 /// The stories and words this crate registers, for the story tests.
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }

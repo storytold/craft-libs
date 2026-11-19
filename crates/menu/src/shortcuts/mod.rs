@@ -110,7 +110,7 @@ mod review;
 mod rows;
 mod sets;
 mod state;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 pub mod summary;
 mod view;

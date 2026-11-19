@@ -1,6 +1,6 @@
 //! `TitleBar`: the app-drawn bar of a window, in the title slot of an `AppShell`.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::measure::{End, Ends, Strip};

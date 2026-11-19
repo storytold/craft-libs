@@ -9,7 +9,7 @@ mod handles;
 mod menu;
 mod model;
 mod overlay;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod transform;
 

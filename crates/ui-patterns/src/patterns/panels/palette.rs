@@ -22,7 +22,7 @@ use egui::{Response, Ui};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The most commands the empty query lists when the app has run none.

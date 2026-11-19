@@ -1,6 +1,6 @@
 //! `AgentsPage`: the Agents page of Preferences, over the agent settings in the Preferences draft.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

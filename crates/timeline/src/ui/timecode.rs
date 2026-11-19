@@ -1,7 +1,7 @@
 //! The timecode field, its codec and the Timecode panel.
 
 mod readout;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::nav::LARGE_STEPS;

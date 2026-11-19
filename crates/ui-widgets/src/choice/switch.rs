@@ -113,5 +113,5 @@ impl Component for Switch<'_> {
     }
 }
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;

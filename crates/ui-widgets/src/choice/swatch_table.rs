@@ -12,7 +12,7 @@ use craft_behavior::{DisplayOrder, ItemSource, Metrics, Selection, TileLayout};
 use craft_theme::Srgba;
 use egui::{Response, Ui, Vec2};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The entries of a colour table as an item source: keyed by index, named for type-ahead.

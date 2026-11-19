@@ -57,6 +57,7 @@ pub use security::AutomationError;
 /// The trials this crate registers, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

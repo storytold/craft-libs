@@ -3,7 +3,7 @@
 
 mod place;
 pub mod reading;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use reading::GuideReading;

@@ -3,7 +3,7 @@
 //! `LayersSettings` is the panel's persisted section (`.settings(&mut ..)` on the panel);
 //! `LayersOptions` is the value the dialog edits and returns, held by the settings.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};

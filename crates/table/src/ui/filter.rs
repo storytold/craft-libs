@@ -11,7 +11,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2, pos2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

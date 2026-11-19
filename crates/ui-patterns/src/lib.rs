@@ -10,7 +10,7 @@ extern crate self as craft_ui;
 
 #[doc(hidden)]
 pub use craft_ui_panels::canvas_data;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 #[doc(hidden)]
 pub use craft_ui_panels::story_kit;
 #[cfg(feature = "testing")]
@@ -31,5 +31,6 @@ pub mod patterns;
 pub mod testing {
     pub use craft_ui_panels::testing::*;
 
+    #[cfg(feature = "suite")]
     crate::testing_registered!();
 }

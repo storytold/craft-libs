@@ -20,7 +20,7 @@ mod grab;
 mod model;
 mod overlay;
 mod panel;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
 mod words;

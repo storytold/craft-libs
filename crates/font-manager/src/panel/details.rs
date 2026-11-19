@@ -2,7 +2,7 @@
 //! installing or removing it whole or a style at a time.
 
 mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::sync::Arc;

@@ -4,7 +4,7 @@ mod sections;
 mod summary;
 mod words;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use self::sections::{ArtboardChoice, PasswordSwitches, Sections};

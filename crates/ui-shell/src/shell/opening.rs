@@ -10,7 +10,7 @@ use crate::runtime::env::{Env, Label};
 use crate::style::{SurfaceKind, TypeRole};
 use egui::{Layout, Response, Ui, UiBuilder};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A centred card: "Opening {name}…" elided on one line with the full text on hover, the muted message, a progress bar

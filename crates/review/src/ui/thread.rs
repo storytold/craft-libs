@@ -8,7 +8,7 @@
 mod mention;
 mod pins;
 mod popover;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};

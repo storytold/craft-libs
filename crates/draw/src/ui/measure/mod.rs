@@ -9,7 +9,7 @@ mod bar;
 mod distances;
 mod model;
 mod overlay;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tool;
 mod words;

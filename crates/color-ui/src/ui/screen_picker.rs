@@ -33,7 +33,7 @@ use egui::{Color32, Context, Pos2, Rect, Ui, pos2, vec2};
 use super::ScreenPickGesture;
 
 mod capture;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use capture::{CaptureView, CaptureWindow};

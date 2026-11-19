@@ -20,7 +20,7 @@
 //! }
 //! ```
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::view::PageSource;

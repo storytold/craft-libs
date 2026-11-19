@@ -5,7 +5,7 @@
 
 mod rank;
 mod rows;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::sync::Arc;

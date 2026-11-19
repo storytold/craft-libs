@@ -1,7 +1,7 @@
 //! `PreferencesWindow`: the preferences body in an app-modal `Dialog` that opens in its own OS window where windows
 //! exist.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::body::{self, BodyOut};

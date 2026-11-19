@@ -3,7 +3,7 @@
 //! share one stroking function over `kit::outline` (halo and line) and `kit::dashed`.
 
 mod hover;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(super) mod stories;
 
 use crate::canvas::canvas_space;

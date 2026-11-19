@@ -14,7 +14,7 @@ use crate::runtime::env::{Env, Label};
 use crate::runtime::overlay::CloseReason;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The [`ColorRequest::key`](crate::runtime::requests::ColorRequest::key) of Panel Options' Custom… colour.

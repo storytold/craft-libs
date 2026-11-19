@@ -17,7 +17,7 @@ use craft_ui::runtime::pointer;
 use craft_ui::style::{ComponentStyle, StyleCx, UiTokens};
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The model the HUD picks in: saturation and brightness across and down, hue in the strip.

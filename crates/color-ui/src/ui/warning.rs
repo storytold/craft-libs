@@ -11,7 +11,7 @@ use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A warning the host shows beside a colour's swatch, as the out-of-gamut and web-colour warnings of Photoshop's Color

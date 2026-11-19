@@ -1,7 +1,7 @@
 //! `TransformOverlay`: the open session's box on the canvas, which shows a [`TransformBox`](super::TransformBox)
 //! and turns its reports into [`TransformEdit`]s, and `TransformTool`: the canvas tool of the open session.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::CancelReason;

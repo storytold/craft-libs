@@ -1,6 +1,6 @@
 //! `TransformBar`: the options bar of an open Free Transform session.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::session::{TransformEdit, TransformPhase, TransformSession, TransformSettings, TransformWarp};

@@ -19,7 +19,7 @@ use craft_theme::variant::Variant;
 use egui::{Rect, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The keys of a tour: Right goes to the next step and Left back (the keymap mirrors them in a right-to-left

@@ -1,6 +1,6 @@
 //! A decoded frame fitted in a panel, with a status line.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::{Axis, Metrics, Sense};

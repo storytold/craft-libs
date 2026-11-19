@@ -19,7 +19,7 @@ use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::text::TextField;
 use egui::{Context, Response, Ui};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

@@ -3,7 +3,7 @@
 //! Replace and Go To tabs, Search Options, Replace and Replace All) and PowerPoint's simpler Find / Replace, on the
 //! dialog stack. Both search with [`crate::find`]; the document's text and the replacing are the app's.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 mod bar;

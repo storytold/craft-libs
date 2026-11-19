@@ -2,7 +2,7 @@
 //! column widths. A divider moves only the two columns it divides (`craft_behavior::divider`, `Give::Pair`); each keeps
 //! its least share, and the other columns keep theirs.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::divider::{Give, Segment, resize, travel};

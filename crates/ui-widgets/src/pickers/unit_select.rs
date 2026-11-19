@@ -11,7 +11,7 @@ use craft_behavior::{EditEvents, Flow, Metrics, Mixed, NumberCodec, Proposal, Se
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a unit select: the gap between the field and the select, and the number field's width.

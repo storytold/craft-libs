@@ -18,7 +18,7 @@ mod root;
 mod spec;
 mod splitter;
 pub mod stack;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 pub mod targets;
 pub mod tree;

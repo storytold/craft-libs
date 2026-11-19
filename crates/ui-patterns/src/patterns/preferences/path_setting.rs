@@ -1,6 +1,6 @@
 //! `PathSetting`: a path setting of Preferences, typed or picked through the host's file service, kept in the draft.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::SettingsDraft;

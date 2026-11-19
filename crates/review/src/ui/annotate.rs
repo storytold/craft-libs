@@ -1,7 +1,7 @@
 //! The annotation tool on the canvas, the overlay that draws annotations, and the toolbar.
 
 mod overlay;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod tool;
 mod toolbar;

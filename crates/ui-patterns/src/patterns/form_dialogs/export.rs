@@ -8,7 +8,7 @@ mod as_dialog;
 mod options;
 mod path_row;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::PreviewRequest;

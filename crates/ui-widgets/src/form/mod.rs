@@ -3,7 +3,7 @@
 mod field;
 mod group;
 mod slider_field;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

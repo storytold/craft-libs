@@ -41,7 +41,7 @@ use egui::{Context, Response, Ui};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

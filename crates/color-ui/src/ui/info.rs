@@ -13,7 +13,7 @@ use egui::{Response, Ui};
 
 use super::SamplerReadout;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// What a missing value shows.

@@ -5,7 +5,7 @@
 mod gesture;
 mod paint;
 mod shield;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::words::CanvasWords;

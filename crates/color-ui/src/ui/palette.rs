@@ -10,7 +10,7 @@ use craft_ui::runtime::env::Label;
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// What a [`SwatchPalette`] reports.

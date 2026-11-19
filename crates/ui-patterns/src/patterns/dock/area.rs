@@ -35,7 +35,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// A layout the dock cannot show: the workspace failed `Workspace::validate`. The area draws nothing for it.

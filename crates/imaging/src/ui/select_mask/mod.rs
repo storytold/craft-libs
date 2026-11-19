@@ -43,7 +43,7 @@ mod commands;
 mod edits;
 mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tools;
 mod words;

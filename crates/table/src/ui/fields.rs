@@ -21,7 +21,7 @@ use craft_ui::sections::Panel;
 use craft_ui::style::{SurfaceKind, TypeRole};
 use egui::{Id, Response, Ui};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

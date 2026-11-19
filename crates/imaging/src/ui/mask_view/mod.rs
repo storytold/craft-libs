@@ -23,7 +23,7 @@
 mod controls;
 mod keys;
 mod state;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use controls::{MaskViewControls, MaskViewControlsOutput};

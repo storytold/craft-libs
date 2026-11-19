@@ -19,7 +19,7 @@ use super::picker::{ChannelRow, ChannelRule};
 use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 use craft_ui::choice::{SwatchTable, SwatchTableOutput};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

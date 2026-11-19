@@ -1,7 +1,7 @@
 //! [`HueSaturationEditor`]: Master and six colour ranges, Colorize, the two spectrum bars and the four range thumbs
 //! that wrap at 360°.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::Mixed;

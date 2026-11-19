@@ -3,7 +3,7 @@
 //! empty, a double click (or Enter on the focused section) starts editing it, and the app's editor takes the section's
 //! rectangle. What a section holds, its fields and the editor are the app's.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::kurbo::Point;

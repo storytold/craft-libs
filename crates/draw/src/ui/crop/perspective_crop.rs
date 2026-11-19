@@ -487,5 +487,5 @@ pub fn grid_lines(view: &CanvasView, q: &[Point; 4], step: f32) -> Vec<[Pos2; 2]
     out
 }
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;

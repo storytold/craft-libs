@@ -40,7 +40,7 @@ use serde_json::Value;
 
 use std::borrow::Cow;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

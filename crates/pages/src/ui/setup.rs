@@ -8,7 +8,7 @@
 //! if let Some(choice) = PageLayoutMenus::new(&doc.page_setup()).unit(prefs.unit).margins(ui, &margins_button) { doc.apply(choice) }
 //! ```
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::ops::RangeInclusive;

@@ -8,7 +8,7 @@ pub mod level;
 mod panel;
 mod popup;
 pub mod search;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod words;
 

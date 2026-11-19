@@ -12,7 +12,7 @@ use egui::{CornerRadius, Rect, Response, Vec2, pos2};
 use super::picker::ColorPickerWords;
 use super::warning::{ColorWarning, ColorWarningChip};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a compare block: the size of the block and of each half, the edge round it and the gap between a

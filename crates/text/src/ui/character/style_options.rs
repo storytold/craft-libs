@@ -30,7 +30,7 @@ use crate::ui::length::DocUnit;
 #[cfg(feature = "font-picker")]
 use super::FontPickerSource;
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

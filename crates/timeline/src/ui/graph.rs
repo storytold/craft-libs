@@ -1,7 +1,7 @@
 //! `GraphEditor`: keyframed values (or their speed) as curves over time (N1.08), a leaf with a content painter for the
 //! plot and parts for the keys, the handles and the bottom bar.
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use craft_behavior::kurbo;

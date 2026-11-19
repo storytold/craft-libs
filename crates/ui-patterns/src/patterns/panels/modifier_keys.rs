@@ -9,7 +9,7 @@ use craft_keymap::{Mods, Platform};
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The panel's buttons in their fixed order, each with the one modifier it latches: Shift, the command key (⌘ on

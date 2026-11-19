@@ -3,7 +3,7 @@
 
 mod dialog;
 mod panel;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use dialog::{HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintMarks, PrintSection, PrintSheet};

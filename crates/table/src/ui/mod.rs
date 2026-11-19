@@ -30,6 +30,7 @@ pub mod stats;
 /// The registrations of the table widgets' stories and trials.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
+    #[cfg(feature = "suite")]
     craft_ui::testing_registered!();
 }
 

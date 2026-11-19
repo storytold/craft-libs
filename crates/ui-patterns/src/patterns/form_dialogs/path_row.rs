@@ -1,6 +1,6 @@
 //! `PathRow`: a path typed in a text field, with a Browse button that asks the host to pick one.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use crate::buttons::Button;

@@ -1,7 +1,7 @@
 //! [`LevelsEditor`]: a levels adjustment's histogram, input thumbs and fields, output bar, thumbs
 //! and fields, editing one channel's [`Levels`].
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::ops::RangeInclusive;

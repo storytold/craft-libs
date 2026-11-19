@@ -1,6 +1,6 @@
 //! The row of sliders that edits the axes of a face (Photoshop's Properties › Character axis sliders; FigCraft's axis panel).
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use std::sync::Arc;

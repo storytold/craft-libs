@@ -2,7 +2,7 @@
 
 mod metadata;
 mod sort;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod view;
 mod words;

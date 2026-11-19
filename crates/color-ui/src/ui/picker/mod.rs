@@ -6,7 +6,7 @@ mod channel;
 mod compact;
 mod full;
 mod screen_pick;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod value;
 

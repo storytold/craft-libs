@@ -23,9 +23,9 @@ use egui::{Response, Ui, Vec2};
 
 mod data;
 mod drag;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(super) mod stories;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod trials;
 
 use data::row_groups;

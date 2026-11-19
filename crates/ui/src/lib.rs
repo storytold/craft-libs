@@ -46,12 +46,15 @@ pub mod patterns {
 pub mod testing {
     pub use craft_ui_canvas::testing::*;
 
+    #[cfg(feature = "suite")]
     crate::testing_registered!();
 
     /// A crate's `registered`.
+    #[cfg(feature = "suite")]
     type Registered = fn() -> Vec<&'static Registration>;
 
     /// The crates of the library, each with its `registered`.
+    #[cfg(feature = "suite")]
     const LIBRARY: [(&str, Registered); 7] = [
         ("craft-ui", registered),
         ("craft-ui-contract", craft_ui_contract::testing::registered),
@@ -64,6 +67,7 @@ pub mod testing {
 
     /// Every registration declared in the library crates of the library: this crate and the six it re-exports.
     /// Types declared in integration binaries are fixtures and are left out.
+    #[cfg(feature = "suite")]
     pub fn library_registrations() -> Vec<&'static Registration> {
         // A crate's registrations run only in a binary that links the crate; naming each crate's `registered`
         // links them all.

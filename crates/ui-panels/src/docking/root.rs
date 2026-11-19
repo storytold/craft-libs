@@ -13,7 +13,7 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
 use egui::Response;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a dock root: the docking sizes of its drop bands, columns, groups and floating windows. Colours,

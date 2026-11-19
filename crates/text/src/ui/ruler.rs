@@ -28,7 +28,7 @@ mod geometry;
 mod items;
 mod paint;
 mod run;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use geometry::{Geometry, Shapes};

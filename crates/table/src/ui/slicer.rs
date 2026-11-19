@@ -17,7 +17,7 @@ use craft_ui::sections::{HeaderStrength, TitleRow};
 use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens};
 use egui::{Rect, Response, Ui, Vec2, pos2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

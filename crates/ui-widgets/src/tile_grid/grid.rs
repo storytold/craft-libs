@@ -5,7 +5,7 @@
 //! the item step that hold the lead), and the rating keys. It owns what its cards have in common: where the
 //! caption goes, whether a detail line is reserved, and the zoom.
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 use super::headers::Outline;

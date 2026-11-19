@@ -4,7 +4,7 @@
 mod canvas;
 mod side;
 mod status;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod title;
 mod view;

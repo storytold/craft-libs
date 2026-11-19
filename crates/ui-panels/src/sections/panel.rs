@@ -18,7 +18,7 @@ use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceKind, UiTokens};
 use craft_behavior::{Metrics, Sense};
 use egui::{CornerRadius, Id, Response, Ui};
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a panel: the surface and padding come from the container.

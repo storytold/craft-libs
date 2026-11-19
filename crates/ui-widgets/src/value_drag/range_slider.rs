@@ -16,7 +16,7 @@ use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The track both thumbs ride on.

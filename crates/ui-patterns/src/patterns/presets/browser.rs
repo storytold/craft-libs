@@ -7,7 +7,7 @@
 //! presets as rows of the same collection in both views: the grid's tail rows, the list's last rows.
 
 mod reorder;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use reorder::PresetReorder;

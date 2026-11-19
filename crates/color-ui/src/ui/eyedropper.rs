@@ -35,7 +35,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::DataColor;
 use egui::{Color32, Pos2, Response, Ui, Vec2, vec2};
 
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 craft_ui::words! {

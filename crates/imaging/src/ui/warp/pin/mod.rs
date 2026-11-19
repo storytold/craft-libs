@@ -5,7 +5,7 @@
 mod bar;
 mod overlay;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 
 pub use bar::{PinWarpBar, PinWarpBarOutput, PinWarpBarWords};

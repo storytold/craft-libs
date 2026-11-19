@@ -25,7 +25,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 /// The style of a footer bar. A bar of panel actions sits under a divider rule along its top edge, with the control

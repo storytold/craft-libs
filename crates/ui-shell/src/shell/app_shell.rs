@@ -3,7 +3,7 @@
 //! name of each region come from the pipeline.
 
 mod dialogs;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 
 pub use self::dialogs::{ShellDialogsCx, WindowDialogs};

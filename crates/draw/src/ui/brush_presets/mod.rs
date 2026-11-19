@@ -14,7 +14,7 @@ mod panel;
 mod picker;
 mod rows;
 mod settings;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;
 

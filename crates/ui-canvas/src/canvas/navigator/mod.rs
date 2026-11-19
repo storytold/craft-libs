@@ -12,7 +12,7 @@
 mod menu;
 mod preview;
 mod proxy;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 mod stories;
 mod zoom_row;
 

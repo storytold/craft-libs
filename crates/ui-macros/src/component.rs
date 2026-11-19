@@ -178,13 +178,13 @@ pub(crate) fn purpose_of(attrs: &[Attribute]) -> String {
 }
 
 /// The attributes on a registration block, from the crate being compiled. See `gate_for`.
-fn registration_gate() -> TokenStream {
+pub(crate) fn registration_gate() -> TokenStream {
     let manifest = std::env::var_os("CARGO_MANIFEST_DIR").and_then(|dir| std::fs::read_to_string(std::path::Path::new(&dir).join("Cargo.toml")).ok());
     gate_for(manifest.as_deref().unwrap_or_default())
 }
 
 /// The attributes on a registration block. The registration's types can exist only under the defining package's
-/// `screen-testing` feature, which may be off while craft-ui's `testing` is on, so the block is gated on it (the cfg
+/// `suite` feature, which may be off while craft-ui's `testing` is on, so the block is gated on it (the cfg
 /// is evaluated in the defining crate) when the package's `manifest` declares that feature, and is not gated otherwise.
 pub(crate) fn gate_for(manifest: &str) -> TokenStream {
     let mut in_features = false;
@@ -193,9 +193,9 @@ pub(crate) fn gate_for(manifest: &str) -> TokenStream {
             in_features = line.trim_end_matches(|c: char| c.is_whitespace()) == "[features]";
             return false;
         }
-        in_features && line.strip_prefix("screen-testing").is_some_and(|rest| rest.trim_start().starts_with('='))
+        in_features && line.strip_prefix("suite").is_some_and(|rest| rest.trim_start().starts_with('='))
     });
-    if declares { quote!(#[cfg(feature = "screen-testing")]) } else { quote!() }
+    if declares { quote!(#[cfg(feature = "suite")]) } else { quote!() }
 }
 
 fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Shape) -> syn::Result<TokenStream> {
