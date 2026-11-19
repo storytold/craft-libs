@@ -921,7 +921,9 @@ impl ReadingMeasure {
 
 #[cfg(feature = "testing")]
 mod memo_tests {
-    use super::*;
+    use super::{
+        Arc, Color32, Context, Cow, Direction, HAlign, LayoutRun, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UiTokens, Wrap, with_memo,
+    };
     use crate::testing::trial;
     use craft_theme::{Appearance, Contrast, Mode, Size, TextSize, builtins, resolve};
 
