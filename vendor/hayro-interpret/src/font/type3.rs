@@ -223,6 +223,12 @@ impl<'a, T: Device<'a>> Device<'a> for Type3ShapeGlyphDevice<'a, '_, T> {
         self.inner.set_soft_mask(m);
     }
 
+    /// Craft patch (rendering intent): the glyph's paint converts with the intent its
+    /// procedure's graphics state holds.
+    fn set_rendering_intent(&mut self, intent: crate::color::RenderIntent) {
+        self.inner.set_rendering_intent(intent);
+    }
+
     fn draw_path(
         &mut self,
         path: &BezPath,

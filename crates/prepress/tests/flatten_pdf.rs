@@ -745,3 +745,106 @@ fn an_icc_source_converts_with_the_rendering_intent() {
     let (mixed, perceptual, _) = fills("Saturation");
     assert!(near(mixed, perceptual, 1e-4), "saturation: {mixed:?}, want {perceptual:?}");
 }
+
+#[test]
+fn a_mask_backdrop_converts_with_the_mask_intent() {
+    let perceptual = fogra39_with(Intent::Perceptual, YELLOW);
+    let relative = fogra39_with(Intent::RelativeColorimetric, YELLOW);
+    let objects = [
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Intent /Perceptual", "FFFF00"),
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "FFFF00"),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 300 120] /Group << /S /Transparency /CS /DeviceRGB >> /Resources << >>",
+            "1 g 0 0 300 120 re f",
+        ),
+    ];
+    // The masked image follows one with its own `/Intent`; the mask's backdrop converts as the
+    // mask's own content starts, relative colorimetric.
+    let content = "q 10 0 0 10 0 0 cm /Im1 Do Q q /GS1 gs 10 0 0 10 20 0 cm /Im2 Do Q";
+    let resources = "/XObject << /Im1 5 0 R /Im2 6 0 R >> /ExtGState << /GS1 << /SMask << /S /Luminosity /G 7 0 R /BC [1 1 0] >> >> >>";
+    let (list, _) = read(&raw_pdf(content, resources, &objects));
+    let masked = images(&list);
+    let mask = masked.iter().find_map(|(groups, _)| groups.iter().find_map(|g| g.mask.as_deref())).unwrap();
+    let Some(InkColor::Tints(tints)) = &mask.backdrop else { panic!("{:?}", mask.backdrop) };
+    let got = Process::ALL.map(|p| tint(tints, ink(p)));
+    assert!(!near(perceptual, relative, 0.02), "the intents must differ for this test");
+    assert!(near(got, relative, 1e-4), "{got:?}, want {relative:?}");
+}
+
+#[test]
+fn type3_glyphs_and_uncolored_patterns_convert_with_their_intent() {
+    let perceptual = fogra39_with(Intent::Perceptual, YELLOW);
+    let relative = fogra39_with(Intent::RelativeColorimetric, YELLOW);
+    let saturation = fogra39_with(Intent::Saturation, YELLOW);
+    let objects = [
+        // 5: a Type 3 font with two shape glyphs, the second setting its own intent.
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] \
+         /CharProcs << /sq 6 0 R /ri 7 0 R >> /Encoding << /Type /Encoding /Differences [65 /sq /ri] >> \
+         /FirstChar 65 /LastChar 66 /Widths [1000 1000] >>"
+            .to_string(),
+        stream("", "1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f"),
+        stream("", "1000 0 0 0 1000 1000 d1 /Saturation ri 0 0 1000 1000 re f"),
+        // 8, 9: uncolored tiling patterns, the second setting its own intent.
+        stream("/PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /Resources << >>", "0 0 10 10 re f"),
+        stream("/PatternType 1 /PaintType 2 /TilingType 1 /BBox [0 0 10 10] /XStep 20 /YStep 20 /Resources << >>", "/Saturation ri 0 0 10 10 re f"),
+    ];
+    let content = "/Perceptual ri 1 1 0 rg BT /F1 10 Tf 0 100 Td (A) Tj ET BT /F1 10 Tf 20 100 Td (B) Tj ET \
+        /CS1 cs 1 1 0 /P1 scn 0 0 10 10 re f 1 1 0 /P2 scn 40 0 10 10 re f";
+    let resources = "/Font << /F1 5 0 R >> /Pattern << /P1 8 0 R /P2 9 0 R >> /ColorSpace << /CS1 [/Pattern /DeviceRGB] >>";
+    let (list, _) = read(&raw_pdf(content, resources, &objects));
+    let paints: Vec<[f32; 4]> = leaves(&list.items)
+        .into_iter()
+        .map(|(_, item)| {
+            let paint = match item {
+                Item::Fill(f) => &f.paint,
+                Item::Text(t) => &t.paint,
+                other => panic!("{other:?}"),
+            };
+            let Paint::Solid(InkColor::Tints(tints)) = paint else { panic!("{paint:?}") };
+            Process::ALL.map(|p| tint(tints, ink(p)))
+        })
+        .collect();
+    // A glyph converts with the intent of the text show, or its procedure's own; a pattern cell
+    // starts from the initial graphics state (ISO 32000-2 §8.7.3.1), so relative colorimetric.
+    let want = [perceptual, saturation, relative, saturation];
+    assert_eq!(paints.len(), want.len(), "{paints:?}");
+    for (i, (got, want)) in paints.iter().zip(want).enumerate() {
+        assert!(near(*got, want, 1e-4), "paint {i}: {got:?}, want {want:?}");
+    }
+}
+
+/// An ICCBased CMYK space: craft-cms's synthetic coated CMYK profile with media white `white`.
+fn icc_cmyk_white_object(white: [f64; 3]) -> String {
+    let mut profile = Builtin::CoatedCmyk.profile().clone();
+    profile.white_point = white;
+    let bytes = profile.with_encoded_bytes().to_bytes();
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    stream("/N 4 /Filter /ASCIIHexDecode", &format!("{hex}>"))
+}
+
+#[test]
+fn absolute_colorimetric_scales_by_the_source_media_white() {
+    const D50: [f64; 3] = [0.9642, 1.0, 0.8249];
+    const PAPER: [f64; 3] = [0.84, 0.87, 0.66];
+    let objects = [icc_cmyk_white_object(D50), icc_cmyk_white_object(PAPER)];
+    let fills = |intent: &str| {
+        let content = format!("/{intent} ri /C1 cs 0.2 0.4 0.6 0.1 sc 0 0 10 10 re f /C2 cs 0.2 0.4 0.6 0.1 sc 20 0 10 10 re f");
+        let resources = "/ColorSpace << /C1 [/ICCBased 5 0 R] /C2 [/ICCBased 6 0 R] >>";
+        let got = fill_tints(&read(&raw_pdf(&content, resources, &objects)).0);
+        assert_eq!(got.len(), 2);
+        (got[0], got[1])
+    };
+    let (d50, paper) = fills("RelativeColorimetric");
+    assert!(near(d50, paper, 1e-4), "relative colorimetric ignores the media white: {d50:?} {paper:?}");
+    let (d50, paper) = fills("AbsoluteColorimetric");
+    assert!(!near(d50, paper, 0.02), "absolute colorimetric keeps the media white: {d50:?} {paper:?}");
+    // As craft-cms converts the whole way, absolute colorimetric.
+    let mut source = Builtin::CoatedCmyk.profile().clone();
+    source.white_point = PAPER;
+    let opts = TransformOptions { intent: Intent::AbsoluteColorimetric, bpc: false, precise_float: false };
+    let t = cached(&source, Builtin::CoatedFogra39.profile(), opts).unwrap();
+    let mut want = [0.0; 4];
+    t.convert_f32(&[0.2, 0.4, 0.6, 0.1], 4, &mut want, 4, false).unwrap();
+    let want = want.map(|v| v.clamp(0.0, 1.0));
+    assert!(near(paper, want, 0.02), "{paper:?}, want {want:?}");
+}

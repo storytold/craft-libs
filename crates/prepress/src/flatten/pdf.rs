@@ -458,15 +458,18 @@ impl<'s, 'a> Reader<'s, 'a> {
         self.shared.masks.insert(key, None);
         let mut reader = Reader::new(&mut *self.shared, false, self.bounds);
         mask.interpret(&mut reader);
-        let children = reader.finish();
         let kind = match mask.mask_type() {
             MaskType::Luminosity => MaskKind::Luminosity,
             MaskType::Alpha => MaskKind::Alpha,
         };
+        // The backdrop converts as the mask's content starts, from a fresh graphics state, not
+        // with whatever the paint before the masked one left: the mask is cached by its object.
+        reader.intent = RenderIntent::default();
         let backdrop = match kind {
-            MaskKind::Luminosity => self.ink_color(&mask.background_color()),
+            MaskKind::Luminosity => reader.ink_color(&mask.background_color()),
             MaskKind::Alpha => None,
         };
+        let children = reader.finish();
         let transfer = mask.transfer_function().map(|tf| (0..=255_u8).map(|v| (tf.apply(f32::from(v) / 255.0) * 255.0).round() as u8).collect());
         let group = GroupItem { isolated: true, children, ..plain_group(None) };
         let read = Mask { kind, group, backdrop, transfer };

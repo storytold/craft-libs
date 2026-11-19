@@ -1344,11 +1344,41 @@ impl ICCProfile {
             };
         }
         transform.transform(encoded, xyz).ok()?;
+        let scale = match intent {
+            RenderIntent::AbsoluteColorimetric => self.absolute_scale(),
+            _ => None,
+        };
         for color in xyz.chunks_exact_mut(3) {
-            let pcs = HUB.to_pcs(&[color[0], color[1], color[2]]);
+            let mut pcs = HUB.to_pcs(&[color[0], color[1], color[2]]);
+            if let Some(scale) = scale {
+                for (v, s) in pcs.iter_mut().zip(scale) {
+                    *v *= s;
+                }
+            }
             color.copy_from_slice(&pcs);
         }
         Some(())
+    }
+
+    /// Craft patch (rendering intent): what ICC-absolute colorimetric multiplies the
+    /// media-relative PCS XYZ by, the media white over the PCS white (ICC.1:2010 §6.3.2.2,
+    /// Annex D): moxcms builds an absolute transform as a relative one. The printing condition
+    /// scales by the PCS white over its own media white, as craft-cms does for a whole
+    /// transform. `None` for no change: a v2 display profile's `wtpt` is the unadapted display
+    /// white and reads as the PCS white, as in craft-cms, and an unusable one is left out.
+    fn absolute_scale(&self) -> Option<[f32; 3]> {
+        let profile = &self.0.src_profile;
+        if profile.profile_class == moxcms::ProfileClass::DisplayDevice
+            && profile.version() < moxcms::ProfileVersion::V4_0
+        {
+            return None;
+        }
+        let white = profile.media_white_point?;
+        let [x, y, z] = PCS_WHITE;
+        let scale = [white.x as f32 / x, white.y as f32 / y, white.z as f32 / z];
+        let usable = scale.iter().all(|s| s.is_finite() && *s > 0.0);
+        let identity = scale.iter().all(|s| (s - 1.0).abs() < 1e-6);
+        (usable && !identity).then_some(scale)
     }
 
     fn is_srgb(&self) -> bool {

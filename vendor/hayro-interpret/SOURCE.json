@@ -182,7 +182,7 @@
       "path": "src/color.rs",
       "source_sha256": "799ce29bb5e59c8fc94db202873e48c2047dd35962e6f26efd215156c47158c1",
       "source_git_blob": "56bb04f24c04ba33ab6bf99c02a24735670959ad",
-      "sha256": "17eafeefd7d8b5ce86d9724a9ea4fe0c340d6b8a46f77ec611e6308989f8d8de"
+      "sha256": "96c3faa3afa73c6fe1c1923fd53dcd64b054f52c2f5354e19a367a94b9a2b13d"
     },
     {
       "path": "src/context.rs",
@@ -320,7 +320,7 @@
       "path": "src/font/type3.rs",
       "source_sha256": "bc33784f0dd3e599028b28b3696b9e4380cbff08f4c4e6299dee51f8df5eb08f",
       "source_git_blob": "c0e0d0b2df8f38183b8e23e9e8f644c0b81d0529",
-      "sha256": "1778362c6c4a5cb015e756fd3f36afd7482f20a230dde0206f4339da922eaca4"
+      "sha256": "42f6f6d1f4f85ba851a6cb3b9d4d43259f9eebcb0135b57df8d43cdfd032fab7"
     },
     {
       "path": "src/function/mod.rs",
@@ -404,7 +404,7 @@
       "path": "src/pattern.rs",
       "source_sha256": "17b49a465275c20e6645dea9443f2cb3a64c594925fd860e74b80b44d5344e37",
       "source_git_blob": "9295f51709f8915951d7b9afca9411651d65a1f8",
-      "sha256": "e57d4de60126eafa0da2113af12bbbde1aabd15554f1ee26f6551b8219f4ede5"
+      "sha256": "7a6760057a12c8c00739a4ce7087a20b60cede51c090ca175d1f1ebda60bd73d"
     },
     {
       "path": "src/shading.rs",

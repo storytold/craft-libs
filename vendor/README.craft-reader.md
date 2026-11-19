@@ -101,11 +101,17 @@ each `set_overprint` and again with an image's own intent; the default does noth
 `CmykConversion` has `from_srgb_with` and `from_pcs_xyz_with`, which default to the
 relative colorimetric methods; the moxcms conversion keeps that default. An ICCBased source
 reaches the PCS through its own tables for the intent, else the perceptual ones (ICC.1
-clause 8.10.2), else relative colorimetric, with one cached transform per intent. A
-simulation's cache digest includes an intent other than relative colorimetric. Tests in
-`crates/prepress/tests/flatten_pdf.rs` check fills, an image and a shading against
-craft-cms's own conversions, and an ICCBased source's perceptual and colorimetric tables and
-its missing saturation table.
+clause 8.10.2), else relative colorimetric, with one cached transform per intent. moxcms
+builds absolute colorimetric as relative, so for that intent the source's PCS XYZ is scaled
+by its media white over the PCS white (ICC.1:2010 §6.3.2.2, Annex D; a v2 display profile's
+`wtpt` reads as the PCS white, as in craft-cms); the printing condition scales by the PCS
+white over its own. The Type 3 shape glyph and uncolored pattern adapters forward
+`set_rendering_intent`. A simulation's cache digest includes an intent other than relative
+colorimetric. Tests in `crates/prepress/tests/flatten_pdf.rs` check fills, an image, a
+shading, Type 3 glyphs, uncolored patterns and a luminosity mask's backdrop against
+craft-cms's own conversions, an ICCBased source's perceptual and colorimetric tables and its
+missing saturation table, and absolute colorimetric against craft-cms with a media white
+other than the PCS white.
 
 The shared snapshot adds immutable per-document ordinary decode limits, threaded through
 initial xrefs, object streams, fallback and repair. Existing constructors retain their
