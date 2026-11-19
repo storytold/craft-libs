@@ -53,6 +53,7 @@ struct El {
 struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Option<Vec<Cell>>,
+    group_start: usize,
     /// The table or one of its cells asks for borders.
     bordered: bool,
     /// Explicit column widths from `<col>` and childless `<colgroup>`.
@@ -62,6 +63,26 @@ struct TableB {
 }
 
 impl TableB {
+    fn finish_row_group(&mut self) {
+        if let Some(row) = self.row.take() {
+            self.rows.push(row);
+        }
+        let end = self.rows.len().min(craft_wordmodel::table::MAX_ROWS);
+        if let Some(rows) = self.rows.get_mut(self.group_start..end) {
+            let mut remaining = 0u32;
+            for row in rows.iter_mut().rev() {
+                if !row.is_empty() {
+                    remaining += 1;
+                }
+                // Resolve zero spans before expanding the table's covered cells.
+                for cell in row.iter_mut().filter(|cell| cell.rowspan == 0) {
+                    cell.rowspan = remaining.clamp(1, 1000);
+                }
+            }
+        }
+        self.group_start = end;
+    }
+
     /// Commit pending colgroup widths: if childless, push span columns with group width.
     /// When child `<col>` elements are present, they have already received the group width
     /// during `<col>` handling; columns from earlier groups are never backfilled.
@@ -219,6 +240,10 @@ pub(super) fn block_kind(n: &str) -> Option<ElKind> {
 }
 
 /// Closes an open `p` (HTML's "close a p element" on block starts).
+fn is_row_group(name: &str) -> bool {
+    matches!(name, "thead" | "tbody" | "tfoot")
+}
+
 fn closes_p(n: &str) -> bool {
     matches!(
         n,
@@ -921,9 +946,7 @@ impl<'r> Builder<'r> {
             ElKind::Table => {
                 if let Some(mut t) = self.tables.pop() {
                     t.commit_pending_colgroup();
-                    if let Some(r) = t.row.take() {
-                        t.rows.push(r);
-                    }
+                    t.finish_row_group();
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
@@ -1014,6 +1037,24 @@ impl<'r> Builder<'r> {
         false
     }
 
+    fn finish_row_group(&mut self) {
+        let Some(table) = self.stack.iter().rposition(|element| element.name == "table") else { return };
+        let owns_rows = self.stack.get(table).is_some_and(|element| element.kind == ElKind::Table);
+        if let Some((index, _)) = self
+            .stack
+            .iter()
+            .enumerate()
+            .skip(table + 1)
+            .find(|(_, element)| is_row_group(&element.name) || matches!(element.name.as_str(), "tr" | "td" | "th"))
+        {
+            self.pop_to(index);
+        }
+        // A table flattened at the nesting limit does not own the containing table's rows.
+        if owns_rows && let Some(table) = self.tables.last_mut() {
+            table.finish_row_group();
+        }
+    }
+
     fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
         if closes_p(name)
             && let Some(k) = self.find_open(|e| e.name == "p", |e| matches!(e.kind, ElKind::Cell | ElKind::Table | ElKind::Li | ElKind::Quote))
@@ -1035,10 +1076,8 @@ impl<'r> Builder<'r> {
         {
             self.pop_to(k);
         }
-        if matches!(name, "tbody" | "thead" | "tfoot")
-            && let Some(k) = self.find_open(|e| matches!(e.name.as_str(), "tbody" | "thead" | "tfoot"), |e| e.kind == ElKind::Table)
-        {
-            self.pop_to(k);
+        if is_row_group(name) || matches!(name, "caption" | "colgroup" | "col") {
+            self.finish_row_group();
         }
         if is_table_part && !self.tables.is_empty() {
             if matches!(name, "td" | "th")
@@ -1260,6 +1299,7 @@ impl<'r> Builder<'r> {
             ElKind::Table => self.tables.push(TableB {
                 rows: Vec::new(),
                 row: None,
+                group_start: 0,
                 bordered: declares_border(attrs, &css, true),
                 col_widths: Vec::new(),
                 pending_colgroup: None,
@@ -1321,7 +1361,7 @@ impl<'r> Builder<'r> {
                 let mso_vmerge = decls(&css).filter(|(k, _)| k == "mso-yfti-vmerge").last().map(|(_, v)| v.trim().to_ascii_lowercase());
                 let is_mso_vmerge_continue = mso_vmerge.as_deref() == Some("continue");
                 let is_mso_vmerge_restart = mso_vmerge.as_deref() == Some("restart");
-                let rowspan = attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1);
+                let rowspan = attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.min(1000)).unwrap_or(1);
                 self.cells.push(Cell {
                     blocks: Vec::new(),
                     colspan,
@@ -1372,6 +1412,14 @@ impl<'r> Builder<'r> {
         if name == "colgroup" {
             if let Some(t) = self.tables.last_mut() {
                 t.commit_pending_colgroup();
+            }
+            return;
+        }
+        if is_row_group(name) {
+            let open = self.find_open(|element| is_row_group(&element.name), |element| element.name == "table");
+            // Without an explicit group, a row-group end tag ends the implicit group.
+            if open.is_none_or(|index| self.stack.get(index).is_some_and(|element| element.name == name)) {
+                self.finish_row_group();
             }
             return;
         }

@@ -2049,3 +2049,24 @@ fn zero_alpha_colors_with_none_channels() {
     let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
     assert_eq!(p2.props.shading, None);
 }
+
+#[test]
+fn zero_rowspan_stops_at_the_row_group_boundary() {
+    for boundary in ["</tbody><tbody>", "<tbody>", "</tbody>", "<caption>Heading</caption>", "<colgroup><col></colgroup>", "<col>"] {
+        let html = format!("<table><tr><td rowspan=0>A<td>B<tr><td>C{boundary}<tr><td>D<td>E</table>");
+        let flow = parse(&html);
+        let table = flow
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                FBlock::Table(table) => Some(table),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(table.rows.len(), 3, "{boundary}: expected three rows");
+        assert_eq!(table.rows[0][0].rowspan, 2, "{boundary}: A spans the first two rows");
+        assert!(table.rows[1][0].covered, "{boundary}: row two continues A");
+        assert!(!table.rows[2][0].covered, "{boundary}: the next group starts at column one");
+        assert_eq!(table.rows[2].len(), 2, "{boundary}: D and E retain their columns");
+    }
+}
