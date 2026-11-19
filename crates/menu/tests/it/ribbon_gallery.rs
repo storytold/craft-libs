@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use craft_menu::{Gallery, GalleryFace, GalleryItem, GroupLevel};
 use craft_ui::contract::Show as _;
-use craft_ui::list::ThumbAspect;
+use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::runtime::env::{Label, with_env};
@@ -85,6 +85,35 @@ fn tiles(wide: bool) -> (Vec<Rect>, Vec<(String, Rect)>) {
     fixture.settle();
     let rects = (0..3).filter_map(|at| fixture.by_label(&format!("Tile {at}")).map(|tile| tile.rect)).collect();
     (rects, fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect())
+}
+
+/// The rect of the first tile of a square gallery of three at thumbnail `size`; the default without one.
+fn first_tile(size: Option<ThumbSize>) -> Rect {
+    let mut fixture = Fixture::new(move |ui| {
+        let paint = |_: &ContentPainterCx, _: Rect| {};
+        let items: Vec<GalleryItem<'_, usize>> =
+            (0..3).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+        let gallery = Gallery::new("Style Sets", &items, None).tiles(3, 3);
+        let gallery = match size {
+            Some(size) => gallery.thumb(size),
+            None => gallery,
+        };
+        let _ = gallery.show(ui);
+    });
+    fixture.settle();
+    fixture.by_label("Tile 0").map_or(Rect::NOTHING, |tile| tile.rect)
+}
+
+/// A gallery's tiles take the thumbnail size it names: a square large tile is much wider than the default medium one
+/// (every tile is as high as the strip, so its width shows its picture's size), and `ThumbSize::None` keeps the
+/// medium size, since a gallery tile always shows its picture.
+#[trial]
+fn a_gallery_at_the_large_thumbnail_size_shows_larger_tiles() {
+    let (medium, large, none) = (first_tile(None), first_tile(Some(ThumbSize::Large)), first_tile(Some(ThumbSize::None)));
+    assert!(medium.is_positive(), "the default tile shows: {medium:?}");
+    assert!(large.width() > 1.5 * medium.width(), "a large tile is wider: {large:?} against {medium:?}");
+    assert!(large.height() >= medium.height() - 0.5, "a large tile is no shorter: {large:?} against {medium:?}");
+    assert!((none.size() - medium.size()).length() < 0.5, "no thumbnail size keeps the medium tile: {none:?} against {medium:?}");
 }
 
 /// A style gallery's tiles are twice as wide as a square one's and name their items under the pictures, inside the

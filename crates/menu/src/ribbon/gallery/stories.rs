@@ -6,7 +6,7 @@ use craft_host::InlineJobs;
 use craft_ui::contract::Show as _;
 use craft_ui::primitives::textures::Revision;
 use craft_ui::primitives::{FakeThumbSource, Thumbnails, ThumbnailOptions};
-use craft_ui::list::ThumbAspect;
+use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::testing::pictures::sample_picture;
@@ -65,6 +65,20 @@ fn gallery_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .caption(CaptionPlace::Below)
         .show(ui)
         .into()
+}
+
+/// A gallery of small pages at the large thumbnail size: each preview (a style set's title, heading and paragraph)
+/// reads at the size of a ribbon's three rows.
+#[story(Gallery<'static, usize>, covers = [], drive = Drive::Never, title = "Large tiles")]
+fn gallery_large(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let images: Vec<Box<dyn Fn() -> egui::ColorImage>> =
+        (0..COUNT).map(|at| Box::new(move || sample_picture(at as u64, [52, 48])) as Box<dyn Fn() -> egui::ColorImage>).collect();
+    let items: Vec<GalleryItem<'_, usize>> = images
+        .iter()
+        .enumerate()
+        .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
+        .collect();
+    Gallery::new("Style Sets", &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).show(ui).into()
 }
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
