@@ -424,20 +424,33 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
             crate::theora::PixelFormat::Yuv444 => (Subsampling::S444, p.pic_width, p.pic_height, p.pic_x, p.pic_y),
         };
 
-        let mut y_cropped = Vec::with_capacity((p.pic_width * p.pic_height) as usize);
+        let y_len = (p.pic_width as usize).checked_mul(p.pic_height as usize).ok_or(FrameError::Shape("crop size overflow"))?;
+        let mut y_cropped = Vec::with_capacity(y_len);
         for row in 0..p.pic_height {
-            let py = p.pic_y + (p.pic_height - 1 - row);
-            let start = py as usize * p.y_stride + p.pic_x as usize;
-            y_cropped.extend_from_slice(&p.y[start..start + p.pic_width as usize]);
+            let py = p.pic_y.checked_add(p.pic_height - 1 - row).ok_or(FrameError::Shape("crop y overflow"))?;
+            let start = (py as usize)
+                .checked_mul(p.y_stride)
+                .and_then(|s| s.checked_add(p.pic_x as usize))
+                .ok_or(FrameError::Shape("crop offset overflow"))?;
+            let end = start.checked_add(p.pic_width as usize).ok_or(FrameError::Shape("crop slice overflow"))?;
+            let slice = p.y.get(start..end).ok_or(FrameError::Plane("buffer shorter than cropped region"))?;
+            y_cropped.extend_from_slice(slice);
         }
 
-        let mut u_cropped = Vec::with_capacity((cw * ch) as usize);
-        let mut v_cropped = Vec::with_capacity((cw * ch) as usize);
+        let uv_len = (cw as usize).checked_mul(ch as usize).ok_or(FrameError::Shape("crop uv size overflow"))?;
+        let mut u_cropped = Vec::with_capacity(uv_len);
+        let mut v_cropped = Vec::with_capacity(uv_len);
         for row in 0..ch {
-            let py = cy + (ch - 1 - row);
-            let start = py as usize * p.uv_stride + cx as usize;
-            u_cropped.extend_from_slice(&p.u[start..start + cw as usize]);
-            v_cropped.extend_from_slice(&p.v[start..start + cw as usize]);
+            let py = cy.checked_add(ch - 1 - row).ok_or(FrameError::Shape("crop chroma y overflow"))?;
+            let start = (py as usize)
+                .checked_mul(p.uv_stride)
+                .and_then(|s| s.checked_add(cx as usize))
+                .ok_or(FrameError::Shape("crop chroma offset overflow"))?;
+            let end = start.checked_add(cw as usize).ok_or(FrameError::Shape("crop chroma slice overflow"))?;
+            let u_slice = p.u.get(start..end).ok_or(FrameError::Plane("u buffer shorter than cropped region"))?;
+            let v_slice = p.v.get(start..end).ok_or(FrameError::Plane("v buffer shorter than cropped region"))?;
+            u_cropped.extend_from_slice(u_slice);
+            v_cropped.extend_from_slice(v_slice);
         }
 
         let planes = vec![
@@ -450,13 +463,13 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
         match p.color_space {
             crate::theora::ColorSpace::Rec470M => {
                 f.color.matrix = 6;
-                f.color.primaries = 6;
+                f.color.primaries = 4;
                 f.color.transfer = 6;
             }
             crate::theora::ColorSpace::Rec470Bg => {
                 f.color.matrix = 5;
                 f.color.primaries = 5;
-                f.color.transfer = 5;
+                f.color.transfer = 1;
             }
             _ => {}
         }

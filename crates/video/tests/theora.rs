@@ -159,11 +159,26 @@ fn test_theora_empty_packet_inter_frame() {
 
 #[test]
 fn test_theora_video_frame_conversion() {
-    let pic = test_picture(32, 32);
-    let vf = VideoFrame::try_from(pic).expect("convert to VideoFrame");
+    let mut pic = test_picture(32, 32);
+    pic.color_space = ColorSpace::Rec470M;
+    let vf = VideoFrame::try_from(pic.clone()).expect("convert to VideoFrame");
     assert_eq!(vf.width(), 32);
     assert_eq!(vf.height(), 32);
     assert_eq!(vf.planes().len(), 3);
+    assert_eq!(vf.color.primaries, 4);
+    assert_eq!(vf.color.transfer, 6);
+    assert_eq!(vf.color.matrix, 6);
+
+    pic.color_space = ColorSpace::Rec470Bg;
+    let vf_bg = VideoFrame::try_from(pic.clone()).expect("convert Rec470Bg");
+    assert_eq!(vf_bg.color.primaries, 5);
+    assert_eq!(vf_bg.color.transfer, 1);
+    assert_eq!(vf_bg.color.matrix, 5);
+
+    // Empty or short plane buffers fail with FrameError without panicking
+    let mut bad_pic = pic.clone();
+    bad_pic.y.clear();
+    assert!(VideoFrame::try_from(bad_pic).is_err());
 }
 
 #[test]
