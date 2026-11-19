@@ -359,7 +359,7 @@ struct FamilyCodec {
 
 impl FamilyCodec {
     fn shown(&self, family: &str, info: &Info) -> String {
-        shown_name(info, family, &self.language, false)
+        shown_name(&info.localized, family, &self.language, false)
     }
 }
 

@@ -202,4 +202,10 @@ fn classifies_japanese_and_cjk_families() {
     assert_eq!(FontClass::classify("UD デジタル 教科書体", 0, NONE, false), Some(FontClass::Handwritten));
     assert_eq!(FontClass::classify("HG創英角ﾎﾟｯﾌﾟ体", 0, NONE, false), Some(FontClass::Handwritten));
     assert_eq!(FontClass::classify("MS Gothic 等幅", 0, NONE, false), Some(FontClass::Monospace));
+    // A Latin word that merely ends in `song` is not a CJK serif (WindSong is a script family); the foundry stems
+    // keep their Song/Songti reading.
+    assert_eq!(FontClass::classify("WindSong", 0, NONE, false), None, "an English word ending in song is not a serif");
+    assert_eq!(FontClass::classify("STSong", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("STZhongsong", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("FZFangSong-Z02", 0, NONE, false), Some(FontClass::Serif));
 }

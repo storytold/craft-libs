@@ -252,7 +252,7 @@ fn banner_shown_name(slots: &[Slot], infos: &Infos, family: &str, language: &str
     });
     row.or_else(|| {
         let english = settings.is_some_and(|s| s.names_in_english);
-        infos.families.get(family).map(|info| shown_name(info, family, language, english))
+        infos.families.get(family).map(|info| shown_name(&info.localized, family, language, english))
     })
     .unwrap_or_else(|| family.to_owned())
 }

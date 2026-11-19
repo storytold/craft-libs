@@ -183,7 +183,7 @@ pub(super) fn regular_face(faces: &[FaceInfo]) -> Option<&FaceInfo> {
 }
 
 /// The name shown for a family: its record in the interface language, else the family name.
-pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: bool) -> String {
+pub(super) fn shown_name(localized: &[LocalizedName], family: &str, language: &str, english: bool) -> String {
     let primary = |tag: &str| tag.split(['-', '_']).next().unwrap_or(tag).to_ascii_lowercase();
     let is_ja = primary(language) == "ja";
     // In a Japanese interface, Photoshop always lists Japanese font names in Japanese,
@@ -193,7 +193,7 @@ pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: boo
     }
     let exact = |n: &&LocalizedName| n.language.as_deref().is_some_and(|l| l.replace('_', "-").eq_ignore_ascii_case(&language.replace('_', "-")));
     let same_language = |n: &&LocalizedName| n.language.as_deref().is_some_and(|l| primary(l) == primary(language));
-    info.localized.iter().find(exact).or_else(|| info.localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
+    localized.iter().find(exact).or_else(|| localized.iter().find(same_language)).map_or_else(|| family.to_owned(), |n| n.name.clone())
 }
 
 /// A face's class, PANOSE and weight from its `OS/2` and `post` tables.
@@ -234,6 +234,15 @@ fn is_cjk_boundary(c: char) -> bool {
         | '\u{F900}'..='\u{FAFF}'
         | '\u{AC00}'..='\u{D7AF}'
     )
+}
+
+/// A CJK Song (宋) serif's Latin name: a foundry-prefixed stem such as `STSong`, `STZhongsong` or `FZFangSong`.
+/// A bare English word that ends in `song` is not one — `WindSong` is a script family, and reading its ending as the
+/// Chinese serif marker filed a script face under Serif.
+fn is_cjk_song(word: &str) -> bool {
+    const FOUNDRIES: [&str; 9] = ["st", "fz", "hg", "hy", "df", "gb", "sim", "adobe", "noto"];
+    ["song", "songti", "sungti"].iter().any(|ending| word.len() > ending.len() && word.ends_with(ending))
+        && FOUNDRIES.iter().any(|prefix| word.starts_with(prefix))
 }
 
 /// Classify from the OS/2 `sFamilyClass` (high byte: the IBM class), the PANOSE digits, the
@@ -289,7 +298,7 @@ pub(super) fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_
     } else if has(&["serif", "roman", "garamond", "times", "bodoni", "baskerville", "caslon", "mincho", "明朝", "宋体", "宋體"])
         || name
             .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
-            .any(|w| matches!(w, "sung" | "song" | "sungti" | "songti") || w.ends_with("song") || w.ends_with("sungti") || w.ends_with("songti"))
+            .any(|w| matches!(w, "sung" | "song" | "sungti" | "songti") || is_cjk_song(w))
     {
         Some(FontClass::Serif)
     } else if name
@@ -350,7 +359,7 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
         .iter()
         .filter_map(|family| {
             let info = infos.families.get(family)?;
-            let shown = shown_name(info, family, listing.language, english);
+            let shown = shown_name(&info.localized, family, listing.language, english);
             let names = [family.as_str(), shown.as_str()].into_iter().chain(info.localized.iter().map(|n| n.name.as_str()));
             let rank = names.filter_map(|name| matcher.score(name)).map(|m| m.rank).min()?;
             let row = FamilyRow {
@@ -479,39 +488,20 @@ mod tests {
 
     #[trial]
     fn a_japanese_interface_lists_japanese_family_names() {
-        use super::{FontFormat, Info, shown_name};
-        use craft_font_catalog::{FaceInfo, LocalizedName, Outlines, Source};
+        use super::shown_name;
+        use craft_font_catalog::LocalizedName;
 
         let localized = vec![
             LocalizedName { language: Some("ja".into()), name: "ＭＳ ゴシック".into() },
             LocalizedName { language: Some("en".into()), name: "MS Gothic".into() },
         ];
-        let regular = FaceInfo {
-            family: "MS Gothic".into(),
-            style: "Regular".into(),
-            weight: 400.0,
-            italic: false,
-            width: 100.0,
-            monospaced: true,
-            variable: false,
-            outlines: Outlines::TrueType,
-            fs_type: 0,
-            code_pages: [0, 0],
-            path: None,
-            index: 0,
-            source: Source::Bundled,
-            blob: None,
-            variations: Vec::new(),
-            localized_families: localized.clone(),
-        };
-        let info = Info { localized, format: FontFormat::TrueType, styles: 1, regular };
 
         // In a Japanese interface, always Japanese regardless of the English font names preference:
-        assert_eq!(shown_name(&info, "MS Gothic", "ja", true), "ＭＳ ゴシック");
-        assert_eq!(shown_name(&info, "MS Gothic", "ja", false), "ＭＳ ゴシック");
+        assert_eq!(shown_name(&localized, "MS Gothic", "ja", true), "ＭＳ ゴシック");
+        assert_eq!(shown_name(&localized, "MS Gothic", "ja", false), "ＭＳ ゴシック");
         // In other languages:
-        assert_eq!(shown_name(&info, "MS Gothic", "en", true), "MS Gothic");
-        assert_eq!(shown_name(&info, "MS Gothic", "en", false), "MS Gothic");
-        assert_eq!(shown_name(&info, "MS Gothic", "fr", true), "MS Gothic");
+        assert_eq!(shown_name(&localized, "MS Gothic", "en", true), "MS Gothic");
+        assert_eq!(shown_name(&localized, "MS Gothic", "en", false), "MS Gothic");
+        assert_eq!(shown_name(&localized, "MS Gothic", "fr", true), "MS Gothic");
     }
 }
