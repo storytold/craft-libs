@@ -849,7 +849,7 @@ mod tests {
         let bits = if mode.subsets == 2 { 3 } else { 4 };
         let partition = value(PB) as usize;
         for (i, x) in index.iter().enumerate() {
-            fields.push((*x, bits - u32::from(anchor(mode.subsets, partition, i))));
+            fields.push((*x, bits - u32::from(super::anchor(mode.subsets, partition, i))));
         }
         pack(&fields)
     }
