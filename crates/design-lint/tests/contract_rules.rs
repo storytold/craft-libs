@@ -101,7 +101,7 @@ fn global_state_counts_every_form_and_honours_the_allowlist() {
     let src = fixture("reject", "contract-global-state.rs");
     let found = analyze_contract(&src, Path::new(FAMILY), &scope(), false);
     // static, static mut, static OnceLock, thread_local!, impl MemoProps, a static in a fn, `use std::fs`, `std::fs::read`,
-    // and the two derive-only forms: impl PlainData and a direct `__from_field_path`.
+    // and the two derive-only forms: impl PlainData and a direct `__split_for_bind`.
     assert_eq!(found.iter().filter(|f| f.rule == "contract/no-global-state").count(), 10, "{found:?}");
     // An entry names one item; the rest of the file is still flagged. The three derive-only forms have no entry.
     let mut allowed = StaticScope::new();

@@ -16,8 +16,8 @@ impl MemoProps for Props {}
 
 impl PlainData for Props {}
 
-fn project() -> Path {
-    Path::__from_field_path(&[])
+fn project() -> Tracked {
+    Tracked::__split_for_bind(&[])
 }
 
 fn read(path: &str) -> Vec<u8> {

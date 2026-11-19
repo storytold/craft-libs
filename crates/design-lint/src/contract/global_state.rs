@@ -24,8 +24,8 @@ const PATH_FS: [&str; 2] = ["std", "fs"];
 const PLAIN_DATA: &str = "contract/no-global-state:plain-data";
 const PROJECTION: &str = "contract/no-global-state:projection";
 
-/// The hidden constructor behind `field!`; the lint reads source before macro expansion, so every textual hit is a direct call.
-const FROM_FIELD_PATH: &str = "__from_field_path";
+/// The hidden `Tracked::__split_for_bind`, called only by `bind_tracked!`; the lint reads source before macro expansion, so every textual hit is a direct call.
+const SPLIT_FOR_BIND: &str = "__split_for_bind";
 
 struct Hits {
     found: Vec<(proc_macro2::Span, String, String)>,
@@ -52,7 +52,7 @@ fn static_names(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
 fn field_path_in(tokens: proc_macro2::TokenStream, out: &mut Vec<proc_macro2::Span>) {
     for token in tokens {
         match token {
-            proc_macro2::TokenTree::Ident(i) if i == FROM_FIELD_PATH => out.push(i.span()),
+            proc_macro2::TokenTree::Ident(i) if i == SPLIT_FOR_BIND => out.push(i.span()),
             proc_macro2::TokenTree::Group(g) => field_path_in(g.stream(), out),
             _ => {}
         }
@@ -131,8 +131,8 @@ impl Visit<'_> for Hits {
     }
 
     fn visit_ident(&mut self, node: &proc_macro2::Ident) {
-        if node == FROM_FIELD_PATH {
-            self.projection.push((node.span(), format!("`{FROM_FIELD_PATH}` is called by `field!` only")));
+        if node == SPLIT_FOR_BIND {
+            self.projection.push((node.span(), format!("`{SPLIT_FOR_BIND}` is called by `bind_tracked!` only")));
         }
     }
 
@@ -140,7 +140,7 @@ impl Visit<'_> for Hits {
         let mut spans = Vec::new();
         field_path_in(node.tokens.clone(), &mut spans);
         for span in spans {
-            self.projection.push((span, format!("`{FROM_FIELD_PATH}` is called by `field!` only")));
+            self.projection.push((span, format!("`{SPLIT_FOR_BIND}` is called by `bind_tracked!` only")));
         }
         visit::visit_macro(self, node);
     }
