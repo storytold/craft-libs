@@ -271,9 +271,9 @@ impl Component for Button<'_> {
             let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
             let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
             style.text.color = text.clone();
-            // A place's icon is the standard icon, not a control's small one, set off from its name by a section gap: a
-            // list of places reads by its icons (WordCraft's File rail: 18 pt icons 12 pt before 14 pt names).
-            style.icon = IconLook::new(style.icon.side.max(cx.tokens.size.icon.md), text);
+            // A place's icon is the large icon, not a control's standard one, set off from its name by a section gap: a
+            // list of places reads by its icons (WordCraft's File rail: 18 pt icons, nearest token 20 pt, 12 pt before 14 pt names).
+            style.icon = IconLook::new(style.icon.side.max(cx.tokens.size.icon.lg), text);
             // The face paints by its gap and the measure by the metrics', so the two stay one.
             style.face.gap = style.face.gap.max(cx.tokens.space.gap.section);
             style.metrics.gap = style.face.gap;
