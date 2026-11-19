@@ -307,8 +307,13 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         .into_iter()
         .map(|(owner, part, rect)| HitArea { owner, part, rect: from_screen * rect })
         .collect();
+    // Keep the first occurrence, matching the tree-order lookup when an id appears more than once.
+    let mut index = std::collections::HashMap::new();
+    for (at, element) in elements.iter().enumerate() {
+        index.entry((element.id, element.part)).or_insert(at);
+    }
     for (node, label) in labels {
-        let facts = elements.iter_mut().find(|element| element.id == node && element.part.is_none()).and_then(|element| element.facts.as_mut());
+        let facts = index.get(&(node, None)).and_then(|&at| elements[at].facts.as_mut());
         if let Some(facts) = facts {
             facts.labelled_by.push(label);
         }
@@ -320,20 +325,27 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         let key = |hit: &HitArea| (place.get(&hit.owner).copied(), hit.rect.min.y, hit.rect.min.x);
         key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
     });
-    for (at, (id, part)) in focus::tab_order(ctx, |id| ids.contains(&id)).into_iter().enumerate() {
-        let index = match elements.iter().position(|element| element.id == id && element.part == part) {
-            Some(index) => index,
+    for (stop, (id, part)) in focus::tab_order(ctx, |id| ids.contains(&id)).into_iter().enumerate() {
+        let at = match index.get(&(id, part)).copied() {
+            Some(at) => at,
             None => {
                 // A part with no node of its own: listed after its component, where its hit area is.
-                let Some(owner) = elements.iter().position(|element| element.id == id && element.part.is_none()) else { continue };
+                let Some(owner) = index.get(&(id, None)).copied() else { continue };
                 let rect = hits.iter().find(|hit| hit.owner == id && hit.part == part).map_or(elements[owner].rect, |hit| hit.rect);
                 let depth = elements[owner].depth + 1;
                 let element = Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None };
-                elements.insert(owner + 1, element);
-                owner + 1
+                let at = owner + 1;
+                elements.insert(at, element);
+                for old in index.values_mut() {
+                    if *old >= at {
+                        *old += 1;
+                    }
+                }
+                index.insert((id, part), at);
+                at
             }
         };
-        elements[index].stop = Some(at + 1);
+        elements[at].stop = Some(stop + 1);
     }
     Recorded { elements, hits }
 }
