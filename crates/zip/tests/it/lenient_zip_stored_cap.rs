@@ -1,8 +1,7 @@
 #![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip_stored_cap.rs.
 
-#[path = "lenient_common/mod.rs"]
-mod common;
+use super::common;
 use craft_zip::lenient::{self as zip, ZipError};
 
 #[test]

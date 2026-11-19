@@ -1,9 +1,8 @@
 #![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip_split_volumes.rs.
-use craft_zip::lenient::{self as zip, ZipError};
-#[path = "lenient_common/mod.rs"]
-mod common;
+use super::common;
 use common::zip_stored;
+use craft_zip::lenient::{self as zip, ZipError};
 
 fn assert_split(data: &[u8]) {
     assert!(matches!(zip::parse(data, 10), Err(ZipError::Unsupported(_))));

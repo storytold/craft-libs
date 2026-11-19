@@ -1,9 +1,8 @@
 #![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip_entry_detection.rs.
-use craft_zip::lenient::has_entry as zip_has_entry;
-#[path = "lenient_common/mod.rs"]
-mod common;
+use super::common;
 use common::zip_stored;
+use craft_zip::lenient::has_entry as zip_has_entry;
 
 /// A directory-shaped payload is ordinary file content, not an archive member.
 #[test]
