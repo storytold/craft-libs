@@ -2680,6 +2680,8 @@ dependencies = [
 name = "craft-midi"
 version = "0.1.0"
 dependencies = [
+ "craft-codepage",
+ "craft-xml",
  "proptest",
  "serde",
  "serde_json",
