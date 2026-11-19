@@ -27,12 +27,23 @@ fn has_resolution_fields(bytes: &[u8]) -> bool {
 /// or either is 0 or negative (most writers leave them 0). A whole number of ppi stored rounded to
 /// whole pixels per metre (300 ppi = 11811) reads back whole, as a PNG's `pHYs` does.
 pub(crate) fn resolution(bytes: &[u8]) -> Option<(f32, f32)> {
+    let (x, y) = pixels_per_meter(bytes)?;
+    Some((dpi_of_ppm(x as u32), dpi_of_ppm(y as u32)))
+}
+
+/// Positive signed pixels per metre from a BMP's header, without rounding to DPI.
+///
+/// Requires a `BM` signature, at least 46 bytes and a DIB header size of at least 40.
+/// Zero or negative density on either axis gives `None`. This is a bounded header
+/// probe, not full BMP validation: pixel data and other header fields are not checked.
+/// Callers retain their own unit conversion, precision and density sanity policy.
+pub fn pixels_per_meter(bytes: &[u8]) -> Option<(i32, i32)> {
     if !has_resolution_fields(bytes) {
         return None;
     }
-    let field = |at: usize| le4(bytes, at).map(i32::from_le_bytes).and_then(|v| u32::try_from(v).ok());
-    let (x, y) = (field(X_PPM)?, field(Y_PPM)?);
-    (x > 0 && y > 0).then(|| (dpi_of_ppm(x), dpi_of_ppm(y)))
+    let x = i32::from_le_bytes(le4(bytes, X_PPM)?);
+    let y = i32::from_le_bytes(le4(bytes, Y_PPM)?);
+    (x > 0 && y > 0).then_some((x, y))
 }
 
 /// Pixels per metre for `ppi`, rounded as Photoshop and the PNG `pHYs` writer do (300 ppi = 11811),

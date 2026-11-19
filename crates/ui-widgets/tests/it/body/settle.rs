@@ -13,7 +13,7 @@ use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Comm
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Fixture, Frames, last_pass_measuring_runs, trial};
+use craft_ui::testing::{Fixture, Frames, Settle, last_pass_measuring_runs, last_pass_runs, last_pass_settles, last_pass_text_layouts, trial};
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
@@ -36,6 +36,8 @@ struct Scene {
     versions: [Cell<Option<u64>>; 2],
     repaints: Cell<bool>,
     app_repaints: Cell<bool>,
+    /// Whether the scene shows only what is outside the settling children.
+    bare: Cell<bool>,
     runs: [Cell<usize>; 2],
     buttons: [Cell<(Id, Rect)>; 2],
     seen: Seen,
@@ -51,6 +53,7 @@ impl Scene {
             versions: Default::default(),
             repaints: Cell::new(false),
             app_repaints: Cell::new(false),
+            bare: Cell::new(false),
             runs: Default::default(),
             buttons: [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))],
             seen: Seen::default(),
@@ -73,28 +76,30 @@ impl Scene {
         if self.editor_first {
             self.editor(ui);
         }
-        in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
-            self.child("reader", 0).show(ui, |ui| {
-                self.runs[0].set(self.runs[0].get() + 1);
-                let response = Button::new("Alpha").show(ui).response;
-                self.buttons[0].set((response.id, response.rect));
-                Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("reader").seen(&self.seen).show_at(ui, READER);
-            });
-            self.child("other", 1).show(ui, |ui| {
-                self.runs[1].set(self.runs[1].get() + 1);
-                if self.repaints.get() {
-                    frame::request_repaint(ui.ctx());
-                }
-                // In a body, whose measure a run that is not settled takes from what its last run kept.
-                Stack::new().show(ui, |ui, _| {
-                    let response = Button::new("Beta").show(ui).response;
-                    self.buttons[1].set((response.id, response.rect));
+        if !self.bare.get() {
+            in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
+                self.child("reader", 0).show(ui, |ui| {
+                    self.runs[0].set(self.runs[0].get() + 1);
+                    let response = Button::new("Alpha").show(ui).response;
+                    self.buttons[0].set((response.id, response.rect));
+                    Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("reader").seen(&self.seen).show_at(ui, READER);
                 });
-                if self.spinner {
-                    Spinner::new().show(ui);
-                }
+                self.child("other", 1).show(ui, |ui| {
+                    self.runs[1].set(self.runs[1].get() + 1);
+                    if self.repaints.get() {
+                        frame::request_repaint(ui.ctx());
+                    }
+                    // In a body, whose measure a run that is not settled takes from what its last run kept.
+                    Stack::new().show(ui, |ui, _| {
+                        let response = Button::new("Beta").show(ui).response;
+                        self.buttons[1].set((response.id, response.rect));
+                    });
+                    if self.spinner {
+                        Spinner::new().show(ui);
+                    }
+                });
             });
-        });
+        }
         if !self.editor_first {
             self.editor(ui);
         }
@@ -144,6 +149,31 @@ fn a_settled_child_does_not_run_and_still_paints() {
         );
         assert_eq!(ids.map(|id| tree.parent_of(id)), parents, "settled frame {frame} keeps the nodes' parents");
     }
+}
+
+/// After two warm-up frames, an idle frame with no input runs nothing that settles: every keyed child replays, the
+/// components that run are those outside every settling child, the frame takes one pass and lays out no text.
+#[trial]
+fn an_idle_frame_runs_nothing_that_settles() {
+    let scene = Scene::new(false, false);
+    scene.versions.iter().for_each(|version| version.set(Some(1)));
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let reference = Scene::new(false, false);
+    reference.bare.set(true);
+    let mut bare = Frames::new();
+    reference.settle(&mut bare);
+    let outside = {
+        reference.frame(&mut bare, vec![]);
+        last_pass_runs(&bare.ctx).iter().map(|(_, runs)| runs).sum::<u32>()
+    };
+    let passes = frames.frame(vec![], |ui| scene.show(ui));
+    let ran = last_pass_settles(&frames.ctx).into_iter().filter(|(_, what)| *what == Settle::Ran).count();
+    let runs = last_pass_runs(&frames.ctx);
+    assert_eq!(ran, 0, "an idle frame ran keyed children: {:?}", last_pass_settles(&frames.ctx));
+    assert_eq!(runs.iter().map(|(_, runs)| runs).sum::<u32>(), outside, "components ran inside settling children: {runs:?}");
+    assert_eq!(passes, 1, "an idle frame takes one pass");
+    assert_eq!(last_pass_text_layouts(&frames.ctx), 0, "an idle frame laid out text");
 }
 
 /// The pointer over a settled child runs it, and only it, in the frame it arrives, from the measures its last run

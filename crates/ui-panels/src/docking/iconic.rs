@@ -24,6 +24,7 @@ use craft_behavior::overlay::Side;
 use craft_behavior::{Axis, CursorIcon, DockSide, Metrics, PartKey, PressPhase, Sense, Value};
 use craft_theme::ControlSize;
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
+use std::fmt::Debug;
 use std::hash::Hash;
 
 #[cfg(feature = "testing")]
@@ -235,7 +236,7 @@ struct Plan {
     body: Rect,
 }
 
-impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
+impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// A column named `label` of the dock `dock`, over `column`, whose open flyout is the panel in `open`; `spec`
     /// reads each panel's label, icon and limits.
     pub fn new(label: impl Into<Label>, dock: Id, column: &'a Column<P>, open: Bind<'a, Option<P>>, spec: &'a dyn Fn(&P) -> PanelSpec) -> Self {
@@ -388,7 +389,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
 /// What measures and shows the group of an open flyout.
 type FlyoutView<'a, P> = Box<dyn FnMut(&Group<P>, GroupAt, &mut Ui, &mut BodyCx<'_>) -> Option<f32> + 'a>;
 
-impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
+impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
     const ROLE: Role = Role::GROUP;
     const KEYS: KeyUse = KeyUse::SPLITTER;
     type Style = IconicColumnStyle;
@@ -635,7 +636,7 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
     }
 }
 
-impl<P: Value + Hash + 'static> IconicColumn<'_, P> {
+impl<P: Value + Debug + Hash + 'static> IconicColumn<'_, P> {
     /// Registers the drop spots of the column the way an expanded column registers them: the bands of a dock
     /// column's two edges (a new column beside it), the seam on the separator between two icon groups (a new group
     /// between them), the top of the first group and the bottom of the last down to the column's foot (a new group
@@ -692,7 +693,7 @@ fn chevron_edge(edge: DockEdge) -> HeaderEdge {
     if edge == DockEdge::End { HeaderEdge::End } else { HeaderEdge::Start }
 }
 
-impl<P: Value + Hash + 'static> Container for IconicColumn<'_, P> {
+impl<P: Value + Hash + Debug + 'static> Container for IconicColumn<'_, P> {
     /// The chevron's square at the bar's outer end; nothing in a floating window, whose title row is the bar.
     fn header_parts(&self, cx: &MeasureCx<'_, Self>) -> HeaderParts {
         if self.bar == ColumnBar::Window {

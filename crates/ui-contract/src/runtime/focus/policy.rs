@@ -250,7 +250,7 @@ pub enum EndKey {
 }
 
 /// A component's declared keys.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyUse {
     /// The keys kept from the key stage.
