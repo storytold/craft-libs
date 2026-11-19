@@ -126,6 +126,8 @@ pub(super) struct PagePictures<'a> {
     source: &'a dyn PageSource,
     pages: &'a [PlacedPage],
     near: &'a [(usize, Vec2)],
+    /// The pages whose pictures the stores keep, sorted; every other page's are dropped.
+    keep: &'a [usize],
     /// The document's paper under each picture.
     paper: DataColor,
     /// Sharp renders wait: a zoom is under way.
@@ -137,8 +139,14 @@ pub(super) struct PagePictures<'a> {
 }
 
 impl<'a> PagePictures<'a> {
-    pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], near: &'a [(usize, Vec2)], paper: DataColor) -> Self {
-        PagePictures { common: Common::new(), source, pages, near, paper, hold: false, describer: None }
+    pub(super) fn new(
+        source: &'a dyn PageSource,
+        pages: &'a [PlacedPage],
+        near: &'a [(usize, Vec2)],
+        keep: &'a [usize],
+        paper: DataColor,
+    ) -> Self {
+        PagePictures { common: Common::new(), source, pages, near, keep, paper, hold: false, describer: None }
     }
 }
 
@@ -197,6 +205,12 @@ impl Component for PagePictures<'_> {
             let request = ThumbRequest::for_cell(size.x.max(size.y), ppp);
             thumbs.state(&ctx, self.source, &page, &request, Priority::NEAR);
         }
+        // Pages scrolled out of reach give their pictures back (#811: a long scroll held every page it had shown);
+        // a part-in-view picture is only of use while its page shows.
+        let keep = self.keep;
+        thumbs.retain(&ctx, |page| keep.binary_search(page).is_ok());
+        let shown = self.pages;
+        details.retain(&ctx, |page| shown.iter().any(|p| p.page == *page));
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {

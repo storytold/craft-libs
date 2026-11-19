@@ -42,6 +42,16 @@ fn spreads(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     view(ui, data, false, |state| state.display = PageDisplay::TwoUp)
 }
 
+/// A long document whose view keeps only the pictures of the pages drawn and the row either side
+/// (`picture_reach(0.0)`): a page scrolled away is rendered again when it comes back.
+#[story(PageView<'static>, covers = [], drive = Drive::Never)]
+fn pictures_near_the_view_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = data.value("view", PageViewState::default());
+    let pages = DemoPages::new(8 * PAGES);
+    let out = PageView::new("Pages", &pages, state, PAPER).options(LayoutOptions::ACROBAT).picture_reach(0.0).show(ui, |_, _| ());
+    out.canvas.response.into()
+}
+
 #[story(PageView<'static>, covers = [], drive = Drive::Never)]
 fn one_page_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     view(ui, data, false, |state| state.continuous = false)
@@ -116,7 +126,9 @@ fn page_pictures(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let placed = demo_placed(1, Pos2::new(room.min.x + 20.0, room.min.y + 10.0));
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
     let near: [(usize, Vec2); 0] = [];
-    let shown =
-        Canvas::new("Document").view(view).show_at(ui, room, |ui, body| PagePictures::new(&pages, &placed, &near, PAPER).show_at(ui, body.rect));
+    let keep = [0];
+    let shown = Canvas::new("Document")
+        .view(view)
+        .show_at(ui, room, |ui, body| PagePictures::new(&pages, &placed, &near, &keep, PAPER).show_at(ui, body.rect));
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }

@@ -98,6 +98,53 @@ fn the_pictures_a_view_holds_stay_bounded_as_it_scrolls_through_many_pages() {
     assert!(held > 0 && held <= bound, "{held} pictures held over {count} pages scrolled through, at most {bound} expected");
 }
 
+/// The most pictures a continuous view of 40 Letter pages at 100 % in a 900 × 600 room holds while it scrolls from
+/// the top to the bottom 400 points a step, with `reach` (`None`: the default), and the most pages it drew in a pass.
+fn most_held_scrolling(reach: Option<f32>) -> (usize, usize) {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.continuous = true;
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+    })));
+    let most = Rc::new(Cell::new((0_usize, 0_usize)));
+    let (kept, seen) = (Rc::clone(&state), Rc::clone(&most));
+    let pages = DemoPages::new(40);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let view = PageView::new("Pages", &pages, &mut now, PAPER).options(LayoutOptions::ACROBAT);
+        let view = match reach {
+            Some(screens) => view.picture_reach(screens),
+            None => view,
+        };
+        let out = view.show(ui, |_, _| ());
+        let (held, drawn) = seen.get();
+        seen.set((held.max(out.resident_pictures()), drawn.max(out.pages.len())));
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let mut last = f64::NAN;
+    while state.borrow().offset.1 != last {
+        last = state.borrow().offset.1;
+        state.borrow_mut().offset.1 += 400.0;
+        fixture.idle(2);
+    }
+    assert!(last > 30_000.0, "the view scrolled through the pages: {last}");
+    most.get()
+}
+
+#[trial]
+fn pages_scrolled_out_of_reach_give_their_pictures_back() {
+    // WordCraft (#811) kept the textures of the pages within three screens of the view: a 600-point view holds the
+    // pages over 4'200 points, four or five 1'056-point pages, and the row either side; never the 40 it went past.
+    let (held, drawn) = most_held_scrolling(None);
+    assert!(drawn > 0, "the view drew pages");
+    assert!(held > 0 && held <= 8, "{held} pictures held while scrolling 40 pages with the default reach");
+    // With no reach only the pages drawn and the row either side keep theirs.
+    let (held, drawn) = most_held_scrolling(Some(0.0));
+    assert!(held > 0 && held <= drawn + 2, "{held} pictures held with no reach, {drawn} pages drawn");
+}
+
 /// A wheel step of `lines` over the middle of the room.
 fn wheel(fixture: &mut Fixture, lines: f32) {
     let middle = pos2(450.0, 300.0);

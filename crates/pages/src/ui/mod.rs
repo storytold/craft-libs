@@ -61,4 +61,4 @@ pub use text_selection::{
 pub use thumbnails::{
     PageThumbnails, PageThumbnailsOutput, THUMBNAIL_ZOOM, ThumbnailEvent, ThumbnailMarks, ThumbnailSection, ThumbnailWords, moved_page,
 };
-pub use view::{PageBody, PageRegion, PageSnap, PageSource, PageView, PageViewOutput, PageViewState, PageViewWords, PlacedPage};
+pub use view::{PageBody, PageRegion, PageSnap, PageSource, PageView, PageViewOutput, PageViewState, PageViewWords, PICTURE_REACH, PlacedPage};
