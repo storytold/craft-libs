@@ -548,6 +548,7 @@ fn codec_params_map_fourccs_and_format_tags() {
         (b"AVdn", CodecId::Dnxhd),
         (b"cvid", CodecId::Cinepak),
         (b"CVID", CodecId::Cinepak),
+        (b"FFV1", CodecId::Ffv1),
         (b"YUY2", CodecId::Unknown),
         (&[0; 4], CodecId::Unknown),
     ] {

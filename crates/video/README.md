@@ -71,6 +71,11 @@ is built with any of the decoder features below and decodes the codecs whose fea
 | VP9 | `vp9-decode` | ignored |
 | AV1 | `av1-decode` | an `av1C` record, or empty |
 | MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
+| ProRes | `prores` | ignored (frame headers carry the format) |
+| DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
+| APV | `apv-decode` | ignored (access units carry the format) |
+| FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+| VP8 | `vp8-decode` | ignored (key frames carry the format) |
 
 Configuration that holds picture data (a slice, a frame OBU, an MPEG-2 picture) is refused.
 Errors are `VideoError`: `Unsupported`, `Malformed`, or a picture that did not convert.
@@ -83,3 +88,9 @@ them first. When the codec itself fails, the pictures it had finished are up to 
 - VP9 keeps those of earlier packets.
 - MPEG-2 returns them with the call, unless the packet made too many pictures.
 - AV1 drops those the failing `decode` or `flush` had finished.
+
+ProRes, DNx, APV and FFV1 return one frame per successful packet, with its packet timestamp;
+VP8 returns no picture for a hidden reference frame. These codecs have no delayed output.
+APV uses the codec's default selection of the first decodable primary frame and its alpha.
+FFV1 has the underlying decoder's version 3, range-coded, key-frame-only support. Reset keeps
+its configuration and container dimensions; VP8 reset discards its reference pictures.
