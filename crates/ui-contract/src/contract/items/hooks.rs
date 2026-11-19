@@ -257,7 +257,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         match comp.props(Internal::new()).sizing {
             // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
             // collection's do: the body has no room of its own to hand it.
-            Sizing::Fill => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
+            Sizing::Fill | Sizing::FillHeight => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
             Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
         }
     }
@@ -275,8 +275,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
-            (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
-            (true, Sizing::Fill) => size.y.min(self.room.y),
+            (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
+            (true, Sizing::Fill | Sizing::FillHeight) => size.y.min(self.room.y),
             (true, Sizing::Content | Sizing::FillWidth) => size.y.min(self.room.y),
             (false, _) => size.y,
         };

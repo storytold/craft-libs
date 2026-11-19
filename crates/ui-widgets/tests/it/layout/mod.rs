@@ -1,5 +1,6 @@
 mod cross_fill;
 mod fill_column;
+mod fill_height;
 mod fill_share;
 mod fonts;
 mod grid_labels;

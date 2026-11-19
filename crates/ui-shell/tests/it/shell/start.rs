@@ -162,3 +162,18 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     assert!(fixture.by_label("Remove from Recent").is_some(), "a right click on a recent file opens its menu");
     assert_eq!(fixture.by_label("Show in Folder").is_some(), craft_platform::open::CAN_REVEAL);
 }
+
+/// An empty recent list on a page says so in a line at the reading start under its heading, where its rows would
+/// begin, not in the start screen's centred empty state (a File page's Open list).
+#[trial]
+fn an_empty_recent_list_says_so_at_the_reading_start() {
+    let files: Vec<RecentFile> = Vec::new();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = RecentList::new(&files).empty("Nothing opened yet").show(ui);
+    });
+    fixture.room(egui::Vec2::new(700.0, 500.0));
+    fixture.settle();
+    let line = fixture.by_label("Nothing opened yet").expect("the empty line shows");
+    assert!(line.rect.left() < 60.0, "the line starts at the list's start edge: {:?}", line.rect);
+    assert!(line.rect.width() < 300.0, "the line is as wide as its text: {:?}", line.rect);
+}

@@ -20,7 +20,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// Whether the collection takes its width from its widest row: `Sizing::Content`. A row's width holds its
     /// column cells at the widths the header resolves for them.
     pub(super) fn content_sized(&self, comp: &C) -> bool {
-        comp.props(Internal::new()).sizing == Sizing::Content
+        comp.props(Internal::new()).sizing.content_width()
     }
 
     /// The padding the collection's props add on every side of its rows (`ShapeHooks::pad`).

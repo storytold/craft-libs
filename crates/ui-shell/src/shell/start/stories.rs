@@ -159,6 +159,12 @@ fn recent_list(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     RecentList::new(&files).now(Some(NOW)).empty("No recent files").show(ui).into()
 }
 
+/// No recent files: the muted line under the heading, at the reading start.
+#[story(RecentList<'static>, covers = [], drive = Drive::Never)]
+fn recent_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    RecentList::new(&[]).empty("Documents you open will show up here.").show(ui).into()
+}
+
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
 fn start_screen_with_links(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let links = [

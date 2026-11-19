@@ -168,6 +168,22 @@ pub enum Sizing {
     /// fills takes it, and the container with it. A content-sized mount, a row or a grid stops that.
     #[default]
     Content,
+    /// The width its content took last pass and the available height: a side menu beside a page, as wide as its
+    /// widest item and as tall as the row it stands in, with its footer at the bottom. Across the width it is
+    /// `Content`, down the height `Fill`.
+    FillHeight,
+}
+
+impl Sizing {
+    /// Whether the width follows the content: `Content` and `FillHeight`.
+    pub const fn content_width(self) -> bool {
+        matches!(self, Sizing::Content | Sizing::FillHeight)
+    }
+
+    /// Whether the height is the available height: `Fill` and `FillHeight`.
+    pub const fn fills_height(self) -> bool {
+        matches!(self, Sizing::Fill | Sizing::FillHeight)
+    }
 }
 
 /// A size role that sets the least width of a container's content or of a button.
