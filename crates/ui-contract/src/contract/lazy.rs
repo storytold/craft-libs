@@ -162,7 +162,7 @@ impl Lazy {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
         if self.settles
-            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), view, key)
+            && let Some(size) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
         {
             let (took, _) = take_in_flow(ui, size);
             let memo = matches!(key, Key::Memo(_));
@@ -200,7 +200,7 @@ impl Lazy {
         alloc::advance_past(ui, rect);
         if view.is_some() || self.settles {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, rect.size(), sizing, key, registered);
+            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
         }
         if let Some(view) = view
             && real

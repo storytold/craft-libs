@@ -639,3 +639,55 @@ fn a_changed_view_its_container_measures_first_runs_in_the_sizing_pass_and_the_r
     stack_frame_in(&mut frames, wider, "Label", "A much longer heading");
     assert_eq!(title_runs(), 0, "then the view replays in every run");
 }
+
+/// A paragraph that wraps at its room's width.
+#[derive(MemoProps)]
+struct Paragraph {
+    text: String,
+}
+
+fn paragraph(props: &mut Paragraph, ui: &mut Ui) -> Vec2 {
+    Text::new(props.text.clone()).show(ui).rect.size()
+}
+
+/// One frame of a stack `width` wide, sized from its content's height, holding the memoized `paragraph`. Returns the
+/// sizing passes the stack's content ran in, the stack's rect and what the view returned (the paragraph's size) in the
+/// last real run.
+fn paragraph_frame(frames: &mut Frames, width: f32) -> (usize, Rect, Option<Vec2>) {
+    let sizing = Cell::new(0);
+    let mut out = (Rect::NOTHING, None);
+    frames.frame(vec![], |ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(width, 400.0)), |ui| {
+            let shown = Stack::new().fill_width().show(ui, |ui, _| {
+                if ui.is_sizing_pass() {
+                    sizing.set(sizing.get() + 1);
+                }
+                let text = "A paragraph long enough to wrap onto more lines in a narrow room".to_owned();
+                MemoView::new("paragraph", Paragraph { text }, paragraph).show(ui)
+            });
+            out = (shown.output.rect, shown.inner.flatten());
+        });
+    });
+    (sizing.get(), out.0, out.1)
+}
+
+/// A view whose props are unchanged, offered another room in its container's sizing pass, is measured there once: its
+/// last sizing extent was measured in the old room. The container's size follows the new extent (here the paragraph
+/// wraps onto more lines), and the real run runs it too, for the new room is also its own.
+#[trial]
+fn a_view_offered_another_room_in_a_sizing_pass_is_measured_again() {
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        paragraph_frame(&mut frames, 600.0);
+    }
+    let (_, wide, wide_text) = paragraph_frame(&mut frames, 600.0);
+    let (sizing, stack, text) = paragraph_frame(&mut frames, 150.0);
+    assert!(sizing > 0, "the stack measured its content in a sizing pass");
+    let text = text.expect("the view returned the paragraph's size");
+    assert!(text.y > wide_text.map_or(0.0, |size| size.y), "the paragraph wraps onto more lines in the narrow room");
+    let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).count();
+    assert_eq!(ran, 2, "one measuring run in the sizing pass and one real run, both in the new room");
+    assert!(stack.height() + 0.5 >= text.y, "the stack follows the new extent: {stack:?} for a paragraph {text:?} (wide: {wide:?})");
+    paragraph_frame(&mut frames, 150.0);
+    assert!(last_frame_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed), "then the view replays in every run");
+}

@@ -128,11 +128,11 @@ pub(crate) enum Decision {
 struct Entry {
     /// The scroll area the child is kept under.
     owner: Option<Id>,
-    /// The extent of the last measuring run and of the last real run that showed the child, with the key of the
-    /// content it showed. A run that skips the child takes the extent of its own kind: a content-sized scroll area is
-    /// offered another room in its measuring run than in its real run, so each kind places the child as it last laid
-    /// it out. Out of view the child keeps it at any room; it is measured again when it meets the reach.
-    sizes: [Option<(Vec2, Key)>; 2],
+    /// What the last measuring run and the last real run that showed the child measured. A run that skips the child
+    /// takes the extent of its own kind: a content-sized scroll area is offered another room in its measuring run than
+    /// in its real run, so each kind places the child as it last laid it out. Out of view the child keeps it at any
+    /// room; it is measured again when it meets the reach.
+    sizes: [Option<Measured>; 2],
     /// What the child registered with the focus service in the last real run that showed it. Out of view the
     /// child registers it again in its place, so Tab and F6 reach its stops; it runs while one of them holds focus
     /// or a focus request asks to reveal one.
@@ -147,6 +147,15 @@ struct Entry {
     replays: Option<(u64, bool)>,
     /// The last frame that read or wrote the entry.
     touched: u64,
+}
+
+/// What a run that showed a child measured: the extent it took, the key of the content it showed and the room it was
+/// offered (`Rect::NOTHING` for a collection row, whose extent its collection reports).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Measured {
+    pub(crate) size: Vec2,
+    pub(crate) key: Key,
+    pub(crate) room: Rect,
 }
 
 /// Where a settling child ran: it is settled only while it runs at the same place, in the same environment.
@@ -322,7 +331,7 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
-        let size = entry.sizes[kind].or(entry.sizes[1 - kind]).map_or(estimate, |(size, _)| size);
+        let size = entry.sizes[kind].or(entry.sizes[1 - kind]).map_or(estimate, |measured| measured.size);
         let skip = match entry.decided {
             Some((decided_in, skip)) if decided_in == pass_nr => skip,
             _ => {
@@ -336,12 +345,12 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
     })
 }
 
-/// Records what a run that showed the child `id` keyed `key` found: its extent in a run of this kind and, from a real
-/// run, what it registered with the focus service.
-pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, size: Vec2, sizing: bool, key: Key, registered: Option<Transcript>) {
+/// Records what a run that showed the child `id` found: what it measured in a run of this kind and, from a real run,
+/// what it registered with the focus service.
+pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, measured: Measured, registered: Option<Transcript>) {
     with(ctx, |store, _, frame| {
         let entry = store.touch(owner, id, frame);
-        entry.sizes[usize::from(!sizing)] = Some((size, key));
+        entry.sizes[usize::from(!sizing)] = Some(measured);
         if let Some(registered) = registered {
             entry.focus = Arc::new(registered);
         }
@@ -358,11 +367,12 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 }
 
 /// Whether the settling child `id` adds its last real run to this pass in place of running, and the extent that run
-/// took in a run of this kind (`sizing`). The first run of a pass decides from what changed since that run; a real run
-/// also needs the child at the `place` it ran at, which a measuring run cannot tell. A sizing run of a pass that
-/// replays takes the extent the last sizing run measured of the content the kept run showed (its key); when that
-/// sizing run showed other content, or there was none, it runs once as a measuring run, which keeps no record and
-/// leaves the decision of the pass alone, so the real run still replays.
+/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass). The first run
+/// of a pass decides from what changed since that run; a real run also needs the child at the `place` it ran at, which
+/// a measuring run cannot tell. A sizing run of a pass that replays takes the extent the last sizing run measured of
+/// the content the kept run showed (its key) in the room it offers now; when that sizing run showed other content or
+/// had another room, or there was none, it runs once as a measuring run, which keeps no record and leaves the decision
+/// of the pass alone, so the real run still replays.
 ///
 /// It replays when its last run was in an earlier frame, or, for a memoized view, in an earlier pass of this frame, and
 /// since then:
@@ -390,7 +400,15 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 ///
 /// A memoized view's props hold every input it reads, so the two rules that infer a change of app data (input
 /// arrived, a repaint was asked) do not apply to it.
-pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, view: Option<View>, key: Key) -> Option<Vec2> {
+pub(crate) fn settled(
+    ctx: &Context,
+    owner: Option<Id>,
+    id: Id,
+    sizing: Option<Rect>,
+    place: Option<Place>,
+    view: Option<View>,
+    key: Key,
+) -> Option<Vec2> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -433,9 +451,11 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         if replays && settled.is_none() {
             entry.replays = Some((pass_nr, false));
         }
-        let measured = |kind: usize, key: Key| entry.sizes[kind].filter(|&(_, of)| of == key).map(|(size, _)| size);
         settled.and_then(|settled| {
-            let size = if sizing { measured(0, settled.key)? } else { measured(1, settled.key).unwrap_or(settled.rect.size()) };
+            let size = match sizing {
+                Some(room) => entry.sizes[0].filter(|measured| measured.key == settled.key && measured.room == room)?.size,
+                None => entry.sizes[1].filter(|measured| measured.key == settled.key).map_or(settled.rect.size(), |measured| measured.size),
+            };
             Some((size, settled))
         })
     });
@@ -581,7 +601,7 @@ pub(crate) fn unsettle(ctx: &Context) {
 /// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it
 /// does not build by it (its item layout answers for rows it never built).
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
-    shown(ctx, Some(owner), id, size, false, Key::None, None);
+    shown(ctx, Some(owner), id, false, Measured { size, key: Key::None, room: Rect::NOTHING }, None);
 }
 
 /// Runs `f` with a reader of the extents the rows of the collection `owner` had in the last pass that built them, for
@@ -594,7 +614,7 @@ pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) ->
             let mut store = store.borrow_mut();
             let entry = store.entries.get_mut(&id)?;
             entry.touched = frame;
-            entry.sizes[1].or(entry.sizes[0]).map(|(size, _)| size)
+            entry.sizes[1].or(entry.sizes[0]).map(|measured| measured.size)
         })
     })
 }
