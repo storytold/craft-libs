@@ -39,6 +39,8 @@ pub enum Format {
     Cineon,
     Dicom,
     Iff,
+    /// JPEG-LS (ITU-T T.87). Its files start with the same `FF D8 FF` bytes as JPEG files.
+    JpegLs,
     Ase,
     Psd,
     Affinity,
@@ -108,7 +110,7 @@ const fn availability(feature: bool, supported: bool) -> Availability {
 
 impl Format {
     /// Every known format, including formats whose reader or writer is not enabled in this build.
-    pub const ALL: [Format; 56] = [
+    pub const ALL: [Format; 57] = [
         Self::Pdf,
         Self::Eps,
         Self::PostScript,
@@ -139,6 +141,7 @@ impl Format {
         Self::Cineon,
         Self::Dicom,
         Self::Iff,
+        Self::JpegLs,
         Self::Ase,
         Self::Psd,
         Self::Affinity,
@@ -200,6 +203,7 @@ impl Format {
             Self::Cineon => &["cin"],
             Self::Dicom => &["dcm", "dicom", "dc3"],
             Self::Iff => &["iff", "lbm", "ilbm"],
+            Self::JpegLs => &["jls"],
             Self::Ase => &["ase"],
             Self::Psd => &["psd", "psb", "psdt"],
             Self::Affinity => &["afdesign", "afphoto", "afpub", "af"],
@@ -270,6 +274,7 @@ impl Format {
             Self::Cineon => "image/x-cineon",
             Self::Dicom => "application/dicom",
             Self::Iff => "image/ilbm",
+            Self::JpegLs => "image/jls",
             Self::Ase => "application/x-adobe-swatch-exchange",
             Self::Psd => "image/vnd.adobe.photoshop",
             Self::Affinity => "application/x-affinity",
@@ -327,6 +332,7 @@ impl Format {
             Self::Cineon => Codec::Cineon,
             Self::Dicom => Codec::Dicom,
             Self::Iff => Codec::Iff,
+            Self::JpegLs => Codec::JpegLs,
             _ => return None,
         })
     }
@@ -381,7 +387,8 @@ impl Format {
             | Self::Fits
             | Self::Dpx
             | Self::Cineon
-            | Self::Iff => capability(raster, true, true, false, false),
+            | Self::Iff
+            | Self::JpegLs => capability(raster, true, true, false, false),
             Self::Pdf => capability(cfg!(feature = "pdf"), true, true, false, false),
             Self::Eps | Self::PostScript | Self::Illustrator => capability(cfg!(feature = "pdf"), true, false, false, false),
             Self::Svg | Self::Svgz => capability(cfg!(feature = "svg"), true, false, false, false),
@@ -483,7 +490,7 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<Format> {
     if extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("af")) {
         return Some(Format::Affinity);
     }
-    if let Some(raster) = raster_signature(bytes) {
+    if let Some(raster) = raster_signature(name, bytes) {
         return Some(raster);
     }
     if bytes.starts_with(b"silhouette04;") || bytes.starts_with(b"silhouette05;") {
@@ -598,13 +605,18 @@ fn dxf_ascii_prefix(bytes: &[u8]) -> bool {
     matches!((lines.next(), lines.next(), lines.next(), lines.next()), (Some("0"), Some("SECTION"), Some("2"), Some(section)) if matches!(section, "HEADER" | "CLASSES" | "TABLES" | "BLOCKS" | "ENTITIES" | "OBJECTS"))
 }
 
-fn raster_signature(bytes: &[u8]) -> Option<Format> {
+fn raster_signature(name: &str, bytes: &[u8]) -> Option<Format> {
     let head = bytes.get(..16).unwrap_or(bytes);
     if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
     }
     if head.starts_with(b"\xff\xd8\xff") {
-        return Some(Format::Jpeg);
+        return Some(match jpeg_frame(bytes) {
+            JpegFrame::Ls => Format::JpegLs,
+            JpegFrame::Other => Format::Jpeg,
+            JpegFrame::Unknown if extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("jls")) => Format::JpegLs,
+            JpegFrame::Unknown => Format::Jpeg,
+        });
     }
     if head.starts_with(b"BM") {
         return Some(Format::Bmp);
@@ -619,4 +631,51 @@ fn raster_signature(bytes: &[u8]) -> Option<Format> {
         return Some(Format::WebP);
     }
     None
+}
+
+/// What the marker segments after a JPEG start-of-image marker lead to.
+#[derive(Debug, PartialEq, Eq)]
+enum JpegFrame {
+    /// An SOF55 frame header (`FF F7`, ITU-T T.87): JPEG-LS.
+    Ls,
+    /// Another frame header, a scan header, an end-of-image marker, or a byte that is not a
+    /// marker where one should be.
+    Other,
+    /// The bytes, or the probe's first 1 MiB, end before a frame or scan header.
+    Unknown,
+}
+
+/// Walk the marker segments from the start-of-image marker to the first frame or scan header.
+/// Only the first 1 MiB is read, and each step moves forward at least one byte. The walk follows
+/// `jpeg_frame_from` in craft-image-codecs, which a build without the `raster-codecs` feature does
+/// not link.
+fn jpeg_frame(bytes: &[u8]) -> JpegFrame {
+    const LIMIT: usize = 1 << 20;
+    let bytes = bytes.get(..bytes.len().min(LIMIT)).unwrap_or(bytes);
+    let mut pos = 2;
+    loop {
+        let (Some(&prefix), Some(&marker)) = (bytes.get(pos), bytes.get(pos + 1)) else {
+            return if bytes.get(pos).is_none_or(|&prefix| prefix == 0xFF) { JpegFrame::Unknown } else { JpegFrame::Other };
+        };
+        if prefix != 0xFF {
+            return JpegFrame::Other;
+        }
+        match marker {
+            0xF7 => return JpegFrame::Ls,
+            // `FF 00` is a stuffed zero, not a marker.
+            0x00 | 0xDA | 0xD9 => return JpegFrame::Other,
+            // A DRI segment (`FF DD`) may come before an SOF55 frame header, so it is skipped
+            // by its length below.
+            0xC0..=0xCF | 0xDB | 0xDC | 0xDE | 0xDF => return JpegFrame::Other,
+            // A fill byte, or a marker without a length.
+            0xFF => pos += 1,
+            0x01 | 0xD0..=0xD7 => pos += 2,
+            _ => {
+                let Some(length) = bytes.get(pos + 2..pos + 4).map(|length| usize::from(u16::from_be_bytes([length[0], length[1]]))) else {
+                    return JpegFrame::Unknown;
+                };
+                pos += 2 + length;
+            }
+        }
+    }
 }
