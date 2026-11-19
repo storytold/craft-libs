@@ -47,26 +47,66 @@ fn box_at(bytes: &[u8], at: usize) -> Option<BoxSpan> {
     Some(BoxSpan { start: at, header, end: end.min(bytes.len()) })
 }
 
-/// Every box of the container, in order, up to the first one that cannot be read.
-fn boxes(bytes: &[u8]) -> Vec<BoxSpan> {
-    let mut found = Vec::new();
-    let mut at = 0;
-    while let Some(span) = box_at(bytes, at) {
-        at = span.end;
-        found.push(span);
-        if at >= bytes.len() {
-            break;
-        }
-    }
-    found
+/// The boxes of the container, in order, up to the first one that cannot be read. One box at a
+/// time: a file of eight-byte boxes must not cost three times its size in spans.
+struct Boxes<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    done: bool,
 }
 
-/// Inflates `compressed`, or `None` when it is broken or would pass `cap` bytes.
-pub(crate) fn inflate_capped(compressed: &[u8], cap: usize) -> Option<Vec<u8>> {
+impl<'a> Boxes<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0, done: false }
+    }
+
+    /// Where the next box would start: the end of the last one read, or 0 before the first.
+    fn end(&self) -> usize {
+        self.at
+    }
+}
+
+impl Iterator for Boxes<'_> {
+    type Item = BoxSpan;
+
+    fn next(&mut self) -> Option<BoxSpan> {
+        if self.done {
+            return None;
+        }
+        let Some(span) = box_at(self.bytes, self.at) else {
+            self.done = true;
+            return None;
+        };
+        self.at = span.end;
+        self.done = self.at >= self.bytes.len();
+        Some(span)
+    }
+}
+
+/// Whether the Brotli stream header asks for a window of at most 16 MiB. The decoder reserves its
+/// whole ring buffer up front, outside the output cap, so a header that declares a large window
+/// (RFC 7932 §9.1 and the large-window extension) could ask for a gigabyte from a few bytes.
+fn window_is_small(compressed: &[u8]) -> bool {
+    let Some(first) = compressed.first() else { return true };
+    let wide = first & 1 == 1;
+    let long_form = (first >> 1) & 7;
+    let short_form = (first >> 4) & 7;
+    !(wide && long_form == 0 && short_form == 1)
+}
+
+/// Inflates `compressed`. `Err` carries how many bytes were produced before it was refused
+/// (broken stream, over `cap`, or a large window), so the caller can charge the work to its budget.
+pub(crate) fn inflate_capped(compressed: &[u8], cap: usize) -> Result<Vec<u8>, usize> {
+    if !window_is_small(compressed) {
+        return Err(0);
+    }
     let mut out = Vec::new();
-    let limit = u64::try_from(cap).ok()?.checked_add(1)?;
-    brotli_decompressor::Decompressor::new(compressed, 4096).take(limit).read_to_end(&mut out).ok()?;
-    (out.len() <= cap).then_some(out)
+    let limit = u64::try_from(cap).ok().and_then(|c| c.checked_add(1)).ok_or(0_usize)?;
+    let read = brotli_decompressor::Decompressor::new(compressed, 4096).take(limit).read_to_end(&mut out);
+    if read.is_err() || out.len() > cap {
+        return Err(out.len());
+    }
+    Ok(out)
 }
 
 /// A plain box of type `kind` holding `data`.
@@ -92,9 +132,18 @@ fn unwrap_brob(span: &BoxSpan, bytes: &[u8], budget: &mut usize) -> Option<Vec<u
     if inner == BROB {
         return None;
     }
-    let inflated = inflate_capped(compressed, *budget)?;
-    *budget -= inflated.len();
-    Some(plain_box(inner, &inflated))
+    match inflate_capped(compressed, *budget) {
+        Ok(inflated) => {
+            *budget -= inflated.len();
+            Some(plain_box(inner, &inflated))
+        }
+        Err(produced) => {
+            // The work was done even though the box is dropped: charge it, so a file of many
+            // over-cap streams cannot make the decoder inflate the whole budget once per box.
+            *budget = budget.saturating_sub(produced);
+            None
+        }
+    }
 }
 
 /// `bytes` with every `brob` box inflated, `cap` bytes in all (or removed), or `None` when the file is
@@ -103,20 +152,20 @@ pub(crate) fn sanitize(bytes: &[u8], cap: usize) -> Option<Vec<u8>> {
     if !bytes.starts_with(SIGNATURE) {
         return None;
     }
-    let spans = boxes(bytes);
-    if !spans.iter().any(|s| s.kind(bytes) == BROB) {
+    if !Boxes::new(bytes).any(|s| s.kind(bytes) == BROB) {
         return None;
     }
     let mut budget = cap;
     let mut out = Vec::with_capacity(bytes.len());
-    for span in &spans {
+    let mut walk = Boxes::new(bytes);
+    for span in walk.by_ref() {
         match (span.kind(bytes) == BROB, bytes.get(span.start..span.end)) {
-            (true, _) => out.extend(unwrap_brob(span, bytes, &mut budget).unwrap_or_default()),
+            (true, _) => out.extend(unwrap_brob(&span, bytes, &mut budget).unwrap_or_default()),
             (false, Some(whole)) => out.extend_from_slice(whole),
             (false, None) => {}
         }
     }
-    out.extend_from_slice(bytes.get(spans.last().map_or(0, |s| s.end)..).unwrap_or(&[]));
+    out.extend_from_slice(bytes.get(walk.end()..).unwrap_or(&[]));
     Some(out)
 }
 
@@ -146,9 +195,9 @@ mod tests {
 
     #[test]
     fn a_bomb_passes_the_cap_and_a_real_packet_does_not() {
-        assert_eq!(inflate_capped(&EXIF_BR, BROB_CAP).as_deref(), Some(&b"II*\0\x08\0\0\0hello exif"[..]));
-        assert!(inflate_capped(&BOMB_BR, BROB_CAP).is_none());
-        assert!(inflate_capped(&BOMB_BR[..20], BROB_CAP).is_none(), "a cut stream is not a result");
+        assert_eq!(inflate_capped(&EXIF_BR, BROB_CAP).as_deref(), Ok(&b"II*\0\x08\0\0\0hello exif"[..]));
+        assert!(inflate_capped(&BOMB_BR, BROB_CAP).is_err());
+        assert!(inflate_capped(&BOMB_BR[..20], BROB_CAP).is_err(), "a cut stream is not a result");
     }
 
     #[test]
@@ -186,6 +235,26 @@ mod tests {
         let kept = out.windows(4).filter(|w| *w == b"Exif").count();
         assert_eq!(kept, 2, "the boxes past the file's budget are dropped");
         assert!(out.len() < SIGNATURE.len() + 2 * (exif + 8) + 1);
+    }
+
+    #[test]
+    fn an_over_cap_box_uses_up_the_budget_of_the_boxes_after_it() {
+        let boxes = [brob_of(b"xml ", &BOMB_BR), brob_of(b"Exif", &EXIF_BR)];
+        assert_eq!(sanitize(&container(&boxes), 64).unwrap(), container(&[]), "the later packet is dropped too");
+    }
+
+    #[test]
+    fn a_stream_that_declares_a_large_window_is_refused_before_decoding() {
+        // WBITS bits 1, 000, 001: the large-window marker.
+        assert_eq!(inflate_capped(&[0x11, 0, 0, 0], BROB_CAP), Err(0));
+        assert!(window_is_small(&EXIF_BR) && window_is_small(&BOMB_BR) && window_is_small(&[]));
+    }
+
+    #[test]
+    fn a_long_run_of_tiny_boxes_is_walked_without_a_list_of_spans() {
+        let boxes: Vec<Vec<u8>> = (0..1000).map(|_| plain_box(b"free", b"")).collect();
+        assert!(sanitize(&container(&boxes), BROB_CAP).is_none(), "no brob box: used as it is");
+        assert_eq!(Boxes::new(&container(&boxes)).count(), 1001, "the signature box and the 1000 others");
     }
 
     #[test]

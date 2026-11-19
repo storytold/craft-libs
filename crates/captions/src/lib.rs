@@ -37,6 +37,8 @@ pub mod cea608;
 pub mod jacosub;
 pub mod mcc;
 pub mod microdvd;
+#[cfg(feature = "mov-text")]
+pub mod mov_text;
 pub mod mpl2;
 pub mod pjs;
 pub mod realtext;
