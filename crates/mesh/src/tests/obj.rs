@@ -373,3 +373,14 @@ fn group_boundaries_keep_repeated_names_separate() {
     assert_eq!(scene.meshes.len(), 2);
     assert!(scene.meshes.iter().all(|m| m.name == "Same"));
 }
+
+#[test]
+fn write_with_mtl_links_library_and_clearcoat_maps() {
+    let mut scene = cube();
+    scene.images = vec![Image { uri: Some("coat.png".into()), ..Image::default() }];
+    scene.materials[0].clearcoat_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    scene.materials[0].clearcoat_roughness_texture = Some(TextureRef { image: 0, ..TextureRef::default() });
+    let (obj, mtl) = crate::obj::write_with_mtl(&scene, "cube.mtl", &Limits::default()).unwrap();
+    assert!(obj.contains("mtllib cube.mtl\n"));
+    assert!(mtl.contains("map_Pc coat.png\n") && mtl.contains("map_Pcr coat.png\n"), "{mtl}");
+}
