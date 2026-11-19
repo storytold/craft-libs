@@ -37,9 +37,10 @@ pub enum GroupLevel {
 /// Where controls are shown. A ribbon group sets `Ribbon` for its content (and for its collapsed button and the
 /// popover that holds its content), and styles keyed on the env follow it:
 ///
-/// - a `Button` or `SplitButton` that asks for no variant (or for the default `Variant::SECONDARY`) draws flat at
-///   rest, as the ghost variant: no edge and no fill until the pointer is over it or presses it; a flat button's
-///   sides take the control's padding (`space.pad.control`), not its corner round;
+/// - a `Button`, `SplitButton` or `ToggleButton` that asks for no variant (or for the default `Variant::SECONDARY`)
+///   draws flat at rest, as the ghost variant: no edge and no fill until the pointer is over it or presses it, and a
+///   toggle shows the on plate while on; a flat button's sides take the control's padding (`space.pad.control`), not
+///   its corner round;
 /// - a `ComboBox` is as wide as its widest option and its chevron, not a field length, and a font picker is a short
 ///   field (`size.length.short`) whichever family it shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]

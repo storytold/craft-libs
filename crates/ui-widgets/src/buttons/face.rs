@@ -1,7 +1,7 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
 //! button unless it aligns them to an edge, and the look parts the buttons share.
 
-use super::GroupLevel;
+use super::{ControlPlace, GroupLevel};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
@@ -22,14 +22,28 @@ pub(crate) struct FaceLook {
     pub stacked_icon: f32,
     /// How far under a stacked face's leading icon the split button's parts meet.
     pub divide_gap: f32,
+    /// Whether a stacked face lays its block out from its top (`stacked_lines`): in a ribbon.
+    pub stacked_top: bool,
 }
 
 impl FaceLook {
     /// The face look of the instance's variant: the control's gap and the stacked icon side.
     pub(crate) fn of(cx: &StyleCx<'_>) -> FaceLook {
         let control = cx.control();
-        FaceLook { gap: control.gap, stacked_icon: stacked_side(cx.tokens, control.icon), divide_gap: cx.tokens.space.gap.tight }
+        FaceLook {
+            gap: control.gap,
+            stacked_icon: stacked_side(cx.tokens, control.icon),
+            divide_gap: cx.tokens.space.gap.tight,
+            stacked_top: stacked_lines(cx.env::<ControlPlace>()) > 0,
+        }
     }
+}
+
+/// The label lines a stacked face keeps room for whatever its label, laying its block out from its top: two in a
+/// ribbon, where the large buttons share one height and their icons one line, a one-line label leaving its second line
+/// empty, as the ribbon's large buttons always did; none elsewhere, where the face is as high as its content.
+fn stacked_lines(place: ControlPlace) -> usize {
+    if place == ControlPlace::Ribbon { 2 } else { 0 }
 }
 
 /// The side of a stacked face's leading icon: the large icon, or the control's own icon when that is larger. The
@@ -137,7 +151,8 @@ impl<'a> FaceSpec<'a> {
         }
     }
 
-    /// The lines of a stacked label: the label whole, or broken at its middle space when it has more than
+    /// The lines of a stacked label: broken where the label breaks its line itself (`"Page\nNumber"`, as the ribbon's
+    /// large buttons name the break), else whole, or broken at its middle space when it has more than
     /// `ONE_LINE_CHARS` characters. The mnemonic stays on the character it marks.
     fn lines(&self) -> Vec<TextRun<'a>> {
         if self.label.is_empty() {
@@ -145,9 +160,16 @@ impl<'a> FaceSpec<'a> {
         }
         let label = self.label;
         let whole = self.line(label, self.mnemonic);
-        let split = middle_space(label).filter(|_| label.chars().count() > ONE_LINE_CHARS).and_then(|at| label.split_at_checked(at));
+        let split = match label.split_once('\n') {
+            Some(lines) => Some(lines),
+            None => middle_space(label).filter(|_| label.chars().count() > ONE_LINE_CHARS).and_then(|at| label.split_at_checked(at)),
+        };
         let Some((first, rest)) = split else { return vec![whole] };
         let (first, second) = (first.trim_end(), rest.trim_start());
+        // A label that ends at its break keeps one line.
+        if second.is_empty() {
+            return vec![self.line(first, self.mnemonic.filter(|at| *at < first.chars().count()))];
+        }
         // The characters before the second line: the first line and the spaces between.
         let skipped = label.chars().count() - second.chars().count();
         let (on_first, on_second) = match self.mnemonic {
@@ -184,8 +206,9 @@ struct Stack {
 /// Lays a stacked face out in `area` from its lines' sizes: the leading icon of `lead_side` (a picture that high)
 /// centred at the top, a gap,
 /// then each line centred under it, the trailing icon of `side` after the last line at its reading end (on a row of
-/// its own when there is no line). The block is centred vertically; `size` is what `measure` reports.
-fn stack(spec: &FaceSpec<'_>, sides: (f32, f32), gap: f32, lines: &[Vec2], area: Rect, rtl: bool) -> Stack {
+/// its own when there is no line). The block is centred vertically, or sits at the area's top when `top`
+/// (`FaceLook::stacked_top`); `size` is the block's.
+fn stack(spec: &FaceSpec<'_>, sides: (f32, f32), gap: f32, lines: &[Vec2], area: Rect, rtl: bool, top: bool) -> Stack {
     let (lead_side, side) = sides;
     let trail = spec.trail.is_some();
     let last = lines.len().checked_sub(1);
@@ -203,7 +226,7 @@ fn stack(spec: &FaceSpec<'_>, sides: (f32, f32), gap: f32, lines: &[Vec2], area:
     let width = rows.iter().map(|row| row.x).fold(lead_width, f32::max);
     let size = Vec2::new(width, icon + under_icon + rows.iter().map(|row| row.y).sum::<f32>());
     let middle = area.center().x;
-    let mut y = area.top() + (area.height() - size.y).max(0.0) / 2.0;
+    let mut y = if top { area.top() } else { area.top() + (area.height() - size.y).max(0.0) / 2.0 };
     let lead = spec.leads().then(|| Rect::from_min_size(pos2(middle - lead_width / 2.0, y), Vec2::new(lead_width, lead_side)));
     y += icon + under_icon;
     let mut placed = Stack { size, lead, lines: Vec::new(), trail: None };
@@ -359,7 +382,15 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         let (side, lead_side) = (cx.icon(), stacked_side(cx.tokens, cx.icon()));
         let lines = spec.lines();
         let sizes = stacked_sizes(cx, spec, &lines, cx.room.unwrap_or(f32::INFINITY), side);
-        return stack(spec, (lead_side, side), cx.gap(), &sizes, Rect::ZERO, false).size;
+        let size = stack(spec, (lead_side, side), cx.gap(), &sizes, Rect::ZERO, false, false).size;
+        // Room for the lines the place keeps (`stacked_lines`) under the icon, whatever the label's own count.
+        let keep = stacked_lines(cx.env.get::<ControlPlace>());
+        if keep <= lines.len() {
+            return size;
+        }
+        let line = cx.layout_at(&spec.line("Ag", None), f32::INFINITY).size().y;
+        let icon = if spec.leads() { lead_side + cx.gap() } else { 0.0 };
+        return Vec2::new(size.x, size.y.max(icon + keep as f32 * line.max(if spec.trail.is_some() { side } else { 0.0 })));
     }
     let icon = cx.icon();
     let fixed = spec.icons_width(icon, icon) + cx.gap() * spec.gaps() as f32;
@@ -484,7 +515,7 @@ fn paint_stacked<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook
     let layouts: Vec<TextLayout> =
         colored.iter().enumerate().map(|(i, run)| draw.layout(run, line_room(spec, i + 1 == count, area.width(), side, look.gap))).collect();
     let sizes: Vec<Vec2> = layouts.iter().map(TextLayout::size).collect();
-    let placed = stack(spec, (look.stacked_icon, side), look.gap, &sizes, area, cx.flow.is_rtl());
+    let placed = stack(spec, (look.stacked_icon, side), look.gap, &sizes, area, cx.flow.is_rtl(), look.stacked_top);
     if let (Some(lead), Some(slot)) = (spec.lead, placed.lead)
         && !spec.loading
     {
@@ -506,7 +537,7 @@ fn stacked_in<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &F
     let count = lines.len();
     let sizes: Vec<Vec2> =
         lines.iter().enumerate().map(|(i, run)| cx.layout_at(run, line_room(spec, i + 1 == count, area.width(), side, look.gap)).size()).collect();
-    stack(spec, (look.stacked_icon, side), look.gap, &sizes, area, rtl)
+    stack(spec, (look.stacked_icon, side), look.gap, &sizes, area, rtl, look.stacked_top)
 }
 
 /// Where a stacked split button's parts meet in `area`: halfway down the gap under the face's leading icon, so the

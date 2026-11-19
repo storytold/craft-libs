@@ -249,6 +249,40 @@ fn toggle_button_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     shown.into()
 }
 
+/// Stacked buttons in a ribbon group: flat at rest, one height for a one-line label and a label that names its break
+/// (`"Page\nNumber"`, its chevron on the second line), icons on one line, and toggles flat off and on the plate on.
+#[story(ToggleButton<'static>, covers = [], drive = Drive::Never, title = "Stacked in a ribbon")]
+fn toggle_button_stacked_in_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let shown = with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(super::ControlPlace::Ribbon);
+        },
+        |ui| {
+            Row::new().show(ui, |ui, _| {
+                Button::new("Pictures").icon(IconId::new("image")).arrangement(Arrangement::Stacked).id_salt("pictures").show(ui);
+                Button::new("Page\nNumber")
+                    .icon(IconId::new("copy"))
+                    .trailing_icon(IconId::new("chevron_down"))
+                    .arrangement(Arrangement::Stacked)
+                    .id_salt("page number")
+                    .show(ui);
+                ToggleButton::new("Track\nChanges", Bind::bound(data.value("track", false)))
+                    .icon(IconId::new("eye"))
+                    .arrangement(Arrangement::Stacked)
+                    .id_salt("track")
+                    .show(ui);
+                ToggleButton::new("Select", Bind::bound(data.value("select", true)))
+                    .icon(IconId::new("eye"))
+                    .arrangement(Arrangement::Stacked)
+                    .id_salt("select")
+                    .show(ui);
+            })
+        },
+    );
+    shown.into()
+}
+
 /// Rests the pointer on the toggle, clicks it and stays: its output reports the click while the pointer stays.
 fn click_and_stay(fixture: &mut Fixture) {
     if let Some(toggle) = fixture.by_label("Snap to grid") {

@@ -138,14 +138,10 @@ impl Component for ToggleButton<'_> {
     }
 
     fn style(cx: &StyleCx<'_>, key: ToggleButtonStyleKey) -> ToggleButtonStyle {
-        // An icon-only toggle draws as an icon button: the ghost square, with the on plate while on.
-        let ghost;
-        let cx = if key.icon_only {
-            ghost = cx.with_variant(Variant::GHOST);
-            &ghost
-        } else {
-            cx
-        };
+        // An icon-only toggle draws as an icon button: the ghost square, with the on plate while on. A labelled one in a
+        // ribbon is flat at rest as the ribbon's push buttons are (`placed`): no edge until the pointer is over it, and
+        // the on plate while on.
+        let cx = &if key.icon_only { cx.with_variant(Variant::GHOST) } else { super::placed(cx) };
         let (off, on) = (cx.variant_look(), face::on_parts(cx));
         let (mut text, mut icon) = face::ink(cx);
         let (mut surface, metrics) = if key.icon_only {

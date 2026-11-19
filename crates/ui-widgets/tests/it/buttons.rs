@@ -91,6 +91,42 @@ fn a_stacked_label_stays_inside_the_stacked_height_in_every_density() {
     }
 }
 
+/// A stacked label breaks where it names its break (`"Page\nNumber"`), whatever its length, and each part shows
+/// whole on its own line: the line break is not elided into the first line.
+#[trial]
+fn a_stacked_label_breaks_at_its_own_line_break() {
+    for kind in [Kind::Button, Kind::Toggle, Kind::Split] {
+        let (control, lines) = stacked(kind, "Page\nNumber", ControlSize::Md);
+        assert_eq!(lines.len(), 2, "{kind:?}: the label breaks at its newline");
+        assert!(lines[1].min.y >= lines[0].max.y - 0.5, "{kind:?}: the second part is under the first");
+        for line in &lines {
+            assert!(control.expand(0.5).contains_rect(*line), "{kind:?}: the line {line:?} lies inside {control:?}");
+        }
+    }
+}
+
+/// In a ribbon, stacked buttons share one height whether their labels take one line or two, and lay out from their
+/// tops, so their icons and first lines sit on one line across the row, as the ribbon's large buttons did.
+#[trial]
+fn a_ribbons_stacked_buttons_share_one_height_and_one_first_line() {
+    let ids = Rc::new(RefCell::new(Vec::<Id>::new()));
+    let seen = Rc::clone(&ids);
+    let mut fixture = Fixture::new(move |ui| {
+        in_ribbon(ui, |ui| {
+            let one = Button::new("Pictures").icon(IconId::new("copy")).arrangement(Arrangement::Stacked).show(ui).response.id;
+            let two = Button::new("Page\nNumber").icon(IconId::new("copy")).arrangement(Arrangement::Stacked).show(ui).response.id;
+            *seen.borrow_mut() = vec![one, two];
+        });
+    });
+    fixture.settle();
+    let rects: Vec<Rect> = ids.borrow().iter().filter_map(|id| fixture.node_of(*id).map(|node| node.rect)).collect();
+    assert_eq!(rects.len(), 2, "both buttons show");
+    assert!((rects[0].height() - rects[1].height()).abs() < 0.5, "one height for one and two lines: {rects:?}");
+    let top = |text: &str| fixture.texts().iter().find(|run| run.text == text).map_or(f32::NAN, |run| run.rect.min.y);
+    let (one, two) = (top("Pictures") - rects[0].min.y, top("Page") - rects[1].min.y);
+    assert!((one - two).abs() < 0.5, "the first lines sit as far under each top: {one} against {two}");
+}
+
 /// A fixture showing one toggle, the hover reports of each pass of a frame, and a switch that reruns the next
 /// frame's pass.
 struct HoverTrial {
@@ -386,6 +422,27 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     });
     assert_eq!(ribbon, ghost, "a ribbon split button draws the ghost surface");
     assert!(narrow < wide - 0.5, "a ribbon's flat split button sits close: {narrow} against {wide}");
+
+    // A labelled toggle is flat at rest too, with no outlined capsule: the ghost surface, which shows the on plate
+    // while on.
+    let toggle = std::any::type_name::<ToggleButton<'static>>();
+    let (ribbon, narrow) = seen(toggle, "Track Changes", |ui| {
+        in_ribbon(ui, |ui| {
+            let mut on = false;
+            let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).show(ui);
+        });
+    });
+    let (ghost, wide) = seen(toggle, "Track Changes", |ui| {
+        let mut on = false;
+        let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).variant(Variant::GHOST).show(ui);
+    });
+    let (standard, _) = seen(toggle, "Track Changes", |ui| {
+        let mut on = false;
+        let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).show(ui);
+    });
+    assert_eq!(ribbon, ghost, "a ribbon toggle draws the ghost surface");
+    assert_ne!(standard, ghost, "outside a ribbon a toggle keeps its outlined default");
+    assert!(narrow < wide - 0.5, "a ribbon's flat toggle sits close: {narrow} against {wide}");
 }
 
 /// In a ribbon a combo box is as wide as its widest option and its chevron, not a field length.
