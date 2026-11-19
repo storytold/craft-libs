@@ -540,3 +540,38 @@ fn a_side_menus_selected_row_shows_its_hover_band() {
     assert_ne!(on.rest, fill.off.rest, "the shown page's row is marked");
     assert!(plain.expect("a ghost button has a surface").fill.on.is_none(), "a selected ghost button elsewhere keeps its look");
 }
+
+/// A split button's body that closes itself (a colour palette's swatch pick) closes the split's menu layer: before,
+/// the close reached only the inline menu inside the layer, which stayed open around an empty body. Opened again, the
+/// body shows its rows.
+#[trial]
+fn a_split_bodys_request_close_closes_the_menu_layer_and_it_opens_again_with_its_body() {
+    let picked = Rc::new(Cell::new(0));
+    let count = Rc::clone(&picked);
+    let mut fixture = Fixture::new(move |ui| {
+        let count = Rc::clone(&count);
+        let _ = SplitButton::<u8>::body("Shading", move |ui, cx| {
+            if craft_ui::contract::clicked(&Button::new("Red").show(ui).response) {
+                count.set(count.get() + 1);
+                cx.request_close();
+            }
+        })
+        .arrow_label("Shading colours")
+        .show(ui);
+    });
+    fixture.settle();
+    let open_menu = |fixture: &mut Fixture| {
+        let arrow = fixture.by_label("Shading colours").expect("the arrow part");
+        fixture.click(&arrow).settle();
+        assert!(!fixture.by_role(Role::MENU).is_empty(), "the arrow opened the menu");
+    };
+    open_menu(&mut fixture);
+    let swatch = fixture.by_label("Red").expect("the body's swatch is shown");
+    fixture.click(&swatch).settle();
+    assert_eq!(picked.get(), 1, "the swatch ran once");
+    assert!(fixture.by_role(Role::MENU).is_empty(), "the body's close closed the menu");
+    // An arrow click on a layer left open around an empty body would only close it: the layer itself must have closed
+    // for the click to open the menu with its body.
+    open_menu(&mut fixture);
+    assert!(fixture.by_label("Red").is_some(), "opened again, the menu shows its body");
+}

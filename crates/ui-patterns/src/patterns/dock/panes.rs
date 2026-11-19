@@ -25,7 +25,7 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::dock::{ZoneSize, zones};
 use craft_behavior::{DockSide, GesturePhase, Metrics, Sense};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -105,7 +105,9 @@ pub enum PaneRequest<P> {
     Close(P),
     /// The user moved the pane to a new place.
     Place(P, PanePlace),
-    /// The user moved or resized the floating frame to this rect. It arrives every pass a gesture changes the rect.
+    /// The user moved or resized the floating frame to this rect. It arrives every pass a gesture changes the rect,
+    /// and after the `Place` of a Float with the rect the pane floats in (its kept float rect, else where the area
+    /// places it).
     FloatRect(P, Rect),
     /// The user minimized the floating pane (`true`) or restored it (`false`).
     Minimize(P, bool),
@@ -329,8 +331,32 @@ fn outermost<P>(panes: &[Shown<P>], policy: SidePolicy, edge: PaneEdge, dragged:
     }
 }
 
-/// The requests of a pane command acting on `pane`.
-fn command_requests<P: Clone>(panes: &[Shown<P>], policy: SidePolicy, pane: PanelKey, command: PaneCommands) -> Vec<PaneRequest<P>> {
+/// Where floating panes are placed: the shell's float bounds and the cascade step of a pane with no float rect.
+#[derive(Clone, Copy, Debug)]
+struct FloatPlace {
+    bounds: Rect,
+    inset: f32,
+}
+
+/// The rect `pane` floats in: its state's float rect, else its float size at the bounds' start, one cascade step on
+/// for each floating pane before it. The area draws a floating pane there, and a Float reports it.
+fn float_rect_of<P>(panes: &[Shown<P>], pane: PanelKey, float: FloatPlace) -> Rect {
+    let Some(at) = panes.iter().position(|s| s.key == pane) else { return Rect::from_min_size(float.bounds.min, Vec2::ZERO) };
+    let shown = &panes[at];
+    shown.state.float_rect.unwrap_or_else(|| {
+        let before = panes[..at].iter().filter(|s| s.state.place == PanePlace::Floating).count();
+        Rect::from_min_size(float.bounds.min + Vec2::splat(before as f32 * float.inset), shown.spec.float_size)
+    })
+}
+
+/// The requests of a pane command acting on `pane`. `float` places a pane the command floats.
+fn command_requests<P: Clone>(
+    panes: &[Shown<P>],
+    policy: SidePolicy,
+    pane: PanelKey,
+    command: PaneCommands,
+    float: Option<FloatPlace>,
+) -> Vec<PaneRequest<P>> {
     let Some(shown) = panes.iter().find(|s| s.key == pane) else { return Vec::new() };
     let dock = |edge| dock_requests(panes, pane, edge, outermost(panes, policy, edge, pane));
     match command {
@@ -338,8 +364,14 @@ fn command_requests<P: Clone>(panes: &[Shown<P>], policy: SidePolicy, pane: Pane
         PaneCommands::MoveToEnd if shown.spec.movable => dock(PaneEdge::End),
         PaneCommands::MoveToTop if shown.spec.movable => dock(PaneEdge::Top),
         PaneCommands::MoveToBottom if shown.spec.movable => dock(PaneEdge::Bottom),
+        // The rect it will float in goes with the place, so an app that keeps the float rect has it from the Float on,
+        // not only after a move or resize.
         PaneCommands::Float if shown.spec.movable && shown.state.place != PanePlace::Floating => {
-            vec![PaneRequest::Place(shown.pane.clone(), PanePlace::Floating)]
+            let mut requests = vec![PaneRequest::Place(shown.pane.clone(), PanePlace::Floating)];
+            if let Some(float) = float {
+                requests.push(PaneRequest::FloatRect(shown.pane.clone(), float_rect_of(panes, pane, float)));
+            }
+            requests
         }
         PaneCommands::Close if shown.spec.closable => vec![PaneRequest::Close(shown.pane.clone())],
         _ => Vec::new(),
@@ -640,6 +672,8 @@ struct Pass<'a, P> {
     content: RefCell<&'a mut dyn PaneContent<P>>,
     sink: RefCell<Vec<PaneRequest<P>>>,
     focused: RefCell<Option<P>>,
+    /// Where floating panes go, set at the start of the area's body.
+    float: Cell<Option<FloatPlace>>,
 }
 
 /// A drop taker with the signature a container's `update` gives it.
@@ -665,8 +699,15 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> PaneArea<'a, P> {
             })
             .collect();
         let rtl = crate::runtime::env::Env::of(ui).direction.is_rtl();
-        let pass =
-            Pass { panes: &shown, policy, rtl, content: RefCell::new(&mut *content), sink: RefCell::new(Vec::new()), focused: RefCell::new(None) };
+        let pass = Pass {
+            panes: &shown,
+            policy,
+            rtl,
+            content: RefCell::new(&mut *content),
+            sink: RefCell::new(Vec::new()),
+            focused: RefCell::new(None),
+            float: Cell::new(None),
+        };
         let root = DockRoot::new(|cx| {
             let band = cx.style.sizes().edge_band;
             let target = PaneDrop { panes: pass.panes, policy, rtl, zone: Zone::Edges { bounds: cx.rect, band } };
@@ -678,6 +719,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> PaneArea<'a, P> {
             let Some(sizes) = cx.style::<DockRoot<'_, Vec<PaneRequest<P>>>>().map(|style| *style.sizes()) else { return };
             let (docks, floats) = cx.shell().as_ref().map_or((true, true), |shell| (shell.dock_visible(), shell.floating_visible()));
             let bounds = cx.shell().map_or(cx.rect, |shell| shell.float_bounds());
+            let float = FloatPlace { bounds, inset: sizes.cascade_inset };
+            pass.float.set(Some(float));
             let mut order = [PaneEdge::Bottom, PaneEdge::Top, PaneEdge::Start, PaneEdge::End];
             if rtl {
                 order.swap(2, 3);
@@ -698,12 +741,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> PaneArea<'a, P> {
             }
             centre(ui, cx);
             if floats {
-                let inset = sizes.cascade_inset;
-                let mut cascade = 0.0;
                 for pane in shown.iter().filter(|s| s.state.place == PanePlace::Floating) {
-                    let rect = pane.state.float_rect.unwrap_or_else(|| Rect::from_min_size(bounds.min + Vec2::splat(cascade), pane.spec.float_size));
-                    cascade += inset;
-                    show_floating(ui, &pass, pane, rect, bounds);
+                    show_floating(ui, &pass, pane, float_rect_of(&shown, pane.key, float), bounds);
                 }
             }
             let held = pass.focused.borrow().as_ref().map(PanelKey::of);
@@ -818,7 +857,7 @@ fn queue_action<P: Clone>(action: Option<HeaderAction>, pass: &Pass<'_, P>, pane
         (Some(HeaderAction::Float), _) => PaneCommands::Float,
         _ => return,
     };
-    pass.sink.borrow_mut().extend(command_requests(pass.panes, pass.policy, pane.key, command));
+    pass.sink.borrow_mut().extend(command_requests(pass.panes, pass.policy, pane.key, command, pass.float.get()));
 }
 
 /// Whether the pane offers the move `command`: a movable pane offers Float and a Move to an edge it may dock at.
@@ -840,7 +879,7 @@ fn take_commands<P: Clone>(cx: &mut BodyCx<'_>, pass: &Pass<'_, P>, pane: &Shown
     }
     cx.publish(PaneCommands::Close, CommandState::new().enabled(pane.spec.closable));
     while let Some((command, _)) = cx.take_command::<PaneCommands>() {
-        pass.sink.borrow_mut().extend(command_requests(pass.panes, pass.policy, pane.key, command));
+        pass.sink.borrow_mut().extend(command_requests(pass.panes, pass.policy, pane.key, command, pass.float.get()));
     }
 }
 

@@ -2,7 +2,7 @@
 
 use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
-    Access, BodyCx, Common, Component, Cx, Entry, Focus as _, Hover, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Access, Bind, BodyCx, Common, Component, Cx, Entry, Focus as _, Hover, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props, Role, ShowContainer as _, Styled as _, WordSetCx as _,
 };
 use crate::menu::{self, Menu};
@@ -231,16 +231,24 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
 
     /// The menu: one `MenuItem` row per entry, a rule for a separator, or the caller's body. Running an entry's row
     /// reports its value and closes the menu; a disabled entry takes neither focus-run nor a pick. A body's rows run
-    /// their own commands, which close the layer as any row's run does.
+    /// their own commands, which close the layer as any row's run does; the body's `request_close` (a palette's pick)
+    /// closes the layer too.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("menu");
         let name = cx.label();
         let entries = match &mut self.menu {
             SplitMenu::Entries(entries) => *entries,
             SplitMenu::Body(body) => {
-                ui.show(popup, menu::layer(false), |ui, _| {
-                    let _ = Menu::inline(name.clone()).show(ui, |ui, cx| body(ui, cx));
+                // The body's `request_close` (a swatch pick) and a row's run close the inline menu; it is open while
+                // the popup is, so its close is the popup's. Its own open slot would stay closed and leave the layer
+                // open around an empty body. Its focus scope ignores Escape, so the binding takes no Escape from the
+                // layer's own rule.
+                let closed = ui.show(popup, menu::layer(false), |ui, _| {
+                    Menu::inline(name.clone()).open(Bind::given(true)).show(ui, |ui, cx| body(ui, cx)).output.closed
                 });
+                if closed.flatten().is_some() {
+                    popup.close(cx);
+                }
                 return;
             }
         };

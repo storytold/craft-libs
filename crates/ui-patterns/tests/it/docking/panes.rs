@@ -171,3 +171,44 @@ fn escape_during_a_pane_title_drag_cancels_it_and_reaches_nothing_else() {
     assert_eq!(bed.state.get().float_rect, Some(FLOAT), "the pane is back where the drag began");
     assert_eq!(bed.window_cancels.get(), 0, "the Escape went to the drag alone");
 }
+
+/// The float rects a pane's requests since the last call reported.
+fn float_rects(requests: &[PaneRequest<u32>]) -> Vec<Rect> {
+    requests
+        .iter()
+        .filter_map(|request| match request {
+            PaneRequest::FloatRect(_, rect) => Some(*rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Float reports the rect the pane floats in with its place, so an app that keeps the float rect (as WordCraft keeps
+/// the Styles pane's) has it from the Float on, not only after a move or resize: a pane with no kept rect reports
+/// where the area draws it, one with a kept rect reports that rect.
+#[trial]
+fn float_reports_the_rect_the_pane_floats_in() {
+    let mut bed = bed(PaneEdges::ALL, PaneState::docked(PaneEdge::Start, 200.0));
+    bed.take();
+    assert!(fire(bed.fixture.ctx(), PaneCommands::Float, FireSource::Key), "Float runs");
+    bed.fixture.idle(2);
+    let requests = bed.take();
+    assert!(requests.contains(&PaneRequest::Place(0, PanePlace::Floating)), "{requests:?}");
+    let reported = float_rects(&requests);
+    assert_eq!(reported.len(), 1, "the Float reports one rect: {requests:?}");
+    assert_eq!(reported[0].size(), FLOAT.size(), "at the pane's float size");
+    assert_eq!(bed.state.get().float_rect, Some(reported[0]), "the app kept it by applying the requests");
+    let frame = bed.fixture.by_label("Pane 0").expect("the floating pane").rect;
+    assert!((frame.min - reported[0].min).length() < 1.0, "the pane floats where the rect says: {frame:?} against {:?}", reported[0]);
+
+    // A docked pane that keeps a float rect reports that rect.
+    let mut start = PaneState::docked(PaneEdge::Start, 200.0);
+    start.float_rect = Some(FLOAT);
+    let mut kept = self::bed(PaneEdges::ALL, start);
+    kept.take();
+    assert!(fire(kept.fixture.ctx(), PaneCommands::Float, FireSource::Key), "Float runs");
+    kept.fixture.idle(2);
+    assert_eq!(float_rects(&kept.take()), vec![FLOAT], "the kept rect is reported");
+    let frame = kept.fixture.by_label("Pane 0").expect("the floating pane").rect;
+    assert!((frame.min - FLOAT.min).length() < 1.0, "the pane floats in its kept rect: {frame:?}");
+}

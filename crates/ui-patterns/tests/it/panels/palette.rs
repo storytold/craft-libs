@@ -276,3 +276,19 @@ fn a_palette_opened_in_a_modal_dialog_lists_what_the_dialog_blocks_as_disabled()
     assert!(disabled(&fixture, "Rotate"), "the dialog under the palette blocks a default-rule app command");
     assert!(!disabled(&fixture, "Zoom"), "a command that runs whatever is open stays enabled");
 }
+
+/// The in-place face's field is the palette's face in the window (a title-bar search box), so a screen reader names it
+/// by the palette's label, closed and open; the generic "Search commands" would drop the app's own name for it.
+#[trial]
+fn the_in_place_field_is_named_by_the_palettes_label_closed_and_open() {
+    let (mut fixture, open, ..) = faced(PaletteFace::InPlace, trial_entries(), None, None, false);
+    fixture.settle();
+    for state in ["closed", "open"] {
+        let tree = fixture.tree();
+        let names: Vec<String> =
+            fixture.by_role(Role::TEXT_INPUT).iter().map(|field| tree.name_of(field.node).unwrap_or_default().to_owned()).collect();
+        assert_eq!(names, vec!["Commands".to_owned()], "{state}: one search field, named by the palette's label");
+        open.set(true);
+        fixture.settle();
+    }
+}
