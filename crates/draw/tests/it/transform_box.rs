@@ -56,13 +56,10 @@ struct Config {
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
-<<<<<<< HEAD
     /// The key that suspends the canvas's snapping.
     suspend: SnapSuspend,
-=======
     /// egui runs each frame twice and gives the frame's input to its first pass only.
     twice: bool,
->>>>>>> up/next
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -109,11 +106,8 @@ fn defaults() -> Config {
         centre_mark: false,
         line: None,
         targets: Vec::new(),
-<<<<<<< HEAD
         suspend: SnapSuspend::Control,
-=======
         twice: false,
->>>>>>> up/next
     }
 }
 

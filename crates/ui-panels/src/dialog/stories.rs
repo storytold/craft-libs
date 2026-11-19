@@ -4,16 +4,11 @@ use super::modal::ModalDragStrip;
 use super::{BlockingOverlay, ButtonPlace, Dialog, DialogFrame, DialogHost, StackDialog};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-<<<<<<< HEAD
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
-use crate::display::Text;
-use crate::runtime::env::Label;
-=======
 use crate::contract::{Bind, FooterSlot, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::display::Text;
 use crate::layout::GridFit;
 use crate::layout_components::{Grid, Row};
->>>>>>> up/next
+use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};

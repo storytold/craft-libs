@@ -18,18 +18,15 @@ use std::cell::Cell;
 use crate::ui::length::{DocUnit, length_field, shown};
 use craft_behavior::{Axis, EditEvent, Metrics, Mixed, NumberCodec, SelectionChange, keyed};
 use craft_theme::variant::Tone;
-<<<<<<< HEAD
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{
     Bind, CollectionEvent, Common, Component, Cx, Entry, FieldLayout, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowCollection as _,
     ShowContainer as _, SideLabel,
 };
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
+use craft_ui::dialog::{
+    ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
 use craft_ui::display::Text;
-=======
-use craft_ui::contract::{Bind, Common, Component, Cx, Entry, MeasureCx, PaintUi, Props as _, Role, Show as _, ShowContainer as _};
-use craft_ui::dialog::{ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
->>>>>>> up/next
 use craft_ui::form::{Field, FieldGroup, Help};
 use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;

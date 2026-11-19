@@ -23,6 +23,9 @@ pub(super) struct Body<'a> {
     pub layout: ColorPickerLayout,
     pub models: Vec<&'a dyn ColorModel>,
     pub warnings: Vec<ColorWarning>,
+    /// Compact only: the host gave a compare colour, so the compare block stands beside the area (Word's Colors
+    /// dialog's New over Current). The Full layout always shows it.
+    pub compare: bool,
     pub alpha: bool,
     pub dynamic_tracks: bool,
     pub eyedropper: bool,
@@ -44,16 +47,12 @@ impl<'a> Body<'a> {
         let words = Env::of(ui).words::<ColorPickerWords>();
         let model = self.models.iter().copied().find(|m| Some(m.id()) == pass.model);
         let visible: Vec<&dyn ColorModel> = model.into_iter().chain([pass.mode.model()]).collect();
-<<<<<<< HEAD
         Row::new().show(ui, |ui, _| {
-            self.area_and_strip(ui, pass, &visible, got);
-            if let Some(current) = self.compare {
-                self.compare_swatch(ui, pass, current, &words, got);
+            self.area_and_strip(ui, pass, &visible, AreaShape::Plot, got);
+            if self.compare {
+                self.compare_block(ui, pass, &words, got);
             }
         });
-=======
-        self.area_and_strip(ui, pass, &visible, AreaShape::Plot, got);
->>>>>>> up/next
         if let Some(model) = model {
             FieldGroup::new(words.channels.as_str().to_owned()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let values = pass.shown.values_in(model);
@@ -128,12 +127,8 @@ impl<'a> Body<'a> {
         }
     }
 
-<<<<<<< HEAD
-    /// The hex field, at `sizing` when given. The Full layout's first show focuses it. Enter in it
+    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected. Enter in it
     /// commits the typed digits and does not reach the dialog's OK, as in the production Colors dialog.
-=======
-    /// The hex field, at `sizing` when given. The picker's first show focuses it, its text selected.
->>>>>>> up/next
     pub(super) fn hex_field(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, sizing: Option<Sizing>, got: &mut Collected) {
         let field =
             TextField::hex(words.hex.as_str().to_owned(), Bind::given(pass.shows(pass.shown.color.to_rgba()))).empty(pass.shown.color.to_rgba()).submits();

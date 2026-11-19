@@ -9,11 +9,7 @@ use crate::contract::{Bind, BodyCx, Props as _, Remember as _, Show as _, ShowCo
 use crate::runtime::commands::Commands as _;
 use crate::runtime::requests::HostAnswer;
 
-<<<<<<< HEAD
-use crate::dialog::{Dialog, DialogOutput, HeldAnswer};
-=======
-use crate::dialog::{ButtonPlace, Dialog, DialogOutput};
->>>>>>> up/next
+use crate::dialog::{ButtonPlace, Dialog, DialogOutput, HeldAnswer};
 
 use crate::runtime::env::{Env, Label};
 
@@ -501,16 +497,11 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             .closable(closable)
             .close_on_enter(enter_confirms && if no_ok { enter_extra } else { ok_enabled })
             .outer_gesture(outer_gesture)
-<<<<<<< HEAD
-            .side_buttons(side_buttons);
+            .button_place(button_place);
         dialog = match close {
             Some(close) => dialog.buttons(close),
             None => reset.install(dialog, accept, restore),
         };
-=======
-            .button_place(button_place);
-        dialog = reset.install(dialog, accept, restore);
->>>>>>> up/next
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

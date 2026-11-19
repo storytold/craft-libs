@@ -2,11 +2,8 @@
 
 use crate::error::CodecError;
 
-<<<<<<< HEAD
-=======
 pub use crate::codecs::bmp::pixels_per_meter;
 
->>>>>>> up/next
 /// Recognize a BMP file header with a supported DIB header kind.
 ///
 /// This is a format-routing check, not full validation: dimensions and pixel data may still
@@ -621,8 +618,6 @@ mod tests {
         odd.extend_from_slice(&copy);
         assert_eq!(dib_layout(odd.clone()), odd);
     }
-<<<<<<< HEAD
-=======
 }
 
 #[cfg(test)]
@@ -667,5 +662,4 @@ mod density_tests {
         trailing.extend_from_slice(&[1, 2, 3]);
         assert_eq!(pixels_per_meter(&trailing), Some((10000, 20000)));
     }
->>>>>>> up/next
 }

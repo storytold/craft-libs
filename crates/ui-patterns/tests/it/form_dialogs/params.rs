@@ -338,7 +338,6 @@ fn an_optional_number_is_held_to_its_bounds_and_remembered_while_off() {
     assert_eq!(values.borrow().number("quality"), Some(7.0), "the box on again brings back the value typed before");
 }
 
-<<<<<<< HEAD
 // A text row with `max_chars` stops typing at its limit, and the host's `set` refuses longer text; the limit counts
 // characters, not bytes.
 #[trial]
@@ -360,7 +359,8 @@ fn a_text_row_with_a_limit_refuses_longer_text() {
     let refused = set_param_field(&params, &mut fields, "code", json!("wxyz1"));
     assert!(refused.is_err(), "longer text is refused: {refused:?}");
     assert_eq!(fields.text("code"), Some("wxyz"), "the refused text is not set");
-=======
+}
+
 /// photocraft#15540: a parameter dialog opens with its first field's whole text selected, so typing right away replaces
 /// the value: a text row (New Layer's Name) and a slider row's number (Gaussian Blur's Radius).
 #[trial]
@@ -387,5 +387,4 @@ fn typing_in_a_freshly_opened_parameter_dialog_replaces_its_first_field() {
     fixture.settle();
     fixture.type_text("7").key(Key::Tab, Modifiers::NONE).settle();
     assert_eq!(values.borrow().number("radius"), Some(7.0), "typing replaced the radius");
->>>>>>> up/next
 }

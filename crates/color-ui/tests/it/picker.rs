@@ -4,24 +4,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::Mixed;
-<<<<<<< HEAD
 use craft_color_ui::ui::{
-    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorReadout, PickedColor,
+    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning,
+    PickedColor,
 };
-use craft_host::{AppInfo, Host};
-use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, RgbModel, Rgba, Srgba};
-use craft_ui::contract::{Bind, Role};
-use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
-use craft_ui::runtime::env::Label;
-=======
-use craft_color_ui::ui::{ColorPicker, ColorPickerDialog, ColorPickerLayout, ColorPopover, ColorReadout, ColorWarning, PickedColor};
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
 use craft_ui::contract::{Bind, Role, ShowContainer as _};
-use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::Row;
->>>>>>> up/next
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Rect, vec2};
 

@@ -390,26 +390,23 @@ impl Keymap {
 
     /// [`lookup`](Self::lookup) with the panels around the focused one in `outer` ([`Scopes::rank_nested`]).
     pub fn lookup_nested(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str]) -> Lookup {
-<<<<<<< HEAD
         self.lookup_where(chord, double, active, outer, &|_| true)
     }
 
     /// [`lookup_nested`](Self::lookup_nested) among the commands `accept` takes: the bindings of a command it refuses
     /// (one disabled where the press lands) are passed over, so the chord's next binding, in an outer scope, runs.
     pub fn lookup_where(&self, chord: &Chord, double: bool, active: &Active, outer: &[&str], accept: &dyn Fn(&CommandRef) -> bool) -> Lookup {
-        let want = Trigger { chord: chord.effective(self.platform), double };
-=======
         let command = |i: usize| self.catalog[i].command.clone();
-        match self.winners(Trigger { chord: chord.effective(self.platform), double }, active, outer) {
+        match self.winners(Trigger { chord: chord.effective(self.platform), double }, active, outer, accept) {
             Winners::None => Lookup::None,
             Winners::Run(i) => Lookup::Run(command(i)),
             Winners::Cycle(cycle) => Lookup::Cycle(cycle.into_iter().map(command).collect()),
         }
     }
 
-    /// The commands, by catalog position, that a press of the effective trigger `want` runs with `active` focus.
-    fn winners(&self, want: Trigger, active: &Active, outer: &[&str]) -> Winners {
->>>>>>> up/next
+    /// The commands, by catalog position, that a press of the effective trigger `want` runs with `active` focus, among
+    /// the commands `accept` takes.
+    fn winners(&self, want: Trigger, active: &Active, outer: &[&str], accept: &dyn Fn(&CommandRef) -> bool) -> Winners {
         let held = active.typing && !self.typing.fires(&want.chord, self.platform);
         let Some(holders) = self.by_trigger.get(&want) else { return Winners::None };
         // Each command's nearest rank; `holders` is in catalog order.
@@ -470,7 +467,7 @@ impl Keymap {
                 ScopeKind::Panel => Active::panel(name[0]),
                 ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
             };
-            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), double: false }, &active, &[]) {
+            match self.winners(Trigger { chord: trigger.chord.effective(self.platform), double: false }, &active, &[], &|_| true) {
                 Winners::None => false,
                 Winners::Run(j) => j == i,
                 Winners::Cycle(cycle) => cycle.contains(&i),
