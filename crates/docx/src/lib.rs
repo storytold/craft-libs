@@ -165,6 +165,12 @@ impl Flavor {
     }
 }
 
+/// Bound the tooltip at both file boundaries. A whole link can have many formatted runs.
+fn bounded_link_tooltip(text: &str) -> Option<&str> {
+    const MAX_BYTES: usize = 4096;
+    text.get(..text.floor_char_boundary(MAX_BYTES)).filter(|tip| !tip.is_empty())
+}
+
 /// Errors from reading or writing a DOCX package.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum DocxError {
