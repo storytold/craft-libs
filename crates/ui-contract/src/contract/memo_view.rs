@@ -5,6 +5,7 @@ use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
 use crate::runtime::env::{Env, Scoped};
 use egui::Ui;
+use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -42,8 +43,9 @@ use std::sync::Arc;
 /// around it the view is one unit, sized by its content's measure.
 ///
 /// What `show` returns holds layout facts only (a size, which part took the room). A replay returns the kept value
-/// again, so an event returned through it would arrive once per pass. Events leave a view through its bindings, its
-/// `Tracked` writes or commands. A measuring pass that takes the kept extent returns the kept value of the real run.
+/// again, so an event returned through it would arrive once per pass. Events leave a view through an [`Outbox`] in its
+/// props (picks, closes, drags: what its components report in the pass), its bindings, its `Tracked` writes or
+/// commands. A measuring pass that takes the kept extent returns the kept value of the real run.
 ///
 /// `show` is a `fn`: a closure that captures does not build.
 ///
@@ -118,4 +120,55 @@ impl<P: MemoProps, R: Clone + PartialEq + Send + Sync + 'static> MemoView<P, R> 
         crate::runtime::measure::count_memo_key_bytes(ctx, key.bytes());
         key.finish()
     }
+}
+
+/// The events a memoized view's run sends to the code around it, in the pass it runs: what its components reported (a
+/// pick, a close, a drag that started). A run sends; a replay sends nothing. That is complete, because input reaches
+/// only a view it engages (the pointer over it, focus in it, a held press, an intent routed to it), and an engaged view
+/// runs. The view cannot read what it sent, so an outbox is no input and feeds nothing into the key.
+///
+/// ```
+/// # extern crate craft_ui_contract as craft_ui;
+/// use craft_ui::contract::{MemoProps, MemoView, Outbox};
+/// #[derive(MemoProps)]
+/// struct Row<'a> {
+///     title: &'a str,
+///     clicked: Outbox<'a, ()>,
+/// }
+/// fn row(props: &mut Row<'_>, ui: &mut egui::Ui) {
+///     if ui.button(props.title).clicked() {
+///         props.clicked.send(());
+///     }
+/// }
+/// fn view(ui: &mut egui::Ui) -> bool {
+///     let mut clicked = Vec::new();
+///     let _ = MemoView::new("row", Row { title: "Open", clicked: Outbox::new(&mut clicked) }, row).show(ui);
+///     !clicked.is_empty()
+/// }
+/// ```
+pub struct Outbox<'a, E> {
+    sent: &'a mut Vec<E>,
+}
+
+impl<'a, E> Outbox<'a, E> {
+    /// An outbox whose events go into `sent`, after what it holds.
+    pub fn new(sent: &'a mut Vec<E>) -> Outbox<'a, E> {
+        Outbox { sent }
+    }
+
+    /// Sends `event`.
+    pub fn send(&mut self, event: E) {
+        self.sent.push(event);
+    }
+}
+
+impl<E> fmt::Debug for Outbox<'_, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Outbox").field("sent", &self.sent.len()).finish()
+    }
+}
+
+/// An outbox feeds nothing: the view only writes it.
+impl<E> MemoProps for Outbox<'_, E> {
+    fn key(&self, _: &mut MemoKey) {}
 }

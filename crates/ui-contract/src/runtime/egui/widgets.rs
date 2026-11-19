@@ -47,6 +47,8 @@ pub(crate) fn note_widget(ctx: &Context, id: Id) {
     noted::with(ctx, |pass| {
         pass.widgets.insert(id);
     });
+    // A replayed run notes it again, as it adds the widget again.
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_widget(ctx, id));
 }
 
 #[cfg(not(feature = "testing"))]
@@ -58,6 +60,8 @@ pub(crate) fn note_node(ctx: &Context, id: Id) {
     noted::with(ctx, |pass| {
         pass.nodes.insert(super::access::node_key(id));
     });
+    // A replayed run notes it again, as it adds the node again.
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_node(ctx, id));
 }
 
 #[cfg(not(feature = "testing"))]
@@ -76,6 +80,7 @@ pub(crate) struct ScrollRegion {
 #[cfg(feature = "testing")]
 pub(crate) fn note_scroll_region(ctx: &Context, view: Rect, content: Rect) {
     noted::with(ctx, |pass| pass.scrolls.push(ScrollRegion { view, content }));
+    crate::runtime::replay::journal(ctx, || (view, content), |ctx, &(view, content)| note_scroll_region(ctx, view, content));
 }
 
 #[cfg(not(feature = "testing"))]
