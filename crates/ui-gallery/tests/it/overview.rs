@@ -61,12 +61,13 @@ fn shell_runs(level: &str, filter: &str) -> u32 {
 }
 
 /// A story runs in the view's shell, not in one of its own: a settled Overview pass runs as many shell regions with
-/// every card of a level in view as with one card.
+/// every card of a level in view as with the Button cards alone. The Button card animates, so the Overview runs in both
+/// passes rather than replaying.
 #[trial]
 fn a_settled_overview_pass_runs_no_shell_per_story() {
-    let (all, one) = (shell_runs("Controls", ""), shell_runs("Controls", "Slider"));
+    let (all, few) = (shell_runs("Controls", ""), shell_runs("Controls", "Button"));
     assert!(all > 0, "the window's shell runs its regions");
-    assert_eq!(all, one, "the shell regions grow with the stories in view: {one} with the Slider cards, {all} with the level");
+    assert_eq!(all, few, "the shell regions grow with the stories in view: {few} with the Button cards, {all} with the level");
 }
 
 /// The `Grid` runs and the cards run (their `Open` buttons) of a settled Overview pass in a view as tall as `height`.
@@ -358,7 +359,7 @@ fn a_card_of_a_filling_story_is_as_tall_as_its_content() {
 /// The card and story views of the last frame by id, with how each took part: ran, replayed or out of view. Sizing and
 /// measuring calls count.
 fn view_runs(fixture: &Fixture) -> Vec<(egui::Id, MemoRun)> {
-    let views = |ty: &str| ty.contains("::CardProps") || ty.contains("::StoryProps");
+    let views = |ty: &str| ty.contains("::CardProps<") || ty.contains("::StoryProps<");
     last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(ty, _, _)| views(ty)).map(|(_, id, run)| (id, run)).collect()
 }
 
@@ -378,9 +379,9 @@ fn ran(runs: &[(egui::Id, MemoRun)]) -> Vec<egui::Id> {
     runs.iter().filter(|(_, run)| *run == MemoRun::Ran).map(|(id, _)| *id).collect()
 }
 
-/// An idle Overview runs no card and no story: every card in view replays its last run, the stories in it included.
-/// The Button card's Variants story animates a loading button, which runs every frame by itself, so the Controls level
-/// shows its Slider cards only.
+/// An idle Overview runs no card and no story: the Overview's view replays its last run, its cards included, or every
+/// card in view replays. The Button card's Variants story animates a loading button, which runs every frame by itself,
+/// so the Controls level shows its Slider cards only.
 #[trial]
 fn an_idle_overview_runs_no_card_or_story() {
     for (level, filter) in [("Primitives", ""), ("Composites", ""), ("Patterns", ""), ("Shells", ""), ("Controls", "Slider")] {
@@ -388,7 +389,9 @@ fn an_idle_overview_runs_no_card_or_story() {
         let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
         fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(3);
         let runs = view_runs(&fixture);
-        assert!(runs.iter().any(|(_, run)| *run == MemoRun::Replayed), "{level}: the cards in view replay");
+        let overview_replayed =
+            last_frame_memo_runs(fixture.ctx()).iter().any(|(ty, _, run)| ty.contains("::OverviewProps<") && *run == MemoRun::Replayed);
+        assert!(overview_replayed || runs.iter().any(|(_, run)| *run == MemoRun::Replayed), "{level}: the cards in view replay");
         assert!(ran(&runs).is_empty(), "{level}: an idle frame ran {} of {} card and story views: {:?}", ran(&runs).len(), runs.len(), ran(&runs));
     }
 }

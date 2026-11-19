@@ -1,7 +1,7 @@
 //! The viewer's window: the shell with the options bar over the dock of the shown workspace, and the settings it keeps.
 
-use super::dock::GalleryDock;
 use super::card::Look;
+use super::dock::GalleryDock;
 use super::inspect::Inspect;
 use super::options::options_bar;
 use super::panels::ThemePanels;
@@ -87,7 +87,8 @@ fn front_component(viewer: &Viewer) -> Option<&'static str> {
 /// and the view closes when its tab is no longer in front. The dock layout says which tab is in front, before any body
 /// runs.
 fn place_variants(viewer: &mut Viewer) {
-    let front = |panel: &PanelId| matches!(panel, PanelId::Overview | PanelId::Component(_)) && viewer.dock.layout.panel_state(panel) == PanelState::Front;
+    let front =
+        |panel: &PanelId| matches!(panel, PanelId::Overview | PanelId::Component(_)) && viewer.dock.layout.panel_state(panel) == PanelState::Front;
     let owner = match (&viewer.variants, &viewer.variants_tab) {
         (None, _) => None,
         (Some(_), Some(tab)) if front(tab) => Some(tab.clone()),

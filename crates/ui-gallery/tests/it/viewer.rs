@@ -1,7 +1,7 @@
 //! The viewer's own logic: default and saved layouts, and the crates that register components.
 
-use craft_ui::testing::trial;
 use craft_ui::contract::Level;
+use craft_ui::testing::trial;
 use craft_ui_gallery::viewer::{Catalog, ComponentInfo, PanelId, TabName, Workspace, default_for, load_layout, open_tabs, save_layout};
 
 const COMPONENTS: [PanelId; 6] = [PanelId::Components, PanelId::Stories, PanelId::Properties, PanelId::Inspect, PanelId::Overview, PanelId::Tokens];

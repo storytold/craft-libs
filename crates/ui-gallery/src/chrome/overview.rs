@@ -11,8 +11,7 @@ use craft_behavior::{ColumnWidth, Selection};
 use craft_theme::variant::Tone;
 use craft_theme::{Tokens, TypeRole};
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, Lazy, MemoProps, MemoView, Outbox, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, StoryLayout,
-    Tracked,
+    Bind, BodyCx, Entry, Gap, Lazy, MemoProps, MemoView, Outbox, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, StoryLayout, Tracked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Grid, Row, Stack};
@@ -292,7 +291,8 @@ fn overview_view(p: &mut OverviewProps<'_>, ui: &mut Ui) {
     };
     let level = groups[shown].0;
     let entries: Vec<Entry<craft_ui::contract::Level>> = groups.iter().map(|(level, _)| Entry::new(*level, level.title())).collect();
-    let cards: Vec<Spec> = groups[shown].1.iter().filter_map(|component| component_card(centre.catalog, centre.story_of, component, selected)).collect();
+    let cards: Vec<Spec> =
+        groups[shown].1.iter().filter_map(|component| component_card(centre.catalog, centre.story_of, component, selected)).collect();
     let mut chosen = level;
     let mut reported = Vec::new();
     // The cards follow the selection in the pass they run: its card glides into view, and only then is it followed.

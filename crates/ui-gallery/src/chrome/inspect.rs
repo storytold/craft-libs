@@ -104,8 +104,10 @@ fn regions(props: &InspectProps<'_>) -> Vec<(Id, String)> {
     let stories = catalog.group_stories(type_name, group);
     let tab = PanelId::component(type_name);
     let tabs = inspect.front.iter().filter(|front| matches!(front, PanelId::Overview) || **front == tab);
-    tabs.flat_map(|tab| stories.iter().map(|&index| (region_key(tab, index), SpecStory::of(catalog, index, &component.name).caption)).collect::<Vec<_>>())
-        .collect()
+    tabs.flat_map(|tab| {
+        stories.iter().map(|&index| (region_key(tab, index), SpecStory::of(catalog, index, &component.name).caption)).collect::<Vec<_>>()
+    })
+    .collect()
 }
 
 /// One row per element of `recorded` with a node or a focus stop, indented by the shown elements it sits in; an element

@@ -157,7 +157,8 @@ fn components_view(props: &mut ComponentsProps<'_>, ui: &mut Ui) {
     for event in events {
         match event {
             CollectionEvent::Open(change) => open.apply(&change.key, change.open, change.all, groups.iter()),
-            CollectionEvent::Activate(TreeKey::Component(type_name)) | CollectionEvent::Item(TreeKey::Component(type_name), RowEvent::Trailing { .. }) => {
+            CollectionEvent::Activate(TreeKey::Component(type_name))
+            | CollectionEvent::Item(TreeKey::Component(type_name), RowEvent::Trailing { .. }) => {
                 opened.send(type_name);
             }
             _ => {}
