@@ -32,6 +32,44 @@ enum Declaration {
     Focused { inactive: bool },
 }
 
+/// The registered instances in registration order, which `pick_instance` ranks by, with their positions by id.
+#[derive(Default)]
+struct Instances {
+    list: Vec<Instance>,
+    at: HashMap<Id, usize>,
+}
+
+impl Instances {
+    fn get(&self, id: Id) -> Option<&Instance> {
+        self.at.get(&id).map(|at| &self.list[*at])
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Instance> {
+        self.list.iter()
+    }
+
+    /// Registers `instance`, keeping the place of one already registered under the same id.
+    fn upsert(&mut self, instance: Instance) {
+        match self.at.get(&instance.id) {
+            Some(at) => self.list[*at] = instance,
+            None => {
+                self.at.insert(instance.id, self.list.len());
+                self.list.push(instance);
+            }
+        }
+    }
+
+    /// Keeps the instances `keep` accepts, in their order.
+    fn retain(&mut self, mut keep: impl FnMut(&Instance) -> bool) {
+        self.list.retain(|instance| keep(instance));
+        self.at = self.list.iter().enumerate().map(|(at, instance)| (instance.id, at)).collect();
+    }
+
+    fn contains(&self, id: Id) -> bool {
+        self.at.contains_key(&id)
+    }
+}
+
 /// A container instance that receives scoped commands.
 struct Instance {
     id: Id,
@@ -54,6 +92,8 @@ struct KeymapCache {
     edit_chords: Arc<[(EditCommand, Chord)]>,
     /// The chords bound to the window's keys, which the input hook takes before any component.
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
+    /// `BuiltKeymap::shown_text`.
+    shown_text: Arc<HashMap<Chord, Arc<str>>>,
 }
 
 /// A momentary command whose key is down: its release fires the command again.
@@ -85,7 +125,7 @@ pub(crate) struct Board {
     out: Vec<Fired>,
     /// The commands instances took since the last `FrameOutput`, in order.
     delivered: Vec<Fired>,
-    instances: Vec<Instance>,
+    instances: Instances,
     /// The focused component of each viewport's last step 12 and the instances around it.
     chains: HashMap<ViewportId, (Id, CommandChain)>,
     /// The focused component and its chain before the one in `chains`, per viewport; while the focus is in the menus
@@ -98,7 +138,7 @@ pub(crate) struct Board {
     matcher: Matcher,
     held: Vec<Held>,
     /// The top modal layer's root container of each viewport that has one.
-    modal_roots: Vec<(ViewportId, Id)>,
+    modal_roots: HashMap<ViewportId, Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
@@ -129,7 +169,7 @@ fn same_state(a: Option<&CommandState>, b: Option<&CommandState>) -> bool {
 }
 
 /// Who read a command's resolution: the vantage `begin` resolves it from again.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 enum Reader {
     /// A surface with no component of its own (`resolve_global`): the key focus of the running pass.
     Global,
@@ -142,21 +182,19 @@ enum Reader {
     InMenu(Id, CommandChain),
 }
 
-/// What a reader was shown the last time it resolved a command.
-struct Shown {
-    reader: Reader,
-    resolved: ResolvedCommand,
-}
-
-/// The readers of each state key in each viewport.
-type ShownMap = HashMap<(StateKey, ViewportId), Vec<Shown>>;
+/// What each reader was shown the last time it resolved a command, by the viewport and the state key it read. The
+/// readers of a key stay in the order they first read it: the gate is app code, and `wake_shown` asks it in that order.
+type ShownMap = HashMap<ViewportId, HashMap<StateKey, Vec<(Reader, ResolvedCommand)>>>;
 
 /// Keeps `resolved` as what `reader` of `viewport` was shown under `key`, in place of what it was shown before.
 fn keep_shown(shown: &mut ShownMap, key: StateKey, viewport: ViewportId, reader: Reader, resolved: &ResolvedCommand) {
-    let readers = shown.entry((key, viewport)).or_default();
-    match readers.iter_mut().find(|entry| entry.reader == reader) {
-        Some(entry) => entry.resolved.clone_from(resolved),
-        None => readers.push(Shown { reader, resolved: resolved.clone() }),
+    keep_in(shown.entry(viewport).or_default().entry(key).or_default(), reader, resolved);
+}
+
+fn keep_in(readers: &mut Vec<(Reader, ResolvedCommand)>, reader: Reader, resolved: &ResolvedCommand) {
+    match readers.iter_mut().find(|(kept, _)| *kept == reader) {
+        Some((_, kept)) => kept.clone_from(resolved),
+        None => readers.push((reader, resolved.clone())),
     }
 }
 
@@ -238,7 +276,7 @@ impl Board {
     /// The instance of `scope` a command routed to `at` goes to: `at` when it is an instance of the scope itself (a
     /// canvas), else the innermost instance in `around`, the chain of the context `at` was shown in.
     fn instance_around(&self, at: Id, around: &CommandChain, scope: &str) -> Option<Id> {
-        let own = self.instances.iter().any(|i| i.id == at && self.within(i.scope.name(), scope));
+        let own = self.instances.get(at).is_some_and(|i| self.within(i.scope.name(), scope));
         if own { Some(at) } else { self.innermost(around, scope) }
     }
 
@@ -262,7 +300,7 @@ impl Board {
     }
 
     fn is_live(&self, ctx: &Context, id: Id) -> bool {
-        self.instances.iter().any(|i| i.id == id && self.live(ctx, i))
+        self.instances.get(id).is_some_and(|i| self.live(ctx, i))
     }
 
     /// The definition of the command `id`: the linked sets', else the frame's app catalog's.
@@ -301,7 +339,7 @@ impl Board {
     /// is declared inside, after its own.
     fn scopes_around(&self, chain: &[Id]) -> Vec<&'static str> {
         let mut scopes: Vec<&'static str> = Vec::new();
-        for instance in chain.iter().rev().filter_map(|id| self.instances.iter().find(|i| i.id == *id)) {
+        for instance in chain.iter().rev().filter_map(|id| self.instances.get(*id)) {
             let lineage = self.lineage(instance.scope.name());
             scopes.push(lineage[0]);
             let parents: Vec<&'static str> = lineage[1..].iter().copied().filter(|scope| !scopes.contains(scope)).collect();
@@ -318,7 +356,7 @@ impl Board {
     }
 
     fn is_modal_root(&self, id: Id) -> bool {
-        self.modal_roots.iter().any(|(_, root)| *root == id)
+        self.modal_roots.values().any(|root| *root == id)
     }
 
     /// Where `command` goes when a source with no component of its own fires it: `None` for an app-scope command,
@@ -398,10 +436,12 @@ impl Board {
             };
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
         let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
+        let chord_text = chord.and_then(|chord| self.keymap.as_ref()?.shown_text.get(&chord).cloned());
         let resolved = ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             icon: def.and_then(|def| def.icon.clone()),
             chord,
+            chord_text,
             enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
@@ -464,6 +504,8 @@ struct BuiltKeymap {
     keymap: Arc<Keymap>,
     edit_chords: Arc<[(EditCommand, Chord)]>,
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
+    /// The text of every chord the keymap shows, written once when the keymap is built.
+    shown_text: Arc<HashMap<Chord, Arc<str>>>,
 }
 
 /// The keymap of `defs` on `platform` under `overrides`.
@@ -473,6 +515,19 @@ fn keymap_of(defs: Vec<CommandDef>, scopes: Scopes, platform: Platform, override
         keymap.set_overrides((**overrides).clone());
     }
     keymap
+}
+
+#[cfg(feature = "testing")]
+thread_local! {
+    static CHORD_TEXT_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many chord texts this thread's keymap builds have written: one per distinct shown chord per build, never one
+/// per report.
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub fn chord_text_builds() -> u64 {
+    CHORD_TEXT_BUILDS.with(std::cell::Cell::get)
 }
 
 #[cfg(feature = "testing")]
@@ -558,7 +613,17 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
             keymap.bindings(command).into_iter().filter(|binding| !binding.trigger.double).map(move |binding| (edit, binding.trigger.chord))
         })
         .collect();
-    BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts }
+    let mut shown_text = HashMap::new();
+    for def in keymap.catalog() {
+        if let Some(chord) = keymap.shown_chord(&def.command) {
+            shown_text.entry(chord).or_insert_with(|| {
+                #[cfg(feature = "testing")]
+                CHORD_TEXT_BUILDS.with(|builds| builds.set(builds.get() + 1));
+                Arc::from(chord.display(platform))
+            });
+        }
+    }
+    BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts, shown_text: Arc::new(shown_text) }
 }
 
 /// The keymap of each shared registry (with or without the stories' sets) on each platform with no overrides. It
@@ -596,7 +661,7 @@ pub(crate) fn innermost(ctx: &Context, chain: &CommandChain, scope: &str) -> Opt
 }
 
 /// The platform the keymap and the chords shown are read for.
-pub(crate) fn platform(ctx: &Context) -> Platform {
+fn platform(ctx: &Context) -> Platform {
     crate::runtime::windows::os_of(ctx)
 }
 
@@ -630,9 +695,10 @@ pub(crate) fn set_input(ctx: &Context, input: &CommandInput) {
         });
         let mut shadowed = Vec::new();
         if stale {
-            let BuiltKeymap { keymap, edit_chords, window_shortcuts } =
+            let BuiltKeymap { keymap, edit_chords, window_shortcuts, shown_text } =
                 keymap_for(&board.registry, input.catalog.as_ref(), platform, input.overrides.as_ref());
-            board.keymap = Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, edit_chords, window_shortcuts });
+            board.keymap =
+                Some(KeymapCache { keymap, platform, overrides: input.overrides.clone(), generation, edit_chords, window_shortcuts, shown_text });
             for def in input.catalog.as_ref().map_or(&[][..], AppCatalog::defs) {
                 if board.registry.get(&def.command.id).is_some() && board.shadowed.insert(def.command.id.clone()) {
                     shadowed.push(def.command.id.clone());
@@ -699,15 +765,7 @@ fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
     crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_in(ctx, scope, id, layer));
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
-    with(ctx, |board| match board.instances.iter_mut().find(|i| i.id == id) {
-        Some(instance) => {
-            instance.scope = scope;
-            instance.viewport = viewport;
-            instance.stamp = stamp;
-            instance.layer = layer;
-        }
-        None => board.instances.push(Instance { id, scope, viewport, stamp, layer }),
-    });
+    with(ctx, |board| board.instances.upsert(Instance { id, scope, viewport, stamp, layer }));
 }
 
 /// Records the instances around the component `id`, which holds key focus in the running pass of its viewport. The
@@ -731,14 +789,16 @@ pub(crate) fn note_focus(ctx: &Context, id: Id, chain: &CommandChain) {
 pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, root: Option<Id>) {
     with(ctx, |board| {
         board.here.modal_open = open;
-        board.modal_roots.retain(|(of, _)| *of != viewport);
-        board.modal_roots.extend(root.map(|root| (viewport, root)));
+        match root {
+            Some(root) => board.modal_roots.insert(viewport, root),
+            None => board.modal_roots.remove(&viewport),
+        };
     });
 }
 
 /// The root of the top modal layer of `viewport`, if one is open.
 pub(crate) fn modal_root(ctx: &Context, viewport: ViewportId) -> Option<Id> {
-    with(ctx, |board| board.modal_roots.iter().find(|(of, _)| *of == viewport).map(|(_, root)| *root))
+    with(ctx, |board| board.modal_roots.get(&viewport).copied())
 }
 
 /// Which instances a resolution counts as inside the top modal layer, where `ModalRule::InDialogs` and `Blocked`
@@ -897,34 +957,34 @@ fn resolve_from(ctx: &Context, command: &CommandRef, from: Option<&Vantage>) -> 
 /// and what the first pass's call kept, so it wakes only the readers whose resolution the first pass changed (a modal
 /// layer it opened or closed), once.
 fn wake_shown(ctx: &Context, viewport: ViewportId) {
-    let mut shown = with(ctx, |board| std::mem::take(&mut board.shown));
+    let mut table = with(ctx, |board| board.shown.remove(&viewport)).unwrap_or_default();
     let mut changed = Vec::new();
-    for ((key, of), readers) in &mut shown {
-        if *of != viewport {
-            continue;
-        }
+    for (key, readers) in &mut table {
         // A reader beneath a layer or inside a menu that is no longer shown is gone with it.
-        readers.retain(|entry| match entry.reader {
-            Reader::Beneath(layer) | Reader::InMenu(layer, _) => overlay::is_open(ctx, layer),
+        readers.retain(|(reader, _)| match reader {
+            Reader::Beneath(layer) | Reader::InMenu(layer, _) => overlay::is_open(ctx, *layer),
             _ => true,
         });
-        for entry in readers.iter_mut() {
+        for (reader, kept) in readers.iter_mut() {
             // The gate is app code and may resolve commands itself, so no board lock is held here.
-            let (resolved, _) = resolve_as(ctx, &entry.reader, &entry.resolved.command);
-            if resolved != entry.resolved {
-                entry.resolved = resolved;
+            let (resolved, _) = resolve_as(ctx, reader, &kept.command);
+            if resolved != *kept {
+                *kept = resolved;
                 changed.push(*key);
             }
         }
     }
-    shown.retain(|_, readers| !readers.is_empty());
+    table.retain(|_, readers| !readers.is_empty());
     with(ctx, |board| {
         // Reads the gate made while the entries were out of the board.
-        let added = std::mem::replace(&mut board.shown, shown);
-        for ((key, of), readers) in added {
-            for entry in readers {
-                keep_shown(&mut board.shown, key, of, entry.reader, &entry.resolved);
+        let added = board.shown.remove(&viewport).unwrap_or_default();
+        for (key, readers) in added {
+            for (reader, resolved) in readers {
+                keep_in(table.entry(key).or_default(), reader, &resolved);
             }
+        }
+        if !table.is_empty() {
+            board.shown.insert(viewport, table);
         }
     });
     for (number, instance) in changed {
@@ -1197,8 +1257,8 @@ pub(crate) fn begin(ctx: &Context) {
             board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default()
         });
         // Nothing focused inside a modal: the modal's root takes the commands, as a plain Enter goes to its default button.
-        let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.iter().find(|(of, _)| *of == viewport)) {
-            (true, Some((_, root))) => vec![*root],
+        let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.get(&viewport)) {
+            (true, Some(root)) => vec![*root],
             _ => chain,
         };
         if !chain.is_empty() {
@@ -1218,7 +1278,7 @@ pub(crate) fn begin(ctx: &Context) {
         }
         let mut keys = board.key_scopes(&chain)?;
         // The held-open canvas's scope is around the focus for matching: its commands fire from the dialog.
-        let held_scope = held_open.and_then(|id| board.instances.iter().find(|i| i.id == id)).map(|i| i.scope.name()).filter(|scope| !is_app(scope));
+        let held_scope = held_open.and_then(|id| board.instances.get(id)).map(|i| i.scope.name()).filter(|scope| !is_app(scope));
         if let Some(scope) = held_scope
             && !keys.scopes.contains(&scope)
         {
@@ -1295,7 +1355,7 @@ pub(crate) fn begin(ctx: &Context) {
                 .iter()
                 .filter(|fired| fired.phase == FirePhase::Press)
                 .filter_map(|fired| fired.target)
-                .filter_map(|target| board.instances.iter().find(|instance| instance.id == target)?.layer)
+                .filter_map(|target| board.instances.get(target)?.layer)
                 .collect()
         });
         overlay::close_popups_outside(ctx, &inside);
@@ -1313,18 +1373,22 @@ pub(crate) fn end(ctx: &Context) {
         let alive: Vec<bool> = board.instances.iter().map(|i| board.live(ctx, i) && live.contains(&i.viewport)).collect();
         let mut keep = alive.iter();
         board.instances.retain(|_| keep.next().copied().unwrap_or(false));
-        let ids: Vec<Id> = board.instances.iter().map(|i| i.id).collect();
-        board.queue.retain(|fired| fired.target.is_some_and(|id| ids.contains(&id)));
-        board.held.retain(|held| held.target.is_none_or(|id| ids.contains(&id)));
+        let instances = &board.instances;
+        let ids = |id: Id| instances.contains(id);
+        board.queue.retain(|fired| fired.target.is_some_and(ids));
+        board.held.retain(|held| held.target.is_none_or(ids));
         board.chains.retain(|viewport, _| live.contains(viewport));
         board.before.retain(|viewport, _| live.contains(viewport));
         board.here.focused.retain(|(viewport, _)| live.contains(viewport));
-        board.shown.retain(|(_, viewport), readers| {
-            readers.retain(|entry| match &entry.reader {
-                Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_none_or(|id| ids.contains(&id)),
-                _ => true,
+        board.shown.retain(|viewport, table| {
+            table.retain(|_, readers| {
+                readers.retain(|(reader, _)| match reader {
+                    Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_none_or(&ids),
+                    _ => true,
+                });
+                !readers.is_empty()
             });
-            live.contains(viewport) && !readers.is_empty()
+            live.contains(viewport) && !table.is_empty()
         });
     });
 }
