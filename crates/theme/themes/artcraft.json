@@ -66,6 +66,7 @@
         "accent.soft": "#dde3f8",
         "accent.solid": "#3b5bdb",
         "accent.text": "#2b47b5",
+        "surface.canvas": "#e6e6e6",
         "surface.chrome": "#f0f0f0",
         "text.on_accent": "#ffffff"
       },
@@ -73,6 +74,7 @@
         "accent.soft": "#2e3a66",
         "accent.solid": "#7a93f0",
         "accent.text": "#9cb0f5",
+        "surface.canvas": "#141414",
         "surface.chrome": "#1f1f1f",
         "text.on_accent": "#11162e"
       }

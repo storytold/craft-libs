@@ -73,12 +73,12 @@ impl<'a> StripEnd<'a> {
         self.command_ref().is_none_or(|command| cx.resolve_command(command.clone()).is_none_or(|resolved| resolved.enabled))
     }
 
-    /// The face with the label beside the icon.
+    /// The face with the label beside the icon; a menu item's ends with the chevron of a button that opens a menu.
     fn full_face(&self) -> Button<'a> {
         let face = Button::new(self.label.clone()).icon(self.icon.clone()).variant(self.variant);
         match self.command_ref() {
             Some(command) => face.command(command.clone()).label(self.label.clone()),
-            None => face,
+            None => face.trailing_icon(crate::controls::disclosure::DisclosureGlyph::menu_button()),
         }
     }
 

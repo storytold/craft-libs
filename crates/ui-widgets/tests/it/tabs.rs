@@ -537,6 +537,43 @@ fn end_items_drop_their_labels_before_a_tab_overflows() {
     assert!(kept, "a room keeps the contextual tab while a plain tab overflows");
 }
 
+/// The width of the one end item, named "Comments", of a ribbon strip in a wide room: a menu item when `menu`, else a
+/// command item with the same label and icon.
+fn comments_width(menu: bool) -> f32 {
+    use craft_behavior::IconId;
+    use craft_ui::contract::Entry;
+    use craft_ui::runtime::commands::{CommandRef, EditCommands};
+    use craft_ui::tabs::StripEnd;
+    let rows: [Entry<CommandRef>; 1] = [Entry::new(EditCommands::Paste.into(), "Show comments")];
+    let item = if menu {
+        StripEnd::menu("Comments", IconId::new("list").into(), &rows)
+    } else {
+        StripEnd::command("Comments", IconId::new("list").into(), EditCommands::Copy)
+    };
+    let items = [item];
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        ui.set_max_width(2000.0);
+        let keys: Vec<usize> = (0..RIBBON.len()).collect();
+        let source = keyed(&keys, |key: &usize| *key);
+        let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
+        strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+    };
+    frames.idle(3, &mut show);
+    let tree = frames.tree();
+    let buttons = tree.with_role(Role::BUTTON);
+    buttons.iter().find(|key| tree.name_of(**key) == Some("Comments")).and_then(|key| tree.bounds_of(*key)).map_or(0.0, |rect| rect.width())
+}
+
+/// An end item that opens a menu shows the chevron of a menu button after its label, as every button that opens a
+/// menu does; an item that runs a command shows none, so the menu item is wider by the chevron.
+#[trial]
+fn a_menu_end_item_shows_the_menu_chevron() {
+    let (menu, command) = (comments_width(true), comments_width(false));
+    assert!(command > 0.0, "the command item shows");
+    assert!(menu > command + 4.0, "the menu item is wider by its chevron: {menu} against {command}");
+}
+
 /// A contextual tab the source drops fades out at its slot: while it fades it has no node, a click on its slot
 /// selects nothing and the overflow menu does not list it; once the fade ends it is not painted. A frame of two
 /// passes paints the fade as one does. A contextual tab that comes back is hit from its first frame.
