@@ -71,3 +71,47 @@ impl From<crate::mpeg2::Error> for VideoError {
         }
     }
 }
+
+#[cfg(feature = "prores")]
+impl From<crate::prores::Error> for VideoError {
+    fn from(e: crate::prores::Error) -> Self {
+        match e {
+            crate::prores::Error::Unsupported(_) => VideoError::Unsupported(format!("ProRes: {e}")),
+            _ => VideoError::Malformed(format!("ProRes: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "dnx")]
+impl From<crate::dnx::Error> for VideoError {
+    fn from(e: crate::dnx::Error) -> Self {
+        match e {
+            crate::dnx::Error::UnknownCid(_) => VideoError::Unsupported(format!("DNx: {e}")),
+            _ => VideoError::Malformed(format!("DNx: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "apv-decode")]
+impl From<crate::apv::Error> for VideoError {
+    fn from(e: crate::apv::Error) -> Self {
+        VideoError::Malformed(format!("APV: {e}"))
+    }
+}
+
+#[cfg(feature = "ffv1")]
+impl From<crate::ffv1::Error> for VideoError {
+    fn from(e: crate::ffv1::Error) -> Self {
+        match e {
+            crate::ffv1::Error::Unsupported(_) => VideoError::Unsupported(format!("FFV1: {e}")),
+            _ => VideoError::Malformed(format!("FFV1: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "vp8-decode")]
+impl From<crate::vp8::Error> for VideoError {
+    fn from(e: crate::vp8::Error) -> Self {
+        VideoError::Malformed(format!("VP8: {e}"))
+    }
+}
