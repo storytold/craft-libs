@@ -3,7 +3,26 @@
 
 use super::*;
 use std::io::{BufRead, BufReader};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
+
+#[derive(Default)]
+struct ConnectTrace {
+    calls: Vec<(SocketAddr, Duration)>,
+    active: usize,
+    peak: usize,
+}
+
+impl ConnectTrace {
+    fn start(&mut self, addr: SocketAddr, timeout: Duration) {
+        self.calls.push((addr, timeout));
+        self.active += 1;
+        self.peak = self.peak.max(self.active);
+    }
+
+    fn finish(&mut self) {
+        self.active -= 1;
+    }
+}
 
 /// What the fake received: op, attributes, document.
 type Seen = (u16, Vec<Attribute>, Vec<u8>);
@@ -370,16 +389,17 @@ fn a_refused_connection_is_unreachable_and_keeps_why() {
     // The refused-connect path, with the machine no longer deciding what is closed: the connect call
     // is a parameter, so this test cannot race for an ephemeral port with anything.
     let addr: SocketAddr = "192.0.2.9:631".parse().unwrap();
-    let asked_for = std::cell::RefCell::new(None);
-    let open = |seen: SocketAddr, _timeout: Duration| -> std::io::Result<TcpStream> {
-        *asked_for.borrow_mut() = Some(seen);
+    let asked_for = Arc::new(Mutex::new(None));
+    let record = Arc::clone(&asked_for);
+    let open = move |seen: SocketAddr, _timeout: Duration| -> std::io::Result<TcpStream> {
+        *record.lock().unwrap() = Some(seen);
         Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "nobody is listening on this port"))
     };
     let e = match open_tcp("printserver", 631, [addr], open) {
         Ok(_) => panic!("nothing opens {addr}"),
         Err(e) => e,
     };
-    assert_eq!(*asked_for.borrow(), Some(addr), "the connector is handed the resolved address");
+    assert_eq!(*asked_for.lock().unwrap(), Some(addr), "the connector is handed the resolved address");
     match &e {
         Error::Unreachable(m) => {
             assert!(m.contains("printserver:631"), "{e} does not name the endpoint");
@@ -830,21 +850,22 @@ fn a_failed_address_does_not_hide_a_reachable_print_server() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable = listener.local_addr().unwrap();
     let refused: SocketAddr = "[::1]:631".parse().unwrap();
-    let mut asked_for = Vec::new();
-    let mut timeouts = Vec::new();
-    let result = open_tcp("printserver", 631, [refused, reachable], |addr, timeout| {
-        asked_for.push(addr);
-        timeouts.push(timeout);
-        if addr == refused {
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let result = open_tcp("printserver", 631, [refused, reachable], move |addr, timeout| {
+        record.lock().unwrap().start(addr, timeout);
+        let result = if addr == refused {
             Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "first address refused"))
         } else {
             TcpStream::connect_timeout(&addr, timeout)
-        }
+        };
+        record.lock().unwrap().finish();
+        result
     });
     assert!(result.is_ok(), "the second address was not tried");
-    assert_eq!(asked_for, [refused, reachable]);
-    assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
-    assert!(timeouts[0] <= CONNECT / 2, "the first address must leave time for the second");
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [refused, reachable]);
+    assert!(trace.calls.iter().all(|(_, timeout)| !timeout.is_zero() && *timeout <= CONNECT));
     listener.accept().unwrap();
 }
 
@@ -852,10 +873,22 @@ fn a_failed_address_does_not_hide_a_reachable_print_server() {
 fn failed_addresses_keep_the_last_error_and_empty_resolution_stays_clear() {
     let first: SocketAddr = "[::1]:631".parse().unwrap();
     let last: SocketAddr = "127.0.0.1:631".parse().unwrap();
-    let result = open_tcp("printserver", 631, [first, last], |addr, _timeout| {
+    let (release_first, wait_first) = mpsc::channel();
+    let wait_first = Mutex::new(wait_first);
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&completed);
+    let result = open_tcp("printserver", 631, [first, last], move |addr, timeout| {
+        if addr == first {
+            wait_first.lock().unwrap().recv_timeout(timeout).unwrap();
+            record.lock().unwrap().push(addr);
+        } else {
+            record.lock().unwrap().push(addr);
+            release_first.send(()).unwrap();
+        }
         Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, if addr == last { "last refusal" } else { "first refusal" }))
     });
     assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: last refusal"));
+    assert_eq!(*completed.lock().unwrap(), [last, first], "completion order must not choose the final error");
     let result = open_tcp("printserver", 631, [], |_, _| panic!("an empty resolution must not connect"));
     assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: no address"));
 }
@@ -865,23 +898,35 @@ fn a_slow_address_leaves_time_for_a_reachable_print_server() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable = listener.local_addr().unwrap();
     let blackholed: SocketAddr = "[::1]:631".parse().unwrap();
-    let mut asked_for = Vec::new();
-    let mut timeouts = Vec::new();
-    let result = open_tcp("printserver", 631, [blackholed, reachable], |addr, timeout| {
-        asked_for.push(addr);
-        timeouts.push(timeout);
-        if addr == blackholed {
-            // Deterministically consume the first attempt's entire allowance without a real blackhole.
-            std::thread::sleep(timeout);
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let (release, held) = mpsc::channel();
+    let held = Mutex::new(held);
+    let (finished, done) = mpsc::channel();
+    let started = std::time::Instant::now();
+    let result = open_tcp("printserver", 631, [blackholed, reachable], move |addr, timeout| {
+        record.lock().unwrap().start(addr, timeout);
+        let result = if addr == blackholed {
+            let _ = held.lock().unwrap().recv_timeout(timeout);
             Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "first address did not answer"))
         } else {
             TcpStream::connect_timeout(&addr, timeout)
+        };
+        record.lock().unwrap().finish();
+        if addr == blackholed {
+            let _ = finished.send(());
         }
+        result
     });
+    let elapsed = started.elapsed();
+    let _ = release.send(());
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(result.is_ok(), "a timed-out first address hid a reachable second address");
-    assert_eq!(asked_for, [blackholed, reachable]);
-    assert!(timeouts[0] <= CONNECT / 2, "the first address consumed the shared budget");
-    assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
+    assert!(elapsed < Duration::from_secs(2), "the winner waited for a blocked losing worker: {elapsed:?}");
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [blackholed, reachable]);
+    assert!(trace.calls.iter().all(|(_, timeout)| !timeout.is_zero() && *timeout <= CONNECT));
+    assert_eq!(trace.active, 0);
     listener.accept().unwrap();
 }
 
@@ -945,4 +990,127 @@ fn optional_unsupported_operations_still_allow_listing_printers() {
     assert_eq!(printers.len(), 1);
     assert_eq!(printers[0].name, "Office");
     assert!(!printers[0].is_default);
+}
+
+#[test]
+fn a_slow_reachable_first_address_keeps_its_full_connection_window() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let first = listener.local_addr().unwrap();
+    let refused: SocketAddr = "192.0.2.7:631".parse().unwrap();
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let result = open_tcp("printserver", 631, [first, refused], move |addr, timeout| {
+        record.lock().unwrap().start(addr, timeout);
+        let result = if addr == first {
+            let needed = Duration::from_secs(2);
+            std::thread::sleep(timeout.min(needed));
+            if timeout < needed {
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the first address needs two seconds"))
+            } else {
+                TcpStream::connect_timeout(&addr, timeout.saturating_sub(needed).max(Duration::from_nanos(1)))
+            }
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "second address refused"))
+        };
+        record.lock().unwrap().finish();
+        result
+    });
+    assert!(result.is_ok(), "the viable first address lost its original timeout window");
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, refused]);
+    assert_eq!(trace.active, 0);
+    listener.accept().unwrap();
+}
+
+#[test]
+fn failed_attempts_refill_two_connection_slots_in_resolver_order() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reachable = listener.local_addr().unwrap();
+    let blocked: SocketAddr = "192.0.2.1:631".parse().unwrap();
+    let refused: SocketAddr = "192.0.2.2:631".parse().unwrap();
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let (release, held) = mpsc::channel();
+    let held = Mutex::new(held);
+    let (first_started, wait_started) = mpsc::channel();
+    let wait_started = Mutex::new(wait_started);
+    let (finished, done) = mpsc::channel();
+    let result = open_tcp("printserver", 631, [blocked, refused, reachable], move |addr, timeout| {
+        if addr == refused {
+            wait_started.lock().unwrap().recv_timeout(timeout).unwrap();
+        }
+        record.lock().unwrap().start(addr, timeout);
+        let result = if addr == blocked {
+            first_started.send(()).unwrap();
+            let _ = held.lock().unwrap().recv_timeout(timeout);
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "blocked first address"))
+        } else if addr == refused {
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused second address"))
+        } else {
+            TcpStream::connect_timeout(&addr, timeout)
+        };
+        record.lock().unwrap().finish();
+        if addr == blocked {
+            let _ = finished.send(());
+        }
+        result
+    });
+    let _ = release.send(());
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(result.is_ok());
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [blocked, refused, reachable]);
+    assert_eq!(trace.peak, 2, "a slot must refill without launching a third concurrent connector");
+    assert_eq!(trace.active, 0);
+    listener.accept().unwrap();
+}
+
+#[test]
+fn overlapping_attempts_share_one_deadline() {
+    let first: SocketAddr = "192.0.2.1:631".parse().unwrap();
+    let second: SocketAddr = "192.0.2.2:631".parse().unwrap();
+    let third: SocketAddr = "192.0.2.3:631".parse().unwrap();
+    let trace = Arc::new(Mutex::new(ConnectTrace::default()));
+    let record = Arc::clone(&trace);
+    let (finished, done) = mpsc::channel();
+    let started = std::time::Instant::now();
+    let result = open_tcp("printserver", 631, [first, second, third], move |addr, timeout| {
+        record.lock().unwrap().start(addr, timeout);
+        std::thread::sleep(timeout);
+        record.lock().unwrap().finish();
+        finished.send(()).unwrap();
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "address did not answer"))
+    });
+    let elapsed = started.elapsed();
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(result, Err(Error::Unreachable(_))));
+    assert!(elapsed < CONNECT + Duration::from_secs(1), "each worker received a separate budget: {elapsed:?}");
+    let trace = trace.lock().unwrap();
+    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, second]);
+    assert_eq!(trace.peak, 2);
+    assert_eq!(trace.active, 0);
+}
+
+#[test]
+fn a_socket_connecting_after_another_attempt_wins_is_closed() {
+    let loser = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let loser_addr = loser.local_addr().unwrap();
+    let winner = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let winner_addr = winner.local_addr().unwrap();
+    let (release, held) = mpsc::channel();
+    let held = Mutex::new(held);
+    let result = open_tcp("printserver", 631, [loser_addr, winner_addr], move |addr, timeout| {
+        if addr == loser_addr {
+            held.lock().unwrap().recv_timeout(timeout).unwrap();
+        }
+        TcpStream::connect_timeout(&addr, timeout)
+    });
+    let _ = release.send(());
+    assert!(result.is_ok());
+    winner.accept().unwrap();
+    let (mut late, _) = loser.accept().unwrap();
+    late.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let mut byte = [0];
+    assert_eq!(late.read(&mut byte).unwrap(), 0, "the losing socket was retained after the coordinator returned");
 }
