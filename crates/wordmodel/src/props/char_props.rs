@@ -600,10 +600,16 @@ impl CharProps {
     /// the value an unset field resolves to (off, [`DEFAULT_FONT_SIZE`], automatic colour, no border,
     /// snapped to the grid, standard and contextual ligatures…). What
     /// a run moved from one style to another keeps, as Word does bringing a chunk's last
-    /// paragraph in on the document's style of that name. No character style.
+    /// paragraph in on the document's style of that name. No character style, and nothing of
+    /// whether the text is complex script or right to left: Word brings neither `w:cs` nor `w:rtl`
+    /// of the chunk's style along, set or off, and the text keeps what the base says (measured in
+    /// Word for Windows: Thai and Latin drawn at the base's complex-script size under a base
+    /// `w:cs`, at the plain size under a chunk-only `w:cs`).
     pub fn against(&self, base: &CharProps) -> CharProps {
         let mut out = self.clone().minus(base);
         out.style = None;
+        out.cs = None;
+        out.rtl = None;
         self.unset_text_as_default(base, &mut out);
         self.unset_layout_as_default(base, &mut out);
         self.unset_look_as_none(base, &mut out);
@@ -658,8 +664,6 @@ impl CharProps {
             emboss = false,
             engrave = false,
             no_proof = false,
-            rtl = false,
-            cs = false,
             size = DEFAULT_FONT_SIZE,
             underline = Underline::None,
             color = TextColor::Auto,

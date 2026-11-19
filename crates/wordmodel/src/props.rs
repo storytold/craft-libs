@@ -298,6 +298,32 @@ mod tests {
         assert_eq!((out.web_hidden, out.snap_to_grid), (None, None));
     }
 
+    /// Whether the text is complex script or right to left stays the base's, as Word keeps it on a
+    /// chunk's last paragraph: a base `w:cs` isn't turned off (so Arabic and Thai keep the
+    /// complex-script size), and a chunk style's own `w:cs` or `w:rtl`, set or off, doesn't come.
+    #[test]
+    fn against_leaves_complex_script_and_direction_to_the_base() {
+        let base = CharProps { cs: Some(true), rtl: Some(true), size: Some(11.0), size_cs: Some(24.0), ..Default::default() };
+        let out = CharProps { size: Some(11.0), size_cs: Some(24.0), ..Default::default() }.against(&base);
+        assert_eq!((out.cs, out.rtl), (None, None));
+        let look = base.clone().overlaid(&out);
+        let sheet = crate::styles::StyleSheet::default();
+        let rc = sheet.resolve_char(None, &look);
+        assert!(rc.uses_complex('\u{0633}') && rc.uses_complex('A'), "drawn complex script as under the base");
+        assert_eq!(rc.complex().size, 24.0);
+        // Unset in the base, an Arabic letter still takes the complex-script size.
+        let plain = CharProps { size: Some(11.0), size_cs: Some(24.0), ..Default::default() };
+        let rc = sheet.resolve_char(None, &plain.clone().overlaid(&CharProps::default().against(&plain)));
+        assert!(rc.uses_complex('\u{0633}'));
+        // The chunk style's own values, set or off, don't come along.
+        for (cs, rtl) in [(Some(true), Some(true)), (Some(false), Some(false))] {
+            let out = CharProps { cs, rtl, ..Default::default() }.against(&CharProps::default());
+            assert_eq!((out.cs, out.rtl), (None, None), "cs {cs:?} rtl {rtl:?}");
+            let out = CharProps { cs, rtl, ..Default::default() }.against(&base);
+            assert_eq!((out.cs, out.rtl), (None, None), "over the base: cs {cs:?} rtl {rtl:?}");
+        }
+    }
+
     /// Shading and text effects the base gives and the run doesn't are taken off, as Word takes
     /// them off a chunk's last paragraph: overlaid on the base, nothing of them is drawn.
     #[test]
