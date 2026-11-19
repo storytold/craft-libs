@@ -108,7 +108,8 @@ pub struct DecodeOptions {
     pub limits: Limits,
     /// Keep the pixels as stored instead of applying the EXIF / TIFF
     /// orientation (by default they are turned upright and the metadata's
-    /// orientation is rewritten to 1).
+    /// orientation is rewritten to 1). JPEG XL ignores this: `craft-jxl` applies the codestream's
+    /// orientation while rendering, so a JPEG XL image is always upright with orientation 1.
     pub keep_orientation: bool,
 }
 
