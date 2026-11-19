@@ -1333,6 +1333,27 @@ fn moves_inside_the_click_distance_reach_a_tool_that_takes_every_move() {
     }
 }
 
+/// A right-click during a drag asks for the menu where it came up and leaves the drag to the tool: no release and no
+/// cancel until the primary button comes up (a dragged comment keeps moving while its page menu opens).
+#[trial]
+fn a_secondary_click_during_a_drag_asks_for_the_menu_and_the_drag_goes_on() {
+    let log = Log::default();
+    let mut rig = Rig::new(Probe::new("main", &log), &log, None);
+    let at = rig.centre();
+    let menu = at + BY;
+    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(menu)]);
+    rig.fixture.frame(vec![pointer::secondary(menu, true)]).frame(vec![pointer::secondary(menu, false)]);
+    let asked = rig.contexts.borrow().clone();
+    assert_eq!(asked.iter().map(|request| request.at).collect::<Vec<_>>(), [menu], "the secondary release asks once, where it came up");
+    let calls = rig.calls();
+    assert!(!calls.iter().any(|call| call.ends_with("release") || call.ends_with("cancel")), "the drag goes on: {calls:?}");
+    rig.fixture.frame(vec![pointer::moved(menu + BY)]).frame(vec![pointer::release(menu + BY)]);
+    let calls = rig.calls();
+    assert_eq!(calls.iter().filter(|call| call.ends_with("press")).count(), 1, "one gesture: {calls:?}");
+    assert_eq!(calls.last().map(String::as_str), Some("main release"), "it ends on the primary release: {calls:?}");
+    assert_eq!(rig.contexts.borrow().len(), 1, "and asks no more");
+}
+
 #[trial]
 fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
     let log = Log::default();

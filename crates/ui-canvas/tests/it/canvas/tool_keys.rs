@@ -173,6 +173,20 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
 }
 
+/// Escape reaches the active tool as `Cancel` with nothing focused and with the canvas focused, so a tool steps back
+/// out of what it holds (a comment or fill tool leaves for Select) without a gesture to cancel.
+#[trial]
+fn escape_reaches_the_tool_as_cancel_with_nothing_or_the_canvas_focused() {
+    let (mut canvas, ..) = session(false);
+    canvas.fixture().settle();
+    canvas.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [ToolKey::Cancel], "nothing focused: the window's Escape is the tool's");
+    canvas.fixture().key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(canvas.fixture().focused(), Some(canvas.canvas_id()), "Tab focuses the canvas");
+    canvas.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(canvas.tool().seen, [ToolKey::Cancel, ToolKey::Cancel], "the focused canvas's Escape is the tool's");
+}
+
 /// The chords `Claimer` takes through `ToolClaims::keys`.
 fn enter_and_escape() -> &'static [Chord] {
     static KEYS: std::sync::OnceLock<[Chord; 2]> = std::sync::OnceLock::new();

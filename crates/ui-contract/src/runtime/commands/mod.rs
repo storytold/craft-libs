@@ -72,7 +72,9 @@ impl AppCatalog {
         self.generation
     }
 
-    pub(crate) fn defs(&self) -> &[CommandDef] {
+    /// The catalog's rows in the order the app gave them, each with its scope (always [`Scope::app`]), kind and
+    /// default bindings, as a shortcuts list reads them.
+    pub fn defs(&self) -> &[CommandDef] {
         &self.defs
     }
 

@@ -263,6 +263,13 @@ impl<'a> Draw<'a> {
         }
     }
 
+    /// A colour role of the scope's theme, for content that paints a state with no style of its own: a selected row in
+    /// `draw.role(|c| c.state.selected)`, its text in `|c| c.text.on_selected`. It is the colour a style function
+    /// gets from `cx.color(cx.tokens.color.…)` for the same role.
+    pub fn role(&self, pick: impl FnOnce(&craft_theme::ColorTokens) -> craft_theme::Rgba) -> StyleColor {
+        StyleColor(crate::style::rgba_color(pick(&self.env.tokens.color)))
+    }
+
     #[doc(hidden)]
     pub fn width(&self, width: StrokeWidth) -> f32 {
         width.points(self.env.tokens, self.painter.pixels_per_point())
@@ -517,6 +524,13 @@ impl<'a> Draw<'a> {
     /// with the theme's disabled fill instead, as `data_fill` does.
     pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect) {
         data_picture(self.painter, self.env.tokens, self.data, texture, rect, uv, CornerRadius::ZERO);
+    }
+
+    /// The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`](Self::texture):
+    /// `image()` is built on the first request only (see `TextureCache::texture`). A painter with no `egui::Context`
+    /// of its own, such as a canvas tool's paint call, loads its pictures through here.
+    pub fn cached_texture<K: std::hash::Hash + 'static>(&self, key: K, image: impl FnOnce() -> egui::ColorImage) -> TextureId {
+        super::TextureCache::texture(self.painter.ctx(), key, image)
     }
 
     /// Paints `checker` over `rect` with corners `radius`, a light cell at the rect's top left. It shows through data,

@@ -217,7 +217,8 @@ impl<'a> StyleCx<'a> {
         self.values.get::<T>()
     }
 
-    /// The one constructor of `StyleColor`: a semantic token read or a token-group field becomes a style colour here.
+    /// The constructor of `StyleColor` for styles: a semantic token read or a token-group field becomes a style colour
+    /// here. Content paint picks a role through `Draw::role`.
     pub fn color(&self, color: Rgba) -> StyleColor {
         StyleColor(egui_color(color))
     }

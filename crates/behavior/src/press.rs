@@ -284,15 +284,24 @@ pub struct PressState {
     pub sample: Option<PointerSample>,
     /// A drag holds the pointer: nothing else hovers.
     pub captured: bool,
+    /// Where a secondary press made during another open press came up on this part in this pass
+    /// ([`PressStep::aside`]): a context request beside the running phase, which goes on.
+    pub context: Option<Pos2>,
 }
 
 impl PressState {
     /// A part with no press history.
     pub const IDLE: PressState = PressState::new(PressPhase::Idle);
 
-    /// A state in `phase` with no modifiers, sample or capture.
+    /// A state in `phase` with no modifiers, sample, capture or aside context request.
     pub const fn new(phase: PressPhase) -> Self {
-        PressState { phase, mods: Mods::NONE, sample: None, captured: false }
+        PressState { phase, mods: Mods::NONE, sample: None, captured: false, context: None }
+    }
+
+    /// The aside secondary press that came up on the part at `at` in this pass.
+    pub const fn context(mut self, at: Option<Pos2>) -> Self {
+        self.context = at;
+        self
     }
 
     /// The modifiers held.
@@ -458,12 +467,28 @@ pub struct PressStep<T> {
     /// The start of an open press whose sense has `PASSES_DRAG` and no `DRAG` that moved past slop in this pass:
     /// the caller may hand it to the shape below with [`PressMachine::hand_over`].
     pub passes: Option<PressStart>,
+    /// A secondary press that came up in this pass while a primary press stayed open: a right-click during a drag. The
+    /// open press goes on; the aside asks its target for a context menu.
+    pub aside: Option<PressAside<T>>,
 }
 
 impl<T> Default for PressStep<T> {
     fn default() -> Self {
-        PressStep { target: None, phase: None, dragging: false, activated: None, passes: None }
+        PressStep { target: None, phase: None, dragging: false, activated: None, passes: None, aside: None }
     }
+}
+
+/// A secondary press made and released while a primary press was open ([`PressStep::aside`]). Its target is the one
+/// `pick` gave the secondary press, so it senses `Sense::CONTEXT_CLICK`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PressAside<T> {
+    /// The target of the secondary press.
+    pub target: T,
+    /// Where and when the secondary button went down.
+    pub start: PressStart,
+    /// Where it came up, in screen space.
+    pub pos: Pos2,
 }
 
 /// The press winner a root picks at a press position, as [`PressMachine::step`]'s `pick` returns it.
@@ -533,18 +558,20 @@ impl<T> Open<T> {
 #[derive(Clone, Copy, Debug)]
 pub struct PressMachine<T> {
     open: Option<Open<T>>,
+    /// The secondary press held beside the open primary press, with its target and start.
+    aside: Option<(T, PressStart)>,
 }
 
 impl<T> Default for PressMachine<T> {
     fn default() -> Self {
-        PressMachine { open: None }
+        PressMachine { open: None, aside: None }
     }
 }
 
 impl<T: Copy> PressMachine<T> {
     /// A machine with no press.
     pub const fn new() -> Self {
-        PressMachine { open: None }
+        PressMachine { open: None, aside: None }
     }
 
     /// The target of the open press.
@@ -576,6 +603,7 @@ impl<T: Copy> PressMachine<T> {
         // The press released or cancelled in this pass, and whether it was silent: one that ends silent reports nothing.
         let mut released: Option<(T, PressStart, Pos2, bool, bool, bool)> = None;
         let mut cancelled: Option<(T, PressStart, PressCancel, bool)> = None;
+        let mut aside: Option<PressAside<T>> = None;
         // A press passed in the last pass that no shape took is abandoned; that pass reported its `Down`.
         if let Some(open) = &mut self.open
             && open.passing.is_some()
@@ -630,6 +658,16 @@ impl<T: Copy> PressMachine<T> {
                         released = Some((open.target, open.start, up, open.dragging, click, open.silent));
                         self.open = None;
                     }
+                    // A secondary press during an open primary press goes beside it, to the context target `pick` gives
+                    // it, and the primary press goes on (a right-click during a drag asks for the menu there).
+                    if button == PointerButton::Secondary
+                        && self.aside.is_none()
+                        && self.open.is_some_and(|open| open.start.button == PointerButton::Primary)
+                    {
+                        let start = PressStart::new(at, button, time, clicks);
+                        self.aside = pick(at, button).filter(|pick| pick.sense.contains(Sense::CONTEXT_CLICK)).map(|pick| (pick.target, start));
+                        continue;
+                    }
                     // An open press keeps the pointer until its button comes up: no press starts over it, of its own
                     // button (a repeated Down, as a window never sends one) or another. Its moves and its release still
                     // reach it when a modal opened over its target since. A middle press captures for a drag (a canvas
@@ -674,6 +712,12 @@ impl<T: Copy> PressMachine<T> {
                 }
                 PointerEvent::Released { button, pos: at } => {
                     pos = at;
+                    if button == PointerButton::Secondary
+                        && let Some((target, start)) = self.aside.take()
+                    {
+                        aside = Some(PressAside { target, start, pos: at });
+                        continue;
+                    }
                     if self.open.is_some_and(|open| open.start.button != button || open.released_at.is_some()) {
                         continue;
                     }
@@ -691,16 +735,21 @@ impl<T: Copy> PressMachine<T> {
         if self.open.is_some_and(|open| open.released_at.is_none()) && !input.held && released.is_none() {
             self.open = None;
         }
+        // An aside press lasts no longer than the press it went beside.
+        if self.open.is_none() {
+            self.aside = None;
+        }
+        let quiet = PressStep { aside, ..PressStep::default() };
         if let Some((target, start, reason, silent)) = cancelled {
             if silent {
-                return PressStep::default();
+                return quiet;
             }
             let phase = PressPhase::Cancel { start, reason };
-            return PressStep { target: Some(target), phase: Some(phase), dragging: false, activated: None, passes: None };
+            return PressStep { target: Some(target), phase: Some(phase), ..quiet };
         }
         if let Some((target, start, at, was_dragging, click, silent)) = released {
             if silent {
-                return PressStep::default();
+                return quiet;
             }
             let phase = PressPhase::Release { start, pos: at, click };
             return PressStep {
@@ -708,12 +757,12 @@ impl<T: Copy> PressMachine<T> {
                 phase: Some(phase),
                 dragging: was_dragging,
                 activated: (click && start.button == PointerButton::Primary).then_some(target),
-                passes: None,
+                ..quiet
             };
         }
-        let Some(open) = self.open.as_mut() else { return PressStep::default() };
+        let Some(open) = self.open.as_mut() else { return quiet };
         if open.silent {
-            return PressStep::default();
+            return quiet;
         }
         if let Some(at) = &mut open.passing {
             *at = pos;
@@ -733,13 +782,14 @@ impl<T: Copy> PressMachine<T> {
             open.reported = true;
         }
         let passes = open.passing.map(|_| open.start);
-        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes }
+        PressStep { target: Some(open.target), phase: Some(phase), dragging: open.drag_reported, passes, ..quiet }
     }
 
     /// Makes `target` the open press's target in the pass that reported `passes`, dragging from the same
     /// `PressStart`. It returns the `DragStart` step when an earlier pass reported the press, and the `Down` step
     /// (the `DragStart` follows in the next pass) when the move past slop came in the pass of the press itself.
-    /// `None` when no press passes in this pass or `sense` has no `DRAG`; the next pass abandons the press.
+    /// `None` when no press passes in this pass or `sense` has no `DRAG`; the next pass abandons the press. The step
+    /// has no [`aside`](PressStep::aside): that stays the pass's own step's.
     pub fn hand_over(&mut self, target: T, sense: Sense) -> Option<PressStep<T>> {
         let open = self.open.as_mut().filter(|open| !open.abandoned && sense.contains(Sense::DRAG))?;
         let at = open.passing.take()?;
@@ -753,7 +803,7 @@ impl<T: Copy> PressMachine<T> {
             open.reported = true;
             PressPhase::Down { start: open.start }
         };
-        Some(PressStep { target: Some(target), phase: Some(phase), dragging: open.drag_reported, activated: None, passes: None })
+        Some(PressStep { target: Some(target), phase: Some(phase), dragging: open.drag_reported, ..PressStep::default() })
     }
 }
 
@@ -787,6 +837,37 @@ mod tests {
         assert!(matches!(step.phase, Some(PressPhase::Held { .. })), "and stays open");
         let step = pass(&mut machine, &[PointerEvent::released(pos2(0.0, 0.0))], Sense::CLICK);
         assert_eq!(step.activated, Some(1));
+    }
+
+    /// A right-click during a drag goes beside it: the secondary release reports an aside on the context target, and the
+    /// drag goes on to its own release. A secondary press on a target without `CONTEXT_CLICK` reports none.
+    #[test]
+    fn a_secondary_click_during_a_drag_reports_an_aside_and_the_drag_goes_on() {
+        let (from, to, menu) = (pos2(0.0, 0.0), pos2(40.0, 0.0), pos2(40.0, 5.0));
+        let mut machine = PressMachine::new();
+        let mut pass = |events: &[PointerEvent]| {
+            machine.step(PassInput::new(events, SLOP, to, true), |_, button| match button {
+                PointerButton::Secondary => Some(PressPick::new(2, Sense::CLICK | Sense::CONTEXT_CLICK)),
+                _ => Some(PressPick::new(1, Sense::DRAG)),
+            })
+        };
+        pass(&[PointerEvent::pressed(from, 1.0, 1)]);
+        pass(&[PointerEvent::moved(to, None)]);
+        let down = pass(&[PointerEvent::pressed_by(PointerButton::Secondary, menu, 1.2, 1)]);
+        assert!(down.aside.is_none(), "nothing asks before the secondary button comes up");
+        assert!(matches!(down.phase, Some(PressPhase::Drag { .. })), "the drag goes on: {down:?}");
+        let up = pass(&[PointerEvent::released_by(PointerButton::Secondary, menu)]);
+        assert_eq!(up.aside.map(|aside| (aside.target, aside.pos)), Some((2, menu)), "the release asks the context target");
+        assert_eq!(up.target, Some(1), "the drag keeps its target");
+        assert!(up.phase.is_some_and(|phase| phase.is_drag()), "and its drag: {up:?}");
+        let end = pass(&[PointerEvent::released(to)]);
+        assert!(matches!(end.phase, Some(PressPhase::Release { .. })) && end.aside.is_none(), "the drag ends on its own release: {end:?}");
+
+        let mut machine = PressMachine::new();
+        let mut pass = |events: &[PointerEvent]| machine.step(PassInput::new(events, SLOP, to, true), |_, _| Some(PressPick::new(1, Sense::DRAG)));
+        pass(&[PointerEvent::pressed(from, 1.0, 1)]);
+        pass(&[PointerEvent::pressed_by(PointerButton::Secondary, menu, 1.2, 1)]);
+        assert!(pass(&[PointerEvent::released_by(PointerButton::Secondary, menu)]).aside.is_none(), "a drag-only target takes no aside");
     }
 
     /// The phases a sequence of passes reports, as `D`own, `H`eld, `S` (drag start), `G` (drag), `R`elease with `!` for an
