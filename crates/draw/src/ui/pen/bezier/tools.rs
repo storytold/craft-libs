@@ -27,8 +27,8 @@ impl BezierTool {
     ///
     /// - Direct: every part. Convert: anchors and handles, and a straight segment (a drag bends it, or moves a fully
     ///   selected path); never a curved one.
-    /// - Add Anchor: a segment, or an anchor (the press is taken so it starts no path; it reports nothing). Delete
-    ///   Anchor: an anchor, or a segment (taken, nothing reported). Handles are never taken.
+    /// - Add Anchor: every part: a segment adds an anchor, an anchor or a shown handle is selected and dragged as
+    ///   under Direct. Delete Anchor: an anchor, or a segment (a drag bends it). Delete Anchor never takes a handle.
     /// - Auto Add/Delete: a segment, or an anchor that is not the first or last of an open subpath (those are the
     ///   pen draft's: the first closes, the last retracts). Nothing else, so the pen draft starts a path on empty
     ///   canvas.
@@ -42,7 +42,8 @@ impl BezierTool {
             BezierTool::Convert => straight || !matches!(hit, BezierHit::Segment { .. }),
             BezierTool::Anchors => false,
             // The swap with ⌥ changes what a press reports, not what it takes.
-            BezierTool::AddAnchor | BezierTool::DeleteAnchor | BezierTool::Curvature => !matches!(hit, BezierHit::Handle { .. }),
+            BezierTool::AddAnchor => true,
+            BezierTool::DeleteAnchor | BezierTool::Curvature => !matches!(hit, BezierHit::Handle { .. }),
             BezierTool::AutoAddDelete => match hit {
                 BezierHit::Handle { .. } => false,
                 BezierHit::Segment { .. } => true,
@@ -112,9 +113,9 @@ pub(super) fn anchor_click(tool: BezierTool, hit: BezierHit, mods: Mods, selecti
     }
 }
 
-/// The part the hover mark shows for `hit` with `mods` held: what a press would edit. Under Add an anchor and under
-/// Delete a segment are taken and do nothing (PhotoCraft draws no mark there), nor is a hidden anchor under Delete,
-/// which a click only shows. Curvature marks every part it takes.
+/// The part the hover mark shows for `hit` with `mods` held: what a press would add or delete. Under Add an anchor or
+/// a handle (which a press selects and drags as Direct does) and under Delete a segment get no mark (PhotoCraft draws
+/// none there), nor does a hidden anchor under Delete, which a click only shows. Curvature marks every part it takes.
 pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods, selection: &PathSelection) -> Option<BezierHit> {
     // pc: crates/ui-egui/src/tools/anchor_tools.rs:152-169 `draw_hover`, `draw_pen_hover`;
     // crates/ui-egui/src/tools/direct_select.rs:378-389 `curvature_hover`.

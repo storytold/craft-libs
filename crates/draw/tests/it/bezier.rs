@@ -809,6 +809,116 @@ fn alt_under_add_anchor_selects_or_copies_the_whole_subpath() {
     assert!(matches!(h.last_change(), Some(PathEdit::InsertAnchor { path: 1, .. })), "{:?}", h.last_change());
 }
 
+// Add Anchor selects and edits the anchors and handles a path has, as Direct Selection does and as the reference
+// application measures (PhotoCraft #12708): a click on an anchor selects it and ⇧ adds one, with no edit; a drag moves
+// the anchor in one gesture; dragging a smooth anchor's handle turns the other one, ⌥ moves it alone; a click on empty
+// canvas deselects the anchors and keeps the path; a click on a segment still adds an anchor; ⌥ on an anchor deletes
+// nothing (PhotoCraft #12709).
+#[trial]
+fn add_anchor_selects_and_edits_existing_anchors_and_handles() {
+    let add_anchor = || {
+        let mut h = two_paths();
+        h.update(|st| st.tool = BezierTool::AddAnchor);
+        h
+    };
+    let click = |h: &mut Harness, at: Pos2| {
+        h.press_at(at);
+        h.release_at(at);
+    };
+    let (corner, smooth) = (p(160.0, 60.0), p(260.0, 60.0));
+
+    let mut h = add_anchor();
+    let at = h.screen(corner);
+    click(&mut h, at);
+    assert_eq!(h.state.borrow().selection, sel(1, &[(0, 1)]));
+    let at = h.screen(smooth);
+    h.fixture.hold(egui::Modifiers::SHIFT);
+    click(&mut h, at);
+    h.fixture.hold(egui::Modifiers::NONE);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[(0, 1), (0, 2)]));
+        assert!(st.changes.is_empty() && st.seen.is_empty(), "a click edits nothing: {:?} {:?}", st.changes, st.seen);
+        assert_eq!(st.paths, [path_a(), path_b()]);
+    }
+
+    // A drag on an anchor moves it with its handles, in one gesture, and adds nothing.
+    let mut h = add_anchor();
+    let at = h.screen(corner);
+    h.drag(at, vec2(30.0, -20.0));
+    {
+        let st = h.state.borrow();
+        assert!(
+            matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 1, anchors, by }) if anchors == &[kr(1)] && near(Point::ZERO + *by, p(30.0, -20.0))),
+            "{:?}",
+            st.changes
+        );
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+        assert_eq!(st.paths[0].subpaths[0].knots.len(), 4, "no anchor added");
+        assert!(near(st.paths[0].subpaths[0].knots[1].anchor, p(190.0, 40.0)));
+    }
+
+    // The smooth anchor's out handle, shown once the anchor is selected: a drag turns the in handle opposite, with its
+    // length; ⌥ moves the dragged handle alone.
+    for alt in [false, true] {
+        let mut h = add_anchor();
+        let at = h.screen(smooth);
+        click(&mut h, at);
+        let handle = h.screen(p(290.0, 100.0));
+        h.fixture.hold(if alt { egui::Modifiers::ALT } else { egui::Modifiers::NONE });
+        h.drag(handle, vec2(0.0, 40.0));
+        h.fixture.hold(egui::Modifiers::NONE);
+        let st = h.state.borrow();
+        assert!(
+            matches!(st.changes.last(), Some(PathEdit::MoveHandle { path: 1, knot, side: HandleSide::Out, alone, .. }) if *knot == kr(2) && *alone == alt),
+            "{alt}: {:?}",
+            st.changes
+        );
+        let k = st.paths[0].subpaths[0].knots[2];
+        assert!(near(k.out_ctrl, p(290.0, 140.0)), "{alt}: {k:?}");
+        if alt {
+            assert!(near(k.in_ctrl, p(230.0, 20.0)), "the in handle stays: {k:?}");
+        } else {
+            let (was, is) = (p(230.0, 20.0).distance(p(260.0, 60.0)), k.in_ctrl.distance(k.anchor));
+            assert!((was - is).abs() < 1e-6, "the in handle keeps its length: {was} {is}");
+            let (o, i) = (k.out_ctrl - k.anchor, k.in_ctrl - k.anchor);
+            assert!((o.x * i.y - o.y * i.x).abs() < 1e-6 && o.dot(i) < 0.0, "the in handle turns opposite: {k:?}");
+        }
+    }
+
+    // A click on empty canvas deselects the anchors and keeps the path, with no edit.
+    let mut h = add_anchor();
+    h.update(|st| st.selection = sel(1, &[(0, 1)]));
+    let empty = h.screen(p(320.0, 250.0));
+    click(&mut h, empty);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[]));
+        assert!(st.changes.is_empty() && st.seen.is_empty(), "{:?} {:?}", st.changes, st.seen);
+    }
+
+    // A click on a segment still adds an anchor, the only one selected.
+    let at = h.screen(p(110.0, 60.0));
+    click(&mut h, at);
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::InsertAnchor { path: 1, .. })), "{:?}", st.changes);
+        assert_eq!(st.selection, sel(1, &[(0, 1)]));
+    }
+
+    // ⌥ on an anchor deletes nothing and edits nothing (PhotoCraft #12709).
+    let mut h = add_anchor();
+    let at = h.screen(corner);
+    h.fixture.hold(egui::Modifiers::ALT);
+    click(&mut h, at);
+    h.fixture.hold(egui::Modifiers::NONE);
+    {
+        let st = h.state.borrow();
+        assert!(st.deletes.is_empty() && st.changes.is_empty(), "{:?} {:?}", st.deletes, st.changes);
+        assert_eq!(st.paths, [path_a(), path_b()]);
+    }
+}
+
 // The anchor tools' canvas tool: a press off the paths begins nothing (it never starts a path), and off the paths the
 // cursor says what a click does: the arrow for Add Anchor (with "+" under ⌥, PhotoCraft #12709), the pen
 // with "-" for Delete Anchor, the Convert Point icon, the arrow for Direct Selection and under ⌘, the crosshair when
