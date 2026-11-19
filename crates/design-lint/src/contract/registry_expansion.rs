@@ -33,6 +33,10 @@ fn has_registration(tokens: TokenStream) -> bool {
                 attrs.push(attr);
                 i += 2;
             }
+            if attrs.is_empty() {
+                i += 1;
+                continue;
+            }
             if attrs.iter().any(|attr| words(attr).first().is_some_and(|word| *word == "story" || *word == "trial")) {
                 return true;
             }
@@ -85,9 +89,7 @@ struct Walk<'a, 'b> {
 
 impl<'ast> Visit<'ast> for Walk<'_, '_> {
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        let hidden = if item.mac.path.is_ident("macro_rules") {
-            has_registration(item.mac.tokens.clone())
-        } else if item.mac.path.is_ident("include") {
+        let hidden = if item.mac.path.is_ident("include") {
             syn::parse2::<syn::LitStr>(item.mac.tokens.clone())
                 .ok()
                 .and_then(|path| self.cx.path.parent().map(|parent| parent.join(path.value())))
@@ -95,7 +97,7 @@ impl<'ast> Visit<'ast> for Walk<'_, '_> {
                 .and_then(|source| TokenStream::from_str(&source).ok())
                 .is_some_and(has_registration)
         } else {
-            false
+            has_registration(item.mac.tokens.clone())
         };
         if hidden {
             self.cx.flag_span(self.out, ID, ID, item.span(), "suite registration inside a macro or include is invisible to registry!".to_owned());
@@ -117,6 +119,14 @@ mod tests {
         let source = r#"macro_rules! stories { ($($name:ident),*) => { $( #[story(Widget, covers = [])] fn $name() {} )* }; }"#;
         let file = syn::parse_file(source).expect("valid macro definition");
         let syn::Item::Macro(item) = &file.items[0] else { panic!("expected macro definition") };
+        assert!(has_registration(item.mac.tokens.clone()));
+    }
+
+    #[test]
+    fn detects_trial_inside_a_proptest_invocation() {
+        let source = "proptest! { #![proptest_config(ProptestConfig::with_cases(48))] #[trial] fn roundtrip(value in 0u8..4) {} }";
+        let file = syn::parse_file(source).expect("valid macro invocation");
+        let syn::Item::Macro(item) = &file.items[0] else { panic!("expected macro invocation") };
         assert!(has_registration(item.mac.tokens.clone()));
     }
 
