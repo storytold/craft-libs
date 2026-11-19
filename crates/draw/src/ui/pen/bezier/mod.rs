@@ -68,9 +68,11 @@ pub enum BezierTool {
     Anchors,
     /// Add Anchor Point: a click on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
     /// inserts it and pulls out its handles as the Pen does ([`PathEdit::PullAnchor`]: ⇧ turns them to the nearest
-    /// 45°, ⌥ during the drag breaks the pair); the new anchor is selected; ⌥ makes it Delete Anchor Point. Hover:
-    /// the segment mark with the anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor the arrow; the
-    /// crosshair under the canvas's precise cursor ([`CanvasSpace::precise`]).
+    /// 45°, ⌥ during the drag breaks the pair); the new anchor is selected. With ⌥ held at the press a click on a
+    /// segment selects its whole subpath and a drag moves a copy of it ([`PathEdit::DuplicateSubpath`]; the subpath
+    /// itself on a path that takes no copies), and a press on an anchor does nothing. Hover: the segment mark with the
+    /// anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor the arrow; with ⌥ no mark and the arrow
+    /// with "+"; the crosshair under the canvas's precise cursor ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -590,6 +592,8 @@ impl<'a> BezierOverlay<'a> {
             return self.target(hit, start, mods, paths);
         }
         match hit {
+            // Add Anchor with ⌥ takes the whole subpath as Direct's ⌥ does (PhotoCraft #12709).
+            BezierHit::Segment { .. } if self.tool.takes_subpath(mods) => self.target(hit, start, mods, paths),
             // Add Anchor's drag pulls out the new anchor's handles (PhotoCraft #12707); Auto Add/Delete's, and Delete
             // Anchor's with ⌥, moves it.
             BezierHit::Segment { path, segment, t } if self.tool == BezierTool::AddAnchor && self.tool.adds(mods) => {
@@ -676,7 +680,7 @@ impl<'a> BezierOverlay<'a> {
                     self.report.select = Some(self.selecting(path, anchors.clone(), None));
                     // pc: crates/ui-egui/src/tools/direct_select.rs `alt_duplicates` (#13211): Photoshop was not
                     // measured with ⌘, Ctrl or ⇧ held too; those move the subpath.
-                    let copies = self.tool == BezierTool::Direct
+                    let copies = matches!(self.tool, BezierTool::Direct | BezierTool::AddAnchor)
                         && !mods.cmd
                         && !mods.ctrl
                         && !mods.shift
