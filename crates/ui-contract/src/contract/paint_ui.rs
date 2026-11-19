@@ -166,11 +166,18 @@ impl PaintUi<'_> {
         layout_memory::boundary(&ctx, true, || {
             let placed = crate::layout::ColumnGroup::field(&mut *self.ui, |ui| label::leaf(ui, &env, &at, &mut child, None));
             let mut control = placed.control;
+            let mut prepared = None;
             if child.fills() != Some(craft_behavior::Axis::Y) {
-                let ideal = run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under));
+                let ideal = if self.fade.is_none() {
+                    let (ideal, kept) = run::measure_under_prepared(&mut child, &*self.ui, id, craft_behavior::Proposal::Ideal, &under);
+                    prepared = kept;
+                    ideal
+                } else {
+                    run::measure_under(&mut child, &*self.ui, Some(id), craft_behavior::Proposal::Ideal, Some(&under))
+                };
                 control.max.y = control.max.y.min(control.min.y + ideal.y);
             }
-            let output = self.child_with(id, control, child, None, under.inside.clone());
+            let output = self.child_with_prepared(id, control, child, None, under.inside.clone(), prepared);
             placed.finish(&ctx);
             output
         })
@@ -179,6 +186,18 @@ impl PaintUi<'_> {
     /// Shows `child` at `rect` under the composite's `enabled` and `size`, and `inside`, the inside label of the side
     /// label the child is the control of.
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
+        self.child_with_prepared(id, rect, child, tip, inside, None)
+    }
+
+    fn child_with_prepared<C: Show>(
+        &mut self,
+        id: Id,
+        rect: Rect,
+        child: C,
+        tip: Option<TipFn<'_>>,
+        inside: Option<Arc<InsideLabel>>,
+        prepared: Option<run::PreparedLeaf<C>>,
+    ) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
         let kids = self.kids.get_or_insert_with(|| {
@@ -186,7 +205,10 @@ impl PaintUi<'_> {
             alloc::child(parent, access::with_parent(builder, self.id))
         });
         let ctx = kids.ctx().clone();
-        let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        let source = Env::of(kids);
+        let child = super::Props::id(child, id);
+        let prepared = prepared.filter(|prepared| self.fade.is_none() && prepared.matches(&child, &source));
+        let env = super::cx::child_env(&source, &super::cx::Under { enabled: self.enabled, size: self.size, inside });
         // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
         let env = match self.fade {
             Some(_) => {
@@ -200,7 +222,10 @@ impl PaintUi<'_> {
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
-        let output = layout_memory::boundary(&ctx, true, || run::show_leaf(&mut Some(super::Props::id(child, id)), kids, ShowAt::Rect(rect), tip));
+        let output = layout_memory::boundary(&ctx, true, || match prepared {
+            Some(prepared) => run::show_leaf_prepared(&mut Some(child), kids, ShowAt::Rect(rect), tip, prepared),
+            None => run::show_leaf(&mut Some(child), kids, ShowAt::Rect(rect), tip),
+        });
         Env::restore(&ctx, installed);
         output
     }

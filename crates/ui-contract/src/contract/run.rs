@@ -29,8 +29,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_under, measured_extent, member_prepare, member_show, paint_face, show_container,
-    show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, PreparedLeaf, measure_container, measure_under, measure_under_prepared, measured_extent, member_prepare,
+    member_show, paint_face, show_container, show_container_taking, show_items, show_leaf, show_leaf_prepared,
 };
 
 /// Where a component is placed.
@@ -1387,22 +1387,31 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
+pub(super) struct PreparedStep {
+    step1: steps::EnvStep,
+    style: Arc<dyn StyleView>,
+}
+
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    run_with(t, ui, at, tip, None);
+}
+
+fn run_with(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {
             let ctx = ui.ctx().clone();
-            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip));
+            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip, prepared));
         }
-        None => run_steps(t, ui, at, tip),
+        None => run_steps(t, ui, at, tip, prepared),
     }
 }
 
 /// Steps 1 to 17 of `run`. A component's children run inside step 5 (a body's measuring run) and inside the passes
 /// of steps 6 to 16, so the frames on that path keep only what the run reads after them: each step runs in its own
 /// function, and `run_steps` holds what steps 1 to 5 found.
-fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    let begun = begin(t, ui);
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
+    let begun = begin(t, ui, prepared);
     let mut stage = begun.open_stage(t);
     let mixed = value_step(t, &begun, &mut stage);
     let resolved = begun.resolved(t);
@@ -1467,7 +1476,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
+fn begin(t: &mut dyn Erased, ui: &Ui, prepared: Option<PreparedStep>) -> Begun {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1484,9 +1493,14 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     // scope, and everything it shows inherits it.
     let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
-    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
-    // 2 style
-    let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+    let (step1, style) = match prepared {
+        Some(prepared) => (prepared.step1, prepared.style),
+        None => {
+            let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
+            let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+            (step1, style)
+        }
+    };
     // 3 id
     let id = steps::id(ui, &common.id, !sizing, true, facts.style_key, facts.name);
     if recording {
@@ -1843,6 +1857,10 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
 pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> Vec2 {
+    measure_shape_with(t, ui, id, proposal, under).0
+}
+
+fn measure_shape_with(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> (Vec2, steps::EnvStep) {
     let facts = t.facts();
     let env = match under {
         Some(under) => super::cx::child_env(&Env::of(ui), under),
@@ -1879,7 +1897,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
     if let Some(key) = t.bind_key(id) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
     }
-    took
+    (took, step1)
 }
 
 /// The flags a host passes to its faces: the validity of its value. The rest (focus, selection, open) belong to the

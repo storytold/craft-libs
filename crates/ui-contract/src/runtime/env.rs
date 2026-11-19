@@ -416,6 +416,11 @@ impl EnvCapture {
 }
 
 impl Env {
+    /// Whether both views come from the same immutable scope. A derived scope has a different source.
+    pub(crate) fn same_source(&self, other: &Env) -> bool {
+        Arc::ptr_eq(&self.scoped, &other.scoped)
+    }
+
     /// The word set `L` in the scope's language.
     pub fn words<L: WordSet + Send + Sync + 'static>(&self) -> Arc<L> {
         self.words.set::<L>()

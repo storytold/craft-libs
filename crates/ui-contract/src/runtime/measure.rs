@@ -214,6 +214,35 @@ pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<BodyRuns, _>(ctx, |log| log.runs.clone())
 }
 
+/// Adjacent leaf measures whose environment and style steps were reused in the current pass.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct PreparedLeafCounts {
+    pass: u64,
+    count: u32,
+}
+
+#[cfg(feature = "testing")]
+pub(crate) fn count_prepared_leaf(ctx: &Context) {
+    if active(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<PreparedLeafCounts, _>(ctx, |counts| {
+        if counts.pass != pass {
+            *counts = PreparedLeafCounts { pass, count: 0 };
+        }
+        counts.count += 1;
+    });
+}
+
+/// Adjacent leaf measures whose steps were reused in the last pass.
+#[cfg(feature = "testing")]
+pub fn last_pass_prepared_leaves(ctx: &Context) -> u32 {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    store::with::<PreparedLeafCounts, _>(ctx, |counts| if counts.pass == last { counts.count } else { 0 })
+}
+
 /// Counts a run of a component of the type `name` in this pass, measuring or real. Counts nothing without `testing`.
 pub(crate) fn count_run(ctx: &Context, name: &'static str) {
     #[cfg(feature = "testing")]
