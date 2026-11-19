@@ -364,8 +364,10 @@ impl<'b> BodyHooks<'b> {
         let top = inner.min.y + stacked_h;
         // Along an axis the container is not given, its body is offered the room the container was offered and the
         // container takes what the body took.
-        let content_sized = self.sizing(props) == Sizing::Content;
-        let content_y = content_sized || ((self.sizing(props) == Sizing::Fill || !inner.max.y.is_finite()) && !self.given.1);
+        // `content_sized` is the width's rule (`FillHeight` takes its content's width); the height has its own.
+        let content_sized = self.sizing(props).content_width();
+        let content_y =
+            self.sizing(props) == Sizing::Content || ((self.sizing(props).fills_height() || !inner.max.y.is_finite()) && !self.given.1);
         let (bottom, footer_top) = if content_y {
             let body_room = (room.y - stacked_h - across_h).max(0.0);
             // A body that fills records the band it was given, which may predate the footer's measure: the line is

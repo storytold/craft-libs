@@ -516,12 +516,17 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 };
                 Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
             }
+            // Its content's width, and the height as `Fill` takes it.
+            Sizing::FillHeight => {
+                let room = crate::layout::flow_room(ui);
+                Vec2::new(size.x, crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, room.y, self.given.1))
+            }
             Sizing::Content => size,
         }
     }
 
     fn fills_width(&self, comp: &C) -> bool {
-        self.sizing(comp.props(Internal::new())) != Sizing::Content
+        !self.sizing(comp.props(Internal::new())).content_width()
     }
 
     fn fills_width_only(&self, comp: &C) -> bool {
@@ -825,7 +830,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 owner: id,
                 parent: node.then_some(id),
                 row: regions.body,
-                room: if self.sizing(&props) == Sizing::Content {
+                room: if self.sizing(&props).content_width() {
                     layout::ambient_room(&ctx).map_or(room.x, |offered| room.x.max(offered))
                 } else {
                     regions.body.width()
