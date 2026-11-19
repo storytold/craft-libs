@@ -1,6 +1,6 @@
 use super::hammer;
 use crate::obj::{material_names, read, read_mtl, sibling_name, write, write_mtl};
-use crate::{AlphaMode, Corner, Error, Limits, Material, Mesh, NONE, Part, Scene, no_external};
+use crate::{AlphaMode, Corner, Error, Image, Limits, Material, Mesh, NONE, Part, Scene, TextureRef, no_external};
 
 /// A unit cube with texture coordinates, normals, two materials and one face written with
 /// negative references.
