@@ -97,7 +97,6 @@ fn round_trip_keeps_values_and_unknown_keys() {
     assert_eq!(format::write(&again).unwrap(), text, "writing is stable");
 }
 
-<<<<<<< HEAD
 /// An app's own `shape` replaces the theme's for that app only (WordCraft's rounded-rectangle buttons under
 /// ArtCraft's capsules), and it is written back.
 #[test]
@@ -117,7 +116,8 @@ fn an_apps_own_shape_replaces_the_themes_for_that_app() {
     let mut bad = full();
     bad["apps"]["photocraft"]["shape"] = json!({ "button_radius": -1 });
     assert!(!errors(&bad).is_empty(), "an app's shape is checked as a theme's");
-=======
+}
+
 /// A pack set on a file without one is written; clearing it removes the key and keeps the file's unknown keys; a
 /// value that is not a well-formed pack id is an error at its key.
 #[test]
@@ -143,7 +143,6 @@ fn the_icon_pack_is_added_cleared_and_checked() {
         assert_eq!(e.len(), 1, "{bad}: {e:?}");
         assert!(e[0].starts_with("icon_pack: "), "{bad}: {e:?}");
     }
->>>>>>> up/next
 }
 
 /// A theme file with the given light-mode pins.

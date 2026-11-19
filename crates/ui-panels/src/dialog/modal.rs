@@ -36,9 +36,8 @@ type OnPickFn<'a> = Box<dyn FnMut(&FooterButton, &mut BodyCx<'_>) + 'a>;
 
 type SettleFn<'a> = Box<dyn FnMut(&mut BodyCx<'_>, &mut [FooterButton]) + 'a>;
 
-<<<<<<< HEAD
 type RefusalFn<'a> = Box<dyn FnMut() -> Option<Label> + 'a>;
-=======
+
 /// Where a dialog's buttons stand. Wherever they stand, the dialog shows them: their roles, the platform's order,
 /// Enter and Escape, access keys, the close guard and `on_pick` are the dialog's.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -54,7 +53,6 @@ pub enum ButtonPlace {
     /// buttons above its second field group. The body shows exactly one slot.
     Body,
 }
->>>>>>> up/next
 
 /// A dialog on its own layer. It opens in the middle of the window, moves by its title band, scrolls its body when the
 /// window is smaller and traps the keyboard focus while it is open.

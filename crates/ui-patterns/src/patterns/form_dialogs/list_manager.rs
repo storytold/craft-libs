@@ -383,31 +383,18 @@ impl<'a> ListManager<'a> {
                 button
             })
             .collect();
-<<<<<<< HEAD
         buttons.push(FooterButton::new(cancel_label.unwrap_or_else(|| common.cancel.clone()), DialogRole::Cancel));
         let settled = Rc::clone(&name_box);
-        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(false).side_buttons(true).buttons(buttons).settle_buttons(
-            move |cx, buttons| {
-                let folder = cx.env.folder();
-                let typed = text_of(&mut settled.borrow_mut(), cx);
-                for (button, action) in buttons.iter_mut().zip(actions) {
-                    button.set_enabled(is_enabled(action, entries, &folder, &typed, name_check));
-                }
-            },
-        );
-=======
-        buttons.push(FooterButton::new(common.cancel.clone(), DialogRole::Cancel));
         let mut dialog =
             Dialog::new(title.clone()).collection_body().close_on_enter(false).button_place(ButtonPlace::Side).buttons(buttons).settle_buttons(
                 move |cx, buttons| {
                     let folder = cx.env.folder();
-                    let typed = cx.memory::<Session>().name.clone();
+                    let typed = text_of(&mut settled.borrow_mut(), cx);
                     for (button, action) in buttons.iter_mut().zip(actions) {
-                        button.set_enabled(is_enabled(action, entries, &folder, &typed));
+                        button.set_enabled(is_enabled(action, entries, &folder, &typed, name_check));
                     }
                 },
             );
->>>>>>> up/next
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }

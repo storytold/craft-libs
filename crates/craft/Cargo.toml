@@ -95,7 +95,6 @@ craft-flow = { workspace = true, optional = true }
 craft-gainmap = { workspace = true, optional = true }
 craft-gcode = { workspace = true, optional = true }
 craft-gif = { workspace = true, optional = true }
-craft-gpu = { workspace = true, optional = true }
 craft-hdr = { workspace = true, optional = true }
 craft-heif = { workspace = true, optional = true }
 craft-html = { workspace = true, optional = true }
@@ -300,11 +299,8 @@ audio-eac3-encode = ["audio", "craft-audio/eac3-encode"]
 audio-encode = ["audio", "craft-audio/encode"]
 audio-flac-decode = ["audio", "craft-audio/flac-decode"]
 audio-flac-encode = ["audio", "craft-audio/flac-encode"]
-<<<<<<< HEAD
-=======
 audio-g722 = ["audio", "craft-audio/g722"]
 audio-g726 = ["audio", "craft-audio/g726"]
->>>>>>> up/next
 audio-gsm = ["audio", "craft-audio/gsm"]
 audio-gsm-decode = ["audio", "craft-audio/gsm-decode"]
 audio-gsm-encode = ["audio", "craft-audio/gsm-encode"]
@@ -355,11 +351,8 @@ codepage = ["dep:craft-codepage"]
 
 color = ["dep:craft-color"]
 
-<<<<<<< HEAD
-=======
 color-transform = ["dep:craft-color-transform"]
 
->>>>>>> up/next
 color-ui = ["dep:craft-color-ui", "keymap", "settings", "window", "platform"]
 
 control = ["dep:craft-control"]
@@ -382,17 +375,13 @@ deckcraft-format = ["dep:craft-deckcraft-format"]
 
 designcraft-format = ["dep:craft-designcraft-format"]
 
-<<<<<<< HEAD
-dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
-=======
 develop = ["dep:craft-develop"]
 
 develop-model = ["dep:craft-develop-model"]
 
 dex = ["dep:craft-dex"]
 
-dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
->>>>>>> up/next
+dialogs = ["dep:craft-dialogs", "browse"] # native only: rfd's folder picker and file paths
 
 doc = ["dep:craft-doc"]
 doc-pcraft-pixels = ["doc", "craft-doc/pcraft-pixels"]
@@ -492,9 +481,8 @@ gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
 
 gpu = ["dep:craft-gpu"]
+gpu-startup = ["gpu", "craft-gpu/startup"]
 
-<<<<<<< HEAD
-=======
 gpu-null = ["dep:craft-gpu-null"]
 
 gpu-providers = ["dep:craft-gpu-providers"]
@@ -506,7 +494,6 @@ gpu-wgpu-native-gles = ["gpu-wgpu", "craft-gpu-wgpu/native-gles"]
 gpu-wgpu-native-metal = ["gpu-wgpu", "craft-gpu-wgpu/native-metal"]
 gpu-wgpu-native-vulkan = ["gpu-wgpu", "craft-gpu-wgpu/native-vulkan"]
 
->>>>>>> up/next
 gridcraft-format = ["dep:craft-gridcraft-format"]
 
 gzip = ["dep:craft-gzip"]

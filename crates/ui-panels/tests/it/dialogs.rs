@@ -382,7 +382,6 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
 }
 
-<<<<<<< HEAD
 /// The title of the hosted modal the nudge and popup trials open.
 const NUDGED: &str = "Nudge probe";
 
@@ -622,10 +621,10 @@ fn shows_modal_follows_the_open_dialogs_modality() {
     assert!(!host.shows_modal(), "with the modal closed only the modeless dialog is open");
     host.get_mut::<Tool>().expect("the tool is open").modeless = false;
     assert!(host.shows_modal(), "the modality is the dialog's current state");
-=======
+}
+
 /// A dialog with a text field and a number field before any other control, holding `name` and `radius`.
 fn first_field_dialog(name: Rc<RefCell<String>>, radius: Rc<Cell<Option<f64>>>, number_first: bool) -> Fixture {
-    use craft_ui::contract::Bind;
     use craft_ui::text::{NumberField, TextField};
     Fixture::new(move |ui| {
         let mut open = true;
@@ -665,5 +664,4 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     }
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
->>>>>>> up/next
 }

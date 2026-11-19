@@ -60,39 +60,10 @@ impl<'a> Body<'a> {
         });
     }
 
-<<<<<<< HEAD
-    /// The compare swatch: the colour being edited over the current one, with their captions; a click on the current
-    /// half sets it.
-    pub(super) fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<PickedColor>, words: &ColorPickerWords, got: &mut Collected) {
-        let caption = |text: &str| Text::new(text.to_owned()).role(TypeRole::Caption).shade(Shade::Muted);
-        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
-            caption(words.new_caption.as_str()).show(ui);
-            Stack::new().gap(Gap::None).show(ui, |ui, _| {
-                Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).sizing(Sizing::FillWidth).show(ui);
-                let restore = words.restore.as_str().to_owned();
-                let shown = match current {
-                    Mixed::Same(current) => Mixed::Same(current.color),
-                    Mixed::Mixed => Mixed::Mixed,
-                };
-                if Swatch::new(restore.clone(), shown).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
-                    && let Mixed::Same(current) = current
-                {
-                    got.clicks.push(current);
-                }
-            });
-            caption(words.current_caption.as_str()).show(ui);
-        });
-    }
-
-    /// The channel grid: one column of fields per group of models, each column sharing its label column, with the
-    /// radios of "Field shows" in front of the channels that choose an area mode, and the hex field under the first.
-    fn grid(&self, ui: &mut Ui, pass: &Pass<'a>, visible: &[&dyn ColorModel], words: &ColorPickerWords, got: &mut Collected) {
-=======
     /// The compare block and the actions cell over the two field groups, in a grid whose columns never stack: the
     /// actions cell stands over the second group, and both groups start under the taller of the two cells. The radios
     /// of "Field shows" are one group across both.
     fn right_half(&self, ui: &mut Ui, pass: &Pass<'a>, visible: &[&dyn ColorModel], words: &ColorPickerWords, got: &mut Collected) {
->>>>>>> up/next
         let offered = ColorPicker::offered(&self.models);
         let choice = ModelChoice { visible, offered: &offered, words };
         let (first, second): (Vec<&'a dyn ColorModel>, Vec<&'a dyn ColorModel>) = self.models.iter().copied().partition(|m| in_first_group(*m));
@@ -113,8 +84,9 @@ impl<'a> Body<'a> {
     }
 
     /// The compare block, the colour being edited over the one the picker started from, with the warnings column after
-    /// it; a click on the current half or on a warning sets that colour.
-    fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
+    /// it; a click on the current half or on a warning sets that colour. The Compact layout shows it beside its area
+    /// when the host gives a compare colour.
+    pub(super) fn compare_block(&self, ui: &mut Ui, pass: &Pass<'a>, words: &ColorPickerWords, got: &mut Collected) {
         let current = match pass.compare {
             Mixed::Same(current) => Mixed::Same(current.color),
             Mixed::Mixed => Mixed::Mixed,

@@ -308,15 +308,9 @@ pub struct ColorPicker<'a> {
     /// The host's answer to a screen or canvas pick, for this pass; a `Set` that keeps the picker's alpha.
     #[prop]
     sampled: Option<Srgba>,
-<<<<<<< HEAD
-    /// Whether the Full layout focuses its hex field when it first shows; on by default.
-    #[prop]
-    focus_on_open: bool,
     /// The Compact rows' model, held by the host; kept per picker without it.
     #[prop]
     shown_model: Option<Bind<'a, Option<&'static str>>>,
-=======
->>>>>>> up/next
 }
 
 impl<'a> ColorPicker<'a> {
@@ -337,11 +331,7 @@ impl<'a> ColorPicker<'a> {
             warnings: Vec::new(),
             constrain: None,
             sampled: None,
-<<<<<<< HEAD
-            focus_on_open: true,
             shown_model: None,
-=======
->>>>>>> up/next
         }
     }
 
@@ -399,16 +389,13 @@ impl<'a> ColorPicker<'a> {
             warnings,
             constrain,
             sampled,
-<<<<<<< HEAD
-            focus_on_open,
             mut shown_model,
-=======
->>>>>>> up/next
         } = self;
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models
             .unwrap_or_else(|| builtin_models().into_iter().filter(|m| if full { m.default_on().full } else { m.default_on().compact }).collect());
-        let parts = compact::Body { layout, models: models.clone(), warnings, alpha, dynamic_tracks, eyedropper, eyedropper_busy };
+        let parts =
+            compact::Body { layout, models: models.clone(), warnings, compare: compare.is_some(), alpha, dynamic_tracks, eyedropper, eyedropper_busy };
         let mut run = Run {
             name: Arc::from(label.as_str()),
             full,
@@ -478,16 +465,12 @@ impl<'a> Run<'_, 'a> {
         }
 
         let first_show = !memo.opened;
-<<<<<<< HEAD
         let held_model = self.shown_model.as_ref().and_then(|held| held.read(&mut *body)).and_then(|held| held.same().copied()).flatten();
         let wanted = if self.shown_model.is_some() { held_model } else { memo.model };
         let model = wanted.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
-=======
-        let model = memo.model.filter(|id| self.models.iter().any(|m| m.id() == *id)).or_else(|| self.models.first().map(|m| m.id()));
         let focus_hex = first_show && body.resolved.enabled;
         let held = self.value.read(&mut *body).and_then(|held| held.same().copied());
         let first = if first_show { held } else { memo.first };
->>>>>>> up/next
         {
             let memo = body.memory::<Memo>();
             memo.mode = mode;

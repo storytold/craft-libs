@@ -15,16 +15,11 @@ use craft_host::Host;
 use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
-<<<<<<< HEAD
 use craft_ui::choice::{SwatchArrangement, SwatchTable};
 use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Props as _, Sampler as _, ShowCollection as _, ShowContainer as _};
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
-=======
-use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
->>>>>>> up/next
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{Env, Label};
@@ -608,6 +603,9 @@ impl StackDialog for ColorPickerDialog {
         let arm = self.sampling.then_some(self.canvas).flatten();
         let keep_open = self.canvas;
         let screen = self.eyedropper && self.layout == ColorPickerDialogLayout::Full && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
+        // The Full picker keeps a cell for the buttons; the tabbed body has none, so they stand in the side column, as in
+        // Word's Colors dialog.
+        let place = if self.layout == ColorPickerDialogLayout::Full { ButtonPlace::Body } else { ButtonPlace::Side };
         let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, layout, standard, .. } = self;
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
         let (sampled, busy, compare_with) = (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
@@ -616,7 +614,7 @@ impl StackDialog for ColorPickerDialog {
         let shown = Dialog::new(title.clone())
             .opened(Bind::bound(open))
             .buttons(buttons)
-            .button_place(ButtonPlace::Body)
+            .button_place(place)
             .close_on_enter(true)
             .initial_focus(Initial::Keep)
             .roomy(true)

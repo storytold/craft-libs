@@ -10,9 +10,8 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, TrackRamp};
 use super::screen_pick::ScreenPickButton;
-<<<<<<< HEAD
-use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, ColorWarning, ColorWarningChip, PickedColor};
-use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab};
+use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
+use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning};
 
 /// A colour of full brightness and saturation at `hue` (0 to 1).
 fn hue_color(hue: f32) -> Srgba {
@@ -53,11 +52,6 @@ fn color_picker_dialog_tabbed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
 fn color_picker_dialog_tabbed_custom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     tabbed(ui, data, ColorPickerTab::Custom)
 }
-=======
-use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
-use crate::ui::{AreaMode, ColorPickerDialog, ColorWarning};
-use craft_ui::dialog::stories::hosted;
->>>>>>> up/next
 
 /// A naive CMYK in percent, without a working space: a host's model for the stories. A real host converts through its
 /// CMYK profile.

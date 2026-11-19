@@ -218,7 +218,6 @@ fn the_alt_variant_follows_the_commands_key_and_yields_to_a_bound_alt_chord() {
     assert!(hit(&km, &alt(Key::F2, false, false)).is_none(), "a command that did not opt in has no Alt variant");
 }
 
-<<<<<<< HEAD
 /// A press passes over the binding of a command the caller refuses (one disabled where it lands): the chord's binding
 /// in an outer scope runs instead, the lookup says the same, and with every holder refused the press runs nothing.
 #[test]
@@ -257,7 +256,8 @@ fn a_held_shift_runs_the_shift_kept_binding_before_rule_3_drops_it() {
     assert_eq!(ran(both), Some(cmd("format.superscript")), "the Shift-kept binding wins");
     assert_eq!(ran(vec![app("format.subscript", &["Cmd+="])]), Some(cmd("format.subscript")), "unbound, rule 3 holds");
     assert_eq!(Layout::new().resolve(&shift_zero), Some(chord("Cmd+=")), "the press is still recorded as rule 3 reads it");
-=======
+}
+
 /// Tools that share a chord: within one group a press cycles through them, so each shows the chord; across groups the
 /// first in catalog order runs, so only it shows the chord. `shown_chord` decides on catalog positions (#15493) and
 /// must answer as the lookup does.
@@ -280,5 +280,4 @@ fn tools_sharing_a_chord_show_it_as_the_lookup_runs_them() {
     assert_eq!(km.shown_chord(&cmd("tool.artboard")), None, "the other group's tool never runs on V");
     // A command with empty parameters is the same command.
     assert_eq!(km.shown_chord(&CommandRef::with_params("tool.move", serde_json::json!({}))), Some(chord("V")));
->>>>>>> up/next
 }

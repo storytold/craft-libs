@@ -1,13 +1,9 @@
 //! Stories of the layout components `Row`, `Stack` and `Grid`.
 
 use super::{Grid, Row, Stack};
-<<<<<<< HEAD
 use crate::contract::{Gap, LeastWidth, Pad, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth};
 use crate::display::Text;
-=======
-use crate::contract::{Gap, Pad, ShowContainer as _};
 use crate::layout::{CellAlign, GridFit, empty_cell};
->>>>>>> up/next
 use crate::story_kit::sample::{outlined, words};
 use crate::testing::{StoryData, StoryOutput, story};
 use craft_behavior::ColumnWidth;
@@ -37,7 +33,6 @@ fn stack_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| Stack::new().gap(Gap::Stack).pad(Pad::Regular).footer(|ui, _| words(ui, 2..3)).show(ui, |ui, _| words(ui, 0..2)).into())
 }
 
-<<<<<<< HEAD
 /// A side menu beside a page: the menu as wide as its widest item and as tall as the row, its footer at the bottom.
 #[story(Stack<'static>, covers = [])]
 fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
@@ -80,10 +75,7 @@ fn stack_width_roles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     })
 }
 
-static COLUMNS: [ColumnWidth; 2] =[ColumnWidth::Content, ColumnWidth::Fixed(60.0)];
-=======
 const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Fixed(60.0)];
->>>>>>> up/next
 
 #[story(Grid, covers = [Default])]
 fn grid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
