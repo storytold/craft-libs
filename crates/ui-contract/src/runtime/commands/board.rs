@@ -693,6 +693,13 @@ pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
     with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
 }
 
+/// Whether a command the window's keymap binds `chord` to is enabled, as the last pass resolved it for a surface with
+/// no component of its own (the state a menu row shows): a press of the chord can run something. Notes no reader.
+pub(crate) fn runs_now(ctx: &Context, chord: &Chord) -> bool {
+    let holders = with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.holders(chord)).unwrap_or_default());
+    holders.iter().any(|command| resolve_from(ctx, command, None).0.enabled)
+}
+
 /// The chords bound to the window's keys, which the input hook takes before any component.
 pub(crate) fn window_shortcuts(ctx: &Context) -> Arc<[(WindowShortcut, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.window_shortcuts)).unwrap_or_default())

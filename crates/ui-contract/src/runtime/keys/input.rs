@@ -53,15 +53,17 @@ struct Strip<'a> {
     /// An Alt release in this input ended an Alt+numpad code (`raw_input::take_alt_code_ended`): the code's digits
     /// never reach this stage, so without this the release would read as a lone Alt.
     alt_code_ended: bool,
-    /// Whether the window's keymap binds a chord (`commands::holder`), enabled or not.
+    /// Whether the window's keymap binds a chord to a command that is enabled now (`commands::runs_now`).
     bound: &'a dyn Fn(&Chord) -> bool,
 }
 
 impl Strip<'_> {
     /// Whether the text the platform sends with the press `input` stands for is a shortcut's own and belongs to no
-    /// field: Alt is held and the keymap binds the press, so it fires a command or is refused as one. A platform sends
-    /// its key's text with an Alt shortcut (Alt+Q on Linux). A plain key's text is typing, which a focused field or
-    /// list takes before any shortcut (`route::holds_press`), and Cmd and Ctrl chords type nothing.
+    /// field: Alt is held and the keymap binds the press to a command that is enabled, so it fires (S-L177). A platform
+    /// sends its key's text with an Alt shortcut (Alt+Q on Linux). A bound Alt chord whose command is disabled does
+    /// nothing, so its text is typed, as Word types Option+Shift+-'s em dash where Collapse does not apply. A plain key's
+    /// text is typing, which a focused field or list takes before any shortcut (`route::holds_press`), and Cmd and Ctrl
+    /// chords type nothing.
     fn shortcut_text(&self, input: &KeyInput) -> bool {
         input.mods.alt && self.layout.candidates(input).iter().any(|chord| (self.bound)(chord))
     }
@@ -470,7 +472,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = &input.latin_layout_chars;
-    let bound = |chord: &Chord| commands::holder(ctx, chord).is_some();
+    // S-L177: an Alt chord's text is withheld only when the press can run its command; a bound command that is
+    // disabled (Word's Alt+Shift+- Collapse outside Outline) leaves the text typed (Option+Shift+- is an em dash).
+    let bound = |chord: &Chord| commands::runs_now(ctx, chord);
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));

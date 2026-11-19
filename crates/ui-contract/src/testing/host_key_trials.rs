@@ -718,3 +718,48 @@ fn the_app_catalog_s_typing_rule_lets_an_alt_chord_fire_while_typing() {
 fn a_bound_alt_chord_s_text_leaves_the_press_to_its_command() {
     assert_eq!(alt_while_typing(Key::F7, None), vec![SEARCH.to_owned()], "Alt+F7 fires from the text field");
 }
+
+/// The app command on Alt+Shift+- in the disabled-chord trial: a word processor's Collapse, which works in Outline
+/// view only.
+const COLLAPSE: &str = "hostKeyTrial.collapse";
+
+/// What Alt+Shift+- does from a text stop, with the em dash the platform types for it in the same frame, while the
+/// command bound to it is `enabled`: the commands it fired and the text the stop was given.
+fn alt_shift_minus(enabled: bool) -> (Vec<String>, String) {
+    let field = named_id("document");
+    let typed = RefCell::new(String::new());
+    let mut show = |ui: &mut Ui| {
+        widget(ui, field);
+        register_stop(ui.ctx(), Stop::new(field, KeyUse::of(Input::Text)));
+        let mut intents = crate::testing::focus::intents_of(ui.ctx(), Some(field), false);
+        while let Some(text) = intents.take_text() {
+            typed.borrow_mut().push_str(&text);
+        }
+    };
+    let Ok(binding) = Binding::parse("Alt+Shift+-") else { return (vec!["the trial's chord does not parse".to_owned()], String::new()) };
+    let Ok(catalog) = AppCatalog::new(vec![CommandDef::new(COLLAPSE, "Collapse", Scope::app()).with_default(binding)], 1) else {
+        return (vec!["the trial's catalog is refused".to_owned()], String::new());
+    };
+    let state = crate::runtime::commands::CommandState::new().enabled(enabled);
+    let mut frames = Frames::new();
+    frames.commands(CommandInput::new().catalog(catalog.typing_rule(TypingRule::PlainKeysWait)).state(COLLAPSE, state));
+    frames.frame(Vec::new(), &mut show);
+    focus_stop(&mut frames, &mut show, field);
+    take_output(&frames.ctx);
+    typed.borrow_mut().clear();
+    let alt_shift = Modifiers { alt: true, shift: true, ..Modifiers::NONE };
+    frames.frame(vec![key_press(Key::Minus, alt_shift), Event::Text("\u{2014}".into())], &mut show);
+    frames.frame(Vec::new(), &mut show);
+    let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
+    (fired, typed.take())
+}
+
+/// fwstub-1 (4): the text of a bound Alt chord is withheld only when its command runs (S-L177, as production's
+/// `shortcuts.rs` returned unhandled for a disabled Alt command): with the command disabled the shortcut does nothing
+/// and the character is typed, as Word types Option+Shift+-'s em dash outside Outline view; enabled, the command runs
+/// and nothing is typed.
+#[trial]
+fn a_disabled_alt_chord_leaves_its_text_typed() {
+    assert_eq!(alt_shift_minus(false), (Vec::new(), "\u{2014}".to_owned()), "disabled: the em dash is typed");
+    assert_eq!(alt_shift_minus(true), (vec![COLLAPSE.to_owned()], String::new()), "enabled: the command runs and types nothing");
+}

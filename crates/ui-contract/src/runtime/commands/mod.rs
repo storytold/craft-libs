@@ -26,6 +26,7 @@ pub use board::keymap_builds;
 #[doc(hidden)]
 pub use board::note_page_root;
 pub(crate) use board::publish as publish_for;
+pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
     begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,

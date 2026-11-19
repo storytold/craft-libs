@@ -454,6 +454,19 @@ impl Keymap {
         self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
     }
 
+    /// Every command a single press of `chord` is bound to, in any scope, in catalog order, each once: a caller that
+    /// asks whether the press can run anything now reads each one's state.
+    pub fn holders(&self, chord: &Chord) -> Vec<CommandRef> {
+        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        let mut found: Vec<usize> = Vec::new();
+        for &(i, k) in self.by_trigger.get(&want).into_iter().flatten() {
+            if self.at(i, k).is_some() && !found.contains(&i) {
+                found.push(i);
+            }
+        }
+        found.into_iter().map(|i| self.catalog[i].command.clone()).collect()
+    }
+
     /// Adds a binding to a command.
     pub fn assign(&mut self, command: &CommandRef, binding: Binding, policy: Policy) -> Result<Assigned, AssignError> {
         let i = self.find(command).ok_or(AssignError::UnknownCommand)?;
