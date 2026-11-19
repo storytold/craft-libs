@@ -434,7 +434,7 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
             let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).show(ui);
         });
     });
-    let (ghost, wide) = seen(toggle, "Track Changes", |ui| {
+    let (_, wide) = seen(toggle, "Track Changes", |ui| {
         let mut on = false;
         let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).variant(Variant::GHOST).show(ui);
     });
@@ -448,7 +448,14 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     let edge = ribbon.border.as_ref().map(|border| border.off.rest);
     assert!(edge.is_none() || edge == Some(ribbon.fill.off.rest), "a ribbon toggle shows no edge at rest: {edge:?}");
     assert!(ribbon.fill.on.is_some(), "a ribbon toggle shows the on plate while on");
-    assert_ne!(standard, ghost, "outside a ribbon a toggle keeps its outlined default");
+    // A toggle's style has one variant (`ToggleButtonStyle` lists only `SECONDARY`), so a ghost toggle outside a ribbon
+    // draws that same outlined look: the default is checked by its edge, not against the ghost toggle.
+    let outlined = standard.clone().expect("a toggle has a surface");
+    let standard_edge = outlined.border.as_ref().map(|border| border.off.rest);
+    assert!(
+        standard_edge.is_some_and(|edge| edge != outlined.fill.off.rest),
+        "outside a ribbon a toggle keeps its outlined default: {standard_edge:?}"
+    );
     assert_ne!(Some(ribbon), standard, "a ribbon toggle is not the outlined default");
     assert!(narrow < wide - 0.5, "a ribbon's flat toggle sits close: {narrow} against {wide}");
 }

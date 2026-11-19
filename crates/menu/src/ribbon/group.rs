@@ -12,7 +12,8 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::popover::Popover;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label, with_env};
-use craft_ui::runtime::memory::key_salt;
+use craft_ui::runtime::measure;
+use craft_ui::runtime::memory::{key_salt, with_session};
 use craft_ui::style::TypeRole;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 
@@ -53,29 +54,50 @@ impl<'a> RibbonGroup<'a> {
 
     /// The group's content over its title row, with no gap between them: the title sits directly under the content,
     /// `body` under the content's top whatever the content's height, so every group's title shares one line at the foot
-    /// of the row; a taller content pushes it down. Returns the content's height, which sets `body` for the row's next
-    /// pass, and the height of the whole group, which its separator takes.
-    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), body: f32, line: f32) -> (f32, f32) {
-        let mut took = 0.0;
+    /// of the row; a taller content pushes it down. `kept` is the slot of this group's content height at this level.
+    ///
+    /// The spacer under the content and the separator's length come from the content height the last real run kept,
+    /// never from the content's output in this run: a measuring run has no real size for the content yet, so a spacer
+    /// sized from it there took the whole `body`, the group measured its content's height too tall (the ribbon stood
+    /// one body too high under its titles), and the real run, placing another spacer, never matched what was measured,
+    /// so the row measured again on every pass. Both runs of a pass now place the same sizes; a changed content height
+    /// is kept by the real run and shows in the next pass.
+    ///
+    /// Returns the content's height as the real run found it (none in a measuring run), which sets `body` for the
+    /// row's next pass, and the height of the whole group, which its separator takes.
+    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), room: TitleRoom, kept: Id) -> (Option<f32>, f32) {
+        let ctx = ui.ctx().clone();
+        let line = if room.line.is_finite() { room.line.max(0.0) } else { 0.0 };
+        let body = if room.body.is_finite() { room.body.max(0.0) } else { 0.0 };
+        let held = with_session(&ctx, kept, |kept: &mut ContentHeight| kept.0);
+        let held = if held.is_finite() { held.max(0.0) } else { 0.0 };
+        let side = if self.launcher.is_some() { line } else { 0.0 };
+        let mut took = f32::NAN;
         let mut title = Rect::NOTHING;
-        let side = if self.launcher.is_some() && line.is_finite() { line.max(0.0) } else { 0.0 };
         let shown = Stack::new().gap(Gap::None).show(ui, |ui, _| {
             took = Row::new().show(ui, |ui, _| add(ui)).output.rect.height();
             // Every group places this spacer, an empty one too, so each has the same gaps above its title.
-            let rest = if (body - took).is_finite() { (body - took).max(0.0) } else { 0.0 };
-            craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, rest));
+            craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, (body - held).max(0.0)));
             // The title on a line `line` high in every group, so the titles of groups with and without a launcher
             // share one line; the row keeps room for the launcher after the title.
             title = Row::new()
                 .gap(Gap::None)
                 .show(ui, |ui, _| {
-                    craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, line.max(0.0)));
+                    craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, line));
                     Text::new(self.title.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                     craft_ui::layout::place_in_flow(ui, Vec2::new(side, 0.0));
                 })
                 .output
                 .rect;
         });
+        // Only the real run keeps what the content took; a measuring run's output is no size of it.
+        let found = (!measure::active(&ctx) && took.is_finite()).then_some(took.max(0.0));
+        if let Some(found) = found
+            && (found - held).abs() >= 0.5
+        {
+            with_session(&ctx, kept, |kept: &mut ContentHeight| kept.0 = found);
+            ctx.request_repaint();
+        }
         let group = shown.output.rect;
         // The dialog launcher: a square as high as the title line, at the group's end edge on that line, as the old
         // ribbon placed it. It shows at its place, not in the flow, so it never makes its group's title line taller.
@@ -90,7 +112,8 @@ impl<'a> RibbonGroup<'a> {
             let name = words.launcher.fill(&[("title", self.title.as_str())]);
             IconButton::command(IconId::new("maximize_2"), command.clone()).label(name).show_at(ui, at);
         }
-        (took, group.height())
+        // What the stack places: the content or the body, whichever is taller, and the title line.
+        (found, held.max(body) + line)
     }
 
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
@@ -126,8 +149,8 @@ impl<'a> RibbonGroup<'a> {
                     self.collapsed(ui, add);
                     room.body + room.line
                 } else {
-                    let (took, high) = self.open(ui, add, room.body, room.line);
-                    content = Some(took);
+                    let (took, high) = self.open(ui, add, room, id.with(("content", level)));
+                    content = took;
                     high
                 };
                 Divider::vertical().length(high).show(ui);
@@ -142,6 +165,11 @@ impl<'a> RibbonGroup<'a> {
 /// title sits under. Kept in the ribbon's session memory.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct BodyHeight(pub(super) f32);
+
+/// The height of one open group's content at one level, as the last real run found it: what the spacer under it and
+/// the group's separator are sized from in every run of the next pass. Kept in the ribbon's session memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ContentHeight(f32);
 
 /// Where a group's title goes: `body` under the group's top, on a line `line` high.
 #[derive(Clone, Copy, Debug)]
