@@ -154,6 +154,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     type Output = SplitOutput<T>;
 
     fn style(cx: &StyleCx<'_>, key: SplitButtonStyleKey<T>) -> SplitButtonStyle {
+        let cx = &super::placed(cx);
         let parts = cx.variant_look();
         let metrics = face::metrics_of(cx, &parts, key.arrangement);
         let mut surface = face::surface(cx, &parts);

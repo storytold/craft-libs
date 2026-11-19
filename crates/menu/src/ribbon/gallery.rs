@@ -16,11 +16,11 @@ use craft_ui::contract::{
 use craft_ui::display::{Picture, PictureSize};
 use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::primitives::textures::{Revision, ThumbSource, Thumbnails};
-use craft_ui::primitives::{ContentPainterCx, PaintShape};
+use craft_ui::primitives::{ContentPainterCx, HAlign, PaintShape, TextRun};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx};
-use craft_ui::tile_grid::{Tile, TileGrid};
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, StyleColor, StyleCx, TypeRole};
+use craft_ui::tile_grid::{CaptionPlace, Tile, TileGrid};
 use egui::{ColorImage, CornerRadius, Rect, Response, Ui, Vec2};
 
 use super::GroupLevel;
@@ -54,6 +54,8 @@ craft_ui::words! {
 /// - The up and down buttons (and the Up and Down keys on the strip) move the shown tiles by the count shown; the
 ///   shown run never runs past the last full run, so no tile is empty, and it falls back when the items shrink.
 /// - More opens the whole list as a grid, runs a command, or opens the app's own body.
+/// - Each tile's picture is [`aspect`](Gallery::aspect) times as wide as the medium thumbnail is high (square unless
+///   set), and with `CaptionPlace::Below` the tile names its item under the picture (a style gallery's 'Normal').
 #[must_use = "show the gallery with `show`"]
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(overlay, probe(Gallery<'static, usize>))]
@@ -65,6 +67,10 @@ pub struct Gallery<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     full: u8,
     compact: u8,
     more: GalleryMore<'a>,
+    /// The width of each tile's picture as a multiple of its height.
+    aspect: ThumbAspect,
+    /// Where a tile shows its item's name: `Below` the picture, else nowhere.
+    caption: CaptionPlace,
     /// Each shown tile's rect.
     laid: Vec<Rect>,
     picked: Option<K>,
@@ -94,6 +100,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
             full: 1,
             compact: 1,
             more: GalleryMore::Grid,
+            aspect: ThumbAspect::SQUARE,
+            caption: CaptionPlace::None,
             laid: Vec::new(),
             picked: None,
             menu: None,
@@ -112,6 +120,25 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
     pub fn more(mut self, more: GalleryMore<'a>) -> Self {
         self.more = more;
         self
+    }
+
+    /// The width of each tile's picture as a multiple of its height, the medium thumbnail's (`size.thumb.md`): a wide
+    /// sample (a paragraph style's first letters) fills a wide tile instead of shrinking into a square one.
+    pub fn aspect(mut self, aspect: ThumbAspect) -> Self {
+        self.aspect = aspect;
+        self
+    }
+
+    /// Where each tile shows its item's name: `CaptionPlace::Below` names it under the picture, in the caption role;
+    /// `None` (the default) and `Start` show no name. The name stays each tile's accessible name either way.
+    pub fn caption(mut self, caption: CaptionPlace) -> Self {
+        self.caption = caption;
+        self
+    }
+
+    /// Whether the tiles name their items under the pictures.
+    fn captioned(&self) -> bool {
+        self.caption == CaptionPlace::Below
     }
 
     /// The tiles the level shows at most.
@@ -134,7 +161,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> Gallery<'a, K> {
     fn sizes(&self, cx: &MeasureCx<'_, Self>) -> Sizes {
         let words = cx.env.words::<GalleryWords>();
         let button = cx.face(IconButton::new(IconId::new("more")).label(words.more.clone()));
-        Sizes { tile: cx.face(GalleryTile::blank()), button, gap: cx.gap() }
+        Sizes { tile: cx.face(GalleryTile::blank(self.aspect, self.captioned())), button, gap: cx.gap() }
     }
 }
 
@@ -172,28 +199,30 @@ pub enum GalleryFace<'a> {
     Paint(&'a dyn Fn(&ContentPainterCx, Rect)),
 }
 
-/// The size every tile's picture has, so a tile measures the same with and without its picture.
-fn thumb(picture: Picture<'_>) -> Picture<'_> {
-    picture.extent(PictureSize::Thumb(ThumbSize::Medium))
+/// The size every tile's picture has, `aspect` times as wide as high, so a tile measures the same with and without
+/// its picture.
+fn thumb(picture: Picture<'_>, aspect: ThumbAspect) -> Picture<'_> {
+    picture.extent(PictureSize::Thumb(ThumbSize::Medium)).aspect(aspect)
 }
 
 /// A picture that paints nothing, for measuring a tile.
-fn blank_picture() -> Picture<'static> {
-    thumb(Picture::painter(Label::default(), ThumbAspect::SQUARE, |_: &ContentPainterCx<'_>, _: Rect| {}))
+fn blank_picture(aspect: ThumbAspect) -> Picture<'static> {
+    thumb(Picture::painter(Label::default(), aspect, |_: &ContentPainterCx<'_>, _: Rect| {}), aspect)
 }
 
 impl<'a> GalleryFace<'a> {
-    /// The picture this face shows. It is decoration: the tile that holds it carries the name.
-    fn picture(&self) -> Picture<'a> {
+    /// The picture this face shows, `aspect` times as wide as high. It is decoration: the tile that holds it carries
+    /// the name.
+    fn picture(&self, aspect: ThumbAspect) -> Picture<'a> {
         let picture = match self {
             GalleryFace::Image { key, revision, image } => Picture::new(Label::default(), *key, *image).revision(*revision),
             GalleryFace::Rendered { key, thumbnails, source } => Picture::rendered(Label::default(), *key, *thumbnails, *source),
             GalleryFace::Paint(paint) => {
                 let paint = *paint;
-                Picture::painter(Label::default(), ThumbAspect::SQUARE, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))
+                Picture::painter(Label::default(), aspect, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))
             }
         };
-        thumb(picture)
+        thumb(picture, aspect)
     }
 }
 
@@ -257,11 +286,11 @@ struct GridResult {
 
 /// The whole list as a grid of the same faces; a click or Enter picks, and a context request is forwarded. The
 /// grid sizes its columns from the room it is given.
-fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Option<usize>) -> GridResult {
+fn grid<K>(ui: &mut Ui, label: &Label, items: &[GalleryItem<'_, K>], current: Option<usize>, aspect: ThumbAspect) -> GridResult {
     let selection = Selection::new(current.into_iter().collect(), current, current);
     let grid = TileGrid::<usize>::new(label.clone()).select(SelectMode::Single).selection(Bind::given(selection));
     let out = grid.show_items(ui, &Indexes(items.len()), &mut |key, _| match items.get(*key) {
-        Some(item) => Tile::new(item.label.clone()).picture(ThumbAspect::SQUARE, item.face.picture()),
+        Some(item) => Tile::new(item.label.clone()).picture(aspect, item.face.picture(aspect)),
         None => Tile::new(Label::default()),
     });
     let mut result = GridResult::default();
@@ -299,9 +328,16 @@ struct GalleryTileStyle {
     fill: StyleColor,
     /// The current tile's edge.
     edge: StyleColor,
+    /// The ink of the item's name under the picture, in a captioned gallery.
+    caption: StyleColor,
+    /// Between the picture and the caption.
+    gap: f32,
+    /// The picture's height: the medium thumbnail's (`size.thumb.md`), as `thumb` sizes it.
+    thumb: f32,
 }
 
-/// The face a tile part wears: its picture inside the tile's selection look.
+/// The face a tile part wears: its picture, and in a captioned gallery the item's name under it, inside the tile's
+/// selection look.
 #[derive(craft_ui::contract::Component)]
 #[component(unregistered)]
 struct GalleryTile<'a> {
@@ -311,19 +347,26 @@ struct GalleryTile<'a> {
     picture: Option<Picture<'a>>,
     /// Whether the tile is the gallery's current item.
     selected: bool,
+    /// The width of the picture as a multiple of its height.
+    aspect: ThumbAspect,
+    /// The item's name under the picture; `None` in a gallery without captions.
+    caption: Option<Label>,
 }
 
 impl<'a> GalleryTile<'a> {
-    /// A tile that shows `picture`.
-    fn of(picture: Picture<'a>, selected: bool) -> Self {
-        GalleryTile { common: Common::new(), picture: Some(picture), selected }
+    /// A tile that shows `picture`, `aspect` times as wide as high, with `caption` under it when set.
+    fn of(picture: Picture<'a>, selected: bool, aspect: ThumbAspect, caption: Option<Label>) -> Self {
+        GalleryTile { common: Common::new(), picture: Some(picture), selected, aspect, caption }
     }
 
-    /// A tile with no picture, for measuring.
-    fn blank() -> Self {
-        GalleryTile { common: Common::new(), picture: None, selected: false }
+    /// A tile with no picture, for measuring; a `captioned` one keeps a line for its caption.
+    fn blank(aspect: ThumbAspect, captioned: bool) -> Self {
+        GalleryTile { common: Common::new(), picture: None, selected: false, aspect, caption: captioned.then(Label::default) }
     }
 }
+
+/// The caption's type role.
+const CAPTION: TypeRole = TypeRole::Caption;
 
 impl Component for GalleryTile<'_> {
     const DISABLED: DisabledLook = DisabledLook::Faded;
@@ -344,11 +387,23 @@ impl Component for GalleryTile<'_> {
             stroke: cx.tokens.stroke.thin,
             fill: cx.color(colors.state.selected),
             edge: cx.color(colors.line.control_edge),
+            caption: cx.color(colors.text.normal),
+            gap: cx.tokens.space.gap.tight,
+            thumb: cx.tokens.size.thumb.md,
         }
     }
 
+    /// The picture, and in a captioned gallery the gap and one caption line under it. The caption is as wide as the
+    /// picture: a longer name elides.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        cx.face(blank_picture())
+        let picture = cx.face(blank_picture(self.aspect));
+        match self.caption {
+            Some(_) => {
+                let line = cx.layout(&TextRun::new("Ag").role(CAPTION)).size().y;
+                Vec2::new(picture.x, picture.y + cx.style.gap + line)
+            }
+            None => picture,
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -362,8 +417,21 @@ impl Component for GalleryTile<'_> {
             draw.fill(&PaintShape::Rect(outer, CornerRadius::ZERO), cx.style.edge);
             draw.fill(&PaintShape::Rect(outer.shrink(cx.style.stroke), CornerRadius::ZERO), cx.style.fill);
         }
+        // A captioned tile keeps the picture's height at the top and shows the name in the rest under it.
+        let (area, caption) = match self.caption {
+            Some(_) => {
+                let picture = Rect::from_min_size(area.min, Vec2::new(area.width(), cx.style.thumb.min(area.height())));
+                let top = (picture.max.y + cx.style.gap).min(area.max.y);
+                (picture, Some(Rect::from_min_max(egui::pos2(area.min.x, top), area.max)))
+            }
+            None => (area, None),
+        };
         if let Some(picture) = self.picture.take() {
             let _ = ui.child("picture", area, picture);
+        }
+        if let (Some(rect), Some(name)) = (caption, self.caption.as_ref()) {
+            let run = TextRun::new(name.as_str()).role(CAPTION).color(cx.style.caption).align(HAlign::Center).elide();
+            let _ = ui.draw().text(rect, &run);
         }
     }
 
@@ -482,14 +550,14 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         }
         let popup = cx.popup("more");
         let name = cx.label();
-        let (items, current) = (self.items, self.current_at());
+        let (items, current, aspect) = (self.items, self.current_at(), self.aspect);
         let more = &mut self.more;
         let shown = ui.show(popup, Overlay::popover(), |ui, _| match more {
             GalleryMore::Body(body) => {
                 (**body)(ui);
                 GridResult::default()
             }
-            _ => grid(ui, &name, items, current),
+            _ => grid(ui, &name, items, current, aspect),
         });
         let Some(result) = shown else { return };
         if let Some(item) = result.picked.and_then(|at| items.get(at)) {
@@ -534,7 +602,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         let current = self.current_at();
         for at in 0..visible.min(len) {
             if let Some(item) = self.items.get(start + at) {
-                ui.face(TILE.at(at as u64), GalleryTile::of(item.face.picture(), current == Some(start + at)));
+                let caption = self.captioned().then(|| item.label.clone());
+                let tile = GalleryTile::of(item.face.picture(self.aspect), current == Some(start + at), self.aspect, caption);
+                ui.face(TILE.at(at as u64), tile);
             }
         }
         ui.face(UP, IconButton::new(IconId::new("chevron_up")).label(words.up.clone()).enabled(start > 0));

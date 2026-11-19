@@ -6,7 +6,9 @@ use craft_host::InlineJobs;
 use craft_ui::contract::Show as _;
 use craft_ui::primitives::textures::Revision;
 use craft_ui::primitives::{FakeThumbSource, Thumbnails, ThumbnailOptions};
+use craft_ui::list::ThumbAspect;
 use craft_ui::runtime::env::{Label, with_env};
+use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -44,6 +46,25 @@ fn pictured(ui: &mut Ui) -> StoryOutput {
 #[story(Gallery<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn gallery(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     pictured(ui)
+}
+
+/// A style gallery: wide samples, two to one, each named under its picture.
+#[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
+fn gallery_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let images: Vec<Box<dyn Fn() -> egui::ColorImage>> =
+        (0..COUNT).map(|at| Box::new(move || sample_picture(at as u64, [96, 48])) as Box<dyn Fn() -> egui::ColorImage>).collect();
+    let items: Vec<GalleryItem<'_, usize>> = images
+        .iter()
+        .enumerate()
+        .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
+        .collect();
+    let current = 2;
+    Gallery::new("Styles", &items, Some(&current))
+        .tiles(6, 3)
+        .aspect(ThumbAspect::new(2, 1))
+        .caption(CaptionPlace::Below)
+        .show(ui)
+        .into()
 }
 
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
