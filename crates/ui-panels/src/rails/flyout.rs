@@ -353,8 +353,15 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
             .as_ref()
             .map(|laid| laid.resolved.iter().map(|resolved| resolved.as_ref().map(|resolved| self.shown_label(resolved.label.as_ref()))).collect())
             .unwrap_or_default();
-        let name = self.laid.as_ref().and_then(|laid| laid.resolved.get(laid.shown)).and_then(Option::as_ref).map(|resolved| resolved.label.clone());
-        let name = name.map_or(Label::Empty, Label::Shared);
+        // The menu's own label is the shown tool's name, translated like its row: the menu's default accessible
+        // name is this label, so a screen reader must not hear the source language beside translated rows.
+        let name = self
+            .laid
+            .as_ref()
+            .and_then(|laid| laid.resolved.get(laid.shown))
+            .and_then(Option::as_ref)
+            .map(|resolved| Label::from(self.shown_label(resolved.label.as_ref())));
+        let name = name.unwrap_or(Label::Empty);
         let layer = menu::layer(false).place(Place::anchored(Anchor::Response, self.opens, Align::Start));
         let ran = ui.show(popup, layer, |ui, _| {
             Menu::inline(name.clone())
@@ -407,5 +414,37 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn finish(self, cx: Cx<'_, Self>) -> FlyoutOutput<T> {
         FlyoutOutput { response: cx.response.clone(), select: self.picked, double_clicked: self.double, opened: self.open, dropped: self.dropped }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A button over two tools, named `Lasso Tool` and `Move Tool`, whose labels a translator maps to `投げ縄ツール`
+    /// and `移動ツール`.
+    fn translated() -> FlyoutButton<'static, u8> {
+        // The tools' commands are only read for their labels here, so the test names them directly.
+        static TOOLS: std::sync::OnceLock<[RailTool<u8>; 2]> = std::sync::OnceLock::new();
+        let tools = TOOLS.get_or_init(|| [RailTool::new(0, "testing.lasso"), RailTool::new(1, "testing.move")]);
+        static SHOWN: u8 = 0;
+        FlyoutButton::new(tools, &SHOWN)
+    }
+
+    #[test]
+    fn a_translator_names_every_surface_the_rail_shows() {
+        let mut button = translated();
+        // Without a translator the command's own label is what the rail shows.
+        assert_eq!(button.shown_label("Lasso Tool"), "Lasso Tool");
+        button = button.labels(Some(std::sync::Arc::new(|label: &str| match label {
+            "Lasso Tool" => "投げ縄ツール".to_owned(),
+            "Move Tool" => "移動ツール".to_owned(),
+            other => other.to_owned(),
+        })));
+        // The rows, the tooltip and the flyout menu's own label all go through this one place.
+        assert_eq!(button.shown_label("Lasso Tool"), "投げ縄ツール");
+        assert_eq!(button.shown_label("Move Tool"), "移動ツール");
+        assert_eq!(button.shown_label("Something Else"), "Something Else");
     }
 }
