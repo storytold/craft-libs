@@ -343,7 +343,7 @@ impl CommandInput {
 /// The chain of container instances that receive scoped commands, innermost last. A private inherited field of
 /// the env.
 #[doc(hidden)]
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
 impl CommandChain {

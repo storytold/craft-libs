@@ -10,7 +10,7 @@ use egui::{Context, Id};
 pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
     // Journaled after the `register_node` it amends, so a settled region's replay leaves the row's node with the
     // collection, as a run does.
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| redirect_node(ctx, node, owner, part));
+    crate::runtime::replay::journal(ctx, || (node, owner, part), |ctx, &(node, owner, part)| redirect_node(ctx, node, owner, part));
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.owner = owner;
@@ -22,7 +22,7 @@ pub(crate) fn redirect_node(ctx: &Context, node: Id, owner: Id, part: PartRef) {
 /// Records the expanded state of the node registered by `register_node`: an `Expand` or `Collapse` request on a node
 /// with the state asks to change it, and acts as the node's activation.
 pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_expanded(ctx, node, expanded));
+    crate::runtime::replay::journal(ctx, || (node, expanded), |ctx, &(node, expanded)| register_expanded(ctx, node, expanded));
     current(ctx, |stage| {
         if let Some(entry) = stage.nodes.get_mut(&node_key(node)) {
             entry.expanded = expanded;
@@ -32,7 +32,11 @@ pub(crate) fn register_expanded(ctx: &Context, node: Id, expanded: Option<bool>)
 
 /// Registers an AccessKit node so a request that targets it reaches `owner`.
 pub(crate) fn register_node(ctx: &Context, node: Id, owner: Id, part: Option<PartRef>, focusable: bool) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_node(ctx, node, owner, part, focusable));
+    crate::runtime::replay::journal(
+        ctx,
+        || (node, owner, part, focusable),
+        |ctx, &(node, owner, part, focusable)| register_node(ctx, node, owner, part, focusable),
+    );
     current(ctx, |stage| {
         stage.nodes.insert(node_key(node), Node { owner, part, focusable, expanded: None });
     });
