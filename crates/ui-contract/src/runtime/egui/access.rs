@@ -10,9 +10,7 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
-#[cfg(feature = "testing")]
-use egui::FullOutput;
-use egui::{Context, Id, IdMap, IdSet, ViewportId};
+use egui::{Context, FullOutput, Id, IdMap, IdSet, ViewportId};
 use std::collections::HashMap;
 
 use super::pass;
@@ -139,7 +137,7 @@ pub(crate) fn register_parent(ctx: &Context, id: Id, parent: Id) {
 /// Notes that the runtime emitted the node of `id`.
 fn emit(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| emitted.emit(id));
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| emit(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| emit(ctx, id));
 }
 
 /// Notes that the node of the text widget `widget` folds into the node of `owner`.
@@ -147,7 +145,7 @@ fn note_folded(ctx: &Context, widget: Id, owner: Id) {
     with_emitted(ctx, |emitted| {
         emitted.folded.insert(widget, owner);
     });
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_folded(ctx, widget, owner));
+    crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| note_folded(ctx, widget, owner));
 }
 
 /// Notes that the runtime wrote the node of `id`.
@@ -155,7 +153,7 @@ pub(crate) fn note_written(ctx: &Context, id: Id) {
     with_emitted(ctx, |emitted| {
         emitted.written.insert(id);
     });
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_written(ctx, id));
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_written(ctx, id));
 }
 
 /// The pass-end step: the children of each node the runtime wrote follow the order the runtime emitted them in,
@@ -199,4 +197,29 @@ fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
 #[cfg(feature = "testing")]
 pub(crate) fn tree_of(output: &mut FullOutput) -> Option<AccessTree> {
     output.platform_output.accesskit_update.take().map(AccessTree::new)
+}
+
+/// Drops relations that name a node this update does not carry.
+///
+/// A menu reports its popup open on a frame where the popup's own node is not emitted (the ordering
+/// differs per menu), and `runtime::access::emit` puts that id in `controls`. A host's UIA adapter
+/// unwraps every `controls` lookup (`accesskit_consumer`'s `Node::controls`), so one id with no node
+/// in the same update aborts the app: photocraft#15597, where clicking Image, Edit or Layer — and on
+/// one machine Filter — closed PhotoCraft on the click that opened the menu.
+pub(crate) fn drop_dangling_relations(output: &mut FullOutput) {
+    let Some(update) = output.platform_output.accesskit_update.as_mut() else { return };
+    prune_controls(update);
+}
+
+/// The step itself: every `controls` id of `update` that names no node of `update` is dropped. Other
+/// relations keep their ids: they are built from nodes this pass wrote.
+pub fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
+    let ids: std::collections::HashSet<egui::accesskit::NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+    for (_, node) in update.nodes.iter_mut() {
+        if node.controls().iter().all(|id| ids.contains(id)) {
+            continue;
+        }
+        let kept: Vec<egui::accesskit::NodeId> = node.controls().iter().copied().filter(|id| ids.contains(id)).collect();
+        node.set_controls(kept);
+    }
 }

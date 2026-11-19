@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Stroke};
 
 /// A colour a style builder picked from tokens. `Draw` accepts only this or `DataColor`. It has no
 /// `From<Color32>`: the one constructor is `StyleCx::color`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct StyleColor(#[doc(hidden)] pub Color32);
 
 impl StyleColor {
@@ -25,7 +25,7 @@ impl Mix for StyleColor {
 }
 
 /// A colour from data (a swatch, a layer label dot).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 pub struct DataColor(#[doc(hidden)] pub Color32);
 
 impl DataColor {

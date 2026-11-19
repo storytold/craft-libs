@@ -505,10 +505,11 @@ pub(crate) fn show_mark(ctx: &Context, mark: Option<DropMark>) {
 /// Records that `owner`'s `ordinal`th target on `layer` accepts at the pointer, with its mark in layer space and the
 /// tokens of the target's region. A `window` target covers the whole window.
 pub(crate) fn register(ctx: &Context, owner: Id, layer: Layer, mark: DropMark, tokens: Arc<UiTokens>, window: bool) {
-    crate::runtime::replay::journal(ctx, || {
-        let tokens = tokens.clone();
-        move |ctx: &Context| register(ctx, owner, layer, mark, tokens.clone(), window)
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (owner, layer, mark, tokens.clone(), window),
+        |ctx, (owner, layer, mark, tokens, window)| register(ctx, *owner, *layer, *mark, tokens.clone(), *window),
+    );
     let mark = match areas::layer_map(ctx, layer) {
         Some(map) => mark.mapped(|point| map.to_screen(point)),
         None => mark,

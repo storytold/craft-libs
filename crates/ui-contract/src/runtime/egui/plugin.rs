@@ -1,7 +1,7 @@
 //! The plugin impl, its registration and hook order, and the plugin lock.
 
 use crate::runtime::frame;
-use egui::{Context, Plugin, RawInput, Ui};
+use egui::{Context, FullOutput, Plugin, RawInput, Ui};
 
 /// The runtime's plugin. egui holds a plugin's mutex while it calls a hook, so the struct holds no state:
 /// every record lives in context data behind its own lock.
@@ -17,6 +17,10 @@ impl Plugin for RuntimePlugin {
         frame::input_hook(ctx, input);
     }
 
+    fn output_hook(&mut self, ctx: &Context, output: &mut FullOutput) {
+        let _ = ctx;
+        crate::runtime::egui::access::drop_dangling_relations(output);
+    }
     fn on_begin_pass(&mut self, ui: &mut Ui) {
         frame::begin_pass(ui);
     }

@@ -20,6 +20,7 @@ mod level;
 #[cfg(feature = "testing")]
 mod level_table;
 mod looks;
+mod memo;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -38,6 +39,7 @@ pub mod toast;
 pub mod tooltip;
 mod values;
 
+pub use crate::bind_tracked;
 pub use crate::layout::{BodyLayout, RowAlign};
 pub use crate::primitives::FacesCx;
 pub use crate::runtime::access::{Access, FieldLabel, GridPlace, Name, Numeric, Politeness, PopupKind, Role, SetPosition, SubNode, announce};
@@ -66,7 +68,8 @@ pub use container::{
     BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
     Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
-pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
+pub use craft_tracked::{PlainData, Revision, Tracked};
+pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
 #[doc(hidden)]
 pub use cx::THUMB;
 pub use cx::{
@@ -90,6 +93,7 @@ pub use lazy::Lazy;
 #[cfg(feature = "testing")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
+pub use memo::{MemoKey, MemoProps, Stateless};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
