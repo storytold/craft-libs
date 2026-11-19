@@ -90,6 +90,11 @@ jobs:
         # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
         cargo nextest run --workspace --all-features --locked --profile ci
+        # The replay audit (craft-libs#2336), on Linux: the UI crates' tests again, from the same build, with every
+        # memoized view that would replay also run for real and compared with its replay.
+        if [ "$RUNNER_OS" = Linux ]; then
+          CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci -E 'package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu)'
+        fi
         cargo test --workspace --doc --all-features --locked
         cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
       windows-command: |
