@@ -143,6 +143,15 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         Vec2::new(face.x + cx.icon(), face.y)
     }
 
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        let (mut whole, mut narrow) = face::measure_pair(ideal, least, &self.spec(ideal.resolved.label));
+        whole.x += ideal.icon();
+        narrow.x += least.icon();
+        Some((whole, narrow))
+    }
+
     fn sense(&self) -> Sense {
         Sense::CLICK | Sense::FOCUS
     }

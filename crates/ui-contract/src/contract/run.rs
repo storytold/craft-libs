@@ -438,6 +438,7 @@ pub(crate) struct TypeFacts {
     pub canvas_control: bool,
     pub labelled_after: bool,
     pub binds_view: bool,
+    pub paired_measure: bool,
     /// `DISABLED` is `Faded`.
     pub faded: bool,
     /// `RULE`.
@@ -459,6 +460,7 @@ impl TypeFacts {
             canvas_control: C::CANVAS_CONTROL,
             labelled_after: C::LABELLED_AFTER,
             binds_view: C::BINDS_VIEW,
+            paired_measure: C::PAIRED_MEASURE,
             faded: C::DISABLED == super::DisabledLook::Faded,
             rule: C::RULE,
             style_key: TypeId::of::<C::StyleKey>(),
@@ -497,6 +499,7 @@ pub(crate) trait Erased {
     fn cut_first(&self) -> bool;
     /// What `C::measure` gives for the shown value.
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
+    fn measure_content_pair(&mut self, ideal: &MeasureIn<'_>, least: &MeasureIn<'_>, resolved: &Resolved<'_>) -> Option<((Vec2, Vec2), Inputs)>;
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2;
     fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2;
     /// Builds the component's `Cx` over `core` and `style` (what `style` gave), runs `rest` with it, then `finish`.
@@ -1609,8 +1612,8 @@ fn measure_step(
     let ask = |t: &mut dyn Erased, proposal: Proposal, room: Option<f32>, extent: Vec2| {
         measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, style, resolved, extent)
     };
-    let (size, inputs) = ask(&mut *t, Proposal::Ideal, room, extent);
-    let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+    // Legacy components keep their original ordering: measure before asking whether they fill.
+    let initial = (!facts.paired_measure).then(|| ask(&mut *t, Proposal::Ideal, room, extent));
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
     let in_label = shape == ShapeKind::Leaf && scope::in_label(ctx);
@@ -1621,10 +1624,36 @@ fn measure_step(
     let tells_least = shape == ShapeKind::Leaf
         && matches!(at, ShowAt::Flow)
         && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
-    let min = (in_label || tells_least).then(|| {
-        let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
-        Call { proposal: Proposal::Min, room: None, inputs, took }
-    });
+    let pair = if facts.paired_measure
+        && (in_label || tells_least || (shape == ShapeKind::Leaf && matches!(shrink, Some(crate::layout::Shrink::Count(_)))))
+    {
+        let ideal_input = MeasureIn { ui, env, proposal: Proposal::Ideal, room };
+        let least_input = MeasureIn { ui, env, proposal: Proposal::Min, room: None };
+        t.measure_content_pair(&ideal_input, &least_input, resolved).map(|((ideal, least), inputs)| {
+            let size = steps::measure(style, &ideal_input, ideal, extent, resolved);
+            let least = steps::measure(style, &least_input, least, Vec2::ZERO, resolved);
+            (size, inputs, least, ideal)
+        })
+    } else {
+        None
+    };
+    let paired = pair.as_ref().map(|(_, _, least, content)| (*least, *content));
+    let (size, ideal, min) = match pair {
+        Some((size, inputs, least, _)) => {
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs: inputs.clone(), took: size };
+            let min = Call { proposal: Proposal::Min, room: None, inputs, took: least };
+            (size, ideal, Some(min))
+        }
+        None => {
+            let (size, inputs) = initial.unwrap_or_else(|| ask(&mut *t, Proposal::Ideal, room, extent));
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+            let min = (in_label || tells_least).then(|| {
+                let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
+                Call { proposal: Proposal::Min, room: None, inputs, took }
+            });
+            (size, ideal, min)
+        }
+    };
     let min_took = min.as_ref().filter(|_| in_label).map(|min| min.took);
     // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
     // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
@@ -1684,10 +1713,13 @@ fn measure_step(
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
             let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
-            let (content, _) = t.measure_content(&input, resolved);
+            let content = match paired.filter(|_| room.is_none()) {
+                Some((_, content)) => content,
+                None => t.measure_content(&input, resolved).0,
+            };
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
-            let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
+            let least = paired.map_or_else(|| ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x, |(least, _)| least.x);
             crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }
         Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),

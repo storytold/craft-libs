@@ -411,6 +411,19 @@ pub trait Component: Meta + Sized {
         Vec2::ZERO
     }
 
+    /// Set when `measure_pair` may answer a paired request. The default avoids calling the hook for legacy components.
+    const PAIRED_MEASURE: bool = false;
+
+    /// Optionally answers an ideal and a least content measure together. The answers must match `measure` under
+    /// the two supplied contexts, including the external inputs each reads, and leave the component as those calls
+    /// would. The component's fill declaration and label-scope reads must not change during either measure. Both
+    /// answers are replayed under the union of those inputs, so use this only when that preserves each answer. Return
+    /// `None` without reading either context or changing state to keep the ordinary separate calls;
+    /// that is the default.
+    fn measure_pair(&mut self, _ideal: &MeasureCx<'_, Self>, _least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        None
+    }
+
     /// The axis along which the component takes all the room the flow offers when that is more than it measured,
     /// as a container with `Sizing::Fill` does: the width when its caller set `Sizing::FillWidth` (a search field
     /// before a count) or `Sizing::Fill` (which takes the height as well). A component that fills by what it is

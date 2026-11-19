@@ -176,6 +176,11 @@ impl<C: Component> Erased for Typed<'_, '_, C> {
         steps::measure_content(self.comp.get(), input, style, resolved, self.shown.as_deref())
     }
 
+    fn measure_content_pair(&mut self, ideal: &MeasureIn<'_>, least: &MeasureIn<'_>, resolved: &Resolved<'_>) -> Option<((Vec2, Vec2), Inputs)> {
+        let style = step_style(&self.style);
+        steps::measure_content_pair(self.comp.get(), ideal, least, style, resolved, self.shown.as_deref())
+    }
+
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2 {
         let style = step_style(&self.style);
         let (extent, shown) = measured_extent(self.comp.get(), &mut *self.hooks, at, stage, style, self.shown.take());

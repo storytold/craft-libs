@@ -94,6 +94,20 @@ impl Component for Link {
         Vec2::new(layout.size().x, painted_height(&layout))
     }
 
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        if !self.cut_first() {
+            return None;
+        }
+        let run = self.run(ideal.resolved.label);
+        let layout = ideal.layout_at(&run, ideal.room.unwrap_or(f32::INFINITY));
+        let ideal_size = Vec2::new(layout.size().x, painted_height(&layout));
+        let width = least.least_width(&run);
+        let whole = least.layout_at(&run, f32::INFINITY);
+        Some((ideal_size, Vec2::new(width, painted_height(&whole))))
+    }
+
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let middle_click = match cx.press().phase {
             PressPhase::Release { start, click: true, .. } => start.button == PointerButton::Middle,

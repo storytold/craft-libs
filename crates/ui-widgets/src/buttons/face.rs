@@ -168,6 +168,22 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
     Vec2::new(text.x + fixed, text.y.max(icon))
 }
 
+/// The ideal and least face sizes from one paired component measure.
+pub(crate) fn measure_pair<C: Component>(ideal: &MeasureCx<'_, C>, least: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> (Vec2, Vec2) {
+    let icon = ideal.icon();
+    let fixed = icon * spec.icons() as f32 + ideal.gap() * spec.gaps() as f32;
+    let (whole, narrow) = if spec.label.is_empty() {
+        (Vec2::ZERO, Vec2::ZERO)
+    } else {
+        let run = spec.run();
+        let whole = ideal.layout_at(&run, ideal.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0))).size();
+        let width = least.least_width(&run);
+        let height = least.layout_at(&run, f32::INFINITY).size().y;
+        (whole, Vec2::new(width, height))
+    };
+    (Vec2::new(whole.x + fixed, whole.y.max(icon)), Vec2::new(narrow.x + fixed, narrow.y.max(icon)))
+}
+
 /// `icon` in `color`, unless the spec names a colour of its own.
 pub(super) fn tinted<'a>(icon: &IconSpec<'a>, color: StyleColor) -> IconSpec<'a> {
     let icon = icon.clone();

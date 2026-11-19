@@ -209,6 +209,33 @@ impl Component for SelectFace<'_> {
         Vec2::new(beside + text.x, text.y.max(picture))
     }
 
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        // A caption may wrap differently under two rooms, so keep the separate path when the ideal has a room.
+        if ideal.room.is_some() {
+            return None;
+        }
+        let run = TextRun::new(ideal.resolved.label).role(ideal.style.text.role).elide();
+        let whole = if self.name { ideal.layout_at(&run, f32::INFINITY).size() } else { Vec2::ZERO };
+        let width = if self.name { least.least_width(&run) } else { 0.0 };
+        let caption = self.caption_run(&ideal.style.caption).map_or(Vec2::ZERO, |run| ideal.layout(&run).size());
+        let picture = match (&self.thumb, caption.y > 0.0) {
+            (None, _) => 0.0,
+            (Some(_), false) => ideal.style.thumb,
+            (Some(_), true) => ideal.style.thumb + ideal.style.caption_gap + caption.y,
+        };
+        let beside = self.lead(ideal.style, caption.x) + reserve(&ideal.style.field, &self.leading_glyphs(), &[Self::chevron()]);
+        let mut ideal_width = whole.x;
+        if self.fit && self.name {
+            let field = ideal.style.field.metrics();
+            let room = field.ideal_width - ideal.style.metrics.padding.start - ideal.style.metrics.padding.end - beside;
+            ideal_width = ideal_width.min(room.max(width));
+        }
+        let height = whole.y.max(picture);
+        Some((Vec2::new(beside + ideal_width, height), Vec2::new(beside + width, height)))
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let chevron = Self::chevron();
         let rtl = cx.flow.is_rtl();

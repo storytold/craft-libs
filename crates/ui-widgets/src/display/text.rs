@@ -183,6 +183,27 @@ impl Component for Text {
         }
     }
 
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        // Wrapped and document text need their own least-measure logic; keep the separate path for them.
+        if !self.spans.is_empty() || self.elide == Elide::Off {
+            return None;
+        }
+        let band = ideal.column_room().unwrap_or(f32::INFINITY);
+        let run = self.run(ideal.style.text.role, ideal.resolved.label);
+        let layout = ideal.layout_at(&run, band);
+        let ideal_size = match ideal.room {
+            Some(room) if layout.elided => Vec2::new(room, layout.size().y),
+            _ => layout.size(),
+        };
+        // `measure` reads the column room even in its least branch.
+        let _ = least.column_room();
+        let width = least.least_width(&run);
+        let height = least.layout_at(&run, f32::INFINITY).size().y;
+        Some((ideal_size, Vec2::new(width, height)))
+    }
+
     fn cut_first(&self) -> bool {
         self.elide != Elide::Off
     }

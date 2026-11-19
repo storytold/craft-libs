@@ -30,6 +30,22 @@ pub(crate) fn measure_content<C: Component>(
     layout_memory::measure_call(input.ui.ctx(), || comp.measure(&cx))
 }
 
+/// Asks a component that supports it for both measures in one call. Both answers share the inputs read by the call,
+/// so replay checks each answer under all of those inputs.
+pub(crate) fn measure_content_pair<C: Component>(
+    comp: &mut C,
+    ideal: &MeasureIn<'_>,
+    least: &MeasureIn<'_>,
+    style: &C::Style,
+    resolved: &Resolved<'_>,
+    value: Option<&ValueOf<C>>,
+) -> Option<((Vec2, Vec2), Inputs)> {
+    let ideal_cx = measure_cx::<C>(ideal, style, resolved, value);
+    let least_cx = measure_cx::<C>(least, style, resolved, value);
+    let (pair, inputs) = layout_memory::measure_call(ideal.ui.ctx(), || comp.measure_pair(&ideal_cx, &least_cx));
+    pair.map(|pair| (pair, inputs))
+}
+
 /// Step 5, measure: the `content` size plus padding, then `max(min_size)`, and for any proposal but `Min` at least the
 /// ideal width, up to the room, unless the component is sized to its content (`sizing`, a leaf's `Sizing::Content`).
 /// At `Min` a least width the style sets takes the place of `min_size`'s width. `extent` is what the shape adds to the

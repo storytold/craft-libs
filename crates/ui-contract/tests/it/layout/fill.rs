@@ -127,6 +127,7 @@ const LINE: f32 = 20.0;
 struct Asked {
     ideal: Cell<usize>,
     min: Cell<usize>,
+    pair: Cell<usize>,
 }
 
 /// A leaf `IDEAL` wide that narrows to `LEAST`, whatever its room; it counts the measures it answers in measuring runs.
@@ -136,11 +137,13 @@ struct Stretch<'a> {
     common: Common,
     seen: &'a RefCell<Seen>,
     asked: &'a Asked,
+    paired: bool,
+    track_input: bool,
 }
 
 impl<'a> Stretch<'a> {
     fn new(seen: &'a RefCell<Seen>, asked: &'a Asked) -> Self {
-        Stretch { common: Common::new(), seen, asked }
+        Stretch { common: Common::new(), seen, asked, paired: false, track_input: false }
     }
 }
 
@@ -154,11 +157,32 @@ impl Component for Stretch<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if self.track_input {
+            let _ = cx.column_room();
+        }
         let (count, width) = if cx.proposal == Proposal::Min { (&self.asked.min, LEAST) } else { (&self.asked.ideal, IDEAL) };
         if is_measuring(cx.ui.ctx()) {
             count.set(count.get() + 1);
         }
         Vec2::new(width, LINE)
+    }
+
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        if !self.paired {
+            return None;
+        }
+        assert_eq!(ideal.proposal, Proposal::Ideal);
+        assert_eq!(least.proposal, Proposal::Min);
+        if self.track_input {
+            let _ = ideal.column_room();
+            let _ = least.column_room();
+        }
+        if is_measuring(ideal.ui.ctx()) {
+            self.asked.pair.set(self.asked.pair.get() + 1);
+        }
+        Some((Vec2::new(IDEAL, LINE), Vec2::new(LEAST, LINE)))
     }
 
     fn sense(&self) -> Sense {
@@ -172,6 +196,44 @@ impl Component for Stretch<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+/// Compare the paired path with the legacy component calls through a nested filling body and its kept transcript.
+fn nested_pair(paired: bool) -> (Rect, Rect, usize, usize, usize) {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let asked = Rc::new(Asked::default());
+    let (shown, counts) = (Rc::clone(&seen), Rc::clone(&asked));
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("outer").show(ui, |ui, _| {
+            Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("inner").show(ui, |ui, _| {
+                let mut child = Stretch::new(&shown, &counts);
+                child.paired = paired;
+                child.track_input = true;
+                child.sizing(Sizing::FillWidth).id_salt("child").show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(200.0, 100.0)).settle();
+    let rect = seen.borrow().rect;
+    let pairs = asked.pair.get();
+    let separate_calls = asked.ideal.get() + asked.min.get();
+    fixture.idle(3);
+    let after_idle = asked.pair.get();
+    fixture.room(Vec2::new(140.0, 100.0)).settle();
+    let resized = seen.borrow().rect;
+    (rect, resized, pairs, after_idle, separate_calls)
+}
+
+#[trial]
+fn paired_measure_matches_separate_calls_through_a_nested_body_and_replay() {
+    let (separate, separate_resized, _, _, separate_calls) = nested_pair(false);
+    let (paired, paired_resized, before_idle, after_idle, paired_calls) = nested_pair(true);
+    assert!(paired.width() > 0.0);
+    assert!((paired.size() - separate.size()).abs().max_elem() < 0.5, "paired {paired:?}, separate {separate:?}");
+    assert!((paired_resized.size() - separate_resized.size()).abs().max_elem() < 0.5, "paired {paired_resized:?}, separate {separate_resized:?}");
+    assert!(before_idle > 0, "the nested filling leaf used the paired path");
+    assert!(paired_calls < separate_calls, "paired calls {paired_calls}, separate calls {separate_calls}");
+    assert_eq!(before_idle, after_idle, "the kept transcript needs no new paired measure on idle frames");
 }
 
 /// The rect of a row that fills a room `width` wide, scrolling along x when `scrolls`, and of the `Stretch` that fills

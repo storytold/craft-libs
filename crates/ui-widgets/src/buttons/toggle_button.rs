@@ -160,6 +160,12 @@ impl Component for ToggleButton<'_> {
         face::measure(cx, &self.spec(cx.resolved.label, true))
     }
 
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        Some(face::measure_pair(ideal, least, &self.spec(ideal.resolved.label, true)))
+    }
+
     fn sense(&self) -> Sense {
         Sense::CLICK | Sense::FOCUS
     }
