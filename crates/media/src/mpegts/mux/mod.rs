@@ -155,9 +155,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Av1Config {
     /// seq_profile, 0 to 2.
     pub seq_profile: u8,
-    /// seq_level_idx[0], 0 to 31.
+    /// `seq_level_idx[0]`, 0 to 31.
     pub seq_level_idx_0: u8,
-    /// seq_tier[0].
+    /// `seq_tier[0]`.
     pub seq_tier_0: bool,
     /// high_bitdepth.
     pub high_bitdepth: bool,
