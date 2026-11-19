@@ -879,12 +879,10 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
         return words(text);
     }
     let prev_base = |idx: usize| -> Option<char> {
-        text.get(..idx)
-            .and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+        text.get(..idx).and_then(|s| s.chars().rev().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
     };
     let next_base = |idx: usize, c: char| -> Option<char> {
-        text.get(idx + c.len_utf8()..)
-            .and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
+        text.get(idx + c.len_utf8()..).and_then(|s| s.chars().find(|&ch| !unicode_normalization::char::is_combining_mark(ch)))
     };
     // Check if character at index i can join adjacent characters into a word (quotes/gershayim/maqaf/hyphen)
     // Skipping vowel marks / combining marks (e.g. צָהָ"ל, וכוּ')
@@ -902,8 +900,7 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
             }
             '"' | '”' | '“' => {
                 // Only join ASCII/curly double quotes if bordered by Hebrew letters (skipping niqqud)
-                prev_base(idx).is_some_and(crate::he::is_hebrew_letter)
-                    && next_base(idx, c).is_some_and(crate::he::is_hebrew_letter)
+                prev_base(idx).is_some_and(crate::he::is_hebrew_letter) && next_base(idx, c).is_some_and(crate::he::is_hebrew_letter)
             }
             '\'' | '’' | '׳' => {
                 // Geresh/apostrophe can follow or join Hebrew letters (skipping niqqud)
