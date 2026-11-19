@@ -251,11 +251,11 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
 
 /// Notes, in the records open around the running code, the registration the running code made: `again(ctx, &args)`
 /// registers it again. `args` builds the arguments only while a record is open. `again` captures nothing (a function
-/// or a closure without captures; a capture does not compile), so everything the registration depends on is in the
-/// arguments, and two notes of the same `again` with equal arguments are the same registration. A replay at another
-/// place calls `again` with the arguments moved there (`Shift`). A service outside this crate that keeps registrations
-/// per pass (a dock's drop spots) notes each one here, so a settled view's replay
-/// makes it again.
+/// or a closure without captures), so everything the registration depends on is in the arguments. A capture fails
+/// the build, not `cargo check`: the size assert is a constant that is evaluated only when the code is generated.
+/// Two notes of the same `again` with equal arguments are the same registration. A replay at another place calls
+/// `again` with the arguments moved there (`Shift`). A service outside this crate that keeps registrations per pass
+/// (a dock's drop spots) notes each one here, so a settled view's replay makes it again.
 pub fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
 where
     A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
