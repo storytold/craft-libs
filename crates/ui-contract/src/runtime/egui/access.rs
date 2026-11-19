@@ -213,7 +213,7 @@ pub(crate) fn drop_dangling_relations(output: &mut FullOutput) {
 
 /// The step itself: every `controls` id of `update` that names no node of `update` is dropped. Other
 /// relations keep their ids: they are built from nodes this pass wrote.
-pub(crate) fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
+pub fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
     let ids: std::collections::HashSet<egui::accesskit::NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
     for (_, node) in update.nodes.iter_mut() {
         if node.controls().iter().all(|id| ids.contains(id)) {
