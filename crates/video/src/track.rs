@@ -31,6 +31,16 @@ enum Inner {
     Av1 { dec: Box<av1::decode::Decoder>, config_obus: Vec<u8> },
     #[cfg(feature = "mpeg2-decode")]
     Mpeg2(Box<mpeg2::Decoder>),
+    #[cfg(feature = "prores")]
+    ProRes,
+    #[cfg(feature = "dnx")]
+    Dnx,
+    #[cfg(feature = "apv-decode")]
+    Apv,
+    #[cfg(feature = "ffv1")]
+    Ffv1(Box<crate::ffv1::Decoder>),
+    #[cfg(feature = "vp8-decode")]
+    Vp8(Box<crate::vp8::Decoder>),
 }
 
 /// A decoder for one video track, whatever its codec: built from the track's [`CodecParams`],
@@ -43,6 +53,11 @@ enum Inner {
 /// | VP9 | `vp9-decode` | ignored (the frame headers repeat the `vpcC` values) |
 /// | AV1 | `av1-decode` | an `av1C` record, or empty |
 /// | MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
+/// | ProRes | `prores` | ignored (frame headers carry the format) |
+/// | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
+/// | APV | `apv-decode` | ignored (access units carry the format) |
+/// | FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+/// | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 ///
 /// With an `avcC` or `hvcC` record, packets are length-prefixed NAL units, as MP4 and Matroska
 /// store them. Otherwise they are Annex B, as MPEG-TS and AVI store them, and the parameter sets
@@ -51,6 +66,11 @@ enum Inner {
 /// parameter sets, SEI and access unit delimiters, `av1C` config OBUs are sequence headers and
 /// metadata, and MPEG-2 `extradata` holds sequence headers, their extensions, user data and GOP
 /// headers.
+///
+/// ProRes, DNx, APV and FFV1 return one frame per packet. APV selects the first decodable
+/// primary frame and its alpha, as the codec's default decoder does. FFV1 supports version 3,
+/// range-coded key frames. VP8 hidden frames update references without returning a picture.
+/// These five decoders have no delayed output; reset keeps FFV1 configuration and dimensions.
 ///
 /// Other codecs are [`VideoError::Unsupported`], as is a codec whose decoder feature is off.
 ///
@@ -86,13 +106,15 @@ impl std::fmt::Debug for TrackDecoder {
 }
 
 impl TrackDecoder {
-    /// A decoder for the track `params` describes. Only `codec` and `extradata` are read; the
-    /// picture size and format come from the stream.
+    /// A decoder for the track `params` describes. `codec` and `extradata` select and configure it;
+    /// FFV1 also requires nonzero `width` and `height` from the container. Other codecs get the
+    /// picture size and format from the stream.
     ///
-    /// Configuration that the codec refuses, or that holds picture data, is
-    /// [`VideoError::Malformed`].
+    /// Invalid configuration, or configuration containing picture data where only headers are
+    /// allowed, is [`VideoError::Malformed`]. Unsupported codec features are
+    /// [`VideoError::Unsupported`].
     pub fn new(params: &CodecParams) -> Result<TrackDecoder, VideoError> {
-        Ok(TrackDecoder { inner: Inner::new(params.codec, &params.extradata)?, codec: params.codec, held: Vec::new() })
+        Ok(TrackDecoder { inner: Inner::new(params)?, codec: params.codec, held: Vec::new() })
     }
 
     /// The track's codec, as `params` gave it.
@@ -141,6 +163,22 @@ impl TrackDecoder {
                 let pics = dec.decode(packet, pts)?;
                 self.output(pics, None)
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => self.single(crate::prores::decode_frame(packet)?, pts),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => self.single(crate::dnx::decode_frame(packet)?, pts),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => self.single(crate::apv::decode_frame(packet)?, pts),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(dec) => {
+                let pic = dec.decode(packet)?;
+                self.single(pic, pts)
+            }
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(dec) => {
+                let pic = dec.decode(packet, pts)?;
+                self.output(pic.into_iter().collect(), None)
+            }
         }
     }
 
@@ -177,6 +215,16 @@ impl TrackDecoder {
                 let pics = dec.flush();
                 self.output(pics, None)
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(_) => Ok(std::mem::take(&mut self.held)),
         }
     }
 
@@ -222,11 +270,45 @@ impl TrackDecoder {
                 dec.reset();
                 Ok(())
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => Ok(()),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => Ok(()),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => Ok(()),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => Ok(()),
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(dec) => {
+                dec.reset();
+                Ok(())
+            }
         }
+    }
+
+    /// Frame-only decoders do not take timestamps; attach the packet timestamp after conversion.
+    #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-decode", feature = "ffv1"))]
+    fn single<P>(&mut self, pic: P, pts: i64) -> Result<Vec<VideoFrame>, VideoError>
+    where
+        VideoFrame: TryFrom<P, Error = FrameError>,
+    {
+        let mut frame = VideoFrame::try_from(pic)?;
+        frame.pts = Some(pts);
+        let mut frames = std::mem::take(&mut self.held);
+        frames.push(frame);
+        Ok(frames)
     }
 
     /// The frames kept from a failed call, then `pics` converted. On `err`, or on a picture that
     /// does not convert, the frames are kept for the next call and the (first) error returned.
+    #[cfg(any(
+        feature = "h264-decode",
+        feature = "hevc-decode",
+        feature = "vp9-decode",
+        feature = "av1-decode",
+        feature = "mpeg2-decode",
+        feature = "vp8-decode"
+    ))]
     fn output<P>(&mut self, pics: Vec<P>, err: Option<VideoError>) -> Result<Vec<VideoFrame>, VideoError>
     where
         VideoFrame: TryFrom<P, Error = FrameError>,
@@ -253,8 +335,9 @@ impl TrackDecoder {
 }
 
 impl Inner {
-    fn new(codec: CodecId, extradata: &[u8]) -> Result<Inner, VideoError> {
-        #[cfg(not(any(feature = "h264-decode", feature = "hevc-decode", feature = "av1-decode", feature = "mpeg2-decode")))]
+    fn new(params: &CodecParams) -> Result<Inner, VideoError> {
+        let codec = params.codec;
+        let extradata = &params.extradata;
         let _ = extradata;
         match codec {
             #[cfg(feature = "h264-decode")]
@@ -286,6 +369,23 @@ impl Inner {
                     dec.decode(extradata, 0)?;
                 }
                 Ok(Inner::Mpeg2(dec))
+            }
+            #[cfg(feature = "prores")]
+            CodecId::ProRes => Ok(Inner::ProRes),
+            #[cfg(feature = "dnx")]
+            CodecId::Dnxhd => Ok(Inner::Dnx),
+            #[cfg(feature = "apv-decode")]
+            CodecId::Apv => Ok(Inner::Apv),
+            #[cfg(feature = "vp8-decode")]
+            CodecId::Vp8 => Ok(Inner::Vp8(Box::default())),
+            #[cfg(feature = "ffv1")]
+            CodecId::Ffv1 => {
+                let (width, height) = params
+                    .width
+                    .zip(params.height)
+                    .filter(|&(w, h)| w > 0 && h > 0)
+                    .ok_or_else(|| VideoError::Malformed("FFV1: container dimensions are required".into()))?;
+                Ok(Inner::Ffv1(Box::new(crate::ffv1::Decoder::new(extradata, width, height)?)))
             }
             other => Err(VideoError::Unsupported(format!("no {} decoder in this build", other.name()))),
         }
