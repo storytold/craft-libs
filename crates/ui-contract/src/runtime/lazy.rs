@@ -240,7 +240,7 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 /// pass gets the same answer, so a measuring run and the real run lay out the same children.
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
-    with(ctx, |store, pass_nr, frame| {
+    let decision = with(ctx, |store, pass_nr, frame| {
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
@@ -255,7 +255,11 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
             }
         };
         if skip { Decision::Skip(size) } else { Decision::Run }
-    })
+    });
+    if matches!(decision, Decision::Skip(_)) {
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::OutOfView);
+    }
+    decision
 }
 
 /// Records what a run that showed the child `id` found: its extent in a run of this kind and, from a real run, what
@@ -298,6 +302,17 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - for a child with no content version: no input other than pointer motion this frame or the one before;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
 pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
+    use crate::runtime::measure::{Settle, count_memo_key_bytes, count_settle};
+    // The 8 bytes of a keyed call's content version are the key fed in.
+    if content.is_some() {
+        count_memo_key_bytes(ctx, 8);
+    }
+    let size = decide_settled(ctx, owner, id, sizing, place, content);
+    count_settle(ctx, id, if size.is_some() { Settle::Replayed } else { Settle::Ran });
+    size
+}
+
+fn decide_settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
