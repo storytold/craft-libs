@@ -168,7 +168,7 @@ impl<'a> DocText<'a> {
         }
         let galley = text_layout::layout(ctx, job);
         let elided = galley.elided;
-        TextLayout::new(aligned_rows(galley, self.align, direction == Direction::Rtl, ctx.pixels_per_point()), elided, self.full_text())
+        TextLayout::from_job(aligned_rows(galley, self.align, direction == Direction::Rtl, ctx.pixels_per_point()), elided, None)
     }
 }
 

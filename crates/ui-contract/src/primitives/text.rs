@@ -12,8 +12,8 @@ use egui::{Color32, Context, Galley};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
-use std::sync::Arc;
+use std::ops::{Deref, Range};
+use std::sync::{Arc, OnceLock};
 
 /// How a run fits its room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -238,6 +238,17 @@ struct LayoutKey {
     scale: u32,
 }
 
+/// A lookup borrows the spans; only a new cache entry copies their text.
+struct LayoutQuery<'a> {
+    run: &'a TextRun<'a>,
+    tokens: u64,
+    direction: Direction,
+    ink: Color32,
+    fonts: StackFacts,
+    width: u32,
+    scale: u32,
+}
+
 struct CachedText {
     key: LayoutKey,
     layout: Option<Arc<TextLayout>>,
@@ -267,7 +278,7 @@ fn with_memo<R>(ctx: &Context, f: impl FnOnce(&mut TextMemo) -> R) -> R {
     })
 }
 
-impl LayoutKey {
+impl LayoutQuery<'_> {
     // Hash the text and the common discriminators. Equality checks the remaining fields and resolves collisions.
     fn hash(&self) -> u64 {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -281,20 +292,66 @@ impl LayoutKey {
         self.scale.hash(&mut hash);
         hash.finish()
     }
+
+    fn matches(&self, key: &LayoutKey) -> bool {
+        key.run == *self.run
+            && key.tokens == self.tokens
+            && key.direction == self.direction
+            && key.ink == self.ink
+            && key.fonts == self.fonts
+            && key.width == self.width
+            && key.scale == self.scale
+    }
+
+    fn owned(&self) -> LayoutKey {
+        let spans = self
+            .run
+            .spans
+            .iter()
+            .map(|span| Span {
+                text: Cow::Owned(span.text.to_string()),
+                italic: span.italic,
+                tabular: span.tabular,
+                mono: span.mono,
+                muted: span.muted,
+                shortcut: span.shortcut,
+                highlight: span.highlight,
+                underline: span.underline,
+                strong: span.strong,
+            })
+            .collect();
+        LayoutKey {
+            run: TextRun {
+                spans,
+                role: self.run.role,
+                color: self.run.color,
+                wrap: self.run.wrap,
+                ltr: self.run.ltr,
+                align: self.run.align,
+                rotation: self.run.rotation,
+            },
+            tokens: self.tokens,
+            direction: self.direction,
+            ink: self.ink,
+            fonts: self.fonts,
+            width: self.width,
+            scale: self.scale,
+        }
+    }
 }
 
 impl TextMemo {
-    fn get(&self, key: &LayoutKey) -> Option<&CachedText> {
-        self.entries.get(&key.hash())?.iter().find(|entry| entry.key == *key)
+    fn get(&self, key: &LayoutQuery<'_>) -> Option<&CachedText> {
+        self.entries.get(&key.hash())?.iter().find(|entry| key.matches(&entry.key))
     }
 
-    fn put(&mut self, key: LayoutKey, layout: Option<Arc<TextLayout>>, least: Option<f32>) {
+    fn put(&mut self, key: &LayoutQuery<'_>, layout: Option<Arc<TextLayout>>, least: Option<f32>) {
         // Large document text should not pin galleys in a UI-label cache.
-        if key.run.spans.iter().fold(0usize, |len, span| len.saturating_add(span.text.len())) > 16 * 1024 {
+        if key.run.spans.len() > 1024 || key.run.spans.iter().fold(0usize, |len, span| len.saturating_add(span.text.len())) > 16 * 1024 {
             return;
         }
         let hash = key.hash();
-        if let Some(entry) = self.entries.get_mut(&hash).and_then(|bucket| bucket.iter_mut().find(|entry| entry.key == key)) {
+        if let Some(entry) = self.entries.get_mut(&hash).and_then(|bucket| bucket.iter_mut().find(|entry| key.matches(&entry.key))) {
             if layout.is_some() {
                 entry.layout = layout;
             }
@@ -314,31 +371,16 @@ impl TextMemo {
                 }
             }
         }
-        self.entries.entry(hash).or_default().push(CachedText { key, layout, least });
+        self.entries.entry(hash).or_default().push(CachedText { key: key.owned(), layout, least });
         self.order.push_back(hash);
     }
 }
 
 impl TextRun<'_> {
     /// All inputs read by `job`, the cutting and row-alignment steps.
-    fn layout_key(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> LayoutKey {
-        let spans = self
-            .spans
-            .iter()
-            .map(|span| Span {
-                text: Cow::Owned(span.text.to_string()),
-                italic: span.italic,
-                tabular: span.tabular,
-                mono: span.mono,
-                muted: span.muted,
-                shortcut: span.shortcut,
-                highlight: span.highlight,
-                underline: span.underline,
-                strong: span.strong,
-            })
-            .collect();
-        LayoutKey {
-            run: TextRun { spans, role: self.role, color: self.color, wrap: self.wrap, ltr: self.ltr, align: self.align, rotation: self.rotation },
+    fn layout_key<'a>(&'a self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> LayoutQuery<'a> {
+        LayoutQuery {
+            run: self,
             tokens: env.tokens.key(),
             direction: env.direction,
             ink: env.ink,
@@ -357,19 +399,22 @@ impl TextRun<'_> {
         if let Some(layout) = cached {
             return (*layout).clone();
         }
-        let full = self.full_text_cow();
+        // Only a custom cut needs the joined text: other jobs already own the full text.
+        let full = self.wrap.cuts().then(|| self.full_text_cow());
         // Every cut goes through the one cut that `least_width` measures, so a run shown at its least keeps its
         // readable characters.
-        let galley = match self.wrap {
-            Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath => self.layout_cut(ctx, env, &full, max_width),
-            _ => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
+        let galley = match &full {
+            Some(full) => self.layout_cut(ctx, env, full, max_width),
+            None => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
         };
-        let elided = galley.elided || self.wrap.cuts() && galley.job.text != full;
-        let mut layout = TextLayout::new(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, full.into_owned());
+        let changed = full.as_ref().is_some_and(|full| galley.job.text != *full);
+        let elided = galley.elided || changed;
+        let original = full.filter(|_| changed).map(|full| Arc::<str>::from(full.as_ref()));
+        let mut layout = TextLayout::from_job(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, original);
         layout.rotation = self.rotation;
         with_memo(ctx, |memo| {
             if memo.generation == generation {
-                memo.put(key, Some(Arc::new(layout.clone())), None);
+                memo.put(&key, Some(Arc::new(layout.clone())), None);
             }
         });
         layout
@@ -387,7 +432,7 @@ impl TextRun<'_> {
         let least = self.compute_least_width(ctx, env);
         with_memo(ctx, |memo| {
             if memo.generation == generation {
-                memo.put(key, None, Some(least));
+                memo.put(&key, None, Some(least));
             }
         });
         least
@@ -587,12 +632,110 @@ pub struct LayoutRun {
 /// Records that the galley of `layout` was painted, and its full text when the layout cut text.
 pub(crate) fn note_painted(ctx: &Context, layout: &TextLayout) {
     if layout.elided {
-        crate::runtime::egui::painted::note_elided(ctx, &layout.galley, &layout.full);
+        crate::runtime::egui::painted::note_elided(ctx, &layout.galley, layout.full());
+    }
+}
+
+/// The full text of a layout, materialized only when read.
+///
+/// Dereferences to `String` so existing field reads continue to work.
+pub struct LayoutText {
+    galley: Arc<Galley>,
+    original: Option<Arc<str>>,
+    value: Arc<OnceLock<String>>,
+}
+
+impl LayoutText {
+    fn shared(&self) -> Self {
+        Self { galley: self.galley.clone(), original: self.original.clone(), value: self.value.clone() }
+    }
+}
+
+impl std::fmt::Debug for LayoutText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.deref(), f)
+    }
+}
+
+impl std::fmt::Display for LayoutText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self.deref(), f)
+    }
+}
+
+impl AsRef<str> for LayoutText {
+    fn as_ref(&self) -> &str {
+        self.deref()
+    }
+}
+
+impl PartialEq for LayoutText {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl PartialEq<&str> for LayoutText {
+    fn eq(&self, other: &&str) -> bool {
+        self.deref() == other
+    }
+}
+
+impl PartialEq<String> for LayoutText {
+    fn eq(&self, other: &String) -> bool {
+        self.deref() == other
+    }
+}
+
+impl Deref for LayoutText {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        self.value.get_or_init(|| self.original.as_deref().unwrap_or(&self.galley.job.text).to_owned())
+    }
+}
+
+/// A layout's single-row direction runs, built only when read.
+///
+/// Dereferences to `Vec<LayoutRun>` so existing field reads continue to work.
+pub struct LayoutRuns {
+    galley: Arc<Galley>,
+    value: Arc<OnceLock<Vec<LayoutRun>>>,
+}
+
+impl LayoutRuns {
+    fn shared(&self) -> Self {
+        Self { galley: self.galley.clone(), value: self.value.clone() }
+    }
+}
+
+impl std::fmt::Debug for LayoutRuns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.deref(), f)
+    }
+}
+
+impl PartialEq for LayoutRuns {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl PartialEq<Vec<LayoutRun>> for LayoutRuns {
+    fn eq(&self, other: &Vec<LayoutRun>) -> bool {
+        self.deref() == other
+    }
+}
+
+impl Deref for LayoutRuns {
+    type Target = Vec<LayoutRun>;
+
+    fn deref(&self) -> &Vec<LayoutRun> {
+        self.value.get_or_init(|| if self.galley.rows.len() <= 1 { TextLayout::build_row_runs(&self.galley, 0) } else { Vec::new() })
     }
 }
 
 /// A laid-out run.
-#[derive(Clone)]
 #[non_exhaustive]
 pub struct TextLayout {
     /// The galley.
@@ -600,23 +743,52 @@ pub struct TextLayout {
     /// The layout cut text.
     pub elided: bool,
     /// The full text, as the tooltip and accessible name of an elided run.
-    pub full: String,
+    pub full: LayoutText,
     /// The first row's baseline, from the layout's top.
     pub first_baseline: f32,
     /// The bidi runs of a single-row layout; empty for a wrapped one.
-    pub runs: Vec<LayoutRun>,
+    pub runs: LayoutRuns,
     /// The run's paint angle, in radians clockwise about the layout's top-left corner.
     pub rotation: f32,
 }
 
+impl Clone for TextLayout {
+    fn clone(&self) -> Self {
+        Self {
+            galley: self.galley.clone(),
+            elided: self.elided,
+            full: self.full.shared(),
+            first_baseline: self.first_baseline,
+            runs: self.runs.shared(),
+            rotation: self.rotation,
+        }
+    }
+}
+
 impl TextLayout {
     pub(crate) fn new(galley: Arc<Galley>, elided: bool, full: String) -> TextLayout {
+        let original = (galley.job.text != full).then(|| Arc::<str>::from(full));
+        Self::from_job(galley, elided, original)
+    }
+
+    pub(super) fn from_job(galley: Arc<Galley>, elided: bool, full: Option<Arc<str>>) -> TextLayout {
         let first_baseline = galley.rows.first().map_or(0.0, |placed| match placed.row.glyphs.first() {
             Some(glyph) => placed.pos.y + glyph.pos.y,
             None => placed.pos.y + placed.row.size.y,
         });
-        let runs = if galley.rows.len() <= 1 { Self::build_row_runs(&galley, 0) } else { Vec::new() };
+        let full = LayoutText { galley: galley.clone(), original: full, value: Arc::new(OnceLock::new()) };
+        let runs = LayoutRuns { galley: galley.clone(), value: Arc::new(OnceLock::new()) };
         TextLayout { galley, elided, full, first_baseline, runs, rotation: 0.0 }
+    }
+
+    /// The full text, as the tooltip and accessible name of an elided run.
+    pub fn full(&self) -> &str {
+        &self.full
+    }
+
+    /// The bidi runs of a single-row layout; empty for a wrapped one.
+    pub fn runs(&self) -> &[LayoutRun] {
+        &self.runs
     }
 
     /// One run per maximal stretch of glyphs with one direction; an empty row is one empty left-to-right run.
@@ -650,7 +822,8 @@ impl TextLayout {
             .map(|at| {
                 let placed = &self.galley.rows[at];
                 let text = placed.row.glyphs.iter().map(|glyph| glyph.chr).collect();
-                (text, egui::Rect::from_min_size(placed.pos, placed.row.size), Self::build_row_runs(&self.galley, at))
+                let runs = if self.galley.rows.len() == 1 { self.runs().to_vec() } else { Self::build_row_runs(&self.galley, at) };
+                (text, egui::Rect::from_min_size(placed.pos, placed.row.size), runs)
             })
             .collect()
     }
@@ -741,6 +914,14 @@ mod memo_tests {
             let first = run.layout(ctx, &env, 80.0);
             let second = run.layout(ctx, &env, 80.0);
             assert!(Arc::ptr_eq(&first.galley, &second.galley));
+            assert!(first.runs.value.get().is_none());
+            assert!(first.full.value.get().is_none());
+            assert_eq!(first.full(), "a label long enough to elide");
+            assert!(second.full.value.get().is_some());
+            let _ = first.runs();
+            assert!(second.runs.value.get().is_some());
+            let _: String = first.full.clone();
+            let _: Vec<LayoutRun> = first.runs.clone();
             let _ = run.layout(ctx, &env, 120.0);
             let _ = run.least_width(ctx, &env);
             let least_key = run.layout_key(ctx, &env, f32::INFINITY);
@@ -751,6 +932,9 @@ mod memo_tests {
             let mut variants = Vec::new();
             let mut changed = run.clone();
             changed.spans[0].text = Cow::Borrowed("a different label");
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans = vec![Span::new("a label "), Span::new("long enough to elide")];
             variants.push(changed);
             let mut changed = run.clone();
             changed.spans[0].italic = true;
@@ -806,13 +990,17 @@ mod memo_tests {
             let _ = run.layout(ctx, &ink, 80.0);
             let fonts = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
             let _ = run.layout(ctx, &fonts, 80.0);
+            let fonts = TextEnv { fonts: StackFacts { system_ui: true, ..env.fonts }, ..env };
+            let _ = run.layout(ctx, &fonts, 80.0);
+            let fonts = TextEnv { fonts: StackFacts { line_ratio: 1.25, ..env.fonts }, ..env };
+            let _ = run.layout(ctx, &fonts, 80.0);
             let mut changed_tokens = (**tokens.tokens()).clone();
             changed_tokens.color.text.muted = craft_theme::Rgba([12, 34, 56, 255]);
             let changed_tokens = UiTokens::new(Arc::new(changed_tokens), Contrast::Standard, Size::Compact);
             let styled = TextEnv { tokens: &changed_tokens, ..env };
             let _ = run.layout(ctx, &styled, 80.0);
             let before = with_memo(ctx, |memo| memo.order.len());
-            assert_eq!(before, 22);
+            assert_eq!(before, 25);
         });
         output.textures_delta.clear();
         // A direct egui font replacement bypasses framework hooks; the sentinel must detect it.
@@ -821,6 +1009,42 @@ mod memo_tests {
         ctx.set_fonts(definitions);
         let mut output = ctx.run_pass(Default::default(), |ctx| {
             with_memo(ctx, |memo| assert!(memo.order.is_empty()));
+        });
+        output.textures_delta.clear();
+    }
+
+    #[trial]
+    fn idle_text_reuses_galleys_and_changed_text_lays_out_once_per_width() {
+        let appearance =
+            Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
+        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let ctx = Context::default();
+        let run = TextRun::new("the initial label for the cache trial").wrap(Wrap::Wrap);
+        let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: Color32::WHITE, fonts: StackFacts::default() };
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            let _ = run.layout(ctx, &env, 80.0);
+            let _ = run.layout(ctx, &env, 120.0);
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            let before = ctx.fonts(|fonts| fonts.num_galleys_in_cache());
+            let _ = run.layout(ctx, &env, 80.0);
+            let _ = run.layout(ctx, &env, 120.0);
+            assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), before);
+            let changed = TextRun::new("a different label for the cache trial").wrap(Wrap::Wrap);
+            let _ = changed.layout(ctx, &env, 80.0);
+            let _ = changed.layout(ctx, &env, 120.0);
+            assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), before + 2);
+        });
+        output.textures_delta.clear();
+        ctx.set_pixels_per_point(2.0);
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            assert_eq!(ctx.pixels_per_point(), 2.0);
+            let _ = run.layout(ctx, &env, 80.0);
+            let after = with_memo(ctx, |memo| memo.order.len());
+            let _ = run.layout(ctx, &env, 80.0);
+            assert_eq!(with_memo(ctx, |memo| memo.order.len()), after);
+            assert_eq!(after, 1);
         });
         output.textures_delta.clear();
     }
