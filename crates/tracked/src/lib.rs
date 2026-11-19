@@ -5,8 +5,8 @@
 //! A reader that only needs to know whether the data changed compares the [`Revision`] (two integers) instead of the
 //! data. The revision is complete because the compiler sees every write:
 //!
-//! - Every way to change the data goes through `&mut Tracked<T>`: [`DerefMut`], [`Tracked::edit`] and a
-//!   [`Field`]'s writes, and each moves the revision.
+//! - Every way to change the data goes through `&mut Tracked<T>`: [`DerefMut`] and [`Tracked::edit`] move the
+//!   revision, and craft-ui's `bind_tracked!` binds fields that move it when an edit changes them.
 //! - `T` is [`PlainData`], so a shared reference can't change it: interior mutability, raw pointers, `dyn` objects
 //!   and closures have no implementation, and a `Tracked` holding one does not compile.
 //!
@@ -182,6 +182,7 @@
 // The derive reaches this crate as `::craft_tracked`, here too.
 extern crate self as craft_tracked;
 
+use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -268,7 +269,7 @@ pub struct Revision {
 
 /// `T` with a revision that every write moves.
 ///
-/// `Deref` reads; `DerefMut`, [`edit`](Self::edit) and a [`Field`]'s writes move the revision whether or not the
+/// `Deref` reads; `DerefMut` and [`edit`](Self::edit) move the revision whether or not the
 /// write changes the data (a write with no change costs a reader one needless run, never a stale one). A clone is a
 /// new source: two clones written apart never share a revision.
 #[derive(Debug)]
@@ -304,9 +305,13 @@ impl<T: PlainData> Tracked<T> {
         f(&mut **self)
     }
 
-    /// One place inside the value, chosen with [`field!`]: reading it leaves the revision, writing it moves it.
-    pub fn field<U>(&mut self, projection: Projection<T, U>) -> Field<'_, T, U> {
-        Field { tracked: self, projection }
+    /// Called by craft-ui's `bind_tracked!` only: the value without moving the revision, and the write count. The
+    /// macro borrows each bound field from the value through a field path and gives the binding the count, which it
+    /// moves on every write that changes the field. A direct call can write any part of the value without moving the
+    /// revision, so readers keyed by it would miss the write; design-lint rejects direct calls in UI crates.
+    #[doc(hidden)]
+    pub fn __split_for_bind(&mut self) -> (&mut T, &Cell<u64>) {
+        (&mut self.value, Cell::from_mut(&mut self.revision.count))
     }
 
     /// The value, leaving the tracking.
@@ -336,116 +341,6 @@ impl<T: PlainData> DerefMut for Tracked<T> {
     }
 }
 
-/// The way to one field of an `M`, as a read and a write projection. Only [`field!`] builds one, from a field path,
-/// so neither projection can do anything but select the field: the read projection leaves the revision, and only a
-/// write runs the write projection.
-pub struct Projection<M, U> {
-    read: fn(&M) -> &U,
-    write: fn(&mut M) -> &mut U,
-}
-
-impl<M, U> Clone for Projection<M, U> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<M, U> Copy for Projection<M, U> {}
-
-impl<M, U> Projection<M, U> {
-    /// Called by [`field!`] only: a hand-written projection could write the value while selecting a field, and that
-    /// write would not move the revision.
-    #[doc(hidden)]
-    pub const fn __from_field_path(read: fn(&M) -> &U, write: fn(&mut M) -> &mut U) -> Self {
-        Projection { read, write }
-    }
-}
-
-/// A [`Projection`] to the field at `path` (`field!(name)`, `field!(style.size)`, `field!(0.title)`): field names
-/// and tuple indices only.
-///
-/// ```
-/// use craft_tracked::{Tracked, field};
-/// # #[derive(craft_ui_macros::PlainData)] struct Style { size: f32 }
-/// # #[derive(craft_ui_macros::PlainData)] struct Doc { style: Style }
-/// let mut doc = Tracked::new(Doc { style: Style { size: 12.0 } });
-/// let before = doc.revision();
-/// let mut size = doc.field(field!(style.size));
-/// assert_eq!(*size.get(), 12.0);
-/// size.set(14.0);
-/// assert_ne!(doc.revision(), before);
-/// ```
-///
-/// A method call or an index is not a field path:
-///
-/// ```compile_fail
-/// use craft_tracked::{Tracked, field};
-/// let mut names = Tracked::new(vec![String::new()]);
-/// let _ = names.field(field!(first()));
-/// ```
-#[macro_export]
-macro_rules! field {
-    ($first:tt $(. $rest:tt)*) => {
-        $crate::Projection::__from_field_path(|m| &m.$first $(.$rest)*, |m| &mut m.$first $(.$rest)*)
-    };
-}
-
-/// One field inside a [`Tracked`]: reading it leaves the revision, writing it moves it.
-pub struct Field<'a, M: PlainData, U> {
-    tracked: &'a mut Tracked<M>,
-    projection: Projection<M, U>,
-}
-
-impl<M: PlainData, U> Field<'_, M, U> {
-    /// The field's value.
-    pub fn get(&self) -> &U {
-        (self.projection.read)(&self.tracked.value)
-    }
-
-    /// Replaces the field's value and moves the revision.
-    pub fn set(&mut self, value: U) {
-        self.edit(|field| *field = value);
-    }
-
-    /// Changes the field through `f` and moves the revision.
-    pub fn edit<R>(&mut self, f: impl FnOnce(&mut U) -> R) -> R {
-        f((self.projection.write)(&mut **self.tracked))
-    }
-
-    /// The same field, borrowed for a shorter time.
-    pub fn reborrow(&mut self) -> Field<'_, M, U> {
-        Field { tracked: &mut *self.tracked, projection: self.projection }
-    }
-}
-
-/// A field of some tracked value, for code that knows only the field's type (a value binding).
-pub trait Place<U> {
-    /// The field's value.
-    fn get(&self) -> &U;
-    /// Replaces the field's value and moves the revision.
-    fn set(&mut self, value: U);
-}
-
-impl<M: PlainData, U> Place<U> for Field<'_, M, U> {
-    fn get(&self) -> &U {
-        Field::get(self)
-    }
-
-    fn set(&mut self, value: U) {
-        Field::set(self, value);
-    }
-}
-
-impl<U, P: Place<U> + ?Sized> Place<U> for &mut P {
-    fn get(&self) -> &U {
-        (**self).get()
-    }
-
-    fn set(&mut self, value: U) {
-        (**self).set(value);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::Tracked;
@@ -462,8 +357,7 @@ mod tests {
         let mut doc = Tracked::new(Doc { name: "a".into(), size: (1, 2) });
         let start = doc.revision();
         assert_eq!(doc.name, "a");
-        let size = doc.field(field!(size.1));
-        assert_eq!(*size.get(), 2);
+        assert_eq!(doc.size.1, 2);
         assert_eq!(doc.revision(), start, "reads leave the revision");
 
         doc.name.push('b');
@@ -471,10 +365,7 @@ mod tests {
         assert_eq!(after_deref.count, start.count + 1, "a `&mut` access moves it");
         doc.edit(|doc| doc.size.0 = 3);
         assert_eq!(doc.revision().count, start.count + 2, "an edit moves it");
-        doc.field(field!(size.1)).set(4);
-        doc.field(field!(name)).edit(|name| name.clear());
-        assert_eq!(doc.revision().count, start.count + 4, "a field's set and edit move it");
-        assert_eq!((doc.size, doc.name.as_str()), ((3, 4), ""));
+        assert_eq!((doc.size, doc.name.as_str()), ((3, 2), "ab"));
         assert_eq!(doc.source(), start.source);
 
         let mut a = Tracked::new(1_u32);
