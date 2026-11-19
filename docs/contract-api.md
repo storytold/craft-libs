@@ -1070,10 +1070,12 @@ Hit shapes, their priority and the arena's resolve rule (8.3).
   - `pub fn polyline(points: Vec<Pos2>, closed: bool) -> Self`. A chain of segments, closed when `closed`.
   - `pub fn outside_polygon(within: Rect, polygon: Vec<Pos2>) -> Self`. The part of `within` outside `polygon`.
   - `pub fn bounds(&self) -> Rect`. The smallest rectangle around the shape.
+  - `pub fn translated(&self, by: Vec2) -> Self`. The shape moved by `by`.
   - `pub fn hit(&self, point: Pos2) -> bool`. Whether `point` hits the shape.
 - `craft_behavior::hit::LINE_REACH`: `pub const LINE_REACH: f32`. How far from a line a point still hits it, in points.
 - `craft_behavior::hit::ResolveFor`: `pub enum ResolveFor { Press, Hover }`. What a resolution is for.
 - `craft_behavior::hit::Shape`: `pub struct Shape<O> { pub shape: HitShape, pub sense: Sense, pub owner: O, pub part: Option<PartRef>, pub priority: HitPriority, pub position: u32, pub local: bool, pub min_across: f32 }`. One registered shape of the shape record: a root's, a member's or a part's.
+  - `pub fn translated(&self, by: Vec2) -> Self`. The shape moved by `by`.
   - `pub const fn new(shape: HitShape, sense: Sense, owner: O, part: Option<PartRef>, priority: HitPriority, position: u32) -> Self`. A shape of `owner` at stack `position`.
   - `pub const fn min_across(mut self, across: f32) -> Self`. The hit area is at least `across` points wide and high.
   - `pub const fn local(mut self, local: bool) -> Self`. The shape lies in the body layer's space.
@@ -1759,6 +1761,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
 The base of the craft UI library: runtime, style, fonts, primitives, the component contract, layout and the test
 
 - `craft_ui::bind_tracked!`: `macro_rules! bind_tracked`. Write-through bindings to fields of a [`Tracked`](crate::contract::Tracked) value: `bind_tracked!(doc => size)`
+- `craft_ui::stays!`: `macro_rules! stays`. Types with no place: they stay as they are at any place.
 - `craft_ui::testing_registered!`: `macro_rules! testing_registered`. Writes `pub fn registered()` for the invoking package: its library crate's registrations in the running binary.
 - `craft_ui::InstallError`: re-export of `craft_ui::runtime::install::InstallError`.
 - `craft_ui::InstallSpec`: re-export of `craft_ui::runtime::install::InstallSpec`.
@@ -2236,10 +2239,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Lazy`: `pub struct Lazy`. A child of a scroll area that runs only while it is in view. Out of view its content does not run: it takes the
   - `pub fn new(key: impl Hash, estimate: f32) -> Lazy`. The child keyed `key` in its scroll area. `estimate` is how long it is along the axes the area scrolls, an
   - `pub fn reveal(mut self, reveal: bool) -> Lazy`. When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
-  - `pub fn settles(mut self, settles: bool) -> Lazy`. When `settles` holds, the child runs only when something it shows may have changed, inside a scroll area or
-  - `pub fn content(mut self, version: u64) -> Lazy`. The version of the app data a settling child shows that the framework does not track (a document's revision,
   - `pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R>`. Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
-  - `pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>>`. [`show`](Self::show) for a child that may leave its room to other content: `add` runs first and settles; when
 - `craft_ui::contract::LeadOnOpen`: `pub enum LeadOnOpen { Selected, First }`. Where the lead starts when the collection first shows rows.
 - `craft_ui::contract::LeadSource`: `pub enum LeadSource { Keys, Pointer }`. What moved the lead.
 - `craft_ui::contract::LeastWidth`: `pub enum LeastWidth { Popup, Dialog, DialogButton, DialogSideButton, Rail(std::num::NonZeroU8) }`. A size role that sets the least width of a container's content or of a button.
@@ -2297,6 +2297,9 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn all(mut self) -> Self`. The change reaches every descendant.
 - `craft_ui::contract::OsFile`: re-export of `craft_ui::runtime::drag::OsFile`.
 - `craft_ui::contract::OsFiles`: re-export of `craft_ui::runtime::drag::OsFiles`.
+- `craft_ui::contract::Outbox`: `pub struct Outbox<'a, E>`. The events a memoized view's run sends to the code around it, in the pass it runs: what its components reported (a
+  - `pub fn new(sent: &'a mut Vec<E>) -> Outbox<'a, E>`. An outbox whose events go into `sent`, after what it holds.
+  - `pub fn send(&mut self, event: E)`. Sends `event`.
 - `craft_ui::contract::Outcome`: `pub trait Outcome`. What `show` returns: the component's response and the type of value it edits.
   - `type Value`. The value type; `NoValue` for a component with none.
   - `fn response(&self) -> &Response`. The component's response.
@@ -3230,8 +3233,12 @@ Frosted backdrops: a bounded blurred composition of the layers under a surface, 
 
 Per-pass and per-frame services and the one egui adapter.
 
+- `craft_ui::runtime::Clip`: `pub struct Clip(pub Rect)`. A clip rect a record holds: the clip of the code around the record becomes the replay's clip, a clip set inside it
 - `craft_ui::runtime::InstallError`: re-export of `craft_ui::runtime::install::InstallError`.
 - `craft_ui::runtime::InstallSpec`: re-export of `craft_ui::runtime::install::InstallSpec`.
+- `craft_ui::runtime::RecordShift`: re-export of `craft_ui::runtime::egui::RecordShift` (defined outside these crates).
+- `craft_ui::runtime::Shift`: `pub trait Shift`. A value a record holds, at the place a replay adds the record (`RecordShift`): rects and points move with the record,
+  - `fn shifted(&self, by: &RecordShift) -> Self`. `self` at the place `by` names.
 - `craft_ui::runtime::install`: re-export of `craft_ui::runtime::install::install`.
 
 ## `craft_ui::runtime::access`
@@ -3361,6 +3368,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
 - `craft_ui::runtime::commands::fire`: `pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -> bool`. Fires `command` from a surface that has no component of its own: a menu, the palette or automation. Scoped
 - `craft_ui::runtime::commands::holder`: `pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef>`. The command a key `chord` belongs to for a surface that takes it whatever has focus, such as a system menu item:
 - `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
+- `craft_ui::runtime::commands::resolver_in`: `pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<ResolvedCommand> + 'static`. A resolver for the commands as the context of `ui` shows them, as [`Commands::resolve_command`] does for a
 - `craft_ui::runtime::commands::Binding`: re-export of `craft_keymap::Binding` (outside these crates).
 - `craft_ui::runtime::commands::ChromeCommand`: `pub enum ChromeCommand { TogglePanels, TogglePanelsKeepTools }`. The `window` commands that hide the panels of the window they run in.
   - `pub const ALL: [ChromeCommand; 2]`. Both commands.
@@ -3632,8 +3640,9 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn window(&self) -> &WindowKey`. The window's key; components in slots key their ids and memory by it.
   - `pub fn body_mode(&self) -> BodyMode`. The body mode of this pass.
   - `pub fn slot_visible(&self, key: SlotKey) -> bool`. Is the slot with this key shown on this pass?
-  - `pub fn reveal_rect(&self, edge: RevealEdge, rect: Rect)`. Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal
-  - `pub fn revealed_rects(&self) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
+  - `pub fn with_reveals_key(mut self, id: egui::Id) -> Self`. The same skeleton with its revealed rects registered under `id`, which stays the same across passes. Without
+  - `pub fn reveal_rect(&self, ctx: &egui::Context, edge: RevealEdge, rect: Rect)`. Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal
+  - `pub fn revealed_rects(&self, ctx: &egui::Context) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
   - `pub fn dialogs_shown(&self) -> u32`. How many times a container in this shell showed on this pass as a dialog (a layer with a dialog's focus scope,
   - `pub fn tabs_visible(&self) -> bool`. Whether the document tabs show: the host's flag in normal mode, never in body-only mode.
   - `pub fn revealed(&self) -> bool`. Are slots shown by a reveal (Tab or edge) on this pass? Only body-only mode reveals.
@@ -4296,6 +4305,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
+- `craft_ui::testing::last_frame_memo_runs`: re-export of `craft_ui::runtime::measure::last_frame_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_measure_asks`: re-export of `craft_ui::runtime::measure::last_pass_measure_asks` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_memo_key_bytes`: re-export of `craft_ui::runtime::measure::last_pass_memo_key_bytes` (defined outside these crates).
@@ -4659,7 +4669,7 @@ The memory services the trials check: a stage fixture that implements `Remember`
 - `craft_ui::testing::memory::global`: `pub fn global(name: &'static str, scope: impl Hash + Debug) -> Id`. The id of a runtime singleton named `name` under `scope`.
 - `craft_ui::testing::memory::put`: `pub fn put<T: std::any::Any + Clone + Send + Sync>(ctx: &Context, id: Id, value: T)`. Stores `value` in context data under `id`, as a slot's `Drop` may.
 - `craft_ui::testing::memory::records_written`: `pub fn records_written(ctx: &Context) -> usize`. How many slot records the stages' write-backs have written in `ctx` so far.
-- `craft_ui::testing::memory::register_fact`: `pub fn register_fact<T: Clone + PartialEq + Debug + Send + Sync + 'static>(ctx: &Context, fact: T)`. Registers `fact` for the next pass of the running viewport.
+- `craft_ui::testing::memory::register_fact`: `pub fn register_fact<T: Clone + PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static>(ctx: &Context, fact: T)`. Registers `fact` for the next pass of the running viewport.
 - `craft_ui::testing::memory::scoped`: `pub fn scoped<R>(ui: &mut Ui, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui`.
 - `craft_ui::testing::memory::scoped_by`: `pub fn scoped_by<R>(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui` with its own id scope named by `salt`.
 - `craft_ui::testing::memory::sub`: `pub fn sub(base: Id, tag: impl Hash + Debug) -> Id`. The runtime sub-id of `base` for `tag`.
@@ -4803,6 +4813,8 @@ Stories: named ways to show one registered type, and the data and output the run
   - `pub fn ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> &mut T`. Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.
   - `pub fn choice<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> &mut T`. Like [`StoryData::value`] for a value that is one of `options`, which the Properties editor offers by label.
   - `pub fn restore(&mut self, before: &StorySnapshot)`. Puts every value that was there in `before` back to what it was then. A value added since stays.
+  - `pub fn settle(&mut self)`. Moves the [`revision`](Self::revision) when a value was added or changed since the last call. The accessors hand
+  - `pub fn revision(&self) -> Revision`. The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a
   - `pub fn changed_since(&self, before: &StorySnapshot) -> Vec<&'static str>`. The names of the values that differ from `before`; a value added since counts as changed.
   - `pub fn snapshot(&self) -> StorySnapshot`. A copy of every value.
 - `craft_ui::testing::story::StoryOutput`: `pub struct StoryOutput { pub id: Option<Id>, pub edits: Vec<EditKind>, pub clicked: bool, pub collection: Vec<CollectionKind>, pub visible: Option<Range<usize>>, pub value_text: Option<String>, pub readout: Option<String> }`. What a story showed, type-erased: the response id, the kinds of its edit events and of its collection events.
