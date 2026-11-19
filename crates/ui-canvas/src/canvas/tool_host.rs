@@ -1214,6 +1214,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// The canvas background's press phase of this pass. A pass carries one phase, so a press that moved or
     /// released in the pass it began in starts here.
     fn phase(&mut self, press: &PressState, frame: &PointerFrame) {
+        // A right-click during the gesture asks for the menu where it came up; the gesture goes on.
+        if let Some(at) = press.context {
+            self.response.context = Some(ContextRequest { at, mods: press.mods, momentary: self.momentary });
+        }
         match press.phase {
             PressPhase::Idle => self.state.spent = false,
             PressPhase::Hover => {

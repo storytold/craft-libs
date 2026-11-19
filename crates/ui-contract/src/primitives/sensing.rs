@@ -242,6 +242,9 @@ pub(crate) struct Outcome {
     pub dragging: bool,
     /// The press winner released as a click this pass.
     pub activated: Option<Hit>,
+    /// The target of a secondary press made beside the open press that came up this pass, and where
+    /// (`PressStep::aside`).
+    pub aside: Option<(Hit, Pos2)>,
     xf: Option<LayerMap>,
 }
 
@@ -905,6 +908,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         // press split gave it at the press (`pointer::press_winners` at the press's origin, with the press's own
         // targets). When that shape is this root's, the press carries on there from its start; another root's took the
         // drag at the press, and this press, no click any more, is abandoned.
+        let aside = step.aside.map(|aside| (aside.target, aside.pos));
         let step = match step.passes {
             Some(start) => {
                 let root = state.root.map(|root| root.id);
@@ -929,7 +933,8 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             None if others_press => Hovered::default(),
             None => under,
         };
-        let outcome = Outcome { pass: pass_nr, hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, xf };
+        let outcome =
+            Outcome { pass: pass_nr, hover, contains, target: step.target, phase: step.phase, dragging, activated: step.activated, aside, xf };
         state.outcome = Some(outcome);
         outcome
     });
@@ -1049,8 +1054,18 @@ fn part_press_in(
         _ => PressPhase::Idle,
     };
     let captured = won.is_some() && outcome.dragging && phase.is_drag();
-    let press = PressState::new(phase).mods(mods).sample(sample).captured(captured);
+    let context = aside_at(outcome, |hit| is_known && mine(hit));
+    let press = PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context);
     PartPress { press, hovered, hover_pos }
+}
+
+/// Where the aside secondary press of the pass came up, in its target's space, when `mine` takes its target.
+fn aside_at(outcome: &Outcome, mine: impl Fn(&Hit) -> bool) -> Option<Pos2> {
+    let (hit, at) = outcome.aside.filter(|(hit, _)| mine(hit))?;
+    Some(match outcome.xf {
+        Some(map) if hit.local => map.to_layer(at),
+        _ => at,
+    })
 }
 
 /// The owner's own shape's press state: a member's root shape or the root background. `Idle` unless it won.
@@ -1062,7 +1077,8 @@ fn shape_press_in(outcome: &Outcome, mods: Mods, sample: Option<PointerSample>, 
         _ => PressPhase::Idle,
     };
     let captured = won.is_some() && phase.is_drag();
-    PressState::new(phase).mods(mods).sample(sample).captured(captured)
+    let context = aside_at(outcome, |hit| hit.owner == owner && hit.part.is_none());
+    PressState::new(phase).mods(mods).sample(sample).captured(captured).context(context)
 }
 
 /// The cursor a hovered part of `decls` declares, if any: the sensing core's request for the cursor service.

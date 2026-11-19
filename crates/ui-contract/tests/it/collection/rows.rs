@@ -542,3 +542,25 @@ fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
     assert_eq!(renamed("proposed"), ["proposed"], "Enter accepts the proposed draft");
     assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
 }
+
+/// A rename requested from outside a settled region (`Lazy::settles` with a content version, as a docked panel's
+/// body) runs the region, so its collection takes the request and opens the rename field.
+#[trial]
+fn a_rename_request_runs_the_settled_region_of_its_collection() {
+    use craft_ui::contract::Lazy;
+    let (log, enter, words) = (Log::new(), Cell::new(false), Words::flat(&["a", "b", "c"]));
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            Lazy::new("panel", 0.0).settles(true).content(1).show(ui, |ui| {
+                let list = Probe::new(SelectMode::Single).id_salt("list").renaming("b", &enter);
+                log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
+            });
+        });
+    };
+    frames.idle(30, &mut show);
+    request_rename(&frames.ctx, log.id(), &1_usize);
+    frames.idle(3, &mut show);
+    let begun = log.events.borrow().iter().any(|event| matches!(event, CollectionEvent::Rename(EditEvent::Begin { .. })));
+    assert!(begun, "the settled region ran and its collection opened the requested rename");
+}
