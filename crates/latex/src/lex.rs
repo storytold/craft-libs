@@ -68,6 +68,19 @@ impl Lexer<'_> {
             self.out.push(Tok::Text(t.to_string()));
         }
     }
+    /// Skip spaces, tabs and line ends, returning the number of line ends skipped.
+    fn blanks(&mut self) -> usize {
+        let mut lines = 0;
+        while let Some(c) = self.peek() {
+            match c {
+                '\n' => lines += 1,
+                ' ' | '\t' | '\r' => {}
+                _ => break,
+            }
+            self.bump();
+        }
+        lines
+    }
     /// Skip the rest of a line (a comment), the line end and the next line's leading blanks.
     fn comment(&mut self) {
         while let Some(c) = self.bump() {
@@ -92,6 +105,16 @@ impl Lexer<'_> {
                 self.i = self.s.len();
                 s
             }
+        }
+    }
+    /// After a comment or a control word has taken its line end: when the next line is blank,
+    /// skip the blank lines and end the paragraph, as TeX does.
+    fn blank_line_after_line_end(&mut self) {
+        if self.peek() == Some('\n') {
+            while matches!(self.peek(), Some(' ' | '\t' | '\n')) {
+                self.bump();
+            }
+            self.out.push(Tok::Par);
         }
     }
     /// After `\begin` / `\end`: the `{name}`, if well formed.
@@ -126,8 +149,26 @@ impl Lexer<'_> {
                     let r = self.rest();
                     let n = r.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(r.len());
                     if n == 0 {
+                        // `\` before a line end is a control space, as TeX defines `\^^M`. TeX
+                        // skips the next line's leading blanks, so no second space follows, but
+                        // a blank line after it still ends the paragraph.
+                        if matches!(self.peek(), Some('\n' | '\r')) {
+                            self.out.push(Tok::Cmd(" ".to_string()));
+                            if self.blanks() >= 2 {
+                                self.out.push(Tok::Par);
+                            }
+                            continue;
+                        }
                         let Some(sym) = self.bump() else { break };
                         match sym {
+                            // `\ ` and `\^^I` (a tab) are control spaces too. TeX skips the blanks
+                            // after them, but a blank line after one still ends the paragraph.
+                            ' ' | '\t' => {
+                                self.out.push(Tok::Cmd(" ".to_string()));
+                                if self.blanks() >= 2 {
+                                    self.out.push(Tok::Par);
+                                }
+                            }
                             '(' => {
                                 let m = self.until("\\)");
                                 self.out.push(Tok::Math(m, false));
@@ -135,6 +176,14 @@ impl Lexer<'_> {
                             '[' => {
                                 let m = self.until("\\]");
                                 self.out.push(Tok::Math(m, true));
+                            }
+                            '\\' => {
+                                // `\\*` breaks the line as `\\` does; the star only forbids a page
+                                // break there.
+                                if self.peek() == Some('*') {
+                                    self.bump();
+                                }
+                                self.out.push(Tok::Cmd(sym.to_string()));
                             }
                             _ => self.out.push(Tok::Cmd(sym.to_string())),
                         }
@@ -186,10 +235,16 @@ impl Lexer<'_> {
                                     break;
                                 }
                             }
+                            if newline {
+                                self.blank_line_after_line_end();
+                            }
                         }
                     }
                 }
-                '%' => self.comment(),
+                '%' => {
+                    self.comment();
+                    self.blank_line_after_line_end();
+                }
                 '{' => {
                     self.bump();
                     self.out.push(Tok::Open);
@@ -219,16 +274,7 @@ impl Lexer<'_> {
                 }
                 '\n' | '\r' | ' ' | '\t' => {
                     // Whitespace: a blank line ends the paragraph, anything else is one space.
-                    let mut lines = 0;
-                    while let Some(c) = self.peek() {
-                        match c {
-                            '\n' => lines += 1,
-                            ' ' | '\t' | '\r' => {}
-                            _ => break,
-                        }
-                        self.bump();
-                    }
-                    if lines >= 2 {
+                    if self.blanks() >= 2 {
                         self.out.push(Tok::Par);
                     } else {
                         self.text(" ");
@@ -248,6 +294,14 @@ impl Lexer<'_> {
 }
 
 pub(super) fn tokenize(src: &str) -> Vec<Tok> {
+    // TeX ends a line at LF, CR or CRLF alike; the lexer reads LF only.
+    let lf;
+    let src = if src.contains('\r') {
+        lf = src.replace("\r\n", "\n").replace('\r', "\n");
+        lf.as_str()
+    } else {
+        src
+    };
     Lexer { s: src, i: 0, out: Vec::new() }.run()
 }
 

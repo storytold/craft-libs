@@ -261,13 +261,18 @@ fn schema_and_rust_agree_on_moniker_ids() {
 }
 
 fn instance_doc() -> Value {
+    let endpoint = if cfg!(windows) {
+        json!({"kind": "pipe", "name": "craft-hub-4242"})
+    } else {
+        json!({"kind": "unix", "path": "/run/user/1000/craft/hub-4242.sock"})
+    };
     json!({
         "v": 1,
         "app": "hub",
         "app_version": "0.1.0",
         "pid": 4242,
         "instance": "550e8400-e29b-41d4-a716-446655440000",
-        "endpoint": {"kind": "unix", "path": "/run/user/1000/craft/hub-4242.sock"},
+        "endpoint": endpoint,
         "token": "ab".repeat(32),
         "started": 1_760_000_000u64,
         "protocol": {"link": 1},

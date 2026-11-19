@@ -94,8 +94,10 @@ struct Rig {
 }
 
 fn boot(epoch: u64) -> Rig {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let path = PathBuf::from(format!("/tmp/cl-blk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
+    // Parallel tests can observe the same clock tick on macOS.
+    static NEXT_RIG: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT_RIG.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("cl-blk-{}-{serial}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     let source = Arc::new(FakeSource { epoch: AtomicU64::new(epoch), closed: Mutex::new(Vec::new()) });
     let tickets = Arc::new(FrameTickets::new(Arc::clone(&source) as Arc<dyn FrameSource>));
@@ -255,8 +257,9 @@ fn a_bad_magic_and_a_bad_header_do_not_panic_the_server() {
 
 /// A one-shot fake server. Answers auth and attach, then sends `bytes` and closes.
 fn fake_server(bytes: Vec<u8>) -> (InstanceRecord, std::thread::JoinHandle<()>, Tmp) {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = PathBuf::from(format!("/tmp/cl-fk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51)));
+    static NEXT_FAKE: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT_FAKE.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("cl-fk-{}-{serial}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("s.sock");
     let listener = UnixListener::bind(&path).unwrap();
