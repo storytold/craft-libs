@@ -148,8 +148,58 @@ const ACB_SIGNATURE: &[u8] = b"8BCB";
 const ACB_CUT_SHORT: &str = "the color book is cut short";
 const ACB_MAX_NAME_BYTES: usize = 64 << 20;
 
+/// Structured palette failure for callers that supply localized messages.
+///
+/// The existing string-returning entry points retain their English diagnostics.
+/// Match these variants rather than parsing those strings when translating errors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaletteError {
+    UnsupportedFormat,
+    TruncatedAse,
+    TruncatedAcb,
+    AseWriteEntryLimit { limit: usize, entries: usize },
+    AseReadEntryLimit { limit: usize },
+    AseBlockCount,
+    AseBlockLength,
+    AseNameLength,
+    AseVersion { major: u16, minor: u16 },
+    AcbVersion { version: u16 },
+    AcbEntryLimit { limit: usize },
+    AcbColorSpace { space: u16 },
+    AcbNameBytes { limit: usize },
+}
+
+impl std::fmt::Display for PaletteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedFormat => f.write_str("not a supported palette (.gpl, .ase, or .acb)"),
+            Self::TruncatedAse => f.write_str(ASE_CUT_SHORT),
+            Self::TruncatedAcb => f.write_str(ACB_CUT_SHORT),
+            Self::AseWriteEntryLimit { limit, entries } => {
+                write!(f, "at most {limit} colors and groups are supported in a swatch exchange file, and this library has {entries}")
+            }
+            Self::AseReadEntryLimit { limit } => write!(f, "the swatch exchange file holds more than {limit} colors and groups"),
+            Self::AseBlockCount => f.write_str("too many swatch exchange blocks"),
+            Self::AseBlockLength => f.write_str("a swatch exchange block is too long"),
+            Self::AseNameLength => f.write_str("a swatch exchange name is too long"),
+            Self::AseVersion { major, minor } => write!(f, "swatch exchange version {major}.{minor} isn't supported (only 1.x)"),
+            Self::AcbVersion { version } => write!(f, "color book version {version} isn't supported (only 1)"),
+            Self::AcbEntryLimit { limit } => write!(f, "the color book holds more than {limit} colors"),
+            Self::AcbColorSpace { space } => write!(f, "color books in color space {space} aren't supported (only RGB, CMYK and Lab)"),
+            Self::AcbNameBytes { limit } => write!(f, "the color book's names take more than {} MB", limit >> 20),
+        }
+    }
+}
+
+impl std::error::Error for PaletteError {}
+
 /// Write `palette` in `format`.
 pub fn write_palette(palette: &Palette, format: PaletteFormat) -> Result<Vec<u8>, String> {
+    write_palette_typed(palette, format).map_err(|error| error.to_string())
+}
+
+/// Write a palette, returning structured errors for caller-localized diagnostics.
+pub fn write_palette_typed(palette: &Palette, format: PaletteFormat) -> Result<Vec<u8>, PaletteError> {
     match format {
         PaletteFormat::Gpl => Ok(write_gpl(palette).into_bytes()),
         PaletteFormat::Ase => write_ase(palette),
@@ -160,18 +210,24 @@ pub fn write_palette(palette: &Palette, format: PaletteFormat) -> Result<Vec<u8>
 /// Read a palette from `bytes` (`.ase`, `.acb`, or `.gpl`, detected from content).
 /// `fallback_name` is used when the file does not specify a library name.
 pub fn read_palette(bytes: &[u8], fallback_name: &str) -> Result<Palette, String> {
+    read_palette_typed(bytes, fallback_name).map_err(|error| error.to_string())
+}
+
+/// Read a palette, returning structured errors for caller-localized diagnostics.
+/// Detection and fallback naming match [`read_palette`].
+pub fn read_palette_typed(bytes: &[u8], fallback_name: &str) -> Result<Palette, PaletteError> {
     if bytes.starts_with(ASE_SIGNATURE) {
         return read_ase(bytes, fallback_name);
     }
     if bytes.starts_with(ACB_SIGNATURE) {
-        return read_acb(bytes, fallback_name).map_err(|e| if e == ASE_CUT_SHORT { ACB_CUT_SHORT.into() } else { e });
+        return read_acb(bytes, fallback_name).map_err(|e| if e == PaletteError::TruncatedAse { PaletteError::TruncatedAcb } else { e });
     }
     let text = String::from_utf8_lossy(bytes);
     let text = text.trim_start_matches('\u{feff}').trim_start();
     if text.starts_with(GPL_HEADER) {
         return Ok(read_gpl(text, fallback_name));
     }
-    Err("not a supported palette (.gpl, .ase, or .acb)".into())
+    Err(PaletteError::UnsupportedFormat)
 }
 
 /// Returns `true` if `bytes` looks like a `.gpl`, `.ase`, or `.acb` palette.
@@ -267,10 +323,10 @@ fn write_css(lib: &Palette) -> String {
     out
 }
 
-fn write_ase(lib: &Palette) -> Result<Vec<u8>, String> {
+fn write_ase(lib: &Palette) -> Result<Vec<u8>, PaletteError> {
     let entries = lib.swatches.len() + lib.groups.iter().map(|g| 1 + g.swatches.len()).sum::<usize>();
     if entries > ASE_MAX_ENTRIES {
-        return Err(format!("at most {ASE_MAX_ENTRIES} colors and groups are supported in a swatch exchange file, and this library has {entries}"));
+        return Err(PaletteError::AseWriteEntryLimit { limit: ASE_MAX_ENTRIES, entries });
     }
     let mut body = vec![];
     let mut blocks = put_ase_colors(&mut body, &lib.swatches)?;
@@ -281,7 +337,7 @@ fn write_ase(lib: &Palette) -> Result<Vec<u8>, String> {
         blocks += 2 + put_ase_colors(&mut body, &g.swatches)?;
         put_ase_block(&mut body, ASE_GROUP_END, &[])?;
     }
-    let blocks = u32::try_from(blocks).map_err(|_| "too many swatch exchange blocks".to_string())?;
+    let blocks = u32::try_from(blocks).map_err(|_| PaletteError::AseBlockCount)?;
     let mut out = ASE_SIGNATURE.to_vec();
     out.extend(1u16.to_be_bytes());
     out.extend(0u16.to_be_bytes());
@@ -290,7 +346,7 @@ fn write_ase(lib: &Palette) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn put_ase_colors(out: &mut Vec<u8>, list: &[PaletteSwatch]) -> Result<usize, String> {
+fn put_ase_colors(out: &mut Vec<u8>, list: &[PaletteSwatch]) -> Result<usize, PaletteError> {
     let unit = |v: f32| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
     let ab = |v: f32| if v.is_finite() { v.clamp(-128.0, 127.0) } else { 0.0 };
     let mut n = 0;
@@ -319,15 +375,15 @@ fn put_ase_colors(out: &mut Vec<u8>, list: &[PaletteSwatch]) -> Result<usize, St
     Ok(n)
 }
 
-fn put_ase_block(out: &mut Vec<u8>, kind: u16, body: &[u8]) -> Result<(), String> {
-    let len = u32::try_from(body.len()).map_err(|_| "a swatch exchange block is too long".to_string())?;
+fn put_ase_block(out: &mut Vec<u8>, kind: u16, body: &[u8]) -> Result<(), PaletteError> {
+    let len = u32::try_from(body.len()).map_err(|_| PaletteError::AseBlockLength)?;
     out.extend(kind.to_be_bytes());
     out.extend(len.to_be_bytes());
     out.extend_from_slice(body);
     Ok(())
 }
 
-fn put_ase_name(out: &mut Vec<u8>, name: &str) -> Result<(), String> {
+fn put_ase_name(out: &mut Vec<u8>, name: &str) -> Result<(), PaletteError> {
     let mut units: Vec<u16> = vec![];
     for c in name.chars().filter(|&c| c != '\0') {
         let mut buf = [0; 2];
@@ -338,7 +394,7 @@ fn put_ase_name(out: &mut Vec<u8>, name: &str) -> Result<(), String> {
         units.extend_from_slice(encoded);
     }
     units.push(0);
-    let count = u16::try_from(units.len()).map_err(|_| "a swatch exchange name is too long".to_string())?;
+    let count = u16::try_from(units.len()).map_err(|_| PaletteError::AseNameLength)?;
     out.extend(count.to_be_bytes());
     out.extend(units.iter().flat_map(|u| u.to_be_bytes()));
     Ok(())
@@ -373,12 +429,12 @@ fn read_gpl(text: &str, fallback: &str) -> Palette {
     lib
 }
 
-fn read_ase(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
+fn read_ase(bytes: &[u8], fallback: &str) -> Result<Palette, PaletteError> {
     let mut data = AseData(bytes);
     data.bytes(ASE_SIGNATURE.len())?;
     let (major, minor) = (data.u16()?, data.u16()?);
     if major != 1 {
-        return Err(format!("swatch exchange version {major}.{minor} isn't supported (only 1.x)"));
+        return Err(PaletteError::AseVersion { major, minor });
     }
     let blocks = data.u32()?;
     let mut lib = Palette { name: fallback.into(), ..Default::default() };
@@ -391,7 +447,7 @@ fn read_ase(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
         if matches!(kind, ASE_GROUP_START | ASE_COLOR) {
             entries += 1;
             if entries > ASE_MAX_ENTRIES {
-                return Err(format!("the swatch exchange file holds more than {ASE_MAX_ENTRIES} colors and groups"));
+                return Err(PaletteError::AseReadEntryLimit { limit: ASE_MAX_ENTRIES });
             }
         }
         match kind {
@@ -414,18 +470,18 @@ fn read_ase(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
     Ok(lib)
 }
 
-fn read_acb(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
+fn read_acb(bytes: &[u8], fallback: &str) -> Result<Palette, PaletteError> {
     let mut data = AseData(bytes);
     data.bytes(ACB_SIGNATURE.len())?;
     let version = data.u16()?;
     if version != 1 {
-        return Err(format!("color book version {version} isn't supported (only 1)"));
+        return Err(PaletteError::AcbVersion { version });
     }
     let _book_id = data.u16()?;
     let [title, prefix, suffix, _description] = [data.acb_string()?, data.acb_string()?, data.acb_string()?, data.acb_string()?];
     let count = usize::from(data.u16()?);
     if count > ASE_MAX_ENTRIES {
-        return Err(format!("the color book holds more than {ASE_MAX_ENTRIES} colors"));
+        return Err(PaletteError::AcbEntryLimit { limit: ASE_MAX_ENTRIES });
     }
     let (_page_size, _page_offset) = (data.u16()?, data.u16()?);
     let space = data.u16()?;
@@ -447,7 +503,7 @@ fn read_acb(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
                 let [l, a, b] = data.array::<3>()?;
                 PaletteColor::lab(f32::from(l) * 100.0 / 255.0, f32::from(a) - 128.0, f32::from(b) - 128.0)
             }
-            other => return Err(format!("color books in color space {other} aren't supported (only RGB, CMYK and Lab)")),
+            other => return Err(PaletteError::AcbColorSpace { space: other }),
         };
         colors.push((name, color));
     }
@@ -458,7 +514,7 @@ fn read_acb(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
     for (name, color) in colors.into_iter().filter(|(n, _)| !n.trim().is_empty()) {
         kept = kept.saturating_add(2 * (prefix.len() + name.len() + suffix.len()));
         if kept > ACB_MAX_NAME_BYTES {
-            return Err(format!("the color book's names take more than {} MB", ACB_MAX_NAME_BYTES >> 20));
+            return Err(PaletteError::AcbNameBytes { limit: ACB_MAX_NAME_BYTES });
         }
         let name = names.unique(format!("{prefix}{name}{suffix}").trim().to_string());
         lib.swatches.push(PaletteSwatch { name, color, global: spot, spot });
@@ -466,7 +522,7 @@ fn read_acb(bytes: &[u8], fallback: &str) -> Result<Palette, String> {
     Ok(lib)
 }
 
-fn ase_swatch(body: &mut AseData) -> Result<Option<PaletteSwatch>, String> {
+fn ase_swatch(body: &mut AseData) -> Result<Option<PaletteSwatch>, PaletteError> {
     let name = body.name()?;
     let unit = |v: f32| v.clamp(0.0, 1.0);
     let color = match &body.array::<4>()? {
@@ -510,29 +566,29 @@ fn value_name(c: PaletteColor) -> String {
 struct AseData<'a>(&'a [u8]);
 
 impl<'a> AseData<'a> {
-    fn bytes(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let (head, rest) = self.0.split_at_checked(n).ok_or(ASE_CUT_SHORT)?;
+    fn bytes(&mut self, n: usize) -> Result<&'a [u8], PaletteError> {
+        let (head, rest) = self.0.split_at_checked(n).ok_or(PaletteError::TruncatedAse)?;
         self.0 = rest;
         Ok(head)
     }
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
-        let (head, rest) = self.0.split_first_chunk::<N>().ok_or(ASE_CUT_SHORT)?;
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], PaletteError> {
+        let (head, rest) = self.0.split_first_chunk::<N>().ok_or(PaletteError::TruncatedAse)?;
         self.0 = rest;
         Ok(*head)
     }
-    fn u16(&mut self) -> Result<u16, String> {
+    fn u16(&mut self) -> Result<u16, PaletteError> {
         self.array().map(u16::from_be_bytes)
     }
-    fn u32(&mut self) -> Result<u32, String> {
+    fn u32(&mut self) -> Result<u32, PaletteError> {
         self.array().map(u32::from_be_bytes)
     }
-    fn f32(&mut self) -> Result<f32, String> {
+    fn f32(&mut self) -> Result<f32, PaletteError> {
         let v = f32::from_be_bytes(self.array()?);
         Ok(if v.is_finite() { v } else { 0.0 })
     }
-    fn acb_string(&mut self) -> Result<String, String> {
+    fn acb_string(&mut self) -> Result<String, PaletteError> {
         let n = usize::try_from(self.u32()?).unwrap_or(usize::MAX);
-        let (units, _) = self.bytes(n.checked_mul(2).ok_or(ASE_CUT_SHORT)?)?.as_chunks::<2>();
+        let (units, _) = self.bytes(n.checked_mul(2).ok_or(PaletteError::TruncatedAse)?)?.as_chunks::<2>();
         let units: Vec<u16> = units.iter().take(ASE_MAX_NAME).map(|u| u16::from_be_bytes(*u)).take_while(|&u| u != 0).collect();
         let s = String::from_utf16_lossy(&units);
         let s = match s.strip_prefix("$$$/") {
@@ -541,7 +597,7 @@ impl<'a> AseData<'a> {
         };
         Ok(s.replace("^R", "®").replace("^C", "©"))
     }
-    fn name(&mut self) -> Result<String, String> {
+    fn name(&mut self) -> Result<String, PaletteError> {
         if self.0.is_empty() {
             return Ok(String::new());
         }
@@ -602,6 +658,75 @@ mod tests {
         assert_eq!(parsed.groups.len(), 1);
         assert_eq!(parsed.groups[0].name, "Blues");
         assert_eq!(parsed.groups[0].swatches[0].name, "Navy");
+    }
+
+    #[test]
+    fn typed_errors_distinguish_formats_and_preserve_legacy_messages() {
+        for (bytes, expected) in [
+            (b"no palette".as_slice(), PaletteError::UnsupportedFormat),
+            (b"ASEF".as_slice(), PaletteError::TruncatedAse),
+            (b"8BCB".as_slice(), PaletteError::TruncatedAcb),
+            (b"8BCB\0\x01\0\0\0\0\0\x03\0x".as_slice(), PaletteError::TruncatedAcb),
+            (b"ASEF\0\x02\0\x03".as_slice(), PaletteError::AseVersion { major: 2, minor: 3 }),
+            (b"8BCB\0\x02".as_slice(), PaletteError::AcbVersion { version: 2 }),
+        ] {
+            assert_eq!(read_palette_typed(bytes, "fallback"), Err(expected));
+            assert_eq!(read_palette(bytes, "fallback"), Err(expected.to_string()));
+        }
+        assert_eq!(read_palette(b"8BCB", "fallback"), Err("the color book is cut short".into()));
+    }
+
+    #[test]
+    fn structured_error_display_preserves_legacy_wording() {
+        let cases = [
+            (PaletteError::UnsupportedFormat, "not a supported palette (.gpl, .ase, or .acb)"),
+            (PaletteError::TruncatedAse, "the swatch exchange file is cut short"),
+            (PaletteError::TruncatedAcb, "the color book is cut short"),
+            (
+                PaletteError::AseWriteEntryLimit { limit: 3, entries: 4 },
+                "at most 3 colors and groups are supported in a swatch exchange file, and this library has 4",
+            ),
+            (PaletteError::AseReadEntryLimit { limit: 3 }, "the swatch exchange file holds more than 3 colors and groups"),
+            (PaletteError::AseBlockCount, "too many swatch exchange blocks"),
+            (PaletteError::AseBlockLength, "a swatch exchange block is too long"),
+            (PaletteError::AseNameLength, "a swatch exchange name is too long"),
+            (PaletteError::AseVersion { major: 2, minor: 3 }, "swatch exchange version 2.3 isn't supported (only 1.x)"),
+            (PaletteError::AcbVersion { version: 2 }, "color book version 2 isn't supported (only 1)"),
+            (PaletteError::AcbEntryLimit { limit: 3 }, "the color book holds more than 3 colors"),
+            (PaletteError::AcbColorSpace { space: 5 }, "color books in color space 5 aren't supported (only RGB, CMYK and Lab)"),
+            (PaletteError::AcbNameBytes { limit: 64 << 20 }, "the color book's names take more than 64 MB"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn typed_write_limit_exposes_counts_without_parsing_english() {
+        let palette = Palette { groups: vec![PaletteGroup::default(); ASE_MAX_ENTRIES + 1], ..Default::default() };
+        let error = PaletteError::AseWriteEntryLimit { limit: ASE_MAX_ENTRIES, entries: ASE_MAX_ENTRIES + 1 };
+        assert_eq!(write_palette_typed(&palette, PaletteFormat::Ase), Err(error));
+        assert_eq!(write_palette(&palette, PaletteFormat::Ase), Err(error.to_string()));
+    }
+
+    #[test]
+    fn typed_success_keeps_legacy_bytes_and_palette() {
+        let palette = Palette {
+            name: "typed".into(),
+            swatches: vec![PaletteSwatch { name: "red".into(), color: PaletteColor::rgb8(255, 0, 0), global: false, spot: false }],
+            groups: vec![],
+        };
+        assert_eq!(
+            write_palette_typed(&palette, PaletteFormat::Ase).expect("ASE golden"),
+            b"ASEF\0\x01\0\0\0\0\0\x01\0\x01\0\0\0\x1c\0\x04\0r\0e\0d\0\0RGB \x3f\x80\0\0\0\0\0\0\0\0\0\0\0\x02"
+        );
+        for format in PaletteFormat::ALL {
+            let typed = write_palette_typed(&palette, format).expect("typed write");
+            assert_eq!(write_palette(&palette, format), Ok(typed.clone()));
+            if format.readable() {
+                assert_eq!(read_palette(&typed, "typed"), read_palette_typed(&typed, "typed").map_err(|error| error.to_string()));
+            }
+        }
     }
 
     #[test]
