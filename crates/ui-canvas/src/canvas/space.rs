@@ -40,6 +40,7 @@ pub struct CanvasSpace {
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PaintSlot>,
+    zoom_anchor: Option<Pos2>,
 }
 
 impl CanvasSpace {
@@ -60,6 +61,7 @@ impl CanvasSpace {
             pasteboard: PasteboardColor::Default,
             precise: false,
             picture: None,
+            zoom_anchor: None,
         }
     }
 
@@ -209,6 +211,21 @@ impl CanvasSpace {
     /// Whether a zoom eases in this pass, so `view` is part way to [`target`](Self::target).
     pub fn easing(&self) -> bool {
         self.easing
+    }
+
+    /// The screen point the wheel or a pinch zoomed about in this pass, in the canvas root's screen space; `None` when
+    /// neither zoomed (a view command zooms about the centre). A body that keeps its own view state anchors its zoom
+    /// here: the canvas clamps the zoomed view to the document after, which can move the centre (a document no wider
+    /// than the view stays centred), so the change of centre no longer tells which point stayed still.
+    pub fn zoom_anchor(&self) -> Option<Pos2> {
+        self.zoom_anchor
+    }
+
+    /// This space with the point a zoom of this pass kept still ([`zoom_anchor`](Self::zoom_anchor)).
+    #[must_use]
+    pub fn with_zoom_anchor(mut self, anchor: Option<Pos2>) -> Self {
+        self.zoom_anchor = anchor;
+        self
     }
 
     /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).

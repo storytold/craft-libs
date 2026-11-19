@@ -712,8 +712,18 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let mut want = state.offset;
     let mut wheel_left = 0.0;
     if zooming {
-        let fixed = (target.center - given.center) * (given.zoom * target.zoom / (target.zoom - given.zoom));
-        let pointer = rect.center() + Vec2::new(fixed.x as f32, fixed.y as f32);
+        // The point that stayed still, in the given view's frame: the canvas places the given view in its own rect (inside
+        // the rulers) about the same centre. The wheel's and a pinch's point is the canvas's own: its clamp of the
+        // zoomed view (a document no wider than the view stays centred) moves the centre, so the change of centre
+        // would put the point elsewhere, across a gutter on another page that reflows into another row. A view
+        // command's zoom keeps the centre.
+        let pointer = match space.zoom_anchor() {
+            Some(at) => at + (rect.center() - target.rect.center()),
+            None => {
+                let fixed = (target.center - given.center) * (given.zoom * target.zoom / (target.zoom - given.zoom));
+                rect.center() + Vec2::new(fixed.x as f32, fixed.y as f32)
+            }
+        };
         geo = zoom_about(build, &mut state, &geo, rect, pointer, target.zoom / given.zoom);
         let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
         state.offset = (state.offset.0.clamp(xs.0, xs.1), state.offset.1.clamp(ys.0, ys.1));
