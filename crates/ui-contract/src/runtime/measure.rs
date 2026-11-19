@@ -328,19 +328,15 @@ struct SettleLog {
 
 /// Counts the decision about the settling child `id` in this pass. Fed by `lazy::settled` (ran, replayed) and
 /// `lazy::decide` (out of view); a rename of that decision point moves both calls.
+#[cfg(feature = "testing")]
 pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
-    #[cfg(feature = "testing")]
-    {
-        let pass = ctx.cumulative_pass_nr();
-        store::with::<SettleLog, _>(ctx, |log| {
-            if log.pass != pass {
-                *log = SettleLog { pass, decisions: Vec::new() };
-            }
-            log.decisions.push((id, what));
-        });
-    }
-    #[cfg(not(feature = "testing"))]
-    let _ = (ctx, id, what);
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<SettleLog, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = SettleLog { pass, decisions: Vec::new() };
+        }
+        log.decisions.push((id, what));
+    });
 }
 
 /// The settled-test decisions of the last pass, by child id, in the order they were made; empty when that pass made none.
@@ -377,12 +373,11 @@ fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R
     store::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
 }
 
-/// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`.
+/// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
+/// per call with a content version).
+#[cfg(feature = "testing")]
 pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
-    #[cfg(feature = "testing")]
     totals(ctx, |log| log.key_bytes += bytes);
-    #[cfg(not(feature = "testing"))]
-    let _ = (ctx, bytes);
 }
 
 /// The bytes fed into memo keys in the last pass.
@@ -392,11 +387,9 @@ pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
 }
 
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.
+#[cfg(feature = "testing")]
 pub(crate) fn count_text_layout(ctx: &Context) {
-    #[cfg(feature = "testing")]
     totals(ctx, |log| log.text_layouts += 1);
-    #[cfg(not(feature = "testing"))]
-    let _ = ctx;
 }
 
 /// The text layouts handed to egui in the last pass.
@@ -406,14 +399,12 @@ pub fn last_pass_text_layouts(ctx: &Context) -> u32 {
 }
 
 /// Counts a measure call of a leaf component of the type `name` in this pass.
+#[cfg(feature = "testing")]
 pub(crate) fn count_measure_ask(ctx: &Context, name: &'static str) {
-    #[cfg(feature = "testing")]
     totals(ctx, |log| match log.asks.iter_mut().find(|(ty, _)| *ty == name) {
         Some((_, count)) => *count += 1,
         None => log.asks.push((name, 1)),
     });
-    #[cfg(not(feature = "testing"))]
-    let _ = (ctx, name);
 }
 
 /// The leaf types that were asked to measure in the last pass, and how many times each.
