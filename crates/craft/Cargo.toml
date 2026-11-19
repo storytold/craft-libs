@@ -143,6 +143,7 @@ craft-stream-codecs = { workspace = true, optional = true }
 craft-svg = { workspace = true, optional = true }
 craft-tga = { workspace = true, optional = true }
 craft-tiff = { workspace = true, optional = true }
+craft-tracked = { workspace = true, optional = true }
 craft-time = { workspace = true, optional = true }
 craft-vcard = { workspace = true, optional = true }
 craft-vectordrawable = { workspace = true, optional = true }
@@ -213,6 +214,12 @@ craft-evm = { workspace = true, optional = true }
 craft-geom = { workspace = true, optional = true }
 craft-suite-account = { workspace = true, optional = true }
 craft-xfa = { workspace = true, optional = true }
+craft-gpu = { workspace = true, optional = true }
+craft-gpu-null = { workspace = true, optional = true }
+craft-gpu-providers = { workspace = true, optional = true }
+craft-gpu-wgpu = { workspace = true, optional = true }
+craft-ipp = { workspace = true, optional = true }
+craft-ppt-binary = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -287,6 +294,7 @@ audio-alac-decode = ["audio", "craft-audio/alac-decode"]
 audio-alac-encode = ["audio", "craft-audio/alac-encode"]
 audio-decode = ["audio", "craft-audio/decode"]
 audio-decode-native = ["audio", "craft-audio/decode-native"]
+audio-dsd = ["audio", "craft-audio/dsd"]
 audio-eac3-encode = ["audio", "craft-audio/eac3-encode"]
 audio-encode = ["audio", "craft-audio/encode"]
 audio-flac-decode = ["audio", "craft-audio/flac-decode"]
@@ -324,6 +332,7 @@ ber = ["dep:craft-ber"]
 browse = ["dep:craft-browse"]
 
 captions = ["dep:craft-captions"]
+captions-mov-text = ["captions", "craft-captions/mov-text"]
 
 cfb = ["dep:craft-cfb"]
 
@@ -471,6 +480,19 @@ geom = ["dep:craft-geom"]
 gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
 
+gpu = ["dep:craft-gpu"]
+
+gpu-null = ["dep:craft-gpu-null"]
+
+gpu-providers = ["dep:craft-gpu-providers"]
+
+gpu-wgpu = ["dep:craft-gpu-wgpu"]
+gpu-wgpu-adapter-probe = ["gpu-wgpu", "craft-gpu-wgpu/adapter-probe"]
+gpu-wgpu-native-dx12 = ["gpu-wgpu", "craft-gpu-wgpu/native-dx12"]
+gpu-wgpu-native-gles = ["gpu-wgpu", "craft-gpu-wgpu/native-gles"]
+gpu-wgpu-native-metal = ["gpu-wgpu", "craft-gpu-wgpu/native-metal"]
+gpu-wgpu-native-vulkan = ["gpu-wgpu", "craft-gpu-wgpu/native-vulkan"]
+
 gridcraft-format = ["dep:craft-gridcraft-format"]
 
 gzip = ["dep:craft-gzip"]
@@ -511,6 +533,8 @@ imaging = ["dep:craft-imaging", "color-ui", "keymap"]
 indd = ["dep:craft-indd"]
 
 ipc = ["dep:craft-ipc"]
+
+ipp = ["dep:craft-ipp"]
 
 java-class = ["dep:craft-java-class"]
 
@@ -652,6 +676,8 @@ plist = ["dep:craft-plist"]
 
 plotter = ["dep:craft-plotter"]
 plotter-serde = ["plotter", "craft-plotter/serde"]
+
+ppt-binary = ["dep:craft-ppt-binary"]
 
 pptx = ["dep:craft-pptx"]
 
@@ -844,6 +870,8 @@ time = ["dep:craft-time"]
 timeline = ["dep:craft-timeline", "keymap"]
 timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
+
+tracked = ["dep:craft-tracked"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]

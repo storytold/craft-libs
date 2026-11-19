@@ -180,7 +180,7 @@ fn clip_path_to_region(
     }
     // Some callers deliberately retain geometry even when the source has no paint. Keep that
     // geometry clip-able as linework instead of silently deleting it.
-    if has_stroke || (!has_fill && !has_stroke) {
+    if has_stroke || !has_fill {
         let polygons: Vec<Vec<Point>> =
             flatten_contours(region)?.into_iter().filter(|(points, closed)| *closed && points.len() >= 3).map(|(points, _)| points).collect();
         for (mut points, closed) in flatten_contours(path)? {

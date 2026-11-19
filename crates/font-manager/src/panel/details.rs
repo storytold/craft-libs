@@ -37,7 +37,7 @@ const HERO_POINTS: f32 = 96.0;
 const LANGUAGES_SHOWN: usize = 60;
 
 /// The facts' labels over their values.
-static FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
+const FACT_COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::fill(1.0)];
 
 /// The installed catalog and the preview catalog, which the faces of the two owners load from.
 type Catalogs = (Arc<Catalog>, Arc<Catalog>);

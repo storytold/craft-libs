@@ -2,8 +2,9 @@
 
 use super::Frames;
 use super::story::{Story, StoryData, StoryOutput};
+use crate::contract::Tracked;
 use crate::runtime::access::Role;
-use crate::runtime::commands::{CommandGate, CommandInput, CommandRef, CommandState};
+use crate::runtime::commands::{CommandGate, CommandInput, CommandRef, CommandState, CommandStates};
 use crate::runtime::egui::access::{AccessTree, NodeKey};
 use crate::runtime::egui::fixture::{self, AccessActionKind};
 use crate::runtime::egui::injected;
@@ -114,6 +115,8 @@ pub struct Fixture {
     show: Box<dyn FnMut(&mut Ui)>,
     root: RootEnv,
     commands: CommandInput,
+    /// The app-scope command states, held as an app holds them.
+    states: Tracked<CommandStates>,
     room: Vec2,
     tree: AccessTree,
     shown: Rect,
@@ -153,6 +156,7 @@ impl Fixture {
             show: Box::new(show),
             root: RootEnv::default(),
             commands: CommandInput::new(),
+            states: Tracked::default(),
             room: Vec2::new(400.0, 300.0),
             tree: AccessTree::none(),
             shown: Rect::NOTHING,
@@ -203,7 +207,8 @@ impl Fixture {
         fixture.data = data;
         fixture.outputs = outputs;
         fixture.root_id = root_id;
-        fixture.commands = Story::command_input([story]);
+        fixture.states = Tracked::new(Story::command_states([story]));
+        fixture.commands = CommandInput::new().states(&fixture.states);
         fixture.frames.commands(fixture.commands.clone());
         fixture
     }
@@ -230,9 +235,8 @@ impl Fixture {
     /// Gives app-scope `command` this state in every following pass, as an app's `FrameInput.commands` does; a later
     /// call for the same command replaces the earlier one.
     pub fn command_state(&mut self, command: impl Into<CommandRef>, state: CommandState) -> &mut Self {
-        let command = command.into();
-        self.commands.states.retain(|(held, _)| *held != command);
-        self.commands.states.push((command, state));
+        self.states.set(command, state);
+        self.commands = self.commands.clone().states(&self.states);
         self.frames.commands(self.commands.clone());
         self
     }

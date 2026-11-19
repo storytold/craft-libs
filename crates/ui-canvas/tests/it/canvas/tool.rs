@@ -1082,7 +1082,7 @@ fn a_held_space_pans_over_a_canvas_control_and_leaves_it_unchanged() {
 fn a_queued_space_whose_hand_the_gate_refuses_leaves_the_press_to_the_selected_tool() {
     let log = Log::default();
     let (mut fixture, view, canvas) = momentary_canvas(Probe::new("main", &log));
-    fixture.gate(CommandGate::new(|command| !matches!(MomentaryCommands::from_ref(command), Some(MomentaryCommands::Hand)))).settle();
+    fixture.gate(CommandGate::new((), |_: &(), command| !matches!(MomentaryCommands::from_ref(command), Some(MomentaryCommands::Hand)))).settle();
     let at = fixture.by_role(Role::CANVAS)[0].rect.center();
     let before = view.get().expect("the canvas ran").center;
     let space = craft_keymap::Key::Space;
