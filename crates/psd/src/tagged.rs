@@ -686,6 +686,26 @@ pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
     Ok(())
 }
 
+/// Append the data of an lfx2 block: fixed version words 0 and 16, then a descriptor.
+///
+/// No outer signature, key, length or padding is written. Existing output is preserved.
+/// Descriptor semantics are the caller's responsibility; no values are normalized.
+/// Views inherit the borrowed writer's finite, stable, acyclic contract and O(depth)
+/// heap traversal. No owned model conversion or serialized temporary is created.
+pub fn append_layer_effects_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
+}
+
+/// Append the data of a SoCo block: fixed descriptor version 16, then a descriptor.
+///
+/// This is data-only, with the same append and borrowed-view contract as
+/// [append_layer_effects_data]. The caller supplies the color descriptor unchanged.
+pub fn append_solid_color_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(&[0, 0, 0, 16]);
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -937,5 +957,36 @@ mod tests {
         let mut versioned = 99u32.to_be_bytes().to_vec();
         versioned.extend(raw);
         assert!(VersionedDescriptor::parse_prefix(&versioned).is_err());
+    }
+
+    #[test]
+    fn borrowed_block_headers_append_literal_empty_and_nonempty_data() {
+        use crate::descriptor::borrowed::{ClassRef, DescriptorView, IdRef, UnicodeRef, ValueRef};
+        struct View(bool);
+        impl DescriptorView for View {
+            fn class(&self) -> ClassRef<'_> {
+                ClassRef { name: UnicodeRef::Units(&[]), id: IdRef::Code(*b"null") }
+            }
+            fn item(&self, index: usize) -> Option<(IdRef<'_>, ValueRef<'_>)> {
+                (self.0 && index == 0).then_some((IdRef::Code(*b"enab"), ValueRef::Boolean(true)))
+            }
+        }
+        for populated in [false, true] {
+            let mut descriptor = b"\0\0\0\0\0\0\0\0null\0\0\0".to_vec();
+            descriptor.push(u8::from(populated));
+            if populated {
+                descriptor.extend_from_slice(b"\0\0\0\0enabbool\x01");
+            }
+            let mut effects = vec![0xa5, 0x5a];
+            append_layer_effects_data(&mut effects, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0, 0, 0, 0, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(effects, expected);
+            let mut color = vec![0xa5, 0x5a];
+            append_solid_color_data(&mut color, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(color, expected);
+        }
     }
 }
