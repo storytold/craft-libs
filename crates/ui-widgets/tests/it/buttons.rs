@@ -318,7 +318,6 @@ fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node
     let tree = fixture.tree();
     let mut pending = vec![(button.node, 0)];
     while let Some((key, depth)) = pending.pop() {
-        eprintln!("DIAG rf-button depth {depth} {key:?}: role {:?} hidden {}", tree.role_of(key), tree.is_hidden(key));
         pending.extend(tree.children_of(key).into_iter().map(|child| (child, depth + 1)));
     }
     // The child `Ui` the button shows its picture in is a generic container, which screen readers pass over.
