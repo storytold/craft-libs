@@ -603,8 +603,8 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
 /// middle, the left side keeps its run along `u` (a skew's offset, a perspective's inset) while its part along `n`
 /// scales by `k`, and the right side keeps its px offset from the left one; the opposite edge's middle holds, and the
 /// dragged edge's middle follows the pointer along the drag's axis. Where the dragged edge and the opposite one meet
-/// (a box in perspective) the dragged edge turns onto the line from that point through the moved handle, its corners
-/// on the edges beside it. On a plain or turned rectangle the sides have no run along `u` and this is the frame
+/// (a box in perspective) the dragged edge turns about its middle onto the line through that point, its corners on the
+/// edges beside it. On a plain or turned rectangle the sides have no run along `u` and this is the frame
 /// scaling below. `None` where the frame scaling applies instead: a factor at or past zero (the box flips there,
 /// as the frame scaling flips it), or a collapsed box.
 fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
@@ -650,8 +650,8 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     };
     let shift = middle(&g.quad0, a, b) - middle(&shape, a, b);
     let mut quad = shape.map(|c| c + shift);
-    // Where the dragged edge and the opposite one meet (a box in perspective), the dragged edge goes onto the line
-    // through that point and the dragged handle; its corners stay on the lines of the edges beside it. Each dragged
+    // Where the dragged edge and the opposite one meet (a box in perspective), the dragged edge turns about its
+    // middle onto the line through that point; its corners stay on the lines of the edges beside it. Each dragged
     // corner is paired with its neighbour on the opposite edge.
     let ([d0, d1], [o0, o1]) = match edge {
         0 => ([0, 1], [3, 2]),
@@ -661,7 +661,7 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     };
     let [q0, q1] = [g.quad0[d0], g.quad0[d1]];
     if let Some(v) = crossing(q0, q1 - q0, g.quad0[o0], g.quad0[o1] - g.quad0[o0]) {
-        let line = q0.midpoint(q1) + d - v;
+        let line = quad[d0].midpoint(quad[d1]) - v;
         let c0 = crossing(quad[o0], quad[d0] - quad[o0], v, line);
         let c1 = crossing(quad[o1], quad[d1] - quad[o1], v, line);
         if let (Some(c0), Some(c1)) = (c0, c1) {

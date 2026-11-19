@@ -261,6 +261,27 @@ fn a_top_or_bottom_drag_on_converging_edges_turns_the_edge_toward_the_vanishing_
     }
 }
 
+/// The dragged edge's line is exact where its corners are not yet: on the reference's results for long drags on a box in
+/// strong perspective, both of its corners lie on the line through the vanishing point we give the edge.
+#[test]
+fn a_dragged_edge_in_perspective_lies_on_the_reference_line() {
+    let parallel_sides = [p(150.0, 125.0), p(452.0, 165.0), p(452.0, 287.0), p(150.0, 327.0)];
+    let narrow_top = [p(210.0, 125.0), p(392.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let cases = [
+        (parallel_sides, 2, p(301.0, 307.0), p(301.0, 347.0), [3, 2], [(111.96, 382.17), (473.9, 311.57)]),
+        (parallel_sides, 2, p(301.0, 307.0), p(301.0, 387.0), [3, 2], [(68.2, 442.69), (492.01, 333.93)]),
+        (narrow_top, 1, p(422.0, 226.0), p(522.0, 226.0), [1, 2], [(442.4, 79.27), (611.34, 390.69)]),
+    ];
+    for (quad, edge, from, to, [a, b], want) in cases {
+        let got = edge_dragged(quad, edge, from, to);
+        let (o, along) = (got.quad[a], got.quad[b] - got.quad[a]);
+        for (x, y) in want {
+            let off = along.cross(p(x, y) - o) / along.hypot();
+            assert!(off.abs() < 0.05, "edge {edge}: ({x}, {y}) is {off} px off the line {:?}", got.quad);
+        }
+    }
+}
+
 /// A plain rectangle scales about the opposite edge's middle as before, and ⇧ still frees the other axis.
 #[test]
 fn a_plain_edge_drag_and_a_free_one_are_unchanged() {
