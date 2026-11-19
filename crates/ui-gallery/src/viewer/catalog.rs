@@ -107,9 +107,20 @@ pub fn fold_filter(filter: &str) -> String {
 
 /// The registry's catalog of the types linked into the running binary: each one's level and plain name.
 pub(crate) fn linked_catalog() -> &'static contract::Catalog {
+    linked_catalog_from(None)
+}
+
+fn linked_catalog_from(registry: Option<&craft_ui::testing::Registry>) -> &'static contract::Catalog {
     static CATALOG: OnceLock<contract::Catalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
-        let registry = crate::registry();
+        let owned;
+        let registry = match registry {
+            Some(registry) => registry,
+            None => {
+                owned = crate::registry();
+                &owned
+            }
+        };
         let registrations: Vec<_> = registry.registrations().iter().collect();
         contract::catalog(&registrations)
     })
@@ -120,9 +131,8 @@ pub fn display_name(type_name: &str) -> String {
     linked_catalog().entry(type_name).map_or_else(|| type_name.to_owned(), |entry| entry.name.clone())
 }
 
-/// Every story linked into the viewer, ordered by type then story name.
-pub fn entries() -> Vec<Entry> {
-    crate::registry().stories().iter().map(|registration| Entry { registration: *registration, type_name: (registration.type_name)() }).collect()
+fn entries_from(registry: &craft_ui::testing::Registry) -> Vec<Entry> {
+    registry.stories().iter().map(|registration| Entry { registration: *registration, type_name: (registration.type_name)() }).collect()
 }
 
 /// What a registration says about a type: where it is declared and what it is for.
@@ -137,10 +147,9 @@ pub struct Declared {
     pub probe: Option<Probe>,
 }
 
-/// The registration of each registered component and pattern type, by the type's registered name.
-pub fn declared() -> HashMap<&'static str, Declared> {
+fn declared_from(registry: &craft_ui::testing::Registry) -> HashMap<&'static str, Declared> {
     let mut out = HashMap::new();
-    for registration in crate::registry().registrations() {
+    for registration in registry.registrations() {
         match registration {
             Registration::Component(probe) => {
                 out.insert(probe.type_name(), Declared { module: probe.module, purpose: probe.purpose, probe: Some(*probe) });
@@ -189,8 +198,10 @@ pub struct Catalog {
 impl Catalog {
     /// The catalog of the stories linked into the running binary.
     pub fn linked() -> Self {
-        let entries = entries();
-        let declared = declared();
+        let registry = crate::registry();
+        linked_catalog_from(Some(&registry));
+        let entries = entries_from(&registry);
+        let declared = declared_from(&registry);
         let components = components(&entries);
         Catalog::new(entries, components, declared)
     }
