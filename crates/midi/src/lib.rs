@@ -46,6 +46,8 @@ pub enum MidiError {
     TooManyTracks(usize),
     #[error("SysEx payload exceeds the file limit of {0} bytes")]
     SysExTooLarge(usize),
+    #[error("MIDI file has more than {0} SysEx packets")]
+    TooManySysExPackets(usize),
     #[error("cannot write MIDI file: {0}")]
     Write(String),
 }

@@ -11,6 +11,27 @@ pub const MAX_TRACKS: usize = 4096;
 /// Most retained SysEx payload bytes across one file, checked before copying hostile input.
 pub const MAX_SYSEX_BYTES: usize = 16 * 1024 * 1024;
 
+// Bound packet metadata independently of the payload, including empty F7 escape events.
+const MAX_SYSEX_PACKETS: usize = 262_144;
+
+struct SysexBudget {
+    bytes: usize,
+    packets: usize,
+}
+
+impl SysexBudget {
+    fn new() -> Self {
+        Self { bytes: MAX_SYSEX_BYTES, packets: MAX_SYSEX_PACKETS }
+    }
+
+    fn charge(&mut self, bytes: usize) -> Result<(), MidiError> {
+        let remaining = self.bytes.checked_sub(bytes).ok_or(MidiError::SysExTooLarge(MAX_SYSEX_BYTES))?;
+        self.packets = self.packets.checked_sub(1).ok_or(MidiError::TooManySysExPackets(MAX_SYSEX_PACKETS))?;
+        self.bytes = remaining;
+        Ok(())
+    }
+}
+
 /// Release velocity used when a note ends with a note-on of velocity 0 (per the spec, a
 /// note-on with velocity 0 is a note-off with velocity 64).
 const DEFAULT_RELEASE: u8 = 64;
@@ -192,7 +213,7 @@ pub const MAX_WARNINGS: usize = 32;
 ///   for where the track's events ended;
 /// - bytes that are no chunk are skipped up to the next `MTrk`, and trailing bytes are ignored;
 /// - past [`MAX_TRACKS`] tracks the rest is left out; this and the event limit set
-///   [`LenientRead::over_limit`], as does exceeding [`MAX_SYSEX_BYTES`];
+///   [`LenientRead::over_limit`], as does exceeding either SysEx limit;
 /// - lyrics are counted in a warning (they are not kept); a format-2 file gets a warning that its
 ///   tracks are read side by side.
 pub fn read_smf_lenient(bytes: &[u8]) -> Result<LenientRead, MidiError> {
@@ -212,7 +233,7 @@ pub struct LenientRead {
     pub instruments: Vec<String>,
     /// The last tick any track reaches: its End of Track, or where its events stop.
     pub end: i64,
-    /// Whether the file goes past [`MAX_EVENTS`], [`MAX_TRACKS`] or [`MAX_SYSEX_BYTES`], so what lies past
+    /// Whether the file goes past the event, track, SysEx payload or SysEx packet limit, so what lies past
     /// the limit was left out. It is set even when the warnings are already full, so a caller that
     /// refuses such files (as [`read_smf`] does) can tell without reading the warnings.
     pub over_limit: bool,
@@ -270,7 +291,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
     let mut globals = Globals { tempos: Vec::new(), meters: Vec::new(), markers: Vec::new(), key_sigs: Vec::new() };
     let (mut tracks, mut instruments) = (Vec::new(), Vec::new());
     let mut event_budget = MAX_EVENTS;
-    let mut sysex_budget = MAX_SYSEX_BYTES;
+    let mut sysex_budget = SysexBudget::new();
     let (mut end, mut seen, mut lyrics) = (0i64, 0usize, 0usize);
     let mut over_limit = false;
 
@@ -332,7 +353,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
         match read.stop {
             Some(e) if !lenient => return Err(e),
             Some(e) => {
-                over_limit |= matches!(e, MidiError::TooManyEvents(_) | MidiError::SysExTooLarge(_));
+                over_limit |= matches!(e, MidiError::TooManyEvents(_) | MidiError::SysExTooLarge(_) | MidiError::TooManySysExPackets(_));
                 warn(&mut warnings, format!("track {seen} {}: what came before is kept", stop_reason(&e)));
             }
             None if !read.ended && lenient => warn(&mut warnings, format!("track {seen} has no End of Track: what came before is kept")),
@@ -388,6 +409,7 @@ fn read(bytes: &[u8], mut warnings: Option<&mut Vec<String>>) -> Result<(Smf, Ex
 fn stop_reason(e: &MidiError) -> &'static str {
     match e {
         MidiError::SysExTooLarge(_) => "exceeds the retained SysEx payload limit",
+        MidiError::TooManySysExPackets(_) => "exceeds the retained SysEx packet count limit",
         MidiError::TooManyEvents(_) => "holds more events than are read: the rest was left out",
         MidiError::Invalid { reason, .. } if reason.starts_with("data byte") || reason.starts_with("system") || reason.starts_with("status") => {
             "holds a byte that is no event"
@@ -434,7 +456,7 @@ struct TrackState {
     lyrics: usize,
 }
 
-fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget: &mut usize, sysex_budget: &mut usize) -> TrackRead {
+fn read_track(body: &[u8], base: usize, conv: TickConv, g: &mut Globals, budget: &mut usize, sysex_budget: &mut SysexBudget) -> TrackRead {
     let mut cur = Cursor { data: body, pos: 0, base };
     let mut st = TrackState { name: None, instrument: None, seq: Sequence::default(), open: vec![VecDeque::new(); 16 * 128], tick: 0, lyrics: 0 };
     let result = track_events(&mut cur, conv, g, budget, sysex_budget, &mut st);
@@ -463,7 +485,7 @@ fn track_events(
     conv: TickConv,
     g: &mut Globals,
     budget: &mut usize,
-    sysex_budget: &mut usize,
+    sysex_budget: &mut SysexBudget,
     st: &mut TrackState,
 ) -> Result<bool, MidiError> {
     let mut file_tick: u64 = 0;
@@ -536,11 +558,9 @@ fn track_events(
                 running = None;
                 let len = cur.vlq()?;
                 let len = usize::try_from(len).unwrap_or(usize::MAX);
-                if len > *sysex_budget {
-                    return Err(MidiError::SysExTooLarge(MAX_SYSEX_BYTES));
-                }
-                let data = cur.bytes(len)?.to_vec();
-                *sysex_budget -= len;
+                let data = cur.bytes(len)?;
+                sysex_budget.charge(len)?;
+                let data = data.to_vec();
                 st.seq.sysex.push(SysExEvent { tick, status, data });
             }
             0x80..=0xEF => {
@@ -800,14 +820,16 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 /// note-off). At each tick note-offs are written before SysEx packets, then controllers, then note-ons.
 ///
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
-/// (1..=128), more than 65535 tracks, or a gap between events beyond the 28-bit delta limit.
+/// (1..=128), more than 65535 tracks, a gap beyond the 28-bit delta limit, an invalid
+/// SysEx status, overlapping split packets in a format-0 merge, or more than
+/// [`MAX_SYSEX_BYTES`] bytes of SysEx payloads or 262,144 SysEx packets.
 pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
-    let mut remaining = MAX_SYSEX_BYTES;
+    let mut sysex_budget = SysexBudget::new();
     for event in smf.tracks.iter().flat_map(|t| &t.sequence.sysex) {
         if !matches!(event.status, 0xF0 | 0xF7) {
             return Err(MidiError::Write("SysEx status must be F0 or F7".into()));
         }
-        remaining = remaining.checked_sub(event.data.len()).ok_or(MidiError::SysExTooLarge(MAX_SYSEX_BYTES))?;
+        sysex_budget.charge(event.data.len())?;
     }
     // The conductor track is omitted when there is nothing to put in it and no content tracks, so an
     // empty `Smf` is written as a file with zero tracks and reads back as zero tracks.
@@ -819,6 +841,9 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     out.extend_from_slice(b"MThd");
     out.extend_from_slice(&6u32.to_be_bytes());
     let single = smf.format == 0;
+    if single && smf.tracks.len() > 1 {
+        check_merged_sysex(&smf.tracks)?;
+    }
     out.extend_from_slice(&u16::from(!single).to_be_bytes());
     out.extend_from_slice(&(if single { 1 } else { ntrks }).to_be_bytes());
     out.extend_from_slice(&u16::try_from(PPQ).unwrap_or(960).to_be_bytes());
@@ -883,11 +908,69 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     Ok(out)
 }
 
+// A format-0 file must keep each split message's continuation packets together.
+fn check_merged_sysex(tracks: &[SmfTrack]) -> Result<(), MidiError> {
+    let mut packets: Vec<_> =
+        tracks.iter().enumerate().flat_map(|(track, entry)| entry.sequence.sysex.iter().map(move |packet| (track, packet))).collect();
+    packets.sort_by_key(|&(track, packet)| (clamp_tick(packet.tick), track));
+    let mut open = None;
+    for (track, packet) in packets {
+        if open.is_some_and(|owner| owner != track || packet.status != 0xF7) {
+            return Err(MidiError::Write("format 0 would interleave split SysEx packets".into()));
+        }
+        if packet.data.last() == Some(&0xF7) {
+            open = None;
+        } else if packet.status == 0xF0 {
+            open = Some(track);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 // Test fixtures assert successful parses; production code keeps the crate's unwrap denial.
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_zero_payload_sysex_packet_storage() {
+        let mut body = [0, 0xF7, 0].repeat(262_145);
+        body.extend_from_slice(&[0, 0xFF, 0x2F, 0]);
+        let mut bytes = b"MThd\0\0\0\x06\0\0\0\x01\x03\xC0MTrk".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&body);
+        assert_eq!(read_smf(&bytes), Err(MidiError::TooManySysExPackets(MAX_SYSEX_PACKETS)));
+        let report = read_smf_lenient(&bytes).unwrap();
+        assert!(report.over_limit);
+        assert_eq!(report.smf.tracks[0].sequence.sysex.len(), 262_144);
+    }
+
+    #[test]
+    fn reports_truncated_sysex_before_the_payload_budget() {
+        let body = [0, 0xF0, 0xFF, 0xFF, 0xFF, 0x7F, 1, 2, 3];
+        let mut bytes = b"MThd\0\0\0\x06\0\0\0\x01\x03\xC0MTrk".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(&body);
+        assert!(matches!(read_smf(&bytes), Err(MidiError::Truncated(_))));
+        let report = read_smf_lenient(&bytes).unwrap();
+        assert!(!report.over_limit);
+        assert!(!report.warnings.is_empty());
+    }
+
+    #[test]
+    fn refuses_to_interleave_split_sysex_when_merging_tracks() {
+        let mut smf = Smf { format: 0, ..Smf::default() };
+        for sysex in [
+            vec![SysExEvent { tick: 0, status: 0xF0, data: vec![0x43, 0x10] }, SysExEvent { tick: 10, status: 0xF7, data: vec![0x4C, 0xF7] }],
+            vec![SysExEvent { tick: 5, status: 0xF0, data: vec![0x41, 0xF7] }],
+        ] {
+            smf.tracks.push(SmfTrack { name: String::new(), sequence: Sequence { sysex, ..Sequence::default() } });
+        }
+        assert!(matches!(write_smf(&smf), Err(MidiError::Write(message)) if message.contains("interleave")));
+        smf.format = 1;
+        assert!(write_smf(&smf).is_ok());
+    }
 
     #[test]
     fn imported_xg_reset_survives_an_smf_round_trip() {
