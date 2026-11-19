@@ -101,7 +101,8 @@ The reader accepts UTF-8, declared ISO-8859-1 and declared Windows-1252. It comb
 channel assignments across custom modes, falling back to the set's AvailableForChannels.
 An external DOCTYPE is ignored and internal subsets are rejected. Input is limited to
 2 MiB, XML depth to 32, expanded names to 16 MiB, and list expansion to 1,048,576 patch
-visits. Shared patch maps are cached per list and bank address. Bank keys are
+visits. The output retains up to 65,536 bank entries across all profiles, including entries
+with empty names or shared program maps. Shared patch maps are cached per list and bank address. Bank keys are
 MSB × 128 + LSB. Program Change numbers are used instead of display numbers.
 The last definition for a duplicate list or program number wins. Extended device
 definitions, standard device modes, and note or controller name lists are outside this reader.
