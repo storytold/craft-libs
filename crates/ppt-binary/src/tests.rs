@@ -473,6 +473,29 @@ Then wave"
     );
 }
 
+/// Two slide records with the same slide id share its notes page, which goes to the first only:
+/// converting it again for each would copy its text into every one.
+#[test]
+fn a_notes_page_goes_to_one_slide() {
+    let again = container(rt::SLIDE_LIST_WITH_TEXT, 0, &[atom(rt::SLIDE_PERSIST_ATOM, 0, &le32(&[6, 0, 0, SLIDE_ID, 0]))]);
+    let (_, mut stream, pics) = streams_with_document(0xE391_C05F, 1, master(), slide(), None, &[], &[again]);
+    let first_edit = stream.len() as u32 - 36;
+    // Persist id 6: a second copy of the slide.
+    let copy_at = stream.len() as u32;
+    stream.extend_from_slice(&slide());
+    let dir_at = stream.len() as u32;
+    stream.extend_from_slice(&atom(rt::PERSIST_DIRECTORY, 0, &le32(&[6 | (1 << 20), copy_at])));
+    let edit_at = stream.len() as u32;
+    let mut edit = le32(&[0, 0x0300_03F4, first_edit, dir_at, 1, 7]);
+    edit.extend_from_slice(&[0; 4]);
+    stream.extend_from_slice(&atom(rt::USER_EDIT, 0, &edit));
+    let cu = atom(rt::CURRENT_USER, 0, &le32(&[0x14, 0xE391_C05F, edit_at, 0, 0]));
+    let p = import(&build(&[("Current User", &cu), ("PowerPoint Document", &stream), ("Pictures", &pics)])).unwrap();
+    assert_eq!(p.slides.len(), 2);
+    assert_eq!(p.slides[0].notes.text(), "Say hello\nThen wave");
+    assert_eq!(p.slides[1].notes.text(), "");
+}
+
 /// Text with very many formatting runs is laid into runs in about linear time. Each lookup used to
 /// scan the run starts from the beginning, so the cost grew with runs²: in a debug build these 640k
 /// one-character runs (about 6 MB of file) took 75 s that way, and take about 2 s with binary search.
@@ -1114,18 +1137,21 @@ fn a_title_masters_placeholders_place_its_layouts() {
     assert_eq!(boxes(title_layout(&p)), expected);
 }
 
-/// A second title master's layout copies placeholders only, not the first title master's own
-/// shapes, which its layout (the first title layout the plain defaults' master has) holds.
+/// A second title master's layout takes nothing from the first title master's layout: not its own
+/// shapes, and not its placeholders or their boxes. With the plain defaults (no title layout of
+/// theirs) it holds only its own placeholder, where it puts it.
 #[test]
 fn a_second_title_master_doesnt_copy_the_firsts_shapes() {
-    let second = container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &[])]);
+    let title = container(rt::SP_CONTAINER, 0, &[fsp(1, 4001, 0xA00), anchor(200, 400, 2000, 800), placeholder(0x0F)]);
+    let second = container(rt::SLIDE, 0, &[slide_atom(0, MASTER_ID, 0x7), drawing(None, &[title])]);
     let p =
         open_plain(streams_with_title_masters(0xE391_C05F, 1, master(), slide(), vec![title_master_with(&[scheme_filled(3003)]), second], &[], &[]));
     let layouts: Vec<&Layout> = p.masters[0].layouts.iter().filter(|l| l.name == "Title Master").collect();
     assert_eq!(layouts.len(), 2);
     assert_eq!(layouts[0].shapes.iter().filter(|s| s.ph.is_none()).count(), 1);
-    assert!(layouts[1].shapes.iter().all(|s| s.ph.is_some()), "{:?}", layouts[1].shapes);
-    assert_eq!(layouts[1].shapes.len(), 2, "the first title master's placeholders");
+    assert_eq!(layouts[1].shapes.len(), 1, "only its own placeholder: {:?}", layouts[1].shapes);
+    let x = layouts[1].shapes[0].xfrm.unwrap();
+    assert_eq!((layouts[1].shapes[0].ph_type(), x.x, x.y, x.w, x.h), (Some(PhType::CtrTitle), 50.0, 25.0, 200.0, 75.0));
 }
 
 /// A title slide of the main master takes an ordinary layout, not the one made for a title

@@ -256,14 +256,37 @@ fn custom_path(props: &Props) -> Option<Vec<CustomPath>> {
                     }
                     3 => push("Z", &[]),
                     4 => break,
-                    // Escapes and client escapes (MSOPATHESCAPEINFO: escape code in bits 8–12,
-                    // segment count in bits 0–7): arcs, ellipses and curves aren't drawn, but they
-                    // use up their points, so the segments after them take the right ones.
-                    5 | 6 => {
-                        for _ in 0..(v & 0xFF) {
-                            pts.next();
+                    // Escapes (MSOPATHESCAPEINFO: escape code in bits 8–12, point count in bits
+                    // 0–7). They aren't drawn as curves, but they use up their points, and the
+                    // segments after them start where they end.
+                    5 => {
+                        let n = usize::from(v & 0xFF);
+                        let code = (v >> 8) & 0x1F;
+                        let mut last = None;
+                        for _ in 0..n {
+                            last = pts.next().or(last);
+                        }
+                        match code {
+                            // Extension: more points for the escape that follows. Fill and line
+                            // colours: a colour pair, not a place. NoFill, NoLine and the Bézier
+                            // editing hints: no points.
+                            0x00 | 0x0A..=0x16 => {}
+                            // Elliptical quadrants run from point to point and a quadratic Bézier
+                            // ends on its last point: a line there keeps the path's place.
+                            0x07..=0x09 => {
+                                if let Some(p) = last {
+                                    push("L", &[p]);
+                                }
+                            }
+                            // Angle ellipses and arcs end at a point computed from their angles or
+                            // radial vectors, not at one of their vertices: the path stops rather
+                            // than go on from the wrong place. So does any other escape.
+                            _ => break,
                         }
                     }
+                    // Client escapes mean what the writing application says: the path stops
+                    // unless one has no points.
+                    6 if v & 0xFF != 0 => break,
                     _ => {}
                 }
             }
@@ -390,14 +413,21 @@ mod tests {
         paths[0].d.clone()
     }
 
-    /// An escape segment (here msopathEscapeArcTo over four points) uses up its points: the line
-    /// after it goes to the fifth vertex, not the first of the arc's.
+    /// An escape segment uses up its points and the path goes on from where it ends: after
+    /// elliptical quadrants or a quadratic Bézier, from their last point; an arc ends at a point
+    /// worked out from its radial vectors, so the path stops there rather than draw the next line
+    /// from the point before the arc.
     #[test]
-    fn path_escapes_consume_their_points() {
+    fn path_escapes_end_where_they_end() {
         let verts = [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (50, 60)];
-        // moveTo, escape ArcTo (3) with 4 segments, lineTo, end
-        let escape = (5u16 << 13) | (3 << 8) | 4;
-        assert_eq!(path_of(freeform(&verts, Some(&[0x4000, escape, 0x0001, 0x8000]), &[])), "M 0 0 L 50 60");
+        let escape = |code: u16, n: u16| (5u16 << 13) | (code << 8) | n;
+        // moveTo, escape ArcTo (3) over 4 points, lineTo, end.
+        assert_eq!(path_of(freeform(&verts, Some(&[0x4000, escape(3, 4), 0x0001, 0x8000]), &[])), "M 0 0");
+        // moveTo, two elliptical quadrants (7), lineTo, end.
+        let verts = [(0, 0), (10, 10), (20, 0), (50, 60)];
+        assert_eq!(path_of(freeform(&verts, Some(&[0x4000, escape(7, 2), 0x0001, 0x8000]), &[])), "M 0 0 L 20 0 L 50 60");
+        // A colour escape uses its point but doesn't move the path.
+        assert_eq!(path_of(freeform(&verts, Some(&[0x4000, escape(0x15, 1), 0x0001, 0x8000]), &[])), "M 0 0 L 20 0");
     }
 
     /// Without segments, shapePath says how the vertices join: closed lines by default, open

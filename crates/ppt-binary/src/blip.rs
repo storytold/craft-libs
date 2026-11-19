@@ -54,30 +54,42 @@ impl<'a> Store<'a> {
         self.decode_charged(&blip)
     }
 
-    /// Decode `blip` and take its size from the budget. A compressed metafile that fails to
+    /// Decode `blip` and take its size from the budget. A compressed metafile is also charged
+    /// its compressed bytes, which inflating reads whatever it produces, and one that fails to
     /// inflate is charged what the inflate may have produced before failing: many entries pointing
-    /// at one damaged stream would otherwise each inflate it again for free.
+    /// at one damaged stream (or one that inflates to nothing) would otherwise each inflate it again
+    /// for free.
     fn decode_charged(&mut self, blip: &Rec) -> Option<Picture> {
+        let bounds = inflate_bounds(blip, self.budget);
         let pic = decode(blip, self.budget);
-        let cost = match &pic {
-            Some(p) => p.data.len(),
-            None => inflate_limit(blip, self.budget).unwrap_or(0),
+        let cost = match (&pic, bounds) {
+            (Some(p), Some((input, _))) => input.saturating_add(p.data.len()),
+            (Some(p), None) => p.data.len(),
+            (None, Some((input, output))) => input.saturating_add(output),
+            (None, None) => 0,
         };
         self.budget = self.budget.saturating_sub(cost);
         pic
     }
 }
 
-/// The most bytes inflating `b` may produce within `limit`: `None` unless it is a compressed
-/// metafile (EMF or WMF, with one UID or, for instances 0x3D5 and 0x217, two).
-fn inflate_limit(b: &Rec, limit: usize) -> Option<usize> {
+/// For a compressed metafile (EMF or WMF, with one UID or, for instances 0x3D5 and 0x217, two):
+/// the compressed bytes inflating it reads, and the most bytes it may produce so that both
+/// together stay within `limit`. `None` for any other blip, or when the compressed bytes alone
+/// pass `limit`.
+fn inflate_bounds(b: &Rec, limit: usize) -> Option<(usize, usize)> {
     if !matches!(b.kind, 0xF01A | 0xF01B) {
         return None;
     }
     let uids = if matches!(b.instance, 0x3D5 | 0x217) { 32 } else { 16 };
     let h = b.data.get(uids..uids + 34)?;
     let size = crate::record::u32_at(h, 0)? as usize;
-    (*h.get(32)? == 0).then(|| size.min(MAX_INFLATED).min(limit))
+    if *h.get(32)? != 0 {
+        return None;
+    }
+    let input = b.data.get(uids + 34..)?.len();
+    let output = limit.checked_sub(input)?;
+    Some((input, size.min(MAX_INFLATED).min(output)))
 }
 
 fn fbse<'a>(r: &Rec<'a>, pictures: &'a [u8]) -> Option<Rec<'a>> {
@@ -113,7 +125,7 @@ pub fn decode(b: &Rec, limit: usize) -> Option<Picture> {
             let compressed = *h.get(32)? == 0;
             let body = b.data.get(uids + 34..)?;
             let data = if compressed {
-                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(body, inflate_limit(b, limit)?).ok()?
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(body, inflate_bounds(b, limit)?.1).ok()?
             } else {
                 body.get(..size.min(body.len())).filter(|d| within(d, 0))?.to_vec()
             };
@@ -212,7 +224,7 @@ mod tests {
         let mut store = Store::new(Rec::at(&dgg, 0), &damaged);
         store.budget = 2500;
         assert!(store.take(0).is_none());
-        assert_eq!(store.budget, 1500);
+        assert_eq!(store.budget, 1496, "1000 bytes it may have inflated and the 4 it read");
         assert!(store.take(1).is_none());
         assert!(store.take(2).is_none());
         assert_eq!(store.budget, 0, "the last attempt is charged what was left");
@@ -221,6 +233,42 @@ mod tests {
         store.budget = 10;
         assert!(store.decode_inline(&atom(0xF01E, 0x6E0, &[0; 4])).is_none());
         assert_eq!(store.budget, 10);
+    }
+
+    /// A compressed metafile that inflates to nothing (a declared size of 0 and a run of empty
+    /// stored blocks, here with a bad checksum) still costs the bytes it makes the inflate read, so
+    /// many entries pointing at it run out of budget instead of each reading it again for free.
+    #[test]
+    fn inflating_is_charged_the_compressed_bytes() {
+        let mut z = vec![0x78, 0x01];
+        for _ in 0..200 {
+            z.extend_from_slice(&[0x00, 0x00, 0x00, 0xFF, 0xFF]);
+        }
+        z.extend_from_slice(&[0x01, 0x00, 0x00, 0xFF, 0xFF, 1, 2, 3, 4]);
+        let empty = atom(0xF01B, 0x216, &[&[0u8; 16][..], &[0u8; 34], &z].concat());
+        let mut fbse = vec![0u8; 36];
+        fbse[20..24].copy_from_slice(&(empty.len() as u32).to_le_bytes());
+        let entries: Vec<Vec<u8>> = (0..5).map(|_| atom(rt::FBSE, 3, &fbse)).collect();
+        let dgg = container(rt::DGG_CONTAINER, 0, &[container(rt::BSTORE, 5, &entries)]);
+        let mut store = Store::new(Rec::at(&dgg, 0), &empty);
+        store.budget = 2 * z.len() + 10;
+        assert!(store.take(0).is_none());
+        assert_eq!(store.budget, z.len() + 10);
+        assert!(store.take(1).is_none());
+        assert_eq!(store.budget, 10);
+        // Too little left for its compressed bytes: not inflated, and nothing charged.
+        assert!(store.take(2).is_none());
+        assert_eq!(store.budget, 10);
+        // One that inflates is charged its compressed bytes as well as what they inflate to.
+        let wmf = vec![7u8; 100];
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&wmf, 6);
+        let mut header = vec![0u8; 34];
+        header[..4].copy_from_slice(&(wmf.len() as u32).to_le_bytes());
+        let blip = atom(0xF01B, 0x216, &[&[0u8; 16][..], &header, &z].concat());
+        let mut store = Store::new(None, &[]);
+        store.budget = 1000;
+        assert_eq!(store.decode_inline(&blip).map(|p| p.data.len()), Some(100));
+        assert_eq!(store.budget, 1000 - 100 - z.len());
     }
 
     #[test]
@@ -319,7 +367,7 @@ mod tests {
         }
     }
 
-    /// A metafile whose inflated size would pass the remaining budget is refused, compressed or not.
+    /// A metafile whose inflated size (with its compressed bytes) would pass the remaining budget is refused, compressed or not.
     #[test]
     fn a_metafile_over_the_budget_is_refused() {
         let wmf = vec![9u8; 4000];
@@ -327,8 +375,9 @@ mod tests {
         let mut header = vec![0u8; 34];
         header[..4].copy_from_slice(&(wmf.len() as u32).to_le_bytes());
         let deflated = atom(0xF01B, 0x216, &[&[0u8; 16][..], &header, &z].concat());
-        assert!(decode(&Rec::at(&deflated, 0).unwrap(), 3999).is_none());
-        assert_eq!(decode(&Rec::at(&deflated, 0).unwrap(), 4000).map(|p| p.data.len()), Some(4000));
+        // The budget covers the compressed bytes read as well as the bytes they inflate to.
+        assert!(decode(&Rec::at(&deflated, 0).unwrap(), 3999 + z.len()).is_none());
+        assert_eq!(decode(&Rec::at(&deflated, 0).unwrap(), 4000 + z.len()).map(|p| p.data.len()), Some(4000));
         header[32] = 0xFE;
         let raw = atom(0xF01B, 0x216, &[&[0u8; 16][..], &header, &wmf].concat());
         assert!(decode(&Rec::at(&raw, 0).unwrap(), 3999).is_none());

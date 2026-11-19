@@ -66,6 +66,13 @@ pub mod prop {
 /// UTF-16 units kept of a string property.
 pub const MAX_STRING: usize = 4096;
 
+/// Distinct properties one set keeps. Ids are 14 bits, so a file's tables could name about 16K of
+/// them, and every shape copies the drawing defaults' and its master shape's sets into its own:
+/// unbounded, that is shapes × 16K. [MS-ODRAW] defines a few hundred properties and a real shape
+/// or the drawing defaults set tens of them. Entries past the limit are still read (their complex
+/// data keeps its place) but not kept.
+pub const MAX_PROPS: usize = 1024;
+
 /// One property value: the 32-bit operand and, for complex properties, the extra bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct PropVal<'a> {
@@ -113,7 +120,9 @@ impl<'a> Props<'a> {
     /// places up, so it is merged flag by flag: a shape that sets only `fNoFillHitTest` still
     /// inherits `fFilled` from its master or the defaults.
     fn fill_gap(&mut self, id: u16, v: PropVal<'a>) {
+        let full = self.map.len() >= MAX_PROPS;
         match self.map.get_mut(&id) {
+            None if full => {}
             None => {
                 self.map.insert(id, v);
             }
@@ -415,6 +424,29 @@ mod tests {
         let mut p = Props::default();
         p.add_table(&Rec::at(&t, 0).unwrap());
         assert_eq!(p.string(prop::NAME).map(|s| s.len()), Some(MAX_STRING));
+    }
+
+    /// A table naming more than [`MAX_PROPS`] properties keeps that many, and still reads the
+    /// complex data after them and the records after it.
+    #[test]
+    fn a_property_set_keeps_at_most_max_props() {
+        let mut entries: Vec<(u16, u32)> = (0..MAX_PROPS as u16 + 100).map(|i| (0x1000 + i, u32::from(i))).collect();
+        let name: Vec<u8> = "Kept\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        entries.insert(0, (0x8000 | prop::NAME, name.len() as u32));
+        let fsp = atom(rt::FSP, 1, &[1025u32.to_le_bytes(), 0u32.to_le_bytes()].concat());
+        let anchor = atom(rt::CHILD_ANCHOR, 0, &[1i32, 2, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        let sp = container(rt::SP_CONTAINER, 0, &[fsp, fopt(&entries, &name), anchor]);
+        let s = shape(&Rec::at(&sp, 0).unwrap());
+        assert_eq!(s.props.map.len(), MAX_PROPS);
+        assert_eq!(s.props.string(prop::NAME).as_deref(), Some("Kept"));
+        assert_eq!(s.props.get(0x1000), Some(0));
+        assert_eq!(s.props.get(0x1000 + MAX_PROPS as u16), None, "past the limit");
+        assert_eq!(s.anchor, Some(Anchor { left: 1.0, top: 2.0, right: 3.0, bottom: 4.0 }));
+        // Inheriting can't pass the limit either.
+        let mut p = Props::default();
+        p.set(prop::FILL_COLOR, 1);
+        p.inherit(&s.props);
+        assert_eq!(p.map.len(), MAX_PROPS);
     }
 
     /// A shape's later primary property table wins over its earlier one, and both over its

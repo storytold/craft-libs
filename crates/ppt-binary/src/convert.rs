@@ -90,6 +90,9 @@ struct Ctx<'a> {
     master_props: HashMap<(u32, u32), Props<'a>>,
     /// The caller's defaults: the master each of the file's masters starts from.
     app: &'a dyn Defaults,
+    /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
+    /// it goes to the first of them only, so its text isn't copied into every one.
+    used_notes: HashSet<usize>,
 }
 
 pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Presentation {
@@ -112,6 +115,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         defaults: draw::default_props(dgg),
         master_props: HashMap::new(),
         app,
+        used_notes: HashSet::new(),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -304,13 +308,15 @@ impl<'a> Ctx<'a> {
         let background = if atom.follow_master_background { None } else { drawing.background.as_ref().and_then(|b| self.background(b, &scope)) };
         let shapes: Vec<Shape> =
             drawing.shapes.iter().filter(|r| r.placeholder.is_none_or(|p| p.kind == 0)).filter_map(|r| self.shape(r, &scope, 0, TOP)).collect();
-        // Its placeholders follow the main master's title layout, with ids of their own. Only the
-        // placeholders: a layout made for an earlier title master holds that one's own shapes.
+        // Its placeholders follow the main master's own title layout (from the defaults), with ids
+        // of their own. A layout made for an earlier title master holds that one's shapes and
+        // placeholder boxes, so it is no base: with no title layout of the defaults' there is none.
+        let made: HashSet<LayoutId> = masters.values().filter_map(|m| m.layout).collect();
         let base: Vec<Shape> = self
             .p
             .masters
             .get(parent.index)
-            .and_then(|m| m.layouts.iter().find(|l| l.kind == LayoutType::Title))
+            .and_then(|m| m.layouts.iter().find(|l| l.kind == LayoutType::Title && !made.contains(&l.id)))
             .map(|l| l.shapes.iter().filter(|s| s.ph.is_some()).cloned().collect())
             .unwrap_or_default();
         let mut placeholders = Vec::with_capacity(base.len());
@@ -442,7 +448,13 @@ impl<'a> Ctx<'a> {
             self.footers(&mut shapes, &hf);
         }
         let hidden = s.rec.child(rt::SLIDE_SHOW_SLIDE_INFO).and_then(|i| i.u16(10)).is_some_and(|f| f & 0x4 != 0);
-        let notes = find.notes_of.get(&s.slide_id).and_then(|&i| d.notes.get(i)).map(|n| self.notes(n, &styles, scheme)).unwrap_or_default();
+        let notes = find
+            .notes_of
+            .get(&s.slide_id)
+            .filter(|&&i| self.used_notes.insert(i))
+            .and_then(|&i| d.notes.get(i))
+            .map(|n| self.notes(n, &styles, scheme))
+            .unwrap_or_default();
         Some(Slide { id, layout, shapes, background, hidden, show_master_shapes: atom.follow_master_objects, notes, ..Default::default() })
     }
 
