@@ -3,13 +3,13 @@
 use super::swatch::hexagon;
 use super::{Swatch, SwatchMetrics, SwatchShape};
 use crate::contract::{
-    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, NoValue, Outcome, Props, Role,
-    SelectMode, ShowCollection as _, Sizing,
+    ActivateOn, Bind, BindMut, Collection, CollectionEvent, CollectionProps, Common, Component, ContainerProps, Cx, NoValue, Outcome, Props,
+    Remember as _, Role, SelectMode, ShowCollection as _, Sizing,
 };
 use crate::list::RowTest;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
-use craft_behavior::{DisplayOrder, ItemLayout, ItemSource, Metrics, NavShape, ScrollPos, Selection, TileLayout};
+use craft_behavior::{DisplayOrder, ItemLayout, ItemSource, Metrics, NavShape, Preview, ScrollPos, Selection, TileLayout};
 use craft_theme::Srgba;
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 
@@ -60,6 +60,27 @@ pub struct SwatchTableOutput {
     pub chosen: Vec<usize>,
     /// The entry a double click or Enter asked to edit this pass.
     pub open: Option<usize>,
+    /// What this pass did to the preview of the cell under the pointer: `Shows` in the pass the pointer moves onto a
+    /// cell, `Ended` in the pass it leaves the last one. The keyboard lead previews nothing.
+    pub preview: Preview<usize>,
+}
+
+/// The cell the table last reported as previewed, kept in its shown memory, so a pass reports a preview only when the
+/// cell under the pointer changes and a second pass of a frame reports nothing.
+#[derive(Clone, Copy, Debug, Default)]
+struct Previewed(Option<usize>);
+
+impl Previewed {
+    /// Follows the cell under the pointer this pass and reports what changed.
+    fn follow(&mut self, hovered: Option<usize>) -> Preview<usize> {
+        let preview = match (hovered, self.0) {
+            (Some(at), shown) if shown != Some(at) => Preview::Shows(at),
+            (None, Some(_)) => Preview::Ended,
+            _ => Preview::Unchanged,
+        };
+        self.0 = hovered;
+        preview
+    }
 }
 
 impl Outcome for SwatchTableOutput {
@@ -303,6 +324,7 @@ impl ItemLayout for SwatchLayout {
 /// - A click or Space selects the cell; a double click or Enter reports `open` and the Enter is the table's, so a
 ///   dialog around it does not also answer OK.
 /// - The table is one Tab stop; the arrows move through the cells as a grid.
+/// - The cell under the pointer is previewed ([`SwatchTableOutput::preview`]); the selection stays.
 /// - AccessKit: a list box named by the label; each cell a list box option named by its entry, with the hex colour as
 ///   its value.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -413,7 +435,9 @@ impl Component for SwatchTable<'_> {
             _ => None,
         });
         let changed = response.events.iter().any(|event| matches!(event, CollectionEvent::Selection(_)));
-        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open }
+        let hovered = response.shown.iter().find(|row| row.hovered).map(|row| row.key);
+        let preview = cx.memory::<Previewed>().follow(hovered);
+        SwatchTableOutput { response: response.response, selected: selection.lead.filter(|_| changed), chosen: selection.items, open, preview }
     }
 }
 
