@@ -1,7 +1,7 @@
 //! Speaker notes keep their run and paragraph formatting: a bold heading, indented points with
 //! custom bullets, plain lines.
 
-mod common;
+use super::common;
 
 use std::sync::Arc;
 

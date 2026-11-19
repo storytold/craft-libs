@@ -1,6 +1,6 @@
 //! The writer, read back with the reader.
 
-mod common;
+use super::common;
 
 use std::sync::Arc;
 
