@@ -89,6 +89,10 @@ pub struct Sheet {
     pub visibility: Visibility,
     /// The stored cells. A blank cell with plain formatting is not stored.
     pub cells: BTreeMap<CellRef, Cell>,
+    /// Stored results of array-formula followers, keyed by the follower cell: (anchor, value).
+    /// Only non-empty results present in the file are retained. Ordinary cells stay blank so
+    /// callers that recalculate can fill the declared array range without stale blockers.
+    pub array_results: BTreeMap<CellRef, (CellRef, Value)>,
     /// Merged ranges of more than one cell.
     pub merges: Vec<Range>,
     /// Columns that have a ColInfo record, by zero-based index (0 to 255).
