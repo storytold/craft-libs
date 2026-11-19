@@ -18,8 +18,10 @@ The fork maintains strict synchronization with official upstream (`storytold/cra
 2. **Canvas Space-Key Hand Tool Preservation (`craft-ui-contract`)**: Resolves keyboard event hijacking where pressing `Space` inadvertently activated previously focused widgets instead of delegating to the canvas Hand/Pan tool.
 3. **Resilient Peripheral Retention (`craft-print`)**: Prevents erasure of remembered printer configurations caused by transient spooler polling delays.
 4. **Comprehensive East Asian Typographical Classification & Localization (`craft-font-manager`)**: Introduces full CJK font classification heuristics, Photoshop-parity Japanese font name localization, and canonical Kana sample previews.
+5. **Title Bar Leading Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)**: Enables the menu bar in integrated title bars to declare its titles width, preventing Window and Help menus from falling into the overflow menu while avoiding unwanted empty gaps before the bar.
+6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Enforces finite positive inline header width reservation in `wanted_width`, preventing child body layout collapse in content-sized containers.
 
-All modifications conform to workspace layering rules, compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`, and pass all 364 unit tests across affected crates.
+All modifications conform to workspace layering rules, compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`, and pass all test suites across affected crates.
 
 ---
 
@@ -32,6 +34,9 @@ All modifications conform to workspace layering rules, compile with zero warning
 | **`craft-pages`** | `src/ui/reading.rs`<br>`tests/it/views.rs` | Blanket Space suppression originally disabled keyboard column turning in `ReadingView`. | Explicitly configures `ActivateKeys::Both` on `ReadingView` and adds verified screen test. | Fork baseline; 112 screen tests passing. |
 | **`craft-print`** | `src/ui/mod.rs` | Transient empty printer enumeration from system spooler clears the remembered/default printer setting. | Added non-empty slice guard before clearing remembered printer settings. | Fork baseline; 43 tests passing. |
 | **`craft-font-manager`** | `src/picker/rank.rs`<br>`src/picker.rs`<br>`src/picker/rows.rs`<br>`tests/it/picker.rs` | Missing CJK classification (Mincho, Gothic, Maru Gothic, Kaisho, Pop); non-parity Japanese font names; missing Kana sample; classifier collisions (`WindSong` classified as Serif, `Pop Script` as Handwritten). | Implements comprehensive CJK heuristics with strict precedence; foundry-prefixed Song checking; Photoshop Japanese name parity; Kana sample preview; zero-cost testing without private `FaceInfo` literals. | Fork baseline; 54 tests passing. |
+| **`craft-ui-shell`** | `src/shell/title_bar/bar.rs`<br>`tests/it/shell/menu_bar_room.rs` | Integrated title bar's leading region previously applied declared width to the caption header (`props.header`), creating an unwanted 380pt empty region before the menu bar on Windows. | Directs `leading_width` strictly to the leading content via `allocate_ui_with_layout`, keeping the caption header at its natural measured width (0pt on Windows) with zero leading offset. | Fork baseline; 94 tests passing. |
+| **`craft-ui-widgets`** & **`craft-menu`** | `craft-ui-widgets/src/menu/bar.rs`<br>`craft-menu/src/bar.rs` | Menu bar filled entire row by default, squeezing trailing titles into overflow menu when embedded beside a title strip. | Added `MenuBar::own_width` / `MenuBarUi::width` to lay out titles at declared width and report `titles_width`, allowing host to preserve full menu rows without overflow. | Fork baseline; 3 tests passing. |
+| **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | `wanted_width` did not count finite positive declared inline header widths, risking child body collapse in content-sized containers, and did not match `regions.rs` zero-width fallback. | Incorporates finite positive declared inline widths (`width.is_finite() && *width > 0.0`) in `wanted_width` while treating zero as no declaration (falling back to measured header). | Fork baseline; 269 tests passing. |
 
 ---
 
@@ -281,6 +286,71 @@ In upstream `craft-font-manager`, font classification was restricted to Latin-ce
 
 ---
 
+### 3.5. Title Bar Leading Content Width & Menu Bar Sizing (`craft-ui-shell`, `craft-menu`, `craft-ui-widgets`)
+
+#### Problem Statement
+In an integrated window chrome layout (such as PhotoCraft on Windows), the menu bar sits in the leading slot of the `TitleBar`. Originally:
+1. `MenuBar` declared `fills = Some(Axis::X)`, expanding to fill the entire horizontal line and squeezing subsequent titles (`Window`, `Help`) into the overflow dropdown.
+2. An initial attempt to declare `inline_width` on `TitleBar::leading_width` inadvertently set `self.props.header(header.inline_width(width))`. Because `props.header` corresponds to the start caption buttons (e.g. macOS traffic lights, which are empty on Windows), this created a 380pt empty region before the menu bar, displacing the File menu 380pt to the right.
+
+#### Implementation & Architecture
+1. **Targeted Leading Allocation in `TitleBar`**:
+   `TitleBar::leading_width` was decoupled from `self.props.header`, allowing the caption header to retain its natural measured width (0pt on Windows, ~70pt on macOS). In `show_titled`, the declared `leading_width` is directly applied to the leading content closure:
+   ```rust
+   // crates/ui-shell/src/shell/title_bar/bar.rs
+   pub fn show_titled(...) -> TitleBarOutput {
+       ...
+       self.trailing(trailing).show(ui, |ui, cx| {
+           if let Some(width) = leading_width {
+               ui.allocate_ui_with_layout(
+                   egui::vec2(width, ui.available_height()),
+                   *ui.layout(),
+                   |ui| leading(ui, cx),
+               );
+           } else {
+               leading(ui, cx);
+           }
+           ...
+       })
+   }
+   ```
+2. **Explicit MenuBar Width & Natural Width Reporting**:
+   `MenuBar::own_width` configures `MenuBar` to lay out titles without filling the entire row (`fills` returns `None`). It records the natural unconstrained width of all titles in `MenuBarOutput::titles_width`, allowing host applications to read back the measured width and declare it on the subsequent frame.
+
+#### Verification & Tests
+- `crates/ui-shell/tests/it/shell/menu_bar_room.rs`: `a_declared_leading_width_is_the_menu_bars_room` asserts that `offset < 1.0` (zero empty spacing before the bar) and `narrow.width() <= 380.0 + 1.0` (bar strictly adheres to declared width).
+
+---
+
+### 3.6. Content-Sized Inline Container Header Reservation (`craft-ui-contract`)
+
+#### Problem Statement
+In `crates/ui-contract/src/contract/body/size.rs`, `BodyHooks::wanted_width` calculates the horizontal extent a content-sized container requests from its parent. Previously:
+1. `wanted_width` only inspected `self.measured_header`. When an inline header declared an `inline_width` larger than its measured content (e.g., an empty inline header with 100pt declared width), `wanted_width` reported only the smaller measured extent. `shared_width` subsequently capped the container at that extent, causing the header to consume the full container and starving the body of width.
+2. When `0.0` was passed as `inline_width`, `wanted_width` previously treated `0.0` as a valid declaration, whereas `regions.rs` treated `0.0` as "no declaration" (falling back to measured header width), creating a layout inconsistency.
+
+#### Implementation & Architecture
+`wanted_width` incorporates the finite positive inline header declaration rule matching `regions.rs`:
+```rust
+// crates/ui-contract/src/contract/body/size.rs
+pub(super) fn wanted_width(&self, props: &ContainerProps) -> Option<f32> {
+    self.measured_body.map(|body| {
+        let (mut header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
+        // A finite positive declared inline width is the header's reserved width, matching regions.rs.
+        if let Some(declared) = props.header.filter(|header| header.inline).and_then(|header| header.inline_width).filter(|width| width.is_finite() && *width > 0.0) {
+            header.x = declared;
+        }
+        let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
+        overlay_of(props).map_or(wanted, |overlay| wanted.max(crate::contract::overlay::anchor_floor(overlay)))
+    })
+}
+```
+
+#### Verification & Tests
+- Verified with `cargo test -p craft-ui-contract`: all 269 tests passing with zero regressions.
+
+---
+
 ## 4. Verification & Quality Assurance Suite
 
 All changes in the fork are validated using the MSVC x64 developer toolchain.
@@ -291,13 +361,17 @@ All changes in the fork are validated using the MSVC x64 developer toolchain.
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-font-manager'
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-print'
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-ui-contract'
+cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-ui-shell'
+cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-menu'
 cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" && cargo test -p craft-pages --features screen-testing'
 ```
 
 ### Measured Test Results
 - `craft-font-manager`: **54 passed; 0 failed**
 - `craft-print`: **43 passed; 0 failed**
-- `craft-ui-contract`: **267 passed; 0 failed** (plus 1 doc-test passed)
+- `craft-ui-contract`: **269 passed; 0 failed** (plus 1 doc-test passed)
+- `craft-ui-shell`: **94 passed; 0 failed** (plus 1 doc-test ignored)
+- `craft-menu`: **3 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-pages` (screen testing): **112 passed; 0 failed**
 - Clippy across all workspace crates: **0 warnings, exit code 0**
 
