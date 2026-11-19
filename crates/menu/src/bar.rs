@@ -173,7 +173,8 @@ fn show_bar<E: Fn(Labeled<'_>) -> Option<String> + Copy + 'static>(props: &mut B
     });
     let english: Option<&EnglishHook<'_>> = hook.as_ref().map(|hook| hook as &EnglishHook<'_>);
     let rows = Rows::new(props.target).english(english).preferred(props.preferred);
-    let labels = rows.labels(&props.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
+    let labels =
+        rows.labels(&props.bar.menus, |menu| menu.title.as_str(), |menu| menu.title.as_str(), |menu| rows.english_of(Labeled::Title(&menu.title)));
     let shared = &rows;
     let titles: Vec<MenuTitle<'_>> =
         props.bar.menus.iter().zip(labels).map(|(menu, label)| MenuTitle::new(label, move |ui| shared.show(ui, &menu.children))).collect();
