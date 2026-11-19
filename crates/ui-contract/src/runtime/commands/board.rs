@@ -460,7 +460,7 @@ pub(crate) fn install(ctx: &Context, stories: bool) -> Result<(), registry::Comm
 
 /// A keymap with the chords it binds to the edit commands and to the window's keys.
 #[derive(Clone)]
-struct BuiltKeymap {
+pub(crate) struct BuiltKeymap {
     keymap: Arc<Keymap>,
     edit_chords: Arc<[(EditCommand, Chord)]>,
     window_shortcuts: Arc<[(WindowShortcut, Chord)]>,
@@ -561,23 +561,17 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts }
 }
 
-/// The keymap of each shared registry (with or without the stories' sets) on each platform with no overrides. It
-/// depends on nothing else, so every context of the process shares it.
-static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, bool, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
-
-/// The keymap of `registry` and `app` on `platform` under `overrides`: built once per platform for the shared
-/// registry with no overrides and no catalog, else built here.
+/// Builds or reuses a keymap owned by this exact command registry.
 fn keymap_for(registry: &Arc<registry::Registry>, app: Option<&AppCatalog>, platform: Platform, overrides: Option<&Arc<Overrides>>) -> BuiltKeymap {
-    if app.is_some() || overrides.is_some() || !registry::Registry::is_shared(registry) {
+    if app.is_some() || overrides.is_some() {
         return build_keymap(registry, app, platform, overrides);
     }
-    let mut kept = DEFAULT_KEYMAPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let stories = registry.has_stories();
-    if let Some((.., built)) = kept.iter().find(|(on, with, _)| *on == platform && *with == stories) {
+    let mut kept = registry.keymaps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, built)) = kept.iter().find(|(on, _)| *on == platform) {
         return built.clone();
     }
     let built = build_keymap(registry, None, platform, None);
-    kept.push((platform, stories, built.clone()));
+    kept.push((platform, built.clone()));
     built
 }
 

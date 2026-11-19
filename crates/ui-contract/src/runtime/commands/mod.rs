@@ -12,10 +12,10 @@ pub use library::ChromeCommand;
 pub(crate) use library::WindowShortcut;
 pub use library::{EditCommands, NavCommand, WindowCommand};
 pub use registry::CommandDefError;
-#[cfg(feature = "suite")]
-pub(crate) use registry::configure_story_sets;
 #[doc(hidden)]
 pub use registry::{SetEntry, sets};
+#[cfg(feature = "suite")]
+pub(crate) use registry::{StorySelection, configure_story_sets, with_story_sets};
 
 #[doc(hidden)]
 pub use board::declare_child;

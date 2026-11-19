@@ -19,6 +19,7 @@ pub(crate) mod paint;
 
 pub(crate) mod runtime;
 
+pub(crate) mod story_command_subsets;
 pub(crate) mod style;
 pub(crate) mod text;
 

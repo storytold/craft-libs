@@ -15,7 +15,7 @@ fn spec() -> AppSpec {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     if !craft_ui_gallery::registry().install_story_sets() {
-        eprintln!("a different set of story commands was already installed");
+        eprintln!("the selected story commands are invalid");
         std::process::exit(1);
     }
     if let Err(error) = craft_ui::shell::app::run(spec(), |_| Gallery::open()) {
@@ -33,7 +33,7 @@ fn main() {
 
     wasm_bindgen_futures::spawn_local(async {
         if !craft_ui_gallery::registry().install_story_sets() {
-            console::error_1(&JsValue::from_str("a different set of story commands was already installed"));
+            console::error_1(&JsValue::from_str("the selected story commands are invalid"));
             return;
         }
         let (counts, stories) = craft_ui_gallery::linked_counts();

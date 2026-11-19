@@ -142,29 +142,55 @@ impl std::error::Error for CommandDefError {}
 
 /// The shared registries: the app's sets, and the app's sets with the stories' (`[apps, with stories]`).
 static LOADED: [OnceLock<Arc<Registry>>; 2] = [OnceLock::new(), OnceLock::new()];
+/// One selected set of story commands and its lazily loaded definitions.
 #[cfg(feature = "suite")]
-static STORY_SETS: OnceLock<Vec<SetEntry>> = OnceLock::new();
-#[cfg(feature = "suite")]
-static STORY_SETS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) struct StorySelection {
+    sets: Vec<SetEntry>,
+    loaded: OnceLock<Arc<Registry>>,
+}
 
-/// Selects the story command sets before the first story context is installed.
 #[cfg(feature = "suite")]
-pub(crate) fn configure_story_sets(sets: &[SetEntry]) -> bool {
-    let _guard = STORY_SETS_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if STORY_SETS.get().is_none() && LOADED[1].get().is_some() {
-        return sets.is_empty();
+impl StorySelection {
+    pub(crate) fn new(sets: Vec<SetEntry>) -> Self {
+        Self { sets, loaded: OnceLock::new() }
     }
-    let selected = STORY_SETS.get_or_init(|| sets.to_vec());
-    selected.len() == sets.len()
-        && selected.iter().zip(sets).all(|(a, b)| {
-            (a.name)() == (b.name)()
-                && std::ptr::fn_addr_eq(a.defs, b.defs)
-                && std::ptr::fn_addr_eq(a.no_default_on, b.no_default_on)
-                && std::ptr::fn_addr_eq(a.edits, b.edits)
-                && std::ptr::fn_addr_eq(a.holds, b.holds)
-                && std::ptr::fn_addr_eq(a.platform_defaults, b.platform_defaults)
-                && a.typing.map(CommandScope::name) == b.typing.map(CommandScope::name)
-        })
+
+    fn shared(&self) -> Result<Arc<Registry>, CommandDefError> {
+        if let Some(loaded) = self.loaded.get() {
+            return Ok(loaded.clone());
+        }
+        let loaded = Arc::new(Registry::load_selected(true, &self.sets)?);
+        Ok(self.loaded.get_or_init(|| loaded).clone())
+    }
+}
+
+#[cfg(feature = "suite")]
+thread_local! {
+    static STORY_SETS: std::cell::RefCell<Option<Arc<StorySelection>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Selects story commands for contexts created on this thread.
+#[cfg(feature = "suite")]
+pub(crate) fn configure_story_sets(selection: Arc<StorySelection>) -> bool {
+    if selection.shared().is_err() {
+        return false;
+    }
+    STORY_SETS.with(|current| *current.borrow_mut() = Some(selection));
+    true
+}
+
+/// Runs one trial with its selection and restores the caller's selection.
+#[cfg(feature = "suite")]
+pub(crate) fn with_story_sets<R>(selection: &Arc<StorySelection>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<StorySelection>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STORY_SETS.with(|current| *current.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = STORY_SETS.with(|current| current.borrow_mut().replace(selection.clone()));
+    let _restore = Restore(previous);
+    f()
 }
 
 /// Indexes the definition at `at` under its id `id`; an id already in `index` is refused (`Duplicate`). The registry
@@ -191,26 +217,23 @@ pub(crate) struct Registry {
     holds: HashMap<String, &'static str>,
     /// The scopes whose keys are meant for typing (`CommandSet::TYPING`).
     typing: HashSet<&'static str>,
-    /// Whether the stories' sets are loaded.
-    stories: bool,
+    /// Default keymaps are shared by contexts using this exact registry.
+    pub(crate) keymaps: std::sync::Mutex<Vec<(Platform, super::board::BuiltKeymap)>>,
 }
 
 impl Registry {
     /// Loads every linked set; the stories' sets only with `stories`.
     pub(crate) fn load(stories: bool) -> Result<Registry, CommandDefError> {
-        let mut registry = Registry { stories, ..Registry::default() };
-        let entries = sets();
-        #[cfg(feature = "suite")]
-        let entries = {
-            let mut entries = entries;
-            if stories {
-                if let Some(story_sets) = STORY_SETS.get() {
-                    entries.extend(story_sets.iter());
-                    entries.sort_by_key(|entry| (entry.name)());
-                }
-            }
-            entries
-        };
+        Self::load_selected(stories, &[])
+    }
+
+    fn load_selected(stories: bool, story_sets: &[SetEntry]) -> Result<Registry, CommandDefError> {
+        let mut registry = Registry::default();
+        let mut entries = sets();
+        if stories {
+            entries.extend(story_sets.iter());
+            entries.sort_by_key(|entry| (entry.name)());
+        }
         for entry in entries {
             for def in (entry.defs)()? {
                 registry.add(def)?;
@@ -230,23 +253,18 @@ impl Registry {
     /// static, so every context shares one. A load that fails is not kept, so each install reports its error.
     pub(crate) fn shared(stories: bool) -> Result<Arc<Registry>, CommandDefError> {
         #[cfg(feature = "suite")]
-        let _guard = stories.then(|| STORY_SETS_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        if stories {
+            let selection = STORY_SETS.with(|current| current.borrow().clone());
+            if let Some(selection) = selection {
+                return selection.shared();
+            }
+        }
         let slot = &LOADED[usize::from(stories)];
         if let Some(loaded) = slot.get() {
             return Ok(loaded.clone());
         }
         let registry = Arc::new(Registry::load(stories)?);
         Ok(slot.get_or_init(|| registry).clone())
-    }
-
-    /// Whether `registry` is one [`Registry::shared`] loaded.
-    pub(crate) fn is_shared(registry: &Arc<Registry>) -> bool {
-        LOADED[usize::from(registry.stories)].get().is_some_and(|loaded| Arc::ptr_eq(loaded, registry))
-    }
-
-    /// Whether the stories' sets are loaded.
-    pub(crate) fn has_stories(&self) -> bool {
-        self.stories
     }
 
     fn add(&mut self, def: CommandDef) -> Result<(), CommandDefError> {

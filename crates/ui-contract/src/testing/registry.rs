@@ -17,6 +17,7 @@ pub struct Registry {
     stories: Vec<StoryRegistration>,
     trials: Vec<Trial>,
     story_sets: Vec<SetEntry>,
+    selection: std::sync::OnceLock<std::sync::Arc<crate::runtime::commands::StorySelection>>,
 }
 
 impl Registry {
@@ -53,6 +54,7 @@ impl Registry {
 
     /// Adds a command set used by stories.
     pub fn add_story_set(&mut self, set: SetEntry) {
+        let _ = self.selection.take();
         self.story_sets.push(set);
     }
 
@@ -71,10 +73,14 @@ impl Registry {
         &self.trials
     }
 
-    /// Installs the selected story command sets before a story context is created.
-    /// Returns false if this process already selected a different set.
+    /// Selects story command sets for contexts created on the current thread.
+    /// Returns false if the selected definitions are invalid.
     pub fn install_story_sets(&self) -> bool {
-        crate::runtime::commands::configure_story_sets(&self.story_sets)
+        crate::runtime::commands::configure_story_sets(self.story_selection())
+    }
+
+    pub(crate) fn story_selection(&self) -> std::sync::Arc<crate::runtime::commands::StorySelection> {
+        self.selection.get_or_init(|| std::sync::Arc::new(crate::runtime::commands::StorySelection::new(self.story_sets.clone()))).clone()
     }
 
     /// The selected story command sets.

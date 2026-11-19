@@ -211,15 +211,21 @@ pub fn trials(package: &'static str, registry: &Registry) -> Vec<Trial> {
         }
         for (index, group) in GROUPS.iter().enumerate() {
             let stories = stories.clone();
+            let story_sets = registry.story_selection();
             let name = format!("suite::{}::{}", probe.type_name(), group.name);
-            trials.push(Trial::test(name, move || run_group(probe, group, index == 0, true, stories)));
+            trials.push(Trial::test(name, move || {
+                crate::runtime::commands::with_story_sets(&story_sets, || run_group(probe, group, index == 0, true, stories))
+            }));
         }
     }
     let patterns: Vec<PatternProbe> = own_registrations.filter_map(Registration::pattern_probe).copied().collect();
     for pattern in &patterns {
         let stories: Vec<Story> = own.iter().filter(|entry| (entry.type_name)() == pattern.type_name()).map(|entry| entry.story).collect();
         let name = pattern.type_name();
-        trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
+        let story_sets = registry.story_selection();
+        trials.push(Trial::test(format!("suite::{name}"), move || {
+            crate::runtime::commands::with_story_sets(&story_sets, || pattern::run(name, &stories).map_err(Failed::from))
+        }));
     }
     // Stories of a type another linked package registers run that type's cases here, as its visitors.
     let mut visited: Vec<&'static str> = Vec::new();
@@ -237,11 +243,17 @@ pub fn trials(package: &'static str, registry: &Registry) -> Vec<Trial> {
             visited.push(name);
             for group in GROUPS {
                 let stories = stories.clone();
-                trials.push(Trial::test(format!("suite::{name}::{}", group.name), move || run_group(probe, group, false, false, stories)));
+                let story_sets = registry.story_selection();
+                trials.push(Trial::test(format!("suite::{name}::{}", group.name), move || {
+                    crate::runtime::commands::with_story_sets(&story_sets, || run_group(probe, group, false, false, stories))
+                }));
             }
         } else if registration.pattern_probe().is_some() {
             visited.push(name);
-            trials.push(Trial::test(format!("suite::{name}"), move || pattern::run(name, &stories).map_err(Failed::from)));
+            let story_sets = registry.story_selection();
+            trials.push(Trial::test(format!("suite::{name}"), move || {
+                crate::runtime::commands::with_story_sets(&story_sets, || pattern::run(name, &stories).map_err(Failed::from))
+            }));
         } else {
             let message = format!("the story `{}` shows `{name}`, which is not in the linked registrations", entry.story.name);
             trials.push(Trial::test(format!("suite::stories::{}", entry.story.name), move || Err(Failed::from(message))));

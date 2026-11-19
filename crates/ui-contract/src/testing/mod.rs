@@ -105,7 +105,7 @@ impl Trial {
 #[cfg(feature = "suite")]
 pub fn run(crate_root: &str, package: &'static str, registry: &Registry) -> ! {
     if !registry.install_story_sets() {
-        eprintln!("a different set of story commands was already installed");
+        eprintln!("the selected story commands are invalid");
         std::process::exit(1);
     }
     let library = package.replace('-', "_");
@@ -118,9 +118,12 @@ pub fn run(crate_root: &str, package: &'static str, registry: &Registry) -> ! {
         .filter(|trial| own(trial.module))
         .map(|trial| {
             let run = trial.run;
+            let story_sets = registry.story_selection();
             libtest_mimic::Trial::test(trial.full_name(), move || {
-                run();
-                Ok(())
+                crate::runtime::commands::with_story_sets(&story_sets, || {
+                    run();
+                    Ok(())
+                })
             })
             .with_ignored_flag(trial.ignored)
         })
