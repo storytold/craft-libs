@@ -322,10 +322,7 @@ fn a_wheel_gesture_keeps_its_gathered_scroll_across_a_momentum_run_and_starts_ag
     mark.set(false);
     wheel(&mut frames, vec![swipe(0.0, TouchPhase::End, MouseWheelSource::Trackpad)]);
     let run = wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Move, MouseWheelSource::Momentum)]);
-    assert!(
-        run.first().is_some_and(|share| share.gathered.y == -30.0 && share.moved),
-        "the momentum run continues its swipe: {run:?}"
-    );
+    assert!(run.first().is_some_and(|share| share.gathered.y == -30.0 && share.moved), "the momentum run continues its swipe: {run:?}");
 
     // A momentum run that comes after the gap is a gesture of its own.
     frames.advance(GESTURE_GAP);
@@ -334,10 +331,7 @@ fn a_wheel_gesture_keeps_its_gathered_scroll_across_a_momentum_run_and_starts_ag
     wheel(&mut frames, vec![swipe(0.0, TouchPhase::End, MouseWheelSource::Trackpad)]);
     frames.advance(GESTURE_GAP);
     let late = wheel(&mut frames, vec![swipe(-10.0, TouchPhase::Move, MouseWheelSource::Momentum)]);
-    assert!(
-        late.first().is_some_and(|share| share.gathered == share.scroll && !share.moved),
-        "a late momentum run starts again: {late:?}"
-    );
+    assert!(late.first().is_some_and(|share| share.gathered == share.scroll && !share.moved), "a late momentum run starts again: {late:?}");
 }
 
 #[trial]

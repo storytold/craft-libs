@@ -2,7 +2,9 @@
 
 use craft_host::ManualJobs;
 use craft_host::queue::Cancel;
-use craft_ui::primitives::{LoadFailure, LoadResult, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStoreOptions};
+use craft_ui::primitives::{
+    LoadFailure, LoadResult, LoaderOptions, Priority, Revision, TextureBudget, TextureLoader, TextureState, TextureStoreOptions,
+};
 use craft_ui::testing::{Frames, trial};
 use egui::Context;
 use std::cell::Cell;

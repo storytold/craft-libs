@@ -173,7 +173,8 @@ fn connections_past_the_limit_are_refused_with_the_reason() {
 fn a_refused_first_frame_closes_the_connection() {
     let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
     let wrong = "f".repeat(TOKEN.len());
-    for (first, id) in [("not json".to_owned(), Value::Null), (json!({"id": 4, "method": "auth", "params": {"token": wrong}}).to_string(), json!(4))] {
+    for (first, id) in [("not json".to_owned(), Value::Null), (json!({"id": 4, "method": "auth", "params": {"token": wrong}}).to_string(), json!(4))]
+    {
         let mut stream = TcpStream::connect(server.addr).expect("connected");
         stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
         let mut reader = BufReader::new(stream.try_clone().expect("cloned"));

@@ -55,8 +55,10 @@ fn rig_with_host(
     let mut fx = Fixture::new(move |ui| {
         let mut seen = shown.borrow_mut();
         let groups: Vec<HostFontGroup<'_>> = host.iter().map(|rows| HostFontGroup::new(None, rows)).collect();
-        let mut picker =
-            FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog).settings(Bind::bound(&mut settings)).served(&served).host(&groups);
+        let mut picker = FontPicker::new("Font family", Bind::bound(&mut seen.family), &catalog)
+            .settings(Bind::bound(&mut settings))
+            .served(&served)
+            .host(&groups);
         if let Some(key) = &current_host {
             picker = picker.current_host(key.clone());
         }

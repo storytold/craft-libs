@@ -49,7 +49,12 @@ fn threads() -> Vec<CommentThread> {
 
 /// Statuses from three reviewers, one of them set back to None and one without a name.
 fn reviewed() -> Vec<ReviewerStatus> {
-    vec![reviewer("Ana", ReviewStatus::Rejected), reviewer("Bo", ReviewStatus::Completed), reviewer("Cy", ReviewStatus::None), reviewer("", ReviewStatus::Cancelled)]
+    vec![
+        reviewer("Ana", ReviewStatus::Rejected),
+        reviewer("Bo", ReviewStatus::Completed),
+        reviewer("Cy", ReviewStatus::None),
+        reviewer("", ReviewStatus::Cancelled),
+    ]
 }
 
 #[story(CommentsPanel<'static>, covers = [Default], drive = Drive::Never)]

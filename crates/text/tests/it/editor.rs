@@ -5,11 +5,11 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use craft_behavior::CancelReason;
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_text::quotes::QuoteStyle;
 use craft_text::ui::editor::{CaretLine, EditKind, EditorEnd, EditorMode, HostCx, HostLine, StyleKey, TextEditor, TextEditorHost, TextSelection};
-use craft_behavior::CancelReason;
 use craft_ui::buttons::Button;
 use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, tool_pass};
 use craft_ui::contract::{Bind, FacesCx as _, Props as _, Show as _, ShowContainer as _};

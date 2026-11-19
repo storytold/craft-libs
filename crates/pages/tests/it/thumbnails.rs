@@ -53,8 +53,7 @@ fn organize_rig(count: usize, id: egui::Id, current: usize) -> (Fixture, Rc<RefC
     let pages = DemoPages::new(count);
     let mut fixture = Fixture::new(move |ui| {
         let mut picked = held.borrow_mut();
-        let out =
-            PageThumbnails::new("Pages", &pages, &mut picked, current, PAPER).arrangement(ThumbnailArrangement::Organize).id(id).show(ui);
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, current, PAPER).arrangement(ThumbnailArrangement::Organize).id(id).show(ui);
         seen.borrow_mut().extend(out.events);
     });
     fixture.room(vec2(600.0, 600.0));

@@ -8,8 +8,8 @@ use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay, Pad,
-    PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, clicked,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay,
+    Pad, PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -347,14 +347,10 @@ impl<'a> NotePopup<'a> {
         let grip = if allowed { ResizeEdges::BOTTOM.union(end) } else { ResizeEdges::NONE };
         // A running move or resize shows where the gesture holds the window; the host's rect changes once it commits.
         let shown_at = drafts.placing.get(&id).copied().unwrap_or(window);
-        let overlay = Overlay::floating()
-            .modeless()
-            .movable(allowed)
-            .resize_edges(grip)
-            .body_scroll(true)
-            .size_limits(NOTE_POPUP_LIMITS)
-            .placed(shown_at);
-        let layer = NoteWindow::new(label, overlay, NoteLook { title, age, fill }, words.close.clone(), allowed, anchor, selected).id_salt(("note-popup", id));
+        let overlay =
+            Overlay::floating().modeless().movable(allowed).resize_edges(grip).body_scroll(true).size_limits(NOTE_POPUP_LIMITS).placed(shown_at);
+        let layer = NoteWindow::new(label, overlay, NoteLook { title, age, fill }, words.close.clone(), allowed, anchor, selected)
+            .id_salt(("note-popup", id));
         let mut content = NoteBody { id, messages, drafts, allowed, now, body: None, reply: None };
         let shown = layer.show(ui, |ui, _| content.show(ui, &words, &view));
         let NoteBody { drafts, mut body, reply, .. } = content;
@@ -501,7 +497,8 @@ struct NoteWindow {
 
 impl NoteWindow {
     fn new(label: Label, overlay: Overlay, look: NoteLook, close_label: Label, allowed: bool, anchor: Option<(Rect, bool)>, selected: bool) -> Self {
-        let props = ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).header(HeaderRegion::new().band(DragBand::Move));
+        let props =
+            ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).header(HeaderRegion::new().band(DragBand::Move));
         NoteWindow {
             common: Common::new(),
             props,

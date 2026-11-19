@@ -694,12 +694,11 @@ pub(crate) fn inject_files(ctx: &Context, viewport: ViewportId, at: Option<Pos2>
 fn give_files(input: &mut egui::RawInput, files: &InjectedFiles) {
     if files.dropped {
         input.hovered_files.clear();
-        input.dropped_files.extend(
-            files.paths.iter().map(|path| std::sync::Arc::new(super::files::DroppedPath(path.clone())) as egui::DroppedFileHandle),
-        );
+        input
+            .dropped_files
+            .extend(files.paths.iter().map(|path| std::sync::Arc::new(super::files::DroppedPath(path.clone())) as egui::DroppedFileHandle));
     } else {
-        input.hovered_files =
-            files.paths.iter().map(|path| egui::HoveredFile { path: Some(path.clone()), mime: String::new() }).collect();
+        input.hovered_files = files.paths.iter().map(|path| egui::HoveredFile { path: Some(path.clone()), mime: String::new() }).collect();
     }
 }
 

@@ -176,7 +176,6 @@ impl Component for Picture<'_> {
                     _ => match rasterise_svg(*svg, width, height) {
                         Some(image) => store.put(&cx.ctx, key, self.revision, image),
                         None => {
-
                             log::error!("picture {:?}: the SVG is refused or does not draw at {width}x{height}", cx.resolved.id);
                             store.put_empty(&cx.ctx, key, self.revision);
                             return;

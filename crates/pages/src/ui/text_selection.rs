@@ -457,9 +457,10 @@ impl CanvasTool for TextSelectTool<'_> {
         let extended = before.filter(|_| pointer.mods.shift && clicks < 2).and_then(|selection| selection.run_ends());
         let (selection, start) = match (clicks, extended) {
             (2.., _) => match click_unit(text, clicks, glyph).filter(|unit| !unit.is_empty()) {
-                Some(unit) => {
-                    (TextSelection::new(page, TextSpan::run(unit.start, page, unit.end - 1)), TextSelection::new(page, TextSpan::run(glyph, page, glyph)))
-                }
+                Some(unit) => (
+                    TextSelection::new(page, TextSpan::run(unit.start, page, unit.end - 1)),
+                    TextSelection::new(page, TextSpan::run(glyph, page, glyph)),
+                ),
                 None => {
                     self.set(None);
                     return ToolAction::Done;
@@ -507,7 +508,9 @@ impl CanvasTool for TextSelectTool<'_> {
         let end_x = self.released_past_row(pointer);
         let selection = self.state.selection;
         match selection {
-            Some(selection @ TextSelection { span: TextSpan::Column { .. }, .. }) if selection.text(self.texts).is_none_or(|text| text.is_empty()) => {
+            Some(selection @ TextSelection { span: TextSpan::Column { .. }, .. })
+                if selection.text(self.texts).is_none_or(|text| text.is_empty()) =>
+            {
                 self.set(None);
             }
             Some(TextSelection { page, span: TextSpan::Run { anchor, head, head_page, .. } }) if end_x.is_some() => {

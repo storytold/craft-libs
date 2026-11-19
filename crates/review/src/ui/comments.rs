@@ -473,7 +473,11 @@ fn set_selection(state: &mut CommentsPanelState, next: Selection<ThreadId>) -> b
 
 /// The card collection's selection of the threads in `selected`, in its order.
 fn card_selection(selected: &Selection<ThreadId>) -> Selection<CardKey> {
-    Selection::new(selected.items.iter().copied().map(CardKey::Thread).collect(), selected.lead.map(CardKey::Thread), selected.anchor.map(CardKey::Thread))
+    Selection::new(
+        selected.items.iter().copied().map(CardKey::Thread).collect(),
+        selected.lead.map(CardKey::Thread),
+        selected.anchor.map(CardKey::Thread),
+    )
 }
 
 /// The threads the collection's `selection` holds, headings left out.

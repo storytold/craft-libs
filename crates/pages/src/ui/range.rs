@@ -352,7 +352,9 @@ impl PageRangeOptions {
                 Row::new().wrap(true).show(ui, |ui, _| {
                     cx.labelled(ui, "range", words.pages_from.clone(), after.clone(), Radio::new(PageScope::Range));
                     let field = |label: &Label, shown: usize| {
-                        NumberField::new(label.clone(), Bind::given(Some(shown as f64))).codec(numbers.clone()).enabled(range.scope == PageScope::Range)
+                        NumberField::new(label.clone(), Bind::given(Some(shown as f64)))
+                            .codec(numbers.clone())
+                            .enabled(range.scope == PageScope::Range)
                     };
                     from = whole(&field(&words.pages_from, shown_from).show(ui).edit, shown_from);
                     Row::new().show(ui, |ui, _| {

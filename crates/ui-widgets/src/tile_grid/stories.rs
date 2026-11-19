@@ -70,12 +70,7 @@ fn tile_badges_and_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// tile's accessible name.
 #[story(Tile<'static>, covers = [], drive = Drive::Never)]
 fn tile_stack_sheets(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    Tile::new("Scans.pdf")
-        .thumb(ThumbAspect::new(3, 4), StoryPictures::of(ui.ctx()).thumb(5))
-        .stack(3)
-        .stack_look(StackLook::Sheets)
-        .show(ui)
-        .into()
+    Tile::new("Scans.pdf").thumb(ThumbAspect::new(3, 4), StoryPictures::of(ui.ctx()).thumb(5)).stack(3).stack_look(StackLook::Sheets).show(ui).into()
 }
 
 /// Hovers the tile, so its actions show, and clicks the first.

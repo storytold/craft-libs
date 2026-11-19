@@ -76,7 +76,8 @@ pub fn resolve(tree: &AccessTree, target: &NodeTarget, action: Declared) -> Resu
         }
         NodeTarget::Label(label) => {
             let wanted = label.to_lowercase();
-            let named: Vec<NodeKey> = reported.iter().copied().filter(|key| tree.name_of(*key).is_some_and(|name| name.to_lowercase() == wanted)).collect();
+            let named: Vec<NodeKey> =
+                reported.iter().copied().filter(|key| tree.name_of(*key).is_some_and(|name| name.to_lowercase() == wanted)).collect();
             let usable: Vec<NodeKey> = named.iter().copied().filter(|key| !tree.is_disabled_key(*key) && tree.declares_key(*key, action)).collect();
             match usable.as_slice() {
                 [one] => *one,
@@ -177,7 +178,8 @@ pub fn inspect(host: &WindowHost, viewport: ViewportId, params: &Value) -> Resul
         if Some(key) == root {
             continue;
         }
-        let text = [tree.name_of(key), tree.value_of(key), tree.description_of(key)].into_iter().flatten().collect::<Vec<_>>().join(" ").to_lowercase();
+        let text =
+            [tree.name_of(key), tree.value_of(key), tree.description_of(key)].into_iter().flatten().collect::<Vec<_>>().join(" ").to_lowercase();
         let keep = query.as_ref().is_none_or(|query| text.contains(query.as_str()))
             && role.as_ref().is_none_or(|role| role_name(&tree, key).is_some_and(|name| name.to_lowercase() == *role))
             && focused.is_none_or(|wanted| (key == focus) == wanted);

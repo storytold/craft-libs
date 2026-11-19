@@ -6,9 +6,7 @@ use std::sync::Arc;
 use crate::ui::length::{DocUnit, length_field, shown};
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, NumberCodec, Preview};
 use craft_ui::buttons::ToggleButton;
-use craft_ui::contract::{
-    Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec,
-};
+use craft_ui::contract::{Bind, Entry, FieldLayout, GlyphLabel, LabelKind, Props, Show as _, ShowContainer as _, SideLabel, Sizing, TooltipSpec};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;

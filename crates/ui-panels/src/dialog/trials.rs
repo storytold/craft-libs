@@ -3,8 +3,8 @@
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::{
-    BlockingOverlay, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog,
-    StandardPrompt, UnsavedChangesDialog,
+    BlockingOverlay, Dialog, DialogHost, DialogResult, PromptChoice, RecoveredDocument, RecoveryAnswer, RecoveryDialog, StackDialog, StandardPrompt,
+    UnsavedChangesDialog,
 };
 use crate::buttons::Button;
 use crate::choice::Checkbox;

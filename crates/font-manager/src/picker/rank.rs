@@ -381,9 +381,8 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
 /// shows only in the unfiltered list.
 pub(super) fn host_rows(groups: &[HostFontGroup<'_>], query: &str, folder: &Folder) -> Vec<(usize, usize)> {
     let matcher = Matcher::new(folder, query);
-    let listed = |row: &super::HostFontRow| {
-        matcher.is_empty() || (!matches!(row.kind, HostFontKind::Notice) && matcher.score(row.name.as_str()).is_some())
-    };
+    let listed =
+        |row: &super::HostFontRow| matcher.is_empty() || (!matches!(row.kind, HostFontKind::Notice) && matcher.score(row.name.as_str()).is_some());
     groups
         .iter()
         .enumerate()

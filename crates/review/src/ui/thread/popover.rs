@@ -358,12 +358,8 @@ impl CommentComposer<'_> {
                     });
                 }
                 let hint = hint.clone().unwrap_or_else(|| words.add_comment.clone());
-                let field = TextField::new(hint.clone(), Bind::bound(&mut *draft))
-                    .lines(COMPOSER_ROWS)
-                    .placeholder(hint)
-                    .submits()
-                    .default_stop()
-                    .show(ui);
+                let field =
+                    TextField::new(hint.clone(), Bind::bound(&mut *draft)).lines(COMPOSER_ROWS).placeholder(hint).submits().default_stop().show(ui);
                 cancel |= field.escaped;
                 let text = kind.posted(draft);
                 // The multi-line field submits on Cmd/Ctrl+Enter; plain Enter adds a line.

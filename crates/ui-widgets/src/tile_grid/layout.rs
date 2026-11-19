@@ -588,7 +588,13 @@ impl GridLayout {
     /// view. `None` past the end and beside a tile the layout does not show (in a closed group).
     pub fn gap(&self, at: usize, offset: ScrollPos, width: f32) -> Option<Rect> {
         let count = self.tiles();
-        let (tile, at_end) = if at < count { (at, false) } else if at == count { (count.checked_sub(1)?, true) } else { return None };
+        let (tile, at_end) = if at < count {
+            (at, false)
+        } else if at == count {
+            (count.checked_sub(1)?, true)
+        } else {
+            return None;
+        };
         let position = match &self.kind {
             Kind::Equal { .. } => tile,
             Kind::Arranged { starts, .. } => outline_position(starts, tile),

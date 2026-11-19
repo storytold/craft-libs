@@ -93,7 +93,6 @@ fn paint_pictogram(kind: AnnotationKind, slot: egui::Rect, line: &impl Fn(PaintS
     }
 }
 
-
 /// A commented markup's marker in the screen `slot`, with a leader to the top right of its last quad. It takes the
 /// annotation's colour at full strength, so a faint highlight still shows its marker.
 fn paint_marker(draw: &Draw<'_>, a: &Annotation, slot: egui::Rect, to_screen: &impl Fn(Point) -> Pos2) {
@@ -293,10 +292,9 @@ impl Component for AnnotationOverlay<'_> {
         if scale > 0.0 {
             let icon_side = f64::from(cx.style.icon_side) / scale;
             let room = cx.response.rect;
-            let page = space.document().map_or_else(
-                || Rect::from_points(view.to_doc(room.min), view.to_doc(room.max)),
-                |size| Rect::from_origin_size(Point::ZERO, size),
-            );
+            let page = space
+                .document()
+                .map_or_else(|| Rect::from_points(view.to_doc(room.min), view.to_doc(room.max)), |size| Rect::from_origin_size(Point::ZERO, size));
             for a in &shown {
                 if let Some(marker) = marker_rect(a, page, icon_side) {
                     paint_marker(&draw, a, screen_rect(marker, &to_screen), &to_screen);

@@ -103,7 +103,8 @@ fn a_wheel_after_the_window_regains_focus_lands_under_the_system_pointer() {
                 craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
             }
             let seen = ui.ctx().input(|input| {
-                let moves: Vec<Pos2> = input.events.iter().filter_map(|event| if let Event::PointerMoved(at) = event { Some(*at) } else { None }).collect();
+                let moves: Vec<Pos2> =
+                    input.events.iter().filter_map(|event| if let Event::PointerMoved(at) = event { Some(*at) } else { None }).collect();
                 (moves, input.events.iter().any(|event| matches!(event, Event::MouseWheel { .. })))
             });
             passes.borrow_mut().push(seen);

@@ -7,9 +7,7 @@ use alloc::vec::Vec;
 
 use crate::error::{FormatError, OverflowError, ParseError, Result, bail};
 use crate::reader::Reader;
-use crate::segment::{
-    Segment, SegmentType, parse_segment, parse_segment_data, parse_segment_header,
-};
+use crate::segment::{Segment, SegmentType, parse_segment, parse_segment_data, parse_segment_header};
 
 /// PdfCraft patch: the most segments a stream, with its globals, may have. They are all parsed and
 /// sorted before the first is decoded, at about 64 bytes for 11 of input, so behind nested Flate a
@@ -112,10 +110,7 @@ pub(crate) fn parse_file(data: &[u8]) -> Result<File<'_>> {
     // are in sorted order, but just to be safe.
     segments.sort_by_key(|seg| seg.header.segment_number);
 
-    Ok(File {
-        _header: header,
-        segments,
-    })
+    Ok(File { _header: header, segments })
 }
 
 fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
@@ -131,11 +126,7 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     // "Bit 0: File organization type. If this bit is 0, the file uses the
     // random-access organization. If this bit is 1, the file uses the
     // sequential organization." (D.4.2)
-    let organization = if flags & 0x01 != 0 {
-        FileOrganization::Sequential
-    } else {
-        FileOrganization::RandomAccess
-    };
+    let organization = if flags & 0x01 != 0 { FileOrganization::Sequential } else { FileOrganization::RandomAccess };
 
     // "Bit 1: Unknown number of pages. If this bit is 0, then the number of
     // pages contained in the file is known. If this bit is 1, then the number
@@ -159,11 +150,7 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     // D.4.3: Number of pages
     // "This is a 4-byte field, and is not present if the 'unknown number of
     // pages' bit was 1." (D.4.3)
-    let number_of_pages = if unknown_page_count {
-        None
-    } else {
-        Some(reader.read_u32().ok_or(ParseError::UnexpectedEof)?)
-    };
+    let number_of_pages = if unknown_page_count { None } else { Some(reader.read_u32().ok_or(ParseError::UnexpectedEof)?) };
 
     Ok(FileHeader {
         organization,
@@ -173,10 +160,7 @@ fn parse_file_header(reader: &mut Reader<'_>) -> Result<FileHeader> {
     })
 }
 
-fn parse_segments<'a>(
-    reader: &mut Reader<'a>,
-    organization: FileOrganization,
-) -> Result<Vec<Segment<'a>>> {
+fn parse_segments<'a>(reader: &mut Reader<'a>, organization: FileOrganization) -> Result<Vec<Segment<'a>>> {
     let mut segments = Vec::new();
 
     match organization {
@@ -196,11 +180,7 @@ fn parse_segments<'a>(
 /// "In this organization, the file structure looks like Figure D.1. A file header
 /// is followed by a sequence of segments. The two parts of each segment are stored
 /// together: first the segment header then the segment data." (D.1)
-pub(crate) fn parse_segments_sequential<'a>(
-    reader: &mut Reader<'a>,
-    segments: &mut Vec<Segment<'a>>,
-    count: &mut SegmentCount,
-) -> Result<()> {
+pub(crate) fn parse_segments_sequential<'a>(reader: &mut Reader<'a>, segments: &mut Vec<Segment<'a>>, count: &mut SegmentCount) -> Result<()> {
     loop {
         if reader.at_end() {
             break;
@@ -228,11 +208,7 @@ pub(crate) fn parse_segments_sequential<'a>(
 /// is followed by a sequence of segments headers; the last segment header is
 /// followed by the data for the first segment, then the data for the second
 /// segment, and so on." (D.2)
-pub(crate) fn parse_segments_random_access<'a>(
-    reader: &mut Reader<'a>,
-    segments: &mut Vec<Segment<'a>>,
-    count: &mut SegmentCount,
-) -> Result<()> {
+pub(crate) fn parse_segments_random_access<'a>(reader: &mut Reader<'a>, segments: &mut Vec<Segment<'a>>, count: &mut SegmentCount) -> Result<()> {
     let mut headers = Vec::new();
 
     loop {

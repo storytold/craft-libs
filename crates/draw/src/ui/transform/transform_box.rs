@@ -574,10 +574,7 @@ impl<'a> TransformBox<'a> {
             }
             (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
-                if dragging
-                    || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. })
-                    || away <= style.rotate_reach
-                {
+                if dragging || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. }) || away <= style.rotate_reach {
                     turn()
                 } else {
                     CursorIcon::Alias.into()

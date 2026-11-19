@@ -56,7 +56,8 @@ fn properties_dialog_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(PropertiesDialog<'static>, covers = [], drive = Drive::Never)]
 fn properties_dialog_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let note = Label::from("Set by the application that made the file.");
-    let file = PropertiesTab::new("File", vec![PropertyRow::value("Producer", "PdfCraft"), PropertyRow::value("PDF Version", "1.7")]).read_only(Some(note));
+    let file =
+        PropertiesTab::new("File", vec![PropertyRow::value("Producer", "PdfCraft"), PropertyRow::value("PDF Version", "1.7")]).read_only(Some(note));
     let mut all = vec![file];
     all.extend(tabs());
     shown(ui, data, all, |dialog| dialog)

@@ -347,9 +347,7 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
                 ),
             ),
         ),
-        async {
-            if shared.gnome { read_with(&connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None }
-        },
+        async { if shared.gnome { read_with(&connection, GNOME, TEXT_SCALE_KEY, text_scale_reply).await } else { None } },
     )
     .await;
     let mut answers = Answers { standard, gnome, motion, gnome_motion };

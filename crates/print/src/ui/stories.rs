@@ -132,7 +132,10 @@ fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let printers = printers();
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", office())), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
+    PrintDialog::new(Bind::bound(data.value("settings", office())), &printers, Bind::given(DialogFields::default()), &sheet)
+        .busy(true)
+        .show(ui)
+        .into()
 }
 
 /// Letter paper in points.

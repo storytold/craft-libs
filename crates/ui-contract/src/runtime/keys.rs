@@ -20,9 +20,9 @@ mod route;
 pub use claims::capture;
 #[doc(hidden)]
 pub use claims::claim;
-pub(crate) use claims::{fire_claimed, hold_escape};
 #[doc(hidden)]
 pub use claims::take_claimed;
+pub(crate) use claims::{fire_claimed, hold_escape};
 /// The types `Intents` reads and returns, for an app that reads the window's intents (`with_window_intents`).
 pub use craft_behavior::{AccessRequest, Intent, MoveMods, NavMove, PartRef};
 #[doc(hidden)]

@@ -237,4 +237,3 @@ impl Outcome for MenuIconRowOutput {
         crate::testing::StoryOutput { id: Some(self.response.id), clicked: self.picked.is_some(), ..crate::testing::StoryOutput::default() }
     }
 }
-

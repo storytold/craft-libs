@@ -197,7 +197,9 @@ fn a_page_gap_change_keeps_the_scroll_offset() {
                     return;
                 }
                 let mut now = kept.borrow().clone();
-                let shown = PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).show(ui, &mut |_: &mut egui::Ui, _: &PageBody<'_>| ());
+                let shown = PageView::new("Pages", &source, &mut now, PAPER)
+                    .options(LayoutOptions::ACROBAT)
+                    .show(ui, &mut |_: &mut egui::Ui, _: &PageBody<'_>| ());
                 *seen.borrow_mut() = shown.layout.rects.clone();
                 *kept.borrow_mut() = now;
             });

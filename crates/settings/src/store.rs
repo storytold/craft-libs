@@ -10,11 +10,11 @@ use web_time::Instant;
 use crate::Settings;
 use crate::document::{self, merge_changes, merge_into, set_schema_version};
 use crate::error::{LoadReport, ReadOnlyReason, SaveStatus, SettingsError, Source, TickResult};
-use crate::files::SettingsFiles;
 #[cfg(target_arch = "wasm32")]
 use crate::files::BrowserFiles;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::files::DiskFiles;
+use crate::files::SettingsFiles;
 use crate::migrate::{self, LegacyFile, Upgrade};
 use crate::paths::{self, Location};
 #[cfg(not(target_arch = "wasm32"))]

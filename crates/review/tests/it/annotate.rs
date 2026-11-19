@@ -3,7 +3,9 @@
 use craft_behavior::{CancelReason, CanvasView, EditEvent};
 use craft_keymap::Mods;
 use craft_review::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, SLIP_MOVE};
-use craft_review::ui::annotate::{DrawOptions, EmptyPress, EraseMode, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions, ToggleMods};
+use craft_review::ui::annotate::{
+    DrawOptions, EmptyPress, EraseMode, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions, ToggleMods,
+};
 use craft_review::ui::{AnnotateTool, AnnotateWords};
 use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect as ScreenRect, vec2};
@@ -341,11 +343,15 @@ fn a_pass_through_tool_ignores_empty_and_markup_presses() {
     let mut options = SelectOptions::default();
     options.empty_press = EmptyPress::PassThrough;
     options.markup_press = MarkupPress::ClickOnly;
-    for (passes, tool) in [(true, AnnotateTool::new(AnnotationTool::Select, 0).select_options(options)), (false, AnnotateTool::new(AnnotationTool::Select, 0))] {
+    for (passes, tool) in
+        [(true, AnnotateTool::new(AnnotationTool::Select, 0).select_options(options)), (false, AnnotateTool::new(AnnotationTool::Select, 0))]
+    {
         let mut tool = tool;
         tool.annotations = vec![highlight.clone()];
         let mut rig = rig(tool);
-        for (what, from, to) in [("empty page", Point::new(300.0, 300.0), Point::new(360.0, 340.0)), ("a highlight", Point::new(150.0, 110.0), Point::new(250.0, 160.0))] {
+        for (what, from, to) in
+            [("empty page", Point::new(300.0, 300.0), Point::new(360.0, 340.0)), ("a highlight", Point::new(150.0, 110.0), Point::new(250.0, 160.0))]
+        {
             rig.forget();
             drag(&mut rig, from, to);
             let (began, edits) = (!rig.gestures().is_empty(), values(&rig));
@@ -481,7 +487,11 @@ fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
         "each change is a selection step under its label: {edits:?}"
     );
     tool.click(AnnotationId(2), Mods::NONE, 1, &words);
-    assert_eq!(tool.selected, vec![AnnotationId(1), AnnotationId(2)], "a plain click on a selected comment keeps the others and makes it the primary");
+    assert_eq!(
+        tool.selected,
+        vec![AnnotationId(1), AnnotationId(2)],
+        "a plain click on a selected comment keeps the others and makes it the primary"
+    );
 
     let mut options = SelectOptions::default();
     options.toggle = ToggleMods::ShiftOrCommand;
@@ -491,7 +501,10 @@ fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
     tool.click(AnnotationId(2), Mods::NONE, 2, &words);
     tool.click(AnnotationId(1), Mods::NONE, 2, &words);
     let edits = labelled(&mut tool);
-    assert!(edits.iter().any(|(edit, label)| *edit == AnnotationEdit::Open(AnnotationId(2)) && label == words.edit_open.as_str()), "a double click opens a note: {edits:?}");
+    assert!(
+        edits.iter().any(|(edit, label)| *edit == AnnotationEdit::Open(AnnotationId(2)) && label == words.edit_open.as_str()),
+        "a double click opens a note: {edits:?}"
+    );
     assert!(!edits.iter().any(|(edit, _)| *edit == AnnotationEdit::Open(AnnotationId(1))), "but not a rectangle: {edits:?}");
     assert_eq!(tool.selected, vec![AnnotationId(1)], "the rectangle's double click selects it");
 

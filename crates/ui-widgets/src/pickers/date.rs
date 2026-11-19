@@ -25,9 +25,9 @@ use crate::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use crate::runtime::env::Label;
 use crate::text::{Adornment, FieldStyle, place, reserve};
 use craft_behavior::{CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Mixed, PartKey, Sense};
-use popover::{CalendarAt, calendar_body};
 use craft_i18n::{CalendarDate, DateFormat};
 use egui::{Rect, Vec2};
+use popover::{CalendarAt, calendar_body};
 use std::sync::Arc;
 
 /// The text part.

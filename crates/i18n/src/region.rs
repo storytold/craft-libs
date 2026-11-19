@@ -396,7 +396,8 @@ mod tests {
     #[cfg(all(unix, not(any(target_vendor = "apple", target_os = "android"))))]
     #[test]
     fn each_locale_category_decides_its_own_part_and_lc_all_all_of_them() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
+        let env =
+            |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).to_owned());
         fn none() -> Option<String> {
             None
         }
@@ -416,16 +417,10 @@ mod tests {
             ]),
             none,
         );
-        assert_eq!(
-            (split.numbers.as_str(), split.time.as_str(), split.measurement, split.paper),
-            ("pl-PL", "en-GB", Measurement::Us, Paper::Letter)
-        );
+        assert_eq!((split.numbers.as_str(), split.time.as_str(), split.measurement, split.paper), ("pl-PL", "en-GB", Measurement::Us, Paper::Letter));
         // `LANG` fills every category not set.
         let lang = from_posix(env(&[("LC_PAPER", "en_US"), ("LANG", "de_DE")]), none);
-        assert_eq!(
-            (lang.numbers.as_str(), lang.time.as_str(), lang.measurement, lang.paper),
-            ("de-DE", "de-DE", Measurement::Metric, Paper::Letter)
-        );
+        assert_eq!((lang.numbers.as_str(), lang.time.as_str(), lang.measurement, lang.paper), ("de-DE", "de-DE", Measurement::Metric, Paper::Letter));
         // `LANG` set to `C`, or unset, gives way to the platform's locale.
         let platform = from_posix(env(&[("LANG", "C.UTF-8")]), || Some("en-CA".to_owned()));
         assert_eq!((platform.numbers.as_str(), platform.measurement, platform.paper), ("en-CA", Measurement::Metric, Paper::Letter));

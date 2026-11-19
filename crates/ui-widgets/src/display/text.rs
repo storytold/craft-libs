@@ -86,8 +86,17 @@ pub struct Text {
 impl Text {
     /// `text`, which is also its accessible name, in body type and the normal shade.
     pub fn new(text: impl Into<Label>) -> Self {
-        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false, numeric: None }
-            .label(text)
+        Text {
+            common: Common::new(),
+            shade: Shade::Normal,
+            tone: None,
+            role: TypeRole::Body,
+            elide: Elide::Off,
+            spans: Vec::new(),
+            italic: false,
+            numeric: None,
+        }
+        .label(text)
     }
 
     /// Text of `spans`, each with its own font, size, colour and lines; the joined text is its accessible name. It wraps

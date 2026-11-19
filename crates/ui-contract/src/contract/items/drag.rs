@@ -18,8 +18,8 @@ use crate::contract::{Collection, Cx, DragPreview, DropMark, DropTarget, Pointer
 use crate::runtime::drag;
 use crate::runtime::env::Label;
 use craft_behavior::{
-    Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton, PressCancel,
-    PressPhase, ScrollPos,
+    Axis, CancelReason, ColumnKey, CopyKeys, DropOperation, EditEvent, Flow, GestureId, ItemLayout, Mixed, NavShape, Outline, PointerButton,
+    PressCancel, PressPhase, ScrollPos,
 };
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;

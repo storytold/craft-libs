@@ -140,7 +140,7 @@ fn rows_from_another_list_drop_into_a_gap_only_where_a_kind_takes_them() {
 /// while they are held: off macOS Ctrl for the platform's keys, Alt for Alt; the other key moves.
 #[trial]
 fn a_lists_copy_keys_pick_the_key_that_copies_its_rows() {
-    use craft_behavior::{Cursor, CursorIcon, CopyKeys};
+    use craft_behavior::{CopyKeys, Cursor, CursorIcon};
     use egui::Modifiers;
     let ctrl = Modifiers::CTRL | Modifiers::COMMAND;
     for (keys, copies, moves) in [(CopyKeys::Platform, ctrl, Modifiers::ALT), (CopyKeys::Alt, Modifiers::ALT, ctrl)] {

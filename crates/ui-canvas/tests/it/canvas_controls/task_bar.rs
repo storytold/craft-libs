@@ -147,7 +147,6 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
 
 #[trial]
 fn a_fixed_task_bar_ignores_a_drag_shows_no_more_menu_and_opens_above_with_no_room_below() {
-
     let scene = Rc::new(RefCell::new(Scene {
         anchor: low_frame(),
         place: TaskBarPlace::default(),

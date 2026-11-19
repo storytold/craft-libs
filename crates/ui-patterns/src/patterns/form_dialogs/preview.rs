@@ -781,4 +781,3 @@ impl PanePager {
         step
     }
 }
-

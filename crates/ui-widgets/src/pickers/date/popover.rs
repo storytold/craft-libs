@@ -158,11 +158,8 @@ impl<'a> CalendarPopover<'a> {
     ///
     /// `value` is a bound or kept binding: a given binding is never written, and the output carries no edit to report.
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>, value: Bind<'a, Option<PickedDate>>) -> Self {
-        let props = ContainerProps::new()
-            .surface(SurfaceKind::Popup)
-            .pad(POPUP_PAD)
-            .header(HeaderRegion::new())
-            .mount(Mount::Layer(Overlay::popover()));
+        let props =
+            ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).header(HeaderRegion::new()).mount(Mount::Layer(Overlay::popover()));
         CalendarPopover {
             common: Common::new(),
             props,

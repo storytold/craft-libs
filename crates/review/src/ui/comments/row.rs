@@ -749,11 +749,7 @@ impl Component for CommentRow<'_> {
             buttons: self.buttons,
             badges: &self.badges,
             reply_submit: self.submit_key,
-            focus: if self.focus_editor {
-                Some((Slot::EditField, &cx.ctx))
-            } else {
-                self.focus_reply.then_some((Slot::ReplyField, &cx.ctx))
-            },
+            focus: if self.focus_editor { Some((Slot::EditField, &cx.ctx)) } else { self.focus_reply.then_some((Slot::ReplyField, &cx.ctx)) },
             events: &mut events,
         };
         self.lay(st, rect.width(), &age, &mut sink);

@@ -98,9 +98,5 @@ fn unsupported_rows(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         FormatControl::CharSpacing,
     ]
     .map(|control| (control, planned.clone()));
-    FormatText::new("Format text", &character, &paragraph, &families)
-        .line_spacing(LineSpacing::Auto)
-        .unsupported(&unsupported)
-        .show(ui)
-        .into()
+    FormatText::new("Format text", &character, &paragraph, &families).line_spacing(LineSpacing::Auto).unsupported(&unsupported).show(ui).into()
 }

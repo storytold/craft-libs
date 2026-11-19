@@ -132,7 +132,8 @@ fn a_pop_up_nests_each_answer_in_the_panel_of_the_reply_it_answers() {
         depth,
         editable: depth == 0,
     };
-    let thread = [message(1, "Ana", "First", 0), message(2, "Bo", "Second", 1), message(3, "Cy", "Second, first answer", 2), message(4, "Di", "Third", 1)];
+    let thread =
+        [message(1, "Ana", "First", 0), message(2, "Bo", "Second", 1), message(3, "Cy", "Second, first answer", 2), message(4, "Di", "Third", 1)];
     let mut drafts = NoteDrafts::default();
     let mut fixture = Fixture::new(move |ui| {
         let _ = NotePopup::new(1, "Note", Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 600.0)), &thread, &mut drafts).show(ui);
@@ -181,7 +182,12 @@ fn a_composer_hint_names_its_field() {
 #[trial]
 fn a_composer_kept_open_on_outside_press_closes_only_on_post_or_cancel() {
     for close in [ComposerClose::OnPostOrCancel, ComposerClose::OnOutsidePress] {
-        let host = Rc::new(ComposerHost { open: Cell::new(true), posted: RefCell::new(None), cancelled: Cell::new(false), draft: RefCell::new(String::new()) });
+        let host = Rc::new(ComposerHost {
+            open: Cell::new(true),
+            posted: RefCell::new(None),
+            cancelled: Cell::new(false),
+            draft: RefCell::new(String::new()),
+        });
         let shown = Rc::clone(&host);
         let mut fixture = Fixture::new(move |ui| {
             if !shown.open.get() {

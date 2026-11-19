@@ -149,11 +149,8 @@ impl Component for Spots {
 
     fn parts(&mut self, _: Rect, cx: &mut craft_ui::contract::PartsCx<'_, Self>) {
         let tip = craft_ui::contract::TooltipSpec::new(craft_ui::runtime::env::Label::from("Alpha\nUnchecked comment")).at(self.at);
-        let _ = cx
-            .part(SPOT, self.spot)
-            .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG)
-            .tooltip(tip)
-            .pointer_only("a panel reaches the spots");
+        let _ =
+            cx.part(SPOT, self.spot).sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG).tooltip(tip).pointer_only("a panel reaches the spots");
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {

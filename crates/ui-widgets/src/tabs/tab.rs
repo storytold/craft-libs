@@ -10,8 +10,8 @@ use super::words::TabWords;
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
-    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, SetPosition,
-    Styled as _, WordSetCx as _,
+    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, SetPosition, Styled as _,
+    WordSetCx as _,
 };
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun};

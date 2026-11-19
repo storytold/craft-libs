@@ -44,7 +44,6 @@ const CALLOUT_MIN_LEADER: f64 = 8.0;
 /// A polygon click this close to the last point, in screen points, adds none: a second press of the same spot.
 const REPEAT_POINT: f32 = 2.0;
 
-
 /// The app's caret snap: the snapped tip and the caret's side for a click, or `None` away from text.
 type CaretSnap = Box<dyn Fn(Point) -> Option<(Point, f64)> + Send>;
 
@@ -70,11 +69,22 @@ enum Drag {
 
 #[derive(Clone, Debug)]
 enum Change {
-    Move { ids: Vec<AnnotationId> },
+    Move {
+        ids: Vec<AnnotationId>,
+    },
     /// `from` is the annotation as the press found it: its box and its own aspect.
-    Resize { target: AnnotationId, handle: (i8, i8), from: Annotation },
+    Resize {
+        target: AnnotationId,
+        handle: (i8, i8),
+        from: Annotation,
+    },
     /// `callout` is the box of a callout, whose points move by the callout's rule.
-    Reshape { target: AnnotationId, index: usize, from: Vec<Point>, callout: Option<Rect> },
+    Reshape {
+        target: AnnotationId,
+        index: usize,
+        from: Vec<Point>,
+        callout: Option<Rect>,
+    },
 }
 
 /// What a call knows when it reads a pointer: the pointer in page units, the page-unit sizes of the screen
@@ -713,7 +723,11 @@ impl AnnotateTool {
     /// The kind the pending strokes make: that of the tool they were drawn with. [`CanvasTool::each_pass`] moves
     /// `last_tool` on only after it has flushed them.
     fn ink_kind(&self) -> AnnotationKind {
-        if self.last_tool == AnnotationTool::Draw(AnnotationKind::FreehandHighlight) { AnnotationKind::FreehandHighlight } else { AnnotationKind::Ink }
+        if self.last_tool == AnnotationTool::Draw(AnnotationKind::FreehandHighlight) {
+            AnnotationKind::FreehandHighlight
+        } else {
+            AnnotationKind::Ink
+        }
     }
 
     fn fresh(&self, kind: AnnotationKind, rect: Rect) -> Annotation {
@@ -826,7 +840,8 @@ impl AnnotateTool {
                 ToolAction::Claimed
             }
             K::PolyLine | K::Polygon | K::Cloud => {
-                let closes = kind != K::PolyLine && self.poly.len() >= 3 && self.poly.first().is_some_and(|&first| (first - at).hypot() <= reading.tolerance);
+                let closes =
+                    kind != K::PolyLine && self.poly.len() >= 3 && self.poly.first().is_some_and(|&first| (first - at).hypot() <= reading.tolerance);
                 if pointer.clicks >= 2 || closes {
                     // The double click's first press already added its point; a click on the first point closes the
                     // shape without adding one.
@@ -1248,7 +1263,9 @@ impl CanvasTool for AnnotateTool {
                 ToolPath::Command("the arrow keys nudge and Delete removes the selection; the New Annotation... command places shapes")
             }
             AnnotationTool::Eraser => ToolPath::Freehand("none; Delete removes the selected annotation"),
-            AnnotationTool::Draw(AnnotationKind::Ink | AnnotationKind::FreehandHighlight) => ToolPath::Freehand("none; a pen stroke has no numeric form"),
+            AnnotationTool::Draw(AnnotationKind::Ink | AnnotationKind::FreehandHighlight) => {
+                ToolPath::Freehand("none; a pen stroke has no numeric form")
+            }
             AnnotationTool::Draw(kind) if kind.is_markup() => ToolPath::Freehand("none; a markup stroke follows the pointer over the text"),
             AnnotationTool::Draw(_) => ToolPath::Command("the New Annotation... command"),
         }

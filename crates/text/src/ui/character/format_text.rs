@@ -263,12 +263,7 @@ impl<'a> FormatText<'a> {
         let position = character.position;
         let toggles = [
             gate(
-                Toggle::new(
-                    &words.bold,
-                    "text_bold",
-                    character.faux_bold,
-                    Box::new(|on| FormatTextChange::Character(CharacterChange::FauxBold(on))),
-                ),
+                Toggle::new(&words.bold, "text_bold", character.faux_bold, Box::new(|on| FormatTextChange::Character(CharacterChange::FauxBold(on)))),
                 FormatControl::Bold,
             ),
             gate(
@@ -295,7 +290,11 @@ impl<'a> FormatText<'a> {
                     "text_superscript",
                     position.map(|position| position == BaselinePosition::Superscript),
                     Box::new(|on| {
-                        FormatTextChange::Character(CharacterChange::Position(if on { BaselinePosition::Superscript } else { BaselinePosition::Normal }))
+                        FormatTextChange::Character(CharacterChange::Position(if on {
+                            BaselinePosition::Superscript
+                        } else {
+                            BaselinePosition::Normal
+                        }))
                     }),
                 ),
                 FormatControl::Superscript,
@@ -306,7 +305,11 @@ impl<'a> FormatText<'a> {
                     "text_subscript",
                     position.map(|position| position == BaselinePosition::Subscript),
                     Box::new(|on| {
-                        FormatTextChange::Character(CharacterChange::Position(if on { BaselinePosition::Subscript } else { BaselinePosition::Normal }))
+                        FormatTextChange::Character(CharacterChange::Position(if on {
+                            BaselinePosition::Subscript
+                        } else {
+                            BaselinePosition::Normal
+                        }))
                     }),
                 ),
                 FormatControl::Subscript,
@@ -380,10 +383,8 @@ impl<'a> FormatText<'a> {
 
             // Line and paragraph spacing.
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
-                let side = SideLabel::new()
-                    .kind(LabelKind::Glyph(GlyphLabel::text("A↕")))
-                    .layout(FieldLayout::Beside)
-                    .tooltip(words.line_spacing.clone());
+                let side =
+                    SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("A↕"))).layout(FieldLayout::Beside).tooltip(words.line_spacing.clone());
                 let picked = Field::new(words.line_spacing.clone()).side(side).show(ui, |ui, _| {
                     let select = Select::new(words.line_spacing.clone(), Bind::given(mixed(line_spacing)), &line_entries)
                         .placeholder("—")
@@ -426,7 +427,6 @@ impl<'a> FormatText<'a> {
                 };
                 let (event, _) = lengths.plain(ui, scale);
                 edits.extend(character_edits(number_change(event, CharacterChange::HorizontalScale).into_iter().collect()));
-
 
                 let spacing = LengthRow {
                     label: words.char_spacing.clone(),

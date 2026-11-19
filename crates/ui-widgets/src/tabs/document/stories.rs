@@ -40,11 +40,8 @@ fn document_tabs_with_tooltips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 /// A tab that does not move: the last tab stays last, and no other tab is dragged or key-moved past it.
 #[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
 fn document_tabs_with_fixed_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let tabs = [
-        DocumentTab::new(0, "Photo.psd"),
-        DocumentTab::new(1, "Poster.psd"),
-        DocumentTab::new(2, "Combine files").closable(false).movable(false),
-    ];
+    let tabs =
+        [DocumentTab::new(0, "Photo.psd"), DocumentTab::new(1, "Poster.psd"), DocumentTab::new(2, "Combine files").closable(false).movable(false)];
     let shown = *data.value("shown", 0_usize);
     let out = DocumentTabs::new("Documents", &tabs).selected(shown).reorderable(true).show(ui);
     out.response.into()

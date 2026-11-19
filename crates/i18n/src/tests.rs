@@ -140,14 +140,18 @@ fn lookup_parses_only_what_it_reaches() {
 #[test]
 fn words_in_any_order_match_after_a_whole_run() {
     // "Delete page" in Arabic and Hebrew, queried with its two words the other way round.
-    for (locale, text, reversed, missing) in [("ar", "حذف صفحة", "صفحة حذف", "صفحة نسخ"), ("he", "מחק עמוד", "עמוד מחק", "עמוד העתק")] {
+    for (locale, text, reversed, missing) in [("ar", "حذف صفحة", "صفحة حذف", "صفحة نسخ"), ("he", "מחק עמוד", "עמוד מחק", "עמוד העתק")]
+    {
         let folder = Folder::new(locale);
         let matcher = Matcher::new(&folder, reversed);
         let found = matcher.score(text).map(|found| (found.rank, found.ranges));
         assert_eq!(found, Some((Rank::AllWords, vec![0..6, 7..15])), "{locale}: each word's first occurrence, in text order");
         let whole = matcher.score(reversed).map(|found| found.rank);
         assert_eq!(whole, Some(Rank::Whole), "{locale}");
-        assert!(Matcher::new(&folder, text).score(&format!("x {text}")).is_some_and(|run| run.rank < Rank::AllWords), "{locale}: a whole run ranks first");
+        assert!(
+            Matcher::new(&folder, text).score(&format!("x {text}")).is_some_and(|run| run.rank < Rank::AllWords),
+            "{locale}: a whole run ranks first"
+        );
         assert_eq!(Matcher::new(&folder, missing).score(text), None, "{locale}: every word must occur");
         assert_eq!(Matcher::new(&Folder::new("en"), reversed).score(text), None, "{locale}: a left-to-right folder keeps the whole run");
     }

@@ -263,10 +263,7 @@ pub fn post_to(ctx: &Context, viewport: ViewportId, window: &WindowKey, toast: T
             // The new card is last and never the one dropped; a kept card has no timer, so it counts as sticky. A
             // progress card stands for a running job and is never dropped.
             let earlier = &live[..live.len() - 1];
-            let at = earlier
-                .iter()
-                .position(Live::leaves_by_itself)
-                .or_else(|| earlier.iter().position(|live| live.card.toast.progress.is_none()));
+            let at = earlier.iter().position(Live::leaves_by_itself).or_else(|| earlier.iter().position(|live| live.card.toast.progress.is_none()));
             let Some(at) = at else { break };
             dropped.push(live.remove(at).card.id);
         }

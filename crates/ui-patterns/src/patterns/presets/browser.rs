@@ -701,12 +701,11 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
                         grid.caption(captions).thumb_size(ThumbSize::Large).zoom(GridZoom::Fixed(zoom))
                     }
                     // The zoom is a factor on the picture's width: a wide chip is the small thumbnail high.
-                    PresetTiles::Chips => {
-                        grid.caption(CaptionPlace::None)
-                            .thumb_size(ThumbSize::Small)
-                            .zoom(GridZoom::Fixed(f64::from(aspect.max(1.0))))
-                            .row_height(RowHeight::Text)
-                    }
+                    PresetTiles::Chips => grid
+                        .caption(CaptionPlace::None)
+                        .thumb_size(ThumbSize::Small)
+                        .zoom(GridZoom::Fixed(f64::from(aspect.max(1.0))))
+                        .row_height(RowHeight::Text),
                 };
                 let mut grid = grid
                     .groups(&plan.groups)

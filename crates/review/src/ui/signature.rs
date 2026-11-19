@@ -28,8 +28,7 @@ use craft_ui::text::TextField;
 use egui::{ColorImage, Pos2, Rect, Vec2};
 
 use crate::signature::{
-    MAX_SIGNATURE_CHARS, PAPER_CUTOFF, PAPER_FEATHER, PickError, SavedSignature, SignatureDraft, SignatureImage, SignatureTab,
-    decode_fitted,
+    MAX_SIGNATURE_CHARS, PAPER_CUTOFF, PAPER_FEATHER, PickError, SavedSignature, SignatureDraft, SignatureImage, SignatureTab, decode_fitted,
 };
 
 #[cfg(feature = "screen-testing")]

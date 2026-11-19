@@ -33,7 +33,12 @@ fn ui_pick_answers_the_next_picker_and_refuses_bad_params() {
         .collect();
     assert_eq!(
         picked,
-        [Picked::Paths(vec![path("/w/a.pdf"), path("/w/b.pdf")]), Picked::Paths(vec![path("/w/out")]), Picked::Paths(vec![path("/w/c.pdf")]), Picked::Cancelled]
+        [
+            Picked::Paths(vec![path("/w/a.pdf"), path("/w/b.pdf")]),
+            Picked::Paths(vec![path("/w/out")]),
+            Picked::Paths(vec![path("/w/c.pdf")]),
+            Picked::Cancelled
+        ]
     );
 
     let held = ScriptedFiles::held();

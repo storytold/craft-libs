@@ -84,7 +84,14 @@ pub(super) fn filter_menu(ui: &mut Ui, words: &CommentsWords, kinds: &AnnotateWo
 
 /// The filter menu hanging from `opener`: a submenu per property that lists its values as checks (checked = shown),
 /// and Show all while anything is hidden.
-fn filter_popup(ui: &mut Ui, opener: &Response, words: &CommentsWords, kinds: &AnnotateWords, threads: &[CommentThread], state: &mut CommentsPanelState) {
+fn filter_popup(
+    ui: &mut Ui,
+    opener: &Response,
+    words: &CommentsWords,
+    kinds: &AnnotateWords,
+    threads: &[CommentThread],
+    state: &mut CommentsPanelState,
+) {
     let active = state.filter.is_active();
     let mut kind_rows: Vec<Option<AnnotationKind>> = threads.iter().map(|thread| thread.kind).collect();
     kind_rows.sort_by_cached_key(|kind| kind_name(words, kinds, *kind));
