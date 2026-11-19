@@ -323,8 +323,11 @@ fn emit(access: &mut Access, built: &AccessBuilder, at: AccessNode) {
         }
         Kind::Block(role) => match role {
             BlockRole::Paragraph => access.node(part, Role::PARAGRAPH),
-            BlockRole::Heading(level) => access.node(part, Role::HEADING).level(usize::from((*level).clamp(1, 9))),
-            BlockRole::ListItem { level, .. } => access.node(part, Role::LIST_ITEM).level(usize::from(*level) + 1),
+            // AccessKit's level is zero-based (`Node::set_level`; its Windows adapter adds one for UI Automation), so
+            // outline level 1 to 9 goes in as 0 to 8 and list level 0 to 8 as it is: a Heading 1 reaches a screen
+            // reader as level 1, not 2 (WordCraft #3173).
+            BlockRole::Heading(level) => access.node(part, Role::HEADING).level(usize::from((*level).clamp(1, 9) - 1)),
+            BlockRole::ListItem { level, .. } => access.node(part, Role::LIST_ITEM).level(usize::from((*level).min(8))),
             BlockRole::Table => {
                 let sub = access.node(part, Role::TABLE);
                 sub.grid = GridPlace::grid(node.parts, node.columns);

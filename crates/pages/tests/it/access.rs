@@ -55,3 +55,38 @@ fn a_placed_picture_is_an_image_at_its_screen_rect_inside_its_paragraph() {
     let paragraph = fixture.by_role(Role::PARAGRAPH);
     assert!(paragraph.iter().any(|paragraph| paragraph.rect.contains_rect(image.rect)), "the paragraph holds the picture: {paragraph:?}");
 }
+
+/// A Heading 1, a Heading 2 and a first-level list item.
+struct Outline;
+
+impl AccessDescriber for Outline {
+    fn describe(&self, placed: &[PlacedPage], out: &mut AccessBuilder) {
+        if !placed.iter().any(|page| page.page == 0) {
+            return;
+        }
+        out.block(None, BlockRole::Heading(1));
+        out.block(None, BlockRole::Heading(2));
+        out.block(None, BlockRole::list_item(0, "•"));
+    }
+
+    fn selection(&self) -> Option<(AccessPosition, AccessPosition)> {
+        None
+    }
+}
+
+/// AccessKit's levels are zero-based (its `Node::set_level` doc; the Windows adapter adds one for UI Automation's
+/// level), so a Heading 1 is level 0, a Heading 2 level 1 and a first-level list item level 0: a screen reader says
+/// "heading level 1" for a Heading 1, not level 2 (WordCraft #3173).
+#[trial]
+fn headings_and_list_items_take_accesskit_zero_based_levels() {
+    let pages = DemoPages::new(1);
+    let mut state = PageViewState::default();
+    let mut fixture = Fixture::new(move |ui| {
+        PageView::new("Pages", &pages, &mut state, PAPER).options(LayoutOptions::ACROBAT).access(&Outline).show(ui, |_, _| ());
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let levels = |role| fixture.by_role(role).iter().map(|target| fixture.tree().level_of(target.node)).collect::<Vec<_>>();
+    assert_eq!(levels(Role::HEADING), [Some(0), Some(1)], "Heading 1 and Heading 2");
+    assert_eq!(levels(Role::LIST_ITEM), [Some(0)], "a first-level list item");
+}
