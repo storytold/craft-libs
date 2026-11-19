@@ -18,8 +18,9 @@
 //! # }
 //! ```
 //!
-//! The index and its lookups, [`verify_font`] and [`IndexPin`] build on every target. The store
-//! and the HTTP client are native only.
+//! The index and its lookups, [`verify_font`] and [`IndexPin`] build on every target. The store,
+//! the HTTP client and Language packs (the store's second item kind, `language-pack`: see
+//! [`FontStore::install_language_pack`]) are native only.
 
 mod index;
 mod pin;
@@ -29,6 +30,8 @@ mod verify;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
+#[cfg(not(target_arch = "wasm32"))]
+mod language_packs;
 #[cfg(not(target_arch = "wasm32"))]
 mod store;
 
@@ -42,6 +45,11 @@ pub use verify::{VerifyError, is_font, sha256_hex, verify_font};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{Cancel, Client, FetchError, Timeouts, USER_AGENT};
+#[cfg(not(target_arch = "wasm32"))]
+pub use language_packs::{
+    InstalledLanguagePack, LANGUAGE_PACK_INDEX_ENV, LANGUAGE_PACKS, MAX_PACK_ARCHIVE_BYTES, MAX_PACK_ENTRIES, MAX_PACK_FILE_BYTES,
+    MAX_PACK_INDEX_BYTES, MAX_PACK_UNPACKED_BYTES, PackEntry, PackIndex, PackIndexPin, language_pack_index_overridden,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{Caller, Error, FontStore, InstalledFamily, InstalledFile, Network, Problem, Progress, UserSource};
 

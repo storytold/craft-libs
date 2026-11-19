@@ -157,13 +157,14 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     // starts from a blank backdrop by definition, and a knockout group or one entered at partial
     // opacity, under a soft mask or with a blend mode keeps its layer, where the group's
     // elements still composite with a blank backdrop (an approximation of §11.4.7 for them).
-    let neutral = !x_object.is_isolated && !x_object.is_knockout && {
+    let entered_plainly = {
         let state = &context.get().graphics_state;
         state.non_stroke_alpha >= 1.0
             && state.stroke_alpha >= 1.0
             && state.soft_mask.is_none()
             && state.blend_mode == BlendMode::Normal
     };
+    let neutral = !x_object.is_isolated && !x_object.is_knockout && entered_plainly;
     // Knockout patch (pdfcraft #2974): a group drawn as an element of a knockout group replaces
     // what that group drew under its shape, the union of its own elements' shapes (pdfcraft #2971).
     // The shape is cleared by drawing the group's content once in the device's erase mode; the
@@ -194,6 +195,26 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         device.end_knockout_erase();
         context.restore_state(device);
         context.path_mut().truncate(0);
+    }
+    // Knockout patch (pdfcraft #4898): a non-isolated knockout group entered the same way
+    // composites each element with the backdrop already on the page, in the element's own blend
+    // mode (#870). A layer of its own starts transparent, where a blend mode has nothing to blend
+    // with, so the group is drawn in passes, one per blend mode, each composited onto the page in
+    // its mode (`Device::begin_knockout_pass`).
+    if x_object.is_transparency_group
+        && x_object.is_knockout
+        && !x_object.is_isolated
+        && entered_plainly
+        && !knockout_element
+    {
+        draw_knockout_passes(x_object, resources, context, device);
+        context.pop_root_transform();
+        context.restore_state(device);
+        if has_oc {
+            context.ocg_state.end_marked_content();
+        }
+        context.end_nested_interpretation();
+        return;
     }
     let own_layer = x_object.is_transparency_group && (!neutral || knockout_element);
 
@@ -252,6 +273,63 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     }
 
     context.end_nested_interpretation();
+}
+
+/// Knockout patch (pdfcraft #4898): draws a non-isolated knockout group entered at full opacity,
+/// without a soft mask and with Normal blending, once per blend mode its elements use. The
+/// Normal pass finds the other modes; there are at most as many passes as blend modes.
+fn draw_knockout_passes<'a>(
+    x_object: &FormXObject<'a>,
+    resources: &Resources<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    let clip = ClipPath {
+        path: context.get().ctm
+            * Rect::new(
+                x_object.bbox[0] as f64,
+                x_object.bbox[1] as f64,
+                x_object.bbox[2] as f64,
+                x_object.bbox[3] as f64,
+            )
+            .to_path(0.1),
+        fill: FillRule::NonZero,
+    };
+    // Each pass starts from the same marked-content state, also after a stream that leaves a
+    // `BDC` open.
+    let visibility = context.ocg_state.visibility();
+    let mut modes = vec![BlendMode::Normal];
+    let mut pass = 0;
+    while let Some(&mode) = modes.get(pass) {
+        context.ocg_state.set_visibility(visibility.clone());
+        context.save_state();
+        device.push_transparency_group(1.0, None, mode);
+        device.set_knockout();
+        device.begin_knockout_pass(mode);
+        device.set_soft_mask(None);
+        device.set_blend_mode(BlendMode::Normal);
+        device.push_clip_path(&clip);
+        interpret(
+            TypedIter::new(x_object.decoded.as_ref()),
+            &Resources::from_scope(x_object.resources.clone(), resources.clone()),
+            context,
+            device,
+        );
+        device.pop_clip_path();
+        let others = device.end_knockout_pass();
+        device.pop_transparency_group();
+        context.restore_state(device);
+        context.path_mut().truncate(0);
+        if pass == 0 {
+            for other in others {
+                if !modes.contains(&other) {
+                    modes.push(other);
+                }
+            }
+        }
+        pass += 1;
+    }
+    context.ocg_state.set_visibility(visibility);
 }
 
 pub(crate) fn draw_image_xobject<'a, 'b>(
@@ -673,7 +751,8 @@ fn decode_context<'a>(
 ) -> Option<DecodeContext<'a>> {
     // PdfCraft patch: images and masks over `MAX_IMAGE_PIXELS` are not decoded at all (the
     // renderer skips them anyway): a fuzzed `/W 4294967295` stencil mask allocated gigabytes here.
-    if !image_size_ok(obj.width, obj.height) {
+    // The document's decode limits may set another pixel count.
+    if !image_size_within(obj.width, obj.height, obj.stream.decode_limits().max_image_pixels()) {
         (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
         return None;
     }
@@ -711,6 +790,11 @@ fn decode_context<'a>(
             (d.width, d.height)
         })
         .unwrap_or((obj.width, obj.height));
+    // Craft patch: the size an image codec decoded to is held to the same limit.
+    if !image_size_within(width, height, obj.stream.decode_limits().max_image_pixels()) {
+        (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure);
+        return None;
+    }
 
     let color_space = color_space
         .or_else(|| {
@@ -810,6 +894,7 @@ fn decode_raster(
             .color_space
             .inverted_default_decode_arr(ctx.bits_per_component as f32);
 
+    let mut rgb_moved = false;
     let image_data = if ctx.bits_per_component == 8
         && ctx.color_space.supports_u8()
         && obj.transfer_function.is_none()
@@ -836,6 +921,17 @@ fn decode_raster(
 
         if ctx.color_space.is_device_gray() {
             Some(ImageData::Luma(LumaData {
+                data: core::mem::take(&mut ctx.decoded.data).into_owned(),
+                width: ctx.width,
+                height,
+                interpolate: obj.interpolate,
+                scale_factors: ctx.scale_factors,
+            }))
+        } else if ctx.color_space.is_device_rgb() {
+            // Craft patch: `DeviceRGB` samples are taken as they are, without a second buffer
+            // of the image's size (`fix_image_length` made them whole rows).
+            rgb_moved = true;
+            Some(ImageData::Rgb(RgbData {
                 data: core::mem::take(&mut ctx.decoded.data).into_owned(),
                 width: ctx.width,
                 height,
@@ -944,6 +1040,7 @@ fn decode_raster(
             obj,
             &mut ctx.decoded,
             Some(&image),
+            rgb_moved,
             &ctx.color_space,
             ctx.bits_per_component,
             ctx.width,
@@ -994,6 +1091,7 @@ pub(crate) fn decode_inks(
         obj,
         &mut ctx.decoded,
         None,
+        false,
         &cs,
         bpc,
         ctx.width,
@@ -1115,10 +1213,14 @@ fn decode_mask_bytes(
     Some(data)
 }
 
+/// Craft patch: `rgb_moved` says that `image_data` holds the image's own 8-bit `DeviceRGB`
+/// samples, moved out of `decoded` (see `decode_raster`).
+#[allow(clippy::too_many_arguments)]
 fn resolve_alpha(
     obj: &ImageXObject<'_>,
     decoded: &mut FilterResult<'_>,
     image_data: Option<&ImageData>,
+    rgb_moved: bool,
     color_space: &ColorSpace,
     bits_per_component: u8,
     width: u32,
@@ -1158,6 +1260,7 @@ fn resolve_alpha(
         // TODO: Make this less ugly.
         let raw_data = match image_data {
             Some(ImageData::Luma(d)) => &d.data,
+            Some(ImageData::Rgb(d)) if rgb_moved => &d.data,
             _ => decoded.data.as_ref(),
         };
 
@@ -1332,9 +1435,11 @@ fn get_components(
             buf
         }
         8 => data.iter().map(|v| *v as u16).collect(),
+        // A trailing odd byte is the high byte of a last sample whose low byte is missing, so pad
+        // it with zero like the other branches pad short data.
         16 => data
             .chunks(2)
-            .map(|v| u16::from_be_bytes([v[0], v[1]]))
+            .map(|v| u16::from_be_bytes([v[0], v.get(1).copied().unwrap_or(0)]))
             .collect(),
         _ => {
             warn!("unsupported bits per component: {bits_per_component}");
@@ -1484,5 +1589,24 @@ fn convert_each(cs: &ColorSpace, input: &[f32], n: usize, output: &mut [u8]) {
 /// PdfCraft patch: whether an image or mask of `width` × `height` may be decoded (at most
 /// 2^28 pixels, the renderer's `MAX_IMAGE_PIXELS`).
 pub fn image_size_ok(width: u32, height: u32) -> bool {
-    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= 1 << 28
+    image_size_within(width, height, 1 << 28)
+}
+
+/// Whether an image or mask of `width` × `height` has at most `max_pixels` pixels and is not
+/// empty.
+fn image_size_within(width: u32, height: u32, max_pixels: u64) -> bool {
+    width > 0 && height > 0 && u64::from(width) * u64::from(height) <= max_pixels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sixteen_bit_components_with_odd_length_data_pad_the_missing_byte() {
+        let color_space = ColorSpace::device_gray();
+
+        assert_eq!(get_components(&[0x41], 1, 1, &color_space, 16), Some(vec![0x4100]));
+        assert_eq!(get_components(&[0x01, 0x02, 0x03], 2, 1, &color_space, 16), Some(vec![0x0102, 0x0300]));
+    }
 }

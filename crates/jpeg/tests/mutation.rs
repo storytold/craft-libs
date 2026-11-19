@@ -1,7 +1,7 @@
 //! Deterministic mutation run over the test images and fuzz seeds: decoding corrupted input never panics and
 //! stays within the caller's limits.
 
-use craft_jpeg::{Limits, Samples, decode, frame};
+use craft_jpeg::{Bands, Limits, Samples, decode, frame};
 
 /// Inputs and mutation counts. The 227×149 test images take tens of milliseconds each to decode
 /// in a debug build; the small fuzz seeds (SOF9 with restarts, 12-bit SOF9, SOF10, 12-bit SOF1)
@@ -128,4 +128,76 @@ fn mutated_streams_never_panic_and_stay_within_limits() {
     eprintln!("{ok} decoded, {errors} rejected");
     // A mutation run that only produces errors would no longer reach the entropy decoders.
     assert!(ok > 50 && errors > 50, "{ok} decoded, {errors} rejected");
+}
+
+/// Every band read in order, and (when the restart markers make more than band 0 a seek point)
+/// read again from each seek point; `None` when `Bands::new` rejects the stream. Once it accepts
+/// one, damage is reported, never an error: a failed read or seek fails the test.
+fn read_bands(bytes: &[u8], limits: &Limits) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+    let mut bands = Bands::new(bytes, limits, None).ok()?;
+    assert!(bands.reader_bytes() <= limits.max_alloc);
+    assert!(u64::from(bands.width()) * u64::from(bands.height()) <= limits.max_pixels);
+    let mut reader = bands.reader();
+    let mut in_order = Vec::new();
+    while let Some(band) = reader.next_band().expect("a read after Bands::new accepted the stream") {
+        in_order.extend_from_slice(band.samples);
+    }
+    assert_eq!(in_order.len(), bands.width() as usize * bands.height() as usize * usize::from(bands.components()));
+    bands.find_seek_points();
+    let points: Vec<usize> = bands.seek_points().collect();
+    if points.len() < 2 {
+        return Some((in_order, None));
+    }
+    let mut sought = vec![0u8; in_order.len()];
+    let band_bytes = bands.band_bytes();
+    let mut reader = bands.reader();
+    for (k, &p) in points.iter().enumerate().rev() {
+        reader.seek(p).expect("a seek to an advertised seek point");
+        for _ in p..points.get(k + 1).copied().unwrap_or(bands.bands()) {
+            let band = reader.next_band().expect("a read after a seek").expect("a band after a seek");
+            let at = band.index * band_bytes;
+            sought[at..at + band.samples.len()].copy_from_slice(band.samples);
+        }
+    }
+    Some((in_order, Some(sought)))
+}
+
+/// A 4:2:0 baseline stream with a restart interval at every line of MCUs, from `jpeg-encoder`.
+fn restart_stream() -> Vec<u8> {
+    let (w, h) = (48u16, 40u16);
+    let px: Vec<u8> = (0..usize::from(w) * usize::from(h)).flat_map(|i| [(i * 7) as u8, (i / 3) as u8, (i % 97) as u8]).collect();
+    let mut out = Vec::new();
+    let mut enc = jpeg_encoder::Encoder::new(&mut out, 80);
+    enc.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+    enc.set_restart_interval(3);
+    enc.encode(&px, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
+    out
+}
+
+/// The band decoder on the same kind of mutations: it never panics, stays within the limits,
+/// and wherever seek points survive, reading from them gives the samples reading in order does.
+#[test]
+fn mutated_streams_never_panic_in_bands() {
+    let mut rng = Rng(0xD1B5_4A32_D192_ED03);
+    let limits = test_limits();
+    let fixture = |name: &str| std::fs::read(format!("{}/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let inputs = [(fixture("tests/data/testorig.jpg"), 40), (fixture("tests/data/testimgari-huffman.jpg"), 40), (restart_stream(), 400)];
+    let (mut ok, mut errors, mut sought) = (0, 0, 0);
+    for (original, cases) in &inputs {
+        assert!(read_bands(original, &limits).is_some());
+        for case in 0..*cases {
+            let bytes = mutate(&mut rng, original);
+            match read_bands(&bytes, &limits) {
+                Some((in_order, Some(by_seeking))) => {
+                    assert!(in_order == by_seeking, "case {case}: seeking changes the samples");
+                    sought += 1;
+                    ok += 1;
+                }
+                Some(_) => ok += 1,
+                None => errors += 1,
+            }
+        }
+    }
+    eprintln!("{ok} decoded ({sought} also by seeking), {errors} rejected");
+    assert!(ok > 50 && errors > 20 && sought > 50, "{ok} decoded ({sought} by seeking), {errors} rejected");
 }

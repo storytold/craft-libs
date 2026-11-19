@@ -1,0 +1,30 @@
+[package]
+name = "craft-html"
+description = "The bottom layer of reading and writing HTML: a tolerant tokenizer, character references, escaping and the charset a page declares. No tree, no CSS, no rendering."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# HTML documents: read into and written from the craft-flow model and a craft-wordmodel Document.
+flow = ["dep:craft-codepage", "dep:craft-flow", "dep:craft-math", "dep:craft-mime", "dep:craft-wordmodel", "dep:encoding_rs"]
+
+[dependencies]
+craft-codepage = { workspace = true, optional = true }
+craft-flow = { workspace = true, optional = true }
+craft-math = { workspace = true, optional = true }
+craft-mime = { workspace = true, features = ["detect"], optional = true }
+craft-wordmodel = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[[test]]
+name = "doc"
+required-features = ["flow"]

@@ -1,0 +1,23 @@
+[package]
+name = "craft-midi"
+description = "MIDI file formats: Standard MIDI File (SMF 0/1/2) reader and format-1 writer over a neutral note and controller model, bounded on hostile input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Serialize / Deserialize on the model types (Note, CtrlEvent, CtrlKind, Sequence).
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true

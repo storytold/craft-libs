@@ -29,6 +29,7 @@ use std::ops::Range;
 
 pub use greedy::{greedy, greedy_with};
 pub use knuth_plass::knuth_plass;
+use knuth_plass::{MAX_WORK, knuth_plass_within};
 
 /// Number of elasticity tiers: word space, letter space, glyph scale.
 pub const TIERS: usize = 3;
@@ -345,11 +346,17 @@ pub struct Breaks {
 
 /// [`knuth_plass`] at each of `tolerances` in turn, the last pass also accepting overfull lines;
 /// [`greedy`] if every pass fails or `tolerances` is empty. The last pass fails only past the
-/// active-break limit (see [`Params::uniform_from`]).
+/// active-break limit (see [`Params::uniform_from`]) or the passes' shared work limit, which
+/// only a paragraph of many hundreds of thousands of items reaches. Nothing is left out then: the
+/// greedy breaker lays out every item, in linear time.
 pub fn break_paragraph(items: &[Item], width: &dyn Fn(usize) -> f64, params: &Params, tolerances: &[f64]) -> Breaks {
+    break_paragraph_within(items, width, params, tolerances, MAX_WORK)
+}
+
+fn break_paragraph_within(items: &[Item], width: &dyn Fn(usize) -> f64, params: &Params, tolerances: &[f64], mut work: u64) -> Breaks {
     for (pass, &tolerance) in tolerances.iter().enumerate() {
         let overfull = params.overfull || pass + 1 == tolerances.len();
-        if let Some(lines) = knuth_plass(items, width, &Params { tolerance, overfull, ..*params }) {
+        if let Some(lines) = knuth_plass_within(items, width, &Params { tolerance, overfull, ..*params }, &mut work) {
             return Breaks { lines, method: Method::KnuthPlass { pass }, balanced: false };
         }
     }
@@ -419,6 +426,9 @@ struct Sums<'a> {
     z: Vec<Tiers>,
     over: Vec<f64>,
     fill: Vec<u32>,
+    /// After item `k`: the first box or forced break, or the item count. Looked up for a break
+    /// at `k`, so it is found once per item rather than by a scan per candidate.
+    next: Vec<usize>,
 }
 
 impl<'a> Sums<'a> {
@@ -450,7 +460,12 @@ impl<'a> Sums<'a> {
         z.push(sz);
         over.push(so);
         fill.push(sf);
-        Sums { items, w, y, z, over, fill }
+        let mut next = vec![m; m + 1];
+        for b in (0..m).rev() {
+            let i = b + 1;
+            next[b] = if items.get(i).is_some_and(|it| it.kind == Kind::Box || it.is_forced()) { i } else { next[i] };
+        }
+        Sums { items, w, y, z, over, fill, next }
     }
 
     fn len(&self) -> usize {
@@ -481,14 +496,7 @@ impl<'a> Sums<'a> {
     /// First item of the line after a break at `b`: glue and penalties are discarded up to the next
     /// box or forced break.
     fn next_start(&self, b: usize) -> usize {
-        let mut i = b + 1;
-        while let Some(it) = self.items.get(i) {
-            if it.kind == Kind::Box || it.is_forced() {
-                break;
-            }
-            i += 1;
-        }
-        i.min(self.len())
+        self.next.get(b).copied().unwrap_or(self.len())
     }
 
     fn at(&self, k: usize) -> (f64, Tiers, Tiers, f64, u32) {

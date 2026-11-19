@@ -1,0 +1,276 @@
+//! Character, paragraph, table and cell properties.
+//!
+//! Every field is an `Option`: `None` means "inherit" (from the style chain, then document
+//! defaults). [`CharProps::overlay`] and friends apply a patch on top of a base.
+
+use serde::{Deserialize, Serialize};
+
+macro_rules! overlay_fields {
+    ($dst:ident, $src:ident; $($f:ident),*) => {
+        $( if $src.$f.is_some() { $dst.$f = $src.$f.clone(); } )*
+    };
+}
+
+macro_rules! drop_same_fields {
+    ($dst:ident, $base:ident; $($f:ident),*) => {
+        $( if $dst.$f == $base.$f { $dst.$f = None; } )*
+    };
+}
+
+mod char_props;
+mod color;
+mod para_props;
+mod table_props;
+
+pub use char_props::{
+    CharProps, CombineBrackets, DEFAULT_FONT_SIZE, EastAsianLayout, EmphasisMark, Highlight, Ligatures, NumChange, PropChange, ThemeFont, Underline,
+    VertAlign,
+};
+pub use color::{Rgb, TextColor};
+pub use para_props::{
+    Align, Border, BorderStyle, Borders, Kashida, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, TAB_POS_EPS, TabAlign, TabLeader, TabStop,
+    TextAlignment, TextFrame,
+};
+pub use table_props::{
+    CellPicture, CellProps, HeightRule, PictureRepeat, RowProps, TableFloat, TableLook, TableProps, TextDirection, TextVert, VAlign, VMerge,
+    anchor_ooxml, valign_from_anchor,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A run's theme slot equal to its base's stays while the run's named font differs: overlaid
+    /// alone, that font would clear the base's slot, so the round trip would lose the slot.
+    #[test]
+    fn minus_keeps_a_theme_slot_whose_font_stays() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            font_ea: s("SimSun"),
+            font_ea_theme: Some(ThemeFont::MinorEastAsia),
+            font_cs: s("Arial"),
+            font_cs_theme: Some(ThemeFont::MinorBidi),
+            ..Default::default()
+        };
+        let run = CharProps { font: s("Georgia"), font_ea: s("MS Mincho"), font_cs: s("Times New Roman"), ..base.clone() };
+        let patch = run.clone().minus(&base);
+        assert_eq!((patch.font_ea_theme, patch.font_cs_theme), (Some(ThemeFont::MinorEastAsia), Some(ThemeFont::MinorBidi)));
+        assert_eq!(patch.font_ascii_theme, Some(ThemeFont::MinorHAnsi));
+        let mut back = base.clone();
+        back.overlay(&patch);
+        assert_eq!(back, run, "base plus the patch is the run again");
+        // A font equal to the base's goes, and its slot with it.
+        let same = base.clone().minus(&base);
+        assert_eq!((same.font_ea_theme, same.font_cs_theme, same.font_ascii_theme), (None, None, None));
+    }
+
+    /// A run that names its base's font but none of its slots (a font chosen in place of the
+    /// theme's) keeps that font in the patch, so overlaying it clears the slots again.
+    #[test]
+    fn minus_keeps_a_same_font_that_clears_its_slots() {
+        let s = |v: &str| Some(v.to_string());
+        let base = CharProps {
+            font: s("Aptos"),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            font_ea: s("SimSun"),
+            font_ea_theme: Some(ThemeFont::MinorEastAsia),
+            font_cs: s("Arial"),
+            font_cs_theme: Some(ThemeFont::MinorBidi),
+            ..Default::default()
+        };
+        let run = CharProps { font_ascii_theme: None, font_hansi_theme: None, font_ea_theme: None, font_cs_theme: None, ..base.clone() };
+        let mut back = base.clone();
+        back.overlay(&run.clone().minus(&base));
+        assert_eq!(back, run);
+    }
+
+    /// A named font with only one of its Latin slots replaces the other slot too: the base's
+    /// would name another font.
+    #[test]
+    fn a_font_with_one_latin_slot_replaces_both() {
+        let mut base = CharProps {
+            font: Some("Verdana".into()),
+            font_ascii_theme: Some(ThemeFont::MinorHAnsi),
+            font_hansi_theme: Some(ThemeFont::MinorHAnsi),
+            ..Default::default()
+        };
+        base.overlay(&CharProps { font: Some("Georgia".into()), font_ascii_theme: Some(ThemeFont::MajorAscii), ..Default::default() });
+        assert_eq!((base.font_ascii_theme, base.font_hansi_theme), (Some(ThemeFont::MajorAscii), None));
+    }
+
+    #[test]
+    fn rgb_hex() {
+        assert_eq!(Rgb(255, 0, 16).hex(), "FF0010");
+        assert_eq!(Rgb::parse("#FF0010"), Some(Rgb(255, 0, 16)));
+        assert_eq!(Rgb::parse("zzzzzz"), None);
+        assert_eq!(Rgb::parse("é1234"), None);
+    }
+
+    #[test]
+    fn rgb_parse_rejects_non_hex() {
+        assert_eq!(Rgb::parse("+1+2+3"), None);
+        assert_eq!(Rgb::parse("-1-2-3"), None);
+        assert_eq!(Rgb::parse("##ff0000"), None);
+        assert_eq!(Rgb::parse("ff00 0"), None);
+        assert_eq!(Rgb::parse("#ff0000"), Some(Rgb(255, 0, 0)));
+        assert_eq!(Rgb::parse("ff0000"), Some(Rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn overlay_keeps_unset() {
+        let base = CharProps { bold: Some(true), size: Some(12.0), ..Default::default() };
+        let patch = CharProps { size: Some(14.0), italic: Some(true), ..Default::default() };
+        let r = base.overlaid(&patch);
+        assert_eq!(r.bold, Some(true));
+        assert_eq!(r.size, Some(14.0));
+        assert_eq!(r.italic, Some(true));
+    }
+
+    #[test]
+    fn borders_overlay_per_side() {
+        let thin = Border::single(0.5);
+        let thick = Border::single(2.0);
+        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+        let mut b = Borders::all(thin);
+        b.overlay(&Borders { top: Some(thick), ..Default::default() });
+        assert_eq!(b.top, Some(thick));
+        assert_eq!(b.bottom, Some(thin));
+        b.overlay(&Borders::box_(nil));
+        assert_eq!(b.left, Some(nil)); // explicit nil overrides that side
+        assert_eq!(b.between, Some(thin)); // untouched sides survive
+        b.overlay(&Borders::default());
+        assert_eq!(b.left, Some(nil)); // empty patch changes nothing
+    }
+
+    #[test]
+    fn ooxml_names_round_trip() {
+        for u in Underline::ALL {
+            assert_eq!(Underline::from_ooxml(u.ooxml()), u);
+        }
+        for h in Highlight::ALL {
+            assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
+        }
+    }
+
+    #[test]
+    fn explicit_off_values_disable_underline() {
+        for value in ["off", "false", "0"] {
+            assert_eq!(Underline::from_ooxml(value), Underline::None, "{value}");
+        }
+        assert_eq!(Underline::from_ooxml("none"), Underline::None);
+        assert_eq!(Underline::from_ooxml("single"), Underline::Single);
+        assert_eq!(Underline::from_ooxml("unknown"), Underline::Single);
+    }
+
+    /// The 16 `w14:ligatures` values of [MS-DOCX], each to its flags and back.
+    #[test]
+    fn ligature_names() {
+        let l = |standard, contextual, historical, discretional| Ligatures { standard, contextual, historical, discretional };
+        for (name, flags) in [
+            ("none", l(false, false, false, false)),
+            ("standard", l(true, false, false, false)),
+            ("contextual", l(false, true, false, false)),
+            ("historical", l(false, false, true, false)),
+            ("discretional", l(false, false, false, true)),
+            ("standardContextual", l(true, true, false, false)),
+            ("standardHistorical", l(true, false, true, false)),
+            ("contextualHistorical", l(false, true, true, false)),
+            ("standardDiscretional", l(true, false, false, true)),
+            ("contextualDiscretional", l(false, true, false, true)),
+            ("historicalDiscretional", l(false, false, true, true)),
+            ("standardContextualHistorical", l(true, true, true, false)),
+            ("standardContextualDiscretional", l(true, true, false, true)),
+            ("standardHistoricalDiscretional", l(true, false, true, true)),
+            ("contextualHistoricalDiscretional", l(false, true, true, true)),
+            ("all", l(true, true, true, true)),
+        ] {
+            assert_eq!(Ligatures::from_ooxml(name), Some(flags), "{name}");
+            assert_eq!(flags.ooxml(), name);
+        }
+        assert_eq!(Ligatures::all().count(), 16);
+        for bad in ["", "Standard", "contextualStandard", "standardstandard", "allx"] {
+            assert_eq!(Ligatures::from_ooxml(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn text_direction_names() {
+        let mut d = TextDirection::Horizontal;
+        for _ in 0..3 {
+            assert_eq!(TextDirection::from_ooxml(d.ooxml()), d);
+            d = d.next();
+        }
+        assert_eq!(d, TextDirection::Horizontal, "the button cycles through three directions");
+        // Strict names, East Asian vertical layouts and junk.
+        assert_eq!(TextDirection::from_ooxml("rl"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("lr"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("tbRlV"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("tb"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("lrTbV"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("é?"), TextDirection::Horizontal);
+    }
+
+    /// #865: a colour reads as `format.color` takes it (`RRGGBB`, `#RRGGBB`, `auto`), while what
+    /// documents and settings already hold reads and writes exactly as before.
+    #[test]
+    fn text_color_reads_hex_and_keeps_its_serialized_forms() {
+        let read = |j: &str| serde_json::from_str::<TextColor>(j);
+        let ink = TextColor::Rgb(Rgb(0x1B, 0x16, 0x11));
+        assert_eq!(read(r#""1B1611""#).unwrap(), ink);
+        assert_eq!(read(r##""#1b1611""##).unwrap(), ink);
+        assert_eq!(read(r#""auto""#).unwrap(), TextColor::Auto);
+        assert_eq!(read(r#""Automatic""#).unwrap(), TextColor::Auto);
+        for (c, j) in [(TextColor::Auto, r#""Auto""#), (ink, r#"{"Rgb":[27,22,17]}"#)] {
+            assert_eq!(serde_json::to_string(&c).unwrap(), j, "written as before");
+            assert_eq!(read(j).unwrap(), c);
+        }
+        for bad in [r#""1B161""#, r#""zzzzzz""#, r#""""#, r#"{"Rgb":"1B16"}"#, r#"{"Rgb":[1,2]}"#, r#"{"Hex":[1,2,3]}"#, "7", "[27,22,17]"] {
+            assert!(read(bad).is_err(), "{bad}");
+        }
+        assert_eq!(read(r#"{"Rgb":"1B1611"}"#).unwrap(), ink);
+        let p: CharProps = serde_json::from_value(serde_json::json!({"color": "#1B1611", "bold": true})).unwrap();
+        assert_eq!((p.color, p.bold), (Some(ink), Some(true)));
+    }
+
+    /// #865: an [`Rgb`] reads `RRGGBB` / `#RRGGBB` as well as the `[r, g, b]` it still writes.
+    #[test]
+    fn rgb_reads_hex_and_keeps_its_serialized_form() {
+        let read = |j: &str| serde_json::from_str::<Rgb>(j);
+        let ink = Rgb(0x1B, 0x16, 0x11);
+        assert_eq!(serde_json::to_string(&ink).unwrap(), "[27,22,17]", "written as before");
+        for j in ["[27,22,17]", r#""1B1611""#, r##""#1b1611""##] {
+            assert_eq!(read(j).unwrap(), ink, "{j}");
+        }
+        for bad in ["[27,22]", "[27,22,17,0]", "[27,22,300]", "[-1,0,0]", r#""auto""#, r#""1B161""#, r#""""#, "7", "null", r#"{"r":1}"#] {
+            assert!(read(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn props_serde_skip_none() {
+        let p = CharProps { bold: Some(true), ..Default::default() };
+        let s = serde_json::to_string(&p).unwrap();
+        assert_eq!(s, r#"{"bold":true}"#);
+        let back: CharProps = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn symbol_font_is_optional_in_json_and_survives_font_changes() {
+        // Older documents (no `symFont`) still load.
+        let old: CharProps = serde_json::from_str(r#"{"font":"Arial"}"#).unwrap();
+        assert_eq!(old.sym_font, None);
+        let p = CharProps { font: Some("Arial".into()), sym_font: Some("Wingdings".into()), ..Default::default() };
+        let s = serde_json::to_string(&p).unwrap();
+        assert!(s.contains(r#""symFont":"Wingdings""#), "{s}");
+        assert_eq!(serde_json::from_str::<CharProps>(&s).unwrap(), p);
+        // A font change keeps the symbol's own font; Clear Formatting too.
+        let changed = p.clone().overlaid(&CharProps { font: Some("Times New Roman".into()), ..Default::default() });
+        assert_eq!(changed.sym_font.as_deref(), Some("Wingdings"));
+        assert_eq!(p.cleared().sym_font.as_deref(), Some("Wingdings"));
+    }
+}

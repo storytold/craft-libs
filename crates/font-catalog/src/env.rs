@@ -38,6 +38,9 @@ impl Os {
 }
 
 /// The environment the font folders depend on.
+///
+/// Its paths are read with the host's path rules, so it describes a system of the host's family:
+/// on Windows, `/usr/share` isn't absolute and an [`Os::Unix`] environment's folders come out wrong.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FontEnv {
     /// Which platform's folders to list.

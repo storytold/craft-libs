@@ -41,7 +41,9 @@ permission to discard work. Run those guards before `craft_quit::on_close_reques
 
 `appearance::Watcher` caches the desktop preference and wakes only on changes. Subscription precedes
 the first read. ReadOne/legacy Read, the standard namespace and GNOME fallback are handled together;
-malformed values retain the last valid answer, and explicit no-preference clears it. Disconnection
+on GNOME the "default" (Light) setting and portal value 0 read as light; elsewhere 0 is no preference.
+Malformed values retain the last valid answer, and explicit no-preference clears it.
+`Watcher::wait_first(timeout)` blocks until the first answer, a known absence, or the timeout (about 250 ms in an eframe creator), so the first frame uses the desktop theme. Disconnection
 retains the last valid value until a fresh answer. A later service owner triggers a reread; session
 reconnection has bounded backoff. Dropping cancels asynchronous work and waits at most 100 ms
 for acknowledgement, joining only an already-finished worker. A synchronously blocked OS call or caller wake callback can outlive

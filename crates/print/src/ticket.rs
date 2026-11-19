@@ -29,7 +29,49 @@ pub(crate) fn points(micrometres: u32) -> f64 {
 /// paper is merged in separately, as the driver's own option. Only schema keywords and bounded
 /// numbers go into the XML; the printer name and the document title never do. Two-sided is left
 /// out when the job doesn't set it, so the queue's default applies.
+#[cfg(test)]
 pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
+    ticket_xml_for_duplex(job, landscape, false)
+}
+
+/// [`ticket_xml_with`] asking for grey as `Monochrome`, as every ticket did before drivers with
+/// only `Grayscale` were asked for that.
+#[cfg(test)]
+pub(crate) fn ticket_xml_for_duplex(job: &Job, landscape: bool, document_only: bool) -> String {
+    ticket_xml_with(job, landscape, document_only, Grey::Monochrome)
+}
+
+/// The Print Schema option a ticket asks for grey output with (`PageOutputColor`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grey {
+    Monochrome,
+    Grayscale,
+}
+
+/// The grey option to ask this driver for: `Grayscale` when its PrintCapabilities list that and
+/// not `Monochrome` (Windows drops an option the driver doesn't list when it validates the
+/// ticket, and the driver's default, colour, comes back); `Monochrome` otherwise, also when the
+/// capabilities can't be read.
+pub(crate) fn grey_option(capabilities_xml: &str) -> Grey {
+    let Ok(document) = roxmltree::Document::parse(capabilities_xml) else { return Grey::Monochrome };
+    let root = document.root_element();
+    let offers = |option: &str| {
+        root.children()
+            .filter(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageOutputColor"))
+            .flat_map(|f| f.children().filter(|n| n.has_tag_name((NS_PSF, "Option"))))
+            .any(|n| named(n, option))
+    };
+    if offers("Grayscale") && !offers("Monochrome") { Grey::Grayscale } else { Grey::Monochrome }
+}
+
+/// Build the job's PrintTicket XML with orientation, copies, collation and no scaling.
+/// `document_only` selects `DocumentDuplex`; otherwise an explicit duplex choice uses
+/// `JobDuplexAllDocumentsContiguously`. With no duplex choice, neither feature is emitted.
+/// Grayscale asks for `grey` ([`grey_option`]); colour asks for nothing, so the driver's own
+/// colour setting stands. Paper is added separately by the caller. The caller reads
+/// capabilities before choosing the feature and returns an error when those capabilities
+/// cannot be read.
+pub(crate) fn ticket_xml_with(job: &Job, landscape: bool, document_only: bool, grey: Grey) -> String {
     let orientation = if landscape { "Landscape" } else { "Portrait" };
     let duplex = match job.duplex {
         None => String::new(),
@@ -39,13 +81,18 @@ pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
                 Duplex::LongEdge => "TwoSidedLongEdge",
                 Duplex::ShortEdge => "TwoSidedShortEdge",
             };
-            format!("\n <psf:Feature name=\"psk:JobDuplexAllDocumentsContiguously\"><psf:Option name=\"psk:{option}\"/></psf:Feature>")
+            let feature = if document_only { "DocumentDuplex" } else { "JobDuplexAllDocumentsContiguously" };
+            format!("\n <psf:Feature name=\"psk:{feature}\"><psf:Option name=\"psk:{option}\"/></psf:Feature>")
         }
     };
     let collate = if job.collate { "Collated" } else { "Uncollated" };
     // Only grayscale is asked for. Without it the ticket says nothing about colour, so a black and
     // white chosen in the driver's own preferences (Properties…) still applies (storytold/pdfcraft#2422).
-    let color = if job.grayscale { "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>" } else { "" };
+    let color = match (job.grayscale, grey) {
+        (false, _) => "",
+        (true, Grey::Monochrome) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Monochrome\"/></psf:Feature>",
+        (true, Grey::Grayscale) => "\n <psf:Feature name=\"psk:PageOutputColor\"><psf:Option name=\"psk:Grayscale\"/></psf:Feature>",
+    };
     let copies = job.copies.clamp(1, 999);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -56,6 +103,67 @@ pub(crate) fn ticket_xml(job: &Job, landscape: bool) -> String {
  <psf:Feature name="psk:PageOrientation"><psf:Option name="psk:{orientation}"/></psf:Feature>
 </psf:PrintTicket>"#
     )
+}
+
+/// Whether the job's own ticket decides the Print Schema feature or parameter `name`, so the
+/// driver dialog's value for it is left out ([`driver_settings_xml`]): copies, collation, paper,
+/// orientation and scaling always; two-sided when the job sets it; color when it asks for grayscale.
+/// Pages per sheet, binding (booklets included) and posters are left out too: they change the
+/// size and the number of the sheets, which the job's own size and its copies rely on. The
+/// parameters of these features start with their feature's name. Only the ticket's features are
+/// removed: a driver that also keeps one of them in its private settings, which are kept, can
+/// still apply it from there.
+fn job_decides(name: &str, job: &Job) -> bool {
+    matches!(
+        name,
+        "JobCopiesAllDocuments" | "DocumentCopiesAllPages" | "PageCopies" | "JobCollateAllDocuments" | "DocumentCollate" | "PageOrientation"
+    ) || ["PageMediaSize", "PageScaling", "JobNUpAllDocumentsContiguously", "DocumentNUp", "JobBindAllDocuments", "DocumentBinding", "PagePoster"]
+        .iter()
+        .any(|feature| name.starts_with(feature))
+        || (job.duplex.is_some() && matches!(name, "JobDuplexAllDocumentsContiguously" | "DocumentDuplex"))
+        || (job.grayscale && name == "PageOutputColor")
+}
+
+/// `xml` without the Print Schema features and parameter initializers directly under its root
+/// whose names `drop` picks. Everything else, vendor features and the driver's private settings
+/// included, is kept as it is written.
+fn without_schema_names(xml: &str, drop: impl Fn(&str) -> bool) -> Result<String, Error> {
+    let unreadable = || spool_error("the printer driver's settings are not a PrintTicket it can read; choose them again in its dialog");
+    let document = roxmltree::Document::parse(xml).map_err(|_| unreadable())?;
+    let root = document.root_element();
+    if !root.has_tag_name((NS_PSF, "PrintTicket")) {
+        return Err(unreadable());
+    }
+    let mut out = String::with_capacity(xml.len());
+    let mut copied = 0;
+    for node in root.children().filter(|n| n.has_tag_name((NS_PSF, "Feature")) || n.has_tag_name((NS_PSF, "ParameterInit"))) {
+        let Some(value) = node.attribute("name") else { continue };
+        let (prefix, local) = value.split_once(':').map_or((None, value), |(p, n)| (Some(p), n));
+        if node.lookup_namespace_uri(prefix) == Some(NS_PSK) && drop(local) {
+            let range = node.range();
+            out.push_str(xml.get(copied..range.start).ok_or_else(unreadable)?);
+            copied = range.end;
+        }
+    }
+    out.push_str(xml.get(copied..).ok_or_else(unreadable)?);
+    Ok(out)
+}
+
+/// The ticket of the settings chosen in the printer driver's dialog, as Windows converted them,
+/// without what the job's own ticket decides ([`job_decides`]): merged before the job's ticket,
+/// they keep the driver's other options (media type, quality, its private settings) and cannot
+/// pull the paper, the copies or a two-sided or grayscale choice of the job away from it.
+pub(crate) fn driver_settings_xml(converted: &str, job: &Job) -> Result<String, Error> {
+    without_schema_names(converted, |name| job_decides(name, job))
+}
+
+/// The job's options for the printer driver's dialog to open on: its copies and collation from
+/// [`ticket_xml_with`]. The orientation and scaling come from the sheets when the job is printed.
+/// The job's two-sided and grayscale choices are left out: the settings the dialog returns are
+/// kept, and a value of the job's in them would apply as the dialog's own once the job leaves
+/// that choice open.
+pub(crate) fn dialog_xml(job: &Job) -> Result<String, Error> {
+    without_schema_names(&ticket_xml_with(job, false, false, Grey::Monochrome), |name| !matches!(name, "JobCopiesAllDocuments" | "DocumentCollate"))
 }
 
 /// Standard paper sizes (points, portrait) and the names drivers give them. A driver can list
@@ -89,11 +197,24 @@ pub(crate) fn paper_names(width: f64, height: f64) -> &'static [&'static str] {
 }
 
 /// Whether a driver's paper name is `name`: it starts with it, ignoring case, and the name ends
-/// there ("A4 210 x 297 mm", not "A4 Extra" for "A4" or "ARCH E1" for "ARCH E").
+/// there — either nothing follows ("arch d"), or a separator and the sheet's dimensions ("A4
+/// 210 x 297 mm"). After a separator, dimensions are a digit: a word is a modifier, another
+/// paper ("A4 Extra", "A4 (Extra)"), and anything joined to the name without a separator is
+/// another paper too ("A4Extra", "ARCH E1" for "ARCH E").
 pub(crate) fn names_paper(display: Option<&str>, name: &str) -> bool {
     let Some(display) = display else { return false };
-    display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name))
-        && display.get(name.len()..).is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+    let Some(rest) = display.get(name.len()..) else { return false };
+    if !display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name)) {
+        return false;
+    }
+    let after = rest.trim_start_matches(|c: char| !c.is_alphanumeric());
+    match after.chars().next() {
+        // The name ends here, or a separator introduces the sheet's dimensions.
+        None => true,
+        Some(c) if !c.is_alphabetic() => after.len() < rest.len(),
+        // A word, directly after the name or after a separator, is a modifier: another paper.
+        Some(_) => false,
+    }
 }
 
 /// A driver paper offered for the job: its size in micrometres (as the driver lists it), its
@@ -110,6 +231,17 @@ pub(crate) struct Paper<'a> {
 /// The driver paper for a sheet of `width` × `height` points (either way round): within a
 /// quarter of a millimetre, preferring the one named like the standard size, then a Print Schema
 /// keyword, then the closest; on a tie the driver's own order. Its index in `papers`.
+///
+/// An entry the driver keeps only one side of (the other reads zero, a legacy host-based driver's
+/// DEVMODE metric, storytold/craft-libs#7230) is a candidate of last resort (INV-4): only when no
+/// full entry matched, only a Print Schema keyword entry, and only while its known side agrees
+/// with the sheet, either way round. A single such entry is still refused when its own name is
+/// known and contradicts the requested standard sheet (INV-4): a known conflicting name is
+/// evidence against the choice, and failing closed is safer than a guess. Without a name there is
+/// nothing contradicting, so the agreement alone is enough. Several such entries that all agree
+/// (a Letter and a Legal option share a width) are told apart by name, as full candidates are:
+/// the one named like the requested standard sheet wins, and when that leaves more than one, or
+/// none, nothing is chosen — a guess here would lay the sheets out for the wrong paper.
 pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> Option<usize> {
     let (w, h) = (micrometres(width.min(height))?, micrometres(width.max(height))?);
     let names = paper_names(width, height);
@@ -123,21 +255,101 @@ pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> O
         })
         .collect();
     candidates.sort_by_key(|(_, p, off)| (!names.iter().any(|n| names_paper(p.name, n)), !p.keyword, *off));
-    candidates.first().map(|(i, _, _)| *i)
+    if let Some(index) = candidates.first().map(|(i, _, _)| *i) {
+        return Some(index);
+    }
+    let agrees = |side: u32| side.abs_diff(w) <= PAPER_TOLERANCE || side.abs_diff(h) <= PAPER_TOLERANCE;
+    let partials: Vec<usize> = papers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.keyword && (p.width == 0) != (p.height == 0) && (p.width == 0 || agrees(p.width)) && (p.height == 0 || agrees(p.height)))
+        .map(|(i, _)| i)
+        .collect();
+    match partials.as_slice() {
+        [only] => {
+            // INV-4: a known name that contradicts the requested standard sheet is evidence
+            // against this single partial record — refuse it; without a name, the known side's
+            // agreement is all the evidence there is, and the record stands.
+            let contradicts = papers[*only].name.is_some_and(|name| !names.iter().any(|n| names_paper(Some(name), n)));
+            (!contradicts).then_some(*only)
+        }
+        // Ambiguous by agreement alone: a partial named like the requested standard sheet wins.
+        _ => {
+            let named: Vec<usize> = partials.iter().copied().filter(|i| names.iter().any(|n| names_paper(papers[*i].name, n))).collect();
+            match named.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            }
+        }
+    }
 }
 
 fn named(node: roxmltree::Node<'_, '_>, local: &str) -> bool {
-    node.attribute("name")
-        .and_then(|v| v.split_once(':'))
-        .is_some_and(|(prefix, name)| name == local && node.lookup_namespace_uri(Some(prefix)) == Some(NS_PSK))
+    node.attribute("name").is_some_and(|v| {
+        let (prefix, name) = v.split_once(':').map_or((None, v), |(p, n)| (Some(p), n));
+        name == local && node.lookup_namespace_uri(prefix) == Some(NS_PSK)
+    })
 }
 
-/// The integer value of the Print Schema element under `node` with this keyword name.
-fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
+/// Read standard duplex options from the original XML: winprint's DOM loses the default
+/// namespace of unprefixed QNames, so it cannot safely choose a duplex scope.
+fn duplex_option(document: &roxmltree::Document<'_>, feature: &str, option: &str) -> bool {
+    document
+        .root_element()
+        .children()
+        .filter(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, feature))
+        .flat_map(|n| n.children())
+        .any(|n| n.has_tag_name((NS_PSF, "Option")) && named(n, option))
+}
+
+/// Prefer job scope when it offers the exact binding; an unspecified request emits neither.
+pub(crate) fn document_duplex_only(xml: &str, duplex: Option<Duplex>) -> bool {
+    let wanted = match duplex {
+        None => return false,
+        Some(Duplex::Off) => "OneSided",
+        Some(Duplex::LongEdge) => "TwoSidedLongEdge",
+        Some(Duplex::ShortEdge) => "TwoSidedShortEdge",
+    };
+    let Ok(document) = crate::xml::parse(xml) else { return false };
+    !duplex_option(&document, "JobDuplexAllDocumentsContiguously", wanted) && duplex_option(&document, "DocumentDuplex", wanted)
+}
+
+/// Whether either duplex scope offers a supported standard binding; unreadable stays unknown.
+pub(crate) fn two_sided(xml: &str) -> Option<bool> {
+    let document = crate::xml::parse(xml).ok()?;
+    Some(
+        ["JobDuplexAllDocumentsContiguously", "DocumentDuplex"]
+            .into_iter()
+            .any(|feature| ["TwoSidedLongEdge", "TwoSidedShortEdge"].into_iter().any(|option| duplex_option(&document, feature, option))),
+    )
+}
+
+/// The `Value` of the Print Schema element `element`: its own, or one a `ParameterRef` names
+/// through the `ParameterInit` under the document's root that sets it (a driver may keep a paper
+/// side or a resolution this way). `None` when the element has neither, or names a parameter the
+/// ticket does not set.
+fn resolved_value<'a>(document: &'a roxmltree::Document<'a>, element: roxmltree::Node<'a, 'a>) -> Option<roxmltree::Node<'a, 'a>> {
+    let value = element.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))?;
+    if value.has_tag_name((NS_PSF, "Value")) {
+        return Some(value);
+    }
+    let parameter = expanded(value, value.attribute("name")?);
+    document
+        .root_element()
+        .children()
+        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
+        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
+        .children()
+        .find(|v| v.has_tag_name((NS_PSF, "Value")))
+}
+
+/// The integer value of the Print Schema element under `node` with this keyword name, direct or
+/// through a `ParameterRef` the ticket resolves ([`resolved_value`]).
+fn integer(document: &roxmltree::Document<'_>, node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
     node.descendants()
         .find(|n| n.has_tag_name((NS_PSF, tag)) && named(*n, name))
-        .and_then(|n| n.children().find(|v| v.has_tag_name((NS_PSF, "Value"))))
-        .and_then(|n| n.text())
+        .and_then(|element| resolved_value(document, element))
+        .and_then(|value| value.text())
         .and_then(|v| v.trim().parse::<u32>().ok())
 }
 
@@ -145,14 +357,35 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// paper (when `paper` is given, that one, to a quarter of a millimetre). Returns the paper's
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
+///
+/// A zero or unreadable side (`MediaSizeWidth` gone) is roll-like only while the request itself
+/// names no sheet (INV-2): a legacy host-based driver keeps the paper metric in its DEVMODE
+/// extension and reads back a zero side for a real sheet (HP LaserJet P1102, storytold/craft-libs#7230), so
+/// with a sheet named the job falls back to the size the request asked for (INV-1,
+/// fail-closed: every refusal here is before anything reaches the spooler). A side the driver
+/// did report must agree with the sheet asked for, either way round (INV-3); both sides gone is
+/// refused whatever the request names (INV-5). The fallback is logged (INV-7).
 pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
-    let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
+    let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
-    let size = integer(media, "ScoredProperty", "MediaSizeWidth")
-        .zip(integer(media, "ScoredProperty", "MediaSizeHeight"))
-        .filter(|(w, h)| *w > 0 && *h > 0)
-        .ok_or_else(|| spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent"))?;
+    let width = integer(&document, media, "ScoredProperty", "MediaSizeWidth").filter(|w| *w > 0);
+    let height = integer(&document, media, "ScoredProperty", "MediaSizeHeight").filter(|h| *h > 0);
+    let without_a_size = spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent");
+    let size = match (width, height, paper) {
+        (Some(w), Some(h), _) => (w, h),
+        (None, None, _) | (_, _, None) => return Err(without_a_size),
+        (Some(reported), None, Some(wanted)) | (None, Some(reported), Some(wanted)) => {
+            let (w, h) = wanted;
+            // Either way round: the one side the driver did report against the sheet's width or height.
+            let agrees = |other: u32| reported.abs_diff(other) <= PAPER_TOLERANCE;
+            if !agrees(w) && !agrees(h) {
+                return Err(spool_error("the printer's driver changed the paper size; nothing was sent (choose a paper size it has)"));
+            }
+            log::warn!("the printer's driver reported only {reported} µm of the paper; going on with the requested {w} × {h} µm");
+            (w, h)
+        }
+    };
     if let Some((w, h)) = paper {
         let same = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= PAPER_TOLERANCE && a.1.abs_diff(b.1) <= PAPER_TOLERANCE;
         if !same(size, (w, h)) && !same(size, (h, w)) {
@@ -176,10 +409,13 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
 /// field is `None` when the capabilities couldn't be read; that option is then checked strictly.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Offered {
-    /// The two-sided feature (`JobDuplexAllDocumentsContiguously`) has any option.
+    /// Either standard duplex feature (`JobDuplexAllDocumentsContiguously` or `DocumentDuplex`) has an option.
     pub duplex: Option<bool>,
     /// The colour feature (`PageOutputColor`) has an option other than Monochrome and Grayscale.
     pub color: Option<bool>,
+    /// The colour feature has a grey option (Monochrome or Grayscale). A driver without one may
+    /// still have a vendor's own grey setting, which a ticket can't ask for by name.
+    pub grey: Option<bool>,
     /// The collation feature (`DocumentCollate`) has a Collated option.
     pub collate: Option<bool>,
 }
@@ -187,7 +423,7 @@ pub(crate) struct Offered {
 /// What these PrintCapabilities offer ([`Offered`]); all unknown when the document is not
 /// PrintCapabilities.
 pub(crate) fn offered(capabilities_xml: &str) -> Offered {
-    let Ok(document) = roxmltree::Document::parse(capabilities_xml) else { return Offered::default() };
+    let Ok(document) = crate::xml::parse(capabilities_xml) else { return Offered::default() };
     let root = document.root_element();
     if !root.has_tag_name((NS_PSF, "PrintCapabilities")) {
         return Offered::default();
@@ -202,6 +438,7 @@ pub(crate) fn offered(capabilities_xml: &str) -> Offered {
         duplex: Some(options("JobDuplexAllDocumentsContiguously").chain(options("DocumentDuplex")).next().is_some()),
         // A vendor's own option might be colour, so only the two schema keywords count as not.
         color: Some(options("PageOutputColor").any(|n| !named(n, "Monochrome") && !named(n, "Grayscale"))),
+        grey: Some(options("PageOutputColor").any(|n| named(n, "Monochrome") || named(n, "Grayscale"))),
         collate: Some(options("DocumentCollate").any(|n| named(n, "Collated"))),
     }
 }
@@ -223,7 +460,7 @@ pub(crate) fn repeats_collated(job: &Job, pages: usize, offered: Offered) -> boo
 /// sheet, binding (booklets and offset stacking included) or stapling, which would treat every
 /// copy as one document.
 pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
-    let document = roxmltree::Document::parse(xml).ok()?;
+    let document = crate::xml::parse(xml).ok()?;
     let features = |names: &'static [&'static str]| {
         document.root_element().children().filter(move |n| n.has_tag_name((NS_PSF, "Feature")) && names.iter().any(|name| named(*n, name)))
     };
@@ -238,7 +475,9 @@ pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
             _ => return None,
         }
     }
-    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"]).any(|f| integer(f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1)) {
+    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"])
+        .any(|f| integer(&document, f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1))
+    {
         return None;
     }
     if features(&["JobBindAllDocuments", "DocumentBinding", "JobStapleAllDocuments", "DocumentStaple"])
@@ -261,9 +500,12 @@ pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
 /// document collating for such a driver (the standard XPS filters make the copies, and leave
 /// collated copies to the device only when its GPD or PPD has a Collate command). The job then
 /// asks for one copy and repeats the document instead ([`repeats_collated`]), in one job or a
-/// job per copy ([`one_job_sides`]). An unknown offer (`None`) is checked strictly.
+/// job per copy ([`one_job_sides`]). An unknown offer (`None`) is checked strictly. Explicit
+/// duplex must appear with the requested option in at least one of the job or document features;
+/// if both appear, both must match. The exception is an explicit one-sided request when the
+/// driver is known to have no duplex feature. Malformed XML and unretained options are errors.
 pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Offered) -> Result<(), Error> {
-    let document = roxmltree::Document::parse(xml).map_err(spool_error)?;
+    let document = crate::xml::parse(xml).map_err(spool_error)?;
     let root = document.root_element();
     let option = |name: &str| {
         root.children()
@@ -272,7 +514,7 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
     };
     let refused = |field: &str| spool_error(format!("the printer's driver did not retain the requested {field}; nothing was sent"));
     let copies = job.copies.clamp(1, 999);
-    if integer(root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
+    if integer(&document, root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
         return Err(refused("copy count"));
     }
     if copies > 1 && pages > 1 && !option("DocumentCollate").is_some_and(|n| named(n, if job.collate { "Collated" } else { "Uncollated" })) {
@@ -293,13 +535,102 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
             Duplex::ShortEdge => "TwoSidedShortEdge",
         };
         let one_sided_only = duplex == Duplex::Off && offered.duplex == Some(false);
-        if !one_sided_only && !option("JobDuplexAllDocumentsContiguously").is_some_and(|n| named(n, wanted)) {
+        let duplex_options = [option("JobDuplexAllDocumentsContiguously"), option("DocumentDuplex")];
+        let retained = duplex_options.iter().any(Option::is_some) && duplex_options.into_iter().flatten().all(|n| named(n, wanted));
+        if !one_sided_only && !retained {
             return Err(refused("simplex/duplex setting"));
         }
     }
     let monochrome_only = offered.color == Some(false);
-    if job.grayscale && !monochrome_only && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale")) {
+    // Pages the caller has already made grey print grey whatever the driver does with colour, so
+    // grey on the driver is best-effort: a driver with no grey option (Microsoft Print to PDF), or
+    // only a vendor's own (storytold/pdfcraft#5806), still prints.
+    if job.grayscale
+        && !job.grey_pages
+        && !monochrome_only
+        && !option("PageOutputColor").is_some_and(|n| named(n, "Monochrome") || named(n, "Grayscale"))
+    {
         return Err(refused("grayscale"));
+    }
+    Ok(())
+}
+
+/// The dialog features whose option a driver may replace while it validates the job's ticket,
+/// and the words an error names them with.
+const CHOSEN_OPTIONS: [(&str, &str); 3] = [("PageMediaType", "media type"), ("PageResolution", "resolution"), ("PageOutputQuality", "print quality")];
+
+/// A qualified name as its namespace and local name.
+type Expanded = (Option<String>, String);
+
+/// The namespace and local name of a QName attribute value of `node`.
+fn expanded(node: roxmltree::Node<'_, '_>, value: &str) -> Expanded {
+    let (prefix, local) = value.split_once(':').map_or((None, value), |(p, n)| (Some(p), n));
+    (node.lookup_namespace_uri(prefix).map(str::to_string), local.to_string())
+}
+
+/// The option of a feature: its name, when it has one, and the value of each scored property
+/// that holds one or refers to a parameter the ticket sets (a resolution's `ResolutionX` and
+/// `ResolutionY`), trimmed. A QName value (`xsi:type="xsd:QName"`) is kept as its namespace and
+/// local name, an integer as its number, any other value as its text.
+struct FeatureOption {
+    name: Option<Expanded>,
+    scored: Vec<(Expanded, Expanded)>,
+}
+
+/// The option of the Print Schema feature `feature` directly under the ticket's root; `None`
+/// when the ticket has no such feature or the feature has no option.
+fn feature_option(document: &roxmltree::Document<'_>, feature: &str) -> Option<FeatureOption> {
+    let option = document
+        .root_element()
+        .children()
+        .find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, feature))?
+        .children()
+        .find(|n| n.has_tag_name((NS_PSF, "Option")))?;
+    let scored = option
+        .children()
+        .filter(|n| n.has_tag_name((NS_PSF, "ScoredProperty")))
+        .filter_map(|n| {
+            let value = resolved_value(document, n)?;
+            let text = value.text()?.trim();
+            let value = match text.parse::<i64>() {
+                _ if is_qname_value(value) => expanded(value, text),
+                Ok(number) => (None, number.to_string()),
+                Err(_) => (None, text.to_string()),
+            };
+            Some((expanded(n, n.attribute("name")?), value))
+        })
+        .collect();
+    Some(FeatureOption { name: option.attribute("name").map(|value| expanded(option, value)), scored })
+}
+
+/// Whether `validated` is the option `chosen` names: the same name when `chosen` has one, and
+/// the same value for each of `chosen`'s scored properties.
+fn keeps_option(chosen: &FeatureOption, validated: Option<&FeatureOption>) -> bool {
+    validated.is_some_and(|validated| {
+        chosen.name.as_ref().is_none_or(|name| validated.name.as_ref() == Some(name))
+            && chosen.scored.iter().all(|property| validated.scored.contains(property))
+    })
+}
+
+/// Check that the driver's validated ticket (`validated`) kept the media type, resolution and
+/// print quality of the settings chosen in its dialog (`chosen`, the ticket [`driver_settings_xml`]
+/// returned). A driver can replace one of them when it conflicts with the job's paper, and Windows
+/// reports the replacement as a success. An option is compared by its name and by the values of
+/// its scored properties, such as a resolution's dots per inch; names are compared by namespace
+/// and local name, so a driver that spells its namespace with another prefix keeps them. A feature
+/// whose option in `chosen` has neither a name nor a scored value is not checked.
+pub(crate) fn verify_chosen_options(chosen: &str, validated: &str) -> Result<(), Error> {
+    let chosen = roxmltree::Document::parse(chosen).map_err(spool_error)?;
+    let validated = roxmltree::Document::parse(validated).map_err(spool_error)?;
+    for (feature, words) in CHOSEN_OPTIONS {
+        if let Some(wanted) = feature_option(&chosen, feature)
+            && (wanted.name.is_some() || !wanted.scored.is_empty())
+            && !keeps_option(&wanted, feature_option(&validated, feature).as_ref())
+        {
+            return Err(spool_error(format!(
+                "the printer's driver replaced the {words} chosen in its dialog; nothing was sent (choose the settings again in its dialog)"
+            )));
+        }
     }
     Ok(())
 }
@@ -391,8 +722,8 @@ fn declared_prefixes(xml: &str, start: usize) -> Vec<(usize, String)> {
 /// A ticket is left as it is when it redeclares one of the prefixes below its root, or has an
 /// element or attribute named in a namespace whose prefix would change.
 pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
-    let document = roxmltree::Document::parse(ticket).ok()?;
-    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
+    let document = crate::xml::parse(ticket).ok()?;
+    let own = vendor_prefixes(&crate::xml::parse(driver).ok()?);
     let declared = vendor_prefixes(&document);
     let renames: Vec<(&str, &str)> = declared
         .iter()
@@ -449,7 +780,7 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
             for a in
                 node.attributes().filter(|a| (a.namespace().is_none() && matches!(a.name(), "name" | "constrained")) || a.namespace() == Some(NS_XSI))
             {
-                edits.extend(respelled(a.range_value().start));
+                edits.extend(value_start(ticket, a.range()).and_then(respelled));
             }
         } else if node.is_text() && node.parent().is_some_and(is_qname_value) {
             // A pretty-printed ticket puts whitespace before the value; the prefix starts after it.
@@ -469,12 +800,22 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
     out.push_str(ticket.get(copied..)?);
     // A last check on the result: it must parse, declare each namespace under the prefix wanted and
     // resolve every prefix.
-    let check = roxmltree::Document::parse(&out).ok()?;
+    let check = crate::xml::parse(&out).ok()?;
     let mut now = vendor_prefixes(&check);
     let mut wanted: Vec<(String, String)> = declared.iter().map(|(old, uri)| (renamed(old).unwrap_or(old).to_string(), uri.clone())).collect();
     now.sort_unstable();
     wanted.sort_unstable();
     (now == wanted && prefixes_resolve(&check)).then_some(out)
+}
+
+/// Where the value of the attribute spanning `attribute` starts: past the quote after its `=`.
+/// Not `range_value`, which roxmltree derives from a name length kept in 16 bits and a count of
+/// spaces around the `=` kept in 8, so it points elsewhere past a 64 KiB name or 255 spaces.
+fn value_start(xml: &str, attribute: std::ops::Range<usize>) -> Option<usize> {
+    let text = xml.get(attribute.clone())?;
+    let equals = text.find('=')?;
+    let quote = text.get(equals..)?.find(['"', '\''])?;
+    Some(attribute.start + equals + quote + 1)
 }
 
 /// Each vendor namespace that `ticket` declares under a prefix the driver does not declare it with,
@@ -486,8 +827,8 @@ pub(crate) fn respell(ticket: &str, driver: &str) -> Option<String> {
 /// is also what it returns when it refused to change a ticket, which then stays as it is.
 #[cfg(test)]
 pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<Vec<(String, String, String)>> {
-    let own = vendor_prefixes(&roxmltree::Document::parse(driver).ok()?);
-    let declared = vendor_prefixes(&roxmltree::Document::parse(ticket).ok()?);
+    let own = vendor_prefixes(&crate::xml::parse(driver).ok()?);
+    let declared = vendor_prefixes(&crate::xml::parse(ticket).ok()?);
     Some(
         declared
             .into_iter()
@@ -504,13 +845,13 @@ pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.
 pub(crate) fn imageable_margin(capabilities_xml: &str) -> Option<u32> {
-    let document = roxmltree::Document::parse(capabilities_xml).ok()?;
+    let document = crate::xml::parse(capabilities_xml).ok()?;
     let imageable = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "PageImageableSize"))?;
-    let width = integer(imageable, "Property", "ImageableSizeWidth")?;
-    let height = integer(imageable, "Property", "ImageableSizeHeight")?;
+    let width = integer(&document, imageable, "Property", "ImageableSizeWidth")?;
+    let height = integer(&document, imageable, "Property", "ImageableSizeHeight")?;
     let area = imageable.children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "ImageableArea"))?;
-    let (x, y) = (integer(area, "Property", "OriginWidth")?, integer(area, "Property", "OriginHeight")?);
-    let (w, h) = (integer(area, "Property", "ExtentWidth")?, integer(area, "Property", "ExtentHeight")?);
+    let (x, y) = (integer(&document, area, "Property", "OriginWidth")?, integer(&document, area, "Property", "OriginHeight")?);
+    let (w, h) = (integer(&document, area, "Property", "ExtentWidth")?, integer(&document, area, "Property", "ExtentHeight")?);
     let right = width.checked_sub(x)?.checked_sub(w)?;
     let bottom = height.checked_sub(y)?.checked_sub(h)?;
     Some(x.max(y).max(right).max(bottom))
@@ -560,6 +901,212 @@ mod tests {
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
     }
 
+    /// A ticket written for these tests in the shape of a converted driver dialog's settings: the
+    /// job-scope schema features, a custom paper with its parameters, pages per sheet, binding
+    /// and a poster, a media type, a vendor's quality and the driver's private settings.
+    fn converted_settings() -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0000="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:Uncollated"/></psf:Feature>
+<psf:Feature name="psk:JobDuplexAllDocumentsContiguously"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:TwoSidedShortEdge"/></psf:Feature>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:CustomMediaSize">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeMediaSizeWidth"/></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:ParameterInit name="psk:PageMediaSizeMediaSizeWidth"><psf:Value xsi:type="xsd:integer">914400</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Landscape"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:CustomSquare"/></psf:Feature>
+<psf:ParameterInit name="psk:PageScalingScale"><psf:Value xsi:type="xsd:integer">50</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentNUp"><psf:Option><psf:ScoredProperty name="psk:PagesPerSheet"><psf:Value xsi:type="xsd:integer">2</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:JobBindAllDocuments"><psf:Option name="psk:Booklet"/></psf:Feature>
+<psf:ParameterInit name="psk:JobBindAllDocumentsGutter"><psf:Value xsi:type="xsd:integer">0</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PagePoster"><psf:Option><psf:ScoredProperty name="psk:SheetsPerPage"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ScoredProperty></psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOutputColor"><psf:Option name="psk:Color"/></psf:Feature>
+<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="ns0000:Fine"/></psf:Feature>
+<psf:Feature name="ns0000:PageMediaSizeSource"><psf:Option name="ns0000:Roll"/></psf:Feature>
+<psf:ParameterInit name="ns0000:PageDevmodeSnapshot"><psf:Value xsi:type="xsd:string">AAECAw==</psf:Value></psf:ParameterInit>
+</psf:PrintTicket>"#
+        )
+    }
+
+    /// The top-level schema names left in a ticket.
+    fn schema_names(xml: &str) -> Vec<String> {
+        let document = roxmltree::Document::parse(xml).unwrap();
+        document.root_element().children().filter(|n| named_in(*n, NS_PSK)).map(|n| n.attribute("name").unwrap_or_default().to_string()).collect()
+    }
+
+    fn named_in(node: roxmltree::Node<'_, '_>, namespace: &str) -> bool {
+        node.attribute("name").and_then(|v| v.split_once(':')).is_some_and(|(prefix, _)| node.lookup_namespace_uri(Some(prefix)) == Some(namespace))
+    }
+
+    #[test]
+    fn the_driver_dialogs_settings_keep_what_the_job_leaves_open() {
+        let settings = converted_settings();
+        let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+        assert_eq!(
+            schema_names(&kept),
+            ["psk:JobDuplexAllDocumentsContiguously", "psk:DocumentDuplex", "psk:PageOutputColor", "psk:PageMediaType", "psk:PageResolution"],
+            "without a two-sided or grayscale choice of the job, the dialog's apply"
+        );
+        for vendor in ["ns0000:Fine", "ns0000:PageMediaSizeSource", "ns0000:PageDevmodeSnapshot", "AAECAw=="] {
+            assert!(kept.contains(vendor), "{vendor} is kept");
+        }
+        for job_owned in [
+            "JobCopiesAllDocuments",
+            "DocumentCollate",
+            "PageMediaSize\"",
+            "MediaSizeWidth",
+            "Landscape",
+            "CustomSquare",
+            "PageScalingScale",
+            "PagesPerSheet",
+            "Booklet",
+            "JobBindAllDocumentsGutter",
+            "SheetsPerPage",
+        ] {
+            assert!(!kept.contains(job_owned), "{job_owned} is the job's");
+        }
+        // Everything kept is the driver's own text, unchanged.
+        let line = r#"<psf:Feature name="psk:PageMediaType"><psf:Option name="psk:PhotographicGlossy"/></psf:Feature>"#;
+        assert!(kept.contains(line));
+
+        let job = Job { duplex: Some(Duplex::Off), grayscale: true, ..Job::default() };
+        assert_eq!(
+            schema_names(&driver_settings_xml(&settings, &job).unwrap()),
+            ["psk:PageMediaType", "psk:PageResolution"],
+            "the job's two-sided and grayscale win"
+        );
+    }
+
+    #[test]
+    fn the_dialogs_settings_are_matched_by_namespace_not_by_prefix() {
+        // The schema keywords under another prefix, or unprefixed in the schema's default
+        // namespace, are still the job's; a vendor feature with a schema-like name is the driver's.
+        let settings = format!(
+            r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}" xmlns:v="http://example.com/vendor">
+<Feature name="k:PageOrientation"><Option name="k:Landscape"/></Feature>
+<Feature name="v:PageOrientation"><Option name="v:Mirrored"/></Feature>
+<p:Feature xmlns:p="{NS_PSF}" xmlns="{NS_PSK}" name="PageMediaSize"/>
+</PrintTicket>"#
+        );
+        let kept = driver_settings_xml(&settings, &Job::default()).unwrap();
+        assert!(!kept.contains("k:Landscape"));
+        assert!(kept.contains("v:Mirrored"));
+        assert!(!kept.contains("name=\"PageMediaSize\""), "{kept}");
+        assert!(roxmltree::Document::parse(&kept).is_ok());
+    }
+
+    #[test]
+    fn a_media_type_or_quality_the_driver_replaced_refuses_the_job() {
+        let chosen = driver_settings_xml(&converted_settings(), &Job::default()).unwrap();
+        // The vendor's namespace under another prefix than the dialog's `ns0000`.
+        let ticket = |media: &str, resolution: &str, quality: &str| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:ns0001="http://example.com/vendor">
+<psf:Feature name="psk:PageMediaType"><psf:Option name="{media}"/></psf:Feature>
+<psf:Feature name="psk:PageResolution"><psf:Option name="{resolution}"/></psf:Feature>{quality}
+</psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&chosen, &ticket("psk:PhotographicGlossy", "ns0001:Fine", "")).is_ok());
+        let respelled = format!(
+            r#"<PrintTicket version="1" xmlns="{NS_PSF}" xmlns:k="{NS_PSK}"><Feature name="k:PageMediaType"><Option name="k:PhotographicGlossy"/></Feature><Feature name="k:PageResolution"><Option xmlns:v="http://example.com/vendor" name="v:Fine"/></Feature></PrintTicket>"#
+        );
+        assert!(verify_chosen_options(&chosen, &respelled).is_ok(), "the same options under other prefixes");
+        let replaced = [
+            (ticket("psk:Plain", "ns0001:Fine", ""), "media type"),
+            (ticket("ns0001:PhotographicGlossy", "ns0001:Fine", ""), "media type"),
+            (ticket("psk:Plain", "ns0001:Fine", "").replace("PageMediaType", "Other"), "media type"),
+            (ticket("psk:PhotographicGlossy", "ns0001:Draft", ""), "resolution"),
+            (ticket("psk:PhotographicGlossy", "psk:Fine", ""), "resolution"),
+        ];
+        for (replaced, words) in replaced {
+            let refused = verify_chosen_options(&chosen, &replaced);
+            assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains(words) && m.contains("nothing was sent")), "{replaced}: {refused:?}");
+        }
+
+        let with_quality = format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High"/></psf:Feature></psf:PrintTicket>"#
+        );
+        let quality = |option: &str| {
+            ticket("psk:Plain", "psk:Other", &format!(r#"<psf:Feature name="psk:PageOutputQuality"><psf:Option name="{option}"/></psf:Feature>"#))
+        };
+        assert!(verify_chosen_options(&with_quality, &quality("psk:High")).is_ok(), "no media type or resolution chosen: not checked");
+        let refused = verify_chosen_options(&with_quality, &quality("psk:Draft"));
+        assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("print quality")), "{refused:?}");
+
+        // A resolution is also its dots per inch, with or without an option name.
+        let resolution = |name: &str, x: u32, y: u32| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option{name}>
+<psf:ScoredProperty name="psk:ResolutionX"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:ResolutionY"><psf:Value xsi:type="xsd:integer"> {y} </psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+            )
+        };
+        for name in ["", r#" name="psk:Fine""#] {
+            let chosen = resolution(name, 600, 600);
+            assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600)).is_ok(), "{name}");
+            assert!(verify_chosen_options(&chosen, &resolution(name, 600, 600).replace(">600<", ">+0600<")).is_ok(), "{name}: the same number");
+            for replaced in [resolution(name, 300, 300), resolution(name, 600, 300), quality("psk:High")] {
+                let refused = verify_chosen_options(&chosen, &replaced);
+                assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("resolution")), "{name} {replaced}: {refused:?}");
+            }
+        }
+        assert!(verify_chosen_options(&resolution(r#" name="psk:Fine""#, 600, 600), &resolution("", 600, 600)).is_err(), "the name was dropped");
+
+        // Values the option refers to as parameters.
+        let by_reference = |x: u32| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:v="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageResolution"><psf:Option name="v:Custom">
+<psf:ScoredProperty name="psk:ResolutionX"><psf:ParameterRef name="v:Dpi"/></psf:ScoredProperty>
+</psf:Option></psf:Feature><psf:ParameterInit name="v:Dpi"><psf:Value xsi:type="xsd:integer">{x}</psf:Value></psf:ParameterInit></psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&by_reference(600), &by_reference(600)).is_ok());
+        assert!(verify_chosen_options(&by_reference(600), &by_reference(300)).is_err(), "the parameter's value changed");
+
+        // A QName value under another prefix is the same value.
+        let qname = |prefix: &str, value: &str| {
+            format!(
+                r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:{prefix}="http://example.com/vendor" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema"><psf:Feature name="psk:PageOutputQuality"><psf:Option name="psk:High">
+<psf:ScoredProperty name="{prefix}:Mode"><psf:Value xsi:type="xsd:QName">{prefix}:{value}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature></psf:PrintTicket>"#
+            )
+        };
+        assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Photo")).is_ok());
+        assert!(verify_chosen_options(&qname("ns0000", "Photo"), &qname("brpsk", "Text")).is_err());
+    }
+
+    #[test]
+    fn settings_that_are_not_a_ticket_are_refused() {
+        for bad in
+            ["", "<not xml", r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework"/>"#]
+        {
+            let refused = driver_settings_xml(bad, &Job::default());
+            assert!(matches!(&refused, Err(Error::Spool(m)) if m.contains("choose them again")), "{bad:?}: {refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_driver_dialog_opens_on_the_jobs_copies_and_collation() {
+        let job = Job { copies: 3, collate: false, duplex: Some(Duplex::LongEdge), grayscale: true, ..Job::default() };
+        let xml = dialog_xml(&job).unwrap();
+        assert_eq!(schema_names(&xml), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
+        for value in [">3<", "psk:Uncollated"] {
+            assert!(xml.contains(value), "missing {value}");
+        }
+        // The job's two-sided and grayscale choices stay out of the settings the dialog returns,
+        // so they do not outlast the job's own choice.
+        for value in ["TwoSided", "Grayscale", "Monochrome"] {
+            assert!(!xml.contains(value), "{value} is the job's");
+        }
+        assert_eq!(schema_names(&dialog_xml(&Job::default()).unwrap()), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
+    }
+
     /// A validated ticket as a driver returns it.
     fn validated(paper: (u32, u32), orientation: &str, scaling: Option<&str>) -> String {
         let scaling = scaling.map_or(String::new(), |s| format!(r#"<psf:Feature name="psk:PageScaling"><psf:Option name="{s}"/></psf:Feature>"#));
@@ -592,6 +1139,89 @@ mod tests {
         assert!(verify_ticket("<not xml", Some(letter), false).is_err());
     }
 
+    /// A validated ticket that keeps only the sides its DEVMODE extension could read, as a legacy
+    /// host-based driver (HP LaserJet P1102, storytold/craft-libs#7230) returns one.
+    fn validated_partial(width: Option<u32>, height: Option<u32>) -> String {
+        let side = |name: &str, value: Option<u32>| {
+            value.map_or(String::new(), |v| {
+                format!(r#"<psf:ScoredProperty name="psk:{name}"><psf:Value xsi:type="xsd:integer">{v}</psf:Value></psf:ScoredProperty>"#)
+            })
+        };
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">{}{}</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#,
+            side("MediaSizeWidth", width),
+            side("MediaSizeHeight", height)
+        )
+    }
+
+    /// storytold/craft-libs#7230: the driver reports one side of the paper as zero for a real
+    /// sheet. With the sheet the request names, the job goes on with the size it asked for; a
+    /// side the driver did report must still agree with it, and a request that names no sheet is
+    /// refused as before.
+    #[test]
+    fn a_legacy_v3_drivers_zero_side_falls_back_to_the_requested_paper() {
+        let a4 = (210_000, 297_000);
+        assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_000)), Some(a4), false), Ok(a4), "a zero side is a missing one");
+        assert_eq!(verify_ticket(&validated_partial(Some(297_000), None), Some(a4), false), Ok(a4), "either way round");
+        // 0.5 pt (176 µm) inside the tolerance still agrees.
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_176)), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_250)), Some(a4), false), Ok(a4), "exactly the tolerance");
+        // A side that disagrees means the driver changed the paper, not that it has a roll.
+        let changed = verify_ticket(&validated_partial(Some(0), Some(279_400)), Some(a4), false).unwrap_err();
+        assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+        assert!(!changed.to_string().contains("roll"), "{changed}");
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_251)), Some(a4), false).is_err(), "one µm past the tolerance");
+        // Without a sheet named the zero side stays roll-like.
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_000)), None, false).is_err());
+        assert!(verify_ticket(&validated_partial(None, Some(297_000)), None, false).is_err());
+        // Both sides gone is refused whatever the request names.
+        for wanted in [Some(a4), None] {
+            for (width, height) in [(None, None), (Some(0), Some(0))] {
+                let refused = verify_ticket(&validated_partial(width, height), wanted, false).unwrap_err();
+                assert!(refused.to_string().contains("roll"), "{refused}");
+            }
+        }
+    }
+
+    /// A validated ticket whose width the option refers to a parameter the ticket sets
+    /// (`MediaSizeWidth` a `ParameterRef`, storytold/craft-libs#1225), as a driver writes one.
+    fn validated_referenced(width: u32, height: u32) -> String {
+        format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:PageMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{width}</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeWidth"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">{height}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#
+        )
+    }
+
+    /// A paper side a driver keeps in a `ParameterRef` is resolved through the `ParameterInit`
+    /// the ticket sets, and checked like a direct one: a referenced width that disagrees with the
+    /// sheet the request names is refused, one that agrees is taken.
+    #[test]
+    fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
+        let a4 = (210_000, 297_000);
+        assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false), Ok(a4));
+        assert_eq!(verify_ticket(&validated_referenced(209_750, 297_000), Some(a4), false), Ok((209_750, 297_000)), "exactly the tolerance");
+        // A referenced size that disagrees is refused, not rewritten from the request.
+        let changed = verify_ticket(&validated_referenced(400_000, 297_000), Some(a4), false).unwrap_err();
+        assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+        // A reference to a parameter the ticket does not set is a missing side, which falls back
+        // to the requested paper like any unreadable one.
+        let unset =
+            validated_referenced(400_000, 297_000).replace(r#"name="psk:PageMediaSizeWidth"><psf:Value"#, r#"name="psk:OtherParameter"><psf:Value"#);
+        assert_eq!(verify_ticket(&unset, Some(a4), false), Ok(a4), "a parameter the ticket does not set is a missing side");
+    }
+
     /// The namespace of the Brother driver's own keywords.
     const BROTHER: &str = "http://schemas.brother.info/mfc/printing/2006/11/printschemakeywords";
 
@@ -609,6 +1239,23 @@ mod tests {
     fn a_qname_value_after_whitespace_is_respelled() {
         let spaced = |prefix: &str| brother(prefix).replace(&format!(">{prefix}:Fast<"), &format!(">\n  {prefix}:Fast\n<"));
         assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+    }
+
+    /// A `name` with more than 255 spaces around its `=`, and an `xsi` attribute with a name over
+    /// 64 KiB, are respelled where their values are, not where roxmltree's `range_value` says.
+    #[test]
+    fn values_past_a_long_name_or_many_spaces_are_respelled_in_place() {
+        let spaced = |prefix: &str| {
+            let pad = " ".repeat(200);
+            brother(prefix).replace(&format!(r#"name="{prefix}:JobPrintSpeed""#), &format!(r#"name{pad}={pad}"{prefix}:JobPrintSpeed""#))
+        };
+        assert_eq!(respell(&spaced("ns0000"), &brother("brpsk")), Some(spaced("brpsk")));
+        let long = |prefix: &str| {
+            let p = "x".repeat(65_536);
+            brother(prefix)
+                .replace("</psf:PrintTicket>", &format!(r#"<psf:Value xmlns:{p}="{NS_XSI}" {p}:type="{prefix}:Custom"/></psf:PrintTicket>"#))
+        };
+        assert_eq!(respell(&long("ns0000"), &brother("brpsk")), Some(long("brpsk")));
     }
 
     /// The ticket Windows returns (`ns0000`) gets the driver's own `brpsk` back, in the declaration, the names and the QName values, but not in text.
@@ -796,6 +1443,70 @@ mod tests {
         assert!(verify_job_options("<not xml", &default, 1, Offered::default()).is_err());
     }
 
+    /// Checks that document duplex drivers keep each requested binding.
+    #[test]
+    fn document_duplex_drivers_keep_each_requested_binding() {
+        for choice in [Duplex::Off, Duplex::LongEdge, Duplex::ShortEdge] {
+            let job = Job { duplex: Some(choice), ..Job::default() };
+            let xml = ticket_xml_for_duplex(&job, false, true);
+            assert!(xml.contains("psk:DocumentDuplex"));
+            assert!(!xml.contains("psk:JobDuplexAllDocumentsContiguously"));
+            assert!(verify_job_options(&xml, &job, 3, Offered::default()).is_ok());
+            assert!(verify_job_options(&without(&xml, "DocumentDuplex"), &job, 3, Offered::default()).is_err());
+            assert!(verify_job_options(&xml.replace("psk:DocumentDuplex", "ns0000:DocumentDuplex"), &job, 3, Offered::default()).is_err());
+            for other in ["OneSided", "TwoSidedLongEdge", "TwoSidedShortEdge"] {
+                let wanted = match choice {
+                    Duplex::Off => "OneSided",
+                    Duplex::LongEdge => "TwoSidedLongEdge",
+                    Duplex::ShortEdge => "TwoSidedShortEdge",
+                };
+                assert!(
+                    verify_job_options(&xml.replace(&format!("psk:{wanted}"), &format!("ns0000:{wanted}")), &job, 3, Offered::default()).is_err()
+                );
+                if other != wanted {
+                    assert!(verify_job_options(&xml.replace(wanted, other), &job, 3, Offered::default()).is_err());
+                    let conflicting = xml.replace("</psf:PrintTicket>", &format!(
+                        "<psf:Feature name=\"psk:JobDuplexAllDocumentsContiguously\"><psf:Option name=\"psk:{other}\"/></psf:Feature></psf:PrintTicket>"
+                    ));
+                    assert!(verify_job_options(&conflicting, &job, 3, Offered::default()).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn duplex_qnames_resolve_their_in_scope_namespace() {
+        for prefix in ["psk:", ""] {
+            for choice in [Duplex::Off, Duplex::LongEdge, Duplex::ShortEdge] {
+                let option = match choice {
+                    Duplex::Off => "OneSided",
+                    Duplex::LongEdge => "TwoSidedLongEdge",
+                    Duplex::ShortEdge => "TwoSidedShortEdge",
+                };
+                let xml = format!(
+                    r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns="{NS_PSK}" xmlns:v="urn:vendor"><psf:Feature name="{prefix}DocumentDuplex"><psf:Option name="{prefix}{option}"/></psf:Feature></psf:PrintCapabilities>"#
+                );
+                assert!(document_duplex_only(&xml, Some(choice)));
+                assert!(!document_duplex_only(&xml, None));
+                assert_eq!(two_sided(&xml), Some(choice != Duplex::Off));
+                let vendor = xml.replace(&format!("name=\"{prefix}{option}\""), &format!("name=\"v:{option}\""));
+                assert!(!document_duplex_only(&vendor, Some(choice)));
+                assert_eq!(two_sided(&vendor), Some(false));
+                let default_vendor = xml.replace(&format!("xmlns=\"{NS_PSK}\""), "xmlns=\"urn:vendor\"");
+                assert_eq!(document_duplex_only(&default_vendor, Some(choice)), !prefix.is_empty());
+                let validated = ticket_xml_for_duplex(&Job { duplex: Some(choice), ..Job::default() }, false, true)
+                    .replace(&format!("xmlns:psk=\"{NS_PSK}\""), &format!("xmlns:psk=\"{NS_PSK}\" xmlns=\"{NS_PSK}\""))
+                    .replace("psk:", prefix);
+                assert!(verify_job_options(&validated, &Job { duplex: Some(choice), ..Job::default() }, 1, Offered::default()).is_ok());
+            }
+        }
+        let unknown = format!(
+            r#"<psf:PrintCapabilities xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}"><psf:Feature name="psk:DocumentDuplex"><psf:Option name="psk:TwoSidedVendor"/></psf:Feature></psf:PrintCapabilities>"#
+        );
+        assert_eq!(two_sided(&unknown), Some(false));
+        assert_eq!(two_sided("invalid"), None);
+    }
+
     /// PrintCapabilities as a driver might write them: with or without a duplex feature, and the
     /// colour and collation options given (none: no such feature).
     fn capabilities_xml(duplex: bool, colors: &[&str], collations: &[&str]) -> String {
@@ -831,7 +1542,7 @@ mod tests {
     #[test]
     fn a_driver_without_a_duplex_feature_prints_one_side_and_is_not_refused_for_it() {
         let offered = |duplex| offered(&capabilities_xml(duplex, COLOR, COLLATE));
-        assert_eq!(offered(true), Offered { duplex: Some(true), color: Some(true), collate: Some(true) });
+        assert_eq!(offered(true), Offered { duplex: Some(true), color: Some(true), grey: Some(true), collate: Some(true) });
         assert_eq!(offered(false).duplex, Some(false));
         assert_eq!(super::offered("<psf:PrintCapabilities xmlns:psf=\"x\"/>"), Offered::default(), "another namespace is not capabilities");
         assert_eq!(super::offered("<not xml"), Offered::default());
@@ -892,6 +1603,57 @@ mod tests {
         assert!(verify_job_options(&dropped, &gray, 3, Offered::default()).is_err(), "unknown stays strict");
     }
 
+    /// storytold/pdfcraft#5806: a driver whose only grey option is `Grayscale` is asked for that,
+    /// since Windows drops a `Monochrome` it doesn't list and the driver's colour comes back.
+    #[test]
+    fn the_ticket_asks_for_the_grey_option_the_driver_lists() {
+        let grey = |colors: &[&str]| grey_option(&capabilities_xml(true, colors, COLLATE));
+        assert_eq!(grey(&["psk:Color", "psk:Grayscale"]), Grey::Grayscale);
+        assert_eq!(grey(&["psk:Color", "psk:Monochrome"]), Grey::Monochrome);
+        assert_eq!(grey(&["psk:Color", "psk:Grayscale", "psk:Monochrome"]), Grey::Monochrome, "both: as before");
+        assert_eq!(grey(&["psk:Color"]), Grey::Monochrome, "none to ask for: as before");
+        assert_eq!(grey(&["psk:Color", "ns0000:Grayscale"]), Grey::Monochrome, "a vendor's option is not the schema's");
+        assert_eq!(grey_option("<not xml"), Grey::Monochrome);
+
+        let gray = Job { grayscale: true, ..Job::default() };
+        let asked = ticket_xml_with(&gray, false, false, Grey::Grayscale);
+        assert!(asked.contains("<psf:Option name=\"psk:Grayscale\"/>") && !asked.contains("psk:Monochrome"));
+        assert_eq!(ticket_xml_with(&gray, false, false, Grey::Monochrome), ticket_xml(&gray, false));
+        assert!(!ticket_xml_with(&Job::default(), false, false, Grey::Grayscale).contains("PageOutputColor"), "colour asks nothing");
+        // The driver keeps it, and the check reads it back.
+        assert!(verify_job_options(&asked, &gray, 3, Offered::default()).is_ok());
+    }
+
+    /// storytold/pdfcraft#5806: pages the caller has already made grey print on a driver with no
+    /// grey option (Microsoft Print to PDF lists only Color; an HP driver has only its own
+    /// `ns0000:JobHPPrintInGrayScale`), and on one that dropped the request. Without them, such a
+    /// driver is still refused, since the pages would come out in colour.
+    #[test]
+    fn grey_pages_print_on_a_driver_that_has_no_grey_option() {
+        let caps = |colors: &[&str]| offered(&capabilities_xml(true, colors, COLLATE));
+        assert_eq!(caps(&["psk:Color"]).grey, Some(false));
+        assert_eq!(caps(&["psk:Color", "ns0000:Gray"]).grey, Some(false), "a vendor's option can't be asked for by name");
+        assert_eq!(caps(COLOR).grey, Some(true));
+        assert_eq!(caps(&["psk:Grayscale"]).grey, Some(true));
+        assert_eq!(super::offered("<not xml").grey, None);
+
+        let gray = Job { grayscale: true, ..Job::default() };
+        let grey_pages = Job { grey_pages: true, ..gray.clone() };
+        // What such a driver returns: colour, or nothing about colour.
+        let color = ticket_xml(&gray, false).replace("psk:Monochrome", "psk:Color");
+        let dropped = without(&ticket_xml(&gray, false), "PageOutputColor");
+        for xml in [&color, &dropped] {
+            assert!(verify_job_options(xml, &gray, 3, caps(&["psk:Color"])).is_err(), "colour pages are refused");
+            assert!(verify_job_options(xml, &grey_pages, 3, caps(&["psk:Color"])).is_ok(), "grey pages print");
+            assert!(verify_job_options(xml, &grey_pages, 3, Offered::default()).is_ok(), "unread capabilities too");
+            assert!(verify_job_options(xml, &grey_pages, 3, caps(COLOR)).is_ok(), "and a driver that dropped it");
+        }
+        // The other options are still checked.
+        let copies = Job { copies: 2, ..grey_pages.clone() };
+        assert!(verify_job_options(&color, &copies, 3, caps(&["psk:Color"])).is_err(), "copy count");
+        assert!(!Job::default().grey_pages, "off unless the caller says so");
+    }
+
     #[test]
     fn copies_on_a_driver_that_cannot_collate_are_accepted_only_uncollated() {
         let caps = |collations: &[&str]| offered(&capabilities_xml(true, COLOR, collations));
@@ -946,8 +1708,81 @@ mod tests {
         assert!(!names_paper(Some("ANSI D"), "ARCH D"));
         assert!(!names_paper(Some("ARCH E1"), "ARCH E"));
         assert!(!names_paper(Some("A4Extra"), "A4"));
+        // storytold/craft-libs#1225: a word after a separator is a modifier, not dimensions.
+        assert!(!names_paper(Some("A4 Extra"), "A4"));
+        assert!(!names_paper(Some("A4 (Extra)"), "A4"));
+        assert!(names_paper(Some("A4 210 x 297 mm"), "A4"));
         assert!(!names_paper(Some("Ä"), "A4"), "never slices inside a character");
         assert!(!names_paper(None, "A4"));
+    }
+
+    /// A paper the driver keeps one side of (storytold/craft-libs#7230) is a candidate of last
+    /// resort only: no full entry matched, a Print Schema keyword entry, and its known side
+    /// agrees with the sheet.
+    #[test]
+    fn a_partially_known_paper_is_a_candidate_of_last_resort_only() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        let partial = paper(0, 297_000, Some("A4"), true);
+        let alone = [partial.clone()];
+        assert_eq!(matching_paper(&alone, 595.28, 841.89), Some(0), "no full entry: the partial one is taken");
+        // A full candidate, however it spells its option, wins over the partial one.
+        let with_full = [partial, paper(210_100, 297_000, Some("A4"), false)];
+        assert_eq!(matching_paper(&with_full, 595.28, 841.89), Some(1), "the full entry wins");
+        // A vendor's own entry is no partial candidate.
+        assert_eq!(matching_paper(&[paper(0, 297_000, Some("A4"), false)], 595.28, 841.89), None);
+        // A partial entry whose known side disagrees is no candidate.
+        assert_eq!(matching_paper(&[paper(0, 279_400, Some("Letter"), true)], 595.28, 841.89), None);
+        // Both sides gone: nothing known to agree with.
+        assert_eq!(matching_paper(&[paper(0, 0, Some("A4"), true)], 595.28, 841.89), None);
+    }
+
+    /// One partial paper whose known side agrees is still taken, named like the requested
+    /// standard sheet or not. The known side agrees only to a quarter of a millimetre: exactly
+    /// the tolerance is taken, one micrometre past it is another paper.
+    #[test]
+    fn a_single_partially_known_paper_that_agrees_is_still_taken() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        assert_eq!(matching_paper(&[paper(215_900, 0, Some("Legal 215.9 x 355.6 mm"), true)], 612.0, 1008.0), Some(0), "named like the sheet");
+        assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "or without a name at all");
+        assert_eq!(matching_paper(&[paper(0, 297_250, None, true)], 595.28, 841.89), Some(0), "exactly the tolerance");
+        assert_eq!(matching_paper(&[paper(0, 297_251, None, true)], 595.28, 841.89), None, "one µm past the tolerance");
+    }
+
+    /// storytold/craft-libs#1225 (Code Rabbit, second round): a single partial paper whose known
+    /// side agrees is still refused when its own name is known and contradicts the requested
+    /// standard sheet — the width the driver kept is shared by Letter and Legal, and a known
+    /// Letter name is evidence against choosing it for a Legal sheet (INV-4). "Extra" is a
+    /// modifier word, another paper: a known "Letter Extra" name contradicts a Letter sheet too.
+    /// Without a name there is nothing contradicting, and the agreeing entry is taken as before.
+    #[test]
+    fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refused() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter 215.9 x 279.4 mm"), true)], 612.0, 1008.0),
+            None,
+            "a known Letter name is not a Legal sheet"
+        );
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter Extra 215.9 x 431.8 mm"), true)], 612.0, 792.0),
+            None,
+            "a known \"Letter Extra\" name is not a Letter sheet"
+        );
+        assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "an unnamed twin stands, the agreement alone");
+    }
+
+    /// storytold/craft-libs#1225: two partial papers that both agree (Letter and Legal share a
+    /// width) are told apart by name, as full candidates are; when nothing tells them apart,
+    /// none is chosen, not the first one that agrees.
+    #[test]
+    fn two_partially_known_papers_that_agree_are_told_apart_by_their_names() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        let both = [paper(215_900, 0, Some("Letter"), true), paper(215_900, 0, Some("Legal"), true)];
+        assert_eq!(matching_paper(&both, 612.0, 1008.0), Some(1), "the partial named like the sheet wins");
+        assert_eq!(matching_paper(&both, 612.0, 792.0), Some(0), "and for a Letter sheet, the Letter one");
+        let unnamed = [paper(215_900, 0, None, true), paper(215_900, 0, None, true)];
+        assert_eq!(matching_paper(&unnamed, 612.0, 1008.0), None, "nothing to tell them apart by");
+        let same_name = [paper(215_900, 0, Some("Legal"), true), paper(215_900, 0, Some("Legal"), true)];
+        assert_eq!(matching_paper(&same_name, 612.0, 1008.0), None, "two of the same name are ambiguous too");
     }
 
     #[test]

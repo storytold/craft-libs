@@ -7,9 +7,14 @@ use alloc::vec::Vec;
 /// PdfCraft patch: `limit` is the most bytes produced (see `filter::decode_limit`); each `z` costs
 /// one input byte and yields four, so a Flate stream of them would outgrow the budget.
 pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
+    decode_controlled(data, limit, None)
+}
+
+pub(crate) fn decode_controlled(data: &[u8], limit: usize, control: Option<&crate::cancel::Control>) -> Option<Vec<u8>> {
     const POW_85: [u32; 5] = [52200625, 614125, 7225, 85, 1];
 
     let mut reader = Reader::new(data);
+    reader.set_control(control.cloned());
 
     let mut read_byte = || -> Option<u8> {
         loop {
@@ -69,6 +74,7 @@ pub(crate) fn decode(data: &[u8], limit: usize) -> Option<Vec<u8>> {
         }
 
         let Some(b) = read_byte() else {
+            crate::cancel::check(control)?;
             // Be lenient and accept what we have (see PDFBOX-5910).
             flush_group(&mut group, &mut decoded)?;
             decoded.truncate(limit);

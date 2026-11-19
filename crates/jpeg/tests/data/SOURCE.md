@@ -9,6 +9,7 @@ libjpeg-turbo's tools, as described below.
 | File | What it is |
 |---|---|
 | `testorig.jpg` | 227×149 YCbCr, 2×2 luma sampling, baseline Huffman (SOF0) |
+| `testorig-huffman-progressive.jpg` | `testorig.jpg` decoded to PPM with FFmpeg, then re-encoded with libjpeg-turbo `cjpeg -progressive -quality 88` (SOF2) |
 | `testimgari.jpg` | the same image, arithmetic coded (SOF9), one interleaved scan |
 | `testimgari-huffman.jpg` | `testimgari.jpg` losslessly transcoded to baseline Huffman (SOF0) |
 | `testorig12.jpg` | 227×149 YCbCr, 12-bit extended sequential Huffman (SOF1) |

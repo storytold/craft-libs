@@ -3,9 +3,12 @@
 //! Derived from PdfCraft's activation-safe subscription and GNOME schema fallback,
 //! CADCraft's BSD support, and ArtCraft Launcher's ReadOne/Read compatibility.
 //! Palettes, manual choices and the fallback when no preference exists belong to the host.
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU8, Ordering},
+use std::{
+    sync::{
+        Arc, Condvar, Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    time::Duration,
 };
 
 /// Desktop color preference observed independently of the application palette.
@@ -20,6 +23,12 @@ pub enum Theme {
 struct Shared {
     value: AtomicU8,
     active: AtomicBool,
+    /// True once the source has answered, found no answer, or been cancelled.
+    settled: Mutex<bool>,
+    settled_changed: Condvar,
+    /// `XDG_CURRENT_DESKTOP` names GNOME; read once when the watcher starts.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    gnome: bool,
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     wake: Box<dyn Fn() + Send + Sync>,
 }
@@ -32,13 +41,20 @@ impl Shared {
         }
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn settle(&self) {
+        *self.settled.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.settled_changed.notify_all();
+    }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     fn publish(&self, theme: Option<Theme>) {
         let code = match theme {
             Some(Theme::Dark) => 1,
             Some(Theme::Light) => 2,
             None => 0,
         };
-        if self.value.swap(code, Ordering::AcqRel) != code && self.active.load(Ordering::Acquire) {
+        let changed = self.value.swap(code, Ordering::AcqRel) != code;
+        self.settle();
+        if changed && self.active.load(Ordering::Acquire) {
             (self.wake)();
         }
     }
@@ -81,6 +97,20 @@ impl Watcher {
     pub fn current(&self) -> Option<Theme> {
         self.shared.get()
     }
+    /// Block until the first answer is known, then return it; at most `timeout`.
+    ///
+    /// Returns early, with `current()`, when the portal is absent and the `gsettings` fallback
+    /// found nothing, or when the desktop reports no preference. Call it once while building the
+    /// first frame so a light desktop does not flash dark:
+    ///
+    /// ```ignore
+    /// let theme = watcher.wait_first(std::time::Duration::from_millis(250));
+    /// ```
+    pub fn wait_first(&self, timeout: Duration) -> Option<Theme> {
+        let settled = self.shared.settled.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(self.shared.settled_changed.wait_timeout_while(settled, timeout, |settled| !*settled).unwrap_or_else(PoisonError::into_inner));
+        self.current()
+    }
     /// Enable or suppress future change notifications without stopping observation.
     /// Changing this flag does not itself wake the host or clear the cached preference.
     pub fn set_active(&self, active: bool) {
@@ -92,7 +122,15 @@ impl Watcher {
         wake: impl Fn() + Send + Sync + 'static,
         source: impl FnOnce(Arc<Shared>) -> F + Send + 'static,
     ) -> Option<Self> {
-        let shared = Arc::new(Shared { value: AtomicU8::new(0), active: AtomicBool::new(active), wake: Box::new(wake) });
+        let gnome = is_gnome(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref());
+        let shared = Arc::new(Shared {
+            value: AtomicU8::new(0),
+            active: AtomicBool::new(active),
+            settled: Mutex::new(false),
+            settled_changed: Condvar::new(),
+            gnome,
+            wake: Box::new(wake),
+        });
         let worker_shared = Arc::clone(&shared);
         let (stop, stopped) = async_channel::bounded::<()>(1);
         let (done, finished) = std::sync::mpsc::channel();
@@ -103,8 +141,9 @@ impl Watcher {
                     async {
                         let _ = stopped.recv().await;
                     },
-                    source(worker_shared),
+                    source(Arc::clone(&worker_shared)),
                 ));
+                worker_shared.settle();
                 let _ = done.send(());
             })
             .ok()?;
@@ -116,6 +155,7 @@ impl Drop for Watcher {
         self.set_active(false);
         #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
         {
+            self.shared.settle();
             self.stop.close();
             if let Some(worker) = self.worker.take() {
                 let _ = self.finished.recv_timeout(std::time::Duration::from_millis(100));
@@ -127,6 +167,12 @@ impl Drop for Watcher {
             }
         }
     }
+}
+
+/// Whether a colon-separated `XDG_CURRENT_DESKTOP` value names GNOME.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn is_gnome(desktop: Option<&str>) -> bool {
+    desktop.is_some_and(|list| list.split(':').any(|name| name.eq_ignore_ascii_case("gnome")))
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
@@ -144,27 +190,31 @@ mod portal {
     const TIMEOUT: Duration = Duration::from_secs(2);
 
     // Outer None means unknown/malformed; Some(None) is an explicit no-preference answer.
-    fn decode(namespace: &str, value: &Value<'_>) -> Option<Option<Theme>> {
+    // GNOME 42-46 writes 'default' (portal value 0) for Settings > Appearance > Light, so on GNOME
+    // both mean light; elsewhere both are no preference.
+    fn decode(namespace: &str, value: &Value<'_>, gnome: bool) -> Option<Option<Theme>> {
         match (namespace, value) {
             (STANDARD, Value::U32(n)) => Some(match n {
                 1 => Some(Theme::Dark),
                 2 => Some(Theme::Light),
+                0 if gnome => Some(Theme::Light),
                 _ => None,
             }),
             (GNOME, Value::Str(s)) => Some(match s.as_str() {
                 "prefer-dark" => Some(Theme::Dark),
                 "prefer-light" => Some(Theme::Light),
+                "default" if gnome => Some(Theme::Light),
                 _ => None,
             }),
             _ => None,
         }
     }
-    fn reply(namespace: &str, value: &Value<'_>, legacy: bool) -> Option<Option<Theme>> {
+    fn reply(namespace: &str, value: &Value<'_>, legacy: bool, gnome: bool) -> Option<Option<Theme>> {
         if legacy {
             let Value::Value(inner) = value else { return None };
-            decode(namespace, inner)
+            decode(namespace, inner, gnome)
         } else {
-            decode(namespace, value)
+            decode(namespace, value, gnome)
         }
     }
     fn combined(standard: Option<Option<Theme>>, gnome: Option<Option<Theme>>) -> Option<Option<Theme>> {
@@ -177,11 +227,11 @@ mod portal {
         })
         .await
     }
-    async fn read(connection: &zbus::Connection, namespace: &str) -> Option<Option<Theme>> {
+    async fn read(connection: &zbus::Connection, namespace: &str, gnome: bool) -> Option<Option<Theme>> {
         for (method, legacy) in [("ReadOne", false), ("Read", true)] {
             if let Some(Ok(message)) = bounded(connection.call_method(Some(DEST), PATH, Some(IFACE), method, &(namespace, KEY))).await
                 && let Ok(value) = message.body().deserialize::<OwnedValue>()
-                && let Some(answer) = reply(namespace, &value, legacy)
+                && let Some(answer) = reply(namespace, &value, legacy, gnome)
             {
                 return Some(answer);
             }
@@ -213,6 +263,8 @@ mod portal {
         loop {
             let mut connected = false;
             let _ = session(&shared, &mut fallback_used, &mut connected).await;
+            // No session bus, no portal and an empty fallback all end here without a publish.
+            shared.settle();
             if connected {
                 retry = Duration::from_secs(5);
             }
@@ -235,7 +287,7 @@ mod portal {
             && let Some(text) = crate::process::capture(&exe, &["get", GNOME, KEY], TIMEOUT).await
         {
             let text = text.trim().trim_matches('\'');
-            if let Some(answer) = decode(GNOME, &Value::from(text)) {
+            if let Some(answer) = decode(GNOME, &Value::from(text), shared.gnome) {
                 shared.publish(answer);
             }
         }
@@ -255,8 +307,8 @@ mod portal {
         // MatchRule installs before activation: unlike a proxy subscription it needs no current owner.
         let mut changes = bounded(zbus::MessageStream::for_match_rule(rule().ok()?, &connection, Some(64))).await?.ok()?;
         let mut owners = bounded(zbus::MessageStream::for_match_rule(owner_rule().ok()?, &connection, Some(8))).await?.ok()?;
-        let mut standard = read(&connection, STANDARD).await;
-        let mut gnome = read(&connection, GNOME).await;
+        let mut standard = read(&connection, STANDARD, shared.gnome).await;
+        let mut gnome = read(&connection, GNOME, shared.gnome).await;
         match combined(standard, gnome) {
             Some(answer) => {
                 *connected = true;
@@ -286,7 +338,7 @@ mod portal {
             if key != KEY {
                 continue;
             }
-            let Some(answer) = decode(&namespace, &value) else { continue };
+            let Some(answer) = decode(&namespace, &value, shared.gnome) else { continue };
             match namespace.as_str() {
                 STANDARD => standard = Some(answer),
                 GNOME => gnome = Some(answer),
@@ -323,6 +375,7 @@ mod portal {
         }
 
         use super::{GNOME, STANDARD, combined, decode, reply};
+        use crate::appearance::is_gnome;
         use crate::appearance::{Theme, Watcher};
         use std::{
             sync::{Arc, atomic::Ordering},
@@ -339,18 +392,70 @@ mod portal {
         }
         #[test]
         fn malformed_is_distinct_from_no_preference_and_legacy_is_exact() {
-            assert_eq!(decode(STANDARD, &Value::U32(0)), Some(None));
-            assert_eq!(decode(STANDARD, &Value::U32(77)), Some(None));
-            assert_eq!(decode(STANDARD, &Value::from("dark")), None);
-            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::U32(1))), true), Some(Some(Theme::Dark)));
-            assert_eq!(reply(STANDARD, &Value::U32(1), true), None);
-            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::Value(Box::new(Value::U32(1))))), true), None);
-            assert_eq!(decode(STANDARD, &Value::Value(Box::new(Value::U32(1)))), None);
-            assert_eq!(decode(STANDARD, &Value::I32(1)), None);
-            assert_eq!(decode(GNOME, &Value::from("default")), Some(None));
-            assert_eq!(decode(GNOME, &Value::U32(1)), None);
-
-            assert_eq!(reply(GNOME, &Value::from("prefer-light"), false), Some(Some(Theme::Light)));
+            assert_eq!(decode(STANDARD, &Value::U32(0), false), Some(None));
+            assert_eq!(decode(STANDARD, &Value::U32(77), false), Some(None));
+            assert_eq!(decode(STANDARD, &Value::from("dark"), false), None);
+            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::U32(1))), true, false), Some(Some(Theme::Dark)));
+            assert_eq!(reply(STANDARD, &Value::U32(1), true, false), None);
+            assert_eq!(reply(STANDARD, &Value::Value(Box::new(Value::Value(Box::new(Value::U32(1))))), true, false), None);
+            assert_eq!(decode(STANDARD, &Value::Value(Box::new(Value::U32(1))), false), None);
+            assert_eq!(decode(STANDARD, &Value::I32(1), false), None);
+            assert_eq!(decode(GNOME, &Value::U32(1), false), None);
+            assert_eq!(reply(GNOME, &Value::from("prefer-light"), false, false), Some(Some(Theme::Light)));
+        }
+        #[test]
+        fn gnome_light_setting_reads_as_light_and_zero_is_no_preference_elsewhere() {
+            assert_eq!(decode(GNOME, &Value::from("default"), true), Some(Some(Theme::Light)));
+            // A GNOME schema installed on another desktop doesn't make that desktop light.
+            assert_eq!(decode(GNOME, &Value::from("default"), false), Some(None));
+            assert_eq!(decode(GNOME, &Value::from("prefer-dark"), false), Some(Some(Theme::Dark)));
+            assert_eq!(decode(GNOME, &Value::from("prefer-light"), false), Some(Some(Theme::Light)));
+            assert_eq!(decode(STANDARD, &Value::U32(0), true), Some(Some(Theme::Light)));
+            assert_eq!(decode(STANDARD, &Value::U32(0), false), Some(None));
+            for gnome in [true, false] {
+                assert_eq!(decode(STANDARD, &Value::U32(1), gnome), Some(Some(Theme::Dark)));
+                assert_eq!(decode(STANDARD, &Value::U32(2), gnome), Some(Some(Theme::Light)));
+            }
+            assert!(is_gnome(Some("GNOME")));
+            assert!(is_gnome(Some("ubuntu:GNOME")));
+            assert!(is_gnome(Some("gnome-classic:gnome")));
+            assert!(!is_gnome(Some("KDE")));
+            assert!(!is_gnome(Some("X-Cinnamon")));
+            assert!(!is_gnome(None));
+        }
+        fn spawn_idle(source: impl FnOnce(Arc<crate::appearance::Shared>) + Send + 'static) -> Result<Watcher, &'static str> {
+            Watcher::spawn(false, || {}, move |shared| async move { source(shared) }).ok_or("worker creation failed")
+        }
+        #[test]
+        fn wait_first_returns_at_once_after_a_publish() -> Result<(), Box<dyn std::error::Error>> {
+            let watcher = spawn_idle(|shared| {
+                shared.publish(Some(Theme::Light));
+                std::thread::sleep(Duration::from_millis(500));
+            })?;
+            let started = std::time::Instant::now();
+            assert_eq!(watcher.wait_first(Duration::from_secs(2)), Some(Theme::Light));
+            assert!(started.elapsed() < Duration::from_secs(1));
+            Ok(())
+        }
+        #[test]
+        fn wait_first_times_out_without_an_answer_and_drop_stays_bounded() -> Result<(), Box<dyn std::error::Error>> {
+            let watcher = Watcher::spawn(false, || {}, |_| futures_lite::future::pending::<()>()).ok_or("worker creation failed")?;
+            let started = std::time::Instant::now();
+            assert_eq!(watcher.wait_first(Duration::from_millis(50)), None);
+            assert!(started.elapsed() >= Duration::from_millis(50));
+            drop(watcher);
+            Ok(())
+        }
+        #[test]
+        fn wait_first_returns_early_for_no_preference_and_for_a_source_that_ends_empty() -> Result<(), Box<dyn std::error::Error>> {
+            let none = spawn_idle(|shared| shared.publish(None))?;
+            let ended = spawn_idle(|_| {})?;
+            for watcher in [none, ended] {
+                let started = std::time::Instant::now();
+                assert_eq!(watcher.wait_first(Duration::from_secs(2)), None);
+                assert!(started.elapsed() < Duration::from_secs(1));
+            }
+            Ok(())
         }
         #[test]
         fn manual_cache_changes_do_not_wake_and_drop_cancels_pending_source() -> Result<(), Box<dyn std::error::Error>> {
