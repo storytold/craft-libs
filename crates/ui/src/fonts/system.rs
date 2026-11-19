@@ -246,6 +246,33 @@ mod tests {
     }
 
     #[test]
+    fn index_completion_before_registration_does_not_leave_cached_fallback() {
+        static INDEX: Shared<Gated> = Shared::new(|| Gated);
+        fn selected(ctx: &egui::Context) -> Option<String> {
+            ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+            ctx.fonts_mut(|fonts| {
+                fonts.has_glyph(&FontId::proportional(14.0), 'ع');
+                fonts.discovered_fonts().last().map(|font| font.name.clone())
+            })
+        }
+        fn start(ctx: &egui::Context) {
+            // Model another thread using any already-visible providers, then the worker
+            // finishing just before this context can register for completion reloads.
+            selected(ctx);
+            INDEX.finish();
+            INDEX.start(Some(ctx));
+        }
+        *INDEX.lock() = State::Building { turned_away: false, contexts: Vec::new() };
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let system: Arc<dyn FontProvider> = Arc::new(Lookup::new(&INDEX, (), false));
+        let fallback: Arc<dyn FontProvider> =
+            Arc::new(|_: &FallbackRequest<'_>| Some(FontInsert::new("temporary", FontData::from_static(ARABIC), vec![])));
+        super::super::install_context_providers(&ctx, Some((system, start)), vec![fallback]);
+        assert_eq!(selected(&ctx).as_deref(), Some("index:Arabic"), "completion before registration must not leave a cached fallback");
+    }
+
+    #[test]
     fn custom_provider_install_reloads_fallbacks_and_preserves_opt_out() {
         static OPEN_CUSTOM: AtomicBool = AtomicBool::new(false);
         fn build() -> Gated {
