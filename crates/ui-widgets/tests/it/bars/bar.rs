@@ -322,6 +322,81 @@ fn a_narrow_bar_gives_way_from_its_end_so_the_message_elides_before_the_readout(
     assert!(!cut(&narrow, "Doc"), "the readout's text was cut while the message after it could still give way");
 }
 
+fn status_zoom(zoom: f64, comma: bool) -> Fixture {
+    let mut fixture = Fixture::new(move |ui| {
+        let size = Size::new(2000.0, 1500.0);
+        let canvas = Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(800.0, 600.0));
+        let scale = craft_ui::runtime::env::Env::of(ui).scale.0;
+        let view = CanvasView::new(canvas, Point::new(1000.0, 750.0), zoom / f64::from(scale));
+        Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
+            StatusReadout::new(Bind::given(view), size, StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+        });
+    });
+    if comma {
+        use craft_host::{AppInfo, Host};
+        use std::sync::Arc;
+        let (i18n, problems) = craft_i18n::I18n::from_owned([("de".to_owned(), String::new(), String::new())], &["de"]);
+        assert!(problems.is_empty(), "{problems:?}");
+        i18n.set_format(craft_i18n::Format::from_tag("de"));
+        fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).build()));
+    }
+    fixture.room(Vec2::new(600.0, 80.0)).settle();
+    fixture
+}
+
+#[trial]
+fn the_status_zoom_shows_its_complete_value_and_percent() {
+    for (zoom, comma, expected) in [(0.7969, false, "79.69%"), (0.7969, true, "79,69%"), (32.0, false, "3200%"), (31.9999, false, "3199.99%")] {
+        let fixture = status_zoom(zoom, comma);
+        let number = fixture.texts().iter().find(|text| text.text == expected).expect(expected);
+        assert!(
+            !number.elided && number.rect.min.x + SLACK >= number.clip.min.x && number.rect.max.x <= number.clip.max.x + SLACK,
+            "{expected} is clipped: {:?} outside {:?}",
+            number.rect,
+            number.clip,
+        );
+    }
+}
+
+#[trial]
+fn the_status_zoom_still_scrubs_and_applies_edited_text() {
+    use egui::{Event, Key, Modifiers};
+
+    let view = Rc::new(Cell::new(CanvasView::new(Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(800.0, 600.0)), Point::ZERO, 1.0)));
+    let shown = view.clone();
+    let committed = Rc::new(Cell::new(None));
+    let seen = committed.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut view = shown.get();
+        Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
+            let output =
+                StatusReadout::new(Bind::bound(&mut view), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &StatusValues::default()).show(ui);
+            if let Some(view) = output.view.committed() {
+                seen.set(Some(view.zoom));
+            }
+        });
+        shown.set(view);
+    });
+    fixture.room(Vec2::new(600.0, 80.0)).settle();
+    let zoom = fixture.by_label("Zoom").expect("the status zoom field");
+    fixture.drag(&zoom, Vec2::new(12.0, 0.0)).settle();
+    let scrubbed = view.get().zoom;
+    assert!(scrubbed > 1.0, "the status bar still scrubs the zoom to the right");
+
+    fixture.click(&zoom).settle();
+    fixture.key(Key::A, Modifiers::COMMAND);
+    fixture.frame(vec![Event::Paste("079.69%".to_owned())]).settle();
+    let before_tab = view.get().zoom;
+    committed.set(None);
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(view.get().zoom, before_tab, "Tab does not change the current zoom");
+    assert_eq!(committed.get(), None, "Tab does not commit the draft");
+    let zoom = fixture.by_label("Zoom").expect("the status zoom field");
+    assert_eq!(fixture.tree().value_of(zoom.node), Some("79.69%"), "Tab rewrites the draft with its suffix");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert!(committed.get().is_some_and(|value| (value - 0.7969).abs() < 1e-7), "Enter commits the percent-bearing zoom");
+}
+
 /// A Row in a Bar under right-to-left measures in a room unbounded at its start edge, the left one: a labelled check
 /// box there lays out with finite rects inside the bar, after the button before it in reading order. Guards against a
 /// label row built from the room's start and width, which was NaN there.

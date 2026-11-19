@@ -22,8 +22,8 @@ use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
     Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
-use craft_theme::{Stateful, States};
-use egui::{Rect, Vec2};
+use craft_theme::{Rgba, Stateful, States, over};
+use egui::{CornerRadius, Rect, Vec2};
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -128,6 +128,8 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// Whether the unit is drawn inside the field or left to the host to draw after it.
     #[prop]
     unit_placement: UnitPlacement,
+    #[style_key]
+    status_zoom: bool,
     /// The rows of the list a chevron after the field opens; Alt+Down opens it too.
     #[prop]
     presets: Option<&'a [Entry<NumberPick>]>,
@@ -200,6 +202,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             stepper: None,
             unit: None,
             unit_placement: UnitPlacement::Inside,
+            status_zoom: false,
             presets: None,
             popup_slider: None,
             snap_typed: false,
@@ -234,6 +237,13 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
+    /// Keeps the entire zoom percentage together in an unframed well in the status bar.
+    #[must_use]
+    pub(super) fn status_zoom(mut self) -> Self {
+        self.status_zoom = true;
+        self.sizing(Sizing::Content)
+    }
+
     /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
     #[must_use]
     pub fn scrub_by_label(mut self) -> Self {
@@ -257,7 +267,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The unit drawn inside the field after the number: the field's own, else the symbol of its unit kind; none when
     /// the host draws it after the field.
     fn shown_unit(&self, units: &Units) -> Option<Label> {
-        if self.unit_placement == UnitPlacement::After {
+        if self.status_zoom || self.unit_placement == UnitPlacement::After {
             return None;
         }
         self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
@@ -330,6 +340,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             decimals: self.commit_decimals,
             mixed,
             names,
+            suffix: self.status_zoom.then(|| units.symbol(UnitKind::Percent)),
             scale: self.scale,
             value: PhantomData,
         }
@@ -399,12 +410,24 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     type Style = NumberStyle;
     type Output = NumberOutput<V>;
 
-    fn style(cx: &StyleCx<'_>, _: NumberFieldStyleKey<V>) -> NumberStyle {
+    fn style(cx: &StyleCx<'_>, key: NumberFieldStyleKey<V>) -> NumberStyle {
         let field = FieldStyle::at(cx);
+        let mut surface = field.surface.clone();
+        if key.status_zoom {
+            surface.kind = None;
+            surface.radius = CornerRadius::ZERO;
+            // Recess it slightly into the current chrome. Its focused and invalid borders still take their usual colors.
+            let chrome = cx.tokens.color.surface.chrome;
+            surface.fill = Stateful::new(cx.color(over(Rgba::BLACK.with_alpha(16), chrome)));
+            let clear = cx.color(Rgba::TRANSPARENT);
+            if let Some(border) = &mut surface.border {
+                border.off = States::new(clear, clear, clear, clear);
+            }
+        }
         let faint = cx.color(cx.tokens.color.text.faint);
         let muted = cx.color(cx.tokens.color.text.muted);
         NumberStyle {
-            surface: field.surface.clone(),
+            surface,
             // The width is the value area, at most a number cell, and the adornments beside it, at least a cell
             // (`measure`); the style's minimum is only the height.
             metrics: field.clone().sized_by_content().metrics,
