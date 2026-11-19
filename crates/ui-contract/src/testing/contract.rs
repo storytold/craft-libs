@@ -3,7 +3,8 @@
 use crate::runtime::inspect::{self, Finding};
 use egui::{Context, Id};
 
-/// The steps the latest show of `id` ran, in order.
+/// The steps the latest inspected show of `id` ran, in order. Wrap the show in
+/// [`crate::runtime::inspect::record`] to collect its steps.
 pub fn steps(ctx: &Context, id: Id) -> Vec<&'static str> {
     inspect::steps_of(ctx, id)
 }

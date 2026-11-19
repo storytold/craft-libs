@@ -952,7 +952,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     if checking_parts && !declares_parts && !steps::declares_none(&parts) {
         crate::testing::contract::bad_parts(facts.name);
     }
-    if facts.canvas_control && p.trace.recording() {
+    if facts.canvas_control && !ui.is_sizing_pass() {
         inspect::canvas_control(&ctx, facts.name);
     }
     steps::check_parts(&ctx, facts.name, &parts);

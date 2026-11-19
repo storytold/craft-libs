@@ -1,5 +1,5 @@
-//! Decision records and findings: what each pipeline step did, kept in frames a test fixture drives and inside an
-//! inspected region ([`record`]). The region's record is what the debug inspector draws: every component shown in it
+//! Decision records and findings. Inspected regions ([`record`]) collect pipeline steps. Fixture frames also collect
+//! contract findings. The region's record is what the debug inspector draws: every component shown in it
 //! with its box and access facts, the hit areas the sensing core registered and the focus stops in Tab order.
 
 use crate::runtime::egui::areas;
@@ -35,9 +35,9 @@ pub(crate) struct Log {
     kept: IdMap<Kept>,
 }
 
-/// Whether records are kept: in frames a test fixture drives, and inside an inspected region in any build.
+/// Whether an explicit inspector region is collecting elements and their pipeline steps.
 pub(crate) fn recording(ctx: &Context) -> bool {
-    fixture_frame() || pass_state::with::<Log, _>(ctx, |log| !log.open.is_empty())
+    pass_state::with::<Log, _>(ctx, |log| !log.open.is_empty())
 }
 
 #[cfg(feature = "testing")]
@@ -50,16 +50,12 @@ fn fixture_frame() -> bool {
 
 /// Starts the step record of `id` for a new show.
 pub(crate) fn begin(ctx: &Context, id: Id) {
-    if recording(ctx) {
-        pass_state::with::<Log, _>(ctx, |log| log.steps.insert(id, Vec::new()));
-    }
+    pass_state::with::<Log, _>(ctx, |log| log.steps.insert(id, Vec::new()));
 }
 
 /// Records that `step` ran for `id`.
 pub(crate) fn step(ctx: &Context, id: Id, step: &'static str) {
-    if recording(ctx) {
-        pass_state::with::<Log, _>(ctx, |log| log.steps.entry(id).or_default().push(step));
-    }
+    pass_state::with::<Log, _>(ctx, |log| log.steps.entry(id).or_default().push(step));
 }
 
 /// The steps the latest show of `id` ran, in order.
@@ -70,7 +66,7 @@ pub(crate) fn steps_of(ctx: &Context, id: Id) -> Vec<&'static str> {
 
 /// Reports a finding.
 pub(crate) fn finding(ctx: &Context, finding: Finding) {
-    if !recording(ctx) {
+    if !fixture_frame() && !recording(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {
@@ -89,7 +85,7 @@ pub(crate) fn findings(ctx: &Context) -> Vec<Finding> {
 /// Records that the canvas control `type_name` showed in this pass, so the canvas-control cases can check that a
 /// press away from its parts reaches the tool.
 pub(crate) fn canvas_control(ctx: &Context, type_name: &'static str) {
-    if !recording(ctx) {
+    if !fixture_frame() && !recording(ctx) {
         return;
     }
     pass_state::with::<Log, _>(ctx, |log| {

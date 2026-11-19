@@ -216,17 +216,20 @@ fn a_style_value_set_in_content_env_changes_a_body_childs_style() {
     assert!(inside > outside, "the body's child read the body's value: {outside} -> {inside}");
 }
 
-/// The step log, a record only trials and the debug inspector read, is kept in frames a test fixture drives; a frame
-/// an app drives itself, such as the gallery's, keeps none.
+/// A fixture pays for pipeline step records only when the caller inspects a region.
 #[trial]
-fn the_step_log_is_kept_in_fixture_frames_only() {
+fn the_step_log_is_kept_only_for_an_inspected_region() {
     let mut fixture = Frames::new();
     let seen = RefCell::new(Seen::default());
     fixture.frame(Vec::new(), |ui| {
         Probe::new(&seen).show(ui);
     });
     let id = seen.borrow().id.expect("the probe ran");
-    assert!(!steps(&fixture.ctx, id).is_empty(), "a fixture frame records the probe's steps");
+    assert!(steps(&fixture.ctx, id).is_empty(), "an ordinary fixture frame has no step log");
+    fixture.frame(Vec::new(), |ui| {
+        craft_ui::runtime::inspect::record(ui, egui::Id::unique("inspect probe"), |ui| Probe::new(&seen).show(ui));
+    });
+    assert!(!steps(&fixture.ctx, seen.borrow().id.expect("the inspected probe ran")).is_empty());
 
     let app = Frames::new();
     let seen = RefCell::new(Seen::default());
