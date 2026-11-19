@@ -382,16 +382,43 @@ pub fn manifest(generated_by: &str, files: &[(&str, &str, Value)]) -> Value {
     serde_json::json!({"type": MANIFEST_TYPE, "version": 1, "generatedBy": generated_by, "refer": "penpot", "files": files, "relations": []})
 }
 
+/// Incremental in-memory Penpot container writer. Members are compressed as they are added;
+/// the writer retains their names and archive output, not a second collection of payloads.
+/// Paths must be safe and distinct. Entries keep insertion order and use deflate level 3.
+/// If [`Writer::add`] fails, discard the writer: additions are not transactional, and a ZIP
+/// failure may leave a reserved member name or partially written output. Do not finish or reuse
+/// a writer after an error.
+#[derive(Default)]
+pub struct Writer {
+    zip: craft_zip::Writer,
+    seen: BTreeSet<String>,
+}
+
+impl Writer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Write one member immediately; the caller may release its serialized payload afterwards.
+    /// On any error, discard this writer rather than retrying or calling [`Writer::finish`].
+    pub fn add(&mut self, path: &str, bytes: &[u8]) -> Result<(), Error> {
+        if path.is_empty() || !safe_name(path) || !self.seen.insert(path.to_owned()) {
+            return Err(Error::Io(format!("unsafe or repeated member path: {}", path.chars().take(200).collect::<String>())));
+        }
+        self.zip.add(path, bytes, craft_zip::Compression::Level(3)).map_err(|e| Error::Io(e.to_string()))
+    }
+
+    pub fn finish(self) -> Result<Vec<u8>, Error> {
+        self.zip.finish().map_err(|e| Error::Io(e.to_string()))
+    }
+}
+
 /// A Penpot archive of `members` (path, bytes), deflated, in the order given. Paths must be safe
 /// and distinct, as [`Archive::open`] requires of what it reads.
 pub fn write_archive<'a>(members: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Vec<u8>, Error> {
-    let mut z = craft_zip::Writer::new();
-    let mut seen = BTreeSet::new();
+    let mut writer = Writer::new();
     for (path, bytes) in members {
-        if path.is_empty() || !safe_name(path) || !seen.insert(path) {
-            return Err(Error::Io(format!("unsafe or repeated member path: {}", path.chars().take(200).collect::<String>())));
-        }
-        z.add(path, bytes, craft_zip::Compression::Level(3)).map_err(|e| Error::Io(e.to_string()))?;
+        writer.add(path, bytes)?;
     }
-    z.finish().map_err(|e| Error::Io(e.to_string()))
+    writer.finish()
 }

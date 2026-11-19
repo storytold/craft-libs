@@ -55,7 +55,15 @@
 //! On Russian, the `с` key reports `C` at physical `C` and must run Ctrl+C. The app's dispatcher
 //! (`craft_keymap::egui::Dispatcher`) turns the event into a `KeyInput` with
 //! `KeyInput::from_egui`.
+//!
+//! # Input steps and review screenshots
+//!
+//! [`input`] clicks, drags, presses keys, types and turns the wheel in any [`Harness`], each step
+//! taking a fixed number of frames. [`snapshot`] writes screenshots for review to a folder named
+//! by an environment variable, and nothing when it is unset.
 
+pub mod input;
+pub mod snapshot;
 #[cfg(test)]
 mod tests;
 
