@@ -53,6 +53,10 @@ pub struct BarStyle {
     pub check_mark: String,
     /// Shown before the label of the selected radio item.
     pub radio_mark: String,
+    /// Fill the rows of checked check items and of the selected radio item with the selection
+    /// color (`Visuals::selection`), as a selected button is drawn, besides their mark. Off by
+    /// default. For apps whose font lacks the marks, or that want the current choice to stand out.
+    pub highlight_checked: bool,
 }
 
 impl BarStyle {
@@ -66,6 +70,7 @@ impl BarStyle {
             separator_spacing: 9.0,
             check_mark: "✓".to_owned(),
             radio_mark: "●".to_owned(),
+            highlight_checked: false,
         }
     }
 }
@@ -531,6 +536,9 @@ impl Draw<'_> {
         let mut button = egui::Button::new(marks.text(ui, mark, label, underline));
         if let Some(s) = &shortcut {
             button = button.shortcut_text(s.as_str());
+        }
+        if self.style.highlight_checked && it.kind.checked() == Some(true) {
+            button = button.selected(true).frame_when_inactive(true);
         }
         let press = self.press;
         let hit = nav.row(ui, depth - 1, enabled, Some(&it.command), mnemonic, |ui, _| {
