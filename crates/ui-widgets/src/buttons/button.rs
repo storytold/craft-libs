@@ -25,6 +25,13 @@ const SPINNER: PartKey = PartKey::new("spinner");
 /// The part a button with a picture shows it in, in the leading icon's place.
 const PICTURE: PartKey = PartKey::new("picture");
 
+/// A side menu row's band under the pointer: its ink at about a tenth over the brand surface.
+const SIDE_MENU_HOVER_ALPHA: u8 = 26;
+/// The band of the page shown and of a press: its ink at about a sixth, a step above the hover's.
+const SIDE_MENU_SHOWN_ALPHA: u8 = 46;
+/// A disabled page's name and icon: the ink at a little under half.
+const SIDE_MENU_DISABLED_ALPHA: u8 = 110;
+
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[style(variants = [Variant::SECONDARY, Variant::PRIMARY, Variant::GHOST, Variant::DANGER, Variant::look(Emphasis::Outline, Tone::Accent)])]
@@ -256,9 +263,20 @@ impl Component for Button<'_> {
             let pad = &cx.tokens.space.pad;
             style.text.role = TypeRole::BodyLarge;
             style.metrics.padding = Insets::new(pad.roomy, pad.roomy, pad.segment, pad.segment);
-            // The row of the page shown (`selected`) keeps the band its hover shows, so the menu marks where the page is.
-            let off = style.surface.fill.off;
-            style.surface.fill = style.surface.fill.clone().on(craft_theme::States::new(off.hover, off.hover, off.pressed, off.disabled));
+            // A side menu stands on the brand surface: its names and icons read in the ink of strong fills, a disabled
+            // page's dimmed, and its bands are that ink laid thinly over the brand colour (hover lighter than the page
+            // shown), not the panel's state fills, which painted a light band with dark text over the rail. The row of
+            // the page shown (`selected`) keeps its band, so the menu marks where the page is.
+            let ink = cx.tokens.color.text.on_strong;
+            let (rest, dim) = (cx.color(ink), cx.color(ink.with_alpha(SIDE_MENU_DISABLED_ALPHA)));
+            let text = craft_theme::Stateful::new(rest).off(craft_theme::States::new(rest, rest, rest, dim));
+            style.text.color = text.clone();
+            style.icon = IconLook::new(style.icon.side, text);
+            let (clear, hover, shown) =
+                (cx.color(Rgba::TRANSPARENT), cx.color(ink.with_alpha(SIDE_MENU_HOVER_ALPHA)), cx.color(ink.with_alpha(SIDE_MENU_SHOWN_ALPHA)));
+            style.surface.fill = craft_theme::Stateful::new(clear)
+                .off(craft_theme::States::new(clear, hover, shown, clear))
+                .on(craft_theme::States::new(shown, shown, shown, shown));
         }
         style
     }

@@ -515,10 +515,11 @@ fn a_side_menus_buttons_are_taller_rows_with_the_large_body_label() {
     assert_eq!(menu.size(), plain.size(), "a stacked button keeps its own look in a side menu");
 }
 
-/// The row of the page shown in a side menu (`selected`) keeps the band its hover shows, as WordCraft's File menu
-/// marks its current page; a selected ghost button elsewhere keeps its own look.
+/// The row of the page shown in a side menu (`selected`) keeps a band, as WordCraft's File menu marks its current page:
+/// the brand surface's ink laid thinly over it, a step stronger than the hover's, never the panel's opaque state fill
+/// (which drew a light band with dark text over the brand rail). A selected ghost button elsewhere keeps its own look.
 #[trial]
-fn a_side_menus_selected_row_shows_its_hover_band() {
+fn a_side_menus_selected_row_shows_a_band_over_the_brand() {
     let button = std::any::type_name::<Button<'static>>();
     let (menu, _) = seen(button, "Info", |ui| {
         with_env(
@@ -536,8 +537,11 @@ fn a_side_menus_selected_row_shows_its_hover_band() {
     });
     let fill = menu.expect("a side menu's row has a surface").fill;
     let on = fill.on.expect("a side menu's row has an on look");
-    assert_eq!(on.rest, fill.off.hover, "the shown page's row rests in the hover band");
-    assert_ne!(on.rest, fill.off.rest, "the shown page's row is marked");
+    let (rest, hover, shown) = (fill.off.rest.egui(), fill.off.hover.egui(), on.rest.egui());
+    assert_eq!(rest.a(), 0, "a row at rest shows the brand surface");
+    assert!(hover.a() > 0 && hover.a() < 64, "the hover band is the ink laid thinly over the brand: {hover:?}");
+    assert!(shown.a() > hover.a() && shown.a() < 96, "the shown page's band is a step above the hover's: {shown:?}");
+    assert_eq!(on.hover, on.rest, "the shown page's row keeps its band under the pointer");
     assert!(plain.expect("a ghost button has a surface").fill.on.is_none(), "a selected ghost button elsewhere keeps its look");
 }
 
