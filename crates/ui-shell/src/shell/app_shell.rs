@@ -702,7 +702,8 @@ impl<'a, S> AppShell<'a, S> {
                         let by_content = placed.sized_by_content();
                         let along_x = placed.along_x();
                         let Placed { slot, edge, named, add, .. } = placed;
-                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
+                        let at = rect_of(slot.key());
+                        let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(at);
                         // Every slot is a chrome pane: it paints the surface under its bar or rail and the rule toward
                         // the body.
                         let mut region = ShellRegion::chrome(pane).id_salt(("slot", slot.key()));
@@ -726,15 +727,27 @@ impl<'a, S> AppShell<'a, S> {
                             region.show(ui, |ui, bcx| fill(ui, bcx));
                             continue;
                         }
-                        // The content's extent along the slot's edge: a top or bottom slot's content fills its width
-                        // and is as tall as it is; a rail's is as wide as it is.
+                        // The slot's extent along its edge: what its content allocated, plus what the pane keeps
+                        // around its body (its rule). A top or bottom slot's content fills its width and is as tall
+                        // as it is; a rail's is as wide as it is. The content is read from the `Ui` it allocated in,
+                        // never from the stack's response: a response rect is clipped to the pane (`sense_root`), so
+                        // it can never report more than the extent the slot was laid out at.
                         let took = region
                             .show(ui, |ui, bcx| {
+                                let room = ui.max_rect();
+                                let inset = (if along_x { at.width() - room.width() } else { at.height() - room.height() }).max(0.0);
                                 let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
-                                let rect = stack.show(ui, |ui, _| fill(ui, bcx)).output.rect;
-                                if along_x { rect.width() } else { rect.height() }
+                                stack
+                                    .show(ui, |ui, _| {
+                                        fill(ui, bcx);
+                                        let content = ui.min_rect();
+                                        if along_x { content.width() } else { content.height() }
+                                    })
+                                    .inner
+                                    .map(|content| content + if inset.is_finite() { inset } else { 0.0 })
                             })
-                            .inner;
+                            .inner
+                            .flatten();
                         eprintln!(
                             "DIAG ribbon: slot {key:?} laid out at extent {extent} in {:?}, content took {took:?}, sizing {}",
                             rect_of(key),

@@ -5,7 +5,7 @@
 use craft_host::target::ShellInfo;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Props as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -76,6 +76,11 @@ fn a_bar_in_a_top_slot_fills_it_and_centres_its_members_on_one_line() {
 
 /// A top slot sized by its content (a ribbon: a strip over a taller group row) stacks its content, is as tall as both
 /// lines, gives the lower line the slot's width, and the body starts under it.
+///
+/// The lower line is a ribbon's group row: a child `Ui` (a fill-width row that scrolls along x) holding a column far
+/// taller than one bar. The trial reads where the lines lie from what they allocated in the slot's `Ui`, not from their
+/// responses: a response rect is clipped to the pane, so a slot left one bar high would clip the row's response to fit
+/// it and hide the fault.
 #[trial]
 fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     let seen = Rc::new(Cell::new(None::<(Rect, Rect, Rect, Rect)>));
@@ -84,24 +89,33 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
         let (mut strip, mut row) = (Rect::NOTHING, Rect::NOTHING);
         let shown = AppShell::new(WindowKey::main())
             .top(Slot::new("ribbon").size(SlotSize::Content), |ui, _, _: &mut ()| {
-                strip = Row::new()
+                let top = ui.cursor().min.y;
+                let strip_x = Row::new()
                     .show(ui, |ui, _| {
                         Button::new("Home").show(ui);
                         Button::new("Insert").show(ui);
                     })
                     .output
-                    .rect;
-                row = Row::new()
+                    .rect
+                    .x_range();
+                let strip_bottom = ui.min_rect().max.y;
+                let row_top = ui.cursor().min.y;
+                let row_x = Row::new()
+                    .scroll(Scroll::horizontal())
                     .fill_width()
                     .show(ui, |ui, _| {
                         Stack::new().show(ui, |ui, _| {
-                            for line in ["Paste", "Cut", "Copy", "Format Painter"] {
+                            for line in ["Paste", "Cut", "Copy", "Format Painter", "Clipboard"] {
                                 Button::new(line).show(ui);
                             }
                         });
                     })
                     .output
-                    .rect;
+                    .rect
+                    .x_range();
+                let bottom = ui.min_rect().max.y;
+                strip = Rect::from_x_y_ranges(strip_x, top..=strip_bottom);
+                row = Rect::from_x_y_ranges(row_x, row_top..=bottom);
             })
             .body(|_, _, _| {})
             .show(ui, &mut ());
@@ -112,9 +126,12 @@ fn a_top_slot_sized_by_its_content_stacks_it_and_takes_its_height() {
     fixture.room(Vec2::new(600.0, 400.0)).settle();
     let (slot, strip, row, body) = seen.get().expect("the ribbon slot shows");
     const SLACK: f32 = 1.0;
+    // The rule toward the body, and rounding: a content-sized slot is no taller than its content and that.
+    const RULE: f32 = 4.0;
+    assert!(row.height() > 2.0 * strip.height(), "the row {row:?} is far taller than the strip {strip:?}, as a ribbon's group row is");
     assert!(row.min.y >= strip.max.y - SLACK, "the row {row:?} lies under the strip {strip:?}, not beside it");
     assert!(slot.min.y <= strip.min.y + SLACK && row.max.y <= slot.max.y + SLACK, "the slot {slot:?} holds the strip {strip:?} and the row {row:?}");
-    assert!(slot.height() >= strip.height() + row.height() - SLACK, "the slot {slot:?} is as tall as both lines, not one bar");
+    assert!(slot.height() <= row.max.y - strip.min.y + RULE, "the slot {slot:?} is as tall as its content, from {strip:?} to {row:?}");
     assert!((row.width() - slot.width()).abs() <= SLACK, "the row {row:?} takes the slot's width {slot:?}");
     assert!(body.min.y >= row.max.y - SLACK, "the body {body:?} starts under the row {row:?}");
 }
