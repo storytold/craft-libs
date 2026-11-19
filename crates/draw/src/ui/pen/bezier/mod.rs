@@ -69,9 +69,11 @@ pub enum BezierTool {
     /// Add Anchor Point: a press on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
     /// moves the new anchor, which is selected. A press on an anchor or a shown handle selects and drags it as
     /// [`BezierTool::Direct`] does (⇧ adds to the selection, ⌥ on a handle moves it alone), and a click on empty canvas
-    /// deselects the anchors and keeps the path. ⌥ makes it Delete Anchor Point on segments and anchors. Hover: the segment mark with the
-    /// anchor a click adds ([`HitMark`]) and the pen with "+"; over an anchor the arrow; the crosshair under the
-    /// canvas's precise cursor ([`CanvasSpace::precise`]).
+    /// deselects the anchors and keeps the path. With ⌥ a click on a segment selects its whole subpath and a drag moves a
+    /// copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that takes no copies), and a press on
+    /// an anchor does nothing. Hover: the segment mark with the anchor a click adds ([`HitMark`]) and the pen with "+";
+    /// over an anchor the arrow; with ⌥ no mark and the arrow with "+"; the crosshair under the canvas's precise cursor
+    /// ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -581,13 +583,15 @@ impl<'a> BezierOverlay<'a> {
             return self.target(hit, start, mods, paths);
         }
         match hit {
+            // Add Anchor with ⌥ takes the whole subpath as Direct's ⌥ does (PhotoCraft #12709).
+            BezierHit::Segment { .. } if self.tool.takes_subpath(mods) => self.target(hit, start, mods, paths),
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
             }
             // Delete Anchor drags a segment as Direct does; only a press on an anchor is its click.
             BezierHit::Segment { .. } if self.tool == BezierTool::DeleteAnchor => self.target(hit, start, mods, paths),
             // Add Anchor selects and edits the anchors and handles a path has, as Direct does (PhotoCraft #12708); ⌥
-            // on an anchor is Delete Anchor's click.
+            // on an anchor does nothing (PhotoCraft #12709).
             BezierHit::Handle { .. } if self.tool == BezierTool::AddAnchor => self.target(hit, start, mods, paths),
             BezierHit::Anchor { .. } if self.tool == BezierTool::AddAnchor && !mods.alt => self.target(hit, start, mods, paths),
             BezierHit::Anchor { path, knot } if self.tool.picks_subpath(mods) => Target::Pick { path, knot },
@@ -665,7 +669,7 @@ impl<'a> BezierOverlay<'a> {
                     self.report.select = Some(self.selecting(path, anchors.clone(), None));
                     // pc: crates/ui-egui/src/tools/direct_select.rs `alt_duplicates` (#13211): Photoshop was not
                     // measured with ⌘, Ctrl or ⇧ held too; those move the subpath.
-                    let copies = self.tool == BezierTool::Direct
+                    let copies = matches!(self.tool, BezierTool::Direct | BezierTool::AddAnchor)
                         && !mods.cmd
                         && !mods.ctrl
                         && !mods.shift

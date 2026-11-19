@@ -744,11 +744,76 @@ fn add_anchor_shows_the_pen_with_plus_over_a_segment_and_the_arrow_over_an_ancho
     }
 }
 
+// Add Anchor with ⌥ takes the whole subpath, as the reference application does (PhotoCraft #12709), instead of
+// turning into Delete Anchor: a click on a segment selects every anchor of its subpath and adds nothing; a drag moves
+// a copy of the subpath, which ends up selected, the source staying; a press on an anchor deletes and selects nothing;
+// there is no hover mark and the cursor is the arrow with "+" over the parts. Delete Anchor with ⌥ still adds.
+#[trial]
+fn alt_under_add_anchor_selects_or_copies_the_whole_subpath() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let add_anchor = || {
+        let mut h = two_paths();
+        h.update(|st| st.tool = BezierTool::AddAnchor);
+        h.fixture.hold(egui::Modifiers::ALT);
+        h
+    };
+    let click = |h: &mut Harness, at: Pos2| {
+        h.press_at(at);
+        h.release_at(at);
+    };
+    let segment = p(110.0, 60.0);
+
+    let mut h = add_anchor();
+    let at = h.screen(segment);
+    h.move_to(at);
+    h.fixture.frame(Vec::new());
+    let arrow_plus = Some(Cursor::Painted(PaintedCursor::badged(craft_behavior::CursorIcon::Default, CursorBadge::Add)));
+    assert_eq!(craft_ui::runtime::cursor::current(h.fixture.ctx()), arrow_plus);
+    assert_eq!(h.state.borrow().hover.map(|hit| hit.path()), Some(1));
+    click(&mut h, at);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1), (0, 2), (0, 3)]));
+        assert!(st.changes.is_empty() && st.seen.is_empty() && st.deletes.is_empty(), "{:?} {:?} {:?}", st.changes, st.seen, st.deletes);
+        assert_eq!(st.paths, [path_a(), path_b()]);
+    }
+
+    let mut h = add_anchor();
+    let at = h.screen(segment);
+    h.drag(at, vec2(0.0, 50.0));
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::DuplicateSubpath { path: 1, subpath: 0, .. })), "{:?}", st.changes);
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+        let subs = &st.paths[0].subpaths;
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0], path_a().subpaths[0], "the source stays");
+        assert!(subs[1].knots.iter().zip(&subs[0].knots).all(|(copy, source)| near(copy.anchor, source.anchor + Vec2::new(0.0, 50.0))));
+        assert_eq!(st.selection, sel(1, &[(1, 0), (1, 1), (1, 2), (1, 3)]), "the copy is selected");
+    }
+
+    let mut h = add_anchor();
+    let at = h.screen(p(160.0, 60.0));
+    click(&mut h, at);
+    {
+        let st = h.state.borrow();
+        assert!(st.deletes.is_empty() && st.changes.is_empty(), "{:?} {:?}", st.deletes, st.changes);
+        assert_eq!(st.selection, PathSelection::default());
+    }
+
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::DeleteAnchor);
+    h.fixture.hold(egui::Modifiers::ALT);
+    let at = h.screen(segment);
+    click(&mut h, at);
+    assert!(matches!(h.last_change(), Some(PathEdit::InsertAnchor { path: 1, .. })), "{:?}", h.last_change());
+}
+
 // Add Anchor selects and edits the anchors and handles a path has, as Direct Selection does and as the reference
 // application measures (PhotoCraft #12708): a click on an anchor selects it and ⇧ adds one, with no edit; a drag moves
 // the anchor in one gesture; dragging a smooth anchor's handle turns the other one, ⌥ moves it alone; a click on empty
-// canvas deselects the anchors and keeps the path; a click on a segment still adds an anchor; ⌥ on an anchor is still
-// Delete Anchor's click.
+// canvas deselects the anchors and keeps the path; a click on a segment still adds an anchor; ⌥ on an anchor deletes
+// nothing (PhotoCraft #12709).
 #[trial]
 fn add_anchor_selects_and_edits_existing_anchors_and_handles() {
     let add_anchor = || {
@@ -841,17 +906,21 @@ fn add_anchor_selects_and_edits_existing_anchors_and_handles() {
         assert_eq!(st.selection, sel(1, &[(0, 1)]));
     }
 
-    // ⌥ on an anchor is still Delete Anchor's click.
+    // ⌥ on an anchor deletes nothing and edits nothing (PhotoCraft #12709).
     let mut h = add_anchor();
     let at = h.screen(corner);
     h.fixture.hold(egui::Modifiers::ALT);
     click(&mut h, at);
     h.fixture.hold(egui::Modifiers::NONE);
-    assert_eq!(h.state.borrow().deletes, [AnchorDelete::new(1, vec![kr(1)], false)]);
+    {
+        let st = h.state.borrow();
+        assert!(st.deletes.is_empty() && st.changes.is_empty(), "{:?} {:?}", st.deletes, st.changes);
+        assert_eq!(st.paths, [path_a(), path_b()]);
+    }
 }
 
 // The anchor tools' canvas tool: a press off the paths begins nothing (it never starts a path), and off the paths the
-// cursor says what a click does: the arrow for Add Anchor (the pen with "-" under ⌥, where a click deletes), the pen
+// cursor says what a click does: the arrow for Add Anchor (with "+" under ⌥, PhotoCraft #12709), the pen
 // with "-" for Delete Anchor, the Convert Point icon, the arrow for Direct Selection and under ⌘, the crosshair when
 // the canvas's cursor is precise.
 #[trial]
@@ -884,7 +953,7 @@ fn the_anchor_tools_take_no_press_off_the_paths_and_show_their_own_cursor() {
 
     assert_eq!(cursor_at(&mut h, egui::Modifiers::NONE), arrow);
     let with_alt = cursor_at(&mut h, egui::Modifiers::ALT);
-    assert!(pen(CursorBadge::Subtract, &with_alt), "{with_alt:?}");
+    assert_eq!(with_alt, Some(Cursor::Painted(PaintedCursor::badged(craft_behavior::CursorIcon::Default, CursorBadge::Add))));
     assert_eq!(cursor_at(&mut h, egui::Modifiers::COMMAND), arrow);
 
     h.update(|st| {
