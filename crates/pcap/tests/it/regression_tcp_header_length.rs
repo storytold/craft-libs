@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{ipv4_pkt, tcp};
 use craft_pcap::{Decoded, decode};
-use support::{ipv4_pkt, tcp};
 
 fn decoded(segment: &[u8]) -> Decoded {
     decode(101, &ipv4_pkt(6, [192, 0, 2, 1], [192, 0, 2, 2], segment))

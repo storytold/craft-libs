@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{ipv4_pkt, tcp};
 use craft_pcap::decode;
-use support::{ipv4_pkt, tcp};
 
 /// WebDAV and extension methods retain the same HTTP evidence as core methods.
 #[test]

@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{eth, ipv4_pkt};
 use craft_pcap::decode;
-use support::{eth, ipv4_pkt};
 
 fn raw_packets() -> (Vec<u8>, Vec<u8>) {
     let ipv4 = ipv4_pkt(17, [1; 4], [2; 4], &[0; 20]);
