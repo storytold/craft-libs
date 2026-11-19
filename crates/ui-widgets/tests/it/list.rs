@@ -98,12 +98,17 @@ fn the_row_menu_button_shows_on_the_hovered_and_selected_rows_and_asks_for_the_r
     });
     fixture.room(Vec2::new(300.0, 200.0));
     fixture.settle();
-    let button = |fixture: &Fixture, row: usize| fixture.by_label(&format!("More ({})", NAMES[row])).expect("each row has its menu button").center();
-    let (first, second, third) = (button(&fixture, 0), button(&fixture, 1), button(&fixture, 2));
+    // A button is exposed only while its row shows it (L-252): the hidden ones are found from the shown one, a row apart.
+    let button = |fixture: &Fixture, row: usize| fixture.by_label(&format!("More ({})", NAMES[row])).map(|node| node.center());
+    let row = |fixture: &Fixture, row: usize| fixture.by_label(NAMES[row]).expect("each row shows").rect.center();
+    let second = button(&fixture, 1).expect("the selected row exposes its menu button");
+    let (first, third) = (second + (row(&fixture, 0) - row(&fixture, 1)), second + (row(&fixture, 2) - row(&fixture, 1)));
+    assert!(button(&fixture, 0).is_none(), "a row neither hovered nor selected exposes no button");
     let rest = fixture.frame_shapes();
     assert!(drawn_at(&rest, second) > 0, "the selected row shows its button");
     assert_eq!(drawn_at(&rest, first), 0, "a row neither hovered nor selected shows none");
     fixture.frame(vec![craft_ui::testing::pointer::moved(third)]);
+    assert!(button(&fixture, 2).is_some(), "the hovered row exposes its button");
     let hovered = fixture.frame_shapes();
     assert!(drawn_at(&hovered, third) > 0, "the hovered row shows its button");
     assert_eq!(drawn_at(&hovered, first), 0, "another row still shows none");
@@ -427,7 +432,10 @@ fn the_row_menu_reads_its_row_from_the_list_while_open_and_renames_it() {
     });
     fixture.room(Vec2::new(300.0, 200.0));
     fixture.settle();
-    let button = fixture.by_label(&format!("More ({})", NAMES[0])).expect("the row has its menu button").center();
+    // The button shows, and is exposed, on the hovered row.
+    let over = fixture.by_label(NAMES[0]).expect("the first row shows").rect.center();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(over)]).settle();
+    let button = fixture.by_label(&format!("More ({})", NAMES[0])).expect("the hovered row has its menu button").center();
     fixture.click_at(button).settle();
     assert!(!fixture.by_role(Role::MENU).is_empty(), "the host's menu opens from the button");
     seen.borrow_mut().clear();
@@ -1450,4 +1458,27 @@ fn a_rename_editor_selects_the_name_once_keeps_the_caret_and_escape_cancels() {
     fixture.settle();
     fixture.type_text("Özet").key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(edits(&seen), [(0, String::from("Özet"))], "typing replaces the whole multibyte name");
+}
+
+/// A part revealed on a hovered or selected row is exposed only while it shows: a screen reader finds the part of
+/// the hovered row, and no part of the rows that hide theirs.
+#[trial]
+fn a_revealed_part_is_exposed_only_while_its_row_shows_it() {
+    use craft_ui::list::{TrailingFace, TrailingPart};
+    use craft_ui::primitives::IconSpec;
+    use craft_ui::testing::pointer;
+    const MOVES: [&str; 3] = ["Move 1", "Move 2", "Move 3"];
+    let row = |key: usize| {
+        ListRow::new(NAMES[key]).trailing_part_revealed(
+            TrailingPart::new(0),
+            TrailingFace::Icon(IconSpec::svg(craft_behavior::IconId::new("settings"))),
+            MOVES[key],
+        )
+    };
+    let (mut fixture, _) = rows_rig(Vec2::new(320.0, 200.0), row);
+    assert!(MOVES.iter().all(|name| fixture.by_label(name).is_none()), "no row shows its part, so none is exposed");
+    let over = fixture.by_label(NAMES[1]).expect("the row's node").rect.center();
+    fixture.frame(vec![pointer::moved(over)]).settle();
+    assert!(fixture.by_label(MOVES[1]).is_some(), "the hovered row's part is exposed");
+    assert!(fixture.by_label(MOVES[0]).is_none() && fixture.by_label(MOVES[2]).is_none(), "the other rows' parts stay hidden");
 }

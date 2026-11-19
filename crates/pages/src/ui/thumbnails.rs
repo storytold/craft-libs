@@ -232,6 +232,7 @@ pub struct PageThumbnails<'a> {
     new_page_row: bool,
     arrangement: ThumbnailArrangement,
     actions: &'a [(IconId, CommandRef)],
+    action_label: Option<&'a dyn Fn(usize, usize) -> Label>,
     insert_label: Option<&'a dyn Fn(usize) -> Label>,
     middle_button: Option<MiddleButton>,
     invert_middle: bool,
@@ -257,6 +258,7 @@ impl<'a> PageThumbnails<'a> {
             new_page_row: false,
             arrangement: ThumbnailArrangement::Strip,
             actions: &[],
+            action_label: None,
             insert_label: None,
             middle_button: None,
             invert_middle: false,
@@ -276,6 +278,15 @@ impl<'a> PageThumbnails<'a> {
     #[must_use]
     pub fn actions(mut self, actions: &'a [(IconId, CommandRef)]) -> Self {
         self.actions = actions;
+        self
+    }
+
+    /// The accessible name of action `action` of [`PageThumbnails::actions`] in page `page`'s band, called as
+    /// `label(action, page)`: a name that says which page it acts on ("Rotate page 1 clockwise"). Without it an action
+    /// reads as its command's label.
+    #[must_use]
+    pub fn action_label(mut self, label: &'a dyn Fn(usize, usize) -> Label) -> Self {
+        self.action_label = Some(label);
         self
     }
 
@@ -386,6 +397,7 @@ impl<'a> PageThumbnails<'a> {
             new_page_row,
             arrangement,
             actions,
+            action_label,
             insert_label,
             middle_button,
             invert_middle,
@@ -476,8 +488,11 @@ impl<'a> PageThumbnails<'a> {
             if organize {
                 let on = checked.get(page).copied().unwrap_or(false);
                 tile = tile.check(if on { ToggleState::On } else { ToggleState::Off });
-                for (icon, command) in actions {
-                    tile = tile.action(icon.clone(), command.clone());
+                for (at, (icon, command)) in actions.iter().enumerate() {
+                    tile = match action_label {
+                        Some(label) => tile.action_named(icon.clone(), command.clone(), label(at, page)),
+                        None => tile.action(icon.clone(), command.clone()),
+                    };
                 }
             }
             let thumbs = &thumbnails;

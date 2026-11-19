@@ -10,14 +10,14 @@ use super::words::TabWords;
 use crate::buttons::IconButton;
 use crate::buttons::icon_button::{MarkerStyle, paint_marker};
 use crate::contract::{
-    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props as _, Role, SetPosition,
+    Access, Common, Component, Cx, ItemOutput, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role, SetPosition,
     Styled as _, WordSetCx as _,
 };
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
-use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
+use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, Proposal, Sense};
 use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
@@ -28,7 +28,7 @@ mod stories;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TabPartEvent {
-    /// The close button was pressed, or the tab was middle-clicked where the kind closes on a middle click.
+    /// The close button was pressed. A middle click is the strip's (`CollectionEvent::MiddleClick`).
     Close,
 }
 
@@ -316,11 +316,7 @@ impl Component for Tab<'_> {
     }
 
     fn sense(&self) -> Sense {
-        if self.can_close() && self.kind.middle_click_closes() {
-            Sense::CLICK | Sense::MIDDLE_CLICK | Sense::FOCUS
-        } else {
-            Sense::CLICK | Sense::FOCUS
-        }
+        Sense::CLICK | Sense::FOCUS
     }
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
@@ -410,11 +406,7 @@ impl Component for Tab<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let pressed = self.shows_close() && cx.part_activated(CLOSE).is_some();
-        let middle = self.can_close()
-            && self.kind.middle_click_closes()
-            && matches!(cx.press().phase, PressPhase::Release { start, click: true, .. } if start.button == PointerButton::Middle);
-        if pressed || middle {
+        if self.shows_close() && cx.part_activated(CLOSE).is_some() {
             self.event = Some(TabPartEvent::Close);
         }
     }

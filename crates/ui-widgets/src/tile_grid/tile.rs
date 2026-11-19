@@ -408,7 +408,8 @@ pub struct Tile<'a> {
     badges: Vec<TileBadge>,
     marks: Vec<TileMark>,
     pills: Vec<TileBadge>,
-    actions: Vec<(IconId, CommandRef)>,
+    /// The hover actions: icon, command and the name that tells the action apart from the other tiles' (`action_named`).
+    actions: Vec<(IconId, CommandRef, Option<Label>)>,
     placed: Option<Placed>,
     event: Option<TilePartEvent>,
     caption_rect: Option<Rect>,
@@ -481,7 +482,16 @@ impl<'a> Tile<'a> {
     /// does not fire it.
     #[must_use]
     pub fn action(mut self, icon: IconId, command: impl Into<CommandRef>) -> Self {
-        self.actions.push((icon, command.into()));
+        self.actions.push((icon, command.into(), None));
+        self
+    }
+
+    /// A hover action, as [`action`](Self::action), whose accessible name is `name` in place of the command's label:
+    /// a name that says which tile it acts on ("Rotate page 1 clockwise"), so a screen reader tells the actions of
+    /// different tiles apart. The command still gives its tooltip and enabled state.
+    #[must_use]
+    pub fn action_named(mut self, icon: IconId, command: impl Into<CommandRef>, name: impl Into<Label>) -> Self {
+        self.actions.push((icon, command.into(), Some(name.into())));
         self
     }
 
@@ -820,7 +830,7 @@ impl Component for Tile<'_> {
             action: self
                 .actions
                 .iter()
-                .fold(Vec2::ZERO, |most, (icon, command)| most.max(cx.face(IconButton::command(icon.clone(), command.clone())))),
+                .fold(Vec2::ZERO, |most, (icon, command, _)| most.max(cx.face(IconButton::command(icon.clone(), command.clone())))),
         };
         let pill_widths: Vec<f32> = self.pills.iter().map(|badge| Self::badge_face(badge).map_or(faces.pill, |face| cx.face(face).x)).collect();
         let bar_shown = self.has_bar_content()
@@ -907,6 +917,13 @@ impl Component for Tile<'_> {
         if self.check.is_some() {
             access.node(CHECK, Role::CHECK_BOX).name = Name::Text(words.select.fill(&[("name", label)]));
         }
+        // Only the actions `parts` declared show; a named one takes its name over the command's label.
+        for (at, (_, _, name)) in self.actions.iter().enumerate() {
+            let part = ACTION.at(at as u64);
+            if let Some(name) = name.as_ref().filter(|_| cx.part_if_declared(part).is_some()) {
+                access.node(part, Role::BUTTON).name = Name::Text(name.as_str().to_owned());
+            }
+        }
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -961,7 +978,7 @@ impl Component for Tile<'_> {
         self.paint_band(ui, cx, &placed);
         self.paint_bar(ui, cx, &placed);
         self.paint_pills(ui, cx, &placed);
-        for (at, ((icon, command), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
+        for (at, ((icon, command, _), _)) in self.actions.iter().zip(&placed.actions).enumerate() {
             ui.face(ACTION.at(at as u64), IconButton::command(icon.clone(), command.clone()));
         }
         if let (Some(state), Some((_, plate))) = (self.check, placed.check) {

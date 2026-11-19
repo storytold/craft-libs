@@ -43,6 +43,30 @@ fn a_card_shows_eight_bullet_lines_and_counts_the_rest() {
     assert_eq!(fixture.texts().iter().filter(|painted| painted.text == "\u{2022}").count(), 8, "each shown line has a bullet");
 }
 
+/// A click on a notice's action or its dismiss button is reported once, also in a frame that runs twice: the pass
+/// that takes the press reports it.
+#[trial]
+fn a_notice_reports_its_action_and_dismissal_in_a_frame_that_runs_twice() {
+    let taken = Rc::new(Cell::new((0_usize, 0_usize)));
+    let seen = taken.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = Notice::new(Tone::Info, "This document is secured.").dismiss().action(NoticeAction::new("Security settings")).show(ui);
+        let (actions, dismissals) = seen.get();
+        seen.set((actions + usize::from(out.action == Some(0)), dismissals + usize::from(out.dismissed)));
+        if ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.room(Vec2::new(600.0, 200.0));
+    fixture.settle();
+    let action = fixture.by_label("Security settings").expect("the action");
+    fixture.click(&action).settle();
+    assert_eq!(taken.get().0, 1, "the action is reported once");
+    let dismiss = fixture.by_label("Dismiss").expect("the dismiss button");
+    fixture.click(&dismiss).settle();
+    assert_eq!(taken.get().1, 1, "the dismissal is reported once");
+}
+
 /// A centred notice hosts the app's own leaf under its actions: the leaf sits centred under them, and a click on it
 /// reaches the app through the leaf's output.
 #[trial]

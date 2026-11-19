@@ -535,6 +535,7 @@ impl Component for ListRow<'_> {
                 TrailingItem::Icon { name, .. } => {
                     access.node(TRAILING_ICON.at(at as u64), Role::IMAGE).name = Name::Text(name.as_str().to_owned());
                 }
+                TrailingItem::Part { part, revealed, .. } if !Self::part_shown(cx, part.part(), *revealed, selected, self.menu_open) => {}
                 TrailingItem::Part { part, face, name, .. } => {
                     let name = self.part_name(*part, name, &words, label);
                     let node = access.node(part.part(), Role::BUTTON);

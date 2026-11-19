@@ -53,7 +53,8 @@ pub struct TabStripOutput<K> {
     /// double click as `Activate`, a reorder or a drop from another strip. Close and context-menu events are in the
     /// fields below.
     pub response: CollectionResponse<K, TabPartEvent>,
-    /// The tabs whose close button was pressed, or that a middle click closed where the kind closes on it.
+    /// The tabs whose close button was pressed, or that a middle click closed where the kind closes on it
+    /// (`TabStrip::can_close`).
     pub closed: Vec<K>,
     /// The tab context menu is asked for: a secondary click, the context-menu key or Shift+F10.
     pub menu: Option<ContextMenuRequest<K>>,
@@ -286,6 +287,10 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     /// Which tabs may be dragged.
     #[prop(func = "Fn(&K) -> bool")]
     can_drag: Option<RowTest<'a, K>>,
+    /// Which tabs a middle click closes, where the kind closes on one (`TabKind::middle_click_closes`): every tab
+    /// when unset. A host with tabs that cannot close (`Tab::closable(false)`) names the ones that can.
+    #[prop(func = "Fn(&K) -> bool")]
+    can_close: Option<RowTest<'a, K>>,
     /// What the strip takes from drags that did not start in it, in order.
     drops: Vec<DropKind<'a, K>>,
     /// Where the strip's own drag may land: the test gets the drag, the tab under the pointer and the position before which the
@@ -333,6 +338,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
             tear_off: false,
             wheel_selects: false,
             can_drag: None,
+            can_close: None,
             drops: Vec::new(),
             accepts: None,
             held: Bind::kept(),
@@ -426,8 +432,15 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
     }
 
     fn sense(&self) -> Sense {
-        let sense = <<Self as Meta>::Shape as ShowShape>::DEFAULT_SENSE;
-        if self.wheel_selects { sense | Sense::WHEEL_Y } else { sense }
+        let mut sense = <<Self as Meta>::Shape as ShowShape>::DEFAULT_SENSE;
+        if self.wheel_selects {
+            sense |= Sense::WHEEL_Y;
+        }
+        // A middle click on a tab closes it where the kind closes on one: the collection reports it on the tab.
+        if self.kind.middle_click_closes() {
+            sense |= Sense::MIDDLE_CLICK;
+        }
+        sense
     }
 
     /// The overflow button, over the end of the row or right after the last shown tab.
@@ -515,13 +528,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
 
     fn finish(self, mut cx: Cx<'_, Self>) -> TabStripOutput<K> {
         let tab_rects = self.tab_rects(&cx);
-        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, .. } = self;
+        let TabStrip { picked, torn, wheeled, empty_drag, empty_double, can_close, .. } = self;
         let mut response = cx.collection_response();
         let (mut closed, mut menu) = (Vec::new(), None);
         let mut kept = Vec::with_capacity(response.events.len());
         for event in std::mem::take(&mut response.events) {
             match event {
                 CollectionEvent::Item(key, TabPartEvent::Close) => closed.push(key),
+                CollectionEvent::MiddleClick(key) => {
+                    if can_close.as_ref().is_none_or(|test| test.passes(&key)) {
+                        closed.push(key);
+                    }
+                }
                 CollectionEvent::ContextMenu(request) => menu = Some(request),
                 other => kept.push(other),
             }

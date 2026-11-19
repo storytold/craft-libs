@@ -19,6 +19,17 @@ use craft_theme::ControlSize;
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 impl ListRow<'_> {
+    /// Whether the trailing part `key` shows: a `revealed` one only on a hovered or `selected` row, while it has focus
+    /// or while the menu it opens is open. A part that does not show is neither painted nor exposed.
+    pub(super) fn part_shown(cx: &Cx<'_, Self>, key: PartRef, revealed: bool, selected: bool, menu_open: bool) -> bool {
+        !revealed
+            || cx.response.hovered()
+            || selected
+            || menu_open
+            || cx.part_state(key).flags.contains(Flags::FOCUSED)
+            || item_part_open(&cx.ctx, cx.id, key)
+    }
+
     pub(super) fn paint_trailing(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>, placed: &Placed) {
         let side = Vec2::splat(cx.style.sizes.icon);
         let selected = cx.resolved.selected == Some(true) || cx.env.facts_of(cx.id).is_some_and(|facts| facts.flags.contains(Flags::SELECTED));
@@ -44,13 +55,7 @@ impl ListRow<'_> {
                 }
                 TrailingItem::Part { part, face, enabled, revealed, .. } => {
                     let key = part.part();
-                    let shown = !*revealed
-                        || cx.response.hovered()
-                        || selected
-                        || self.menu_open
-                        || cx.part_state(key).flags.contains(Flags::FOCUSED)
-                        || item_part_open(&cx.ctx, cx.id, key);
-                    if !shown {
+                    if !Self::part_shown(cx, key, *revealed, selected, self.menu_open) {
                         continue;
                     }
                     match face {
