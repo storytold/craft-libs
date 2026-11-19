@@ -30,7 +30,7 @@ const TOOLS_DOCK_WIDTH: f32 = 120.0;
 
 /// The tools of the rail. Each is a command of the `tools` group; a tool alone in its slot carries its letter, and the
 /// letter of a slot with several is the pick command of [`ToolKey`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet, craft_ui::contract::MemoProps)]
 #[command(prefix = "mockTool")]
 #[non_exhaustive]
 pub enum Tool {
