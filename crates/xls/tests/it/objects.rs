@@ -2,7 +2,7 @@
 //! from [MS-XLS] and [MS-ODRAW]; no Excel-produced file is used. Ported from
 //! storytold/gridcraft#3457, with tests for the fixes its review asked for.
 
-mod common;
+use super::common;
 
 use common::*;
 use craft_xls::{ClientAnchor, Color, ConditionRule, DxfFill, Operator, Pattern, Range, Workbook};

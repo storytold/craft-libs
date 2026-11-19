@@ -1,6 +1,6 @@
 //! Reading BIFF8 workbooks: values, formulas, layout, names, limits and hostile input.
 
-mod common;
+use super::common;
 
 use common::{
     at, bof, cat, cell, compound, eof, exp, fmt, formula, ftext, num, ptg_int, ptg_ref, put32, read_limited, read_xls, rec, special, text, u16s, v,

@@ -1,7 +1,7 @@
 //! Binary workbooks: BIFF12 records and packages assembled here from [MS-XLSB].
 //! Adapted from GridCraft's `crates/xlsx/src/tests/xlsb_tests.rs`.
 
-mod common;
+use super::common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;

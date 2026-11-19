@@ -1,7 +1,7 @@
 //! Cell formatting: Font, XF, Palette and Style records. Every workbook is assembled here from
 //! the [MS-XLS] structures; no Excel-produced file is used.
 
-mod common;
+use super::common;
 
 use common::{at, bof, compound, eof, read_xls, rec, u16s, v};
 use craft_xls::{BorderLine, BorderStyle, CellFormat, Color, DEFAULT_PALETTE, Fill, HAlign, Pattern, Script, Underline, VAlign, Value, Workbook};
