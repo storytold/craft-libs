@@ -68,10 +68,15 @@ pub(crate) fn put_boxed<T: Any + Clone + Send + Sync>(data: &mut Map, id: Id, va
 /// Runs `f` on the slot under `id` (`None` when no slot of type `T` is stored) without running slot code under the
 /// data lock: the entry moves out, `f` reads it in place and it moves back.
 pub(crate) fn peek_with<T: Any + Clone + Send + Sync, R>(ctx: &Context, id: Id, f: impl FnOnce(Option<&T>) -> R) -> R {
-    let Some(moved) = take::<T>(ctx, id) else { return f(None) };
+    let Some(moved) = take_boxed::<T>(ctx, id).and_then(|stored| stored.downcast::<T>().ok()) else { return f(None) };
     let out = f(Some(&moved));
-    ctx.data_mut(|data| data.insert_temp(id, moved));
+    restore(ctx, id, moved);
     out
+}
+
+/// Return the original slot allocation. Any replaced value drops after the data lock is released.
+fn restore<T: Any + Clone + Send + Sync>(ctx: &Context, id: Id, value: Box<T>) {
+    drop(ctx.data_mut(|data| put_boxed(data, id, value)));
 }
 
 /// A copy of the slot under `id`, read as [`peek_with`] reads it.
