@@ -158,10 +158,10 @@ impl Pointer for CxCore<'_> {
 
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
         let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx))?;
-        let op = drag::current_operation(&self.ctx);
+        let op = drag::current_operation(&self.ctx, craft_behavior::CopyKeys::Alt);
         let drop = target.accept(&payload, op)?;
         let ordinal = drag::next_ordinal(&self.ctx, self.id);
-        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), true);
+        drag::register(&self.ctx, self.id, self.response.layer_id, target.mark(&drop), op, true);
         drag::take_drop(&self.ctx, self.id, ordinal, op, TypeId::of::<P>()).then_some(drop)
     }
 

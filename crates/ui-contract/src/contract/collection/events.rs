@@ -24,7 +24,7 @@ pub struct ReorderMove<K> {
     pub keys: Vec<K>,
     /// The new position of the first of `keys`, counted in the order that remains once all of them are taken out.
     pub to: usize,
-    /// The drag was a copy (Alt held, `ReorderRule::copy_with_alt`): the item stays and a copy goes to `to`.
+    /// The drag was a copy (the copy keys of `ReorderRule::copy_with` held): the item stays and a copy goes to `to`.
     pub copy: bool,
     /// The group the items land in: `None` at the top level, and always `None` unless the rule has `into_groups`.
     pub parent: Option<K>,

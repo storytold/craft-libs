@@ -34,7 +34,7 @@ mod tool;
 
 pub use auto_scroll_mark::AutoScrollMark;
 pub use content::{ContentPainterCx, DocRun, DocText};
-pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth, WellFill};
+pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokePlace, StrokeWidth, WellFill};
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};
 pub use handle::{Handle, HandleShape};

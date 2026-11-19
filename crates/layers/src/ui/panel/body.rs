@@ -9,7 +9,7 @@ pub(in crate::ui::panel) use map::start_rename;
 pub(in crate::ui::panel) use rows::{LayerRows, ToggleSweeps, reveal_plan, thumb_click_replaces_select};
 use rows::{RevealPlan, list_selection};
 
-use craft_behavior::{ColumnWidth, IconId};
+use craft_behavior::{ColumnWidth, CopyKeys, IconId};
 use craft_keymap::Mods;
 use craft_ui::contract::{
     Bind, CollectionEvent, ColumnSpec, DropAt, DropKind, DropPlace, ListDrag, PendingDrop, Props as _, ReorderRule, ShowCollection as _, ToggleColumn,
@@ -69,7 +69,7 @@ pub(super) fn show_body<T: LayerTree>(
     let mut list = List::new(cx.words.list.clone())
         .id(cx.list)
         .tree(true)
-        .reorder(ReorderRule::new().into_groups().copy_with_alt())
+        .reorder(ReorderRule::new().into_groups().copy_with(CopyKeys::Alt))
         .allow_empty(true)
         .rename(true)
         .rename_column(NAME)

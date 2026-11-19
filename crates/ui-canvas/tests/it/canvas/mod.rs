@@ -2,6 +2,8 @@
 
 mod crop;
 
+mod modal_wheel;
+
 mod navigate;
 
 mod navigator;

@@ -217,12 +217,29 @@ pub enum DropOperation {
     Link,
 }
 
-/// The drop operation the held modifiers pick.
-pub fn drop_operation(os: Os, mods: Mods) -> DropOperation {
-    let link = if os == Os::Mac { mods.cmd && mods.alt } else { mods.cmd && mods.shift };
+/// Which held key turns a drag into a copy over a target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CopyKeys {
+    /// Alt, Option on macOS: a design app's duplicating drag (Photoshop's layers).
+    #[default]
+    Alt,
+    /// The file manager's: Ctrl off macOS, Option on macOS (Explorer, Finder, a document's page grid).
+    Platform,
+}
+
+/// The drop operation the held modifiers pick over a target that copies with `copy`. Link is Ctrl+Shift, Cmd+Option on
+/// macOS, whatever the copy keys.
+pub fn drop_operation(os: Os, mods: Mods, copy: CopyKeys) -> DropOperation {
+    let mac = os == Os::Mac;
+    let link = if mac { mods.cmd && mods.alt } else { mods.cmd && mods.shift };
+    let copies = match copy {
+        CopyKeys::Platform if !mac => mods.cmd,
+        _ => mods.alt,
+    };
     if link {
         DropOperation::Link
-    } else if mods.alt {
+    } else if copies {
         DropOperation::Copy
     } else {
         DropOperation::Move

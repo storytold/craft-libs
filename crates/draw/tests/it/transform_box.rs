@@ -1092,7 +1092,8 @@ fn a_sides_only_box_takes_presses_on_its_side_edges_only() {
 }
 
 /// The rotate knob stands above the box, or below it at the canvas's top edge; a ⇧ drag on it turns the box by whole
-/// rotate steps, and a click on it applies nothing. The knob is found as the app finds it, by its access-tree name.
+/// rotate steps under the grab pointer, and a click on it applies nothing. The knob is found as the app finds it, by
+/// its access-tree name.
 #[trial]
 fn a_knob_sits_below_a_box_at_the_top_turns_in_shift_steps_and_a_click_on_it_applies_nothing() {
     let knob_of = |h: &Harness| h.fixture.by_label("Rotate").map(|target| target.center());
@@ -1128,9 +1129,11 @@ fn a_knob_sits_below_a_box_at_the_top_turns_in_shift_steps_and_a_click_on_it_app
         centre + by(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
     };
     frame(&mut h, vec![pointer::moved(knob)]);
+    assert_eq!(h.fixture.cursor_icon(), egui::CursorIcon::Grab, "the knob offers to be taken hold of");
     frame(&mut h, vec![pointer::press(knob)]);
     frame(&mut h, vec![pointer::moved(around(10.0))]);
     frame(&mut h, vec![pointer::moved(around(25.0))]);
+    assert_eq!(h.fixture.cursor_icon(), egui::CursorIcon::Grabbing, "and holds it while it turns");
     frame(&mut h, vec![pointer::release(around(25.0))]);
     frame(&mut h, Vec::new());
     let angle = h.state().angle().rem_euclid(360.0);

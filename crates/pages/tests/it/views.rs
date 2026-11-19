@@ -181,6 +181,47 @@ fn a_changed_zoom_keeps_the_point_at_the_centre_and_a_new_room_the_current_pages
     assert!((after - before).abs() < 1.0, "the current page's top stays put: {before} then {after}");
 }
 
+/// Turning the page gaps off keeps the scroll offset, as production did, so the pages below the top close up toward
+/// it; also when the gaps change while the view is hidden (a page grid shown in its place) and it shows again.
+#[trial]
+fn a_page_gap_change_keeps_the_scroll_offset() {
+    for fit in [Fit::None, Fit::Width] {
+        for hidden in [false, true] {
+            let source = DemoPages::new(5);
+            let state = Rc::new(RefCell::new(state_with(|s| s.fit = fit)));
+            let shows = Rc::new(Cell::new(true));
+            let rects: Rc<RefCell<Vec<kurbo::Rect>>> = Rc::default();
+            let (kept, seen, showing) = (Rc::clone(&state), Rc::clone(&rects), Rc::clone(&shows));
+            let mut fixture = Fixture::new(move |ui| {
+                if !showing.get() {
+                    return;
+                }
+                let mut now = kept.borrow().clone();
+                let shown = PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).show(ui, &mut |_: &mut egui::Ui, _: &PageBody<'_>| ());
+                *seen.borrow_mut() = shown.layout.rects.clone();
+                *kept.borrow_mut() = now;
+            });
+            fixture.room(vec2(900.0, 600.0));
+            fixture.settle();
+            state.borrow_mut().go_to_fraction(1, 0.0);
+            fixture.idle(3);
+            let offset = state.borrow().offset;
+            assert_eq!(state.borrow().current, 1, "precondition: the second page is current");
+            shows.set(!hidden);
+            fixture.idle(2);
+            state.borrow_mut().page_gaps = false;
+            fixture.idle(2);
+            shows.set(true);
+            fixture.idle(3);
+            let after = state.borrow().offset;
+            assert!(
+                (after.0 - offset.0).abs() < 0.5 && (after.1 - offset.1).abs() < 0.5,
+                "{fit:?}, hidden {hidden}: the offset stays: {offset:?} then {after:?}"
+            );
+        }
+    }
+}
+
 /// A wheel step of `lines` over the middle of the room.
 fn wheel(fixture: &mut Fixture, lines: f32) {
     let middle = pos2(450.0, 300.0);

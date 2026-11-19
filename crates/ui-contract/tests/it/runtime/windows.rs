@@ -298,6 +298,38 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
     }
 }
 
+/// A window that a modal in another window blocks takes no wheel, as it takes no press or key: what is under the
+/// pointer there does not scroll.
+#[trial]
+fn a_window_an_app_modal_in_another_window_blocks_takes_no_wheel() {
+    use craft_behavior::WheelTaker;
+    use craft_ui::testing::wheel::{register, take};
+    for open in [false, true] {
+        let windows = Windows::new();
+        let view = egui::Id::new("view");
+        let taken = Cell::new(None);
+        let frame = |events: Vec<Event>| {
+            windows.frame(events, vec![], |ui| {
+                register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).vertical(true).scrolls(true));
+                if let Some(scroll) = take(ui.ctx(), view) {
+                    taken.set(Some(scroll));
+                }
+                if open {
+                    ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
+                        let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                        Modal { common: Common::new(), props }.id_salt("modal").show(cui, |_, _| {});
+                    });
+                }
+            })
+        };
+        for _ in 0..4 {
+            frame(vec![moved(Pos2::new(200.0, 200.0))]);
+        }
+        frame(vec![wheel(-30.0)]);
+        assert_eq!(taken.get().is_some(), !open, "modal open {open}: the view's share {:?}", taken.get());
+    }
+}
+
 /// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window
 /// forward with it, in the pass the main window gains focus; a pass without a focus change sends nothing.
 #[trial]

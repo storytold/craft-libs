@@ -89,7 +89,7 @@ pub use intent::{AccessRequest, EditCommand, Granularity, Intent, MoveMods, NavM
 pub use item_layout::{FreeLayout, ItemLayout, LineIndex, SHEET_ZOOM, SheetLayout, SpanLayout, TileLayout};
 pub use item_marquee::{MarqueeMode, MarqueeSelect};
 pub use item_source::{DisplayOrder, ItemSource, Keyed, Outline, SizeHint, keyed};
-pub use keys::{DropOperation, KeyRole, ReorderKeys};
+pub use keys::{CopyKeys, DropOperation, KeyRole, ReorderKeys};
 pub use label_column::{LabelColumn, LabelPlacement};
 pub use layout_memory::SizeTween;
 pub use middle_scroll::{MiddleButton, MiddleScroll};

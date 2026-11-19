@@ -43,6 +43,29 @@ pub enum PaintShape {
     Path(Vec<Pos2>),
 }
 
+impl PaintShape {
+    /// Where `Draw::stroke` puts the shape's stroke.
+    fn stroke_place(&self) -> StrokePlace {
+        match self {
+            PaintShape::Rect(..) => StrokePlace::Inside,
+            PaintShape::Circle(..) => StrokePlace::Outside,
+            PaintShape::Polygon(_) | PaintShape::Path(_) => StrokePlace::Centre,
+        }
+    }
+}
+
+/// Where a stroke lies against the edge of a closed shape (`Rect`, `Circle`, `Polygon`); an open `Path` always strokes
+/// on its centre line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrokePlace {
+    /// Wholly inside the edge, so the shape keeps its outer size.
+    Inside,
+    /// Centred on the edge.
+    Centre,
+    /// Wholly outside the edge, so the stroke covers nothing the shape covers.
+    Outside,
+}
+
 /// A line width from the theme, so content never picks a literal one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -506,9 +529,16 @@ impl<'a> Draw<'a> {
     }
 
     /// Strokes `shape` at a theme width or a width from the document, in a theme colour or a colour from data (a
-    /// chart series, a curve). A data colour paints as `data_fill` paints it.
+    /// chart series, a curve). A data colour paints as `data_fill` paints it. A rect strokes inside its edge, a circle
+    /// outside it and a polygon on it; [`stroke_placed`](Self::stroke_placed) picks the place.
     pub fn stroke(&self, shape: &PaintShape, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
-        self.paint(shape, None, Some(self.line(width.into(), color.into())));
+        self.stroke_placed(shape, shape.stroke_place(), width, color);
+    }
+
+    /// Strokes `shape` as [`stroke`](Self::stroke) does, with the stroke `place`d against the shape's edge: an outline
+    /// around a selected item that must not cover it strokes `Outside`.
+    pub fn stroke_placed(&self, shape: &PaintShape, place: StrokePlace, width: impl Into<DataStrokeWidth>, color: impl Into<StrokeColor>) {
+        self.paint_placed(shape, None, Some(self.line(width.into(), color.into())), place);
     }
 
     /// Fills `shape` with a colour from data (a swatch well, a layer label dot, an avatar). A component that paints its
@@ -524,6 +554,26 @@ impl<'a> Draw<'a> {
     /// with the theme's disabled fill instead, as `data_fill` does.
     pub fn texture(&self, rect: Rect, texture: TextureId, uv: Rect) {
         data_picture(self.painter, self.env.tokens, self.data, texture, rect, uv, CornerRadius::ZERO);
+    }
+
+    /// Paints the part `uv` of `texture` onto the quad `corners`, untinted, as [`texture`](Self::texture) paints into a
+    /// rect: `corners` are where the top left, top right, bottom right and bottom left of `uv` land, so a picture turned
+    /// by a quarter turn (or any affine map) paints from the one cached texture. For an inactive part the quad is
+    /// filled with the theme's disabled fill.
+    pub fn texture_quad(&self, corners: [Pos2; 4], texture: TextureId, uv: Rect) {
+        let tint = self.data.color(self.env.tokens, super::textures::UNTINTED);
+        if self.data == DataMode::Inactive {
+            self.paint(&PaintShape::Polygon(corners.to_vec()), Some(tint), None);
+            return;
+        }
+        let mut mesh = egui::Mesh::with_texture(texture);
+        let uvs = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
+        for (pos, uv) in corners.into_iter().zip(uvs) {
+            mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: tint });
+        }
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        self.painter.add(Shape::mesh(mesh));
     }
 
     /// The texture for `key` from the `TextureCache` of the context this painter paints in, for [`texture`](Self::texture):
@@ -622,12 +672,36 @@ impl<'a> Draw<'a> {
         paint(&Draw { painter: &painter, record: self.record, env: self.env, data: self.data, text_direction: self.text_direction });
     }
 
+    /// Paints `shape` with its stroke where [`stroke`](Self::stroke) puts it.
     fn paint(&self, shape: &PaintShape, fill: Option<Color32>, stroke: Option<Stroke>) {
+        self.paint_placed(shape, fill, stroke, shape.stroke_place());
+    }
+
+    fn paint_placed(&self, shape: &PaintShape, fill: Option<Color32>, stroke: Option<Stroke>, place: StrokePlace) {
         let fill_color = fill.unwrap_or(Color32::TRANSPARENT);
         let stroke = stroke.unwrap_or(Stroke::NONE);
+        let kind = match place {
+            StrokePlace::Inside => StrokeKind::Inside,
+            StrokePlace::Centre => StrokeKind::Middle,
+            StrokePlace::Outside => StrokeKind::Outside,
+        };
         let shape = match shape {
-            PaintShape::Rect(rect, radius) => Shape::Rect(RectShape::new(*rect, *radius, fill_color, stroke, StrokeKind::Inside)),
-            PaintShape::Circle(center, radius) => Shape::Circle(CircleShape { center: *center, radius: *radius, fill: fill_color, stroke }),
+            PaintShape::Rect(rect, radius) => Shape::Rect(RectShape::new(*rect, *radius, fill_color, stroke, kind)),
+            PaintShape::Circle(center, radius) => {
+                // egui strokes a circle outside its radius, so the fill and the stroke paint as two circles when the
+                // stroke moves in.
+                let offset = match place {
+                    StrokePlace::Inside => -stroke.width,
+                    StrokePlace::Centre => -stroke.width / 2.0,
+                    StrokePlace::Outside => 0.0,
+                };
+                if offset != 0.0 && fill.is_some() {
+                    self.painter.add(Shape::Circle(CircleShape { center: *center, radius: *radius, fill: fill_color, stroke: Stroke::NONE }));
+                }
+                let fill_color = if offset == 0.0 { fill_color } else { Color32::TRANSPARENT };
+                let radius = (*radius + offset).max(0.0);
+                Shape::Circle(CircleShape { center: *center, radius, fill: fill_color, stroke })
+            }
             PaintShape::Polygon(points) => {
                 if fill.is_some() {
                     let feather = self.painter.ctx().tessellation_options(|options| {
@@ -641,7 +715,9 @@ impl<'a> Draw<'a> {
                 if stroke.is_empty() {
                     return;
                 }
-                Shape::closed_line(points.clone(), stroke)
+                let mut line = egui::epaint::PathStroke::from(stroke);
+                line.kind = kind;
+                Shape::closed_line(points.clone(), line)
             }
             PaintShape::Path(points) => Shape::line(points.clone(), stroke),
         };
