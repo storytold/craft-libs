@@ -1076,11 +1076,7 @@ pub fn write_to<W: std::io::Write + std::io::Seek>(
         };
         list.push(AnyChannel::new(name, samples));
     }
-    let encoding = Encoding {
-        compression: to_exr_compression(compression),
-        blocks: Blocks::ScanLines,
-        line_order: LineOrder::Increasing,
-    };
+    let encoding = Encoding { compression: to_exr_compression(compression), blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let layer = Layer::new((width as usize, height as usize), LayerAttributes::default(), encoding, AnyChannels::sort(list.into_iter().collect()));
     let mut image = exr::image::Image::from_layer(layer);
     image.attributes.chromaticities = to_exr_chromaticities(chromaticities);
@@ -1114,11 +1110,7 @@ pub fn write_rgba<W: std::io::Write + std::io::Seek>(
             _ => [0.0; 4],
         }
     };
-    let encoding = Encoding {
-        compression: to_exr_compression(compression),
-        blocks: Blocks::ScanLines,
-        line_order: LineOrder::Increasing,
-    };
+    let encoding = Encoding { compression: to_exr_compression(compression), blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let chroma = to_exr_chromaticities(chromaticities);
     match depth {
         SampleDepth::Float => {

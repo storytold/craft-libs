@@ -23,7 +23,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 #[cfg(feature = "tree")]
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
