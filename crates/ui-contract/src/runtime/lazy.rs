@@ -240,7 +240,7 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
 /// pass gets the same answer, so a measuring run and the real run lay out the same children.
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
-    with(ctx, |store, pass_nr, frame| {
+    let decision = with(ctx, |store, pass_nr, frame| {
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
@@ -255,7 +255,12 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
             }
         };
         if skip { Decision::Skip(size) } else { Decision::Run }
-    })
+    });
+    #[cfg(feature = "testing")]
+    if matches!(decision, Decision::Skip(_)) {
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::OutOfView);
+    }
+    decision
 }
 
 /// Records what a run that showed the child `id` found: its extent in a run of this kind and, from a real run, what
@@ -298,6 +303,11 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - for a child with no content version: no input other than pointer motion this frame or the one before;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
 pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
+    // Keyed calls feed their 8-byte content version into the key.
+    #[cfg(feature = "testing")]
+    if content.is_some() {
+        crate::runtime::measure::count_memo_key_bytes(ctx, 8);
+    }
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -340,15 +350,23 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         settled.map(|settled| (entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(settled.rect.size()), settled))
     });
     // The pointer over it, or a press that started on it, is read outside the store.
-    let (size, settled) = settled?;
+    let Some((size, settled)) = settled else {
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Ran);
+        return None;
+    };
     if engaged(ctx, &settled) {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
                 entry.replays = Some((pass_nr, false));
             }
         });
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Ran);
         return None;
     }
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Replayed);
     Some(size)
 }
 

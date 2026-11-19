@@ -41,8 +41,9 @@ pub use crate::contract::{Exemption, PatternKind, PatternProbe, Probe, Registrat
 #[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::forget_kept as forget_measurements;
 pub use crate::runtime::measure::{
-    active as is_measuring, body_runs as measuring_runs, contributions as measured_contributions, last_pass_body_runs as last_pass_measuring_runs,
-    last_pass_runs, least_runs as shrink_least_runs, row_measures, run as measuring_run, take_effects, widest_runs,
+    Settle, active as is_measuring, body_runs as measuring_runs, contributions as measured_contributions,
+    last_pass_body_runs as last_pass_measuring_runs, last_pass_measure_asks, last_pass_memo_key_bytes, last_pass_runs, last_pass_settles,
+    last_pass_text_layouts, least_runs as shrink_least_runs, row_measures, run as measuring_run, take_effects, widest_runs,
 };
 pub use craft_ui_macros::{story, trial};
 pub use fixture::{Fixture, Impure, Room, Target};
