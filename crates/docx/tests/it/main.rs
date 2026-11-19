@@ -20,6 +20,7 @@ mod element_budget;
 mod emphasis_marks;
 mod fixtures;
 mod font_table;
+mod footer_table_end;
 mod glossary;
 mod heading_levels;
 mod kashida;
