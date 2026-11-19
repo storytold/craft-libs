@@ -39,8 +39,8 @@ pub enum GroupLevel {
 ///
 /// - a `Button` or `SplitButton` that asks for no variant (or for the default `Variant::SECONDARY`) draws flat at
 ///   rest, as the ghost variant: no edge and no fill until the pointer is over it or presses it;
-/// - a `ComboBox` is as wide as its widest option and its chevron, not a field length, and a font picker takes the
-///   small field length (`size.length.field.sm`).
+/// - a `ComboBox` is as wide as its widest option and its chevron, not a field length, and a font picker is a short
+///   field (`size.length.short`) whichever family it shows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
 #[env(style)]
 #[non_exhaustive]

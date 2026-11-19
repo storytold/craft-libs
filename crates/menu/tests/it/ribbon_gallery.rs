@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use craft_menu::{Gallery, GalleryFace, GalleryItem, GroupLevel};
 use craft_ui::contract::Show as _;
+use craft_ui::list::ThumbAspect;
 use craft_ui::primitives::ContentPainterCx;
+use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::{Fixture, trial};
 use egui::Rect;
@@ -67,4 +69,34 @@ fn the_tile_count_follows_the_group_level_and_stepping_stays_in_range_when_the_i
     fixture.click(&tile);
     fixture.settle();
     assert_eq!(*picks.borrow(), vec![1], "a click on a tile picks its key");
+}
+
+/// The tiles' rects and the painted texts of a gallery of three, square and uncaptioned or two to one and named under
+/// each picture.
+fn tiles(wide: bool) -> (Vec<Rect>, Vec<String>) {
+    let mut fixture = Fixture::new(move |ui| {
+        let paint = |_: &ContentPainterCx, _: Rect| {};
+        let items: Vec<GalleryItem<'_, usize>> =
+            (0..3).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+        let gallery = Gallery::new("Styles", &items, None).tiles(3, 3);
+        let gallery = if wide { gallery.aspect(ThumbAspect::new(2, 1)).caption(CaptionPlace::Below) } else { gallery };
+        let _ = gallery.show(ui);
+    });
+    fixture.settle();
+    let rects = (0..3).filter_map(|at| fixture.by_label(&format!("Tile {at}")).map(|tile| tile.rect)).collect();
+    (rects, fixture.texts().iter().map(|run| run.text.clone()).collect())
+}
+
+/// A style gallery's tiles are twice as wide as a square one's and name their items under the pictures; a plain
+/// gallery's tiles are square and show no names.
+#[trial]
+fn a_wide_captioned_gallery_names_its_tiles_under_wide_pictures() {
+    let (square, plain) = tiles(false);
+    let (wide, named) = tiles(true);
+    assert_eq!((square.len(), wide.len()), (3, 3), "every tile shows");
+    let (square, wide) = (square[0], wide[0]);
+    assert!(wide.width() > 1.5 * square.width(), "a two to one tile is wider: {wide:?} against {square:?}");
+    assert!(wide.height() > square.height() + 0.5, "a captioned tile keeps a line for its name: {wide:?} against {square:?}");
+    assert!(named.iter().any(|text| text == "Tile 0"), "a captioned tile paints its name: {named:?}");
+    assert!(!plain.iter().any(|text| text == "Tile 0"), "a plain tile paints no name: {plain:?}");
 }

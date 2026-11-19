@@ -74,11 +74,11 @@ impl FieldStyle {
         self
     }
 
-    /// The style of a field as wide as the small field length (`size.length.field.sm`) whatever its control size,
-    /// where the room allows: a ribbon's font box, which keeps that width whichever family it shows.
+    /// The style of a field with no field length to widen it past its shortest width (`size.length.short`): a
+    /// ribbon's font box, which keeps that width whichever family it shows, as a word processor's does.
     #[must_use]
-    pub fn small_length(mut self, cx: &StyleCx<'_>) -> FieldStyle {
-        self.metrics = self.metrics.ideal_width(cx.tokens.size.length.field.sm);
+    pub fn shortest(mut self) -> FieldStyle {
+        self.metrics = self.metrics.ideal_width(self.metrics.min_size.x);
         self
     }
 

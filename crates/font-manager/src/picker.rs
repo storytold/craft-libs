@@ -588,10 +588,11 @@ impl Component for FontPicker<'_> {
     type Style = craft_ui::text::FieldStyle;
     type Output = FontPickerOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) the small field length, as a ribbon's font box is.
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) at its shortest width (`size.length.short`), as a ribbon's font
+    /// box is.
     fn style(cx: &craft_ui::style::StyleCx<'_>, _: FontPickerStyleKey) -> craft_ui::text::FieldStyle {
         let field = craft_ui::text::FieldStyle::at(cx);
-        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.small_length(cx) } else { field }
+        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.shortest() } else { field }
     }
 
     /// The wheel steps the family through the list.
@@ -600,7 +601,7 @@ impl Component for FontPicker<'_> {
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
-    /// In a ribbon the field's length alone sets its width (the style's small field length): a longer name scrolls
+    /// In a ribbon the style alone sets its width (`FieldStyle::shortest`): a longer name scrolls
     /// in the field, as in a word processor's font box.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let current = cx.value().map_or("", String::as_str);

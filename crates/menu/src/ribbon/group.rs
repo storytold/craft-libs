@@ -70,6 +70,7 @@ impl<'a> RibbonGroup<'a> {
                 }
             });
         });
+        took
     }
 
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
