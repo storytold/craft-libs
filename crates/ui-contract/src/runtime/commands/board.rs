@@ -1384,7 +1384,7 @@ pub(crate) fn end(ctx: &Context) {
         board.shown.retain(|viewport, table| {
             table.retain(|_, readers| {
                 readers.retain(|(reader, _)| match reader {
-                    Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_none_or(&ids),
+                    Reader::Chain(chain) | Reader::InMenu(_, chain) => chain.innermost_any().is_none_or(ids),
                     _ => true,
                 });
                 !readers.is_empty()
