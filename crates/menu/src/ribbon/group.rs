@@ -77,16 +77,7 @@ impl<'a> RibbonGroup<'a> {
     /// popup the content opens does not close the popover: the overlay family keeps it open.
     fn collapsed(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)) {
         let button = Button::new(self.title.clone()).icon(self.icon.clone()).arrangement(Arrangement::Stacked).show(ui);
-        if craft_ui::contract::clicked(&button.response) {
-            eprintln!(
-                "DIAG a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used: collapsed button {:?} clicked at {:?}, sizing {}",
-                button.response.id,
-                button.response.rect,
-                ui.is_sizing_pass()
-            );
-        }
         Popover::new(self.title.clone(), Bind::kept()).overlay(|overlay| overlay.opened_by(&button.response, Trigger::Click)).show(ui, |ui, _| {
-            eprintln!("DIAG a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used: popover body of {:?} runs", self.title.as_str());
             with_env(
                 ui,
                 |overrides| {
