@@ -689,3 +689,23 @@ fn a_match_src_chunks_other_paragraphs_leave_their_styles_complex_script_and_dir
         }
     }
 }
+
+/// A paragraph style a Word chunk names but doesn't define is its Normal, even when the chunk's
+/// styles part has no quick style: the gallery such a file gets doesn't make Subtitle one of the
+/// chunk's, so its paragraphs don't land on our Subtitle (nor on a gallery copy of it).
+#[test]
+fn a_chunk_without_quick_styles_keeps_an_undefined_style_its_normal() {
+    let theirs = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let para = |t: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+    let inner = package_styled(&format!("{}{}", para("First"), para("Last")), None, Some(theirs));
+    let ours = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:qFormat/><w:rPr><w:sz w:val="56"/></w:rPr></w:style>"#;
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+    for (i, name) in [(1, "First"), (2, "Last")] {
+        let Block::Para(p) = &*d.body[i] else { panic!("{:?}", d.body[i]) };
+        assert_eq!(p.text, name);
+        let style = p.props.style.clone().unwrap_or_default();
+        assert!(!style.starts_with("Subtitle"), "{name} is in the chunk's Normal, not {style}");
+        assert_eq!(d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 10.0, "{name}: Word's size of a Normal without one");
+    }
+}

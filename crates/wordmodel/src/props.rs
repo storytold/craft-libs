@@ -364,8 +364,16 @@ mod tests {
         let style = CharProps { text_effects: Some(Box::new(red.clone())), ..Default::default() };
         let blue = CharProps { color: Some(TextColor::Rgb(Rgb(0, 0, 0xFF))), ..Default::default() };
         assert_eq!(style.clone().overlaid(&blue).text_effects, None);
-        let both = CharProps { text_effects: Some(Box::new(red.clone())), ..blue };
-        assert_eq!(style.overlaid(&both).text_effects.map(|t| t.fill), Some(red.fill));
+        let both = CharProps { text_effects: Some(Box::new(red.clone())), ..blue.clone() };
+        assert_eq!(style.overlaid(&both).text_effects.map(|t| t.fill), Some(red.fill.clone()));
+        // What a colour equal to the base's does over the base's fill is kept by `minus`: overlaid
+        // again, the difference takes the fill off as the colour did.
+        let base = CharProps { text_effects: Some(Box::new(red.clone())), ..blue.clone() };
+        let diff = blue.clone().minus(&base);
+        assert_eq!(diff.color, blue.color);
+        assert_eq!(base.clone().overlaid(&diff).text_effects, None);
+        // Without a fill below, an equal colour has nothing to say.
+        assert_eq!(blue.clone().minus(&blue).color, None);
         // A shading and "no shading" replace each other.
         let shaded = CharProps { shading: Some(Rgb(1, 2, 3)), ..Default::default() };
         let none = CharProps { shading_auto: Some(true), ..Default::default() };

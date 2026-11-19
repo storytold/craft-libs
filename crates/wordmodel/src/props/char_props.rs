@@ -586,7 +586,13 @@ impl CharProps {
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         let font = self.font.clone();
+        let color = self.color;
         self.minus_text_style(base);
+        // A colour takes a text fill below it off (`overlay`): one equal to the base's still has
+        // to say so where the base has a fill and `self` doesn't.
+        if base.text_effects.as_deref().is_some_and(|fx| fx.fill.is_some()) && self.text_effects.as_deref().is_none_or(|fx| fx.fill.is_none()) {
+            self.color = color;
+        }
         self.minus_shading(base);
         self.minus_latin_theme(base, font);
         self.minus_run_visibility(base);

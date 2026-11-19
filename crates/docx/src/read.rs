@@ -378,7 +378,9 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    if r.gallery_pending {
+    // Not in a chunk's package: a style it doesn't define stays undefined there (its Normal),
+    // as in Word; the document the chunk lands in gets the gallery.
+    if r.gallery_pending && r.chunks.nesting == 0 {
         Arc::make_mut(&mut r.doc.styles).add_default_gallery();
     }
     let (left, bytes, graphic, elements) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, pkg.elements_left());
