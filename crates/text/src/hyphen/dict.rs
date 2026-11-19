@@ -49,7 +49,11 @@ impl Dictionary {
 
     /// Deserialize data written by `Dictionary::to_bytes`.
     pub(crate) fn decode(data: &[u8]) -> Result<Dictionary, String> {
-        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(data, MAX_INFLATED)
+        Dictionary::decode_limited(data, MAX_INFLATED)
+    }
+
+    fn decode_limited(data: &[u8], max_inflated: usize) -> Result<Dictionary, String> {
+        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(data, max_inflated)
             .map_err(|e| format!("hyphenation dictionary: inflate failed: {e:?}"))?;
         let body = raw.strip_prefix(MAGIC).ok_or("hyphenation dictionary: bad header")?;
         let mut d = Dictionary { words: String::with_capacity(body.len()), offs: vec![0], masks: Vec::new() };
@@ -169,8 +173,7 @@ mod tests {
 
     #[test]
     fn an_oversized_stream_is_refused_before_parsing() {
-        let bomb = miniz_oxide::deflate::compress_to_vec(&vec![b'a'; MAX_INFLATED + 1], 10);
-        assert!(bomb.len() < 1 << 20, "{} bytes compressed", bomb.len());
-        assert!(Dictionary::from_bytes(&bomb).unwrap_err().contains("inflate failed"));
+        let bomb = miniz_oxide::deflate::compress_to_vec(&[b'a'; 1025], 10);
+        assert!(Dictionary::decode_limited(&bomb, 1024).unwrap_err().contains("inflate failed"));
     }
 }

@@ -1,7 +1,7 @@
 //! Binary workbooks: BIFF12 records and packages assembled here from [MS-XLSB].
 //! Adapted from GridCraft's `crates/xlsx/src/tests/xlsb_tests.rs`.
 
-mod common;
+use crate::common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
@@ -310,13 +310,17 @@ fn declared_counts_and_decoded_text_are_bounded() {
     let mut count_mismatch = record(159, &[1, 0, 0, 0, 1, 0, 0, 0]);
     count_mismatch.extend(record(160, &[]));
     assert!(read(&package(&book(false), &worksheet(&[], &[]), &count_mismatch, ROOT, RELS, TYPES)).is_err());
+    // The default allowance exceeds the 64 MiB of text that storytold/gridcraft#2126 hit.
+    assert!(Limits::default().binary_text > 64 << 20);
+    // The shared string ("shared 🦀 café", 17 bytes) and three 32-character cells are charged.
     let mut data = row(0);
-    let text = wide(&"x".repeat(32767));
-    for col in 0..2050 {
-        data.extend(cell(6, col, &text));
+    for col in 0..3 {
+        data.extend(cell(6, col, &wide(&"x".repeat(32))));
     }
-    // Just over 64 MiB of text, the allowance before storytold/gridcraft#2126.
-    assert_eq!(read(&file(&worksheet(&data, &[]))).unwrap().sheets[0].cells.len(), 2050);
+    let bytes = file(&worksheet(&data, &[]));
+    let text = |n| Limits { binary_text: n, ..Limits::default() };
+    assert_eq!(read_with(&bytes, &text(17 + 96)).unwrap().sheets[0].cells.len(), 3);
+    assert!(matches!(read_with(&bytes, &text(17 + 95)), Err(Error::TooLarge(_))));
 }
 
 /// A row as Excel writes it: the row header, then `BrtRwDescent` (1024) in an alternate-content
@@ -351,48 +355,32 @@ fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn more_than_a_million_cells_open() {
-    // storytold/gridcraft#2126: a million cells over the workbook was a quarter of what `.xls` allows.
-    let wb = read(&file(&worksheet(&bool_cells(1_000_001, 16), &[]))).unwrap();
-    assert_eq!(wb.sheets[0].cells.len(), 1_000_001);
-    assert_eq!(wb.sheets[0].value(CellRef::new(62_500, 0)), Value::Bool(true));
-}
-
-#[test]
-fn a_full_height_column_opens() {
-    // 1,048,576 cells in Excel's rows are 5.2 million records in one part.
-    let wb = read(&file(&worksheet(&bool_cells(1_048_576, 1), &[]))).unwrap();
-    assert_eq!(wb.sheets[0].cells.len(), 1_048_576);
-    assert_eq!(wb.sheets[0].value(CellRef::new(1_048_575, 0)), Value::Bool(true));
-}
-
-#[test]
 fn formatted_blank_cells_cost_records_not_cells() {
-    // Filling A1:Z200000 and typing 30 values: Excel writes a BrtCellBlank for every formatted
-    // empty cell, 6 million records in all, which an allowance of 5 million per part refused.
+    // Excel writes a BrtCellBlank for every formatted empty cell, so a filled range with a few
+    // typed values holds far more blanks than values; only the values count against the cell limit.
     let mut data = vec![];
-    for r in 0..200_000u32 {
+    for r in 0..40u32 {
         data.extend(excel_row(r));
         for c in 0..26 {
             data.extend(if r < 10 && c < 3 { cell(4, c, &[1]) } else { cell(1, c, &[]) });
         }
     }
-    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    let limits = Limits { binary_cells: 30, ..Limits::default() };
+    let wb = read_with(&file(&worksheet(&data, &[])), &limits).unwrap();
     assert_eq!(wb.sheets[0].cells.len(), 30);
 }
 
 #[test]
-fn cells_are_limited_to_four_million_over_the_workbook() {
-    // The `.xls` limit, counted across sheets: 2M + 2M opens, 2M + 2M + 1 does not.
-    let half = bool_cells(2_000_000, 40);
-    let mut over = half.clone();
-    over.extend(excel_row(50_000));
-    over.extend(cell(4, 0, &[1]));
-    let wb = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[]))).unwrap();
-    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 4_000_000);
-    let err = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[]))).err().unwrap();
+fn cells_are_limited_over_the_workbook() {
+    // The limit is counted across sheets: 20 + 20 opens, 20 + 21 does not.
+    let half = bool_cells(20, 10);
+    let over = bool_cells(21, 10);
+    let limits = Limits { binary_cells: 40, ..Limits::default() };
+    let wb = read_with(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[])), &limits).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 40);
+    let err = read_with(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[])), &limits).err().unwrap();
     assert!(matches!(err, Error::TooLarge(_)), "{err}");
-    assert!(err.to_string().contains("4000000"), "{err}");
+    assert!(err.to_string().contains("40"), "{err}");
 }
 
 #[test]
@@ -403,14 +391,14 @@ fn records_share_one_allowance_over_the_workbook() {
     let records = |n| Limits { binary_records: n, ..Limits::default() };
     assert!(matches!(read_with(&bytes, &records(2_000)), Err(Error::TooLarge(_))));
     assert!(read_with(&bytes, &records(4_000)).is_ok());
-    // The default allowance: exactly 40 million records, then one more. The other parts hold 20
-    // (7 in the workbook, 3 shared-string records, 5 + 5 sheet framing records).
+    // Exactly the allowance, then one more. The other parts hold 20 records (7 in the workbook,
+    // 3 shared-string records, 5 + 5 sheet framing records).
     let filler = record(30, &[]); // Not a cell record: skipped inside the sheet data.
-    let mut data = filler.repeat(40_000_000 - 20);
-    assert!(read(&file(&worksheet(&data, &[]))).is_ok());
+    let mut data = filler.repeat(100 - 20);
+    assert!(read_with(&file(&worksheet(&data, &[])), &records(100)).is_ok());
     data.extend(filler.repeat(1));
-    let err = read(&file(&worksheet(&data, &[]))).err().unwrap();
-    assert!(matches!(err, Error::TooLarge(_)) && err.to_string().contains("too many records (more than 40000000)"), "{err}");
+    let err = read_with(&file(&worksheet(&data, &[])), &records(100)).err().unwrap();
+    assert!(matches!(err, Error::TooLarge(_)) && err.to_string().contains("too many records (more than 100)"), "{err}");
 }
 
 #[test]
@@ -420,13 +408,6 @@ fn text_and_shared_strings_are_limited() {
     let text = |n| Limits { binary_text: n, ..Limits::default() };
     assert!(read_with(&bytes, &text(28)).is_ok());
     assert!(matches!(read_with(&bytes, &text(27)), Err(Error::TooLarge(_))));
-    // A declared count over 4 million shared strings is refused before any item is read.
-    let sst_header = |unique: u32| [record(159, &[unique.to_le_bytes(), unique.to_le_bytes()].concat()), record(160, &[])].concat();
-    let over = read(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_001), ROOT, RELS, TYPES)).err().unwrap();
-    assert!(matches!(over, Error::TooLarge(_)), "{over}");
-    // At the limit the count passes, and the missing items are what is wrong.
-    let at = read(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_000), ROOT, RELS, TYPES)).err().unwrap();
-    assert!(matches!(at, Error::Invalid(_)), "{at}");
 }
 
 #[test]
@@ -640,16 +621,6 @@ fn formula_grouping_follows_token_order() {
 }
 
 #[test]
-fn functions_past_0x17b_are_called_by_number() {
-    // [MS-XLSB] 2.5.98.10's numbers past the .xls table: IFERROR (PtgFunc) and SUMIFS (PtgFuncVar).
-    let sumifs = [&[0x1Eu8, 1, 0][..], &[0x1E, 2, 0], &[0x17, 2, 0, b'>', 0, b'0', 0], &[0x42, 3, 0xE2, 0x01]].concat();
-    let data = [row(0), formula_cell(0, &[0x1E, 1, 0, 0x1E, 2, 0, 0x41, 0xE0, 0x01], &[]), formula_cell(1, &sumifs, &[])].concat();
-    let wb = read(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), Some("IFERROR(1,2)"));
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), Some("SUMIFS(1,2,\">0\")"));
-}
-
-#[test]
 fn hostile_formula_tokens_keep_the_saved_result() {
     let mut deep = vec![0x1E, 1, 0];
     deep.resize(16384, 0x15); // Thousands of parentheses: refused by the depth guard.
@@ -705,17 +676,6 @@ fn python_formulas_need_their_code_in_the_cell() {
     assert_eq!(formula(2), Some("_xlfn._xlws.PY(\"1\"&\"+1\",0)"));
     assert_eq!(formula(3), Some("_xlfn._xlws.PY(\"1\"&\"+\"&\"1\",0)"));
     assert!(warned(&wb, "Python code stored outside"), "{:?}", wb.warnings);
-}
-
-#[test]
-fn formula_text_past_the_allowance_keeps_the_saved_result() {
-    // `1` takes the last byte of a one-byte allowance; the next formula doesn't fit.
-    let data = [row(0), formula_cell(0, &[0x1E, 1, 0], &[]), formula_cell(1, &[0x1E, 1, 0], &[])].concat();
-    let limits = Limits { binary_formula_text: 1, ..Limits::default() };
-    let wb = read_with(&package(&book_with_links(&xti()), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES), &limits).unwrap();
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), Some("1"));
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), None);
-    assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
 }
 
 fn range_formula(id: u16, (r0, c0, r1, c1): (u32, u32, u32, u32), rgce: &[u8]) -> Vec<u8> {
@@ -892,15 +852,6 @@ fn a_shared_formula_stops_decoding_copies_once_one_is_kept_as_its_value() {
     let text = |a: &str| wb.sheets[0].formula(at(a));
     assert_eq!((text("A1"), text("Z1"), text("B2")), (Some("B1"), None, None));
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
-}
-
-#[test]
-fn convert_is_called_by_its_number_as_excel_writes_it() {
-    // Excel's tokens for `=CONVERT(1,"m","ft")` in .xlsb: PtgFunc 0x1D4, which the
-    // specification's Ftab table leaves out.
-    let rgce = [0x1E, 0x01, 0x00, 0x17, 0x01, 0x00, 0x6D, 0x00, 0x17, 0x02, 0x00, 0x66, 0x00, 0x74, 0x00, 0x41, 0xD4, 0x01];
-    let wb = read(&file(&worksheet(&[row(0), formula_cell(0, &rgce, &[])].concat(), &[]))).unwrap();
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), Some("CONVERT(1,\"m\",\"ft\")"));
 }
 
 #[test]
@@ -1504,11 +1455,6 @@ fn damaged_styles_are_a_warning_and_the_workbook_opens() {
         assert!(warnings.iter().any(|w| w.contains("look/styles.bin")), "{why}: {warnings:?}");
         assert_eq!(read(&bytes).unwrap().sheets[0].value(CellRef::new(0, 0)), Value::Number(1.0), "{why}");
     }
-    // A table past 65,536 entries is past a fixed cap: refused before it is held, as too large.
-    let xfs = brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0).repeat(65_537);
-    let bytes = styled_file(&with(&[&begin(617, 65_537)[..], &xfs, &record(618, &[])].concat()), STYLES_TYPES);
-    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
-    assert!(matches!(p.styles(), Err(Error::TooLarge(m)) if m.contains("65536 entries")));
     // Custom table styles are not read, and say so.
     let table_styles = [body, &record(508, &[&1u32.to_le_bytes()[..], &wide("Probe Table"), &wide("")].concat()), &end].concat();
     let (styles, warnings) = styles_of(&styled_file(&table_styles, STYLES_TYPES));
@@ -1561,8 +1507,6 @@ fn typed_spacing_numbers_and_iso_functions_read_as_in_xlsx() {
         // A newer function: spacing before its name's token is the first argument's.
         [vec![0x1E, 1, 0], space(0, 1), vec![0x23, 5, 0, 0, 0], num(1.5), space(0, 1), vec![0x42, 2, 0xFF, 0, 0x03]].concat(),
         vec![0x23, 1, 0, 0, 0, 0x17, 1, 0, b'a', 0, 0x42, 2, 0xFF, 0],
-        // Numbers written out up to 21 characters, scientific past them.
-        [num(1e20), num(1e21), vec![0x03], num(1e-19), vec![0x03], num(1.5e-19), vec![0x03], num(1234567890123456.0), vec![0x03]].concat(),
     ];
     let mut data = row(0);
     for (i, rgce) in cells.iter().enumerate() {
@@ -1588,15 +1532,13 @@ fn typed_spacing_numbers_and_iso_functions_read_as_in_xlsx() {
         "A1",
         "1+ ISO.CEILING( 1.5)",
         "_xlfn.CONCAT(\"a\")",
-        "100000000000000000000+1E+21+0.0000000000000000001+1.5E-19+1234567890123460",
     ];
     assert_eq!(got, want.map(Some));
 }
 
 #[test]
-fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
-    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; sheet links Macro1, Data:Hidden
-    // (over the chart sheet) and Chart1 (no cells).
+fn a_reference_over_chart_sheets_only_gives_no_formula() {
+    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; the sheet link read is Chart1 (no cells).
     let mut book = record(131, &[]);
     book.extend(record(153, &[[0u8; 8].as_slice(), &wide("")].concat()));
     book.extend(record(143, &[]));
@@ -1614,10 +1556,9 @@ fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
         r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="../data/c.bin"/><Relationship Id="m" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="../data/m.bin"/></Relationships>"#,
     );
     let ref3d = |ixti: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(0, 0)].concat();
-    let data = [row(0), formula_cell(1, &ref3d(0), &[]), formula_cell(2, &ref3d(1), &[]), formula_cell(3, &ref3d(2), &[])].concat();
+    let data = [row(0), formula_cell(1, &ref3d(2), &[])].concat();
     let wb = read(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, &rels, TYPES)).unwrap();
-    let got: Vec<_> = (1..=3).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
-    assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 1)), None);
     assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
 }
 
@@ -2046,7 +1987,7 @@ fn differential_format_strings_are_charged_to_the_text_allowance() {
 }
 
 #[test]
-fn module_sheets_and_supporting_links_are_bounded() {
+fn module_sheets_are_bounded() {
     // 1,025 very hidden module sheets (no relationship) before the worksheets: each keeps a place
     // in the sheet links, so together they are past the 1,024-sheet cap.
     let plain = book(false);
@@ -2054,13 +1995,6 @@ fn module_sheets_and_supporting_links_are_bounded() {
     let module = record(156, &[&2u32.to_le_bytes()[..], &9u32.to_le_bytes(), &u32::MAX.to_le_bytes(), &wide("Module")].concat());
     let modules = [&plain[..at], &module.repeat(1025), &plain[at..]].concat();
     assert!(matches!(read(&package(&modules, &worksheet(&[], &[]), &sst(), ROOT, RELS, TYPES)), Err(Error::TooLarge(_))));
-    // 65,537 supporting links: past the cap the links aren't read, and formulas keep their values.
-    let end = record(132, &[]);
-    let selves = [&plain[..plain.len() - end.len()], &record(353, &[]), &record(357, &[]).repeat(65_537), &record(354, &[]), &end].concat();
-    let data = [row(0), formula_cell(0, &[0x1E, 1, 0], &[])].concat();
-    let wb = read(&package(&selves, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
-    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
-    assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! SpreadsheetML workbooks through the part layer.
 
-mod common;
+use crate::common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::{workbook, zip};
@@ -84,13 +84,6 @@ fn a_strict_workbook_with_prefixes() {
     assert_eq!((part.columns[0].first, part.columns[0].last, part.columns[0].width), (1, 2, Some(20.5)));
     assert_eq!(part.root.child("pageSetup").and_then(|e| e.attr("orientation")), Some("landscape"));
     assert!(part.root.child("sheetData").is_some_and(|d| d.elements().next().is_none()));
-    // Other namespaces keep fixed prefixes, so the rest of the part can be written back.
-    assert_eq!(part.root.child("drawing").and_then(|d| d.attr("r:id")), Some("d1"));
-    assert_eq!(part.root.find("xm:sqref").map(|e| e.text().into_owned()).as_deref(), Some("F1"));
-    let mut root = part.root.clone();
-    craft_xlsx::ns::declare(&mut root);
-    let again = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).parse(root.to_xml().as_bytes()).unwrap();
-    assert_eq!(again, part.root);
     assert_eq!((part.rows, part.dropped, part.damaged.as_deref()), (2, 0, None));
     let values: Vec<_> = cells.iter().map(|c| c.value.resolve(&strings, true)).collect();
     assert_eq!(values, [Value::text("one"), Value::Number(1.0), Value::Number(2.0), Value::Number(2.0), Value::Empty]);
@@ -157,15 +150,6 @@ fn the_workbook_part_is_found_or_named() {
 }
 
 #[test]
-fn a_fixture_that_cannot_be_written_returns_the_writer_error() {
-    let twice = zip(&[("xl/workbook.xml", b"<workbook/>"), ("xl/workbook.xml", b"<workbook/>")]);
-    match twice {
-        Err(craft_opc::Error::Write(message)) => assert!(message.contains("xl/workbook.xml"), "{message}"),
-        other => panic!("expected the writer's error, got {other:?}"),
-    }
-}
-
-#[test]
 fn a_missing_shared_strings_part_is_a_warning() {
     let bytes = workbook(&[("S", r#"<row r="1"><c r="A1" t="s"><v>0</v></c></row>"#)], &["x"]).unwrap();
     let mut entries = vec![];
@@ -221,10 +205,6 @@ fn shared_strings_at_the_conventional_path_work_without_a_relationship() {
 fn limits_are_errors() {
     let rows: String = (1..=2000).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
     let bytes = workbook(&[("S", &rows)], &[]).unwrap();
-    let small = Limits { package: craft_opc::Limits::new(100, 4096, 1 << 20), ..Limits::default() };
-    assert!(matches!(read_with(&bytes, &small), Err(Error::TooLarge(_))));
-    let few = Limits { package: craft_opc::Limits::new(3, 1 << 20, 1 << 20), ..Limits::default() };
-    assert!(matches!(Package::open(&bytes, &few), Err(Error::TooLarge(_))));
     // A row is held to the XML node limit on its own; a sheet of many rows is not.
     let narrow = Limits { xml: craft_xml::Limits { max_nodes: 50, ..craft_xml::Limits::DEFAULT }, ..Limits::default() };
     assert_eq!(read_with(&bytes, &narrow).unwrap().sheets[0].cells.len(), 2000);

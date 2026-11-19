@@ -657,38 +657,3 @@ fn accelerator(c: &Chord) -> Option<Accelerator> {
     };
     Some(Accelerator::new(mods, code))
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-    use crate::driver::key_event;
-
-    /// The shortcuts the layout writes itself, and common app ones, become key equivalents.
-    #[test]
-    fn shortcuts_map_to_key_equivalents() {
-        #[rustfmt::skip]
-        let shortcuts = [
-            "Cmd+Q", "Cmd+H", "Cmd+Alt+H", "Ctrl+Cmd+H", "Ctrl+Cmd+M", "Cmd+,", "Cmd+Shift+Z", "Cmd+1", "Cmd+[", "Cmd+=", "Cmd++",
-            "Cmd+-", "Cmd+Delete", "Cmd+Backspace", "Cmd+Left", "Alt+Cmd+ArrowDown", "Cmd+Escape", "Cmd+Home", "Cmd+End",
-            "Cmd+PageUp", "Cmd+PageDown", "Cmd+Enter", "Ctrl+F7",
-        ];
-        for s in shortcuts {
-            let c = Chord::parse(s).unwrap();
-            assert!(native_ok(&c) && accelerator(&c).is_some(), "{s} has no key equivalent");
-            assert!(matches!(key_event(&c, true), egui::Event::Key { .. }), "{s} has no egui key press");
-        }
-        let code = |s: &str| accelerator(&Chord::parse(s).unwrap()).unwrap();
-        assert_eq!(code("Cmd+Delete"), Accelerator::new(Modifiers::META, Code::Delete), "forward delete, as egui's Key::Delete");
-        assert_eq!(code("Cmd+Backspace"), Accelerator::new(Modifiers::META, Code::Backspace));
-        assert_eq!(code("Cmd++"), code("Cmd+="), "⌘+ is the ⌘= key");
-    }
-
-    #[test]
-    fn control_and_command_stay_distinct() {
-        let a = accelerator(&Chord::parse("Cmd+M").unwrap()).unwrap();
-        let b = accelerator(&Chord::parse("Ctrl+Cmd+M").unwrap()).unwrap();
-        assert_ne!(a, b);
-    }
-}

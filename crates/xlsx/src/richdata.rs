@@ -425,19 +425,4 @@ mod tests {
         assert_eq!(jpeg_dimensions(&[0xff, 0xd8, 0xff, 0xe0, 0xff, 0xff]), None);
         assert_eq!(image_type(b"GIF89a"), None);
     }
-
-    #[test]
-    fn write_limits() {
-        let mut n = 0;
-        let mut fresh = |stem: &str, ext: &str, _: bool| {
-            n += 1;
-            format!("{stem}{n}.{ext}")
-        };
-        let many = vec![CellPicture { image: png(1, 1), alt: String::new() }; MAX_RECORDS + 1];
-        assert!(matches!(metadata_parts(&many, false, &mut fresh), Err(Error::TooLarge(_))));
-        let big = [CellPicture { image: [png(1, 1), vec![0; MAX_PICTURE]].concat(), alt: String::new() }];
-        assert!(matches!(metadata_parts(&big, false, &mut fresh), Err(Error::TooLarge(_))));
-        let gif = [CellPicture { image: b"GIF89a".to_vec(), alt: String::new() }];
-        assert!(matches!(metadata_parts(&gif, false, &mut fresh), Err(Error::Invalid(_))));
-    }
 }

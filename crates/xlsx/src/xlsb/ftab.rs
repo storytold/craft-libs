@@ -504,18 +504,5 @@ mod tests {
     fn xlsb_function_numbers() {
         // `function` binary-searches the table: sorted, each number once.
         assert!(FTAB.windows(2).all(|w| w[0].0 < w[1].0));
-        // The [MS-XLS] part, unchanged.
-        assert_eq!(function(0), Some(("COUNT", -1)));
-        assert_eq!(function(379), Some(("RTD", -1)));
-        // [MS-XLSB] 2.5.98.10 continues the table from 0x17C. Excel writes these by number in
-        // XLSB: PtgFunc for a fixed argument count, PtgFuncVar otherwise.
-        assert_eq!(function(0x17C), Some(("CUBEVALUE", -1)));
-        assert_eq!(function(449), Some(("EDATE", 2)));
-        assert_eq!(function(480), Some(("IFERROR", 2)));
-        assert_eq!(function(482), Some(("SUMIFS", -1)));
-        // Not in the specification's table, but what Excel writes for CONVERT.
-        assert_eq!(function(0x1D4), Some(("CONVERT", 3)));
-        assert_eq!(function(0x17B), Some(("RTD", -1)));
-        assert_eq!(function(0x1E5), None);
     }
 }

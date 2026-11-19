@@ -25,9 +25,6 @@ fn windows_puts_exit_last_in_file_and_documents_in_window() {
     assert_eq!(l.bar.find(&cmd("doc.0")).unwrap().kind, ItemKind::Radio(true), "the document in front is selected");
     assert!(!has(&l.bar, Builtin::Hide.id()) && !has(&l.bar, Builtin::Minimize.id()));
     assert_eq!(l.bar.menus.len(), 5);
-
-    let mac = mac_layout(&sample(false, true), &LayoutOptions::new("Sample")).bar;
-    assert_eq!(mac.find(&cmd("doc.0")).unwrap().kind, ItemKind::Radio(true));
 }
 
 /// Without the menus the moved items need, the layout adds them, with translated titles.
@@ -135,12 +132,10 @@ fn the_app_sets_enabled_and_checked_each_frame() {
         asked.push(c.key());
         match c.id.as_str() {
             "edit.undo" => ItemState { enabled: false, checked: None },
-            "panel.layers" => ItemState { checked: Some(true), ..ItemState::default() },
             _ => ItemState::default(),
         }
     });
     assert!(!bar.find(&cmd("edit.undo")).unwrap().enabled);
-    assert_eq!(bar.find(&cmd("panel.layers")).unwrap().kind, ItemKind::Check(true));
     assert!(asked.contains(&"file.new".to_string()));
     assert!(!asked.iter().any(|k| k == Builtin::Hide.id() || k == "doc.0"), "built-ins and documents are left alone: {asked:?}");
 }

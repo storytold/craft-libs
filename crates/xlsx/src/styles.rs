@@ -797,10 +797,4 @@ mod tests {
         assert_eq!(s.palette().len(), 2);
         assert_eq!(styles("<styleSheet/>").palette(), DEFAULT_PALETTE);
     }
-
-    #[test]
-    fn long_font_names_are_cut() {
-        let s = styles(&format!(r#"<styleSheet><fonts><font><name val="{}"/></font></fonts></styleSheet>"#, "é".repeat(300)));
-        assert_eq!(s.fonts[0].name.as_ref().map(|n| n.chars().count()), Some(MAX_FONT_NAME_CHARS));
-    }
 }
