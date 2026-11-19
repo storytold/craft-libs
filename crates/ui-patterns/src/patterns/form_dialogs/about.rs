@@ -13,8 +13,8 @@ use crate::buttons::{Button, IconButton, Link};
 use crate::choice::Segmented;
 use crate::contract::Gap;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _,
-    ShowCollection as _, ShowContainer as _, clicked,
+    Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, LeastWidth, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode,
+    Show as _, ShowCollection as _, ShowContainer as _, clicked,
 };
 use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use crate::display::{Divider, Shade, Text};
@@ -297,6 +297,10 @@ impl<'a> AboutDialog<'a> {
         let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(true).buttons([FooterButton::new(button, DialogRole::Accept)]);
         if let Some(open) = open {
             dialog = dialog.opened(open);
+        }
+        // The listed layout is a wide dialog, as WordCraft's About, whose tabs hold the credit tables.
+        if layout == AboutLayout::Listed {
+            dialog = dialog.least_width(LeastWidth::WideDialog);
         }
         let shown_dialog = dialog.show(ui, |ui, cx| {
             let mut kept = if cx.appeared() { View::default() } else { cx.memory::<View>().clone() };
