@@ -130,7 +130,7 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.5;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.5625;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
@@ -229,6 +229,19 @@ fn alt_or_ctrl_with_no_tool_is_a_quick_split_chosen_by_the_pointer() {
     let from = h.at_fraction(0.5, 0.5);
     h.drag(from, from + shift(10.0, 0.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Surface { .. })), "{:?}", h.edit.get());
+}
+
+#[trial]
+fn a_split_cuts_half_a_pixel_up_and_left_of_the_pointer() {
+    let mut h = harness(WarpMesh::identity(RECT, 2, 2));
+    let at = h.screen(Point::new(RECT.x0 + 40.0, RECT.y0 + 30.0));
+    h.click(at, Modifiers::ALT);
+    assert!(matches!(h.edit.get(), Some(WarpEdit::Split { split: WarpSplit::Cross, .. })), "{:?}", h.edit.get());
+    let mesh = h.mesh();
+    // Within 0.02 of a pixel: the pointer is in f32 screen points.
+    let (u, v) = (39.5 / RECT.width(), 29.5 / RECT.height());
+    assert!(mesh.us.iter().any(|k| (k - u).abs() < 1e-4), "{:?}, want {u}", mesh.us);
+    assert!(mesh.vs.iter().any(|k| (k - v).abs() < 1e-4), "{:?}, want {v}", mesh.vs);
 }
 
 fn warped(mesh: &mut WarpMesh) {
