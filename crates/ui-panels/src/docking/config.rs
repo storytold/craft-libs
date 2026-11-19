@@ -1,6 +1,7 @@
 //! `DockConfig`: how a dock behaves, apart from how it looks (the dock's `ComponentStyle`) and what it says
 //! (`DockWords`).
 
+use super::IconicMode;
 use super::targets::ZoneRule;
 use craft_behavior::DockSide;
 
@@ -84,6 +85,9 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// What the icons of a docked column collapsed to icons open: flyouts, or with [`IconicMode::Rail`] the column
+    /// itself, whose icons then stay beside it while it is expanded. Floating windows' icons open flyouts.
+    pub iconic_mode: IconicMode,
 }
 
 impl Default for DockConfig {
@@ -102,11 +106,19 @@ impl Default for DockConfig {
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            iconic_mode: IconicMode::Flyouts,
         }
     }
 }
 
 impl DockConfig {
+    /// What the icons of docked iconic columns open.
+    #[must_use]
+    pub fn iconic_mode(mut self, mode: IconicMode) -> Self {
+        self.iconic_mode = mode;
+        self
+    }
+
     /// The Minimize and Move Group Up and Down items of docked groups' menus on or off.
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {

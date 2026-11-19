@@ -240,6 +240,9 @@ pub struct CollectionProps {
     pub notch: Option<Notch>,
     /// What a middle press does: pan or latched auto-scroll.
     pub middle_button: MiddleButton,
+    /// Only a primary press picks an item: a secondary click asks for the item's menu and leaves the selection, and a
+    /// middle press picks nothing. Off, every button's press picks the item under it.
+    pub primary_picks: bool,
     /// Flip the direction of middle-button pan and auto-scroll.
     pub invert_middle: bool,
     /// The axis the rows overflow along. A collection owns the scroll along it, so it sits only in a scrolling body
@@ -334,6 +337,7 @@ impl CollectionProps {
             command_click: false,
             notch: None,
             middle_button: MiddleButton::Pan,
+            primary_picks: false,
             invert_middle: false,
             overflow: Axis::Y,
             pages: false,
@@ -586,6 +590,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn middle_button(mut self, button: MiddleButton) -> Self {
         self.middle_button = button;
+        self
+    }
+
+    /// Whether only a primary press picks an item (see [`CollectionProps::primary_picks`]).
+    #[must_use]
+    pub const fn primary_picks(mut self, on: bool) -> Self {
+        self.primary_picks = on;
         self
     }
 

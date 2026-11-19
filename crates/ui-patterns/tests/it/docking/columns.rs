@@ -4,7 +4,7 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace, node_at};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, SizeLimits};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, PanelSpec, group_heights};
+use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, IconicMode, PanelSpec, group_heights};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -243,4 +243,72 @@ fn a_floating_stepped_windows_left_and_top_edge_drags_keep_the_opposite_edge() {
     fixture.drag_at(Pos2::new(before.center().x, at.top()), Vec2::new(0.0, -30.0)).settle();
     let after = shown_tools(&fixture);
     assert!((after.bottom() - before.bottom()).abs() <= 1.5, "the bottom edge stays: {before:?}, then {after:?}");
+}
+
+/// Two side panels in one group, named and with a line of content each.
+struct Sides;
+
+impl DockPanels<u32> for Sides {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(match panel {
+            10 => "Alpha",
+            11 => "Beta",
+            _ => "Canvas",
+        })
+    }
+
+    fn body(&mut self, panel: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        match panel {
+            10 => Text::new("Alpha body").show(ui),
+            11 => Text::new("Beta body").show(ui),
+            _ => return,
+        };
+    }
+}
+
+/// With the rail mode, a click on an icon expands its column with that panel in front, and the icons stay beside
+/// it, between the panel and the window edge; a click on another icon switches the panel, and a click on the icon of
+/// the panel in front collapses the column again.
+#[trial]
+fn rail_icons_stay_beside_the_expanded_column_and_the_open_panels_icon_collapses_it() {
+    let side = Column::new(vec![Group::new(vec![10, 11], 0)]).with_iconic(true);
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, vec![side]));
+    let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
+    let held = Rc::clone(&workspace);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut workspace = held.borrow().clone();
+        let config = DockConfig::default().iconic_mode(IconicMode::Rail);
+        let out = DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut Sides, config).show(ui);
+        for action in out.actions {
+            drop(workspace.apply(action, false, |_: &u32| Permissions::ALL));
+        }
+        *held.borrow_mut() = workspace;
+    });
+    fixture.room(Vec2::new(900.0, 500.0)).settle();
+    let icon = |fixture: &Fixture, name: &str| {
+        let tree = fixture.tree();
+        fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .find(|button| craft_ui::testing::access::name(tree, button.node) == Some(name))
+            .unwrap_or_else(|| panic!("the rail shows the {name} icon"))
+    };
+    let iconic = || end_columns(&workspace.borrow().layout)[0].iconic;
+    let shown = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|run| run.text == text);
+
+    let beta = icon(&fixture, "Beta");
+    fixture.click(&beta).settle();
+    assert!(!iconic(), "a click on an icon expands the column");
+    assert!(shown(&fixture, "Beta body") && !shown(&fixture, "Alpha body"), "the clicked panel is in front");
+    let (beta, body) = (icon(&fixture, "Beta"), fixture.by_label("Beta body").expect("the panel's content").rect);
+    assert!(body.right() <= beta.rect.left(), "the icons stay beside the panel, at the window edge: {body:?}, icon {:?}", beta.rect);
+
+    let alpha = icon(&fixture, "Alpha");
+    fixture.click(&alpha).settle();
+    assert!(!iconic() && shown(&fixture, "Alpha body") && !shown(&fixture, "Beta body"), "another icon switches the panel in front");
+
+    let alpha = icon(&fixture, "Alpha");
+    fixture.click(&alpha).settle();
+    assert!(iconic(), "the icon of the panel in front collapses the column");
+    assert!(!shown(&fixture, "Alpha body"), "and its panel no longer shows");
 }

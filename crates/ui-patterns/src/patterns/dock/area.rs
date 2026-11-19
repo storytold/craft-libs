@@ -13,8 +13,8 @@ use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_dra
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
-    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths, frame,
-    move_actions, stepped,
+    IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths,
+    frame, move_actions, stepped,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
@@ -253,6 +253,32 @@ impl<P: Clone + Eq + Hash> Scene<'_, P> {
 
     fn panel(&self, key: PanelKey) -> Option<&P> {
         self.keys.get(&key)
+    }
+
+    /// Whether the docked `column` shows a rail of its icons beside it ([`IconicMode::Rail`]): an expanded column
+    /// that collapses to icons.
+    fn rail_beside(&self, column: &Column<P>) -> bool {
+        let spec = |panel: &P| self.spec(panel);
+        let collapses = column.panels().all(|panel| self.permissions(panel).collapses);
+        self.config.iconic_mode == IconicMode::Rail && !column.iconic && ColumnArrow::of(column, &spec, collapses) == ColumnArrow::Collapse
+    }
+
+    /// The `(width, floor)` of each docked column of a dock, for [`fit_widths`]: a rail beside an expanded column adds
+    /// its width to both.
+    fn natural(&self, columns: &[Column<P>]) -> Vec<(f32, Option<f32>)> {
+        let spec = |panel: &P| self.spec(panel);
+        let natural = self.sizes.natural(columns, &spec);
+        columns
+            .iter()
+            .zip(natural)
+            .map(|(column, (width, floor))| {
+                if !self.rail_beside(column) {
+                    return (width, floor);
+                }
+                let rail = self.sizes.iconic_width(column, &spec);
+                (width + rail, floor.map(|floor| floor + rail))
+            })
+            .collect()
     }
 }
 
@@ -541,9 +567,8 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         dock: id,
     };
 
-    let spec_of = |panel: &P| scene.spec(panel);
     let limits = |panel: &P| scene.spec(panel).limits;
-    let dock_width = |columns: &[Column<P>]| scene.sizes.natural(columns, &spec_of).iter().map(|(width, _)| *width).sum::<f32>();
+    let dock_width = |columns: &[Column<P>]| scene.natural(columns).iter().map(|(width, _)| *width).sum::<f32>();
     let stripless = |panel: &P| scene.spec(panel).canvas;
     let rules = FrameRules::new(&limits).dock_width(&dock_width).stripless(&stripless);
     let label = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
@@ -833,10 +858,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             if look.in_window {
                 group = group.in_window();
             }
+            let spec = scene.spec(&members[at]);
             if minimized {
                 group = group.minimized();
-            } else if !document(&scene.spec(&members[at])) {
+            } else if !document(&spec) {
                 group = group.pad(Pad::Regular);
+            }
+            if spec.footer {
+                group = group.footer(move |ui, body| panels.borrow_mut().footer(&members[at], ui, body));
             }
             if scene.config.tab_close_buttons {
                 group = group.closable();
@@ -918,8 +947,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// The columns of a dock, from the window edge inwards.
     fn dock(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, plan: DockPlan<'_, P>) {
         let scene = self.scene;
-        let spec = |panel: &P| scene.spec(panel);
-        let widths = fit_widths(&scene.sizes.natural(plan.columns, &spec), plan.rect.width());
+        let widths = fit_widths(&scene.natural(plan.columns), plan.rect.width());
         let reading = plan.flow.to_physical(plan.rect);
         let start = plan.edge == DockEdge::Start;
         let mut cursor = if start { reading.left() } else { reading.right() };
@@ -982,20 +1010,45 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let spec = |panel: &P| scene.spec(panel);
         let name = Label::from(body.words::<DockWords>().panels.as_str().to_owned());
         let dock = self.dock;
-        let ColumnAt { cell, edge, bar, within, open } = at;
+        let ColumnAt { mut cell, edge, bar, within, open } = at;
         let in_window = bar == ColumnBar::Window;
         let opens = if edge == DockEdge::Start { Side::End } else { Side::Start };
-        let work = if column.iconic {
-            let output = IconicColumn::new(name, dock, column, Bind::given(open), &spec)
+        // Only a docked column's icons are a rail; a floating window's open flyouts.
+        let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
+        let mut icons = |cell: Rect, open: Option<P>| {
+            IconicColumn::new(name.clone(), dock, column, Bind::given(open), &spec)
                 .edge(edge)
                 .opens(opens)
                 .bar(bar)
                 .within(within)
                 .auto_collapse(scene.auto_collapse)
-                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window));
+                .mode(mode)
+                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window))
+        };
+        let work = if column.iconic {
+            let output = icons(cell, open);
             self.report.flyout.extend(output.edit.events);
+            self.rail_work(output.front);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
         } else {
+            if !in_window && scene.rail_beside(column) {
+                // The rail keeps to the dock's window edge and the expanded column shows inward of it.
+                let rail = scene.sizes.iconic_width(column, &spec).min(cell.width());
+                let at_left = (edge == DockEdge::Start) != scene.rtl;
+                let (rail_cell, rest) = if at_left {
+                    (cell.with_max_x(cell.left() + rail), cell.with_min_x(cell.left() + rail))
+                } else {
+                    (cell.with_min_x(cell.right() - rail), cell.with_max_x(cell.right() - rail))
+                };
+                cell = rest;
+                let output = icons(rail_cell, None);
+                self.rail_work(output.front);
+                // The rail's inner edge sets its own width, not the expanded column's.
+                self.column_work(column, ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: None, flyout: None });
+                if let (Some(width), Some(first)) = (output.width, column.groups.first().and_then(|group| group.panels.first())) {
+                    self.report.actions.push(Action::resize_iconic(first.clone(), Some(width)));
+                }
+            }
             let output = DockColumn::new(name, dock, column, &spec)
                 .edge(edge)
                 .bar(bar)
@@ -1008,6 +1061,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: output.resized, width: output.width, flyout: None }
         };
         self.column_work(column, work);
+    }
+
+    /// Brings the panel a click on its rail icon chose, `front`, to the front of its group.
+    fn rail_work(&mut self, front: Option<P>) {
+        self.report.actions.extend(front.map(Action::activate));
     }
 
     /// Turns what a column reported into actions and drags.

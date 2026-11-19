@@ -131,11 +131,18 @@ impl DockSizes {
     /// The width of a column before the dock's room shrinks it.
     pub fn width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
         if column.iconic {
-            let (lo, hi) = self.shown_bounds(column, spec);
-            column.iconic_width.unwrap_or(lo).clamp(lo, hi)
+            self.iconic_width(column, spec)
         } else {
             self.expanded_width(column, spec)
         }
+    }
+
+    /// The width of the icons of `column`, whether it is iconic or expanded beside a rail of its icons
+    /// ([`IconicMode::Rail`](super::IconicMode::Rail)): its iconic width from the rail width up to the width it
+    /// expands to.
+    pub fn iconic_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
+        let (lo, hi) = (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least));
+        column.iconic_width.unwrap_or(lo).clamp(lo, hi)
     }
 
     /// The actions that give the dock on `side` of `layout` the total width `total`, its columns scaled within

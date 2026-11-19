@@ -155,6 +155,7 @@ pub struct FindingsList<'a> {
     common: Common,
     #[container]
     props: ContainerProps,
+    #[collection]
     items: CollectionProps,
     /// The selection the caller owns.
     #[prop]

@@ -99,6 +99,12 @@ impl TabKind {
         self == Self::Document
     }
 
+    /// Whether only a primary press shows a tab: a secondary click on a document tab opens its menu and a middle click
+    /// closes it, and neither shows it.
+    pub const fn primary_shows(self) -> bool {
+        matches!(self, Self::Document)
+    }
+
     /// Whether a drag resting over an unselected tab selects it.
     pub const fn selects_under_drag(self) -> bool {
         matches!(self, Self::Document)

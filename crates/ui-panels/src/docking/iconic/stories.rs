@@ -4,7 +4,7 @@ use super::CELL;
 use crate::buttons::Button;
 use crate::contract::ShowContainer as _;
 use crate::contract::{Bind, BodyCx, Show as _, Validity};
-use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, PanelSpec};
+use crate::docking::{ColumnBar, GroupAt, IconicColumn, IconicColumnOutput, IconicMode, PanelSpec};
 use crate::runtime::commands::{CommandInput, CommandState};
 use crate::runtime::env::{Env, Message};
 use crate::sections::Panel;
@@ -109,6 +109,15 @@ fn icons_in_a_floating_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         None
     })
     .into()
+}
+
+/// The icons as a rail ([`IconicMode::Rail`]) beside their expanded column: the panels in front of their groups
+/// show selected, and the bar's chevron collapses the column. A click opens no flyout.
+#[story(IconicColumn<'static, u8>, covers = [Default], drive = Drive::Never)]
+fn icons_as_a_rail_beside_the_expanded_column(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let column = Column::new(vec![Group::new(vec![0, 1], 1), Group::new(vec![2], 0)]);
+    let column = IconicColumn::new("Panels", global("iconic column", "rail story"), &column, Bind::kept(), &spec).mode(IconicMode::Rail);
+    at_stage(ui, column, |_, _, _, _| None).into()
 }
 
 /// A click on the first icon opens the flyout of its panel, which the bound value then names.

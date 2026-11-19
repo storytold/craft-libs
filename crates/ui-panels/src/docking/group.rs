@@ -8,12 +8,14 @@ use super::words::DockWords;
 use super::{PanelDrag, PanelKey, PanelTitle};
 use crate::buttons::IconButton;
 use crate::contract::{
-    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, HeaderEdge, HeaderParts, HeaderRegion,
+    Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, FooterRegion, HeaderEdge, HeaderParts,
+    HeaderRegion,
     ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, ShowCollection as _,
     ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
+use crate::sections::FooterBar;
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
@@ -260,6 +262,8 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The host's items before the tab strip.
     #[prop(func = "FnMut(&mut egui::Ui, &mut BodyCx<'_>)")]
     extra: Option<HeaderHook<'a>>,
+    /// The shown panel's footer, pinned under the body: [`footer`](DockGroup::footer).
+    footer: Option<HeaderHookFn<'a>>,
     /// The size of the group this pass, for the drag ghost.
     size: Vec2,
     reported: Reported,
@@ -290,10 +294,20 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
             panel_menu_shown: true,
             command_states: Vec::new(),
             extra: None,
+            footer: None,
             size: Vec2::ZERO,
             reported: Reported::default(),
         }
         .label(title)
+    }
+
+    /// The shown panel's footer: the closure fills a footer bar pinned under the body, across the group, that stays in
+    /// view while the body scrolls. A minimized group shows none.
+    #[must_use]
+    pub fn footer(mut self, content: impl FnMut(&mut Ui, &mut BodyCx<'_>) + 'a) -> Self {
+        self.props = self.props.footer(FooterRegion::new());
+        self.footer = Some(Box::new(content));
+        self
     }
 
     /// Whether the panel menu button shows: it is asked for and the menu has rows.
@@ -444,6 +458,12 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
             0.0
         };
         HeaderParts::NONE.end(band + button)
+    }
+
+    fn footer(&mut self, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        if let Some(content) = self.footer.as_mut() {
+            FooterBar::body().show(ui, |ui, bar| content(ui, bar));
+        }
     }
 
     /// The host's items and the tab strip, on one line.

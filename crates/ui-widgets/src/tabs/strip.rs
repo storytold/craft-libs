@@ -311,7 +311,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
     #[must_use]
     pub fn kind(mut self, kind: TabKind) -> Self {
         self.kind = kind;
-        self.items = self.items.select_under_drag(kind.selects_under_drag());
+        self.items = self.items.select_under_drag(kind.selects_under_drag()).primary_picks(kind.primary_shows());
         self
     }
 
@@ -325,7 +325,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
                 .pages(true)
                 .arrows_select(false)
                 .overflow(craft_behavior::Axis::X)
-                .select_under_drag(true),
+                .select_under_drag(TabKind::Document.selects_under_drag())
+                .primary_picks(TabKind::Document.primary_shows()),
             kind: TabKind::Document,
             large: false,
             shown: None,

@@ -102,7 +102,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     // A command on the row, reported when the press ends as a click; the selection stays.
                     self.drags.command = Some(self.source.key(at));
                     self.move_lead(at, LeadSource::Pointer);
-                } else if !secondary_on_toggle {
+                } else if !secondary_on_toggle && (primary || !props.primary_picks) {
                     let mods = crate::runtime::pointer::frame(&ctx).mods;
                     let key = self.source.key(at);
                     let column = if Self::selects_cells(comp) { layout.column_at(local(start.origin), offset) } else { None };
@@ -299,7 +299,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if let Some((pos, Some(at))) = menu_row
             && self.source.enabled(at)
         {
-            if !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
+            if !props.primary_picks && !self.holds(at) && self.toggle_cell(props, layout, at, offset, local(pos)).is_none() {
                 let column = if Self::selects_cells(comp) { layout.column_at(local(pos), offset) } else { None };
                 match column {
                     Some(column) => self.cell_press(comp, layout, at, column, false, false),
