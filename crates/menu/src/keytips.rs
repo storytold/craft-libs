@@ -76,7 +76,7 @@ enum Act {
 /// Where a badge shows.
 #[derive(Clone, Debug)]
 enum Place {
-    /// On the element of this id (a tab).
+    /// On the element that stands for the access node of this id (a tab).
     Tab(Id),
     /// On the element bound to this command.
     Command(CommandRef),
@@ -137,8 +137,9 @@ pub struct Keytips<'a> {
     #[common]
     common: Common,
     enabled: bool,
-    /// The ribbon's tabs, each with its name, its badge letters and the id of its element. A tab's badge shows on the
-    /// element of the records with that id, and [`KeytipsOutput::tab`] reports the badge.
+    /// The ribbon's tabs, each with its name, its badge letters and the id of its access node (a ribbon reports them in
+    /// `RibbonOutput::tab_ids`). A tab's badge shows on the element of the records that stands for that node
+    /// (`Element::node`), and [`KeytipsOutput::tab`] reports the badge.
     #[prop]
     tabs: &'a [(Label, &'a str, Id)],
     /// The controls of the shown tab that get a badge, in the order they are shown: their badges come from their
@@ -303,7 +304,7 @@ impl<'a> Keytips<'a> {
             }
             let found = match &entry.place {
                 Place::Hidden => None,
-                Place::Tab(id) => self.find(&taken, |element| element.id == *id),
+                Place::Tab(id) => self.find(&taken, |element| element.node() == *id),
                 Place::Command(command) => self.find(&taken, |element| element.command.as_ref() == Some(command)),
             };
             let Some((region, index)) = found else { continue };

@@ -150,7 +150,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
                     _ => {}
                 }
             }
-            // The strip shows each tab as an item recorded under the row's id; a tab in the overflow menu has no row.
+            // Each tab the strip shows reports its access node in its row; a tab in the overflow menu has no row.
             tab_ids = strip.response.shown.iter().map(|row| (row.key.clone(), row.id)).collect();
             picked = strip.picked;
             asked = strip.menu.map(|request| (RibbonMenuRequest { command: None, at: request.at }, Asker::Strip));
@@ -358,8 +358,9 @@ pub struct RibbonOutput<T> {
     pub shown: Option<T>,
     /// The tab the user picked this pass.
     pub picked: Option<T>,
-    /// Each tab shown this pass with the id of its element in [`controls`](RibbonOutput::controls) (a keytip's
-    /// place); a tab in the overflow menu has none.
+    /// Each tab shown this pass with the id of its access node, which its element in
+    /// [`controls`](RibbonOutput::controls) stands for (`Element::node`; a keytip's place); a tab in the overflow menu
+    /// has none.
     pub tab_ids: Vec<(T, Id)>,
     /// The inspected record of the strip and the row: each control's rect and command.
     pub controls: Option<Arc<inspect::Recorded>>,

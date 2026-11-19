@@ -90,8 +90,9 @@ impl<K, E> Default for ItemsOut<K, E> {
 pub struct ShownRow<K> {
     /// The row's key.
     pub key: K,
-    /// The id the row's item component is recorded under: its access node and focus stop, so an app finds which
-    /// recorded element is which row (a keytip on a ribbon tab).
+    /// The id of the row's access node: the item component's own id, or, for a member of the collection's run
+    /// (`Collection::MEMBERS`), the sub-node of the collection it reports as. An app finds which recorded element is
+    /// which row by it (`inspect::Element::node`; a keytip on a ribbon tab).
     pub id: egui::Id,
     /// The row's rect.
     pub rect: egui::Rect,

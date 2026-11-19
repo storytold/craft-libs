@@ -150,6 +150,14 @@ pub struct Element {
     pub command: Option<CommandRef>,
 }
 
+impl Element {
+    /// The id of the access node the element stands for: the component's own id, or the sub-node of its part. A
+    /// member of a collection's run is recorded as such a part of the collection.
+    pub fn node(&self) -> Id {
+        self.part.map_or(self.id, |part| crate::runtime::access::sub_node_id(self.id, part))
+    }
+}
+
 /// A hit area the sensing core registered for a component of the region.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

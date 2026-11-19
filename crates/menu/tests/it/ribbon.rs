@@ -14,6 +14,7 @@ use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _};
 use craft_ui::menu::MenuItem;
 use craft_ui::runtime::env::{Direction, Env};
 use craft_ui::runtime::inspect::{Element, Recorded};
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, is_measuring, last_pass_measuring_runs, trial};
 use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Ui, vec2};
 
@@ -335,9 +336,10 @@ fn a_right_click_on_a_control_opens_the_ribbons_menu_with_its_command() {
     fixture.room(vec2(600.0, 300.0));
     fixture.settle();
     let paste = fixture.by_label("Paste").expect("the control");
-    // A press focuses the control, so the menu has a stop to give the focus back to.
-    fixture.click(&paste);
-    assert_eq!(fixture.focused(), Some(paste_id.get()), "the click focused the control");
+    // The control holds focus, so the menu has a stop to give it back to. A press on a button acts and moves no focus
+    // to it (press focus kind 3, `classify_press`), so a Focus request puts it there.
+    fixture.access(AccessActionKind::Focus, &paste).settle();
+    assert_eq!(fixture.focused(), Some(paste_id.get()), "the Focus request focused the control");
     right_click(&mut fixture, paste.rect.center());
     assert!(fixture.by_label(MENU_ROW).is_some(), "the right click opens the ribbon's menu");
     assert!(

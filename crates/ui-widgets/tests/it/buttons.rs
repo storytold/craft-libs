@@ -313,6 +313,15 @@ fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node
 
     fixture.click_at(picture.center());
     assert!(clicks.get() > 0, "a click inside the picture activates the button");
+    for child in fixture.tree().children_of(button.node) {
+        let tree = fixture.tree();
+        eprintln!(
+            "DIAG rf-fu2 button child {child:?}: role {:?} hidden {} images {}",
+            tree.role_of(child),
+            tree.is_hidden(child),
+            fixture.by_role(Role::IMAGE).len()
+        );
+    }
     assert!(fixture.tree().children_of(button.node).is_empty(), "the picture adds no node under the button");
     assert!(fixture.by_role(Role::IMAGE).is_empty(), "the picture is not a node of its own");
 }

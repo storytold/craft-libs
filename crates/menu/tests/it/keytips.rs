@@ -343,9 +343,9 @@ fn the_tab_badges_sit_on_the_ribbons_tabs_by_the_ids_it_reports() {
     let home = recorded
         .elements
         .iter()
-        .position(|element| element.id == home_id && element.part.is_none())
+        .position(|element| element.node() == home_id)
         .and_then(|index| recorded.stop_rect(index))
-        .unwrap_or_else(|| panic!("the Home tab's id is an element of the ribbon's record"));
+        .unwrap_or_else(|| panic!("the Home tab's id is the node of an element of the ribbon's record"));
     let badge = fixture.texts().iter().find(|text| text.text == "H").map(|text| text.rect).unwrap_or_else(|| panic!("the Home badge shows"));
     assert!(sits_on(badge, home), "the Home badge {badge:?} sits on the Home tab {home:?}");
 
