@@ -1,6 +1,8 @@
 //! `Draw`: what a component paints content with. It takes only `StyleColor` or `DataColor`.
 
-use super::content::DocText;
+use super::content::{DocRun, DocText, FaceRun};
+use crate::fonts::document::DocumentFaces;
+use crate::fonts::{FaceBytes, FaceState, FontRef};
 use super::record::PaintRecord;
 use super::rule::{RectSide, RuleKind};
 use super::surface::Surface;
@@ -321,6 +323,28 @@ impl<'a> Draw<'a> {
             self.faded(craft_theme::Opacity::DISABLED, |draw| draw.galley(Pos2::new(x, rect.top()), &layout));
         } else {
             self.galley(Pos2::new(x, rect.top()), &layout);
+        }
+        layout
+    }
+
+    /// Paints `run` in its document face with the start of its first baseline at `start`, and returns its layout, whose
+    /// top lies at `start.y - layout.first_baseline` ([`FaceRun`] says how the face, its fallback and the size are
+    /// chosen). `load` gives the face's bytes and index the first time `run.key` is drawn, and again only after the
+    /// fonts were replaced; a `None` leaves the run in the interface face. The paragraph is left to right. A disabled
+    /// component's run paints at `Opacity::DISABLED`, as `doc` does.
+    pub fn face_run(&self, start: Pos2, run: &FaceRun<'_>, load: impl FnOnce() -> Option<FaceBytes>) -> TextLayout {
+        let ctx = self.painter.ctx();
+        let font = match DocumentFaces::over_interface(ctx, run.key, load) {
+            FaceState::Ready(font) => font,
+            _ => FontRef::proportional(),
+        };
+        let runs = [DocRun::new(run.text, font, run.drawn_size(ctx), run.color)];
+        let layout = DocText::new(&runs).layout(ctx, self.env.tokens, Direction::Ltr);
+        let at = Pos2::new(start.x, start.y - layout.first_baseline);
+        if self.data == DataMode::Dimmed {
+            self.faded(craft_theme::Opacity::DISABLED, |draw| draw.galley(at, &layout));
+        } else {
+            self.galley(at, &layout);
         }
         layout
     }

@@ -31,7 +31,7 @@ mod text_input;
 pub mod textures;
 mod tool;
 
-pub use content::{ContentPainterCx, DocRun, DocText};
+pub use content::{ContentPainterCx, DocRun, DocText, FaceRun};
 pub use draw::{Dashes, DataStrokeWidth, DataWidth, Draw, PaintShape, StrokeColor, StrokeWidth};
 pub use faces::FacesCx;
 pub use focus_ring::{FocusKind, FocusRing};

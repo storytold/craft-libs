@@ -505,6 +505,12 @@ impl TextLayout {
     pub fn size(&self) -> egui::Vec2 {
         self.galley.size()
     }
+
+    /// Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
+    /// an input method's cursor inside its composition. Past the end, the end of the text.
+    pub fn char_x(&self, chars: usize) -> f32 {
+        self.galley.pos_from_cursor(egui::text::CCursor::new(chars)).min.x
+    }
 }
 
 /// A chord formatted for the OS, as one text run laid out as its own left-to-right run.
