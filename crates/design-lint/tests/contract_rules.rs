@@ -31,7 +31,7 @@ fn rules_at(src: &str, path: &str, scope: &StaticScope) -> Vec<&'static str> {
 }
 
 /// Reject fixtures: file and the rules it must trigger (all of them, nothing else).
-const REJECT: [(&str, &[&str]); 19] = [
+const REJECT: [(&str, &[&str]); 20] = [
     ("behavior-pipeline-only.rs", &["behavior/pipeline-only"]),
     ("props-reserved-setter.rs", &["props/reserved-setter"]),
     ("props-hand-setter.rs", &["props/hand-setter"]),
@@ -51,6 +51,7 @@ const REJECT: [(&str, &[&str]); 19] = [
     ("contract-overlay-flag.rs", &["contract/overlay-flag"]),
     ("contract-unsafe-allow.rs", &["contract/unsafe-allow"]),
     ("contract-registration.rs", &["contract/registration"]),
+    ("contract-global-state.rs", &["contract/no-global-state"]),
 ];
 
 #[test]
@@ -72,7 +73,7 @@ fn unsafe_allow_is_accepted_only_in_the_ffi_crates() {
 
 #[test]
 fn accept_fixtures_pass() {
-    for file in ["behavior-pipeline-only.rs", "props.rs", "style.rs", "entry.rs"] {
+    for file in ["behavior-pipeline-only.rs", "props.rs", "style.rs", "entry.rs", "global-state.rs"] {
         let findings = analyze_contract(&fixture("accept", file), Path::new(FAMILY), &scope(), false);
         assert!(findings.is_empty(), "{file}: {findings:?}");
     }
@@ -93,4 +94,17 @@ fn type_facts_cross_files_of_a_crate() {
             ("src/chips/component.rs".to_owned(), "contract/overlay-flag"),
         ]
     );
+}
+
+#[test]
+fn global_state_counts_every_form_and_honours_the_allowlist() {
+    let src = fixture("reject", "contract-global-state.rs");
+    let found = analyze_contract(&src, Path::new(FAMILY), &scope(), false);
+    // static, static mut, static OnceLock, thread_local!, impl MemoProps, a static in a fn, `use std::fs`, `std::fs::read`.
+    assert_eq!(found.iter().filter(|f| f.rule == "contract/no-global-state").count(), 8, "{found:?}");
+    let allowed = StaticScope::new().allow("contract/no-global-state", "crates/x/src/chips");
+    assert!(rules_at(&src, FAMILY, &allowed).is_empty());
+    for skipped in ["crates/x/build.rs", "crates/x/src/bin/tool.rs"] {
+        assert!(rules_at(&src, skipped, &scope()).is_empty(), "{skipped}");
+    }
 }
