@@ -47,6 +47,11 @@ use super::{PathOptionsSettings, PathTool};
 /// Insert on a picked anchor adds one halfway along the segment leaving it.
 const INSERT: Chord = Chord::plain(Key::Insert);
 
+/// How far from a segment, in screen points, an Add Anchor press or hover still takes it: the reference application
+/// adds an anchor 5 px from a segment at 100 % and none at 6 px. The other tools keep a line's reach
+/// ([`LINE_REACH`](craft_behavior::hit::LINE_REACH)).
+const ADD_ANCHOR_REACH: f32 = 5.0;
+
 /// Above this many anchors in the paths shown, the overlay draws outlines only and declares no part (no anchor in
 /// the AccessKit tree either) (VectorCraft's `OVERLAY_MAX_ANCHORS`).
 pub const MAX_ANCHORS: usize = 100_000;
@@ -66,14 +71,14 @@ pub enum BezierTool {
     Convert,
     /// Anchors drawn, not edited (PhotoCraft's Path Selection and Pen tools).
     Anchors,
-    /// Add Anchor Point: a press on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
-    /// moves the new anchor, which is selected. A press on an anchor or a shown handle selects and drags it as
-    /// [`BezierTool::Direct`] does (⇧ adds to the selection, ⌥ on a handle moves it alone), and a click on empty canvas
-    /// deselects the anchors and keeps the path. With ⌥ a click on a segment selects its whole subpath and a drag moves a
-    /// copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that takes no copies), and a press on
-    /// an anchor does nothing. Hover: the segment mark with the anchor a click adds ([`HitMark`]) and the pen with "+";
-    /// over an anchor the arrow; with ⌥ no mark and the arrow with "+"; the crosshair under the canvas's precise cursor
-    /// ([`CanvasSpace::precise`]).
+    /// Add Anchor Point: a press on a segment, within 5 screen points of it, inserts an anchor at the hit's `t`
+    /// ([`PathEdit::InsertAnchor`]); a drag moves the new anchor, which is selected. A press on an anchor or a shown
+    /// handle selects and drags it as [`BezierTool::Direct`] does (⇧ adds to the selection, ⌥ on a handle moves it
+    /// alone), and a click on empty canvas deselects the anchors and keeps the path. With ⌥ a click on a segment selects
+    /// its whole subpath and a drag moves a copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself on a path that
+    /// takes no copies), and a press on an anchor does nothing. Hover: the segment mark with the anchor a click adds
+    /// ([`HitMark`]) and the pen with "+"; over an anchor the arrow; with ⌥ no mark and the arrow with "+"; the
+    /// crosshair under the canvas's precise cursor ([`CanvasSpace::precise`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
     /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
@@ -508,13 +513,18 @@ impl<'a> BezierOverlay<'a> {
                         let start = if ends && i == 0 { reach } else { 0.0 };
                         let end = if ends && i + 1 == sub.segment_count() { reach } else { 0.0 };
                         let Some(points) = trim_polyline(points, start, end) else { continue };
+                        let shape = if self.tool == BezierTool::AddAnchor {
+                            HitShape::polyline_within(points, false, ADD_ANCHOR_REACH)
+                        } else {
+                            HitShape::polyline(points, false)
+                        };
                         items.push(Item {
                             kind: Kind::Segment,
                             path: at,
                             key: path.key,
                             knot: KnotRef::new(s, i),
                             at: corners[0],
-                            shape: HitShape::polyline(points, false),
+                            shape,
                             interior: true,
                             straight: sub.is_straight(i),
                             shown: true,

@@ -143,6 +143,7 @@ craft-stream-codecs = { workspace = true, optional = true }
 craft-svg = { workspace = true, optional = true }
 craft-tga = { workspace = true, optional = true }
 craft-tiff = { workspace = true, optional = true }
+craft-tracked = { workspace = true, optional = true }
 craft-time = { workspace = true, optional = true }
 craft-vcard = { workspace = true, optional = true }
 craft-vectordrawable = { workspace = true, optional = true }
@@ -844,6 +845,8 @@ time = ["dep:craft-time"]
 timeline = ["dep:craft-timeline", "keymap"]
 timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
+
+tracked = ["dep:craft-tracked"]
 
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]
