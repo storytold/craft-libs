@@ -99,13 +99,19 @@ pub(crate) fn seen(ctx: &Context) -> Seen {
     Seen { hovered, dropped: at_hand, reading }
 }
 
-/// `file` as the drop delivers it at once: its path, or the bytes of a pathless file. `None` for a pathless file whose
-/// bytes can be read only asynchronously (the web).
+/// `file` as the drop delivers it at once: its path when that is absolute, or else its bytes. A browser hands a file
+/// over by a relative name that locates nothing, with its bytes. `None` for a file without an absolute path whose bytes
+/// can be read only asynchronously (the web).
 fn at_once(file: &DroppedFileHandle) -> Option<OsFile> {
     let path = file.path();
-    let usable = !path.as_os_str().is_empty();
-    let bytes = if usable { None } else { bytes_now(file)? };
-    Some(OsFile { name: name_of(path), path: usable.then(|| path.to_path_buf()), mime: String::new(), bytes })
+    let name = name_of(path);
+    if path.is_absolute() {
+        return Some(OsFile { name, path: Some(path.to_path_buf()), mime: String::new(), bytes: None });
+    }
+    let bytes = bytes_now(file)?;
+    // A relative path whose bytes cannot be read is all the drop has: it is passed on, and opening it reports why it fails.
+    let path = (bytes.is_none() && !path.as_os_str().is_empty()).then(|| path.to_path_buf());
+    Some(OsFile { name, path, mime: String::new(), bytes })
 }
 
 /// The bytes of a pathless dropped file, read now; none inside when the read fails.
@@ -160,5 +166,30 @@ impl egui::DroppedFile for DroppedPath {
     #[cfg(target_arch = "wasm32")]
     fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
         Box::pin(std::future::ready(Err("there is no file system on the web".to_owned())))
+    }
+}
+
+/// A dropped file the test fixture hands over by a relative name with its bytes at hand, as a browser does.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+pub(crate) struct DroppedBytes {
+    pub(crate) name: PathBuf,
+    pub(crate) bytes: Vec<u8>,
+}
+
+#[cfg(feature = "testing")]
+impl egui::DroppedFile for DroppedBytes {
+    fn path(&self) -> &Path {
+        &self.name
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.bytes.clone())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn bytes_async(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>> + '_>> {
+        Box::pin(std::future::ready(Ok(self.bytes.clone())))
     }
 }

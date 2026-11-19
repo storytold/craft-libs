@@ -359,6 +359,31 @@ fn a_pathless_drop_is_delivered_once_its_bytes_are_read() {
     assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the drop ends the drag");
 }
 
+/// A browser hands a dropped file over by a relative name, which locates no file, with its bytes. The drop used to keep
+/// only that name as a path, so nothing could be opened; it lands with the bytes in the frame of the drop.
+#[trial]
+fn a_drop_by_relative_name_lands_with_its_bytes() {
+    let landed = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let pass = std::cell::Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        ReadDrop { common: Common::new(), landed: &landed, pass: pass.get() }.id_salt("window").show_at(ui, LIST);
+        pass.set(pass.get() + 1);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["scan.pdf"]);
+    frames.idle(2, &mut show);
+
+    frames.drop_with_bytes("scan.pdf", b"%PDF-1.7");
+    pass.set(0);
+    frames.idle(1, &mut show);
+    assert_eq!(
+        *landed.borrow(),
+        vec![(0, vec![("scan.pdf".to_owned(), Some(b"%PDF-1.7".to_vec()))])],
+        "the file lands once, with its bytes, in the drop frame"
+    );
+}
+
 /// Where the window's inner rect sits on the desktop in the desktop-pointer trial.
 const WINDOW_AT: Pos2 = Pos2::new(100.0, 50.0);
 

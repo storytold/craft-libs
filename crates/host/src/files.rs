@@ -359,6 +359,8 @@ struct ScriptState {
     files: HashMap<PathBuf, Vec<u8>>,
     /// Paths a write to is refused ([`ScriptedFiles::failing_writes`]).
     refused: HashSet<PathBuf>,
+    /// The path of every write that took, in order ([`ScriptedFiles::written`]).
+    written: Vec<PathBuf>,
 }
 
 impl ScriptedFiles {
@@ -442,6 +444,12 @@ impl ScriptedFiles {
         self.state().files.get(path).cloned()
     }
 
+    /// The path of every write so far that took, in the order of the writes: a path written twice is listed twice. A
+    /// refused write and a file put there with [`with_file`](ScriptedFiles::with_file) are not listed.
+    pub fn written(&self) -> Vec<PathBuf> {
+        self.state().written.clone()
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, ScriptState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -496,6 +504,7 @@ impl Files for ScriptedFiles {
             return Err(FileError::PermissionDenied(path.to_owned()));
         }
         state.files.insert(path.to_owned(), bytes.to_vec());
+        state.written.push(path.to_owned());
         Ok(false)
     }
 

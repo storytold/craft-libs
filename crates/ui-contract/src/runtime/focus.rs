@@ -211,8 +211,8 @@ pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
 /// nudges, Escape as its `Intent::Cancel`). `keys` is `KeyUse::CANVAS`, or a variant such as
 /// `KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(..)` while the canvas edits text in place and Tab and the
 /// clipboard are its own. With nothing focused the canvas is the key target: a bare Tab it keeps, and the clipboard
-/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them.
-/// With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
+/// events and edit chords of its edit set, stay in egui's input for the app, and nothing toggles or fires with them;
+/// Page Up and Down, Home and End arrive as its `Intent::Move`, as while it has the focus. With the canvas focused, Tab it keeps stays in egui too, and its edit set arrives as `Intent::Edit`
 /// (`keys::intents_of`), as for any focused stop. Call it each pass the canvas shows.
 pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
     register_stop(ctx, Stop::new(id, keys.with_chrome_key(true)).host());
@@ -222,6 +222,12 @@ pub fn host_canvas(ctx: &Context, id: Id, keys: KeyUse) {
 /// app's own. Read before the begin hook rotates the registrations, by the input hook and the begin hook's Tab moves.
 pub(crate) fn canvas_keys(ctx: &Context, viewport: ViewportId) -> Option<KeyUse> {
     with_viewport(ctx, viewport, |state| state.stops.iter().find(|rec| rec.stop.keys.chrome_key).map(|rec| rec.stop.keys))
+}
+
+/// The document canvas the running viewport registered in its last pass (`KeyUse::chrome_key`): the window's key
+/// target while nothing has the focus. Read by the begin hook, after it rotated the registrations.
+pub(crate) fn document_canvas(ctx: &Context) -> Option<StopRec> {
+    with(ctx, |state| state.last_stops.iter().find(|rec| rec.stop.keys.chrome_key).cloned())
 }
 
 /// Whether `rec`, the focused stop, is a canvas control's: a non-text member of the document canvas's arena, as the

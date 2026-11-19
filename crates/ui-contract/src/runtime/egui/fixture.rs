@@ -97,12 +97,13 @@ pub struct ImeSeen {
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
 /// `read` are pathless files dropped in the frame whose bytes the page reads after it, by name with the bytes the read
-/// gives.
+/// gives. `given` are files dropped in the frame by a relative name with their bytes at hand, as a browser hands them over.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OsFiles {
     pub hovered: Vec<(String, String)>,
     pub dropped: Vec<String>,
     pub read: Vec<(String, Vec<u8>)>,
+    pub given: Vec<(String, Vec<u8>)>,
 }
 
 /// The viewport facts a frame reports: a window-focus event also sets the root viewport's focus fact, as a host
@@ -184,8 +185,14 @@ pub(crate) fn run_frame(
 ) -> FrameResult {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
     let hovered_files = files.hovered.iter().map(|(name, mime)| egui::HoveredFile { path: Some(name.into()), mime: mime.clone() }).collect();
-    let dropped_files =
-        files.dropped.iter().map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+    let dropped_files = files
+        .dropped
+        .iter()
+        .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
+        .chain(files.given.into_iter().map(|(name, bytes)| {
+            Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle
+        }))
+        .collect();
     // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
     if !files.read.is_empty() {
         super::files::open_reads(ctx, viewport, files.read.len());

@@ -276,6 +276,18 @@ mod tests {
         assert_eq!(files.file(std::path::Path::new("/docs/b.pdf")).as_deref(), Some(&b"new"[..]));
     }
 
+    /// The written paths list each write that took, in order, and nothing else: a list that took in a refused write or a
+    /// file the test put there would let "nothing was written outside the folder" fail, or pass, on the wrong paths.
+    #[test]
+    fn written_lists_the_writes_that_took_in_order() {
+        let files = ScriptedFiles::new().with_file("/docs/kept.pdf", b"old".to_vec()).failing_writes("/docs/refused.pdf");
+        for path in ["/out/b.pdf", "/docs/refused.pdf", "/out/a.pdf", "/out/b.pdf"] {
+            let _ = files.write(std::path::Path::new(path), b"new", WriteIntent::Save);
+        }
+        let written: Vec<std::path::PathBuf> = ["/out/b.pdf", "/out/a.pdf", "/out/b.pdf"].map(Into::into).into();
+        assert_eq!(files.written(), written);
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn installed_host_survives_a_memory_reset() {

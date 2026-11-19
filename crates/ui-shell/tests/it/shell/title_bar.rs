@@ -128,3 +128,42 @@ fn the_window_title_is_sent_once_per_change() {
     });
     assert!(titles(&out).is_empty(), "an embedded shell sends no title");
 }
+
+/// The leading content of a bar is a row as wide as the bar: a document tab strip beside the Home and Open buttons
+/// takes the width they and the title leave, and its tabs show and are in the tree. The strip used to be laid out at
+/// its minimum there, with no tab drawn or reachable.
+#[trial]
+fn a_document_tab_strip_in_the_bar_takes_the_free_width() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    use craft_ui::testing::Fixture;
+    let mut fixture = Fixture::new(|ui| {
+        let layout = craft_window::Layout { left: vec![], right: vec![Caption::Minimize, Caption::Maximize, Caption::Close] };
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout });
+        let tabs = [DocumentTab::new(0_usize, "One.pdf"), DocumentTab::new(1, "Two.pdf"), DocumentTab::new(2, "Three.pdf")];
+        let _ = TitleBar::new().frame(frame).show_titled(
+            ui,
+            Title::new("One.pdf"),
+            |ui, _| {
+                Button::new("Home").show(ui);
+                DocumentTabs::new("Documents", &tabs).reorderable(true).selected(0).show(ui);
+                Button::new("Open").show(ui);
+            },
+            |ui, _| {
+                Button::new("Settings").show(ui);
+            },
+        );
+    });
+    fixture.room(vec2(1400.0, 300.0)).settle();
+    let home = fixture.by_label("Home").expect("the Home button").rect;
+    let open = fixture.by_label("Open").expect("the Open button").rect;
+    let tabs: Vec<Rect> = fixture.by_role(Role::TAB).into_iter().map(|tab| tab.rect).collect();
+    assert_eq!(tabs.len(), 3, "every tab is in the tree: {tabs:?}");
+    for tab in &tabs {
+        assert!(tab.width() > 0.0 && tab.left() >= home.right() && tab.right() <= open.left(), "a tab shows between Home and Open: {tab:?}");
+    }
+    let strip = fixture.by_role(Role::TAB_LIST).first().expect("the strip's node").rect;
+    let settings = fixture.by_label("Settings").expect("the Settings button").rect;
+    assert!(strip.width() > (settings.left() - home.right()) / 2.0, "the strip takes the free width: {strip:?} up to {settings:?}");
+}

@@ -84,13 +84,21 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
         // edit or a dialog's default button takes it. The arrows nudge the window's canvas content (a tool or the
-        // session control on a canvas), unless a modal layer is open.
+        // session control on a canvas), unless a modal layer is open. The window's document canvas is its key target
+        // (`focus::host_canvas`): Page Up and Down, Home and End page it as they do while it has the focus.
+        let canvas = if modal { None } else { focus::document_canvas(ctx) };
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
             } else if !modal && let Some(nudge) = nudge_of(press.key, press.mods) {
                 routed.entry(None).or_default().nudge = Some(nudge);
+                *taken = Taken::Yes;
+            } else if let Some(canvas) = &canvas
+                && let Some(Intent::Move(mv @ (NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End), mods)) =
+                    keys::intent(os, press.key, press.mods, canvas.stop.role)
+            {
+                push(&mut routed, Some(canvas.stop.id), Intent::Move(mv, mods), false);
                 *taken = Taken::Yes;
             }
         }

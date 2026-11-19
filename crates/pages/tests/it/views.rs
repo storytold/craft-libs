@@ -305,6 +305,30 @@ fn page_keys_turn_and_go_to_the_ends_in_a_view_that_is_not_continuous() {
     assert_eq!(state.borrow().current, 0, "Home goes to the first page");
 }
 
+/// With nothing focused the window's document canvas is its key target: the page keys and the arrows no tool takes
+/// page the view, as they do while it has the focus. They used to reach only the window, where no view read them.
+#[trial]
+fn page_keys_and_arrows_page_the_view_with_nothing_focused() {
+    let (mut fixture, state, _) = layout_rig(
+        5,
+        state_with(|s| {
+            s.continuous = false;
+            s.fit = Fit::Page;
+        }),
+    );
+    assert_eq!(fixture.focused_stop(), None, "nothing has the focus");
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 1, "Page Down turns one page");
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 2, "Right turns one page");
+    fixture.key(Key::End, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 4, "End goes to the last page");
+    assert_eq!(fixture.focused_stop(), None, "the keys leave the focus where it was");
+}
+
 #[trial]
 fn arrows_go_to_the_next_page_and_scroll_a_line_in_a_continuous_view() {
     // Right, then Down, in a view whose key line is `key_line`: the page reached and how far Down scrolled.

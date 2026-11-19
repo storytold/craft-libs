@@ -251,6 +251,13 @@ impl Frames {
         self.files.read.push((name.to_owned(), bytes.to_vec()));
     }
 
+    /// The hovering files drop on the window in the next frame as a browser on the desktop hands a file over: by the
+    /// relative name `name`, which locates no file, with its `bytes` at hand.
+    pub fn drop_with_bytes(&mut self, name: &str, bytes: &[u8]) {
+        self.files.hovered.clear();
+        self.files.given.push((name.to_owned(), bytes.to_vec()));
+    }
+
     /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
     /// [`advance`](Self::advance). Held-pointer repeats, hover delays and animations then wait for the test.
     pub fn still_clock(&mut self) {
@@ -293,6 +300,7 @@ impl Frames {
             hovered: self.files.hovered.clone(),
             dropped: std::mem::take(&mut self.files.dropped),
             read: std::mem::take(&mut self.files.read),
+            given: std::mem::take(&mut self.files.given),
         };
         let mut result = fixture::run_frame(&self.ctx, self.time, self.screen, self.pixels_per_point, viewport, events, files, ui);
         match &mut self.paint {

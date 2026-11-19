@@ -559,7 +559,15 @@ impl<'a> Canvas<'a> {
             }
         }
         if self.keys_to_body {
-            keys.nudge = cx.intents().take_nudge();
+            // With nothing focused the window's arrows are the canvas's too: no tool here takes them.
+            keys.nudge = cx.intents().take_nudge().or_else(|| {
+                let mut nudge = None;
+                crate::runtime::keys::with_window_intents(&ctx, false, |window| {
+                    nudge = window.take_nudge();
+                    nudge.is_some()
+                });
+                nudge
+            });
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
         let mut steer = motion.steer.take();
