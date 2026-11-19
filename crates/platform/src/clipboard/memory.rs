@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use super::backend::ClipboardBackend;
-use super::convert::rgba8_image;
-use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, RGBA8};
+use super::convert::{parse_uri_list, rgba8_image};
+use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, RGBA8, URI_LIST};
 
 /// The public in-memory clipboard for tests and hosts without one. It enforces no limits; the
 /// [`Clipboard`](super::Clipboard) over it does.
@@ -34,8 +34,10 @@ impl ClipboardBackend for MemoryClipboard {
         Ok(self.find(RGBA8).and_then(|flavor| rgba8_image(&flavor.data)))
     }
 
+    /// A held text/uri-list, one file:// URI per line, read as the event clipboard reads an offered one.
     fn read_files(&mut self, _limit: usize) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
-        Ok(None)
+        let files = self.find(URI_LIST).map(|flavor| parse_uri_list(&String::from_utf8_lossy(&flavor.data)));
+        Ok(files.filter(|files| !files.is_empty()))
     }
 
     fn has(&mut self, mimes: &[&str]) -> bool {
