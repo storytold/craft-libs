@@ -122,7 +122,16 @@ impl<W: Write + Seek> Writer<W> {
     }
 
     /// Finishes writing and returns the underlying destination.
+    ///
+    /// Legacy UTF-8 mode requires [`Writer::finish`] to apply its in-memory header patch.
+    /// Calling this method in legacy mode consumes the writer and returns [`Error::Write`];
+    /// use `finish` instead when constructing a writer with [`Writer::legacy_utf8`].
     pub fn finish_into(self) -> Result<W, Error> {
+        // A generic destination need not support reads or header patching. Never silently
+        // return an archive that omits the byte-compatibility contract of legacy mode.
+        if self.legacy_utf8 {
+            return Err(Error::Write("legacy UTF-8 output requires Writer::finish".into()));
+        }
         self.zip.finish().map_err(|e| Error::Write(e.to_string()))
     }
 }
@@ -202,4 +211,28 @@ fn patch_legacy_utf8_headers(bytes: &mut [u8]) -> Result<(), Error> {
         return Err(Error::Write("invalid ZIP central directory size".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_ascii_output_requires_the_header_patching_finish_path() {
+        let mut legacy = Writer::legacy_utf8();
+        legacy.add("a.txt", b"ordinary text", Compression::Stored).unwrap();
+        assert!(matches!(legacy.finish_into(), Err(Error::Write(message))
+            if message == "legacy UTF-8 output requires Writer::finish"));
+
+        let mut legacy = Writer::legacy_utf8();
+        legacy.add("a.txt", b"ordinary text", Compression::Stored).unwrap();
+        let bytes = legacy.finish().unwrap();
+        assert_eq!(get_u16(&bytes, 6).unwrap() & 0x0800, 0x0800);
+
+        let mut ordinary = Writer::to_writer(Cursor::new(Vec::new()));
+        ordinary.add("a.txt", b"ordinary text", Compression::Stored).unwrap();
+        let bytes = ordinary.finish_into().unwrap().into_inner();
+        let mut archive = crate::Archive::open(&bytes, crate::Limits { max_entries: 1, max_total_bytes: 32 }).unwrap();
+        assert_eq!(archive.read("a.txt", 32).unwrap().unwrap(), b"ordinary text");
+    }
 }
