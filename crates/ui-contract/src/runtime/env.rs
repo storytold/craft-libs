@@ -572,7 +572,7 @@ impl Env {
     /// The env of `ui`: the nearest entry up the `Ui` stack, else the running viewport's root env, so the `Ui`
     /// of an egui `Area` or `Window` reads the app's root values. For app panels (layer 8) and caller closures only.
     ///
-    /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`.
+    /// While apps still use `add_enabled_ui`, it also ANDs `ui.is_enabled()`, outside sizing passes.
     pub fn of(ui: &Ui) -> Env {
         let ctx = ui.ctx();
         let viewport = pass::current_viewport(ctx);
@@ -580,7 +580,9 @@ impl Env {
             stack::nearest(ui, |node| envs.entries.get(&node).cloned()).or_else(|| envs.root.clone())
         });
         let env = found.unwrap_or_else(|| Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)));
-        if style::is_enabled(ui) { env } else { env.derive_local(|s| s.enabled = false) }
+        // egui's `invisible()` also disables the `Ui`, and a sizing `Ui` is invisible, not disabled: in a sizing pass
+        // the env keeps the enabled state the real run has, so a memoized view keys alike in both.
+        if style::is_enabled(ui) || ui.is_sizing_pass() { env } else { env.derive_local(|s| s.enabled = false) }
     }
 
     /// The running viewport's root env: what code with no `Ui` (the ghost layer) paints with.

@@ -3,7 +3,9 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, MemoProps, MemoView, Show as _, Tracked};
+use craft_ui::contract::{Bind, MemoProps, MemoView, Show as _, ShowContainer as _, Tracked};
+use craft_ui::display::Text;
+use craft_ui::layout_components::Stack;
 use craft_ui::runtime::inspect;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::testing::input::key_press;
@@ -546,3 +548,44 @@ fn a_saved_value_written_from_outside_runs_its_view() {
     assert!(ran[0].contains("Flag"), "the view that binds the value ran: {ran:?}");
     assert!(frame(&mut frames).is_empty(), "then it replays");
 }
+
+/// Where the stack of the sizing trials is shown: wider than every label it holds.
+const STACK_ROOM: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(410.0, 210.0) };
+
+/// One frame of a stack filling `STACK_ROOM` that holds the memoized view `title` showing `heading`, then the text
+/// `label`. Returns the frame's passes, the sizing passes the stack's content ran in, the width the view took in the
+/// last of them and what the view returned (its button's size) in the last real run.
+fn stack_frame(frames: &mut Frames, label: &str, heading: &str) -> (usize, usize, f32, Option<Vec2>) {
+    let (sizing, measured) = (Cell::new(0), Cell::new(0.0));
+    let mut out = None;
+    let passes = frames.frame(vec![], |ui| {
+        in_region(ui, STACK_ROOM, |ui| {
+            let shown = Stack::new().fill().show(ui, |ui, _| {
+                let out = MemoView::new("heading", Title { title: heading.to_owned() }, title).show(ui);
+                if ui.is_sizing_pass() {
+                    sizing.set(sizing.get() + 1);
+                    measured.set(ui.min_rect().width());
+                }
+                Text::new(label.to_owned()).show(ui);
+                out
+            });
+            out = shown.inner.flatten();
+        });
+    });
+    (passes, sizing.get(), measured.get(), out)
+}
+
+/// A view in a container that measures its content again (in an invisible sizing pass, after a sibling below it changed
+/// size) replays there as in the real run: the sizing `Ui` is invisible, not disabled, so the view keys alike in both.
+#[trial]
+fn a_view_in_a_container_that_measures_again_replays_in_its_sizing_pass() {
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        stack_frame(&mut frames, "Short", "Heading");
+    }
+    title_runs();
+    let (_, sizing, _, _) = stack_frame(&mut frames, "A much longer label than before", "Heading");
+    assert!(sizing > 0, "the stack measured its content again in a sizing pass");
+    assert_eq!(title_runs(), 0, "the view replayed in the sizing pass and in the real run");
+}
+

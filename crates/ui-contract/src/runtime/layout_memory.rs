@@ -1225,6 +1225,10 @@ pub(crate) mod guard {
         ("runtime::pointer::", "pointer state: read; sensing is skipped in measuring runs"),
         ("runtime::wheel::State", "wheel: read"),
         ("runtime::drag::", "drag board and targets: read; targets register in real runs"),
+        (
+            "runtime::inputs::Generations",
+            "framework input generations: a replay decided in a measuring run compares them; observing syncs the values a real run of the pass sees",
+        ),
         ("runtime::overlay::", "overlays: read; opens and closes are effects skipped in measuring runs"),
         ("contract::overlay::popups::Popups", "popups: read"),
         ("runtime::replay::Recorder", "run records: opened and closed by real runs; registrations journal there only while one is open"),
