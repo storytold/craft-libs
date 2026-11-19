@@ -164,6 +164,8 @@ pub enum Error {
     /// A frame layout's fields are not what [`crate::FrameLayout::new`] gives for its format and
     /// size.
     Layout,
+    /// A buffer of `bytes` bytes for the frame could not be allocated.
+    Memory { bytes: usize },
     /// The device reported an error (validation, out of memory, a failed map or poll) while
     /// [`crate::YuvProvider`] ran a job on it.
     Device(String),
@@ -181,6 +183,7 @@ impl fmt::Display for Error {
             Error::Offset(offset) => write!(f, "buffer offset {offset} is not a multiple of {}", wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
             Error::Mismatch { converter, planes } => write!(f, "{planes} planes given to a {converter} converter"),
             Error::Layout => f.write_str("the frame layout does not match its format and size"),
+            Error::Memory { bytes } => write!(f, "a buffer of {bytes} bytes could not be allocated"),
             Error::Device(message) => write!(f, "the device reported an error: {message}"),
         }
     }

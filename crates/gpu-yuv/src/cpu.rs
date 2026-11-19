@@ -80,6 +80,14 @@ impl Image<'_> {
     }
 }
 
+/// An empty vector with room for `len` values, or [`Error::Memory`] when the room cannot be
+/// allocated.
+pub(crate) fn reserve<T>(len: usize) -> Result<Vec<T>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| Error::Memory { bytes: len.saturating_mul(size_of::<T>()) })?;
+    Ok(v)
+}
+
 /// `rgba` (`src_width × src_height`, 4 bytes per pixel; alpha is ignored, so premultiplied
 /// pixels convert as if over black) scaled to `width × height` and converted, as one tightly
 /// packed frame in [`FrameLayout`] order.
@@ -95,7 +103,9 @@ pub fn convert(rgba: &[u8], src_width: u32, src_height: u32, conversion: Convers
     let image = Image { rgba, width: src_width as usize, height: src_height as usize };
     let c = Coefficients::of(conversion);
     let (shift, wide) = (conversion.format.shift(), conversion.format.sample_bytes() == 2);
-    let mut out = Vec::with_capacity(layout.frame_bytes());
+    let (cw, ch) = (width / 2, height / 2);
+    let mut out = reserve(layout.frame_bytes())?;
+    let mut cr: Vec<u16> = if conversion.format == crate::Format::I420 { reserve(cw as usize * ch as usize)? } else { Vec::new() };
     let mut put = |v: u16| {
         let v = v << shift;
         if wide {
@@ -112,7 +122,6 @@ pub fn convert(rgba: &[u8], src_width: u32, src_height: u32, conversion: Convers
             }
         }
     };
-    let (cw, ch) = (width / 2, height / 2);
     plane(width, height, &mut |v| put(v[0]));
     match conversion.format {
         crate::Format::Nv12 | crate::Format::P010 => plane(cw, ch, &mut |v| {
@@ -120,7 +129,6 @@ pub fn convert(rgba: &[u8], src_width: u32, src_height: u32, conversion: Convers
             put(v[2]);
         }),
         crate::Format::I420 => {
-            let mut cr = Vec::with_capacity(cw as usize * ch as usize);
             plane(cw, ch, &mut |v| {
                 put(v[1]);
                 cr.push(v[2]);

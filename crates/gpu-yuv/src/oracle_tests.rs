@@ -59,11 +59,23 @@ fn round(x: f64, bits: u32) -> u16 {
 }
 
 /// Whether `got` is the rounded `exact` value. A value within 0.001 of a half may round either
-/// way in `f32`, so either neighbor passes there.
+/// way in `f32`, so there the floor and the ceiling of `exact`, clamped to the codes, both pass.
 fn rounds_to(got: u16, exact: f64, bits: u32) -> bool {
-    let want = round(exact, bits);
     let near_half = ((exact - exact.floor()) - 0.5).abs() < 1e-3;
-    got == want || near_half && got.abs_diff(want) <= 1
+    let code = |v: f64| v.clamp(0.0, f64::from((1u32 << bits) - 1)) as u16;
+    got == round(exact, bits) || near_half && (got == code(exact.floor()) || got == code(exact.ceil()))
+}
+
+#[test]
+fn a_value_near_a_half_passes_only_as_its_floor_or_ceiling() {
+    assert!(rounds_to(128, 128.5, 8));
+    assert!(rounds_to(129, 128.5, 8));
+    assert!(!rounds_to(130, 128.5, 8));
+    assert!(!rounds_to(127, 128.5, 8));
+    assert!(rounds_to(255, 254.9995, 8));
+    assert!(!rounds_to(254, 254.9, 8));
+    assert!(rounds_to(0, -0.5, 8));
+    assert!(!rounds_to(1, -0.5, 8));
 }
 
 /// Every sample of a frame as its value (P010 words shifted down by 6).

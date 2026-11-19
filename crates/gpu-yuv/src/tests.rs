@@ -122,6 +122,17 @@ fn bad_sizes_are_errors() {
 }
 
 #[test]
+fn a_frame_buffer_that_cannot_be_allocated_is_an_error() {
+    // A request past `isize::MAX` bytes fails on every allocator, so the failure path runs
+    // without exhausting memory.
+    assert_eq!(cpu::reserve::<u8>(usize::MAX).unwrap_err(), Error::Memory { bytes: usize::MAX });
+    assert_eq!(cpu::reserve::<u16>(usize::MAX / 2).unwrap_err(), Error::Memory { bytes: usize::MAX - 1 });
+    let room = cpu::reserve::<u8>(4096).unwrap();
+    assert!(room.is_empty() && room.capacity() >= 4096);
+    assert_eq!(Error::Memory { bytes: 16 }.to_string(), "a buffer of 16 bytes could not be allocated");
+}
+
+#[test]
 fn layouts_pad_rows_for_copies_and_unpack_without_the_padding() {
     let l = FrameLayout::new(Format::Nv12, 1920, 1080).unwrap();
     assert_eq!(

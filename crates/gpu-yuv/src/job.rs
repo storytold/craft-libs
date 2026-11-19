@@ -40,11 +40,12 @@ fn invalid(message: impl std::fmt::Display) -> GpuFault {
     GpuFault::InvalidJob(format!("{PROVIDER_ID}: {message}"))
 }
 
-/// A conversion error as a fault: device errors are [`GpuFault::Operation`], the rest describe a
-/// job that cannot run and are [`GpuFault::InvalidJob`].
+/// A conversion error as a fault: device errors and allocation failures are
+/// [`GpuFault::Operation`], the rest describe a job that cannot run and are
+/// [`GpuFault::InvalidJob`].
 fn fault(e: Error) -> GpuFault {
     match e {
-        Error::Device(_) => GpuFault::Operation(format!("{PROVIDER_ID}: {e}")),
+        Error::Device(_) | Error::Memory { .. } => GpuFault::Operation(format!("{PROVIDER_ID}: {e}")),
         _ => invalid(e),
     }
 }
@@ -256,7 +257,8 @@ mod device {
         }
 
         /// `rgba` converted on the device, as one packed frame. Errors the device reports go to
-        /// error scopes and come back as [`Error::Device`].
+        /// error scopes and come back as [`Error::Device`]; a frame that cannot be allocated is
+        /// [`Error::Memory`].
         pub(super) fn convert(&self, rgba: &[u8], job: &YuvJob) -> Result<Vec<u8>, Error> {
             let (sw, sh) = (job.src_width, job.src_height);
             let limit = self.device.limits().max_texture_dimension_2d;
@@ -270,10 +272,12 @@ mod device {
             drop(converters);
             let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
             let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
             let converter = cached.unwrap_or_else(|| Converter::new(&self.device, job.conversion));
             let recorded = self.record(&converter, rgba, job);
-            // Both scopes are popped on every path, so that none stays open on the device.
-            let errors = [pollster::block_on(validation.pop()), pollster::block_on(oom.pop())];
+            // The scopes are popped on every path, in the reverse of the order they were pushed,
+            // so that none stays open on the device.
+            let errors = [pollster::block_on(internal.pop()), pollster::block_on(validation.pop()), pollster::block_on(oom.pop())];
             if let Some(e) = errors.into_iter().flatten().next() {
                 return Err(device_error(e));
             }
@@ -288,7 +292,9 @@ mod device {
             self.device.poll(wgpu::PollType::wait_indefinitely()).map_err(device_error)?;
             rx.try_recv().map_err(|_| device_error("the read-back map did not complete"))?.map_err(device_error)?;
             let mapped = buffer.get_mapped_range(..).map_err(device_error)?;
-            let mut frame = vec![0u8; planes.layout().frame_bytes()];
+            let bytes = planes.layout().frame_bytes();
+            let mut frame = crate::cpu::reserve(bytes)?;
+            frame.resize(bytes, 0u8);
             let unpacked = planes.layout().unpack(&mapped, &mut frame);
             drop(mapped);
             buffer.unmap();
@@ -297,6 +303,9 @@ mod device {
 
         /// Upload `rgba` and record and submit the passes and the copy into a read-back buffer.
         fn record(&self, converter: &Converter, rgba: &[u8], job: &YuvJob) -> Result<(Planes, wgpu::Buffer), Error> {
+            // The output size is checked against the device before the source is uploaded, so a
+            // rejected job queues no upload.
+            let planes = converter.planes(&self.device, job.width, job.height)?;
             let (sw, sh) = (job.src_width, job.src_height);
             let size = wgpu::Extent3d { width: sw, height: sh, depth_or_array_layers: 1 };
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -312,7 +321,6 @@ mod device {
             let layout = wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(sw * 4), rows_per_image: Some(sh) };
             self.queue.write_texture(texture.as_image_copy(), rgba, layout, size);
             let source = converter.bind(&self.device, &texture.create_view(&wgpu::TextureViewDescriptor::default()));
-            let planes = converter.planes(&self.device, job.width, job.height)?;
             let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("craft.yuv read-back"),
                 size: planes.layout().buffer_size,
