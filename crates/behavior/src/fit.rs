@@ -186,7 +186,7 @@ fn squeeze(natural: &[f32], indices: &[usize], total: f32, minimum: f32) -> Vec<
 }
 
 /// Whether an item may move into the overflow menu, or lives there.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FitKeep {
     /// The item leaves the strip when the room runs out, last item first.
