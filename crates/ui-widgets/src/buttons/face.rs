@@ -3,6 +3,7 @@
 
 use super::GroupLevel;
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
+use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
 use crate::style::{FocusLook, GlyphRole, IconLook, StyleColor, StyleCx, SurfaceKind, SurfaceLook, TextLook, TypeRole, UiTokens, VariantParts};
 use craft_behavior::{Flow, Insets, Metrics, Proposal};
@@ -66,6 +67,9 @@ pub(crate) struct FaceSpec<'a> {
     pub label: &'a str,
     pub role: Option<TypeRole>,
     pub lead: Option<&'a IconSpec<'a>>,
+    /// A picture in the leading icon's place, as high as the leading icon and this many times as wide. The face
+    /// reserves its box and paints nothing there: the button shows the picture in that box (`lead_rect`).
+    pub picture: Option<ThumbAspect>,
     pub trail: Option<&'a IconSpec<'a>>,
     /// A spinner takes the place of the leading icon, or of the label when there is no leading icon: the face keeps
     /// the slot empty and the button shows a `Spinner` there.
@@ -85,13 +89,29 @@ impl FaceSpec<'_> {
         }
     }
 
-    fn icons(&self) -> usize {
-        usize::from(self.lead.is_some()) + usize::from(self.trail.is_some())
+    /// Whether the face has a leading part: an icon or a picture.
+    fn leads(&self) -> bool {
+        self.lead.is_some() || self.picture.is_some()
+    }
+
+    /// The width of the leading part when it is `side` high: `side` for an icon, the picture's aspect of it for a
+    /// picture, 0 without either.
+    fn lead_width(&self, side: f32) -> f32 {
+        match (self.picture, self.lead) {
+            (Some(aspect), _) => aspect.of(side),
+            (None, Some(_)) => side,
+            (None, None) => 0.0,
+        }
+    }
+
+    /// The width the leading part of `lead_side` and the trailing icon of `side` take together.
+    fn icons_width(&self, lead_side: f32, side: f32) -> f32 {
+        self.lead_width(lead_side) + if self.trail.is_some() { side } else { 0.0 }
     }
 
     /// The gaps between the parts that are shown.
     fn gaps(&self) -> usize {
-        (self.icons() + usize::from(!self.label.is_empty())).saturating_sub(1)
+        (usize::from(self.leads()) + usize::from(self.trail.is_some()) + usize::from(!self.label.is_empty())).saturating_sub(1)
     }
 }
 
@@ -100,7 +120,7 @@ impl<'a> FaceSpec<'a> {
     /// icon still shows and the label stays the accessible name and the tooltip. A stacked face keeps its label at
     /// every level, and a face without an icon keeps it, since nothing else would show.
     fn drops_label(&self, level: GroupLevel) -> bool {
-        self.arrangement == Arrangement::Inline && level == GroupLevel::Compact && self.lead.is_some() && !self.label.is_empty()
+        self.arrangement == Arrangement::Inline && level == GroupLevel::Compact && self.leads() && !self.label.is_empty()
     }
 
     /// The spec as the face shows it under `level`, with the label dropped where `drops_label` says.
@@ -161,7 +181,8 @@ struct Stack {
     trail: Option<Rect>,
 }
 
-/// Lays a stacked face out in `area` from its lines' sizes: the leading icon of `lead_side` centred at the top, a gap,
+/// Lays a stacked face out in `area` from its lines' sizes: the leading icon of `lead_side` (a picture that high)
+/// centred at the top, a gap,
 /// then each line centred under it, the trailing icon of `side` after the last line at its reading end (on a row of
 /// its own when there is no line). The block is centred vertically; `size` is what `measure` reports.
 fn stack(spec: &FaceSpec<'_>, sides: (f32, f32), gap: f32, lines: &[Vec2], area: Rect, rtl: bool) -> Stack {
@@ -176,13 +197,14 @@ fn stack(spec: &FaceSpec<'_>, sides: (f32, f32), gap: f32, lines: &[Vec2], area:
     if lines.is_empty() && trail {
         rows.push(Vec2::splat(side));
     }
-    let icon = if spec.lead.is_some() { lead_side } else { 0.0 };
-    let under_icon = if spec.lead.is_some() && !rows.is_empty() { gap } else { 0.0 };
-    let width = rows.iter().map(|row| row.x).fold(icon, f32::max);
+    let icon = if spec.leads() { lead_side } else { 0.0 };
+    let lead_width = spec.lead_width(lead_side);
+    let under_icon = if spec.leads() && !rows.is_empty() { gap } else { 0.0 };
+    let width = rows.iter().map(|row| row.x).fold(lead_width, f32::max);
     let size = Vec2::new(width, icon + under_icon + rows.iter().map(|row| row.y).sum::<f32>());
     let middle = area.center().x;
     let mut y = area.top() + (area.height() - size.y).max(0.0) / 2.0;
-    let lead = spec.lead.map(|_| Rect::from_min_size(pos2(middle - lead_side / 2.0, y), Vec2::splat(lead_side)));
+    let lead = spec.leads().then(|| Rect::from_min_size(pos2(middle - lead_width / 2.0, y), Vec2::new(lead_width, lead_side)));
     y += icon + under_icon;
     let mut placed = Stack { size, lead, lines: Vec::new(), trail: None };
     for (i, row) in rows.iter().enumerate() {
@@ -337,7 +359,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         return stack(spec, (lead_side, side), cx.gap(), &sizes, Rect::ZERO, false).size;
     }
     let icon = cx.icon();
-    let fixed = icon * spec.icons() as f32 + cx.gap() * spec.gaps() as f32;
+    let fixed = spec.icons_width(icon, icon) + cx.gap() * spec.gaps() as f32;
     let text = if spec.label.is_empty() {
         Vec2::ZERO
     } else if cx.proposal == Proposal::Min {
@@ -363,9 +385,9 @@ struct Slots {
 }
 
 /// Places the icons of `side` and a label `text_width` wide with `gap` between them, in `area` by `spec.align`: the leading
-/// icon at the reading start, the trailing icon at the reading end.
+/// icon (or picture) at the reading start, the trailing icon at the reading end.
 fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
-    let width = side * spec.icons() as f32 + gap * spec.gaps() as f32 + text_width;
+    let width = spec.icons_width(side, side) + gap * spec.gaps() as f32 + text_width;
     let free = (area.width() - width).max(0.0);
     let lead = match spec.align {
         HAlign::Start => 0.0,
@@ -380,8 +402,8 @@ fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, 
     };
     let mut slots = Slots { lead: None, text: None, trail: None };
     let mut gapped = false;
-    if spec.lead.is_some() {
-        slots.lead = Some(take(side));
+    if spec.leads() {
+        slots.lead = Some(take(spec.lead_width(side)));
         gapped = true;
     }
     if !spec.label.is_empty() {
@@ -427,7 +449,7 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
     let (text_look, icon_look) = ink;
     let (text_color, icon_color, side) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color), icon_look.side);
     let draw = ui.draw();
-    let fixed = side * spec.icons() as f32 + look.gap * spec.gaps() as f32;
+    let fixed = spec.icons_width(side, side) + look.gap * spec.gaps() as f32;
     let run = spec.run().color(text_color);
     let text = if spec.label.is_empty() { None } else { Some(draw.layout(&run, (area.width() - fixed).max(0.0))) };
     let text_width = text.as_ref().map_or(0.0, |text| text.size().x);
@@ -438,7 +460,7 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
         draw.icon(icon_at(slot, area, side), &tinted(lead, icon_color));
     }
     if let (Some(text), Some(slot)) = (&text, slots.text)
-        && !(spec.loading && spec.lead.is_none())
+        && !(spec.loading && !spec.leads())
     {
         draw.galley(pos2(slot.min.x, text_top(&draw, area, text)), text);
     }
@@ -465,7 +487,7 @@ fn paint_stacked<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook
     {
         draw.icon(slot, &tinted(lead, icon_color));
     }
-    if !(spec.loading && spec.lead.is_none()) {
+    if !(spec.loading && !spec.leads()) {
         for (text, slot) in layouts.iter().zip(&placed.lines) {
             draw.galley(slot.min, text);
         }
@@ -509,13 +531,29 @@ pub(super) fn spinner_rect<C: Component>(
     if spec.arrangement == Arrangement::Stacked {
         let placed = stacked_in(cx, spec, look, side, area, rtl);
         return match placed.lead {
-            Some(lead) => Some(lead),
+            Some(lead) => Some(Rect::from_center_size(lead.center(), Vec2::splat(lead.height()))),
             None => placed.lines.first().map(|line| Rect::from_center_size(line.center(), Vec2::splat(side))),
         };
     }
-    let fixed = side * spec.icons() as f32 + look.gap * spec.gaps() as f32;
-    let text_width = if spec.label.is_empty() { 0.0 } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size().x };
-    let slots = slots(spec, side, look.gap, text_width, area, rtl);
-    let slot = if spec.lead.is_some() { slots.lead } else { slots.text }?;
+    let slots = inline_slots(cx, spec, look, side, area, rtl);
+    let slot = if spec.leads() { slots.lead } else { slots.text }?;
     Some(icon_at(slot, area, side))
+}
+
+/// The slots of an inline face in `area`, its label laid out in the room the icons and gaps leave.
+fn inline_slots<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> Slots {
+    let fixed = spec.icons_width(side, side) + look.gap * spec.gaps() as f32;
+    let text_width = if spec.label.is_empty() { 0.0 } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size().x };
+    slots(spec, side, look.gap, text_width, area, rtl)
+}
+
+/// The box of the face's leading part in `area`, as `paint` places it: the leading icon's square, or the picture's
+/// box, as high as the leading icon and its aspect times as wide. `None` when the face has neither.
+pub(super) fn lead_rect<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> Option<Rect> {
+    let spec = &spec.at(cx.env.get::<GroupLevel>());
+    if spec.arrangement == Arrangement::Stacked {
+        return stacked_in(cx, spec, look, side, area, rtl).lead;
+    }
+    let slot = inline_slots(cx, spec, look, side, area, rtl).lead?;
+    Some(Rect::from_center_size(pos2(slot.center().x, area.center().y), Vec2::new(slot.width(), side)))
 }

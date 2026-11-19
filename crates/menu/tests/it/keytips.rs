@@ -1,15 +1,17 @@
 //! Keytips: a lone Alt tap or F10 shows them, a letter a badge takes is claimed and never types, a second letter
 //! narrows the badges, the badges sit on the controls of the pass's own record and stay off in a text field or under
-//! a modal, badges never start one another, and a host sequence waits, ends on Escape and fires once.
+//! a modal, badges never start one another, a host sequence waits, ends on Escape and fires once, and a real ribbon's
+//! tab ids place the tab badges.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use craft_behavior::IconId;
 use craft_host::target::Os;
 use craft_i18n::Folder;
 use craft_keymap::mnemonic::assign_keytips;
-use craft_menu::{KeytipControl, Keytips, KeytipsOutput};
+use craft_menu::{KeytipControl, Keytips, KeytipsOutput, Ribbon, RibbonGroup, RibbonTab};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, CommandSet, Overlay, Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::{Row, Stack};
@@ -299,6 +301,58 @@ fn badges_sit_on_the_controls_of_this_passes_record_and_stay_off_in_a_text_field
     rig.fixture.settle();
     rig.key(Key::F10);
     assert!(rig.last().output.active, "F10 shows them again once the modal is gone");
+}
+
+/// What one pass of the ribbon rig saw: the keytips' output, the ribbon's record and its tab ids.
+type RibbonPass = (KeytipsOutput, Option<Arc<Recorded>>, Vec<(usize, Id)>);
+
+/// The tab badges of a real ribbon come from the tab ids it reports: Alt shows the Home badge on the Home tab the strip
+/// shows, and its letter reports the Home badge.
+#[trial]
+fn the_tab_badges_sit_on_the_ribbons_tabs_by_the_ids_it_reports() {
+    let passes: Rc<RefCell<Vec<RibbonPass>>> = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&passes);
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home"), RibbonTab::new(1, "Insert")];
+        let ribbon = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
+                Button::command(Trial::Bold).show(ui);
+            });
+        });
+        let letters = [(0_usize, "Home", "H"), (1, "Insert", "N")];
+        let badges: Vec<(Label, &str, Id)> = letters
+            .iter()
+            .filter_map(|(key, name, badge)| ribbon.tab_ids.iter().find(|(tab, _)| tab == key).map(|(_, id)| (Label::from(*name), *badge, *id)))
+            .collect();
+        let places: Vec<Arc<Recorded>> = ribbon.controls.iter().cloned().collect();
+        let output = Keytips::new(true).tabs(&badges).places(&places).show(ui);
+        seen.borrow_mut().push((output, ribbon.controls.clone(), ribbon.tab_ids.clone()));
+    });
+    // The framework arms the menu key from a lone Alt only off macOS; the trial does not depend on its runner.
+    fixture.os(Os::Windows);
+    fixture.settle();
+    fixture.frame(vec![Event::ModifiersChanged(Modifiers::ALT)]);
+    fixture.frame(vec![Event::ModifiersChanged(Modifiers::NONE)]);
+    fixture.settle();
+
+    let (output, recorded, tab_ids) = passes.borrow().last().cloned().unwrap_or_else(|| panic!("the rig ran a pass"));
+    assert!(output.active, "a lone Alt tap shows the keytips");
+    assert_eq!(tab_ids.iter().map(|(tab, _)| *tab).collect::<Vec<_>>(), [0, 1], "the ribbon reports both tabs it shows");
+    let recorded = recorded.unwrap_or_else(|| panic!("the ribbon recorded its region"));
+    let home_id = tab_ids[0].1;
+    let home = recorded
+        .elements
+        .iter()
+        .position(|element| element.id == home_id && element.part.is_none())
+        .and_then(|index| recorded.stop_rect(index))
+        .unwrap_or_else(|| panic!("the Home tab's id is an element of the ribbon's record"));
+    let badge = fixture.texts().iter().find(|text| text.text == "H").map(|text| text.rect).unwrap_or_else(|| panic!("the Home badge shows"));
+    assert!(sits_on(badge, home), "the Home badge {badge:?} sits on the Home tab {home:?}");
+
+    passes.borrow_mut().clear();
+    fixture.key(Key::H, Modifiers::NONE).settle();
+    let chosen: Vec<String> = passes.borrow().iter().filter_map(|(output, _, _)| output.tab.clone()).collect();
+    assert_eq!(chosen, ["H"], "H reports the Home badge, once");
 }
 
 #[trial]

@@ -133,6 +133,7 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
             label,
             role: None,
             lead: self.icon.as_ref(),
+            picture: None,
             trail: (self.arrangement == Arrangement::Stacked).then_some(chevron),
             loading: false,
             mnemonic: None,

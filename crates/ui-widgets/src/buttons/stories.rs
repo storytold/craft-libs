@@ -2,13 +2,15 @@
 
 use super::{Arrangement, Button, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
 use crate::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, Validity};
-use crate::display::{Shade, Text};
+use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row};
+use crate::list::ThumbAspect;
 use crate::menu::MenuItem;
 use crate::primitives::{AppIcons, IconMark, IconSpec, register_app_icons};
 use crate::runtime::commands::EditCommands;
 use crate::runtime::env::{Message, with_env};
 use crate::style::DataColor;
+use crate::testing::pictures::sample_picture;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnWidth, IconId, Mixed, Proposal};
 use craft_theme::{ControlSize, Variant};
@@ -158,6 +160,32 @@ fn button_stacked(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             for label in ["Paste", "Insert page break"] {
                 Button::new(label).icon(IconId::new("copy")).arrangement(Arrangement::Stacked).size(size).id_salt((size_name, label)).show(ui);
             }
+        }
+    });
+    shown.into()
+}
+
+/// Buttons that keep room for their widest text: "1%" and "500%" with room for "500%" are equally wide, beside "1%"
+/// without it.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "Room for the widest text")]
+fn button_room_for(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        for label in ["1%", "500%"] {
+            Button::new(label).room_for("500%").variant(Variant::GHOST).id_salt(label).show(ui);
+        }
+        Button::new("1%").variant(Variant::GHOST).id_salt("no room").show(ui);
+    });
+    shown.into()
+}
+
+/// Stacked buttons with a rendered picture in the icon's place: square and wide.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "Stacked with a picture")]
+fn button_stacked_picture(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Row::new().show(ui, |ui, _| {
+        for (label, key, aspect, pixels) in [("Equation", 3, ThumbAspect::SQUARE, [64, 64]), ("Fraction", 5, ThumbAspect::new(2, 1), [128, 64])] {
+            let image = move || sample_picture(key, pixels);
+            let picture = Picture::new("", key, &image);
+            Button::new(label).picture(aspect, picture).arrangement(Arrangement::Stacked).id_salt(label).show(ui);
         }
     });
     shown.into()

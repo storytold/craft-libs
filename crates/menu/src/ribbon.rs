@@ -14,13 +14,16 @@ use std::sync::Arc;
 use craft_behavior::{CanvasTransform, EditEvent, IconId, Metrics, Mixed, SelectionChange, Sense, keyed};
 use craft_keymap::CommandRef;
 use craft_ui::buttons::IconButton;
+use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
-    Access, Bind, CollectionEvent, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Props as _, Role, Scroll,
-    Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked, scroll_step,
+    Access, Bind, BodyCx, CollectionEvent, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Props as _, Role,
+    Scroll, Show as _, ShowCollection as _, ShowContainer as _, Sizing, Trigger, clicked, scroll_step,
 };
 use craft_ui::layout_components::Row;
+use craft_ui::menu::Menu;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::inspect;
+use craft_ui::runtime::memory::with_session;
 use craft_ui::runtime::motion::{Animate as _, spec};
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::tabs::{StripEnd, Tab, TabKind, TabRole, TabStrip, TabStripOutput};
@@ -36,15 +39,22 @@ craft_ui::words! {
     struct RibbonWords {
         scroll_left: "ribbon.scrollLeft" = "Scroll left";
         scroll_right: "ribbon.scrollRight" = "Scroll right";
+        context_menu: "ribbon.contextMenu" = "Ribbon menu";
     }
 }
 
 /// The ribbon: a [`TabKind::Ribbon`](craft_ui::tabs::TabKind) strip over a scrolling group row,
-/// with minimise and context requests. The strip and the row show inside one inspected region
+/// with minimise and a context menu. The strip and the row show inside one inspected region
 /// (`inspect::record`), whose record ([`RibbonOutput::controls`]) gives each control's rect and
-/// command. On a tab change the group row slides in from the side on which the new tab lies
-/// relative to the old one (mirrored in right-to-left), through one `Tween`; with reduce motion the
-/// new content shows at rest.
+/// command, and [`RibbonOutput::tab_ids`] says which recorded element is which tab. On a tab change
+/// the group row slides in from the side on which the new tab lies relative to the old one
+/// (mirrored in right-to-left), through one `Tween`; with reduce motion the new content shows at
+/// rest.
+///
+/// A context request (a secondary click, the Menu key or Shift+F10) on a tab, a control or the row's
+/// background opens the ribbon's own menu, whose rows the app's [`context_menu`](Ribbon::context_menu)
+/// body shows for that request. The ribbon holds the request while the menu is open, and focus goes back
+/// where it was when the menu closes by key.
 #[must_use = "show the ribbon with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(Ribbon<'static, usize>))]
@@ -54,12 +64,22 @@ pub struct Ribbon<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> {
     shown: Bind<'a, T>,
     trailing: &'a [StripEnd<'a>],
     minimised: Option<Bind<'a, bool>>,
+    /// The body of the context menu: the rows for the request that opened it.
+    context_menu: Option<&'a mut dyn FnMut(&mut Ui, &RibbonMenuRequest, &mut BodyCx<'_>)>,
 }
 
 impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     /// A ribbon named `label` over `tabs`, showing the tab `shown` binds.
     pub fn new(label: impl Into<Label>, tabs: &'a [RibbonTab<T>], shown: Bind<'a, T>) -> Self {
-        Ribbon { label: label.into(), tabs, shown, trailing: &[], minimised: None }
+        Ribbon { label: label.into(), tabs, shown, trailing: &[], minimised: None, context_menu: None }
+    }
+
+    /// The rows of the ribbon's context menu. The ribbon opens its menu on a context request and runs `body` inside
+    /// it on every pass the menu is open, with the request that opened it: the command of the control it was on, or
+    /// none on a tab or the row's background. Without a body a context request opens nothing.
+    pub fn context_menu(mut self, body: &'a mut dyn FnMut(&mut Ui, &RibbonMenuRequest, &mut BodyCx<'_>)) -> Self {
+        self.context_menu = Some(body);
+        self
     }
 
     /// Items at the reading end of the tab strip, after the tabs.
@@ -84,8 +104,9 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     /// Shows the strip and the group row of the shown tab; `body` fills the row for that tab.
     ///
     /// The tab a click picks comes back in [`RibbonOutput::shown`]; the app applies it to its own state. A request
-    /// the pass's input made (a context menu, a double click) is reported in the pass that received that input: the
-    /// framework records it in that pass's real run only, so a second pass of the frame reports none.
+    /// the pass's input made (a context request, a double click) is taken in the pass that received that input: the
+    /// framework records it in that pass's real run only, so a second pass of the frame takes none. The context menu
+    /// it opened stays open on later passes until it closes.
     pub fn show(mut self, ui: &mut Ui, mut body: impl FnMut(&mut RibbonRow<'_>, &T)) -> RibbonOutput<T> {
         let current = self.current();
         let minimised = self.minimised.as_mut().and_then(|bind| bind.reborrow().get()).and_then(|value| value.same().copied()).unwrap_or(false);
@@ -118,8 +139,9 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
         let mut chosen: Option<T> = None;
         let mut toggle = false;
         let mut picked: Option<T> = None;
-        let mut menu: Option<RibbonMenuRequest> = None;
-        let mut strip_rect: Option<Rect> = None;
+        let mut asked: Option<(RibbonMenuRequest, Asker)> = None;
+        let mut strip_response: Option<Response> = None;
+        let mut tab_ids: Vec<(T, Id)> = Vec::new();
         if let Some(strip) = strip {
             for event in &strip.response.events {
                 match event {
@@ -128,18 +150,93 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
                     _ => {}
                 }
             }
-            let response: &Response = &strip.response.response;
-            strip_rect = Some(response.rect);
+            // The strip shows each tab as an item recorded under the row's id; a tab in the overflow menu has no row.
+            tab_ids = strip.response.shown.iter().map(|row| (row.key.clone(), row.id)).collect();
             picked = strip.picked;
-            menu = strip.menu.map(|request| RibbonMenuRequest { command: None, at: request.at, opener: response.id });
+            asked = strip.menu.map(|request| (RibbonMenuRequest { command: None, at: request.at }, Asker::Strip));
+            strip_response = Some(strip.response.response.clone());
         }
         if toggle && let Some(bind) = self.minimised.as_mut() {
             let _ = bind.reborrow().apply(&EditEvent::set(Mixed::Same(minimised), !minimised, Arc::from("ribbon.minimise"), None));
         }
         if let Some(request) = region.as_ref().and_then(|region| row_request(region, controls.as_deref())) {
-            menu = Some(request);
+            asked = Some((request, Asker::Row));
         }
-        RibbonOutput { shown: chosen.or(current), picked, menu, controls, tabs: strip_rect }
+        if let Some(body) = self.context_menu.take() {
+            let openers = Openers { strip: strip_response.as_ref(), row: region.as_ref().map(|region| &region.response) };
+            context_menu(ui, id, asked, openers, body);
+        }
+        let tabs_rect = strip_response.as_ref().map(|response| response.rect);
+        RibbonOutput { shown: chosen.or(current), picked, tab_ids, controls, tabs: tabs_rect }
+    }
+}
+
+/// Which of the ribbon's regions asked for its context menu: the menu hangs from that region's response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Asker {
+    /// The tab strip, for a tab.
+    Strip,
+    /// The group row, for a control or its background.
+    Row,
+}
+
+/// The responses of this pass the ribbon's context menu can hang from; `None` for a region not shown.
+struct Openers<'r> {
+    strip: Option<&'r Response>,
+    row: Option<&'r Response>,
+}
+
+/// The context menu the ribbon holds open: the request that opened it and the region that asked, and the frame the
+/// ribbon last showed in. It is the menu's open-popup state, kept in the ribbon's own slot.
+#[derive(Clone, Default)]
+struct HeldMenu {
+    menu: Option<(RibbonMenuRequest, Asker)>,
+    frame: u64,
+}
+
+/// Shows the ribbon `id`'s context menu while it is open: `asked`, this pass's request, opens it (or moves it to the
+/// new request), and `body` shows its rows. The menu hangs from this pass's response of the region that asked, at the
+/// request's point; the held request goes when the menu closes or that region is not shown.
+fn context_menu(
+    ui: &mut Ui,
+    id: Id,
+    asked: Option<(RibbonMenuRequest, Asker)>,
+    openers: Openers<'_>,
+    body: &mut dyn FnMut(&mut Ui, &RibbonMenuRequest, &mut BodyCx<'_>),
+) {
+    let slot = id.with("context_menu");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let held = with_session(ui.ctx(), slot, |held: &mut HeldMenu| {
+        // A frame without the ribbon closed its menu with it: the request must not open the menu again when the
+        // ribbon shows again.
+        if held.frame.saturating_add(1) < frame {
+            held.menu = None;
+        }
+        if asked.is_some() {
+            held.menu = asked;
+        }
+        held.frame = frame;
+        held.menu.clone()
+    });
+    let Some((request, asker)) = held else { return };
+    let opener = match asker {
+        Asker::Strip => openers.strip,
+        Asker::Row => openers.row,
+    };
+    let mut open = opener.is_some();
+    if let Some(opener) = opener {
+        let words = Env::of(ui).words::<RibbonWords>();
+        let shown = Menu::new(words.context_menu.clone())
+            .opened_by(opener, Trigger::Manual)
+            .anchor(Anchor::Point(request.at))
+            .open(Bind::bound(&mut open))
+            .show(ui, |ui, cx| body(ui, &request, cx));
+        if shown.output.closed.is_some() {
+            open = false;
+        }
+    }
+    if !open {
+        with_session(ui.ctx(), slot, |held: &mut HeldMenu| held.menu = None);
     }
 }
 
@@ -221,8 +318,8 @@ fn row_request(region: &RegionOutput, recorded: Option<&inspect::Recorded>) -> O
             .max_by_key(|(element, _)| element.depth)
     });
     match control {
-        Some((element, rect)) => Some(RibbonMenuRequest { command: element.command.clone(), at: rect.left_bottom(), opener: element.id }),
-        None => region.own.map(|rect| RibbonMenuRequest { command: None, at: rect.left_bottom(), opener: region.response.id }),
+        Some((element, rect)) => Some(RibbonMenuRequest { command: element.command.clone(), at: rect.left_bottom() }),
+        None => region.own.map(|rect| RibbonMenuRequest { command: None, at: rect.left_bottom() }),
     }
 }
 
@@ -261,22 +358,22 @@ pub struct RibbonOutput<T> {
     pub shown: Option<T>,
     /// The tab the user picked this pass.
     pub picked: Option<T>,
-    /// A context menu was asked for.
-    pub menu: Option<RibbonMenuRequest>,
+    /// Each tab shown this pass with the id of its element in [`controls`](RibbonOutput::controls) (a keytip's
+    /// place); a tab in the overflow menu has none.
+    pub tab_ids: Vec<(T, Id)>,
     /// The inspected record of the strip and the row: each control's rect and command.
     pub controls: Option<Arc<inspect::Recorded>>,
     /// The tab row's rect this pass; `None` while no strip shows.
     pub tabs: Option<Rect>,
 }
 
-/// A request for a context menu on a ribbon control or tab.
+/// A request for the ribbon's context menu, on a control, a tab or the row's background.
+#[derive(Clone, Debug)]
 pub struct RibbonMenuRequest {
-    /// The command of the control the request is for, when it has one.
+    /// The command of the control the request is for, when it has one; none on a tab or the row's background.
     pub command: Option<CommandRef>,
     /// Where the menu opens.
     pub at: Pos2,
-    /// The element the menu returns focus to.
-    pub opener: Id,
 }
 
 /// The style of the row's regions: the slide distance and the edge chevrons' width.

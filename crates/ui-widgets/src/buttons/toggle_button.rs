@@ -117,6 +117,7 @@ impl<'a> ToggleButton<'a> {
             label: if self.icon_only { "" } else { label },
             role: self.role,
             lead,
+            picture: None,
             trail: self.trailing_icon.as_ref(),
             loading: false,
             mnemonic: None,

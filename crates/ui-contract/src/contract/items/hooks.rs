@@ -664,7 +664,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         row = self.screen(&layout, rect, at, offset, rtl);
                     }
                 }
-                shown_rows.push(ShownRow::new(key.clone(), row, shown_cells.clone()).with_hover(state.hovered));
+                shown_rows.push(ShownRow::new(key.clone(), item_id, row, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
                     debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
                     let shown = shown_rows.len() - 1;

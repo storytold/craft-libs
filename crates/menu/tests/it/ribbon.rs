@@ -1,4 +1,5 @@
-//! The ribbon: the fit rule, keyed group levels, a collapsed group's popover, the tab-change slide and the run model.
+//! The ribbon: the fit rule, keyed group levels, a collapsed group's popover, the tab-change slide, the run model and
+//! the ribbon's own context menu.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -7,13 +8,14 @@ use std::sync::Arc;
 
 use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
-use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonRow, RibbonTab, plan};
+use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab, plan};
 use craft_ui::buttons::{Arrangement, Button, SplitButton};
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _};
+use craft_ui::menu::MenuItem;
 use craft_ui::runtime::env::{Direction, Env};
 use craft_ui::runtime::inspect::{Element, Recorded};
 use craft_ui::testing::{Fixture, is_measuring, last_pass_measuring_runs, trial};
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Event, Id, Key, Modifiers, PointerButton, Pos2, Ui, vec2};
 
 /// How collapsed a level is: 0 full, 1 compact, 2 collapsed.
 fn rank(level: GroupLevel) -> u8 {
@@ -307,30 +309,55 @@ fn right_click(fixture: &mut Fixture, at: Pos2) {
     fixture.idle(1);
 }
 
-/// A right click on a ribbon control reaches the row's region, which asks for the menu with the control's bound
-/// command and returns focus to it; a right click on a tab asks for the tab's menu, with no command.
+/// The row the ribbon's context menu body shows.
+const MENU_ROW: &str = "Add to Quick Access Toolbar";
+
+/// A right click on a ribbon control opens the ribbon's own menu, whose body gets the control's bound command; the
+/// menu stays open on a pass with no new input, and Escape closes it with focus back on the control. A right click on
+/// a tab opens it with no command.
 #[trial]
-fn a_right_click_on_a_control_asks_for_its_menu_with_its_command() {
+fn a_right_click_on_a_control_opens_the_ribbons_menu_with_its_command() {
     let menus: Rc<RefCell<Vec<Option<CommandRef>>>> = Rc::new(RefCell::new(Vec::new()));
-    let seen = menus.clone();
+    let paste_id = Rc::new(Cell::new(Id::NULL));
+    let (seen, at) = (menus.clone(), paste_id.clone());
     let mut fixture = Fixture::new(move |ui| {
         let tabs = [RibbonTab::new(0_usize, "Home"), RibbonTab::new(1, "Insert")];
-        let out = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+        let mut body = |ui: &mut Ui, request: &RibbonMenuRequest, _: &mut BodyCx<'_>| {
+            seen.borrow_mut().push(request.command.clone());
+            MenuItem::new(MENU_ROW).show(ui);
+        };
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).context_menu(&mut body).show(ui, |row, _| {
             row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
-                Button::new("Paste").command(CommandRef::new("edit.paste")).arrangement(Arrangement::Stacked).show(ui);
+                at.set(Button::new("Paste").command(CommandRef::new("edit.paste")).arrangement(Arrangement::Stacked).show(ui).response.id);
             });
         });
-        if let Some(menu) = out.menu {
-            seen.borrow_mut().push(menu.command);
-        }
     });
     fixture.room(vec2(600.0, 300.0));
     fixture.settle();
     let paste = fixture.by_label("Paste").expect("the control");
+    // A press focuses the control, so the menu has a stop to give the focus back to.
+    fixture.click(&paste);
+    assert_eq!(fixture.focused(), Some(paste_id.get()), "the click focused the control");
     right_click(&mut fixture, paste.rect.center());
-    assert_eq!(menus.borrow().clone(), vec![Some(CommandRef::new("edit.paste"))], "the control's request carries its command");
+    assert!(fixture.by_label(MENU_ROW).is_some(), "the right click opens the ribbon's menu");
+    assert!(
+        menus.borrow().iter().all(|command| *command == Some(CommandRef::new("edit.paste"))) && !menus.borrow().is_empty(),
+        "the body gets the control's command: {:?}",
+        menus.borrow()
+    );
+
+    menus.borrow_mut().clear();
+    fixture.idle(1);
+    assert!(fixture.by_label(MENU_ROW).is_some(), "the menu stays open on a pass with no new input");
+    assert!(!menus.borrow().is_empty(), "its body runs on that pass");
+
+    fixture.key(Key::Escape, Modifiers::NONE).settle();
+    assert!(fixture.by_label(MENU_ROW).is_none(), "Escape closes the menu");
+    assert_eq!(fixture.focused(), Some(paste_id.get()), "focus is back on the control");
+
     menus.borrow_mut().clear();
     let tab = fixture.by_label("Insert").expect("a tab");
     right_click(&mut fixture, tab.rect.center());
-    assert_eq!(menus.borrow().clone(), vec![None], "a tab's request carries no command");
+    assert!(fixture.by_label(MENU_ROW).is_some(), "a right click on a tab opens the menu");
+    assert!(menus.borrow().iter().all(Option::is_none) && !menus.borrow().is_empty(), "a tab's request carries no command: {:?}", menus.borrow());
 }

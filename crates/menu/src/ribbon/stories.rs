@@ -3,13 +3,14 @@
 use craft_behavior::IconId;
 use craft_keymap::CommandRef;
 use craft_ui::buttons::{Arrangement, Button};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Show as _};
+use craft_ui::menu::MenuItem;
 use craft_ui::runtime::env::{Direction, Env, with_env};
 use craft_ui::tabs::StripEnd;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use egui::Ui;
+use egui::{Event, Modifiers, PointerButton, Ui};
 
-use super::{Ribbon, RibbonGroup, RibbonRow, RibbonTab};
+use super::{Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab};
 
 /// The group titles of each tab.
 const GROUPS: [[&str; 4]; 3] =
@@ -37,6 +38,15 @@ struct Setup {
     end: bool,
     /// The ribbon reads right to left.
     rtl: bool,
+    /// The ribbon has a context menu.
+    menu: bool,
+}
+
+/// The rows of the stories' context menu: a request on a control adds it, any other customises.
+fn menu_rows(ui: &mut Ui, request: &RibbonMenuRequest, _: &mut BodyCx<'_>) {
+    let first = if request.command.is_some() { "Add to Quick Access Toolbar" } else { "Customize Quick Access Toolbar" };
+    MenuItem::new(first).show(ui);
+    MenuItem::new("Collapse the Ribbon").show(ui);
 }
 
 /// The groups of `tab`.
@@ -59,12 +69,16 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         tabs.push(RibbonTab::new(3, "Picture").contextual());
     }
     let items = [StripEnd::command("Share", IconId::new("link").into(), CommandRef::new("ribbon.share"))];
+    let mut rows = menu_rows;
     let mut ribbon = Ribbon::new("Ribbon", &tabs, Bind::given(*shown));
     if setup.end {
         ribbon = ribbon.trailing(&items);
     }
     if setup.minimised {
         ribbon = ribbon.minimised(Bind::given(true));
+    }
+    if setup.menu {
+        ribbon = ribbon.context_menu(&mut rows);
     }
     let direction = if setup.rtl { Direction::Rtl } else { Env::of(ui).direction };
     let out = with_env(
@@ -135,6 +149,22 @@ fn ribbon_contextual_tab(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Ribbon<'static, usize>, covers = [], drive = Drive::Never)]
 fn ribbon_end_items_narrow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show(ui, data, Setup { room: Some(SCROLLED_ROOM), end: true, ..Setup::default() })
+}
+
+/// A right click on the first tab, which opens the ribbon's context menu.
+fn open_context_menu(fixture: &mut Fixture) {
+    let Some(tab) = fixture.by_label("Home") else { return };
+    let at = tab.rect.center();
+    let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![Event::PointerMoved(at), button(true)]);
+    fixture.frame(vec![button(false)]);
+    fixture.idle(1);
+}
+
+/// The ribbon's own context menu, open from a right click on a tab.
+#[story(Ribbon<'static, usize>, covers = [Open], drive = Drive::Custom(open_context_menu), title = "Context menu")]
+fn ribbon_context_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show(ui, data, Setup { menu: true, ..Setup::default() })
 }
 
 fn pick_last_tab(fixture: &mut Fixture) {

@@ -189,6 +189,7 @@ impl Segment {
             label: if self.icon.is_some() { "" } else { label },
             role: None,
             lead: self.icon.as_ref(),
+            picture: None,
             trail: None,
             loading: false,
             mnemonic: None,

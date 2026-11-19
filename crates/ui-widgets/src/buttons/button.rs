@@ -1,10 +1,11 @@
-//! `Button`: a push button with an optional leading and trailing icon and a busy state.
+//! `Button`: a push button with an optional leading icon or picture, a trailing icon and a busy state.
 
 use super::face::{self, Arrangement, FaceLook, FaceSpec};
 use crate::contract::{
     Common, Component, Cx, Hover, LeastWidth, MeasureCx, NoValue, Outcome, PaintUi, PartsCx, Pointer as _, Props, Role, Styled as _,
 };
-use crate::display::Spinner;
+use crate::display::{Picture, Spinner};
+use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
@@ -20,6 +21,9 @@ use std::ops::Deref;
 
 /// The part a loading button shows its spinner in.
 const SPINNER: PartKey = PartKey::new("spinner");
+
+/// The part a button with a picture shows it in, in the leading icon's place.
+const PICTURE: PartKey = PartKey::new("picture");
 
 /// The style of a push button.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -124,21 +128,26 @@ impl Outcome for ButtonOutput {
 }
 
 /// A push button. A label wider than the room is cut with an ellipsis and shown whole in a tooltip. While `loading`
-/// a spinner takes the place of the icon (of the label, without an icon) at the same width, the button ignores
-/// activation, keeps focus and reports busy.
+/// a spinner takes the place of the icon or picture (of the label, without either) at the same width, the button
+/// ignores activation, keeps focus and reports busy.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct Button<'a> {
     #[common]
     common: Common,
     /// A leading icon; it mirrors under right-to-left when it has a direction.
-    #[prop(into)]
     icon: Option<IconSpec<'a>>,
+    /// A rendered picture in the leading icon's place, with the width of its box as a multiple of its height.
+    picture: Option<(ThumbAspect, Picture<'a>)>,
     /// An icon at the reading end: the chevron of a button that opens a menu.
     #[prop(into)]
     trailing_icon: Option<IconSpec<'a>>,
     /// Working: a spinner, no activation, AccessKit busy.
     #[prop]
     loading: bool,
+    /// Text the button keeps room for: the face is as wide as the wider of its label and this text, so a button whose
+    /// label changes (a zoom percent) keeps one width. The label is placed as usual.
+    #[prop(into)]
+    room_for: Option<Label>,
     /// The text the face paints in place of the label, which stays the accessible name: the label with its access
     /// letter marked.
     #[prop(into)]
@@ -168,8 +177,10 @@ impl<'a> Button<'a> {
         Button {
             common: Common::new(),
             icon: None,
+            picture: None,
             trailing_icon: None,
             loading: false,
+            room_for: None,
             painted: None,
             tint: None,
             least_width: None,
@@ -184,13 +195,36 @@ impl<'a> Button<'a> {
         <Button as Props>::command(Button::new(Label::Empty), command)
     }
 
+    /// A leading icon; it mirrors under right-to-left when it has a direction. The last of `icon` and `picture`
+    /// called wins.
+    pub fn icon(mut self, icon: impl Into<IconSpec<'a>>) -> Self {
+        self.icon = Some(icon.into());
+        self.picture = None;
+        self
+    }
+
+    /// The button shows `picture` in the leading icon's place, as high as the icon and `aspect` times as wide, as its
+    /// own component in that box (a rendered equation, a stored image). The picture is decoration: press, focus, hit
+    /// area, keytip and accessible name stay the button's. The last of `icon` and `picture` called wins.
+    pub fn picture(mut self, aspect: ThumbAspect, picture: Picture<'a>) -> Self {
+        self.picture = Some((aspect, picture));
+        self.icon = None;
+        self
+    }
+
+    /// The face as it shows `label`: the painted text in its place when set.
     fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        let label = self.painted.as_ref().map_or(label, Label::as_str);
+        self.face_of(self.painted.as_ref().map_or(label, Label::as_str))
+    }
+
+    /// The face showing `label` as it is.
+    fn face_of<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
         FaceSpec {
             arrangement: self.arrangement,
             label,
             role: None,
             lead: self.icon.as_ref(),
+            picture: self.picture.as_ref().map(|(aspect, _)| *aspect),
             trail: self.trailing_icon.as_ref(),
             loading: self.loading,
             mnemonic: None,
@@ -220,22 +254,30 @@ impl Component for Button<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        face::measure(cx, &self.spec(cx.resolved.label))
+        let shown = face::measure(cx, &self.spec(cx.resolved.label));
+        match &self.room_for {
+            Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str()))),
+            None => shown,
+        }
     }
 
     fn sense(&self) -> Sense {
         if self.loading { Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
     }
 
-    /// A loading button declares the slot of its spinner, which paints as the face of that part.
+    /// A loading button declares the slot of its spinner, which paints as the face of that part; any other button with
+    /// a picture declares the picture's box, where `paint` shows it.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
-        if !self.loading {
-            return;
-        }
         let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
-        let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl);
-        if let Some(rect) = spinner {
-            cx.part(SPINNER, rect);
+        if self.loading {
+            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl);
+            if let Some(rect) = spinner {
+                cx.part(SPINNER, rect);
+            }
+        } else if self.picture.is_some()
+            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl)
+        {
+            cx.part(PICTURE, rect);
         }
     }
 
@@ -260,6 +302,10 @@ impl Component for Button<'_> {
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), cx.content_rect);
         if cx.part_if_declared(SPINNER).is_some() {
             ui.face(SPINNER, Spinner::new().size(cx.resolved.size));
+        }
+        if let (Some(part), Some((_, picture))) = (cx.part_if_declared(PICTURE), self.picture.take()) {
+            // The button's name names the picture: shown unlabelled, it is no access node and senses nothing.
+            let _ = ui.child("picture", part.rect, picture.label(Label::Empty));
         }
     }
 

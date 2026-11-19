@@ -1,13 +1,17 @@
-//! Buttons: the stacked arrangement's height, the hover report of a click the pointer stays on, and the compact
-//! group level, under which an inline button drops its label and keeps it as its name and tooltip.
+//! Buttons: the stacked arrangement's height, the hover report of a click the pointer stays on, the compact
+//! group level, under which an inline button drops its label and keeps it as its name and tooltip, the room a button
+//! keeps for its widest text, and a picture in the leading icon's place.
 
-use craft_behavior::IconId;
+use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
 use craft_ui::buttons::{Arrangement, Button, GroupLevel, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Show as _};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _};
+use craft_ui::display::Picture;
+use craft_ui::list::ThumbAspect;
 use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::with_env;
+use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Event, Id, Pos2, Rect, Response, Ui};
@@ -264,4 +268,51 @@ fn an_inline_button_drops_its_label_under_a_compact_group_and_names_itself_by_to
     let settled = shown("Save", save, true).width;
     assert!(passes[1] < passes[0] - 0.5, "the full-size measurement is not reused at the compact level: {passes:?}");
     assert!((passes[1] - settled).abs() < 0.5, "the second pass measures as a settled compact button does: {passes:?} against {settled}");
+}
+
+#[trial]
+fn a_button_with_room_for_its_widest_text_keeps_one_width_whatever_its_label() {
+    let widths = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&widths);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut shown = Vec::new();
+        for label in ["1%", "500%"] {
+            shown.push(Button::new(label).room_for("500%").id_salt(label).show(ui).response.rect.width());
+        }
+        shown.push(Button::new("1%").id_salt("no room").show(ui).response.rect.width());
+        *seen.borrow_mut() = shown;
+    });
+    fixture.settle();
+    let widths = widths.borrow().clone();
+    let (least, most, alone) = (widths[0], widths[1], widths[2]);
+    assert!((least - most).abs() < 0.5, "1% and 500% with room for 500% are equally wide: {least} against {most}");
+    assert!(alone < least - 0.5, "1% without the room is narrower: {alone} against {least}");
+}
+
+#[trial]
+fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node() {
+    let at = Rc::new(Cell::new(Id::NULL));
+    let clicks = Rc::new(Cell::new(0));
+    let (seen, counted) = (Rc::clone(&at), Rc::clone(&clicks));
+    let mut fixture = Fixture::new(move |ui| {
+        let image = || sample_picture(3, [96, 48]);
+        let shown = Button::new("Equation")
+            .picture(ThumbAspect::new(2, 1), Picture::new("Rendered equation", 3, &image))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        seen.set(shown.response.id);
+        if shown.clicked() {
+            counted.set(counted.get() + 1);
+        }
+    });
+    fixture.settle();
+    let button = fixture.node_of(at.get()).expect("the button is in the access tree");
+    let picture = fixture.part_rect(at.get(), PartKey::new("picture")).expect("the button declares its picture's part");
+    assert!(button.rect.contains_rect(picture), "the picture {picture:?} lies inside the button {:?}", button.rect);
+    assert!(picture.width() > picture.height() + 0.5, "the picture's box is its aspect times as wide as high: {picture:?}");
+
+    fixture.click_at(picture.center());
+    assert!(clicks.get() > 0, "a click inside the picture activates the button");
+    assert!(fixture.tree().children_of(button.node).is_empty(), "the picture adds no node under the button");
+    assert!(fixture.by_role(Role::IMAGE).is_empty(), "the picture is not a node of its own");
 }

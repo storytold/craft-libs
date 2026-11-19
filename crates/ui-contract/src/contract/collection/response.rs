@@ -90,6 +90,9 @@ impl<K, E> Default for ItemsOut<K, E> {
 pub struct ShownRow<K> {
     /// The row's key.
     pub key: K,
+    /// The id the row's item component is recorded under: its access node and focus stop, so an app finds which
+    /// recorded element is which row (a keytip on a ribbon tab).
+    pub id: egui::Id,
     /// The row's rect.
     pub rect: egui::Rect,
     /// The rect of each cell, by column key; empty for a collection with no columns.
@@ -101,8 +104,8 @@ pub struct ShownRow<K> {
 }
 
 impl<K> ShownRow<K> {
-    pub(crate) fn new(key: K, rect: egui::Rect, cells: Vec<(ColumnKey, egui::Rect)>) -> Self {
-        ShownRow { key, rect, cells, openers: Vec::new(), hovered: false }
+    pub(crate) fn new(key: K, id: egui::Id, rect: egui::Rect, cells: Vec<(ColumnKey, egui::Rect)>) -> Self {
+        ShownRow { key, id, rect, cells, openers: Vec::new(), hovered: false }
     }
 
     /// The row with its hover fact set.
