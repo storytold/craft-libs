@@ -847,11 +847,8 @@ impl AnnotateTool {
                     // shape without adding one.
                     self.finish_poly(kind, &reading.words);
                 } else {
-                    let next = if pointer.mods.shift {
-                        self.poly.last().map_or(at, |&last| self.select_options.shift_lock.apply(last, at))
-                    } else {
-                        at
-                    };
+                    let next =
+                        if pointer.mods.shift { self.poly.last().map_or(at, |&last| self.select_options.shift_lock.apply(last, at)) } else { at };
                     let repeat = reading.view.doc_len(REPEAT_POINT);
                     if !self.poly.last().is_some_and(|&last| (last - next).hypot() < repeat) {
                         self.poly.push(next);

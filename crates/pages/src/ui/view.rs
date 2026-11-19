@@ -450,8 +450,12 @@ impl<'a> PageView<'a> {
         // The canvas keeps the view inside the shown row, as the pass does, so a wheel share that cannot pan a row at its
         // edge leaves the gesture unmoved and a page turn can follow it.
         navigation.overscroll = false;
-        let canvas =
-            Canvas::new(label.clone()).view(given).navigation(navigation).keys_to_body(true).body_nudges(KeyMoves::NUDGES).document(frame.document(&geo));
+        let canvas = Canvas::new(label.clone())
+            .view(given)
+            .navigation(navigation)
+            .keys_to_body(true)
+            .body_nudges(KeyMoves::NUDGES)
+            .document(frame.document(&geo));
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
@@ -983,11 +987,8 @@ struct KeyMoves {
 
 impl KeyMoves {
     /// The arrow modifiers `of` reads besides the plain arrows: Cmd or Ctrl, alone or with Shift. Alt is the app's.
-    const NUDGES: NudgeMods = NudgeMods::NONE
-        .with(Mods::CMD)
-        .with(Mods::CTRL)
-        .with(Mods { shift: true, ..Mods::CMD })
-        .with(Mods { shift: true, ..Mods::CTRL });
+    const NUDGES: NudgeMods =
+        NudgeMods::NONE.with(Mods::CMD).with(Mods::CTRL).with(Mods { shift: true, ..Mods::CMD }).with(Mods { shift: true, ..Mods::CTRL });
 
     /// Page Up and Down a screen less a key line (a row when not continuous, and with Cmd), Home and End the first
     /// and last page, Up and Down a key line (not continuous, a turn once the row is at its edge that way), Left and

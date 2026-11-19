@@ -412,14 +412,8 @@ fn a_heading_puts_its_count_in_its_access_name() {
     });
     fixture.in_room(Room::Panel).settle();
     let names = row_names(&fixture);
-    assert!(
-        names.iter().any(|name| name.contains("Page 1") && name.contains('3')),
-        "Page 1's heading carries its unfiltered count 3: {names:?}"
-    );
-    assert!(
-        names.iter().any(|name| name.contains("Page 2") && name.contains('1')),
-        "Page 2's heading carries its unfiltered count 1: {names:?}"
-    );
+    assert!(names.iter().any(|name| name.contains("Page 1") && name.contains('3')), "Page 1's heading carries its unfiltered count 3: {names:?}");
+    assert!(names.iter().any(|name| name.contains("Page 2") && name.contains('1')), "Page 2's heading carries its unfiltered count 1: {names:?}");
 
     state.borrow_mut().sort = CommentSort::Type;
     fixture.settle();

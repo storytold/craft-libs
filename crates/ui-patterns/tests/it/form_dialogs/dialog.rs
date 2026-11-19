@@ -813,14 +813,13 @@ fn escape_in_a_text_field_closes_the_form_dialog_typed_or_not() {
             let mut fixture = Fixture::new(move |ui| {
                 let mut is_open = shown.get();
                 let mut text = value.borrow_mut();
-                let out = craft_ui::patterns::form_dialogs::FormDialog::new("Protect", Bind::bound(&mut *text)).opened(Bind::bound(&mut is_open)).show(
-                    ui,
-                    |ui, _, text| {
+                let out = craft_ui::patterns::form_dialogs::FormDialog::new("Protect", Bind::bound(&mut *text))
+                    .opened(Bind::bound(&mut is_open))
+                    .show(ui, |ui, _, text| {
                         let field = craft_ui::text::TextField::new("Type Password", Bind::bound(text));
                         let _ = if masked { field.masked() } else { field }.show(ui);
                         true
-                    },
-                );
+                    });
                 shown.set(is_open);
                 seen.set(seen.get() || out.closed.is_some());
             });

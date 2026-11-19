@@ -691,9 +691,9 @@ fn place_and_erase_drags_paint_their_preview_while_held() {
     let held_shapes = callout_rig.fixture().frame_shapes();
     let held_paths = colored_paths(&held_shapes, stroke_color);
     assert!(
-        held_paths
-            .iter()
-            .any(|p| p.points.len() == 2 && (p.points[0] - on_screen(&callout_rig, from)).length() < 0.5 && (p.points[1] - on_screen(&callout_rig, to)).length() < 0.5),
+        held_paths.iter().any(|p| p.points.len() == 2
+            && (p.points[0] - on_screen(&callout_rig, from)).length() < 0.5
+            && (p.points[1] - on_screen(&callout_rig, to)).length() < 0.5),
         "Callout drag paints its leader preview while held: {held_paths:?}"
     );
     release_drag(&mut callout_rig, to, Modifiers::NONE);
@@ -718,10 +718,7 @@ fn place_and_erase_drags_paint_their_preview_while_held() {
         hold_drag(&mut eraser_rig, Point::new(60.0, 100.0), Point::new(220.0, 100.0), Modifiers::NONE);
         let held_shapes = eraser_rig.fixture().frame_shapes();
         assert_eq!(swath_widths(&held_shapes).len(), 1, "radius {radius}: swath painted at twice the radius while held");
-        let cap_circles = held_shapes
-            .iter()
-            .filter(|shape| matches!(shape, Shape::Circle(c) if (c.radius - radius).abs() < 0.1))
-            .count();
+        let cap_circles = held_shapes.iter().filter(|shape| matches!(shape, Shape::Circle(c) if (c.radius - radius).abs() < 0.1)).count();
         assert!(cap_circles >= 2, "radius {radius}: swath paints round dots along its path: {cap_circles}");
         release_drag(&mut eraser_rig, Point::new(220.0, 100.0), Modifiers::NONE);
         let after_shapes = eraser_rig.fixture().frame_shapes();
