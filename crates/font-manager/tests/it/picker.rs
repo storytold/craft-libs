@@ -313,11 +313,14 @@ fn picker_width(family: &'static str, ribbon: bool) -> f32 {
     fx.by_label("Font family").expect("the picker").rect.width()
 }
 
-/// In a ribbon the font box is a short field, narrower than in a form, and keeps its width whichever family it shows.
+/// In a ribbon the font box is held at the small field length, narrower than in a form, and keeps its width whichever
+/// family it shows.
 #[trial]
 fn a_ribbons_font_box_is_short_and_keeps_its_width() {
     let (ribbon, standard) = (picker_width("Inter", true), picker_width("Inter", false));
     assert!(ribbon < standard - 0.5, "the ribbon's font box is narrower: {ribbon} against {standard}");
+    let length = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.length.field.sm;
+    assert!((ribbon - length).abs() < 0.5, "the ribbon's font box is the small field length {length}: {ribbon}");
     let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
     assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
 }

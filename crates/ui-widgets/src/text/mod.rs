@@ -74,11 +74,21 @@ impl FieldStyle {
         self
     }
 
-    /// The style of a field with no field length to widen it past its shortest width (`size.length.short`): a
-    /// ribbon's font box, which keeps that width whichever family it shows, as a word processor's does.
+    /// The style of a field with no field length to widen it past its shortest width (`size.length.short`): a field
+    /// that keeps that width whatever it shows.
     #[must_use]
     pub fn shortest(mut self) -> FieldStyle {
         self.metrics = self.metrics.ideal_width(self.metrics.min_size.x);
+        self
+    }
+
+    /// The style of a field held at the length `width` (a `size.length` token), whatever value it shows: a ribbon's
+    /// font box at the small field length, as wide as a word processor's whichever family it shows. A row that lacks
+    /// room still narrows it to `size.length.short`.
+    #[must_use]
+    pub fn held_at(mut self, width: f32) -> FieldStyle {
+        let width = if width.is_finite() { width.max(self.metrics.min_size.x) } else { self.metrics.min_size.x };
+        self.metrics = self.metrics.ideal_width(width);
         self
     }
 

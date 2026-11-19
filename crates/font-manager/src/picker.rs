@@ -588,11 +588,11 @@ impl Component for FontPicker<'_> {
     type Style = craft_ui::text::FieldStyle;
     type Output = FontPickerOutput;
 
-    /// A field; in a ribbon (`ControlPlace::Ribbon`) at its shortest width (`size.length.short`), as a ribbon's font
-    /// box is.
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) held at the small field length (`size.length.field.sm`), as a
+    /// ribbon's font box is: wide enough for a family name and its menu arrow, the same width whichever it shows.
     fn style(cx: &craft_ui::style::StyleCx<'_>, _: FontPickerStyleKey) -> craft_ui::text::FieldStyle {
         let field = craft_ui::text::FieldStyle::at(cx);
-        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.shortest() } else { field }
+        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.held_at(cx.tokens.size.length.field.sm) } else { field }
     }
 
     /// The wheel steps the family through the list.

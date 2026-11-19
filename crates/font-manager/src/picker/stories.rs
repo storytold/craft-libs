@@ -88,6 +88,20 @@ fn font_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show_picker(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()))
 }
 
+/// The plain font box in a ribbon group's place (`ControlPlace::Ribbon`): held at the small field length whichever
+/// family it shows, as a word processor's ribbon font box is.
+#[story(FontPicker<'static>, covers = [], title = "In a ribbon")]
+fn font_picker_in_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let extras = Extras { kind: FontPickerKind::Plain, ..Extras::default() };
+    craft_ui::runtime::env::with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(craft_ui::buttons::ControlPlace::Ribbon);
+        },
+        |ui| show_with(ui, data, demo("Ubuntu", FontPickerSettings::default(), FontFilters::default()), &catalog(), &extras),
+    )
+}
+
 /// Focuses the field and types the start of a name, which opens the list on the matches.
 fn type_query(fixture: &mut Fixture) {
     fixture.key(Key::Tab, Modifiers::NONE);
