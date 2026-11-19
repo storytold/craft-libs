@@ -17,7 +17,15 @@ impl Parse for FirstType {
 }
 
 fn attrs_cfg(attrs: &[Attribute]) -> Vec<Attribute> {
-    attrs.iter().filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr")).cloned().collect()
+    attrs
+        .iter()
+        .filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
+        .cloned()
+        .map(|mut attr| {
+            attr.style = syn::AttrStyle::Outer;
+            attr
+        })
+        .collect()
 }
 
 fn derives(attrs: &[Attribute], wanted: &str) -> bool {
@@ -129,6 +137,7 @@ fn walk(
                         .map_err(|e| syn::Error::new_spanned(module, format!("cannot read {}: {e}", file.display())))?;
                     let parsed =
                         syn::parse_file(&text).map_err(|e| syn::Error::new_spanned(module, format!("cannot parse {}: {e}", file.display())))?;
+                    cfg.extend(attrs_cfg(&parsed.attrs));
                     let child_dir = if file.file_name().is_some_and(|n| n == "mod.rs" || n == "main.rs" || n == "lib.rs") {
                         file.parent().unwrap_or(dir).to_path_buf()
                     } else {
@@ -248,6 +257,8 @@ mod tests {
             assert!(generated.contains("__registry_story_view"));
             assert!(generated.contains("__registry_trial_changes"));
             assert!(generated.contains("__registry_trial_path_trial"));
+            assert!(generated.contains("cfg (not (target_arch = \"wasm32\"))"));
+            assert!(!generated.contains("# !"));
         }
     }
 }
