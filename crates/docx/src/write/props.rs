@@ -1,12 +1,46 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, Kashida, LineSpacing, ParaProps, RowProps,
+    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, ThemeFont, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
 use crate::xml::W;
+
+thread_local! {
+    /// The theme's (major, minor) Latin fonts of the document being saved, for [`latin_slot`].
+    static THEME_FONTS: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Holds the document's theme fonts while a package is written; restores the previous ones on
+/// drop (a nested write, as for an embedded document, gets its own).
+pub(crate) struct ThemeFontsGuard(Option<(String, String)>);
+
+impl ThemeFontsGuard {
+    pub(crate) fn set(major: &str, minor: &str) -> ThemeFontsGuard {
+        ThemeFontsGuard(THEME_FONTS.with(|t| t.replace(Some((major.to_string(), minor.to_string())))))
+    }
+}
+
+impl Drop for ThemeFontsGuard {
+    fn drop(&mut self) {
+        let prev = self.0.take();
+        THEME_FONTS.with(|t| *t.borrow_mut() = prev);
+    }
+}
+
+/// A Latin theme slot worth writing: it names `font` in the theme being saved. Otherwise (the
+/// font was changed, or the theme was, or no theme is known) it is left out, so Word shows
+/// `font` as WordCraft does.
+fn latin_slot(slot: Option<ThemeFont>, font: Option<&String>) -> Option<&'static str> {
+    let (slot, font) = (slot?, font?);
+    let names = |(major, minor): &(String, String)| {
+        let named = if slot.is_major() { major } else { minor };
+        !named.is_empty() && named.eq_ignore_ascii_case(font)
+    };
+    THEME_FONTS.with(|t| t.borrow().as_ref().is_some_and(names)).then_some(slot.as_str())
+}
 
 fn toggle(w: &mut W, name: &str, v: Option<bool>) {
     match v {
@@ -21,12 +55,8 @@ fn round(v: f32) -> i64 {
     v.round().clamp(-1e9, 1e9) as i64
 }
 
-/// `w:rPr` content (without the wrapper). Link and revision marks are not run properties.
-pub fn rpr_inner(w: &mut W, c: &CharProps) {
-    if let Some(s) = &c.style {
-        w.val("w:rStyle", s);
-    }
-    // Emit only explicit properties so absent values keep inheriting from the style chain.
+/// `w:rFonts`: the named fonts, then the theme slots still worth writing.
+fn rfonts(w: &mut W, c: &CharProps) {
     let mut fonts: Vec<(&str, &str)> = Vec::new();
     if let Some(f) = &c.font {
         fonts.extend([("w:ascii", f.as_str()), ("w:hAnsi", f.as_str())]);
@@ -37,9 +67,30 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(cs) = &c.font_cs {
         fonts.push(("w:cs", cs));
     }
+    if let Some(t) = latin_slot(c.font_ascii_theme, c.font.as_ref()) {
+        fonts.push(("w:asciiTheme", t));
+    }
+    if let Some(t) = latin_slot(c.font_hansi_theme, c.font.as_ref()) {
+        fonts.push(("w:hAnsiTheme", t));
+    }
+    if let Some(t) = c.font_ea_theme {
+        fonts.push(("w:eastAsiaTheme", t.as_str()));
+    }
+    if let Some(t) = c.font_cs_theme {
+        fonts.push(("w:cstheme", t.as_str()));
+    }
     if !fonts.is_empty() {
         w.empty("w:rFonts", &fonts);
     }
+}
+
+/// `w:rPr` content (without the wrapper). Link and revision marks are not run properties.
+pub fn rpr_inner(w: &mut W, c: &CharProps) {
+    if let Some(s) = &c.style {
+        w.val("w:rStyle", s);
+    }
+    // Emit only explicit properties so absent values keep inheriting from the style chain.
+    rfonts(w, c);
     toggle(w, "w:b", c.bold);
     toggle(w, "w:bCs", c.bold_cs);
     toggle(w, "w:i", c.italic);
@@ -201,6 +252,11 @@ pub fn align_val(a: Align) -> &'static str {
     }
 }
 
+/// `w:jc` for a paragraph, including the kashida length of a justified one.
+pub fn jc_val(a: Align, kashida: Option<Kashida>) -> &'static str {
+    if a == Align::Justify { kashida.unwrap_or(Kashida::None).jc() } else { align_val(a) }
+}
+
 /// A tab stop's or positional tab's `w:leader` value.
 pub fn tab_leader(l: TabLeader) -> &'static str {
     match l {
@@ -261,10 +317,12 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:pageBreakBefore", p.page_break_before);
     write_frame(w, p, framed);
     toggle(w, "w:widowControl", p.widow_control);
-    if let Some(nr) = p.numbering {
+    if p.numbering.is_some() || num_change.is_some() {
         w.open("w:numPr", &[]);
-        w.val("w:ilvl", &n(nr.level.min(8) as i64));
-        w.val("w:numId", &n(nr.num as i64));
+        if let Some(nr) = p.numbering {
+            w.val("w:ilvl", &n(nr.level.min(8) as i64));
+            w.val("w:numId", &n(nr.num as i64));
+        }
         if let Some(a) = num_change {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:numberingChange", &refs);
@@ -285,7 +343,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
     toggle(w, "w:mirrorIndents", p.mirror_indents);
     if let Some(a) = p.align {
-        w.val("w:jc", align_val(a));
+        w.val("w:jc", jc_val(a, p.kashida));
     }
     if let Some(direction) = p.text_direction {
         w.val("w:textDirection", direction.ooxml());

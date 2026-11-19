@@ -1,6 +1,7 @@
 //! `hook` contributions. Every test drives a real `craft_command::Hooks` with real wasmi guests from
 //! `tests/fixtures/{gates,observer}.wat`. Each rule has a case that fails when the rule is removed.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

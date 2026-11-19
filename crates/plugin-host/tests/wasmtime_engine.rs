@@ -1,6 +1,7 @@
 //! wasmtime engine tests that the cross-engine file cannot hold: the epoch timer, the injected
 //! clock, instance lifetime against the timer, and the pooling allocator limit.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![cfg(all(feature = "wasmi", feature = "wasmtime", not(target_arch = "wasm32")))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

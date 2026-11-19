@@ -12,10 +12,15 @@
 
 mod sequence;
 mod smf;
+/// Source-timed SMF compatibility model, including tolerant and SMPTE reading.
+pub mod source_timed;
 pub mod sync;
 
 pub use sequence::{CtrlEvent, CtrlKind, Note, Sequence};
-pub use smf::{LenientRead, MAX_EVENTS, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, read_smf, read_smf_lenient, write_smf};
+pub use smf::{
+    LenientRead, MAX_EVENTS, MAX_TRACKS, MAX_WARNINGS, Smf, SmfTrack, TimedEvent, encode_meta_event, read_smf, read_smf_lenient, write_smf,
+    write_timed_smf,
+};
 
 /// Ticks per quarter note used throughout the model.
 pub const PPQ: u32 = 960;

@@ -1,6 +1,7 @@
 //! `link.call` and `link.apps` against real `craft_ipc::server::Server` peers in a temporary
 //! runtime directory, reached through `LinkClient` by a wasmi guest (`tests/fixtures/relay.wat`).
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

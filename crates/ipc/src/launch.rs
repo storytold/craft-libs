@@ -396,7 +396,7 @@ mod tests {
         fn new(label: &str) -> Self {
             let mut bytes = [0u8; 4];
             getrandom::getrandom(&mut bytes).unwrap();
-            let path = PathBuf::from(format!("/tmp/cl-{label}-{}", crate::auth::encode_hex(&bytes)));
+            let path = std::env::temp_dir().join(format!("cl-{label}-{}", crate::auth::encode_hex(&bytes)));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             Self { path }
@@ -471,9 +471,13 @@ mod tests {
         assert!(matches!(super::resolve_with("effectcraft", &by_env, None, None, &[]), Err(LinkError::Refused { .. })));
         assert!(super::resolve_with("effectcraft", &env_map(&[]), None, None, std::slice::from_ref(&bin_dir)).is_err());
         let data = root.path().join("xdg");
-        write_manifest(&data.join("artcraft-launcher").join("installed.json"), "effectcraft", &bin);
-        let by_manifest = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap())]);
-        assert!(super::resolve_with("effectcraft", &by_manifest, None, None, &[]).is_err());
+        let home = root.path().join("home");
+        write_manifest(&installed_manifest(&home, Some(&data)), "effectcraft", &bin);
+        let by_manifest = data_env(&data);
+        chmod(&bin_dir, 0o755);
+        assert_eq!(super::resolve_with("effectcraft", &by_manifest, Some(&home), None, &[]).unwrap(), bin);
+        chmod(&bin_dir, 0o777);
+        assert!(super::resolve_with("effectcraft", &by_manifest, Some(&home), None, &[]).is_err());
         chmod(&bin_dir, 0o755);
         chmod(&bin, 0o666);
         assert!(super::resolve_with("effectcraft", &env, None, None, &[]).is_err(), "not executable and world-writable");
@@ -489,6 +493,22 @@ mod tests {
 
     fn env_map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(key, value)| ((*key).to_string(), (*value).to_string())).collect()
+    }
+
+    // Independent fixture paths for the launcher's documented native install record.
+    fn installed_manifest(home: &Path, xdg: Option<&Path>) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/ArtCraft Launcher/installed.json")
+        } else if cfg!(windows) {
+            xdg.unwrap_or(home).join("ArtCraft Launcher/installed.json")
+        } else {
+            xdg.map_or_else(|| home.join(".local/share"), Path::to_path_buf).join("artcraft-launcher/installed.json")
+        }
+    }
+
+    fn data_env(data: &Path) -> BTreeMap<String, String> {
+        let key = if cfg!(windows) { "LOCALAPPDATA" } else { "XDG_DATA_HOME" };
+        env_map(&[(key, data.to_str().unwrap())])
     }
 
     fn write_manifest(path: &Path, app: &str, bin: &Path) {
@@ -557,28 +577,37 @@ mod tests {
         let data = root.path().join("xdg");
         let bin = root.path().join("from-manifest");
         touch(&bin);
-        let manifest = data.join("artcraft-launcher").join("installed.json");
+        let home = root.path().join("home");
+        let manifest = installed_manifest(&home, Some(&data));
         write_manifest(&manifest, "effectcraft", &bin);
-        let env = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap())]);
-        let got = super::resolve_with("effectcraft", &env, Some(&root.path().join("empty-home")), None, &[]).unwrap();
+        let env = data_env(&data);
+        let got = super::resolve_with("effectcraft", &env, Some(&home), None, &[]).unwrap();
         assert_eq!(got, bin);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn relative_xdg_data_home_uses_home() {
         let root = Tmp::new("rel");
         let home = root.path().join("home");
         let bin = root.path().join("home-bin");
         touch(&bin);
-        let manifest = home.join(".local").join("share").join("artcraft-launcher").join("installed.json");
+        let manifest = installed_manifest(&home, None);
         write_manifest(&manifest, "effectcraft", &bin);
         let env = env_map(&[("XDG_DATA_HOME", "relative/data")]);
         let got = super::resolve_with("effectcraft", &env, Some(&home), None, &[]).unwrap();
         assert_eq!(got, bin);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn portable_manifest_wins_over_xdg() {
+    fn relative_localappdata_is_not_used() {
+        let env = env_map(&[("LOCALAPPDATA", "relative/data")]);
+        assert!(matches!(super::resolve_with("effectcraft", &env, None, None, &[]), Err(LinkError::NotInstalled { .. })));
+    }
+
+    #[test]
+    fn portable_manifest_wins_over_native_data_directory() {
         let root = Tmp::new("port");
         let exe = root.path().join("exe-dir");
         std::fs::create_dir_all(&exe).unwrap();
@@ -589,9 +618,10 @@ mod tests {
         let xdg = root.path().join("xdg");
         let decoy = root.path().join("decoy-bin");
         touch(&decoy);
-        write_manifest(&xdg.join("artcraft-launcher").join("installed.json"), "effectcraft", &decoy);
-        let env = env_map(&[("XDG_DATA_HOME", xdg.to_str().unwrap())]);
-        let got = super::resolve_with("effectcraft", &env, None, Some(&exe), &[]).unwrap();
+        let home = root.path().join("home");
+        write_manifest(&installed_manifest(&home, Some(&xdg)), "effectcraft", &decoy);
+        let env = data_env(&xdg);
+        let got = super::resolve_with("effectcraft", &env, Some(&home), Some(&exe), &[]).unwrap();
         assert_eq!(got, bin);
     }
 
@@ -601,12 +631,14 @@ mod tests {
         let data = root.path().join("xdg");
         let folder = root.path().join("not-a-file");
         std::fs::create_dir_all(&folder).unwrap();
-        write_manifest(&data.join("artcraft-launcher").join("installed.json"), "effectcraft", &folder);
+        let home = root.path().join("home");
+        write_manifest(&installed_manifest(&home, Some(&data)), "effectcraft", &folder);
         let bin_dir = root.path().join("bin");
         let bin = bin_dir.join("effectcraft");
         touch(&bin);
-        let env = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap()), ("PATH", bin_dir.to_str().unwrap())]);
-        let got = super::resolve_with("effectcraft", &env, None, None, &[]).unwrap();
+        let mut env = data_env(&data);
+        env.insert("PATH".into(), bin_dir.to_str().unwrap().into());
+        let got = super::resolve_with("effectcraft", &env, Some(&home), None, &[]).unwrap();
         assert_eq!(got, bin);
     }
 
@@ -697,7 +729,7 @@ mod tests {
         let _spawning = crate::SPAWN_GUARD.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut bytes = [0u8; 4];
         getrandom::getrandom(&mut bytes).unwrap();
-        let path = PathBuf::from(format!("/tmp/cl-launch-{}", crate::auth::encode_hex(&bytes)));
+        let path = std::env::temp_dir().join(format!("cl-launch-{}", crate::auth::encode_hex(&bytes)));
         let _ = std::fs::remove_dir_all(&path);
         let runtime = RuntimeDir::at(&path).unwrap();
         let _cleanup = LaunchCleanup { dir: path.clone() };

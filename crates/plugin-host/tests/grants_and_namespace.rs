@@ -2,6 +2,7 @@
 //! with the same id must not keep the old grants when its publisher or risk changes, and a plugin
 //! may not take a host command id. Each test asserts the safe behavior and fails if the rule is removed.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

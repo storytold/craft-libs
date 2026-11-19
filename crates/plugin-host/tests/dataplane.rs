@@ -2,6 +2,7 @@
 //! craft-abi 1 module. The module is `tests/fixtures/pixels.wat`, a real plugin; every test runs it
 //! on wasmi through a real `PluginManager`. Each rule has a case that fails when the rule is removed.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
