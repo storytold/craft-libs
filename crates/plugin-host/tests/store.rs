@@ -1,5 +1,6 @@
 //! The same suite runs on both stores, so they cannot drift apart.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;

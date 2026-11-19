@@ -334,13 +334,14 @@ fn a_window_keeps_its_id_and_os_window_when_its_first_panel_moves_out() {
 #[test]
 fn a_moved_window_reports_its_place_and_monitor() {
     let mut d = driver(layout(true));
-    d.monitors = vec![Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0 }];
+    let left = Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0, work_area: Some([0.0, 0.0, 1920.0, 1040.0]) };
+    d.monitors = vec![left.clone()];
     let viewport = d.viewport(window(&d, 5).id);
     d.host().windows.get_mut(&viewport).unwrap().rect = Rect::from_min_size(pos2(700.0, 200.0), vec2(240.0, 300.0));
     let out = d.step(vec![]);
     assert!(out.actions.contains(&Action::SetNative { panel: 5, rect: Some([700.0, 200.0, 240.0, 300.0]) }), "{:?}", out.actions);
     assert_eq!(window(&d, 5).rect, [600.0, 150.0, 240.0, 300.0], "the in-window rect follows");
-    assert_eq!(window(&d, 5).monitor.as_ref().and_then(|m| m.name.as_deref()), Some("left"));
+    assert_eq!(window(&d, 5).monitor, Some(left));
 
     // Without a monitor list, the size egui reports.
     let mut d = driver(layout(true));
@@ -351,8 +352,8 @@ fn a_moved_window_reports_its_place_and_monitor() {
 
 #[test]
 fn a_restored_window_opens_on_a_connected_monitor() {
-    let left = Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0 };
-    let right = Monitor { name: Some("right".into()), rect: [1920.0, 0.0, 2560.0, 1440.0], scale: 2.0 };
+    let left = Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0, work_area: None };
+    let right = Monitor { name: Some("right".into()), rect: [1920.0, 0.0, 2560.0, 1440.0], scale: 2.0, work_area: None };
     let mut saved = layout(true);
     saved.floating[0].native = Some([3000.0, 100.0, 240.0, 300.0]);
     saved.floating[0].monitor = Some(right.clone());
@@ -366,12 +367,23 @@ fn a_restored_window_opens_on_a_connected_monitor() {
 
     // Unplugged: the main window's monitor, at the same offset.
     let mut d = DockDriver::new(Layout::default(), Content::default()).with_native_host(ORIGIN);
-    d.monitors = vec![left];
-    d.layout = saved;
+    d.monitors = vec![left.clone()];
+    d.layout = saved.clone();
     d.settle();
     assert_eq!(os_window(&d, 5).unwrap().0.min, pos2(1080.0, 100.0));
     assert_eq!(window(&d, 5).native, Some([1080.0, 100.0, 240.0, 300.0]));
     assert_eq!(window(&d, 5).monitor.as_ref().and_then(|m| m.name.as_deref()), Some("left"));
+
+    // Its bar under the taskbar: up into the monitor's work area.
+    let left = Monitor { work_area: Some([0.0, 0.0, 1920.0, 1040.0]), ..left };
+    saved.floating[0].native = Some([500.0, 1050.0, 240.0, 300.0]);
+    saved.floating[0].monitor = Some(left.clone());
+    let mut d = DockDriver::new(Layout::default(), Content::default()).with_native_host(ORIGIN);
+    d.monitors = vec![left];
+    d.layout = saved;
+    d.settle();
+    assert_eq!(os_window(&d, 5).unwrap().0.min, pos2(500.0, 740.0));
+    assert_eq!(window(&d, 5).native, Some([500.0, 740.0, 240.0, 300.0]));
 }
 
 /// The last `InnerSize`, `MinInnerSize` and `MaxInnerSize` sent to `viewport`.
@@ -578,6 +590,50 @@ fn viewer_windows_stay_shown_at_normal_level() {
 }
 
 #[test]
+fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
+    // Both kinds set `taskbar` to false, which egui applies on Windows. Under X11 on Linux a
+    // palette is a utility window and a viewer a normal one.
+    use egui::X11WindowType::{Normal, Utility};
+    let palette = if cfg!(target_os = "linux") { Utility } else { Normal };
+    let mut layout = layout(false);
+    layout.floating = vec![Floating::single(vec![5], 0, [300.0, 80.0, 240.0, 300.0]), Floating::single(vec![6], 0, [560.0, 80.0, 240.0, 300.0])];
+    let mut d = driver(layout);
+    d.content.normal = vec![5];
+    d.step(vec![]);
+    let types = |d: &DockDriver<u32, Content>| {
+        [5, 6].map(|panel| {
+            let window = &d.host().windows[&d.viewport(window(d, panel).id)];
+            (window.taskbar, window.window_type)
+        })
+    };
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
+    // The palette becomes a viewer. A new type recreates the window, which opens where it is.
+    let moved = [700.0, 120.0, 240.0, 300.0];
+    d.layout.floating[1].native = Some(moved);
+    d.step(vec![]);
+    d.content.normal = vec![5, 6];
+    d.step(vec![]);
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(Normal))]);
+    if cfg!(target_os = "linux") {
+        let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
+        assert_eq!(position, Some(pos2(moved[0], moved[1])));
+    }
+    // The window system moves the window, and it becomes a palette again before the window
+    // reports its new place: the new window opens where the window system put it.
+    d.settle();
+    let viewport = d.viewport(window(&d, 6).id);
+    let os_moved = Rect::from_min_size(pos2(820.0, 160.0), vec2(240.0, 300.0));
+    d.host().windows.get_mut(&viewport).unwrap().rect = os_moved;
+    d.content.normal = vec![5];
+    d.step(vec![]);
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
+    if cfg!(target_os = "linux") {
+        let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
+        assert_eq!(position, Some(os_moved.min));
+    }
+}
+
+#[test]
 fn the_app_comes_forward_with_its_viewers_when_it_is_activated() {
     use egui::{ViewportId, WindowLevel};
     let start = || {
@@ -678,7 +734,8 @@ fn unused_keys_in_a_native_window_reach_the_app() {
 #[test]
 fn a_native_window_saves_its_id_place_and_monitor() {
     let mut layout = layout(true);
-    let monitor = Monitor { name: Some("DP-1".into()), rect: [-1920.0, 0.0, 1920.0, 1080.0], scale: 1.5 };
+    let monitor =
+        Monitor { name: Some("DP-1".into()), rect: [-1920.0, 0.0, 1920.0, 1080.0], scale: 1.5, work_area: Some([-1920.0, 25.0, 1920.0, 1055.0]) };
     layout.floating[0].native = Some([-1500.0, 100.0, 240.0, 300.0]);
     layout.floating[0].monitor = Some(monitor);
     layout.floating.push(Floating {
@@ -690,6 +747,10 @@ fn a_native_window_saves_its_id_place_and_monitor() {
     let back: Layout<u32> = serde_json::from_str(&json).unwrap();
     assert_eq!(back, layout);
     assert_eq!(back.floating.iter().map(|w| w.id).collect::<Vec<_>>(), layout.floating.iter().map(|w| w.id).collect::<Vec<_>>());
+    // A monitor saved without a work area reads as one without, and writes none.
+    let old: Monitor = serde_json::from_str(r#"{"name": "DP-1", "rect": [0, 0, 1920, 1080], "scale": 1}"#).unwrap();
+    assert_eq!(old.work_area, None);
+    assert!(!serde_json::to_string(&old).unwrap().contains("work_area"));
 
     // Old layouts get fresh ids, and copies of one id unique ones.
     let old = r#"{"root": null, "floating": [{"panels": [5], "active": 0, "rect": [0, 0, 100, 100]}, {"panels": [6], "active": 0, "rect": [0, 0, 100, 100]}]}"#;
@@ -1200,7 +1261,7 @@ fn a_changed_layout_moves_the_os_window() {
     assert_eq!(window(&d, 5).native, Some([700.0, 200.0, 260.0, 320.0]));
 
     // Off every monitor: onto the nearest, and the layout follows.
-    d.monitors = vec![Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0 }];
+    d.monitors = vec![Monitor { name: Some("left".into()), rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0, work_area: None }];
     d.layout.floating[0].native = Some([5000.0, 200.0, 260.0, 320.0]);
     d.settle();
     assert_eq!(d.host().windows[&viewport].rect.min, pos2(1660.0, 200.0));

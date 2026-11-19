@@ -25,7 +25,7 @@ pub(crate) use objects::Held;
 pub(crate) use reader::find;
 #[cfg(test)]
 use reader::rfind;
-use state::{ObjStm, Slot, Unreadable};
+use state::{ObjStm, ObjectNotes, Slot};
 pub(crate) use state::{ObjectReader, held_bytes};
 pub use state::{ReadState, SourceIdentity};
 #[cfg(test)]
@@ -51,14 +51,16 @@ pub struct Document {
     repair_log: Arc<Vec<String>>,
     /// See [`Self::rebuilt_unlinked_update`].
     unlinked_update: bool,
+    /// See [`Self::rebuilt_with_unsettled_generations`].
+    unsettled_generations: bool,
     /// What loading each file object gave, a failure as well: a damaged object is otherwise
     /// loaded again on every read, and a member of an object stream that can't be decoded
     /// decodes the stream again (`Document::load`).
     cache: Arc<Mutex<state::ObjectCache>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
-    /// See [`Self::unreadable_objects`]. Shared by clones, like the caches: it describes the
-    /// source, and is reset wherever they are.
-    unreadable: Arc<Mutex<Unreadable>>,
+    /// See [`Self::unreadable_objects`] and [`Self::repaired_objects`]. Shared by clones, like
+    /// the caches: it describes the source, and is reset wherever they are.
+    object_notes: Arc<Mutex<ObjectNotes>>,
     /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
     /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
     jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,

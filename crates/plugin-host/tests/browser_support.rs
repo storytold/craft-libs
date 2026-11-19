@@ -2,6 +2,7 @@
 //! `memory_patch` lowers a module's declared memory maximum. `js_fault` maps a browser exception to
 //! a trap. The browser run of the same behavior is in `tests/web.rs`.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![cfg(feature = "wasmi")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

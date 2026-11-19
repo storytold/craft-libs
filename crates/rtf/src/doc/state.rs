@@ -42,6 +42,11 @@ pub(super) enum Dest {
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+    /// A shape's description (`\shpinst`), and the name (`\sn`) and value (`\sv`) of one of
+    /// its properties.
+    ShpInst,
+    ShpSn,
+    ShpSv,
 }
 
 /// A footnote, endnote or comment group being read into an output of its own.
@@ -148,6 +153,8 @@ pub(super) struct St {
     pub(super) hidden: bool,
     // Paragraph properties.
     pub(super) align: Option<Align>,
+    /// `\rtlpar`: the paragraph reads right to left.
+    pub(super) rtldir: Option<bool>,
     pub(super) style: i32,
     pub(super) intbl: bool,
     pub(super) ls: Option<i32>,
@@ -155,6 +162,8 @@ pub(super) struct St {
     pub(super) outline: Option<u8>,
     pub(super) pagebb: bool,
     pub(super) field: Option<usize>,
+    /// Inside a group of shapes (`\shpgrp`), whose members are not read as shapes of their own.
+    pub(super) in_shpgrp: bool,
     /// The code page of the current font's charset (`\fcharset`), when it names one.
     pub(super) cp: Option<u16>,
     /// Space before/after (`\sb`, `\sa`), line spacing (`\sl`, `\slmult`) and indents
@@ -185,6 +194,7 @@ impl Default for St {
             uc: 1,
             hidden: false,
             align: None,
+            rtldir: None,
             style: 0,
             intbl: false,
             ls: None,
@@ -192,6 +202,7 @@ impl Default for St {
             outline: None,
             pagebb: false,
             field: None,
+            in_shpgrp: false,
             cp: None,
             borders: Default::default(),
             border_side: None,

@@ -8,6 +8,7 @@
 //!
 //! Not covered here: the browser engines, float edge cases (NaN payloads, `nearest` ties), simd128 kernels.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![cfg(all(feature = "wasmi", feature = "wasmtime", not(target_arch = "wasm32")))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

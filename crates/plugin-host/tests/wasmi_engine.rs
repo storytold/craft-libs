@@ -2,6 +2,7 @@
 //! when the guarded behavior is removed: the deadline, memory, stack, cancel, and pointer tests
 //! each have a control in the same file that shows the budget is the cause.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

@@ -3,6 +3,7 @@
 //! contributions run through the data plane entry (`Generation::process_image`, `run_objects`). The
 //! modules are generated: the stand-ins in `common/v1.rs` and the gain plugin in `common/gain.rs`.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

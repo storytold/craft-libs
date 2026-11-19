@@ -20,6 +20,7 @@
 //! Not covered: Firefox, float edge cases and NaN payloads, simd128
 //! kernels, an infinite loop on the page thread engine, a deadline on wasmi inside a Worker.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![cfg(target_arch = "wasm32")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

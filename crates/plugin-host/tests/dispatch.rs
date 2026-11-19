@@ -2,6 +2,7 @@
 //! the denial tests check that the service was never reached, the retry test counts executions,
 //! and the rate limit test shows the refill.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
