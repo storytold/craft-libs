@@ -145,6 +145,117 @@ fn pages_scrolled_out_of_reach_give_their_pictures_back() {
     assert!(held > 0 && held <= drawn + 2, "{held} pictures held with no reach, {drawn} pages drawn");
 }
 
+/// What a pass of the zoom rig showed: the area the pages show in, the pages drawn and the screen points per page point.
+#[derive(Clone)]
+struct ZoomSeen {
+    area: egui::Rect,
+    pages: Vec<(usize, egui::Rect)>,
+    scale: f64,
+}
+
+impl ZoomSeen {
+    /// Pages across: those level with the first page drawn.
+    fn columns(&self) -> usize {
+        self.pages.first().map_or(0, |(_, first)| self.pages.iter().filter(|(_, r)| (r.top() - first.top()).abs() < 1.0).count())
+    }
+
+    fn rect(&self, page: usize) -> Option<egui::Rect> {
+        self.pages.iter().find(|(p, _)| *p == page).map(|(_, r)| *r)
+    }
+}
+
+/// WordCraft's Ctrl + wheel zoom out (#1340): the point under the pointer stays where it is in every frame, the
+/// pages reflow into rows in the frame of the notch that makes room for them, and a frame without input moves
+/// nothing. Pointer in the middle of the area inside the rulers, many pages down, a notch every 8 frames; the pages
+/// pass through a gutter between columns under the pointer on the way.
+#[trial]
+fn a_ctrl_wheel_zoom_keeps_the_point_under_the_pointer_and_settles_in_its_own_frame() {
+    let state = Rc::new(RefCell::new(state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 1.0;
+        s.display = PageDisplay::Columns;
+    })));
+    let seen = Rc::new(RefCell::new(ZoomSeen { area: egui::Rect::NOTHING, pages: Vec::new(), scale: 0.0 }));
+    let (kept, shown) = (Rc::clone(&state), Rc::clone(&seen));
+    let pages = DemoPages::new(200);
+    let mut navigation = craft_ui::canvas::NavigationOptions::default();
+    navigation.wheel = craft_ui::canvas::WheelScheme::Document;
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = kept.borrow().clone();
+        let mut area = egui::Rect::NOTHING;
+        let out = PageView::new("Pages", &pages, &mut now, PAPER)
+            .options(LayoutOptions::WORD)
+            .navigation(navigation)
+            .rulers(true)
+            .show(ui, |_, body| area = body.view.rect);
+        let scale = out.pages.first().map_or(0.0, |p| p.scale);
+        *shown.borrow_mut() = ZoomSeen { area, pages: out.pages.iter().map(|p| (p.page, p.rect)).collect(), scale };
+        *kept.borrow_mut() = now;
+    });
+    fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::NONE);
+    fixture.room(vec2(1280.0, 760.0));
+    fixture.settle();
+    // Far enough down that zooming out never meets the top of the document, whose clamp would move the place.
+    state.borrow_mut().offset.1 = 40.4 * 1056.0;
+    fixture.settle();
+    let pointer = seen.borrow().area.center();
+    fixture.frame(vec![egui::Event::PointerMoved(pointer)]).settle();
+    let start = seen.borrow().clone();
+    let (page, _) = *start
+        .pages
+        .iter()
+        .min_by(|(_, a), (_, b)| a.distance_to_pos(pointer).total_cmp(&b.distance_to_pos(pointer)))
+        .expect("pages show");
+    assert!(page >= 30, "many pages down: page {page}");
+    let under = |seen: &ZoomSeen| seen.rect(page).map(|r| (pointer - r.min) / seen.scale as f32);
+    let at = under(&start).expect("the page shows");
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    fixture.frame(vec![egui::Event::ModifiersChanged(ctrl)]);
+    let mut last = seen.borrow().clone();
+    for n in 0..40 {
+        let notch = n % 8 == 0;
+        let events = if notch {
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, -1.0),
+                modifiers: ctrl,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+            }]
+        } else {
+            Vec::new()
+        };
+        fixture.frame(events);
+        let now = seen.borrow().clone();
+        let here = under(&now).unwrap_or_else(|| panic!("frame {n}: page {page} shows"));
+        let off = (here - at) * now.scale as f32;
+        // Across, the place holds while the pages stay one a row; in rows they fit the window side by side.
+        let across = now.columns() > start.columns() || off.x.abs() < 2.0;
+        assert!(
+            across && off.y.abs() < 2.0,
+            "frame {n} at scale {:.3}: {here:?} on page {page}, was {at:?}; {:?} after {:?}",
+            now.scale,
+            now.pages,
+            last.pages
+        );
+        if !notch {
+            assert_eq!(now.columns(), last.columns(), "frame {n}: the pages reflow only in a notch's frame");
+            assert_eq!(now.pages, last.pages, "frame {n}: a frame without input moves nothing");
+        }
+        last = now;
+    }
+    assert!(last.scale < start.scale * 0.6, "zoomed out: {} -> {}", start.scale, last.scale);
+    assert!(
+        last.columns() > start.columns(),
+        "the pages reflowed into rows on the way: {} to {} at {} in {:?}: {:?}",
+        start.columns(),
+        last.columns(),
+        last.scale,
+        last.area,
+        last.pages
+    );
+}
+
 /// A wheel step of `lines` over the middle of the room.
 fn wheel(fixture: &mut Fixture, lines: f32) {
     let middle = pos2(450.0, 300.0);

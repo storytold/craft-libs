@@ -32,7 +32,7 @@ use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{Axis, CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Snap, ToolPass,
-    ToolRegion, canvas_space, tool_pass,
+    ToolRegion, canvas_space, pixel_aligned, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::EditorPurpose;
@@ -316,7 +316,9 @@ impl PageViewOutput {
 ///   `Priority::VISIBLE`, one row either side at `Priority::NEAR`; a page larger than the texture side adds a
 ///   second picture of the part in view. Sharp renders wait while a zoom gesture or ease runs. A page scrolled
 ///   further than [`picture_reach`](Self::picture_reach) from the view gives its picture back.
-/// - Layout: a scale the fit or the app changes keeps the page at the top of the view in place.
+/// - Layout: a scale the fit or the app changes keeps the page at the top of the view in place. A zoom about the
+///   pointer keeps the point under it in place relative to the page there (or, in a gap, the nearest page), and one
+///   that does not ease draws its new layout, reflowed, in the pass it happens, so the next pass moves nothing.
 /// - Scrolling: the canvas folds in the wheel (the wheel scrolls, Shift or Ctrl/Cmd + wheel scrolls sideways, Alt +
 ///   wheel and a pinch zoom about the pointer, as [`NavigationOptions`] say) and the view commands; the view
 ///   reads the result back into its state. [`CanvasScrollbars`] land in their own pass. Not continuous, a page
@@ -713,6 +715,8 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         let fixed = (target.center - given.center) * (given.zoom * target.zoom / (target.zoom - given.zoom));
         let pointer = rect.center() + Vec2::new(fixed.x as f32, fixed.y as f32);
         geo = zoom_about(build, &mut state, &geo, rect, pointer, target.zoom / given.zoom);
+        let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
+        state.offset = (state.offset.0.clamp(xs.0, xs.1), state.offset.1.clamp(ys.0, ys.1));
         want = state.offset;
     } else {
         // The canvas was given the view the pass started with, so its change of it is the pan; the state's offset
@@ -728,6 +732,20 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     if wheel_left == 0.0 {
         mem.overshoot = 0.0;
     }
+    // A zoom that does not ease draws the layout it made in its own pass, through the view of the anchored offset: the
+    // pages reflow and the point under the pointer stays in the pass the zoom happens, and the next pass, given that
+    // view, moves nothing. (Drawing the layout the pass started with, scaled, put the reflow and the spacing that does
+    // not scale one pass late.) An ease draws the layout it started from, scaled, until it lands.
+    let (drawn, drawn_frame, shown) = if zooming && !space.easing() {
+        let frame = Frame::of(&geo);
+        let mut view = frame.view(rect, state.offset, geo.scale / SCREEN_POINTS_PER_POINT);
+        // As the canvas places a given view: in its own rect (inside the rulers), about the same centre.
+        view.rect = target.rect;
+        let view = if shown == target { view } else { pixel_aligned(view, ui.ctx().pixels_per_point()) };
+        (Arc::clone(&geo), frame, view)
+    } else {
+        (drawn, drawn_frame, shown)
+    };
     let keys = KeyMoves::of(space.keys(), &state, &geo, rect);
     want.0 += keys.pan.0;
     want.1 = if keys.to_end { f64::INFINITY } else { want.1 + keys.pan.1 };
@@ -1118,18 +1136,31 @@ fn zoom_about(build: &Geometry, state: &mut PageViewState, old: &Placed, rect: R
     state.fit = Fit::None;
     state.zoom = (state.zoom * delta).clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end());
     let new = build.of(state);
-    let (x, y) = match crate::layout::page_at(&old.layout, at) {
-        Some(page) => {
+    // The page under the pointer, or in a gap (between columns, rows or pages) the nearest: the point keeps its place
+    // relative to that page, outside it too, since the gaps keep their size and the pages may reflow.
+    let (x, y) = match crate::layout::page_at(&old.layout, at).or_else(|| nearest_page(&old.layout, at)) {
+        Some(page) if page < new.layout.rects.len() => {
             let (before, after) = (old.layout.rects[page], new.layout.rects[page]);
             (after.x0 + (at.x - before.x0) / before.width() * after.width(), after.y0 + (at.y - before.y0) / before.height() * after.height())
         }
-        None => {
+        _ => {
             let ratio = new.scale / old.scale;
             (at.x * ratio, at.y * ratio)
         }
     };
     state.offset = (x - inside.0, y - inside.1);
     new
+}
+
+/// The page whose shown band lies nearest `p` (content coordinates); the earlier page on a tie, `None` with no pages.
+fn nearest_page(layout: &PagedLayout, p: Point) -> Option<usize> {
+    let distance = |page: usize| {
+        let band = band_rect(layout, page);
+        let dx = (band.x0 - p.x).max(p.x - band.x1).max(0.0);
+        let dy = (band.y0 - p.y).max(p.y - band.y1).max(0.0);
+        dx.hypot(dy)
+    };
+    (0..layout.rects.len().min(layout.bands.len())).min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
 }
 
 /// The pages one row either side of what shows: the neighbouring rows, or the neighbouring row of a single shown
