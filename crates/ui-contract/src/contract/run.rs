@@ -390,6 +390,7 @@ fn blank_core<'a>(
         reveal: None,
         member_tip: None,
         header_stops: Vec::new(),
+        roving_member: false,
         press_cancel: None,
         scroll_moves: Vec::new(),
         value_parts: Default::default(),
@@ -696,7 +697,6 @@ struct StopsStep<'a> {
     rtl: bool,
     env: &'a Env,
     resolved: &'a Resolved<'a>,
-    inert: bool,
     holder_widget: Option<Id>,
     member: Option<crate::runtime::env::ArenaId>,
     own: Sense,
@@ -705,7 +705,7 @@ struct StopsStep<'a> {
 
 /// Registers the focus stops of a component that has any; one that sets `STOPS = false` has none, which a debug build checks.
 fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, parts: &PartsStep) {
-    let StopsStep { ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys } = at;
+    let StopsStep { ctx, id, rtl, env, resolved, holder_widget, member, own, text_keys } = at;
     let body_roving = e.roving();
     if !facts.stops && body_roving.is_none() {
         debug_assert!(
@@ -730,15 +730,15 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
         ctx,
         id,
         holder: holder_widget.unwrap_or_else(|| member.map_or(id, |arena| arena.0)),
-        focusable: !inert && steps::takes_focus(resolved) && own.contains(Sense::FOCUS) && env.item != Some(id),
-        parts_focus: !inert && steps::takes_focus(resolved),
+        focusable: steps::takes_focus(resolved) && own.contains(Sense::FOCUS) && env.item != Some(id),
+        parts_focus: steps::takes_focus(resolved),
         text,
         press_only: text && resolved.read_only && !facts.holds_cells(),
         keys,
         role: role.resettable(resettable).value(value).text(text).moves(role.moves || keys.moves).deletes(role.deletes || keys.deletes || text),
         rtl,
         parts,
-        group: steps::member_group(ctx, env.roving, id),
+        group: env.roving.filter(|_| e.core_ref().roving_member),
         body: env.roving,
         row: env.row,
         item: env.item == Some(id),
@@ -850,7 +850,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let scope = enter_scope(p, ui);
     let env = host_env.unwrap_or(p.env);
     if let Some(mut h) = sense_steps(p, ui, host_at, env) {
-        update_steps(p, &h);
+        update_steps(p, env, &h);
         overlay_step(p, ui, env, &h);
         state_steps(p, ui, env, &h);
         paint_step(p, ui, env, &mut h);
@@ -880,8 +880,10 @@ struct HostStep {
     /// The component's own direction: right to left unless its axis keeps its order.
     rtl: bool,
     rect: Rect,
-    /// The parts step 7 declared.
-    decls: super::cx::Decls,
+    /// What step 7 declared: the parts, roving groups and text parts. The stops register from it after `update`.
+    parts: PartsStep,
+    /// The egui widget of the component's text part or editor, which holds key focus for it.
+    holder_widget: Option<Id>,
     text_keys: Option<focus::KeyUse>,
     own: Sense,
     member: Option<crate::runtime::env::ArenaId>,
@@ -959,7 +961,6 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     let own = if env.item == Some(id) { own.difference(Sense::CLICK | Sense::FOCUS) | Sense::HOVER } else { own };
     let arena = e.arena();
     let member = if arena || facts.text() { None } else { env.arena };
-    stops_step(StopsStep { ctx: &ctx, id, rtl, env, resolved, inert, holder_widget, member, own, text_keys }, e, facts, &parts);
     // A body's wheel share is its scroll taker (body step, step 7); the gate value does not take the wheel. A body root that
     // senses the wheel itself (a canvas) registers like any other component. A collection that senses the wheel itself
     // registers in the item step, with its notch.
@@ -1078,7 +1079,8 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
         id,
         rtl,
         rect,
-        decls: parts.decls,
+        parts,
+        holder_widget,
         text_keys,
         own,
         member,
@@ -1096,7 +1098,7 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
 /// Step 9, update, with the body's roving group, which registers after `update`.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn update_steps(p: &mut Pass<'_, '_, '_>, h: &HostStep) {
+fn update_steps(p: &mut Pass<'_, '_, '_>, env: &Env, h: &HostStep) {
     let (facts, ctx, id, rtl) = (p.facts, &h.ctx, h.id, h.rtl);
     let e = &mut *p.p;
     // 9 update
@@ -1122,6 +1124,10 @@ fn update_steps(p: &mut Pass<'_, '_, '_>, h: &HostStep) {
     }
     e.updated();
     steps::record_context(e.core_ref());
+    // The stops register after `update`, which says whether the component joins its body's roving group.
+    let at =
+        StopsStep { ctx, id, rtl, env, resolved: p.resolved, holder_widget: h.holder_widget, member: h.member, own: h.own, text_keys: h.text_keys };
+    stops_step(at, e, facts, &h.parts);
     // The body's group registers after `update`, which may change its rules from what the component knows now.
     if let Some(roving) = e.roving() {
         let core = e.core_ref();
@@ -1239,7 +1245,7 @@ fn content_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
 /// `paint_over`, after the `over` parts are placed, so the children it shows stack above them (8.3).
 fn paint_over_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) {
     ui.set_clip_rect(h.outer_clip);
-    sensing::place_over_widgets(ui, h.id, h.member, h.decls.parts());
+    sensing::place_over_widgets(ui, h.id, h.member, h.parts.decls.parts());
     ui.set_clip_rect(h.inside);
     let e = &mut *p.p;
     let fade = steps::fade(ui, env, e.core());
@@ -1268,17 +1274,17 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         facts,
         &steps::ReportIn {
             node: h.node,
-            decls: &h.decls,
+            decls: &h.parts.decls,
             sense: h.own,
             live: e.live(),
             scrolls: e.scrolls(),
             expanded: e.expanded(),
             position: e.position(),
-            group: steps::member_group(ctx, env.roving, id),
+            group: env.roving.filter(|_| e.core_ref().roving_member),
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
+    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.parts.decls, shows_label, message });
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;

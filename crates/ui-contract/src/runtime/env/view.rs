@@ -58,11 +58,6 @@ impl<'a> EnvView<'a> {
         self.scoped.measure
     }
 
-    /// The roving group of the innermost body with `ContainerProps.roving`.
-    pub(crate) fn roving(&self) -> Option<Id> {
-        self.scoped.roving
-    }
-
     /// The inside label the scope carries ([`inside_label`](EnvView::inside_label) reads it back).
     pub(crate) fn inside_held(&self) -> Option<&'a Held> {
         self.scoped.inside_label.as_ref()

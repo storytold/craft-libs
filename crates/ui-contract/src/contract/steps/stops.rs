@@ -1,15 +1,13 @@
-//! Step 7's tail: the focus stops and the roving groups they join.
+//! After step 9: the focus stops and the roving groups they join.
 
 use super::parts::PartsStep;
 use crate::contract::Resolved;
-use crate::runtime::egui::memory as store;
 use crate::runtime::focus::{self, Group, Stop};
 use crate::runtime::memory::sub;
 use craft_behavior::{DocKey, KeyRole, PartRef};
 use egui::{Context, Id};
 
-/// The parts of last pass's complete set in which this pass's results are read; first-frame parts read idle.
-/// Step 7's tail: the focus stops. The root's interest when the component or any part is focusable, its
+/// The focus stops, registered after `update`: the root's interest when the component or any part is focusable, its
 /// `(id, part)` stops, and its roving groups.
 pub(crate) struct StopsIn<'a> {
     pub ctx: &'a Context,
@@ -27,7 +25,8 @@ pub(crate) struct StopsIn<'a> {
     pub role: KeyRole,
     pub rtl: bool,
     pub parts: &'a PartsStep,
-    /// The roving group of the body this component is shown in: its own stop joins it.
+    /// The roving group of the body this component is shown in, when it joined it in this pass (`Cx::join_roving`): its
+    /// own stop and its focusable parts join it.
     pub group: Option<Id>,
     /// The roving group of the innermost body this component is shown in, whether or not it joined it.
     pub body: Option<Id>,
@@ -42,22 +41,6 @@ pub(crate) struct StopsIn<'a> {
 }
 
 /// The id of the roving group a container's body forms.
-/// Records that `id` is a member of the roving `group` in this pass.
-pub(crate) fn join_group(ctx: &Context, group: Id, id: Id) {
-    let slot = sub(group, ("member", id));
-    store::put(ctx, slot, crate::runtime::pointer::pass_of(ctx));
-    crate::runtime::memory::adopt::<u64>(ctx, id, slot);
-}
-
-/// `group` when `id` joined it in this pass or the one before, else `None`: a component that is no member keeps its
-/// own Tab stop.
-pub(crate) fn member_group(ctx: &Context, group: Option<Id>, id: Id) -> Option<Id> {
-    let group = group?;
-    let pass = crate::runtime::pointer::pass_of(ctx);
-    let joined = store::peek_clone::<u64>(ctx, sub(group, ("member", id)))?;
-    (joined.saturating_add(1) >= pass).then_some(group)
-}
-
 pub(crate) fn body_group(id: Id) -> Id {
     sub(id, "body_roving")
 }
@@ -103,7 +86,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
             let stop = if extras.nudges { stop.role(input.role.nudge(true)) } else { stop };
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
             // A part group that joined the body's roving group has its parts registered there.
-            let joined = group.and_then(|parts| focus::registration::part_group(ctx, parts));
+            let joined = group.and(input.group);
             let stop = if let Some(group) = row_parts.or(joined).or(group).or(input.row) { stop.in_group(group) } else { stop };
             if extras.after_header {
                 after_header.push(stop);
