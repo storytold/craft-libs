@@ -156,19 +156,21 @@ impl<'a> Tokenizer<'a> {
         Some(v)
     }
 
-    fn next_tok(&mut self) -> Option<Tok> {
+    fn next_tok(&mut self) -> Result<Option<Tok>> {
         let mut nums = Numbers { s: self.s, i: self.i };
         nums.skip_seps();
         self.i = nums.i;
         self.tok_start = self.i;
-        let c = self.s.get(self.i).copied()?;
+        let Some(c) = self.s.get(self.i).copied() else { return Ok(None) };
         if c.is_ascii_alphabetic() {
             self.i += 1;
-            return Some(Tok::Cmd(c));
+            return Ok(Some(Tok::Cmd(c)));
         }
         let tok = nums.next_num().map(Tok::Num);
         self.i = nums.i;
-        tok
+        // Invalid bytes and malformed/non-finite numbers are not EOF: returning a
+        // successful prefix here would silently discard the rest of the shape.
+        tok.map(Some).ok_or_else(|| Error("SVG: invalid path token".into()))
     }
 }
 
@@ -193,7 +195,7 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
                 *look = Some(other);
                 Err(Error("SVG: path command is missing coordinates".into()))
             }
-            None => match tk.next_tok() {
+            None => match tk.next_tok()? {
                 Some(Tok::Num(v)) => Ok(v),
                 Some(other @ Tok::Cmd(_)) => {
                     *look = Some(other);
@@ -204,7 +206,10 @@ pub fn parse_path(d: &str) -> Result<Vec<Subpath>> {
         }
     };
 
-    while let Some(tok) = lookahead.take().or_else(|| tk.next_tok()) {
+    while let Some(tok) = match lookahead.take() {
+        Some(tok) => Some(tok),
+        None => tk.next_tok()?,
+    } {
         let rel = match tok {
             Tok::Cmd(c) => {
                 if c.eq_ignore_ascii_case(&b'z') {
@@ -457,6 +462,25 @@ mod tests {
         assert!((center.x - 5.0).abs() < 1e-10);
         assert!(center.y.abs() < 1e-10 && start.is_finite());
         assert!((sweep - std::f64::consts::PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn rejects_invalid_tokens_instead_of_returning_a_partial_path() {
+        for input in ["@", "M0 0 L1 1@ L2 2", "M0 0 L1 1@", "M0 0 Z@", "M0 0 L1 1é", "M0 0 L1 1 +", "M0 0 L1 1 .", "M0 0 L1 1 2e+", "M0 0 L1 1 1e999"]
+        {
+            assert!(parse_path(input).is_err(), "accepted malformed path: {input}");
+        }
+    }
+
+    #[test]
+    fn token_errors_do_not_change_clean_eof_or_compact_numbers() {
+        assert!(parse_path(" \t\r\n,").unwrap().is_empty());
+        let paths = parse_path("M.5-.5 L1e1-2e0 A6 7 30 0110 12 z ,\n").unwrap();
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].closed);
+        assert_eq!(paths[0].start, Point::new(0.5, -0.5));
+        assert_eq!(paths[0].segs[0], Segment::Line(Point::new(10.0, -2.0)));
+        assert_eq!(paths[0].segs[1], Segment::Arc { rx: 6.0, ry: 7.0, rot: 30.0, large: false, sweep: true, end: Point::new(10.0, 12.0) });
     }
 
     #[test]

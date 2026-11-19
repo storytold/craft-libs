@@ -42,19 +42,86 @@ fn splicing_visits_each_piece_a_few_times() {
 
 #[test]
 fn a_long_unreadable_number_is_read_once() {
-    for junk in ["+", "5"] {
+    for junk in ["+", "5", "-", "-+", "+-"] {
         let n = 20_000;
         let src = format!("{}{} 1 0 0 1 0 0 cm", junk.repeat(n), if junk == "5" { "x" } else { "" });
         RESCANNED.with(|c| c.set(0));
         let p = parse(src.as_bytes());
         let rescanned = RESCANNED.with(|c| c.get());
         assert!(rescanned <= 2 * n, "{rescanned} bytes read for a {n}-byte token");
+        assert!(junk == "5" || junk == "+" || rescanned > 0, "the run of {junk:?} is counted");
         assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
     }
     // A short damaged number still recovers byte by byte.
     let p = parse(b"-+5 0 Td");
     assert_eq!((p.ops.len(), p.skipped), (1, 1));
     assert_eq!(p.ops[0].nums::<2>(), Some([5.0, 0.0]));
+}
+
+/// A lone `-`, or two signs with a minus among them, between operands, is the number 0 to
+/// hayro-syntax, as a lone `-` is in real files (PDF.js bug 1753983, among the operands of `c`):
+/// the second `Tr` of `3 Tr - Tr` gets 0, and `0 - (a) "` three operands. The token takes no
+/// bytes from what follows and starts the operator's span. Other sign tokens are read as before: a
+/// `+` alone, three signs, signs before a letter or after a digit, and signs inside an array or
+/// dictionary the lexer can't read.
+#[test]
+fn a_lone_minus_is_read_as_zero() {
+    let ops = |data: &[u8]| -> Vec<(Vec<u8>, Vec<Object>)> { parse(data).ops.into_iter().map(|o| (o.op, o.operands)).collect() };
+    let zero = || Object::Int(0);
+    assert_eq!(ops(b"3 Tr - Tr"), [(b"Tr".to_vec(), vec![Object::Int(3)]), (b"Tr".to_vec(), vec![zero()])]);
+    assert_eq!(ops(b"0 - (a) \""), [(b"\"".to_vec(), vec![zero(), zero(), Object::String(PdfString::literal(b"a".to_vec()))])]);
+    for data in [&b"- w"[..], b"-- w", b"+- w", b"-+ w", b"-"] {
+        let want: &[(Vec<u8>, Vec<Object>)] = if data == b"-" { &[] } else { &[(b"w".to_vec(), vec![zero()])] };
+        assert_eq!(ops(data), want, "{}", String::from_utf8_lossy(data));
+    }
+    assert_eq!(ops(b"(a)-/N gs"), [(b"gs".to_vec(), vec![Object::String(PdfString::literal(b"a".to_vec())), zero(), Object::name("N")])]);
+    for data in [&b"- w"[..], b"-- w", b"-+ w", b"+- w"] {
+        let parsed = parse(data);
+        assert_eq!((parsed.skipped, parsed.ops.first().map(|o| o.span.clone())), (0, Some(0..data.len())), "{}", String::from_utf8_lossy(data));
+    }
+    // As before.
+    assert_eq!(ops(b"5 + Tc"), [(b"Tc".to_vec(), vec![Object::Int(5)])]);
+    assert_eq!(ops(b"/Span << /A - >> BDC"), [(b"BDC".to_vec(), vec![Object::name("Span"), Object::name("A")])]);
+    assert_eq!(ops(b"[(a) - ] TJ"), [(b"TJ".to_vec(), vec![Object::String(PdfString::literal(b"a".to_vec()))])]);
+    assert_eq!(ops(b"[1 - 2] 0 d"), [(b"d".to_vec(), vec![Object::Int(1), Object::Int(2), Object::Int(0)])]);
+    assert_eq!(ops(b"<- w"), [(b"w".to_vec(), vec![])]);
+    // Past a broken array's or dictionary's end, a lone minus is 0 again; not before the outer one's.
+    assert_eq!(ops(b"[(a) - ] TJ - Tc")[1], (b"Tc".to_vec(), vec![zero()]));
+    assert_eq!(ops(b"/Span << /A - >> BDC - w")[1], (b"w".to_vec(), vec![zero()]));
+    assert_eq!(
+        ops(b"/P << /A << /B - >> /C - >> BDC - w"),
+        [(b"BDC".to_vec(), vec![Object::name("P"), Object::name("A"), Object::name("B"), Object::name("C")]), (b"w".to_vec(), vec![zero()])]
+    );
+    assert_eq!(ops(b"5 ++ Tc"), [(b"Tc".to_vec(), vec![Object::Int(5)])]);
+    assert_eq!(ops(b"--- w"), [(b"w".to_vec(), vec![])]);
+    assert_eq!(ops(b"-x w"), [(b"x".to_vec(), vec![]), (b"w".to_vec(), vec![])]);
+    assert_eq!(ops(b"5-- Tc"), [(b"Tc".to_vec(), vec![])]);
+    for (data, n) in [(&b"-5 w"[..], -5.0), (b"+5 w", 5.0), (b"-.5 w", -0.5), (b"--5 w", -5.0)] {
+        assert_eq!(parse(data).ops.first().and_then(|o| o.num_back(0)), Some(n), "{}", String::from_utf8_lossy(data));
+    }
+}
+
+#[test]
+fn a_long_run_of_unclosed_brackets_is_read_once() {
+    // Every `[` opens an array nested inside the one before, so none of them parses: each is
+    // refused once it passes the depth limit, not after reading to the end of the stream.
+    for open in ["[", "<<"] {
+        let n = 100_000;
+        let src = format!("{} 1 0 0 1 0 0 cm", open.repeat(n));
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(src.as_bytes());
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= 2 * src.len(), "{rescanned} bytes read again for {open} x {n}");
+        assert!(p.skipped >= n, "{} skipped", p.skipped);
+        assert_eq!(p.ops.last().map(|o| o.op.as_slice()), Some(&b"cm"[..]), "{open}");
+    }
+    // A stray `[` before a whole stream of operators still loses only itself.
+    let p = parse(b"[ 1 0 0 1 0 0 cm 0 0 m");
+    assert_eq!(p.ops.last().map(|o| o.op.as_slice()), Some(&b"m"[..]));
+    // An array nested within the limit is still one operand.
+    let deep = format!("{}{} TJ", "[".repeat(100), "]".repeat(100));
+    let p = parse(deep.as_bytes());
+    assert_eq!((p.ops.len(), p.skipped), (1, 0));
 }
 
 #[test]

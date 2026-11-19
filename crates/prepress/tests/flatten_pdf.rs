@@ -636,15 +636,19 @@ fn near(a: [f32; 4], b: [f32; 4], tolerance: f32) -> bool {
     a.iter().zip(b).all(|(a, b)| (a - b).abs() <= tolerance)
 }
 
-const BLUE: [f32; 3] = [0.0, 0.2, 1.0];
+// Coated FOGRA39 separates sRGB yellow differently under each of the three intents tested.
+const YELLOW: [f32; 3] = [1.0, 1.0, 0.0];
 
 #[test]
 fn fills_convert_with_the_rendering_intent_current_when_painted() {
-    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
-    let relative = fogra39_with(Intent::RelativeColorimetric, BLUE);
-    let saturation = fogra39_with(Intent::Saturation, BLUE);
-    assert!(!near(perceptual, relative, 0.02), "the intents must differ for this test: {perceptual:?} {relative:?}");
-    let content = "0 0.2 1 rg 0 0 10 10 re f \
+    let perceptual = fogra39_with(Intent::Perceptual, YELLOW);
+    let relative = fogra39_with(Intent::RelativeColorimetric, YELLOW);
+    let saturation = fogra39_with(Intent::Saturation, YELLOW);
+    assert!(
+        !near(perceptual, relative, 0.02) && !near(saturation, relative, 0.02) && !near(saturation, perceptual, 0.02),
+        "the intents must differ for this test: {perceptual:?} {relative:?} {saturation:?}"
+    );
+    let content = "1 1 0 rg 0 0 10 10 re f \
         /Perceptual ri 20 0 10 10 re f \
         q /Saturation ri 40 0 10 10 re f Q \
         60 0 10 10 re f \
@@ -663,15 +667,15 @@ fn fills_convert_with_the_rendering_intent_current_when_painted() {
 
 #[test]
 fn an_image_converts_with_its_own_intent() {
-    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
-    let relative = fogra39_with(Intent::RelativeColorimetric, BLUE);
+    let perceptual = fogra39_with(Intent::Perceptual, YELLOW);
+    let relative = fogra39_with(Intent::RelativeColorimetric, YELLOW);
     let objects = [
-        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Intent /Perceptual", "0033FF"),
-        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "0033FF"),
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Intent /Perceptual", "FFFF00"),
+        hex_image("/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", "FFFF00"),
     ];
     let content = "q 10 0 0 10 0 0 cm /Im1 Do Q q 10 0 0 10 20 0 cm /Im2 Do Q \
         /Perceptual ri q 10 0 0 10 40 0 cm /Im2 Do Q \
-        /RelativeColorimetric ri 0 0.2 1 rg 60 0 10 10 re f";
+        /RelativeColorimetric ri 1 1 0 rg 60 0 10 10 re f";
     let (list, _) = read(&raw_pdf(content, "/XObject << /Im1 5 0 R /Im2 6 0 R >>", &objects));
     let samples: Vec<[f32; 4]> = images(&list)
         .iter()
@@ -691,8 +695,11 @@ fn an_image_converts_with_its_own_intent() {
 
 #[test]
 fn a_shading_converts_with_the_rendering_intent() {
-    let perceptual = fogra39_with(Intent::Perceptual, BLUE);
-    let objects = ["<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0.2 1] /C1 [0 0.2 1] /N 1 >> >>".to_string()];
+    let perceptual = fogra39_with(Intent::Perceptual, YELLOW);
+    let objects = [
+        "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 1 0] /C1 [1 1 0] /N 1 >> >>"
+            .to_string(),
+    ];
     let pdf = raw_pdf("/Perceptual ri q 0 0 100 100 re W n /Sh1 sh Q", "/Shading << /Sh1 5 0 R >>", &objects);
     let (list, _) = read(&pdf);
     let fills = fill_items(&list);

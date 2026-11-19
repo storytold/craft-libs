@@ -354,13 +354,13 @@ fn mixed_headers_with_deep_size(
 }
 
 /// Sample `i` of a flat channel: `R` is 1, 2, 3, …, `G` 10 more and `B` 100 more, top row first.
-fn mixed_flat(channel: f32, i: usize) -> f32 {
+pub(super) fn mixed_flat(channel: f32, i: usize) -> f32 {
     channel + 1.0 + i as f32
 }
 
 /// A mixed file with a 3 × 2 flat part, and its chunk offsets as `offsets[part][chunk]`. The
 /// tiled flat part's chunks hold the tiles at (0, 0) and (1, 0).
-fn mixed_file(deep_first: bool, tiled: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
+pub(super) fn mixed_file(deep_first: bool, tiled: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
     let (w, h) = (3usize, 2usize);
     let mut out = mixed_headers(deep_first, tiled, (w, h));
     let chunks: Vec<Vec<Vec<u8>>> = (0..2i32)
@@ -705,5 +705,58 @@ fn dense_block_ordinals_cover_scan_lines_and_all_tile_levels() {
             let absent = TileCoordinates { tile_index: exr::math::Vec2(0, 0), level_index: exr::math::Vec2(100, 100) };
             assert!(flat_block_ordinal(header, absent).is_err());
         }
+    }
+}
+
+#[test]
+fn write_rgba_compressions_and_chromaticities() {
+    let compressions = [
+        Compression::None,
+        Compression::Rle,
+        Compression::Zip1,
+        Compression::Zip16,
+        Compression::Piz,
+        Compression::Pxr24,
+        Compression::B44,
+        Compression::B44a,
+        Compression::Dwaa,
+        Compression::Dwab,
+    ];
+    let chroma = [[0.64, 0.33], [0.30, 0.60], [0.15, 0.06], [0.3127, 0.3290]];
+    let data = vec![0.25_f32, 0.5, 0.75, 1.0, 0.1, 0.2, 0.3, 0.4, 0.9, 0.8, 0.7, 0.6, 0.0, 0.0, 0.0, 1.0];
+    for comp in compressions {
+        for depth in [SampleDepth::Float, SampleDepth::Half] {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            write_rgba(&mut buf, &data, 2, 2, depth, comp, Some(chroma)).unwrap();
+            let bytes = buf.into_inner();
+            let meta = exr::meta::MetaData::read_from_buffered(std::io::Cursor::new(&bytes), false).unwrap();
+            let c = meta.headers[0].shared_attributes.chromaticities.unwrap();
+            assert_eq!([c.red.0, c.red.1], chroma[0]);
+            assert_eq!([c.green.0, c.green.1], chroma[1]);
+            assert_eq!([c.blue.0, c.blue.1], chroma[2]);
+            assert_eq!([c.white.0, c.white.1], chroma[3]);
+            let part = decode_part(&bytes, 0, &|_| true, &Limits::default()).unwrap();
+            assert_eq!(part.info.data_window.width, 2);
+            assert_eq!(part.info.data_window.height, 2);
+            assert_eq!(part.channels.len(), 4);
+        }
+    }
+}
+
+#[test]
+fn write_rgba_half_clamps_overflow() {
+    let data = vec![100_000.0_f32, -100_000.0, 0.5, 1.0];
+    let mut buf = std::io::Cursor::new(Vec::new());
+    write_rgba(&mut buf, &data, 1, 1, SampleDepth::Half, Compression::None, None).unwrap();
+    let bytes = buf.into_inner();
+    let part = decode_part(&bytes, 0, &|_| true, &Limits::default()).unwrap();
+    let r = part.channels.iter().find(|c| c.name == "R").unwrap();
+    let g = part.channels.iter().find(|c| c.name == "G").unwrap();
+    match (&r.samples, &g.samples) {
+        (Samples::F16(rv), Samples::F16(gv)) => {
+            assert_eq!(rv[0].to_f32(), 65_504.0);
+            assert_eq!(gv[0].to_f32(), -65_504.0);
+        }
+        _ => panic!("expected F16 samples"),
     }
 }
