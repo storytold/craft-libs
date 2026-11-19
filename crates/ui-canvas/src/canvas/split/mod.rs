@@ -21,12 +21,12 @@ use crate::contract::{
 use crate::docking::divider::{self, Divider, Drag};
 use crate::docking::{DockSizes, Splitter};
 use crate::primitives::{PaintShape, StrokeWidth};
-use crate::runtime::env::{AppValues, EnvValue, Label};
+use crate::runtime::env::{AppValues, EnvValue, Label, in_room};
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
 use craft_behavior::dock::arrange_rects;
 use craft_behavior::{Axis, CanvasView, Flow, HitLevel, HitPriority, Metrics, PartKey, Sense};
-use egui::{CornerRadius, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
+use egui::{CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 use std::sync::Arc;
 
 const DIVIDER: PartKey = PartKey::new("divider");
@@ -411,19 +411,13 @@ impl<D: Clone + Send + Sync + 'static> SplitViews<'_, D> {
 
     /// Shows the views with a body per pane: `pane` runs once for each pane, in reading order, in a `Ui` held to the
     /// pane's rect and clipped to it, with the pane ([`SplitPaneAt`]) as the views lay it out in this pass, so a
-    /// divider drag moves the panes' content in the pass it moves the divider. The results come back in that order.
+    /// divider drag moves the panes' content in the pass it moves the divider. Each pane is a layout room of its own
+    /// ([`in_room`]): a view that fills takes its pane, not a share of the views' body with the other panes' content.
+    /// The results come back in reading order.
     pub fn show_panes<R>(self, ui: &mut Ui, mut pane: impl FnMut(&mut Ui, &mut BodyCx<'_>, SplitPaneAt) -> R) -> Inner<SplitViewsOutput<D>, Vec<R>> {
         self.show(ui, |ui, body| {
             let panes = body.env.get::<SplitPanes>().0;
-            let mut shown = Vec::with_capacity(panes.len());
-            for &at in panes.iter() {
-                let inner = ui.scope_builder(UiBuilder::new().max_rect(at.rect), |ui| {
-                    ui.shrink_clip_rect(at.rect);
-                    pane(ui, body, at)
-                });
-                shown.push(inner.inner);
-            }
-            shown
+            panes.iter().map(|&at| in_room(ui, at.rect, |ui| pane(ui, body, at))).collect()
         })
     }
 }

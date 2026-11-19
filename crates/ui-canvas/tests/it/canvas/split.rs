@@ -3,7 +3,7 @@
 
 use craft_behavior::PartKey;
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews, TabDrop, TabDropTarget};
-use craft_ui::contract::{Bind, ShowContainer as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Direction;
 use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
@@ -191,6 +191,96 @@ fn each_pane_body_shows_at_its_pane_in_the_pass_a_divider_moves() {
         }
         assert_eq!(bodies[0].1.center().x > bodies[1].1.center().x, rtl, "pane 0's body sits at the start edge (rtl {rtl})");
         fixture.frame(vec![pointer::release(from + Vec2::new(60.0, 0.0))]);
+    }
+}
+
+/// The views fill the room they are given whatever their bodies hold: a pane's body, and `show`'s plain body, are the
+/// room's full height pass after pass, not the height of content shorter than it.
+#[trial]
+fn bodies_shorter_than_the_room_keep_the_full_height_pass_after_pass() {
+    use craft_ui::display::Text;
+    let seen = Rc::new(RefCell::new((Vec::<Rect>::new(), Rect::NOTHING)));
+    let held = seen.clone();
+    let mut at = SplitAt::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut bodies = Vec::new();
+        let views = SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(&mut at)).count(2).show_panes(ui, |ui, _, pane| {
+            // A body has a measuring run before its real run: keep the last run's panes.
+            if pane.index == 0 {
+                bodies.clear();
+            }
+            Text::new("Page").show(ui);
+            bodies.push(ui.max_rect());
+        });
+        *held.borrow_mut() = (bodies, views.output.edit.response.rect);
+    });
+    fixture.room(ROOM).settle();
+    for pass in 0..4 {
+        fixture.frame(Vec::new());
+        let (bodies, views) = seen.borrow().clone();
+        assert!(near(views.height(), ROOM.y), "pass {pass}: the views fill the room's height: {views:?}");
+        assert_eq!(bodies.len(), 2, "pass {pass}: one body per pane");
+        for (index, body) in bodies.iter().enumerate() {
+            assert!(
+                near(body.top(), views.top()) && near(body.bottom(), views.bottom()),
+                "pass {pass}: body {index} is the full height: {body:?} in {views:?}"
+            );
+        }
+    }
+
+    // A pane holding a view that fills (as a canvas does) gives it the whole pane.
+    let seen = Rc::new(RefCell::new((Vec::<Rect>::new(), Vec::<Rect>::new(), Rect::NOTHING)));
+    let held = seen.clone();
+    let mut at = SplitAt::default();
+    let mut inner_at = [SplitAt::default(), SplitAt::default()];
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut panes, mut inner) = (Vec::new(), Vec::new());
+        let views = SplitViews::new("Views", SplitLayout::TwoUpVertical, Bind::bound(&mut at)).count(2).show_panes(ui, |ui, _, pane| {
+            if pane.index == 0 {
+                panes.clear();
+                inner.clear();
+            }
+            let label = if pane.index == 0 { "Inner 0" } else { "Inner 1" };
+            let shown = SplitViews::new(label, SplitLayout::Tile, Bind::bound(&mut inner_at[pane.index])).count(1).show(ui, |ui, _| {
+                Text::new("Page").show(ui);
+            });
+            panes.push(pane.rect);
+            inner.push(shown.output.edit.response.rect);
+        });
+        *held.borrow_mut() = (panes, inner, views.output.edit.response.rect);
+    });
+    fixture.room(ROOM).settle();
+    for pass in 0..4 {
+        fixture.frame(Vec::new());
+        let (panes, inner, views) = seen.borrow().clone();
+        assert!(near(views.height(), ROOM.y), "pass {pass}: the views around filling panes fill the room's height: {views:?}");
+        assert_eq!(inner.len(), 2, "pass {pass}: one inner view per pane");
+        for (index, (shown, pane)) in inner.iter().zip(&panes).enumerate() {
+            assert!(near(pane.height(), views.height()), "pass {pass}: pane {index} is the views' height: {pane:?} in {views:?}");
+            assert!(
+                near(shown.top(), pane.top()) && near(shown.bottom(), pane.bottom()),
+                "pass {pass}: inner view {index} fills its pane: {shown:?} in {pane:?}"
+            );
+        }
+    }
+
+    let seen = Rc::new(RefCell::new((Rect::NOTHING, Rect::NOTHING)));
+    let held = seen.clone();
+    let mut at = SplitAt::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut body = Rect::NOTHING;
+        let views = SplitViews::new("Views", SplitLayout::Tile, Bind::bound(&mut at)).count(1).show(ui, |ui, _| {
+            Text::new("Page").show(ui);
+            body = ui.max_rect();
+        });
+        *held.borrow_mut() = (body, views.output.edit.response.rect);
+    });
+    fixture.room(ROOM).settle();
+    for pass in 0..4 {
+        fixture.frame(Vec::new());
+        let (body, views) = *seen.borrow();
+        assert!(near(views.height(), ROOM.y), "pass {pass}: the plain views fill the room's height: {views:?}");
+        assert!(near(body.height(), views.height()), "pass {pass}: the plain body is the full height: {body:?} in {views:?}");
     }
 }
 

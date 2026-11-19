@@ -1,4 +1,5 @@
-//! Changes to the inherited values for a stretch of code: Overrides, with_env and ThemeScope.
+//! Changes to the inherited values for a stretch of code: Overrides, with_env and ThemeScope, and a region that is a
+//! layout room of its own (in_room).
 
 use super::app_values::AppValues;
 use super::host_words::overlaid_words;
@@ -8,7 +9,7 @@ use crate::runtime::egui::child;
 use craft_behavior::MotionMode;
 use craft_i18n::{Direction, WordRows, Words};
 use craft_theme::{ControlSize, Mode};
-use egui::{Context, Ui};
+use egui::{Context, Rect, Ui, UiBuilder};
 use std::sync::Arc;
 
 /// Token-changing values for a container's body: the body and everything under it resolve their styles from the
@@ -137,4 +138,18 @@ pub fn with_env<R>(ui: &mut Ui, set: impl FnOnce(&mut Overrides), body: impl FnO
         let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(child, inner)) };
         body(child)
     })
+}
+
+/// Runs `body` in a child `Ui` held to `rect` and clipped to it, as a layout room of its own: the flow grid, content
+/// column and fill sharing of the body around it do not reach in, so a child that fills takes `rect`, whatever else
+/// that body holds. A split pane's body and a dock group's view show here.
+pub fn in_room<R>(ui: &mut Ui, rect: Rect, body: impl FnOnce(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let room = Env::of(ui).new_room();
+    ui.scope_builder(UiBuilder::new().max_rect(rect), |child| {
+        child.shrink_clip_rect(rect);
+        let _restore = Restore { ctx: &ctx, installed: Some(Env::install_for(child, room)) };
+        body(child)
+    })
+    .inner
 }

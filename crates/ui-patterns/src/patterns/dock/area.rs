@@ -19,7 +19,7 @@ use crate::docking::{
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
 use crate::runtime::drag;
-use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry};
+use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
 use crate::sections::HeaderAction;
@@ -29,7 +29,7 @@ use craft_behavior::dock::{
 use craft_behavior::overlay::Side;
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
 use craft_host::target::WindowKind;
-use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
+use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -799,15 +799,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let anchor = members.first()?;
         let active = active.min(members.len() - 1);
         let viewed = match at {
-            // The view draws in a child `Ui` held to the group's rect and clipped to it: it lays out in the group's
-            // room, never in the room the area has left.
-            GroupAt::Show(rect) => {
-                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                    ui.shrink_clip_rect(rect);
-                    self.panels.group_view(members, active, ui, at, body)
-                })
-                .inner
-            }
+            // The view draws in the group's rect as a layout room of its own: it lays out in the group's room, never in
+            // the room the area has left, and a view that fills takes the whole group.
+            GroupAt::Show(rect) => in_room(ui, rect, |ui| self.panels.group_view(members, active, ui, at, body)),
             GroupAt::Measure(_) => self.panels.group_view(members, active, ui, at, body),
         };
         if let Some(height) = viewed {
