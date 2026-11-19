@@ -240,4 +240,15 @@ mod tests {
             assert_eq!(xy_to_temp_tint(p), (6500.0, 0.0), "{p:?}");
         }
     }
+
+    /// Warm, strongly green illuminants (e.g. 2000–3500 K with high positive tint) push the
+    /// source white's Bradford blue cone response to `<= 0`. Unlike unchecked division, which
+    /// inverts the blue channel, `bradford` / `wb_matrix` returns the identity matrix there.
+    #[test]
+    fn warm_green_wb_with_non_positive_cone_response_returns_identity() {
+        for (t, tint) in [(2000.0, 30.0), (2500.0, 60.0), (3000.0, 100.0), (3500.0, 125.0)] {
+            let src = temp_tint_to_xy(t, tint);
+            assert_eq!(wb_matrix(&REC2020, src), Mat3::IDENTITY, "{t} K tint {tint}");
+        }
+    }
 }
