@@ -1,0 +1,15 @@
+[package]
+name = "craft-xml"
+description = "Bounded XML for hostile input: an owned element tree, streaming of repeated elements, a pull reader, escaping and a writer. No DTDs, no entity expansion."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+quick-xml = { version = "0.41", default-features = false }
+thiserror = { workspace = true }

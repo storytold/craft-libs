@@ -5,7 +5,7 @@
 //! `Separation(Gold, alt DeviceCMYK)`, `DeviceN(Cyan,Black, alt DeviceCMYK)`, `Indexed(…)`,
 //! `Pattern`. Transparency group color spaces are reported per group, not in `color_spaces`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use hayro_syntax::Pdf;
@@ -69,6 +69,9 @@ pub struct ExtGState {
     pub smask_tr: bool,
 }
 
+/// The most decoded content bytes read per page (the former `page.operations()` decode limit).
+const MAX_PAGE_CONTENT: usize = 256 * 1024 * 1024;
+
 /// Summarize `pdf`. Malformed objects are skipped rather than reported.
 pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
     let pdf = Pdf::new(Arc::new(pdf.to_vec())).map_err(|e| Error::Read(format!("{e:?}")))?;
@@ -85,8 +88,11 @@ pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
         if let Some(group) = raw.get::<Dict<'_>>(b"Group".as_slice()) {
             walk.group(&format!("page {}", index + 1), &group);
         }
-        let mut ops = page.operations();
-        walk.operators(&mut ops);
+        // Read and dropped page by page: `page.operations()` keeps every page's decoded content
+        // for as long as the document, so pages sharing one stream would each hold a copy.
+        let mut content = Vec::new();
+        page.content_reader().read_into(&mut content, MAX_PAGE_CONTENT);
+        walk.operators(&mut UntypedIter::new(&content));
         let res = page.resources();
         walk.resources(&Resources {
             ext_g_states: res.ext_g_states.clone(),
@@ -95,6 +101,9 @@ pub fn summarize(pdf: &[u8]) -> Result<Summary, Error> {
             patterns: res.patterns.clone(),
             shadings: res.shadings.clone(),
         });
+    }
+    if !walk.truncated.is_empty() {
+        return Err(Error::Read(format!("resources nested more than {MAX_RESOURCE_DEPTH} levels deep were not read")));
     }
     let mut summary = walk.summary;
     summary.device_rgb = summary.color_spaces.iter().any(|cs| cs.contains("DeviceRGB"));
@@ -122,16 +131,35 @@ impl<'a> Resources<'a> {
     }
 }
 
+/// How deep forms, patterns and soft masks may reference each other's resources. Each level is
+/// a recursive `Walk::content`, so this bounds the native stack a crafted PDF can use.
+const MAX_RESOURCE_DEPTH: usize = 16;
+
 #[derive(Default)]
 struct Walk {
     summary: Summary,
-    seen: HashSet<ObjectIdentifier>,
+    /// The shallowest depth each indirect object was expanded at.
+    seen: HashMap<ObjectIdentifier, usize>,
+    /// Streams whose `/Resources` were left unread at the depth limit, and not expanded since.
+    truncated: HashSet<ObjectIdentifier>,
+    /// Graphics states and form groups already listed, so a re-expansion does not list them twice.
+    recorded: HashSet<(ObjectIdentifier, String)>,
+    depth: usize,
 }
 
 impl Walk {
-    /// True the first time an indirect object is visited.
+    /// True the first time an indirect object is visited, and again when it is reached at a shallower
+    /// depth than before (its expansion may have been cut at the depth limit). Each object is
+    /// expanded at most `MAX_RESOURCE_DEPTH + 1` times.
     fn first_visit(&mut self, id: Option<ObjectIdentifier>) -> bool {
-        id.is_none_or(|id| self.seen.insert(id))
+        let Some(id) = id else { return true };
+        match self.seen.get(&id) {
+            Some(&at) if at <= self.depth => false,
+            _ => {
+                self.seen.insert(id, self.depth);
+                true
+            }
+        }
     }
 
     fn group(&mut self, at: &str, group: &Dict<'_>) {
@@ -233,7 +261,9 @@ impl Walk {
                 self.x_object(&source, "soft mask");
             }
         }
-        self.summary.ext_g_states.push(state);
+        if gs.obj_id().is_none_or(|id| self.recorded.insert((id, String::new()))) {
+            self.summary.ext_g_states.push(state);
+        }
     }
 
     fn shading(&mut self, shading: &Object<'_>) {
@@ -258,7 +288,9 @@ impl Walk {
                 }
             }
             Some("Form") => {
-                if let Some(group) = dict.get::<Dict<'_>>(b"Group".as_slice()) {
+                if let Some(group) = dict.get::<Dict<'_>>(b"Group".as_slice())
+                    && self.recorded.insert((xobject.obj_id(), at.to_owned()))
+                {
                     self.group(at, &group);
                 }
                 self.content(xobject);
@@ -272,7 +304,17 @@ impl Walk {
             self.operators(&mut UntypedIter::new(&data));
         }
         if let Some(res) = stream.dict().get::<Dict<'_>>(b"Resources".as_slice()) {
+            if self.depth >= MAX_RESOURCE_DEPTH {
+                // An empty dictionary names nothing, so nothing was left unread.
+                if res.keys().next().is_some() {
+                    self.truncated.insert(stream.obj_id());
+                }
+                return;
+            }
+            self.truncated.remove(&stream.obj_id());
+            self.depth += 1;
             self.resources(&Resources::of(&res));
+            self.depth -= 1;
         }
     }
 }
@@ -474,5 +516,68 @@ impl StructureExpect {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PDF whose page paints `/A` and `/B` (form XObjects given by object number), with `bodies`
+    /// as objects 4 onward and one more graphics-state object after them; the form objects are streams carrying their own dictionary entries.
+    fn pdf(a: usize, b: usize, forms: &[String]) -> Vec<u8> {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        let mut objs = vec![
+            "<</Type/Catalog/Pages 2 0 R>>".to_owned(),
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>".to_owned(),
+            format!("<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]/Resources<</XObject<</A {a} 0 R/B {b} 0 R>>>>>>"),
+        ];
+        for f in forms {
+            objs.push(format!("<</Type/XObject/Subtype/Form/BBox[0 0 1 1]{f}/Length 0>>\nstream\n\nendstream"));
+        }
+        objs.push("<</BM/Multiply>>".to_owned()); // the graphics state the last form names
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend(format!("trailer\n<</Size {} /Root 1 0 R>>\nstartxref\n{xref}\n%%EOF", objs.len() + 1).as_bytes());
+        out
+    }
+
+    /// `n` chained forms (objects 4..4+n); the last paints with Multiply. Returns the form bodies.
+    fn chain(n: usize) -> Vec<String> {
+        let mut forms: Vec<String> = (0..n - 1).map(|i| format!("/Resources<</XObject<</X {} 0 R>>>>", 5 + i)).collect();
+        forms.push(format!("/Resources<</ExtGState<</G {} 0 R>>>>", 4 + n));
+        forms
+    }
+
+    #[test]
+    fn nesting_past_the_depth_limit_is_an_error_not_an_absence() {
+        let bytes = pdf(4, 4, &chain(3));
+        let s = summarize(&bytes).unwrap();
+        assert_eq!(s.ext_g_states.len(), 1, "{s:?}");
+        assert!(summarize(&pdf(4, 4, &chain(MAX_RESOURCE_DEPTH + 1))).is_err());
+        // An empty terminal /Resources at the limit leaves nothing unread.
+        let mut forms = chain(MAX_RESOURCE_DEPTH + 1);
+        *forms.last_mut().unwrap() = "/Resources<<>>".to_owned();
+        assert!(summarize(&pdf(4, 4, &forms)).is_ok());
+    }
+
+    #[test]
+    fn a_shared_stream_reached_shallower_later_is_still_expanded() {
+        let n = MAX_RESOURCE_DEPTH + 1;
+        let last = 4 + n - 1;
+        // Deep path first, then the direct one; and the reverse (keys are visited in dictionary order).
+        for (a, b) in [(4, last), (last, 4)] {
+            // One path is the whole chain, ending at the last form at the depth limit; the other is direct.
+            let summary = summarize(&pdf(a, b, &chain(n))).unwrap();
+            assert_eq!(summary.ext_g_states.len(), 1, "{a} {b}");
+        }
     }
 }

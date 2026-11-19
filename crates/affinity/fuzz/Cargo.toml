@@ -1,0 +1,31 @@
+[package]
+name = "craft-affinity-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+craft-affinity = { path = "..", features = ["synth"] }
+
+[[bin]]
+name = "container"
+path = "fuzz_targets/container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stream"
+path = "fuzz_targets/stream.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace: cargo-fuzz needs nightly and sanitizer flags, so this crate stays out of the
+# main one.
+[workspace]
+members = ["."]

@@ -1,0 +1,16 @@
+[package]
+name = "craft-markdown"
+description = "Markdown read and written: a CommonMark subset with GitHub tables and strikethrough, to and from the craft-flow model and a craft-wordmodel Document."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-flow = { workspace = true }
+craft-html = { workspace = true }
+craft-wordmodel = { workspace = true }

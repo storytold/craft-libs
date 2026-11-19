@@ -1,6 +1,6 @@
 [package]
 name = "craft-jpeg"
-description = "Clean-room decoder for 12-bit and arithmetic-coded JPEG (ITU-T T.81)."
+description = "Clean-room JPEG decoder (ITU-T T.81): 12-bit and arithmetic-coded frames, and baseline frames a band of rows at a time."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

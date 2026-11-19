@@ -105,7 +105,13 @@ pub enum ComplexReason {
     Degenerate,
     /// More regions than [`FlattenOptions::max_regions`].
     TooManyRegions(usize),
+    /// More path segments than [`MAX_GROUP_SEGMENTS`], so the arrangement was not built.
+    TooManySegments(usize),
 }
+
+/// Path segments (shapes and clips together) a group may hold before it is rasterized whole
+/// without building its arrangement, whose crossings grow with the square of the segment count.
+pub const MAX_GROUP_SEGMENTS: usize = 200_000;
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -180,6 +186,20 @@ fn flatten_group(
         out.complex.push(ComplexRegion { path, items: members.to_vec(), at: out.items.len(), whole: Some(reason) });
         out.report.complex_groups.push(ComplexGroup { items: members.to_vec(), reason });
     };
+    let segments =
+        b.shapes.iter().map(|s| s.path.elements().len()).chain(b.clips.iter().map(|c| c.path.elements().len())).fold(0_usize, usize::saturating_add);
+    if segments > MAX_GROUP_SEGMENTS {
+        geom::check_finite(&b.shapes, &b.clips)?;
+        let mut path = BezPath::new();
+        for &i in members {
+            if !bounds[i].is_nan() {
+                path.extend(bounds[i].abs().path_elements(0.1));
+            }
+        }
+        whole(out, path, ComplexReason::TooManySegments(segments));
+        out.report.flattened += members.len();
+        return Ok(());
+    }
     let regions = match geom::regions_with(&b.shapes, &b.clips, opts.sliver) {
         Ok(r) => r,
         Err(GeomError::Degenerate) => {
@@ -1087,6 +1107,45 @@ mod tests {
         assert_eq!(f.report.fills, 3, "{:?}", f.items);
         assert_eq!(at(&f, 15.0, 50.0, &[C, K]).1, [1.0, 0.0]);
         assert_eq!(at(&f, 65.0, 50.0, &[C, M, K]).1, [0.5, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn a_group_with_too_many_segments_goes_to_complex_unbuilt() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for i in 0..=MAX_GROUP_SEGMENTS {
+            path.line_to(Point::new((i % 100) as f64, (i / 100) as f64));
+        }
+        path.close_path();
+        let crowded = Item::Fill(FillItem {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![(C, 1.0)])),
+            overprint: Overprint::default(),
+        });
+        let f = flat(&list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]));
+        assert_eq!(f.report.complex_groups.len(), 1);
+        assert!(matches!(f.report.complex_groups[0].reason, ComplexReason::TooManySegments(n) if n > MAX_GROUP_SEGMENTS), "{:?}", f.report);
+        assert_eq!(f.report.regions, 0, "the arrangement was not built");
+    }
+
+    #[test]
+    fn a_group_with_too_many_segments_still_rejects_non_finite_points() {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        for i in 0..=MAX_GROUP_SEGMENTS {
+            path.line_to(Point::new((i % 100) as f64, (i / 100) as f64));
+        }
+        path.line_to(Point::new(f64::NAN, 0.0));
+        path.close_path();
+        let crowded = Item::Fill(FillItem {
+            path,
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![(C, 1.0)])),
+            overprint: Overprint::default(),
+        });
+        let l = list(InkSet::new(), vec![Item::Group(group(0.5, BlendMode::Normal, vec![crowded]))]);
+        assert!(flatten(&l, &FlattenOptions::default()).is_err());
     }
 
     #[test]

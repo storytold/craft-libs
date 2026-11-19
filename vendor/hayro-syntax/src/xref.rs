@@ -4,6 +4,7 @@ use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
 use crate::object::Name;
+use crate::object::Number;
 use crate::object::ObjectIdentifier;
 use crate::object::Stream;
 use crate::object::dict::keys::{
@@ -38,23 +39,29 @@ pub(crate) enum XRefError {
 }
 
 /// Parse the "root" xref from the PDF.
+#[cfg(test)]
 pub(crate) fn root_xref(data: PdfData, password: &[u8], limits: DecodeLimits) -> Result<XRef, XRefError> {
-    let mut xref_map = FxHashMap::default();
-    let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
-    let trailer = populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map, limits).ok_or(XRefError::Unknown)?;
+    root_xref_controlled(data, password, limits, None)
+}
 
-    XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, password, limits)
+pub(crate) fn root_xref_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<XRef, XRefError> {
+    let mut xref_map = FxHashMap::default();
+    let xref_pos = find_last_xref_pos_controlled(data.as_ref(), control.as_ref()).ok_or(XRefError::Unknown)?;
+    let trailer = populate_xref_controlled(data.as_ref(), xref_pos, &mut xref_map, limits, control.clone()).ok_or(XRefError::Unknown)?;
+
+    XRef::new(data.clone(), xref_map, XRefInput::TrailerDictData(trailer), false, password, limits, control)
 }
 
 /// Try to manually parse the PDF to build an xref table and trailer dictionary.
-pub(crate) fn fallback(data: PdfData, password: &[u8], limits: DecodeLimits) -> Option<XRef> {
+pub(crate) fn fallback_controlled(data: PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<XRef> {
+    crate::cancel::check(control.as_ref())?;
     warn!("xref table was invalid, trying to manually build xref table");
-    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits);
+    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits, control.clone());
 
     if let Some(xref_input) = xref_input {
         warn!("rebuild xref table with {} entries", xref_map.len());
 
-        XRef::new(data.clone(), xref_map, xref_input, true, password, limits).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, password, limits, control).ok()
     } else {
         warn!("couldn't find trailer dictionary, failed to rebuild xref table");
 
@@ -62,9 +69,69 @@ pub(crate) fn fallback(data: PdfData, password: &[u8], limits: DecodeLimits) -> 
     }
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8], limits: DecodeLimits) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy_with_limits(limits), true, password)
+/// PdfCraft patch: an `N G obj` header for the repair scan, taking a generation number that
+/// cannot be read as 0.
+///
+/// A generation number is at most 65,535 (ISO 32000-2 §7.5.4), so `3 18446744073709551616 obj` is
+/// malformed and [`ObjectIdentifier::read`] is right to refuse it everywhere else. This scan runs
+/// only when a file's cross-reference table is unusable and its objects are being recovered by
+/// reading the file, where refusing the header drops the object and whatever it holds (#5580).
+/// Before #427 the digits wrapped, and 2^64 wrapped to exactly 0, which is the only reason such a
+/// file used to open.
+///
+/// Only here: reading numbers anywhere else is unchanged.
+fn read_object_header<'a>(r: &mut Reader<'a>, ctx: &ReaderContext<'a>) -> Option<ObjectIdentifier> {
+    let mut strict = r.clone();
+    if let Some(obj_id) = strict.read::<ObjectIdentifier>(ctx) {
+        *r = strict;
+        return Some(obj_id);
+    }
+    // On a clone as well, so a header that isn't one leaves `r` where it was for the caller.
+    let mut lenient = r.clone();
+    let obj_number = lenient.read_without_context::<i32>()?;
+    lenient.skip_white_spaces_and_comments();
+    // Any number at all in the generation position, including one no generation may be.
+    lenient.skip::<Number>(false)?;
+    lenient.skip_white_spaces_and_comments();
+    lenient.forward_tag(b"obj")?;
+    *r = lenient;
+    Some(ObjectIdentifier::new(obj_number, 0))
 }
+
+/// PdfCraft patch: the body of the object at `offset` whose `N G obj` header cannot be read
+/// strictly, for a table rebuilt by scanning the file (#5580). The steps are
+/// `IndirectObject::read`'s, with [`read_object_header`] in place of the strict identifier.
+fn read_repaired_body<'a, T>(
+    data: &'a [u8],
+    offset: usize,
+    id: ObjectIdentifier,
+    ctx: &ReaderContext<'a>,
+) -> Option<T>
+where
+    T: ObjectLike<'a>,
+{
+    let mut r = Reader::new(data);
+    r.jump(offset);
+    // The number is what identifies the object; the generation is what could not be read.
+    if read_object_header(&mut r, ctx)?.obj_number != id.obj_number {
+        return None;
+    }
+    let mut ctx = ctx.clone();
+    if ctx.parent_chain_contains(&id) {
+        warn!("cycle detected in indirect object: {id:?}");
+
+        return None;
+    }
+    ctx.set_obj_number(id);
+    ctx.parent_chain_push(id);
+    r.skip_white_spaces_and_comments();
+    r.read_with_context::<T>(&ctx)
+}
+
+fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy_with_control(limits, control), true, password)
+}
+
 
 fn fallback_xref_map_inner<'a>(
     data: &'a PdfData,
@@ -73,26 +140,55 @@ fn fallback_xref_map_inner<'a>(
     password: &[u8],
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
+    // PdfCraft patch: the generation-0 keys below that stand in for a header with another
+    // generation, so a later header can replace one while a real `N 0 obj` is never displaced
+    // (noted in review of #5580).
+    let mut aliases: rustc_hash::FxHashSet<ObjectIdentifier> = rustc_hash::FxHashSet::default();
     let mut trailer_dicts = vec![];
     let mut root_ref = None;
 
     let mut r = Reader::new(data.as_ref());
+    r.set_control(dummy_ctx.control().cloned());
 
     let mut last_obj_num = None;
 
     loop {
+        if crate::cancel::check(dummy_ctx.control()).is_none() {
+            return (XrefMap::default(), None);
+        }
         let cur_pos = r.offset();
 
         let mut old_r = r.clone();
 
         // First try to check if we have an object identifier.
         if r.peek_byte().is_some_and(|b: u8| b.is_ascii_digit()) {
-            if let Some(obj_id) = r.read::<ObjectIdentifier>(&dummy_ctx) {
+            if let Some(obj_id) = read_object_header(&mut r, &dummy_ctx) {
                 let mut cloned = r.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
-                if cloned.skip::<Object<'_>>(false).is_some() {
-                    xref_map.insert(obj_id, EntryType::Normal(cur_pos));
+                if cloned.skip::<Object<'_>>(false).is_some()
+                    && insert_entry(&mut xref_map, obj_id, EntryType::Normal(cur_pos)).is_some()
+                {
+                    // PdfCraft patch: also reachable by object number alone, so a reference that
+                    // names a different generation than the header still finds it. A rebuilt
+                    // table has no revision history to tell two generations apart, and a file
+                    // that needs rebuilding references everything as `N 0 R` whatever its headers
+                    // say: `poppler-85140-0.pdf` has one page whose header reads
+                    // `3 18446744073709551616 obj` with a page tree pointing at `3 0 R`, so the
+                    // page was lost and the file did not open at all (#5580).
+                    let by_number = ObjectIdentifier::new(obj_id.obj_number, 0);
+                    if obj_id.gen_number == 0 {
+                        // A real `N 0 obj`: it owns the key from here on, and the last one wins
+                        // as every other entry does.
+                        aliases.remove(&by_number);
+                    } else if !xref_map.contains_key(&by_number) || aliases.contains(&by_number) {
+                        // Stand in for it, and let a later header for the same number replace the
+                        // stand-in -- the exact key moves on, so an alias left behind would send
+                        // `N 0 R` to a body the exact key no longer names (noted in review).
+                        if insert_entry(&mut xref_map, by_number, EntryType::Normal(cur_pos)).is_some() {
+                            aliases.insert(by_number);
+                        }
+                    }
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
                 }
@@ -139,13 +235,10 @@ fn fallback_xref_map_inner<'a>(
                                     .get(&id)
                                     .is_none_or(|e| !matches!(e, &EntryType::Normal(_)))
                                 {
-                                    xref_map.insert(
-                                        id,
-                                        EntryType::ObjStream(
-                                            last_obj_num.obj_number as u32,
-                                            idx as u32,
-                                        ),
-                                    );
+                                    let entry = EntryType::ObjStream(last_obj_num.obj_number as u32, idx as u32);
+                                    if insert_entry(&mut xref_map, id, entry).is_none() {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -242,6 +335,7 @@ fn fallback_xref_map_inner<'a>(
             true,
             password,
             dummy_ctx.decode_limits(),
+            dummy_ctx.control().cloned(),
         ) {
             let ctx = ReaderContext::new(&xref, false);
             let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
@@ -283,7 +377,8 @@ impl XRef {
         Some(f(&mut cache))
     }
 
-    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, password: &[u8], limits: DecodeLimits) -> Result<Self, XRefError> {
+    fn new(data: PdfData, xref_map: XrefMap, input: XRefInput<'_>, repaired: bool, password: &[u8], limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Result<Self, XRefError> {
+        crate::cancel::check(control.as_ref()).ok_or(XRefError::Unknown)?;
         // This is a bit hacky, but the problem is we can't read the resolved trailer dictionary
         // before we actually created the xref struct. So we first create it using dummy data
         // and then populate the data.
@@ -298,6 +393,7 @@ impl XRef {
             trailer_data,
             password: password.to_vec(),
             limits,
+            control,
             dict_cache: Arc::new(Mutex::new(DictCache::default())),
         })));
 
@@ -397,6 +493,13 @@ impl XRef {
         }
     }
 
+    pub(crate) fn control(&self) -> Option<&crate::cancel::Control> {
+        match &self.0 {
+            Inner::Dummy => None,
+            Inner::Some(repr) => repr.control.as_ref().filter(|c| c.active()),
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         match &self.0 {
             Inner::Dummy => 0,
@@ -436,10 +539,12 @@ impl XRef {
             Inner::Dummy => unimplemented!(),
             Inner::Some(r) => {
                 let locked = r.map.get();
+                let control = self.control();
                 let mut elements = locked
                     .xref_map
                     .iter()
-                    .map(|(id, e)| {
+                    .map_while(|(id, e)| {
+                        crate::cancel::check(control)?;
                         let offset = match e {
                             EntryType::Normal(o) => (*o, 0),
                             EntryType::ObjStream(id, index) => {
@@ -453,18 +558,37 @@ impl XRef {
                             }
                         };
 
-                        (*id, offset)
+                        Some((*id, offset))
                     })
                     .collect::<Vec<_>>();
 
                 // Try to yield in the order the objects appeared in the
                 // PDF.
-                elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
-
+                if let Some(control) = control {
+                    let mut sorted = alloc::collections::BTreeMap::new();
+                    for (order, (id, offset)) in elements.drain(..).enumerate() {
+                        if control.check().is_none() {
+                            break;
+                        }
+                        sorted.insert((offset, order), (id, offset));
+                    }
+                    elements.extend(sorted.into_values().map_while(|entry| control.check().map(|_| entry)));
+                } else {
+                    elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
+                }
+                // PdfCraft patch: one object per location. A rebuilt table can hold two keys for
+                // one object -- its own generation and the generation-0 stand-in (#5580) -- and
+                // enumeration yielded the object once for each, so a document recovered by
+                // `Pages::new_brute_force` reported the page twice (noted in review). Both keys
+                // stay for lookups; only this walk is deduplicated. The object number is part of
+                // the key: an object stream at (offset, 0) and its first member, also
+                // (offset, 0), are two objects.
+                elements.dedup_by(|a, b| a.1 == b.1 && a.0.obj_number == b.0.obj_number);
                 let mut iter = elements.into_iter();
 
                 iter::from_fn(move || {
                     for next in iter.by_ref() {
+                        crate::cancel::check(control)?;
                         if let Some(obj) = self.get_with(next.0, &ReaderContext::new(self, false)) {
                             return Some(obj);
                         } else {
@@ -494,7 +618,10 @@ impl XRef {
         // Set first so an unwinding fallback cannot trigger a reparse storm.
         // Assignment below publishes a complete replacement atomically.
         locked.repaired = true;
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
+        if crate::cancel::check(self.control()).is_none() {
+            return;
+        }
+        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits, self.control().cloned());
         locked.xref_map = xref_map;
     }
 
@@ -545,6 +672,7 @@ impl XRef {
     where
         T: ObjectLike<'a>,
     {
+        crate::cancel::check(ctx.control())?;
         let Inner::Some(repr) = &self.0 else {
             return None;
         };
@@ -571,10 +699,27 @@ impl XRef {
                 r.jump(offset);
 
                 if let Some(object) = r.read_with_context::<IndirectObject<T>>(&ctx) {
-                    if object.id() == &id {
+                    // PdfCraft patch: in a table rebuilt by scanning the file, the object number
+                    // is what identifies an object. There is no revision history to tell two
+                    // generations apart, the scan already files objects found in object streams
+                    // under generation 0, and a malformed generation in a header would otherwise
+                    // make the object unreadable through the reference that names it (#5580). A
+                    // table read from the file's own xref keeps the exact match.
+                    if object.id() == &id || (repaired && object.id().obj_number == id.obj_number) {
                         return Some(object.get());
                     }
                 } else {
+                    // PdfCraft patch: the strict read of the header failed. In a table rebuilt by
+                    // scanning the file that can be a generation number no generation may be --
+                    // `3 18446744073709551616 obj` -- and refusing it loses the object the
+                    // reference names (#5580). The object number still has to be the one asked
+                    // for; only an unreadable generation is tolerated, and only here.
+                    if repaired
+                        && let Some(object) =
+                            read_repaired_body::<T>(repr.data.get().as_ref(), offset, id, &ctx)
+                    {
+                        return Some(object);
+                    }
                     // There is a valid object at the offset, it's just not of the type the caller
                     // expected, which is fine.
                     if r.skip::<IndirectObject<Object<'_>>>(false).is_some() {
@@ -648,10 +793,30 @@ pub(crate) enum XRefInput<'a> {
     RootRef(ObjectIdentifier),
 }
 
+#[cfg(test)]
 pub(crate) fn find_last_xref_pos(data: &[u8]) -> Option<usize> {
+    find_last_xref_pos_controlled(data, None)
+}
+
+fn find_last_xref_pos_controlled(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
     let needle = b"startxref";
-    let pos = findr_needle(data, needle)?;
+    let pos = if control.is_some() {
+        let mut found = None;
+        for i in (0..data.len().div_ceil(64 * 1024)).rev() {
+            crate::cancel::check(control)?;
+            let start = i * 64 * 1024;
+            let end = (start + 64 * 1024 + needle.len() - 1).min(data.len());
+            if let Some(at) = findr_needle(data.get(start..end)?, needle) {
+                found = Some(start + at);
+                break;
+            }
+        }
+        found?
+    } else {
+        findr_needle(data, needle)?
+    };
     let mut finder = Reader::new(data);
+    finder.set_control(control.cloned());
     finder.jump(pos);
     finder.forward_tag(needle)?;
     finder.skip_white_spaces_and_comments();
@@ -670,6 +835,44 @@ enum EntryType {
 }
 
 type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
+
+/// PdfCraft patch: the most entries one document's xref map may hold, the PDF 32000-1 (Annex C)
+/// limit on indirect objects. An xref-stream entry can be one decoded byte, so a stream at the
+/// decode limit could otherwise become hundreds of millions of map entries (gigabytes of map).
+const MAX_XREF_ENTRIES: usize = 8_388_607;
+
+/// PdfCraft patch: insert an entry unless that would take `map` past [`MAX_XREF_ENTRIES`].
+fn insert_entry(map: &mut XrefMap, id: ObjectIdentifier, entry: EntryType) -> Option<()> {
+    if map.len() >= MAX_XREF_ENTRIES && !map.contains_key(&id) {
+        warn!("xref holds more than {MAX_XREF_ENTRIES} entries");
+
+        return None;
+    }
+    map.insert(id, entry);
+
+    Some(())
+}
+
+/// PdfCraft patch: merge a section's entries into `map`, refusing a result past
+/// [`MAX_XREF_ENTRIES`].
+fn merge_entries(map: &mut XrefMap, own: XrefMap) -> Option<()> {
+    for (id, entry) in own {
+        insert_entry(map, id, entry)?;
+    }
+
+    Some(())
+}
+
+fn merge_entries_controlled(map: &mut XrefMap, own: XrefMap, control: Option<&crate::cancel::Control>) -> Option<()> {
+    if control.is_none() {
+        return merge_entries(map, own);
+    }
+    for (id, entry) in own {
+        crate::cancel::check(control)?;
+        insert_entry(map, id, entry)?;
+    }
+    Some(())
+}
 
 /// Representation of a proper xref table.
 #[derive(Debug)]
@@ -705,6 +908,7 @@ struct SomeRepr {
     has_ocgs: bool,
     password: Vec<u8>,
     limits: DecodeLimits,
+    control: Option<crate::cancel::Control>,
     trailer_data: TrailerData,
 }
 
@@ -754,9 +958,14 @@ impl XRefEntry {
     }
 }
 
+#[cfg(test)]
 fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap, limits: DecodeLimits) -> Option<&'a [u8]> {
+    populate_xref_controlled(data, pos, xref_map, limits, None)
+}
+
+fn populate_xref_controlled<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap, limits: DecodeLimits, control: Option<crate::cancel::Control>) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
-    populate_xref_impl_inner(data, pos, xref_map, &mut visited, limits)
+    populate_xref_impl_inner(data, pos, xref_map, &mut visited, limits, control)
 }
 
 /// The offset of the previous xref section (`Prev`).
@@ -776,7 +985,7 @@ fn prev_offset(data: &[u8], trailer: &Dict<'_>, own: &XrefMap) -> Option<usize> 
             let mut reader = Reader::new(data);
             reader.jump(*at);
             reader
-                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy())
+                .read_with_context::<IndirectObject<i32>>(&ReaderContext::dummy_with_control(trailer.ctx().decode_limits(), trailer.ctx().control().cloned()))
                 .filter(|o| o.id() == &id)
                 .map(|o| o.get())
                 .filter(|p| *p >= 0)
@@ -796,7 +1005,9 @@ fn populate_xref_impl_inner<'a>(
     xref_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
     limits: DecodeLimits,
+    control: Option<crate::cancel::Control>,
 ) -> Option<&'a [u8]> {
+    crate::cancel::check(control.as_ref())?;
     if !visited.insert(pos) {
         warn!("circular xref PREV chain detected at offset {}", pos);
 
@@ -813,6 +1024,7 @@ fn populate_xref_impl_inner<'a>(
     }
 
     let mut reader = Reader::new(data);
+    reader.set_control(control);
     reader.jump(pos);
     // In case the position points to before the object number of a xref stream.
     reader.skip_white_spaces_and_comments();
@@ -852,7 +1064,8 @@ fn populate_from_xref_table<'a>(
 ) -> Option<&'a [u8]> {
     let trailer = {
         let mut reader = reader.clone();
-        read_xref_table_trailer(&mut reader, &ReaderContext::dummy_with_limits(limits))?
+        let ctx = ReaderContext::dummy_with_control(limits, reader.control().cloned());
+        read_xref_table_trailer(&mut reader, &ctx)?
     };
 
     reader.skip_white_spaces();
@@ -877,26 +1090,27 @@ fn populate_from_xref_table<'a>(
             // Specification says we should ignore any object number > SIZE, but probably
             // not important?
             if entry.used {
-                own.insert(
+                insert_entry(
+                    &mut own,
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
                     EntryType::Normal(entry.offset),
-                );
+                )?;
             }
         }
     }
 
     if let Some(prev) = prev_offset(data, &trailer, &own) {
         // First insert the entries from any previous xref tables.
-        populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+        populate_xref_impl_inner(data, prev, insert_map, visited, limits, reader.control().cloned())?;
     }
 
     // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
     // after looking at `PREV`.
     if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
-        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits)?;
+        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, limits, reader.control().cloned())?;
     }
 
-    insert_map.extend(own);
+    merge_entries_controlled(insert_map, own, reader.control())?;
 
     Some(trailer.data())
 }
@@ -908,7 +1122,8 @@ fn populate_from_xref_stream<'a>(
     visited: &mut BTreeSet<usize>,
     limits: DecodeLimits,
 ) -> Option<&'a [u8]> {
-    let stream = reader.read_with_context::<IndirectObject<Stream<'_>>>(&ReaderContext::dummy_with_limits(limits))?.get();
+    let ctx = ReaderContext::dummy_with_control(limits, reader.control().cloned());
+    let stream = reader.read_with_context::<IndirectObject<Stream<'_>>>(&ctx)?.get();
 
     let size = stream.dict().get::<u32>(SIZE)?;
 
@@ -925,6 +1140,7 @@ fn populate_from_xref_stream<'a>(
     // PdfCraft patch: (PdfCraft #2400) this section's entries are read first, for `prev_offset`.
     let mut own = XrefMap::default();
     let mut xref_reader = Reader::new(xref_data.as_ref());
+    xref_reader.set_control(reader.control().cloned());
 
     if let Some(arr) = stream.dict().get::<Array<'_>>(INDEX) {
         let iter = arr.iter::<(u32, u32)>();
@@ -946,10 +1162,10 @@ fn populate_from_xref_stream<'a>(
 
     if let Some(prev) = prev_offset(data, stream.dict(), &own) {
         // First insert the entries from any previous xref tables.
-        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits)?;
+        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, limits, reader.control().cloned())?;
     }
 
-    insert_map.extend(own);
+    merge_entries_controlled(insert_map, own, reader.control())?;
 
     Some(stream.dict().data())
 }
@@ -1036,10 +1252,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number as i32),
                     EntryType::Normal(offset as usize),
-                );
+                )?;
             }
             2 => {
                 let obj_stream_number = {
@@ -1054,10 +1271,11 @@ fn xref_stream_subsection<'a>(
                     0
                 };
 
-                insert_map.insert(
+                insert_entry(
+                    insert_map,
                     ObjectIdentifier::new(obj_number, gen_number),
                     EntryType::ObjStream(obj_stream_number, index),
-                );
+                )?;
             }
             _ => {
                 warn!("xref has unknown field type {f_type}");
@@ -1132,10 +1350,12 @@ impl<'a> ObjectStream<'a> {
         let first_offset = inner.dict().get::<usize>(FIRST)?;
 
         let mut r = Reader::new(data);
+        r.set_control(inner.dict().ctx().control().cloned());
 
         let mut offsets = vec![];
 
         for _ in 0..num_objects {
+            crate::cancel::check(inner.dict().ctx().control())?;
             r.skip_white_spaces_and_comments();
             // Skip object number
             let obj_num = r.read_without_context::<u32>()?;
@@ -1153,6 +1373,7 @@ impl<'a> ObjectStream<'a> {
     {
         let offset = self.offsets.get(index as usize)?.1;
         let mut r = Reader::new(self.data);
+        r.set_control(self.ctx.control().cloned());
         r.jump(offset);
         r.skip_white_spaces_and_comments();
 
@@ -1194,6 +1415,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cancellation_stops_before_a_whole_xref_subsection_is_read() {
+        let data = vec![1; 512 * 1024];
+        let (control, polls) = crate::cancel::stop_at(3);
+        let mut reader = Reader::new(&data);
+        reader.set_control(Some(control));
+        let mut map = XrefMap::default();
+        assert!(xref_stream_subsection(&mut reader, 0, data.len() as u32, 1, 0, 0, &mut map).is_none());
+        assert!(reader.offset() > 0 && reader.offset() < data.len());
+        assert!(!map.is_empty() && map.len() < data.len());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn cancellation_interrupts_the_recovery_scanner() {
+        let data: PdfData = vec![b'a'; 2 << 20].into();
+        let (control, polls) = crate::cancel::stop_at(10);
+        assert!(fallback_controlled(data, b"", DecodeLimits::default(), Some(control.clone())).is_none());
+        assert!(control.check().is_none());
+        assert_eq!(polls.load(core::sync::atomic::Ordering::Relaxed), 10);
+    }
+
+    #[test]
     fn xref_stream_entries_need_backing_bytes() {
         let mut map = XrefMap::default();
         // All widths zero: an entry reads nothing, so none may be declared.
@@ -1214,6 +1457,30 @@ mod tests {
             assert!(xref_stream_subsection(&mut wrap, start, 2, 1, 1, 1, &mut past_end).is_none());
             assert!(past_end.keys().all(|id| id.obj_number >= 0));
         }
+    }
+
+    #[test]
+    fn xref_entries_stop_at_the_document_limit() {
+        // One-byte entries (type 1, offset and generation zero): the cheapest a stream can encode.
+        let data = vec![1u8; MAX_XREF_ENTRIES + 1];
+        let mut map = XrefMap::default();
+        let mut full = Reader::new(&data[..MAX_XREF_ENTRIES]);
+        assert!(xref_stream_subsection(&mut full, 0, MAX_XREF_ENTRIES as u32, 1, 0, 0, &mut map).is_some());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // A new object past the limit is refused, from a stream, a table section or a merge.
+        let mut over = Reader::new(&data[..1]);
+        assert!(xref_stream_subsection(&mut over, MAX_XREF_ENTRIES as u32, 1, 1, 0, 0, &mut map).is_none());
+        let mut other = XrefMap::default();
+        other.insert(ObjectIdentifier::new(i32::MAX, 0), EntryType::Normal(0));
+        assert!(merge_entries(&mut map, other).is_none());
+        assert_eq!(map.len(), MAX_XREF_ENTRIES);
+
+        // Replacing an existing object (an incremental update) still works at the limit.
+        let mut update = XrefMap::default();
+        update.insert(ObjectIdentifier::new(0, 0), EntryType::Normal(42));
+        assert!(merge_entries(&mut map, update).is_some());
+        assert_eq!(map.get(&ObjectIdentifier::new(0, 0)), Some(&EntryType::Normal(42)));
     }
 
     #[test]
@@ -1375,6 +1642,18 @@ mod tests {
                 job.join().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn an_object_stream_and_its_first_member_are_both_enumerated() {
+        // Both sit at (stream offset, 0) in `objects`' ordering; one object per location must
+        // not cost either of them.
+        let pdf = crate::Pdf::new(object_stream_fixture(false)).unwrap();
+        let objects: Vec<_> = pdf.xref().objects().into_iter().collect();
+        assert!(objects.iter().any(|o| matches!(o, Object::Stream(_))));
+        assert!(objects.iter().any(
+            |o| matches!(o, Object::Dict(d) if d.get::<i32>(b"Marker") == Some(123))
+        ));
     }
 
     #[test]
@@ -1573,6 +1852,52 @@ mod tests {
         let data = b"xref\n0 999999999999999999999\ntrailer\n<<>>";
         let mut reader = Reader::new(data);
         assert!(read_xref_table_trailer(&mut reader, &ReaderContext::dummy()).is_none());
+    }
+
+    /// PdfCraft patch (#5580): a file whose table is rebuilt by scanning keeps an object whose header
+    /// names a generation the reference does not (`3 99999 obj`, or `3 18446744073709551616 obj` as in
+    /// poppler-85140-0.pdf, no generation may be), since the scan has no revision history and such a
+    /// file references everything as `N 0 R`. A stray number before a header (`42 3 0 obj`) costs nothing.
+    #[test]
+    fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
+        for generation in ["0", "99999", "18446744073709551616"] {
+            let pdf = alloc::format!(
+                "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 {generation} obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+                 trailer << /Root 1 0 R >>\n%%EOF\n"
+            );
+            let pdf = crate::Pdf::new(pdf.into_bytes()).unwrap();
+            assert_eq!(pdf.pages().len(), 1, "generation {generation}");
+            assert_eq!(pdf.pages()[0].render_dimensions(), (200.0, 100.0), "generation {generation}");
+        }
+        let pdf = "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                   2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                   42 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+                   trailer << /Root 1 0 R >>\n%%EOF\n";
+        let pdf = crate::Pdf::new(pdf.as_bytes().to_vec()).unwrap();
+        assert_eq!(pdf.pages()[0].render_dimensions(), (200.0, 100.0), "the header after a stray number");
+    }
+
+    /// PdfCraft patch (#5580): the generation-0 stand-in is one key, not a second object (a document
+    /// recovered without a page tree reported its page twice), and a later header for the same number
+    /// replaces it, so `3 0 R` reads the body `3 1 R` reads.
+    #[test]
+    fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
+        let pdf = "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                   3 99999 obj << /Type /Page /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj\n\
+                   4 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+                   trailer << /Root 1 0 R >>\n%%EOF\n";
+        let pdf = crate::Pdf::new(pdf.as_bytes().to_vec()).unwrap();
+        assert_eq!(pdf.pages().len(), 1, "one page, not two");
+
+        let twice = "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                     2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                     3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+                     3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] >> endobj\n\
+                     trailer << /Root 1 0 R >>\n%%EOF\n";
+        let pdf = crate::Pdf::new(twice.as_bytes().to_vec()).unwrap();
+        assert_eq!(pdf.pages()[0].render_dimensions(), (300.0, 150.0), "`3 0 R` reads the later body, as `3 1` does");
     }
 }
 

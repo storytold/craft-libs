@@ -13,6 +13,8 @@ pub(super) const TAB_PADDING: f32 = 24.0;
 pub struct DockStyle {
     pub tab_height: f32,
     pub gap: f32,
+    /// Optional gap beside attached side docks. Other split/row dividers retain `gap`.
+    pub dock_gap: Option<f32>,
     pub min_pane: f32,
     pub background: Color32,
     pub tab_background: Color32,
@@ -30,7 +32,7 @@ pub struct DockStyle {
     pub panels_label: String,
     pub resize_label: String,
     pub resize_window_label: String,
-    /// Accessibility label of a group's drag bar and top border.
+    /// Accessibility label of a group's drag bar and top border; `{name}` names the group.
     pub move_group_label: String,
     pub close_group_label: String,
     pub minimize_label: String,
@@ -113,7 +115,7 @@ pub struct DockStyle {
     /// [D] Lay docks out right to left: `Side::Start` is the right edge. egui has no app-wide
     /// layout direction, so the host sets this from its locale. Splits keep their sides.
     pub right_to_left: bool,
-    /// [D] Accessibility label of a column bar.
+    /// [D] Accessibility label of a column bar; `{name}` names the column ([`Self::localized`]).
     pub move_column_label: String,
     /// [D] Column menu and group menu items.
     pub collapse_to_icons_label: String,
@@ -175,6 +177,7 @@ impl DockStyle {
         Self {
             tab_height: 26.0,
             gap: 4.0,
+            dock_gap: None,
             min_pane: 40.0,
             background: visuals.panel_fill,
             tab_background: visuals.extreme_bg_color,
@@ -191,7 +194,7 @@ impl DockStyle {
             panels_label: "Panels".into(),
             resize_label: "Resize panels".into(),
             resize_window_label: "Resize panel window".into(),
-            move_group_label: "Move tab group".into(),
+            move_group_label: super::labels::MOVE_GROUP.into(),
             close_group_label: "Close Tab Group".into(),
             minimize_label: "Minimize".into(),
             expand_label: "Expand".into(),
@@ -218,7 +221,7 @@ impl DockStyle {
             iconic_label_width: 96.0,
             auto_collapse_label: "Auto-Collapse Iconic Panels".into(),
             right_to_left: false,
-            move_column_label: "Move panel column".into(),
+            move_column_label: super::labels::MOVE_COLUMN.into(),
             collapse_to_icons_label: "Collapse to Icons".into(),
             expand_panels_label: "Expand Panels".into(),
             collapse_column_label: "Collapse column to icons".into(),
@@ -304,6 +307,7 @@ impl DockStyle {
             && self.font.size > 0.0
             && self.drop_line_width > 0.0
             && self.side_zone_fraction <= 0.5
+            && self.dock_gap.is_none_or(|gap| gap.is_finite() && (0.0..=4096.0).contains(&gap))
     }
 }
 
@@ -832,6 +836,45 @@ pub fn send_keys(ctx: &Context, viewport: egui::ViewportId, events: Vec<egui::Ev
 /// `show*` functions override `logical_label`, `permissions` and `limits`.
 pub trait DockContent<P> {
     fn body(&mut self, ui: &mut Ui, panel: &P);
+
+    /// Observe the fitted rectangle of each attached column, before its chrome is drawn.
+    fn column_rect(&mut self, _ctx: &Context, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// An exclusive host surface replaces stock iconic painting, focus, drag and resize.
+    /// Placement and column-edge drop targets still belong to the workspace renderer.
+    fn owns_iconic_column(&self, _first: &P) -> bool {
+        false
+    }
+
+    /// Draw the complete iconic column inside its fitted rectangle when owned by the host.
+    fn iconic_column(&mut self, _ui: &mut Ui, _column: &super::Column<P>, _rect: Rect, _side: super::Side) {}
+
+    /// Return true after painting an exclusive group surface; stock tabs/body/targets are skipped.
+    /// The host supplies that group's size limits through `limits`.
+    fn custom_group(&mut self, _ui: &mut Ui, _panels: &[P], _active: &P, _rect: Rect, _floating: bool) -> bool {
+        false
+    }
+
+    /// Hosts which paint shared seams can keep the stock resize input without a second fill.
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        default
+    }
+    /// Presentation-only collapse of a group; its selected tab remains model state.
+    fn group_collapsed(&self, _panels: &[P]) -> bool {
+        false
+    }
+    /// Paint a fitted split gap in the owning surface, without another resize target.
+    fn split_separator(&mut self, _ui: &mut Ui, _rect: Rect) {}
+    /// The host supplies horizontal resize input at the floating frame edges.
+    /// Internal split dividers retain stock input unless `owns_floating_split_width` is true.
+    fn owns_floating_width(&self, _panel: &P) -> bool {
+        false
+    }
+    /// The host supplies horizontal resize input for every internal split in this floating tree.
+    /// This is separate from frame-edge ownership; only return true with replacement input.
+    fn owns_floating_split_width(&self, _panel: &P) -> bool {
+        false
+    }
     /// Plain text name for accessibility, menus and the default visual label.
     fn logical_label(&self, panel: &P) -> String
     where
@@ -967,6 +1010,33 @@ struct Overrides<'a, P, C: ?Sized> {
 impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     fn body(&mut self, ui: &mut Ui, panel: &P) {
         self.inner.body(ui, panel);
+    }
+    fn column_rect(&mut self, ctx: &Context, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.column_rect(ctx, column, rect, side);
+    }
+    fn owns_iconic_column(&self, first: &P) -> bool {
+        self.inner.owns_iconic_column(first)
+    }
+    fn iconic_column(&mut self, ui: &mut Ui, column: &super::Column<P>, rect: Rect, side: super::Side) {
+        self.inner.iconic_column(ui, column, rect, side);
+    }
+    fn custom_group(&mut self, ui: &mut Ui, panels: &[P], active: &P, rect: Rect, floating: bool) -> bool {
+        self.inner.custom_group(ui, panels, active, rect, floating)
+    }
+    fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
+        self.inner.resize_handle_style(default)
+    }
+    fn group_collapsed(&self, panels: &[P]) -> bool {
+        self.inner.group_collapsed(panels)
+    }
+    fn split_separator(&mut self, ui: &mut Ui, rect: Rect) {
+        self.inner.split_separator(ui, rect);
+    }
+    fn owns_floating_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_width(panel)
+    }
+    fn owns_floating_split_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_split_width(panel)
     }
     fn logical_label(&self, panel: &P) -> String {
         (self.label)(panel)
@@ -1157,6 +1227,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             return false;
         }
         super::hits::named(self.id, layout).contains_key(&focused)
+            || (super::flyout::<P>(ctx, self.id).is_some()
+                && super::chrome::RESIZE_HANDLES.iter().any(|name| self.id.with("flyout").with(name) == focused))
     }
 
     /// Raise a panel's floating window (or open its flyout) on this frame. Apply Activate

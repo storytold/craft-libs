@@ -1,0 +1,77 @@
+name: Proofing
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/proof/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
+  pull_request:
+    paths: ["crates/proof/**", "Cargo.toml", "Cargo.lock", ".github/workflows/proof.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
+  # always gets to save the cache.
+  group: craft-proof-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    timeout-minutes: 20
+    name: Proofing lint, tests with and without Language data, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Language data (craft-i18n `language-data/`), embedded by crates/proof/build.rs.
+      # Pinned to storytold/craft-i18n#114's head (#109's SCOWL dictionaries + judgment/judgement,
+      # CP2.1); TODO(CP2.1): move to #114's merge commit once it merges.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-i18n
+          ref: c239f934ace90b7939afaceb23b472ceeafd6b8a
+          path: craft-i18n
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-proof
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt -p craft-proof --check
+      - name: Without Language data (a fork, docs.rs, offline)
+        run: |
+          cargo clippy -p craft-proof --all-targets --locked -- -D warnings
+          cargo test -p craft-proof --locked
+          cargo check -p craft-proof --locked --target wasm32-unknown-unknown
+      - name: A release without Language data fails
+        run: |
+          if CRAFT_I18N_REQUIRED=1 cargo check -p craft-proof --locked 2>build.log; then
+            echo "::error::CRAFT_I18N_REQUIRED=1 without CRAFT_I18N_DIR built"; exit 1
+          fi
+          grep -q "CRAFT_I18N_REQUIRED=1 but CRAFT_I18N_DIR is unset" build.log
+      - name: With Language data
+        env:
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: |
+          cargo clippy -p craft-proof --all-targets --locked -- -D warnings
+          cargo test -p craft-proof --locked
+          cargo check -p craft-proof --locked --target wasm32-unknown-unknown
+      - name: The English-only build (CRAFT_PROOF_EMBED=en, CP4.4's default once Language packs ship)
+        env:
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+          CRAFT_PROOF_EMBED: en
+        run: cargo test -p craft-proof --locked

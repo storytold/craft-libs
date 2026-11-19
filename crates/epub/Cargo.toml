@@ -1,0 +1,21 @@
+[package]
+name = "craft-epub"
+description = "EPUB packages: the OCF ZIP container, the package document (manifest, spine, metadata) and the navigation document, written (EPUB 3, reflowable and fixed layout) and read (EPUB 2 and 3) with bounded reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+thiserror = { workspace = true }
+craft-zip = { workspace = true }
+
+[dev-dependencies]
+# The tests build hostile archives by hand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+craft-zip = { workspace = true, features = ["test-support"] }

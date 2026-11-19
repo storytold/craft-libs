@@ -1,0 +1,47 @@
+name: Font store
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']
+  pull_request:
+    paths: ['crates/font-store/**', 'crates/font-catalog/**', 'crates/atomic/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/font-store.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
+  group: font-store-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  font-store:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-font-store --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-font-store --locked
+      - run: cargo clippy -p craft-font-catalog --all-targets --locked -- -D warnings
+      - run: cargo test -p craft-font-catalog --locked
+      - name: Check the web build
+        if: runner.os == 'Linux'
+        run: cargo check -p craft-font-store --target wasm32-unknown-unknown --locked

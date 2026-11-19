@@ -1,0 +1,13 @@
+[package]
+name = "craft-kiwi"
+description = "Clean-room decoder and encoder for the kiwi binary schema format: a schema of enums, structs and messages, and messages decoded with it into a tree keyed by field name, with bounded reads."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

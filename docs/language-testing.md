@@ -117,6 +117,10 @@ shortcut as listed. On macOS read Ctrl as Cmd.
       Q position, which types `'`, does not run Ctrl+Q.
 - [ ] **QWERTZ** (German). Ctrl+Z undoes and Ctrl+Y redoes, on the keys labelled Z and Y. Ctrl+⇧7
       runs Ctrl+/. The menu shows Ctrl+[ as Ctrl+Ü.
+- [ ] **Turkish Q** (Windows and Linux; macOS reports this key as `` ` ``). The Keyboard
+      Shortcuts dialog records the key next to left Shift, which types `<`, as `IntlBackslash`,
+      and with Shift held as `Shift+IntlBackslash`. Each runs its command, and neither runs a `\`
+      or Shift+, binding. Once `<` has been typed, the menu shows Ctrl+IntlBackslash as Ctrl+<.
 - [ ] **Dvorak – QWERTY ⌘** (macOS). Typing gives Dvorak letters. With Cmd held, the keys follow
       QWERTY: Cmd on the QWERTY C position copies, and the menus show ⌘C.
 

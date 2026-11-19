@@ -266,7 +266,7 @@ fn header_reads_geometry_without_samples() {
 fn limits_cap_the_sample_count() {
     let hi = test_hi(128);
     let f = roundtrip_file(16, 8, "Canon EOS D60", None, &hi, Order::Le);
-    let mut limits = Limits { max_samples: 127 };
+    let mut limits = Limits { max_samples: 127, ..Limits::default() };
     assert_eq!(decode(&f, &limits), Err(Error::LimitExceeded("image too large")));
     assert!(header(&f, &limits).is_err());
     limits.max_samples = 128;
@@ -365,7 +365,7 @@ fn black_level_ignores_clamped_rows() {
 }
 
 /// The frozen stream-end rule: a truncated entropy stream leaves the remaining samples at
-/// their chain values instead of failing the file.
+/// their chain values instead of failing the file, when the limit allows that many.
 #[test]
 fn truncated_stream_keeps_chain_values() {
     let (w, h) = (16u16, 8u16);
@@ -378,9 +378,117 @@ fn truncated_stream_keeps_chain_values() {
         Order::Le,
     );
     let f = ciff(&[(RAW_DATA, payload(None, &entropy[..cut])), (0x300a, props)], Order::Le);
-    let img = full(&f).expect("truncated stream still decodes");
+    let lenient = Limits { max_stream_end_fill: 128, ..Limits::default() };
+    let img = decode(&f, &lenient).expect("truncated stream still decodes");
     assert_eq!(img.samples.len(), 128);
     assert_eq!(&img.samples[..32], &hi[..32], "the leading samples decode exactly");
+    assert!(img.stream_end_fill > 0, "the samples after the cut are filled");
+    let tail_start = img.samples.len() - img.stream_end_fill;
+    for i in tail_start..img.samples.len() {
+        let expected = if i % (w as usize) < 2 { 512 } else { img.samples[i - 2] };
+        assert_eq!(img.samples[i], expected, "filled sample at {i} keeps its predictor value");
+    }
+}
+
+/// A stream cut short decoded as a smeared image: the samples after its end take their chain
+/// values. Past one block that is `Corrupt` by default; a complete stream fills none, and a fill
+/// within the limit is accepted.
+#[test]
+fn a_stream_cut_short_is_corrupt() {
+    let (w, h) = (64u16, 32u16);
+    let hi = test_hi(2048);
+    let tables = tables::tables(0).expect("selector 0");
+    let entropy = encode_hi(&hi, 64, &tables);
+    let file = |entropy: &[u8], with_trailer: bool| {
+        let mut p = Vec::with_capacity(514 + entropy.len() + 2);
+        p.extend_from_slice(&[0; 514]);
+        p.extend_from_slice(entropy);
+        if with_trailer {
+            p.extend_from_slice(&[0, 0]);
+        }
+        let props = heap(
+            &[
+                (SENSOR_INFO, sensor_info(w, h, None, Order::Le)),
+                (DECODER_TABLE, decoder_table(0, Order::Le)),
+                (MAKE_MODEL, make_model("Canon EOS D60")),
+            ],
+            Order::Le,
+        );
+        ciff(&[(RAW_DATA, p), (0x300a, props)], Order::Le)
+    };
+    let whole = full(&file(&entropy, true)).expect("a complete stream decodes");
+    assert_eq!(whole.stream_end_fill, 0);
+    let cut = file(&entropy[..entropy.len() / 2], false);
+    let Err(Error::Corrupt(why)) = full(&cut) else { panic!("a stream cut in half must be refused") };
+    assert!(why.contains("samples before the frame does"), "{why}");
+    let filled = decode(&cut, &Limits { max_stream_end_fill: usize::MAX, ..Limits::default() }).expect("lenient").stream_end_fill;
+    assert_eq!(filled, 1024, "half the 2048-sample frame is 1024 filled samples");
+    let at_limit = Limits { max_stream_end_fill: 1024, ..Limits::default() };
+    assert_eq!(decode(&cut, &at_limit).map(|i| i.stream_end_fill), Ok(1024), "a fill at the limit is accepted");
+}
+
+/// Truncated entropy streams at 1 sample, 64 samples (at the default limit), 65 samples (past
+/// the default limit, returning Corrupt), and a complete file; and verifying the limit can be raised
+/// by callers wanting partial recovery.
+#[test]
+fn truncated_stream_fill_limits_and_recovery() {
+    let (w, h) = (16u16, 8u16);
+    let n = (w * h) as usize; // 128
+    // Construct hi where every sample difference has magnitude 16 (size 5), encoding to exactly 8 bits
+    // (1 byte) per sample across both first and main tables.
+    let mut hi = Vec::with_capacity(n);
+    let (mut ce, mut co) = (512i32, 512i32);
+    for qi in 0..n {
+        if qi % w as usize == 0 {
+            ce = 512;
+            co = 512;
+        }
+        let c = if qi % 2 == 0 { &mut ce } else { &mut co };
+        *c += 16;
+        hi.push(*c as u16);
+    }
+    let tables = tables::tables(0).expect("selector 0");
+    let entropy = encode_hi(&hi, w as usize, &tables);
+    assert_eq!(entropy.len(), n, "each sample encodes to exactly 1 byte");
+    let file = |entropy_bytes: &[u8]| {
+        let mut p = Vec::with_capacity(514 + entropy_bytes.len());
+        p.extend_from_slice(&[0; 514]);
+        p.extend_from_slice(entropy_bytes);
+        let props = heap(
+            &[
+                (SENSOR_INFO, sensor_info(w, h, None, Order::Le)),
+                (DECODER_TABLE, decoder_table(0, Order::Le)),
+                (MAKE_MODEL, make_model("Canon EOS D60")),
+            ],
+            Order::Le,
+        );
+        ciff(&[(RAW_DATA, p), (0x300a, props)], Order::Le)
+    };
+
+    // 1. Complete file: fills 0 samples, decodes cleanly with default limits
+    let complete = file(&entropy);
+    let img = full(&complete).expect("complete file decodes");
+    assert_eq!(img.stream_end_fill, 0);
+
+    // 2. Truncated 1 sample before end: fills 1 sample, accepted under default limit (64)
+    let cut_1 = file(&entropy[..n - 1]);
+    let img_1 = full(&cut_1).expect("1-sample truncation accepted by default limits");
+    assert_eq!(img_1.stream_end_fill, 1);
+
+    // 3. Truncated 64 samples before end: fills 64 samples, accepted at the boundary of default limit (64)
+    let cut_64 = file(&entropy[..n - 64]);
+    let img_64 = full(&cut_64).expect("64-sample truncation accepted at boundary by default limits");
+    assert_eq!(img_64.stream_end_fill, 64);
+
+    // 4. Truncated 65 samples before end: fills 65 samples, refused by default limit (64) as Corrupt
+    let cut_65 = file(&entropy[..n - 65]);
+    let err_65 = full(&cut_65).expect_err("65-sample truncation must be refused by default limits");
+    assert_eq!(err_65, Error::Corrupt("entropy stream ends 65 samples before the frame does".into()));
+
+    // 5. Check the limit can be raised by callers who want partial recovery
+    let lenient = Limits { max_stream_end_fill: 65, ..Limits::default() };
+    let img_65_recovered = decode(&cut_65, &lenient).expect("decodes when limit is raised");
+    assert_eq!(img_65_recovered.stream_end_fill, 65);
 }
 
 /// Every record the decoder needs missing, bogus selectors, dimensions and offsets: errors,

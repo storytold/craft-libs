@@ -12,6 +12,7 @@
 //! 6fcf2a4, MIT OR Apache-2.0), with craft-cms in place of moxcms.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 
@@ -34,6 +35,12 @@ pub const MAX_SPOT_INKS: usize = 32;
 /// Device pixels per plate (4 MP, 2000 × 2000), so a page with many inks stays within a few
 /// hundred megabytes. The resolution is reduced to fit; [`Plates::dpi`] says what was used.
 pub const MAX_PLATE_PIXELS: f32 = 4.0e6;
+
+/// Pixels per plate of a page separated in bands (256 MP, 16000 × 16000). It bounds the memory a
+/// page's bands add up to; a long page reaches it, while across a Letter or A4 page the side limit
+/// stops near 960 dpi first. The resolution is reduced to fit. It does not bound the band count: a
+/// page a few points wide and very tall still makes one band per 8192 rows.
+pub const MAX_BANDED_PIXELS: f32 = 2.56e8;
 
 /// The resolution, in pixels per point, inks are discovered at before the plates render.
 const DISCOVERY_SCALE: f32 = 0.1;
@@ -148,8 +155,51 @@ pub enum Error {
 /// Separates page `page` (from 0) of `pdf` at `dpi`, reduced to fit [`MAX_PLATE_PIXELS`] and
 /// the renderer's side limit: one plate per ink, the four process inks and up to
 /// [`MAX_SPOT_INKS`] spot inks the page paints. Spot inks only soft masks use are left out
-/// (masks don't print). Never panics.
+/// (masks don't print). [`plates_in_bands`] separates at higher resolutions. Never panics.
 pub fn plates(pdf: &[u8], page: usize, dpi: f32, opts: &Options) -> Result<Plates, Error> {
+    let mut whole = None;
+    // One band of the whole page: `plate_scale` keeps it within `MAX_PLATE_PIXELS`.
+    separate(pdf, page, dpi, opts, plate_scale, Some(u32::MAX), &mut |band: Band| {
+        whole = Some(band.plates);
+        ControlFlow::Break(())
+    })?;
+    whole.ok_or(Error::Render(raster::Error::OutputLimit))
+}
+
+/// Rows of a page's plates, from [`plates_in_bands`].
+#[derive(Clone, Debug)]
+pub struct Band {
+    /// The band's first row on the page, from the top.
+    pub top: u32,
+    /// The page's height in pixels. The band's own height is the plates' height.
+    pub page_height: u32,
+    /// The band's plates: as wide as the page, `height` rows from `top`. Every band has the
+    /// same inks, in the same order.
+    pub plates: Plates,
+}
+
+/// Separates page `page` (from 0) of `pdf` at `dpi` as [`plates`] does, in bands from the top
+/// down, each at most [`MAX_PLATE_PIXELS`]. The resolution is reduced only to fit the
+/// renderer's side limit across the page (`MAX_SIDE`, 8192 pixels) and [`MAX_BANDED_PIXELS`]
+/// in all; [`Plates::dpi`] says what was used. The page's inks are found once, so every band has the same ones.
+///
+/// `each` gets the bands in order and returns [`ControlFlow::Break`] to stop. Each band renders
+/// the page again, clipped to its rows. Never panics.
+pub fn plates_in_bands(pdf: &[u8], page: usize, dpi: f32, opts: &Options, mut each: impl FnMut(Band) -> ControlFlow<()>) -> Result<(), Error> {
+    separate(pdf, page, dpi, opts, banded_scale, None, &mut each)
+}
+
+/// Separates in bands of `rows` rows, else as many as fit [`MAX_PLATE_PIXELS`], at `scale_of`'s
+/// scale.
+fn separate(
+    pdf: &[u8],
+    page: usize,
+    dpi: f32,
+    opts: &Options,
+    scale_of: fn(f32, f32, f32) -> f32,
+    rows: Option<u32>,
+    each: &mut dyn FnMut(Band) -> ControlFlow<()>,
+) -> Result<(), Error> {
     if !dpi.is_finite() || dpi <= 0.0 {
         return Err(Error::InvalidDpi);
     }
@@ -161,12 +211,51 @@ pub fn plates(pdf: &[u8], page: usize, dpi: f32, opts: &Options) -> Result<Plate
     let pages = doc.pages();
     let p = pages.get(page).ok_or(Error::NoPage(page))?;
     let (w, h) = p.render_dimensions();
-    let scale = plate_scale(w, h, dpi / 72.0);
+    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return Err(Error::Render(raster::Error::InvalidPage));
+    }
+    let scale = scale_of(w, h, dpi / 72.0);
     let cache = RenderCache::new();
+    // Inks are found on a small render of the whole page, within the renderer's limits.
+    let (inks, separated, unseparated) = discover(p, &cache, plate_scale(w, h, DISCOVERY_SCALE.min(scale)))?;
+    // The page's size in pixels, as the renderer floors it. Only each band's viewport goes to
+    // the renderer, so the page itself may pass the renderer's own size limits.
+    let [width, page_height] = [w, h].map(|side| (side * scale).floor().max(1.0) as u32);
+    // A band is within the plate cap and, like any render, the renderer's side limit.
+    let fit = (MAX_PLATE_PIXELS / width as f32).floor().clamp(1.0, MAX_SIDE as f32) as u32;
+    if u64::from(width) * u64::from(page_height) > MAX_BANDED_PIXELS as u64 {
+        return Err(Error::Render(raster::Error::OutputLimit));
+    }
+    let rows = rows.unwrap_or(fit).clamp(1, page_height);
+    let mut top = 0;
+    while top < page_height {
+        let height = rows.min(page_height - top);
+        let mut planes = Vec::with_capacity(separated.len());
+        for ink in &separated {
+            let plate = Plate { ink: ink.clone(), overprint: opts.overprint, simulation: simulation.clone(), spots_as_process: false };
+            let settings = InterpreterSettings { plate: Some(plate), ..Default::default() };
+            let viewport = raster::Options { size: Some([width, height]), offset: [0.0, top as f32], ..film(scale) };
+            let film = raster::render(p, &cache, &settings, &viewport)?;
+            // The film is gray on white: its red channel is the paper left uncovered.
+            planes.push(film.bytes().as_chunks::<4>().0.iter().map(|[red, ..]| 255 - red).collect());
+        }
+        let plates =
+            Plates { inks: inks.clone(), unseparated: unseparated.clone(), width, height, dpi: scale * 72.0, conversion: conversion.clone(), planes };
+        if each(Band { top, page_height, plates }).is_break() {
+            break;
+        }
+        top += height;
+    }
+    Ok(())
+}
 
+/// The inks page `p` paints, found at `scale`, a low resolution: the process inks, then up to
+/// [`MAX_SPOT_INKS`] spots as the [`InkSet`], the renderer's inks to separate in the same
+/// order, and the names of spots left unseparated.
+fn discover<'a>(p: &'a craft_pdf::syntax::page::Page<'a>, cache: &RenderCache<'a>, scale: f32) -> Result<(InkSet, Vec<PdfInk>, Vec<String>), Error> {
     let log = Arc::new(Mutex::new(SpotLog::default()));
-    let discover = InterpreterSettings { ink_sink: Some(spot_sink(&log)), ..Default::default() };
-    render(p, &cache, &discover, DISCOVERY_SCALE.min(scale))?;
+    let settings = InterpreterSettings { ink_sink: Some(spot_sink(&log)), ..Default::default() };
+    raster::render(p, cache, &settings, &film(scale))?;
     let spots = std::mem::take(&mut log.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).order);
 
     let mut inks = InkSet::new();
@@ -186,30 +275,31 @@ pub fn plates(pdf: &[u8], page: usize, dpi: f32, opts: &Options) -> Result<Plate
             _ => unseparated.push(ink.name().to_string()),
         }
     }
-
-    let mut size = None;
-    let mut planes = Vec::with_capacity(separated.len());
-    for ink in separated {
-        let plate = Plate { ink, overprint: opts.overprint, simulation: simulation.clone(), spots_as_process: false };
-        let settings = InterpreterSettings { plate: Some(plate), ..Default::default() };
-        let film = render(p, &cache, &settings, scale)?;
-        size = Some((film.width, film.height));
-        // The film is gray on white: its red channel is the paper left uncovered.
-        planes.push(film.bytes().as_chunks::<4>().0.iter().map(|[red, ..]| 255 - red).collect());
-    }
-    let (width, height) = size.unwrap_or((0, 0));
-    Ok(Plates { inks, unseparated, width, height, dpi: scale * 72.0, conversion, planes })
+    Ok((inks, separated, unseparated))
 }
 
-fn render<'a>(
-    page: &'a craft_pdf::syntax::page::Page<'a>,
-    cache: &RenderCache<'a>,
-    settings: &InterpreterSettings,
-    scale: f32,
-) -> Result<raster::Raster, Error> {
-    // The plate's gray film must keep its tints: no color replacement.
-    let options = raster::Options { scale: [scale, scale], background: [255; 4], color_replacement: None, ..Default::default() };
-    Ok(raster::render(page, cache, settings, &options)?)
+/// Raster options for a gray film at `scale`. The plate's film must keep its tints: no color
+/// replacement.
+fn film(scale: f32) -> raster::Options {
+    raster::Options { scale: [scale, scale], background: [255; 4], color_replacement: None, ..Default::default() }
+}
+
+/// The scale a `w` × `h` pt page separates at in bands: `scale`, within the renderer's side
+/// limit across the page and [`MAX_BANDED_PIXELS`]. Down the page there is no side limit.
+fn banded_scale(w: f32, h: f32, scale: f32) -> f32 {
+    let (w, h) = (w.max(1.0), h.max(1.0));
+    // The margin keeps the floored size under the cap despite f32 rounding.
+    let cap = MAX_BANDED_PIXELS * 0.999;
+    let by_area = (cap / (w * h)).sqrt();
+    let mut s = scale.min(by_area).min(MAX_SIDE as f32 / w);
+    // A side scaled under one pixel still renders one, so the other side alone must fit.
+    if w * s < 1.0 {
+        s = s.min(cap / h);
+    }
+    if h * s < 1.0 {
+        s = s.min(cap / w);
+    }
+    if s.is_finite() && s > 0.0 { s } else { f32::MIN_POSITIVE }
 }
 
 /// The scale a `w` × `h` pt page separates at: `scale`, within [`MAX_PLATE_PIXELS`] and
@@ -340,6 +430,168 @@ fn output_intents(pdf: &Pdf, page: usize) -> Vec<Dict<'_>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 40 × 40 pt page: a black disc with anti-aliased edges, a spot square overprinting it.
+    fn disc_and_spot() -> Vec<u8> {
+        let content = "0 0 0 1 k 20 4 m 29 4 36 11 36 20 c 36 29 29 36 20 36 c 11 36 4 29 4 20 c 4 11 11 4 20 4 c f                        /GS0 gs /CS0 cs 0.5 scn 10.3 10.3 19.4 19.4 re f";
+        let resources = "/ColorSpace << /CS0 [/Separation /Gold /DeviceCMYK << /FunctionType 2 /Domain [0 1]                          /C0 [0 0 0 0] /C1 [0 0.3 1 0] /N 1 >>] >> /ExtGState << /GS0 << /op true >> >>";
+        let mut out = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+"
+        .to_vec();
+        out.extend_from_slice(
+            b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+",
+        );
+        out.extend_from_slice(
+            format!(
+                "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << {resources} >> >> endobj
+"
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(
+            format!(
+                "4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+",
+                content.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(
+            b"trailer << /Root 1 0 R >>
+%%EOF",
+        );
+        out
+    }
+
+    #[test]
+    fn bands_join_into_the_page_rendered_whole() {
+        let pdf = disc_and_spot();
+        let whole = plates(&pdf, 0, 216.0, &Options::default()).unwrap();
+        assert_eq!((whole.width, whole.height, whole.planes.len()), (120, 120, 5));
+        let mut joined = vec![Vec::new(); 5];
+        let mut tops = Vec::new();
+        separate(&pdf, 0, 216.0, &Options::default(), plate_scale, Some(7), &mut |band: Band| {
+            assert_eq!((band.plates.width, band.page_height, band.plates.inks.len()), (120, 120, 5));
+            tops.push((band.top, band.plates.height));
+            for (plane, part) in joined.iter_mut().zip(&band.plates.planes) {
+                plane.extend_from_slice(part);
+            }
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!(tops.len(), 18, "17 bands of 7 rows and one of 1: {tops:?}");
+        assert_eq!(tops.last(), Some(&(119, 1)));
+        assert!(whole.planes.iter().any(|p| p.iter().any(|t| *t > 0 && *t < 255)), "the disc's edge is anti-aliased");
+        assert_eq!(joined, whole.planes, "no seam between bands");
+    }
+
+    #[test]
+    fn bands_reach_resolutions_past_the_plate_cap_and_can_stop() {
+        let pdf = disc_and_spot();
+        // 40 pt at 3700 dpi is 2055 pixels a side: 4.2 MP, past `MAX_PLATE_PIXELS`.
+        assert!(plates(&pdf, 0, 3700.0, &Options::default()).unwrap().dpi < 3700.0);
+        let mut bands = Vec::new();
+        plates_in_bands(&pdf, 0, 3700.0, &Options::default(), |band| {
+            let p = &band.plates;
+            assert!((p.width * p.height) as f32 <= MAX_PLATE_PIXELS);
+            bands.push((band.top, p.height, p.width, p.dpi, band.page_height));
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        let &(_, _, width, dpi, page_height) = bands.first().unwrap();
+        assert_eq!((width, page_height), (2055, 2055));
+        assert!((dpi - 3700.0).abs() < 0.01);
+        assert_eq!(bands.iter().map(|b| b.1).sum::<u32>(), 2055);
+
+        let mut seen = 0;
+        plates_in_bands(&pdf, 0, 3700.0, &Options::default(), |_| {
+            seen += 1;
+            ControlFlow::Break(())
+        })
+        .unwrap();
+        assert_eq!(seen, 1);
+        assert!(matches!(plates_in_bands(&pdf, 0, f32::NAN, &Options::default(), |_| ControlFlow::Continue(())), Err(Error::InvalidDpi)));
+    }
+
+    /// A 10 × 2000 pt strip, black only in its bottom 10 pt.
+    fn tall_strip() -> Vec<u8> {
+        let content = "0 0 0 1 k 0 0 10 10 re f";
+        let mut out = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+"
+        .to_vec();
+        out.extend_from_slice(
+            b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+",
+        );
+        out.extend_from_slice(
+            b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 2000] /Contents 4 0 R >> endobj
+",
+        );
+        out.extend_from_slice(
+            format!(
+                "4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+",
+                content.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(
+            b"trailer << /Root 1 0 R >>
+%%EOF",
+        );
+        out
+    }
+
+    #[test]
+    fn a_page_past_the_renderers_height_limit_separates_in_bands() {
+        // At 600 dpi the strip is 83 × 16 666 pixels: past `MAX_SIDE` down the page.
+        let pdf = tall_strip();
+        let mut rows = 0;
+        let mut bands = 0;
+        let mut black_rows = Vec::new();
+        plates_in_bands(&pdf, 0, 600.0, &Options::default(), |band| {
+            let p = &band.plates;
+            assert_eq!((p.width, band.page_height), (83, 16_666));
+            let k = p.plane(InkId::process(crate::Process::Black)).unwrap();
+            for (y, row) in k.chunks(p.width as usize).enumerate() {
+                if row.iter().all(|t| *t == 255) {
+                    black_rows.push(band.top + y as u32);
+                }
+            }
+            rows += p.height;
+            bands += 1;
+            ControlFlow::Continue(())
+        })
+        .unwrap();
+        assert_eq!((rows, bands), (16_666, 3), "bands of at most MAX_SIDE rows");
+        // The square's top edge is 1990 pt down, row 16 583.3: rows 16 584 to the last are solid.
+        assert_eq!(black_rows.first(), Some(&16_584), "{:?}", &black_rows[..black_rows.len().min(3)]);
+        assert_eq!(black_rows.len(), 82);
+    }
+
+    #[test]
+    fn banded_scale_keeps_the_side_and_area_limits() {
+        assert_eq!(banded_scale(40.0, 40.0, 10.0), 10.0);
+        assert!(612.0 * banded_scale(612.0, 792.0, 2400.0 / 72.0) <= MAX_SIDE as f32);
+        let s = banded_scale(100.0, 1.0e6, 10.0);
+        assert!(100.0 * 1.0e6 * s * s <= MAX_BANDED_PIXELS * 1.0001);
+        assert!(banded_scale(0.0, f32::NAN, 1.0) > 0.0);
+        // A 1 pt wide, very tall page: its width floors to one pixel, which the cap still counts.
+        let s = banded_scale(1.0, 1.0e9, 1.0);
+        let [width, height] = [1.0f32, 1.0e9].map(|side| (side * s).floor().max(1.0));
+        assert!(width * height <= MAX_BANDED_PIXELS);
+        // A page whose exact area scale rounds up in f32 by a pixel row.
+        let s = banded_scale(17.0, 15_058_824.0, 1.0);
+        let [width, height] = [17.0f32, 15_058_824.0].map(|side| u64::from((side * s).floor().max(1.0) as u32));
+        assert!(width * height <= MAX_BANDED_PIXELS as u64);
+    }
 
     #[test]
     fn plates_fit_the_pixel_and_side_caps() {

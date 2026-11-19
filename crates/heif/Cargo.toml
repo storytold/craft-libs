@@ -1,0 +1,33 @@
+[package]
+name = "craft-heif"
+description = "Optional HEIF/HEIC still-image decoder: heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Pure Rust, no unsafe. Pinned exactly: a young, single-owner crate that parses untrusted files;
+# moving the pin is a reviewed change (re-run these tests and each app's HEIF corpus tests).
+# heic-rs was chosen over the other permissive candidates (heif-oxide's HEVC decoder, rust_h265, follows FFmpeg's (LGPL)
+# code structure; gamut-heic has no HEVC decoder of its own).
+heic-rs = { version = "=0.1.4", default-features = false, features = ["std"], optional = true }
+
+# The tiles of a HEIC photo decode in parallel on native; wasm stays single-threaded.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"], optional = true }
+rayon = { workspace = true, optional = true }
+
+[features]
+default = ["decode"]
+# The decoder (probe, decode, decode_thumbnail, read_metadata): heic-rs for the container and HEVC.
+decode = ["dep:heic-rs", "dep:rayon"]
+# `items`: the Exif and XMP items from the box structure alone, without heic-rs. Without `decode`,
+# `read_metadata` is this reader.
+metadata = []
+# `craft_heif::testdata`: lossless synthetic HEIF files, for the tests of the crates above.
+testdata = []
+
+[lints]
+workspace = true

@@ -178,8 +178,16 @@ pub fn score(pats: &Patterns, words: &[(Vec<char>, Vec<usize>)]) -> Score {
         let Some(pts) = pats.points(w) else { continue };
         s.words += 1;
         s.breaks += br.len();
+        // Indexed once per word: `pts` are in `1..w.len()`, so no expected break past the word
+        // can be found anyway.
+        let mut expected = vec![false; w.len() + 1];
+        for &b in br {
+            if let Some(e) = expected.get_mut(b) {
+                *e = true;
+            }
+        }
         for p in &pts {
-            if br.contains(p) {
+            if expected.get(*p).copied().unwrap_or(false) {
                 s.found += 1;
             } else {
                 s.wrong += 1;

@@ -1,0 +1,30 @@
+[package]
+name = "craft-doc-binary"
+description = "Reader for the Word 97-2003 binary file format (.doc, [MS-DOC]) into the craft-wordmodel document model, with XOR, RC4 and RC4 CryptoAPI password protection."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cfb = { workspace = true }
+craft-codepage = { workspace = true }
+craft-wordmodel = { workspace = true }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+log = "0.4"
+miniz_oxide = "0.9"
+sha1 = "0.11"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Test files are written with an independent compound-file writer, so craft-cfb's reader is
+# checked against another implementation's output.
+cfb = "0.15"
+craft-wordmodel = { workspace = true, features = ["test-support"] }
+proptest = { workspace = true }
+serde_json = "1"

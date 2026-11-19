@@ -1,0 +1,16 @@
+[package]
+name = "craft-dwg"
+description = "Bounded DWG↔DXF byte bridge with an optional child-process worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# acadrust is used unmodified and only on targets supported by its 0.6.6 platform APIs.
+[target.'cfg(not(any(target_arch = "wasm32", all(target_os = "freebsd", target_arch = "aarch64"))))'.dependencies]
+acadrust = { workspace = true }
+log = { workspace = true }

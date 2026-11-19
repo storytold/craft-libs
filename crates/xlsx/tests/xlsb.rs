@@ -1,0 +1,444 @@
+//! Binary workbooks: BIFF12 records and packages assembled here from [MS-XLSB].
+//! Adapted from GridCraft's `crates/xlsx/src/tests/xlsb_tests.rs`.
+
+mod common;
+
+use common::{read, read_with};
+use craft_xlsx::testing::zip;
+use craft_xlsx::{CellError, CellRef, Error, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+
+const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
+const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
+const TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/data/two.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/text/strings.bin" ContentType="application/vnd.ms-excel.sharedStrings"/></Types>"#;
+
+fn record(id: u16, bytes: &[u8]) -> Vec<u8> {
+    let mut out = vec![];
+    if id < 128 {
+        out.push(id as u8);
+    } else {
+        out.extend([(id as u8 & 0x7f) | 0x80, (id >> 7) as u8]);
+    }
+    let mut len = bytes.len();
+    loop {
+        let byte = (len & 0x7f) as u8;
+        len >>= 7;
+        out.push(if len == 0 { byte } else { byte | 0x80 });
+        if len == 0 {
+            break;
+        }
+    }
+    out.extend(bytes);
+    out
+}
+fn wide(text: &str) -> Vec<u8> {
+    let units: Vec<_> = text.encode_utf16().collect();
+    let mut out = (units.len() as u32).to_le_bytes().to_vec();
+    for unit in units {
+        out.extend(unit.to_le_bytes());
+    }
+    out
+}
+fn rich(text: &str, extras: bool) -> Vec<u8> {
+    let mut out = vec![if extras { 3 } else { 0 }];
+    out.extend(wide(text));
+    if extras {
+        out.extend(1u32.to_le_bytes());
+        out.extend([0, 0, 0, 0]); // One formatting run.
+        out.extend(wide("sound"));
+        out.extend(1u32.to_le_bytes());
+        out.extend([0, 0, 0, 0, 1, 0, 0, 0, 0, 0]); // One ten-byte phonetic run.
+    }
+    out
+}
+fn row(r: u32) -> Vec<u8> {
+    let mut out = r.to_le_bytes().to_vec();
+    out.extend([0; 13]);
+    record(0, &out)
+}
+fn cell(id: u16, col: u32, value: &[u8]) -> Vec<u8> {
+    let mut data = col.to_le_bytes().to_vec();
+    data.extend([0; 4]);
+    data.extend(value);
+    if (8..=11).contains(&id) {
+        data.extend([0; 2]); // Formula flags.
+        data.extend(3u32.to_le_bytes());
+        data.extend([0x1e, 1, 0]); // PtgInt(1): not decoded, the saved result is read.
+        data.extend(0u32.to_le_bytes());
+    }
+    record(id, &data)
+}
+fn worksheet(data: &[u8], tail: &[u8]) -> Vec<u8> {
+    let mut out = record(129, &[]);
+    out.extend(record(148, &[0xff; 16])); // A bogus dimension must never allocate a dense grid.
+    out.extend(record(145, &[]));
+    out.extend(data);
+    out.extend(record(146, &[]));
+    out.extend(tail);
+    out.extend(record(130, &[]));
+    out
+}
+fn book(date1904: bool) -> Vec<u8> {
+    let mut out = record(131, &[]);
+    let mut props = u32::from(date1904).to_le_bytes().to_vec();
+    props.extend(0u32.to_le_bytes());
+    props.extend(wide(""));
+    out.extend(record(153, &props));
+    out.extend(record(143, &[]));
+    for (id, rel, name, state) in [(1u32, "one", "Data", 0u32), (2, "two", "Hidden", 1)] {
+        let mut data = state.to_le_bytes().to_vec();
+        data.extend(id.to_le_bytes());
+        data.extend(wide(rel));
+        data.extend(wide(name));
+        out.extend(record(156, &data));
+    }
+    out.extend(record(144, &[]));
+    out.extend(record(132, &[]));
+    out
+}
+fn sst() -> Vec<u8> {
+    let mut out = record(159, &[1, 0, 0, 0, 1, 0, 0, 0]);
+    out.extend(record(19, &rich("shared 🦀 café", true)));
+    out.extend(record(160, &[]));
+    out
+}
+fn package(book: &[u8], sheet: &[u8], strings: &[u8], roots: &str, rels: &str, types: &str) -> Vec<u8> {
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", roots.as_bytes()),
+        ("records/book.bin", book),
+        ("records/_rels/book.bin.rels", rels.as_bytes()),
+        ("data/one.bin", sheet),
+        ("data/two.bin", &worksheet(&[], &[])),
+        ("text/strings.bin", strings),
+    ])
+}
+fn file(sheet: &[u8]) -> Vec<u8> {
+    package(&book(false), sheet, &sst(), ROOT, RELS, TYPES)
+}
+fn text(s: &str) -> Value {
+    Value::Text(s.into())
+}
+
+#[test]
+fn scalar_caches_rk_unicode_visibility_and_epochs() {
+    let mut data = row(2);
+    let real_rk = (3.5f64.to_bits() >> 32) as u32;
+    for c in [
+        cell(1, 0, &[]),
+        cell(2, 1, &((-123i32 << 2) | 2).to_le_bytes()),
+        cell(2, 2, &((123i32 << 2) | 3).to_le_bytes()),
+        cell(2, 3, &real_rk.to_le_bytes()),
+        cell(2, 4, &(real_rk | 1).to_le_bytes()),
+        cell(3, 5, &[0x17]),
+        cell(4, 6, &[1]),
+        cell(5, 7, &123.5f64.to_le_bytes()),
+        cell(6, 8, &wide("inline λ")),
+        cell(7, 9, &0u32.to_le_bytes()),
+        cell(8, 10, &wide("cached text")),
+        cell(9, 11, &2.0f64.to_le_bytes()),
+        cell(10, 12, &[0]),
+        cell(11, 13, &[7]),
+        cell(62, 14, &rich("rich text", true)),
+    ] {
+        data.extend(c);
+    }
+    let mut merge = vec![];
+    for n in [5u32, 6, 0, 1] {
+        merge.extend(n.to_le_bytes());
+    }
+    let sheet = worksheet(&data, &record(176, &merge));
+    let expected = [
+        Value::Empty,
+        Value::Number(-123.0),
+        Value::Number(1.23),
+        Value::Number(3.5),
+        Value::Number(0.035),
+        Value::Error(CellError::Ref),
+        Value::Bool(true),
+        Value::Number(123.5),
+        text("inline λ"),
+        text("shared 🦀 café"),
+        text("cached text"),
+        Value::Number(2.0),
+        Value::Bool(false),
+        Value::Error(CellError::Div0),
+        text("rich text"),
+    ];
+    for epoch in [false, true] {
+        let bytes = package(&book(epoch), &sheet, &sst(), ROOT, RELS, TYPES);
+        assert!(is_xlsb(&bytes));
+        let wb = read(&bytes).unwrap();
+        assert_eq!(wb.date_1904, epoch);
+        assert_eq!(wb.sheets.len(), 2);
+        assert_eq!((wb.sheets[0].name.as_str(), wb.sheets[1].visibility), ("Data", Visibility::Hidden));
+        assert_eq!(wb.sheets[0].cells.len(), 14);
+        assert_eq!(wb.sheets[0].merges, vec![Range::new(CellRef::new(5, 0), CellRef::new(6, 1))]);
+        for (col, expected) in expected.iter().enumerate() {
+            assert_eq!(&wb.sheets[0].value(CellRef::new(2, col as u32)), expected);
+        }
+    }
+}
+
+#[test]
+fn cells_carry_their_format_index_and_blank_cells_their_format() {
+    let mut data = row(0);
+    let mut blank = 0u32.to_le_bytes().to_vec();
+    blank.extend((7u32 | 0x0100_0000).to_le_bytes());
+    data.extend(record(1, &blank));
+    let bytes = file(&worksheet(&data, &[]));
+    let mut p = craft_xlsx::Package::open(&bytes, &craft_xlsx::Limits::default()).unwrap();
+    assert!(p.styles().unwrap().is_none());
+    let wb = p.workbook().unwrap();
+    let mut cells = vec![];
+    p.sheet(&wb.sheets[0], |r| {
+        cells.extend(r.cells);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(cells.len(), 1);
+    assert_eq!((cells[0].style, cells[0].phonetic, &cells[0].value), (7, true, &craft_xlsx::CellValue::Empty));
+}
+
+#[test]
+fn extension_blocks_are_skipped_with_strict_boundaries_and_record_framing() {
+    let mut data = row(0);
+    data.extend(cell(5, 0, &1.0f64.to_le_bytes()));
+    data.extend(record(35, &[0; 4]));
+    data.extend(record(37, &[1, 0, 0, 0, 0, 0]));
+    data.extend(cell(5, 1, &99.0f64.to_le_bytes()));
+    data.extend(record(130, &[])); // Looks like the sheet's end, but is inside a skipped block.
+    data.extend(record(38, &[]));
+    data.extend(record(36, &[]));
+    data.extend([0xe8, 0x87, 0x80, 0x80, 0x80, 0x80]); // Record 1000: high bits of the second id and fourth length byte ignored.
+    data.extend(cell(5, 1, &2.0f64.to_le_bytes()));
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 2);
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 1)), Value::Number(2.0));
+    assert!(wb.warnings.iter().any(|w| w.contains("blocks were skipped")));
+    for bad in [
+        vec![0x81],
+        vec![0x81, 0],
+        vec![1, 0x80],
+        vec![1, 10, 0],
+        record(36, &[]),
+        [record(35, &[0; 4]), record(38, &[])].concat(),
+        record(35, &[0; 4]),
+        record(37, &[0, 0]),
+    ] {
+        assert!(read(&file(&worksheet(&bad, &[]))).is_err(), "{bad:?}");
+    }
+    let nested = record(35, &[0; 4]).repeat(65);
+    assert!(read(&file(&worksheet(&nested, &[]))).err().unwrap().to_string().contains("nested too deeply"));
+    let mut missing_end = worksheet(&[], &[]);
+    missing_end.truncate(missing_end.len() - record(130, &[]).len());
+    assert!(read(&file(&missing_end)).is_err());
+}
+
+#[test]
+fn bad_values_strings_and_coordinates_fail_without_silent_data_loss() {
+    for bad in [
+        cell(4, 0, &[2]),
+        cell(3, 0, &[0xff]),
+        cell(5, 0, &f64::INFINITY.to_le_bytes()),
+        cell(2, 0, &0x7ff00000u32.to_le_bytes()),
+        cell(7, 0, &1u32.to_le_bytes()),
+        cell(6, 0, &[1, 0, 0, 0, 0, 0xd8]),
+        cell(6, 0, &u32::MAX.to_le_bytes()),
+        cell(5, 16384, &1.0f64.to_le_bytes()),
+        cell(5, 0, &[0; 3]),
+        cell(62, 0, &[1, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff]),
+    ] {
+        assert!(read(&file(&worksheet(&[row(0), bad].concat(), &[]))).is_err());
+    }
+    assert!(read(&file(&worksheet(&cell(5, 0, &1.0f64.to_le_bytes()), &[]))).is_err());
+    assert!(read(&file(&worksheet(&row(1048576), &[]))).is_err());
+    let repeated = [row(0), cell(5, 0, &1.0f64.to_le_bytes()), cell(5, 0, &2.0f64.to_le_bytes())].concat();
+    assert!(read(&file(&worksheet(&repeated, &[]))).is_err());
+    let mut formula = [0u8; 18].to_vec(); // Cell header, saved number and flags, but no formula.
+    assert!(read(&file(&worksheet(&[row(0), record(9, &formula)].concat(), &[]))).is_err());
+    formula.extend(0u32.to_le_bytes()); // A formula of no tokens.
+    assert!(read(&file(&worksheet(&[row(0), record(9, &formula)].concat(), &[]))).is_err());
+    let bad_sst = [record(159, &[1, 0, 0, 0, 2, 0, 0, 0]), record(160, &[])].concat();
+    assert!(read(&package(&book(false), &worksheet(&[], &[]), &bad_sst, ROOT, RELS, TYPES)).is_err());
+}
+
+#[test]
+fn relationships_must_be_internal_and_typed() {
+    let sheet = worksheet(&[], &[]);
+    for (roots, rels, types) in [
+        (ROOT.replace("officeDocument\"", "wrong\""), RELS.to_owned(), TYPES.to_owned()),
+        (ROOT.replace("Target=", "TargetMode=\"External\" Target="), RELS.to_owned(), TYPES.to_owned()),
+        (ROOT.to_owned(), RELS.replace("Target=\"../data/one.bin\"", "Target=\"missing.bin\""), TYPES.to_owned()),
+        (
+            ROOT.to_owned(),
+            RELS.replace("Target=\"../data/one.bin\"", "TargetMode=\"External\" Target=\"https://example.com/data.bin\""),
+            TYPES.to_owned(),
+        ),
+        (
+            ROOT.to_owned(),
+            RELS.replace("Target=\"../text/strings.bin\"", "TargetMode=\"External\" Target=\"https://example.com/strings.bin\""),
+            TYPES.to_owned(),
+        ),
+        (ROOT.to_owned(), RELS.to_owned(), TYPES.replace("application/vnd.ms-excel.worksheet", "application/xml")),
+        (ROOT.to_owned(), RELS.replace("Id=\"two\"", "Id=\"three\""), TYPES.to_owned()),
+    ] {
+        assert!(read(&package(&book(false), &sheet, &sst(), &roots, &rels, &types)).is_err(), "{roots} {rels} {types}");
+    }
+    let chartsheet = RELS.replace(
+        "Id=\"two\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+        "Id=\"two\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet",
+    );
+    let wb = read(&package(&book(false), &sheet, &sst(), ROOT, &chartsheet, TYPES)).unwrap();
+    assert_eq!(wb.sheets.len(), 1);
+    assert_eq!(wb.skipped, [("Hidden".to_string(), SheetKind::Chartsheet)]);
+    // A binary part elsewhere does not make an XML workbook package binary.
+    let elsewhere = TYPES.replace("/records/book.bin\"", "/elsewhere.bin\"");
+    assert!(!is_xlsb(&package(&book(false), &sheet, &sst(), ROOT, RELS, &elsewhere)));
+    let spec_type = TYPES.replace("application/vnd.ms-excel.sheet.binary.macroEnabled.main", "application/vnd.ms-excel.main");
+    assert!(is_xlsb(&package(&book(false), &sheet, &sst(), ROOT, RELS, &spec_type)));
+    assert!(read(&package(&book(false), &sheet, &sst(), ROOT, RELS, &spec_type)).is_ok());
+}
+
+#[test]
+fn declared_counts_and_decoded_text_are_bounded() {
+    let bad_sst = record(159, &[0xff; 8]);
+    assert!(read(&package(&book(false), &worksheet(&[], &[]), &bad_sst, ROOT, RELS, TYPES)).is_err());
+    let mut count_mismatch = record(159, &[1, 0, 0, 0, 1, 0, 0, 0]);
+    count_mismatch.extend(record(160, &[]));
+    assert!(read(&package(&book(false), &worksheet(&[], &[]), &count_mismatch, ROOT, RELS, TYPES)).is_err());
+    let mut data = row(0);
+    let text = wide(&"x".repeat(32767));
+    for col in 0..2050 {
+        data.extend(cell(6, col, &text));
+    }
+    // Just over 64 MiB of text, the allowance before storytold/gridcraft#2126.
+    assert_eq!(read(&file(&worksheet(&data, &[]))).unwrap().sheets[0].cells.len(), 2050);
+}
+
+/// A row as Excel writes it: the row header, then `BrtRwDescent` (1024) in an alternate-content
+/// block. [MS-XLSB] 2.4.791: one per non-empty row whenever the workbook lists its fonts, which
+/// Excel always does. Four records per row besides the cells.
+fn excel_row(r: u32) -> Vec<u8> {
+    [row(r), record(37, &[1, 0, 0, 0, 0, 0]), record(1024, &[0, 0]), record(38, &[])].concat()
+}
+/// `n` TRUE cells, `width` to a row from A1, in rows as Excel writes them.
+fn bool_cells(n: u32, width: u32) -> Vec<u8> {
+    let mut data = vec![];
+    for i in 0..n {
+        if i % width == 0 {
+            data.extend(excel_row(i / width));
+        }
+        data.extend(cell(4, i % width, &[1]));
+    }
+    data
+}
+/// A workbook whose two worksheets are the given parts.
+fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
+    zip(&[
+        ("[Content_Types].xml", TYPES.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book(false)),
+        ("records/_rels/book.bin.rels", RELS.as_bytes()),
+        ("data/one.bin", one),
+        ("data/two.bin", two),
+        ("text/strings.bin", &sst()),
+    ])
+}
+
+#[test]
+fn more_than_a_million_cells_open() {
+    // storytold/gridcraft#2126: a million cells over the workbook was a quarter of what `.xls` allows.
+    let wb = read(&file(&worksheet(&bool_cells(1_000_001, 16), &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 1_000_001);
+    assert_eq!(wb.sheets[0].value(CellRef::new(62_500, 0)), Value::Bool(true));
+}
+
+#[test]
+fn a_full_height_column_opens() {
+    // 1,048,576 cells in Excel's rows are 5.2 million records in one part.
+    let wb = read(&file(&worksheet(&bool_cells(1_048_576, 1), &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 1_048_576);
+    assert_eq!(wb.sheets[0].value(CellRef::new(1_048_575, 0)), Value::Bool(true));
+}
+
+#[test]
+fn formatted_blank_cells_cost_records_not_cells() {
+    // Filling A1:Z200000 and typing 30 values: Excel writes a BrtCellBlank for every formatted
+    // empty cell, 6 million records in all, which an allowance of 5 million per part refused.
+    let mut data = vec![];
+    for r in 0..200_000u32 {
+        data.extend(excel_row(r));
+        for c in 0..26 {
+            data.extend(if r < 10 && c < 3 { cell(4, c, &[1]) } else { cell(1, c, &[]) });
+        }
+    }
+    let wb = read(&file(&worksheet(&data, &[]))).unwrap();
+    assert_eq!(wb.sheets[0].cells.len(), 30);
+}
+
+#[test]
+fn cells_are_limited_to_four_million_over_the_workbook() {
+    // The `.xls` limit, counted across sheets: 2M + 2M opens, 2M + 2M + 1 does not.
+    let half = bool_cells(2_000_000, 40);
+    let mut over = half.clone();
+    over.extend(excel_row(50_000));
+    over.extend(cell(4, 0, &[1]));
+    let wb = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&half, &[]))).unwrap();
+    assert_eq!(wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), 4_000_000);
+    let err = read(&two_sheets(&worksheet(&half, &[]), &worksheet(&over, &[]))).err().unwrap();
+    assert!(matches!(err, Error::TooLarge(_)), "{err}");
+    assert!(err.to_string().contains("4000000"), "{err}");
+}
+
+#[test]
+fn records_share_one_allowance_over_the_workbook() {
+    // About 1,400 records a sheet: over a 2,000 shared allowance, though each sheet alone fits.
+    let sheet = worksheet(&bool_cells(1000, 10), &[]);
+    let bytes = two_sheets(&sheet, &sheet);
+    let records = |n| Limits { binary_records: n, ..Limits::default() };
+    assert!(matches!(read_with(&bytes, &records(2_000)), Err(Error::TooLarge(_))));
+    assert!(read_with(&bytes, &records(4_000)).is_ok());
+    // The default allowance: exactly 40 million records, then one more. The other parts hold 20
+    // (7 in the workbook, 3 shared-string records, 5 + 5 sheet framing records).
+    let filler = record(30, &[]); // Not a cell record: skipped inside the sheet data.
+    let mut data = filler.repeat(40_000_000 - 20);
+    assert!(read(&file(&worksheet(&data, &[]))).is_ok());
+    data.extend(filler.repeat(1));
+    let err = read(&file(&worksheet(&data, &[]))).err().unwrap();
+    assert!(matches!(err, Error::TooLarge(_)) && err.to_string().contains("too many records (more than 40000000)"), "{err}");
+}
+
+#[test]
+fn text_and_shared_strings_are_limited() {
+    let bytes = file(&worksheet(&[row(0), cell(6, 0, &wide("eleven char"))].concat(), &[]));
+    // The shared string ("shared 🦀 café", 17 bytes) and the cell's 11 are charged.
+    let text = |n| Limits { binary_text: n, ..Limits::default() };
+    assert!(read_with(&bytes, &text(28)).is_ok());
+    assert!(matches!(read_with(&bytes, &text(27)), Err(Error::TooLarge(_))));
+    // A declared count over 4 million shared strings is refused before any item is read.
+    let sst_header = |unique: u32| [record(159, &[unique.to_le_bytes(), unique.to_le_bytes()].concat()), record(160, &[])].concat();
+    let over = read(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_001), ROOT, RELS, TYPES)).err().unwrap();
+    assert!(matches!(over, Error::TooLarge(_)), "{over}");
+    // At the limit the count passes, and the missing items are what is wrong.
+    let at = read(&package(&book(false), &worksheet(&[], &[]), &sst_header(4_000_000), ROOT, RELS, TYPES)).err().unwrap();
+    assert!(matches!(at, Error::Invalid(_)), "{at}");
+}
+
+#[test]
+fn phonetic_runs_use_documented_size_and_tolerate_padding() {
+    // [MS-XLSB] 2.5.103: a PhRun is 10 bytes. Padding after the runs is ignored; a run shorter
+    // than documented is refused.
+    let phonetic = |runs: u32, bytes: usize| {
+        let mut out = vec![2];
+        out.extend(wide("ruby"));
+        out.extend(wide("ルビ"));
+        out.extend(runs.to_le_bytes());
+        out.extend(vec![0; bytes]);
+        out
+    };
+    for padded in [phonetic(1, 10), phonetic(1, 12), phonetic(2, 24)] {
+        let wb = read(&file(&worksheet(&[row(0), cell(62, 0, &padded)].concat(), &[]))).unwrap();
+        assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("ruby"));
+    }
+    assert!(read(&file(&worksheet(&[row(0), cell(62, 0, &phonetic(2, 12))].concat(), &[]))).is_err());
+}

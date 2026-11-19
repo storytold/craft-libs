@@ -1,0 +1,24 @@
+[package]
+name = "craft-stream-codecs"
+description = "Byte-stream and bi-level image codecs that PDF, PostScript and TIFF share: LZW, ASCII85, ASCIIHex, RunLength, TIFF and PNG predictors, CCITT Group 3 and 4 decoding and Group 4 encoding, JBIG2 decoding and lossless encoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# CCITT Group 4 encoding (ITU-T T.6). MIT.
+fax = "0.2.7"
+# CCITT fax decoding, the decoder the vendored PDF reader uses. MIT OR Apache-2.0.
+hayro-ccitt = { version = "0.3", default-features = false }
+# JBIG2 decoding, the decoder the vendored PDF reader uses (the workspace patches it to `vendor/hayro-jbig2`).
+hayro-jbig2 = { version = "=0.3.0", default-features = false, features = ["std"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+weezl = "0.2"

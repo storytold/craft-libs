@@ -1,7 +1,7 @@
 //! Font indexes (aiongg/craft-font-index, format 1.x): the families of every source in one
 //! [`Index`], and exact lookup.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Deserialize;
 
@@ -24,25 +24,25 @@ pub const LICENSES: [&str; 3] = ["OFL", "APACHE2", "UFL"];
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
     /// More than [`MAX_INDEX_BYTES`].
-    #[error("the font index is larger than {max} bytes")]
+    #[error("the index is larger than {max} bytes")]
     TooLarge {
         /// The limit.
         max: usize,
     },
     /// Not JSON, or a field has the wrong type.
-    #[error("the font index can't be read: {0}")]
+    #[error("the index can't be read: {0}")]
     Json(String),
     /// A major version this crate doesn't know.
-    #[error("the font index has version {0}; this build reads version {MAJOR_VERSION}.x")]
+    #[error("the index has version {0}; this build reads version {MAJOR_VERSION}.x")]
     Version(String),
     /// An entry breaks the format's rules.
-    #[error("the font index has an invalid entry: {0}")]
+    #[error("the index has an invalid entry: {0}")]
     Invalid(String),
     /// A gzipped index that doesn't decompress.
-    #[error("the gzipped font index can't be read: {0}")]
+    #[error("the gzipped index can't be read: {0}")]
     Gzip(String),
     /// The bytes aren't the pinned ones.
-    #[error("the font index doesn't have the sha256 this build expects")]
+    #[error("the index doesn't have the sha256 this build expects")]
     Checksum,
 }
 
@@ -519,8 +519,11 @@ impl Index {
             by_name.entry(fam.family.to_lowercase()).or_default().push(fi);
             for (xi, file) in fam.files.iter().enumerate() {
                 for ps in &file.postscript {
+                    // Files are visited in order, so a file that lists a name twice can only
+                    // have been the last one pushed: checking the end keeps this linear
+                    // however many files share the name.
                     let hits = by_postscript.entry(ps.clone()).or_default();
-                    if !hits.contains(&(fi, xi)) {
+                    if hits.last() != Some(&(fi, xi)) {
                         hits.push((fi, xi));
                     }
                 }
@@ -610,9 +613,10 @@ impl Index {
     pub fn find_postscript(&self, name: &str) -> Result<Face<'_>, Unavailable> {
         let hits = self.by_postscript.get(name).map(Vec::as_slice).unwrap_or_default();
         let mut names: Vec<&str> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for &(fi, _) in hits {
             if let Some(f) = self.families.get(fi)
-                && !names.iter().any(|n| n.to_lowercase() == f.family.to_lowercase())
+                && seen.insert(f.family.to_lowercase())
             {
                 names.push(&f.family);
             }

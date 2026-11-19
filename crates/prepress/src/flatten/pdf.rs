@@ -667,7 +667,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         let space = cs.ink_space(simulation.as_ref());
         let (inks, channels) = self.space_inks(&space, cs)?;
         let samples: Vec<u8> = raster.values.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
-        let samples = channels.apply(samples, space.len());
+        let samples = channels.apply(samples, space.len())?;
         let (w, h) = (raster.width as usize, raster.height as usize);
         let smask = (!raster.alpha.iter().all(|a| *a == 255)).then(|| raster.alpha.into());
         self.shared.report.rasterized_shadings += 1;
@@ -768,12 +768,15 @@ impl<'s, 'a> Reader<'s, 'a> {
             return;
         };
         let Some((inks, channels)) = self.space_inks(&im.space, &im.color_space) else { return };
+        let (w, h) = (im.width as usize, im.height as usize);
+        let Some(samples) = channels.apply(im.samples, im.space.len()) else {
+            self.shared.report.unreadable_images += 1;
+            return;
+        };
         self.shared.report.images += 1;
         if matches!(im.space, InkSpace::Cmyk { converted: true }) {
             self.shared.report.converted_images += 1;
         }
-        let (w, h) = (im.width as usize, im.height as usize);
-        let samples = channels.apply(im.samples, im.space.len());
         let smask = im.alpha.map(|a| {
             if (a.width as usize, a.height as usize) == (w, h) {
                 a.data
@@ -1072,13 +1075,23 @@ enum Channels {
     Spread(usize),
 }
 
+/// The most samples an image may hold once its values are spread over the page's inks
+/// ([`Channels::Spread`]): the pixel and ink limits each hold, but their product need not.
+const MAX_IMAGE_SAMPLES: usize = 256 << 20;
+
 impl Channels {
-    fn apply(&self, samples: Vec<u8>, width: usize) -> Vec<u8> {
-        match self {
+    /// `None` when spreading would pass [`MAX_IMAGE_SAMPLES`].
+    fn apply(&self, samples: Vec<u8>, width: usize) -> Option<Vec<u8>> {
+        Some(match self {
             Self::All => samples,
             Self::Keep(keep) => samples.chunks_exact(width.max(1)).flat_map(|s| s.iter().zip(keep).filter(|(_, k)| **k).map(|(v, _)| *v)).collect(),
-            Self::Spread(n) => samples.iter().flat_map(|v| std::iter::repeat_n(*v, *n)).collect(),
-        }
+            Self::Spread(n) => {
+                if samples.len().checked_mul(*n)? > MAX_IMAGE_SAMPLES {
+                    return None;
+                }
+                samples.iter().flat_map(|v| std::iter::repeat_n(*v, *n)).collect()
+            }
+        })
     }
 
     fn apply_f32(&self, values: &[f32]) -> Vec<f32> {
@@ -1125,12 +1138,15 @@ fn limit_scale(scale: f64, area: Rect, pixels: f64) -> f64 {
     if have > pixels { scale * (pixels / have).sqrt() } else { scale }
 }
 
-/// `items` and every item inside their groups and masks.
+/// `items` and every item inside their groups and masks, plus the path elements and glyphs each
+/// owns: what a copy of them allocates and a translation visits.
 fn item_count(items: &[Item]) -> usize {
     items.iter().fold(0, |sum, item| {
         let inner = match item {
             Item::Group(g) => item_count(&g.children).saturating_add(g.mask.as_ref().map_or(0, |m| item_count(&m.group.children))),
-            Item::Fill(_) | Item::Text(_) | Item::Image(_) => 0,
+            Item::Fill(f) => f.path.elements().len(),
+            Item::Text(t) => t.outlines.elements().len().saturating_add(t.glyphs.len()),
+            Item::Image(_) => 0,
         };
         sum.saturating_add(1).saturating_add(inner)
     })
@@ -1331,5 +1347,26 @@ mod tests {
         assert!(values(cell, cell_scale, 1000) <= MAX_CELL_PIXELS * CANVAS_INKS * 1.01);
         // A CMYK page keeps its resolution.
         assert_eq!(tiling_scales(dpi, page, cell, 1.0, 4).0, dpi);
+    }
+
+    #[test]
+    fn spreading_samples_over_inks_stays_within_the_sample_budget() {
+        assert_eq!(Channels::Spread(3).apply(vec![1, 2], 1), Some(vec![1, 1, 1, 2, 2, 2]));
+        let pixels = MAX_IMAGE_SAMPLES / 1024;
+        assert!(Channels::Spread(1024).apply(vec![0; pixels], 1).is_some(), "at the budget");
+        assert_eq!(Channels::Spread(1025).apply(vec![0; pixels], 1), None, "past it");
+        assert_eq!(Channels::Spread(usize::MAX).apply(vec![0; 2], 1), None, "overflow");
+    }
+
+    #[test]
+    fn item_count_charges_path_elements() {
+        let path = Rect::new(0.0, 0.0, 1.0, 1.0).to_path(0.1);
+        let fill = Item::Fill(FillItem {
+            path: path.clone(),
+            rule: FillRule::NonZero,
+            paint: Paint::Solid(InkColor::Tints(vec![])),
+            overprint: Overprint::default(),
+        });
+        assert_eq!(item_count(&[fill]), 1 + path.elements().len());
     }
 }

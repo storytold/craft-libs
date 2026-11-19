@@ -119,6 +119,34 @@ fn group_merge_into_tabs_inserts_every_member_before_the_anchor_tab() {
 }
 
 #[test]
+fn a_floating_destination_takes_only_floatable_panels_and_a_group_there_needs_splits() {
+    let before = docked();
+    // Panel 4 may move but not float; panel 6 (floating) takes no splits.
+    let policy = |p: &u32| match p {
+        4 => Permissions { floatable: false, ..Permissions::default() },
+        6 => Permissions { accepts_splits: false, ..Permissions::default() },
+        _ => Permissions::default(),
+    };
+    let tab = Placement::Tab { before: None };
+    let group = Placement::Group { below: true, height: None };
+    for action in [
+        Action::Move { panel: 4, anchor: 8, placement: tab.clone() },
+        Action::MovePanel { panel: 4, to: Target::At { anchor: 8, placement: tab.clone() } },
+        Action::MoveGroup { panel: 4, to: Target::At { anchor: 8, placement: tab.clone() } },
+        Action::MoveGroup { panel: 11, to: Target::At { anchor: 6, placement: group.clone() } },
+    ] {
+        let mut layout = before.clone();
+        assert_eq!(layout.apply_with_permissions(action.clone(), policy), Err(DockError::NotAllowed), "{action:?}");
+        assert_eq!(layout, before);
+    }
+    // Floatable panels still join the window, and a group still goes below a docked anchor.
+    let mut layout = before.clone();
+    layout.apply_with_permissions(Action::Move { panel: 5, anchor: 8, placement: tab }, policy).unwrap();
+    let mut layout = before.clone();
+    layout.apply_with_permissions(Action::MoveGroup { panel: 11, to: Target::At { anchor: 2, placement: group } }, policy).unwrap();
+}
+
+#[test]
 fn column_moves_and_floats_keep_every_group() {
     let mut layout = docked();
     layout.apply(Action::SetIconic { panel: 4, iconic: true }).unwrap();

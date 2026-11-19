@@ -94,9 +94,10 @@ fn damaged_file_that_cannot_be_moved_is_left_alone() {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     write_config(tmp.path(), "not = [toml");
-    // The folder passes the write probe only while it is writable, so open first, then lock it.
     let dir = tmp.path();
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if !common::restrict_directory_writes(dir) {
+        return;
+    }
     let (mut store, report) = open_in(dir);
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(store.is_read_only(), "{report:?}");
@@ -169,7 +170,9 @@ fn failed_migration_in_an_unwritable_folder_shows_defaults() {
     let tmp = tempfile::tempdir().unwrap();
     // Version 0 has no migration step, so upgrading fails.
     write_config(tmp.path(), "schema_version = 0\n[general]\nlanguage = \"de\"\n");
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    if !common::restrict_directory_writes(tmp.path()) {
+        return;
+    }
     let (store, report) = open_in(tmp.path());
     std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(matches!(report.read_only, Some(ReadOnlyReason::DirNotWritable(_))), "{report:?}");
@@ -194,4 +197,23 @@ fn outside_file_with_failing_migration_is_not_overwritten() {
     assert!(store.is_read_only());
     assert_eq!(read_config(tmp.path()), external, "the outside file is left untouched");
     assert!(matches!(store.tick(std::time::Instant::now()).status, craft_settings::SaveStatus::Idle), "no retries once read-only");
+}
+
+#[test]
+fn an_emptied_file_is_not_adopted_over_the_loaded_document() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n\n# my note\n[plugins]\nenabled = true\n\n[general]\nlanguage = \"de\"\n");
+    let (mut store, _) = open_in(tmp.path());
+    store.update(|p| p.general.language = "fr".into());
+    store.flush().unwrap();
+
+    // Emptied while the app runs: an editor crash, a sync tool, a hand `truncate`.
+    write_config(tmp.path(), "");
+    store.update(|p| p.general.language = "es".into());
+    store.flush().unwrap();
+
+    let text = read_config(tmp.path());
+    assert!(text.contains("# my note"), "{text}");
+    assert!(text.contains("[plugins]"), "{text}");
+    assert!(text.contains("language = \"es\""), "{text}");
 }

@@ -1,0 +1,17 @@
+[package]
+name = "craft-ews"
+description = "Exchange Web Services SOAP layer without sockets: the request envelope and an escaping element builder, and the answer envelope, faults and response messages read with craft-xml."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-xml = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

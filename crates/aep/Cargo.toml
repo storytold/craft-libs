@@ -1,0 +1,16 @@
+[package]
+name = "craft-aep"
+description = "After Effects projects: the .aep (RIFX 'Egg!') and .aepx container as a lossless chunk tree with a typed, read-only view (compositions, layers, properties, keyframes, effects, masks, shapes, text, footage), bounded on hostile input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# The tool's own tests run with the crate's (examples are only built by default).
+[[example]]
+name = "stubicc"
+test = true

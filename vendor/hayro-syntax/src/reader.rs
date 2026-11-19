@@ -31,6 +31,8 @@ impl<'a> ReaderExt<'a> for Reader<'a> {
     // that it's not an object reference.
     #[inline]
     fn read<T: Readable<'a>>(&mut self, ctx: &ReaderContext<'a>) -> Option<T> {
+        crate::cancel::check(ctx.control())?;
+        self.set_control(ctx.control().cloned());
         let old_offset = self.offset;
 
         T::read(self, ctx).or_else(|| {
@@ -126,6 +128,14 @@ struct ReaderContextData<'a> {
 enum ReaderContextInner<'a> {
     Shared(Arc<ReaderContextData<'a>>),
     Dummy { in_content_stream: bool, limits: crate::DecodeLimits },
+    ControlledDummy(Arc<ControlledDummy>),
+}
+
+#[derive(Clone, Debug)]
+struct ControlledDummy {
+    in_content_stream: bool,
+    limits: crate::DecodeLimits,
+    control: crate::cancel::Control,
 }
 
 /// Context for reading PDF objects.
@@ -151,10 +161,26 @@ impl<'a> ReaderContext<'a> {
         Self(ReaderContextInner::Dummy { in_content_stream: false, limits })
     }
 
+    pub(crate) fn dummy_with_control(limits: crate::DecodeLimits, control: Option<crate::cancel::Control>) -> Self {
+        match control {
+            Some(control) => Self(ReaderContextInner::ControlledDummy(Arc::new(ControlledDummy { in_content_stream: false, limits, control }))),
+            None => Self::dummy_with_limits(limits),
+        }
+    }
+
+    pub(crate) fn control(&self) -> Option<&crate::cancel::Control> {
+        match &self.0 {
+            ReaderContextInner::Shared(inner) => inner.xref.control(),
+            ReaderContextInner::Dummy { .. } => None,
+            ReaderContextInner::ControlledDummy(inner) => Some(&inner.control).filter(|c| c.active()),
+        }
+    }
+
     pub(crate) fn decode_limits(&self) -> crate::DecodeLimits {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.xref.decode_limits(),
             ReaderContextInner::Dummy { limits, .. } => *limits,
+            ReaderContextInner::ControlledDummy(inner) => inner.limits,
         }
     }
 
@@ -166,7 +192,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn xref(&self) -> &'a XRef {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.xref,
-            ReaderContextInner::Dummy { .. } => XRef::dummy(),
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => XRef::dummy(),
         }
     }
 
@@ -175,6 +201,7 @@ impl<'a> ReaderContext<'a> {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.in_content_stream,
             ReaderContextInner::Dummy { in_content_stream, .. } => *in_content_stream,
+            ReaderContextInner::ControlledDummy(inner) => inner.in_content_stream,
         }
     }
 
@@ -182,7 +209,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn in_object_stream(&self) -> bool {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.in_object_stream,
-            ReaderContextInner::Dummy { .. } => false,
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => false,
         }
     }
 
@@ -190,7 +217,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn obj_number(&self) -> Option<ObjectIdentifier> {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.obj_number,
-            ReaderContextInner::Dummy { .. } => None,
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => None,
         }
     }
 
@@ -198,7 +225,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn set_obj_number(&mut self, id: ObjectIdentifier) {
         match &mut self.0 {
             ReaderContextInner::Shared(inner) => Arc::make_mut(inner).obj_number = Some(id),
-            ReaderContextInner::Dummy { .. } => {}
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => {}
         }
     }
 
@@ -207,6 +234,7 @@ impl<'a> ReaderContext<'a> {
         match &mut self.0 {
             ReaderContextInner::Shared(inner) => Arc::make_mut(inner).in_content_stream = val,
             ReaderContextInner::Dummy { in_content_stream, .. } => *in_content_stream = val,
+            ReaderContextInner::ControlledDummy(inner) => Arc::make_mut(inner).in_content_stream = val,
         }
     }
 
@@ -214,7 +242,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn set_in_object_stream(&mut self, val: bool) {
         match &mut self.0 {
             ReaderContextInner::Shared(inner) => Arc::make_mut(inner).in_object_stream = val,
-            ReaderContextInner::Dummy { .. } => {}
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => {}
         }
     }
 
@@ -222,7 +250,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn parent_chain_contains(&self, id: &ObjectIdentifier) -> bool {
         match &self.0 {
             ReaderContextInner::Shared(inner) => inner.parent_chain.contains(id),
-            ReaderContextInner::Dummy { .. } => false,
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => false,
         }
     }
 
@@ -230,7 +258,7 @@ impl<'a> ReaderContext<'a> {
     pub(crate) fn parent_chain_push(&mut self, id: ObjectIdentifier) {
         match &mut self.0 {
             ReaderContextInner::Shared(inner) => Arc::make_mut(inner).parent_chain.push(id),
-            ReaderContextInner::Dummy { .. } => {}
+            ReaderContextInner::Dummy { .. } | ReaderContextInner::ControlledDummy(_) => {}
         }
     }
 }

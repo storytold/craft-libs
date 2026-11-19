@@ -1,0 +1,18 @@
+[package]
+name = "craft-xlsx"
+description = "Excel workbooks (.xlsx, .xlsm, SpreadsheetML in an OPC package) and binary workbooks (.xlsb): the workbook part, shared strings, the styles tables and a worksheet's rows and cells as a stream, with every other part reachable for the caller."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-drawingml = { workspace = true }
+craft-opc = { workspace = true }
+craft-sheet = { workspace = true }
+craft-xml = { workspace = true }
+thiserror = { workspace = true }

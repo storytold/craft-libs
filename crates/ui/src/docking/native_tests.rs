@@ -493,6 +493,16 @@ fn dragging_the_bar_moves_the_os_window() {
     assert!(d.host().commands.iter().any(|(_, c)| *c == ViewportCommand::StartDrag));
 }
 
+#[test]
+fn a_native_window_names_its_panel_in_its_tab_only() {
+    // As the in-window floating window does: the bar has no title.
+    let mut d = driver(layout(true));
+    d.settle();
+    let viewport = d.viewport(window(&d, 5).id);
+    let texts = texts(&d.host().windows[&viewport].shapes);
+    assert_eq!(texts.iter().filter(|t| *t == "Panel 5").count(), 1, "{texts:?}");
+}
+
 fn id_of(d: &DockDriver<u32, Content>) -> u64 {
     window(d, 5).id
 }

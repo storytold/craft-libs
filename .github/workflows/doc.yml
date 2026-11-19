@@ -1,0 +1,47 @@
+name: Craft documents
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['crates/doc/**', 'crates/pcraft-format/**', 'crates/vectorcraft-format/**', 'crates/ecproj-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+  pull_request:
+    paths: ['crates/doc/**', 'crates/pcraft-format/**', 'crates/vectorcraft-format/**', 'crates/ecproj-format/**', 'Cargo.toml', 'Cargo.lock', '.github/workflows/doc.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (main, manual) gets a group of its own, so it is neither cancelled nor replaced while queued.
+  group: doc-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  doc:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS runners are kept for releases: macOS runs only when started by hand.
+        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy -p craft-doc --all-targets --locked -- -D warnings
+      - run: cargo clippy -p craft-doc --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p craft-doc --locked -- --nocapture
+      - run: cargo test -p craft-doc --all-features --locked -- --nocapture
+      - run: cargo check -p craft-doc --all-features --locked --target wasm32-unknown-unknown
