@@ -22,7 +22,7 @@
 //!    the app's shortcuts in the next pass: a plain Delete with nothing to delete runs the app's Edit > Clear.
 //!    A tool that claims the nudges has AccessKit Increment and Decrement on its node, and they reach `key` as the
 //!    arrows toward and away from the reading end.
-//! 6. The tool paints over the canvas and requests its cursor at tool priority.
+//! 6. The tool paints over the canvas and requests its cursor at tool priority, within the view on the canvas's layer.
 //! 7. A drag past the canvas edge ([`CanvasTool::autoscrolls`]), and a hover in the band inside it
 //!    ([`CanvasTool::autoscrolls_on_hover`]), report [`ToolHostResponse::past_edge`] and the pass's
 //!    [`ToolHostResponse::scroll`]; the app moves its view by it with [`Autoscroll::scroll`].
@@ -624,7 +624,9 @@ impl<'m> ToolHost<'m> {
         }
         if over {
             let wanted = effective.cursor(&cx);
-            cursor::request(&ctx, wanted.clone(), CursorPriority::Tool);
+            // A tip outline is a mark on the canvas: it shows inside the view, on the canvas's layer.
+            let view = space.map_or(rect, |space| space.view.rect).intersect(rect);
+            cursor::request_within(&ctx, wanted.clone(), CursorPriority::Tool, cursor::CursorRegion::new(ui.layer_id(), view));
             response.cursor = Some(wanted);
         }
         if let Some(at) = current.map(|pointer| pointer.pos) {
