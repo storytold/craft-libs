@@ -4336,7 +4336,7 @@ exit 0
                 if output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("Resource temporarily unavailable") {
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(wait_ms));
+                std::thread::sleep(std::time::Duration::from_millis(wait_ms));
                 output = std::process::Command::new("hdiutil").args(args).output().unwrap();
             }
             output
