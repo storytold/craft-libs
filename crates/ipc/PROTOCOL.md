@@ -33,7 +33,10 @@ protocol.
   path is absolute and the file is regular and executable, and the file and every directory above
   it, from `/` down, belong to the user or root. The file and the directory that holds it may not
   be writable by every user. A higher directory that every user can write must have the sticky
-  bit (as `/tmp` does). A path with a `..` component is refused. The launcher runs the real path
+  bit (as `/tmp` does). A file or directory that its group can write passes only when no other
+  account is in that group: gid 0, or (Linux) a group that `/etc/group` and `/etc/passwd` show
+  has no member besides the user and root. A group those files do not describe is refused. A
+  path with a `..` component is refused. The launcher runs the real path
   that passed the check, so a symlink cannot change between the check and the spawn. Empty and
   relative `PATH` entries are skipped. A fork that starts an app by another route must call
   `craft_ipc::trust::verified_executable` and run the path it returns.

@@ -11,22 +11,23 @@ on:
 permissions:
   contents: read
 
+# A fraction of the proptest cases, as in the Workspace gate; nightly.yml runs them in full.
+env:
+  PROPTEST_CASES: "64"
+
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-pdf-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-pdf-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   native:
-    name: PDF (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS runners are kept for releases: macOS runs only when started by hand.
-        os: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') || fromJSON('["ubuntu-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    # fmt, clippy and the tests run in the Workspace gate on every OS, with the licensed fonts and
+    # the plate tests; this runs the tests behind craft_pdf_unicode_fixtures and the read-only
+    # contract, which is its own workspace.
+    name: PDF Unicode fixtures and read-only contract
+    runs-on: ubuntu-latest
     env:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
     steps:
@@ -38,11 +39,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-          components: rustfmt, clippy
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-pdf
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
@@ -52,9 +48,7 @@ jobs:
           python scripts/test-fetch-pdf-test-fonts.py
           python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
           echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
-      - run: cargo fmt --check
-      - run: cargo clippy -p craft-pdf --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p craft-pdf --all-features --locked
+      - run: cargo test -p craft-pdf --all-features --locked --test unicode_writing --test upstream_compatibility --test upstream_reading
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked
   backends:
     name: PDF vendored contracts
@@ -68,10 +62,6 @@ jobs:
       - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-pdf-backends
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: bash scripts/test-pdf-backends.sh
   wasm:
     name: PDF WASM runtime
@@ -89,10 +79,6 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-pdf-wasm
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
@@ -117,31 +103,3 @@ jobs:
           fallback: cargo-install
       - run: cargo test -p craft-pdf --all-features --locked --target wasm32-unknown-unknown
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked --target wasm32-unknown-unknown
-  plate-test:
-    name: Plate tests and craft-prepress
-    runs-on: ubuntu-latest
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@v2.22.4
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@v7.0.1
-      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
-        with:
-          toolchain: stable
-          components: clippy
-      - uses: step-security/rust-cache@v2.9.2
-        with:
-          key: craft-plate-test
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-python@v7.1.0
-        with:
-          python-version: "3.12"
-      - name: Provision licensed PDF test fonts
-        shell: bash
-        run: |
-          python scripts/test-fetch-pdf-test-fonts.py
-          python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
-          echo "CRAFT_PDF_TEST_FONT_DIR=$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
-      - run: cargo clippy -p craft-plate-test -p craft-prepress --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p craft-plate-test -p craft-prepress --all-features --locked
