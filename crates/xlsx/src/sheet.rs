@@ -190,6 +190,8 @@ pub struct SheetPart {
     pub rows: u64,
     /// Rows and cells dropped because their position was outside the grid or unreadable.
     pub dropped: u64,
+    /// Cell elements (`<c>`) inside dropped rows or dropped for an invalid/out-of-grid reference.
+    pub dropped_cells: u64,
     /// Why reading stopped early, when the part is damaged; the rows before the damage were
     /// handed out.
     pub damaged: Option<String>,
@@ -361,6 +363,7 @@ pub(crate) struct RowReader {
     next_row: u32,
     pub(crate) rows: u64,
     pub(crate) dropped: u64,
+    pub(crate) dropped_cells: u64,
 }
 
 impl RowReader {
@@ -371,11 +374,13 @@ impl RowReader {
             Some(r) if (1..=MAX_ROWS).contains(&r) => r - 1,
             Some(_) => {
                 self.dropped += 1;
+                self.dropped_cells += e.children("c").count() as u64;
                 return None;
             }
             None if self.next_row < MAX_ROWS => self.next_row,
             None => {
                 self.dropped += 1;
+                self.dropped_cells += e.children("c").count() as u64;
                 return None;
             }
         };
@@ -398,12 +403,14 @@ impl RowReader {
                     Some(p) => p,
                     None => {
                         self.dropped += 1;
+                        self.dropped_cells += 1;
                         continue;
                     }
                 },
                 None if next_col < MAX_COLS => CellRef::new(index, next_col),
                 None => {
                     self.dropped += 1;
+                    self.dropped_cells += 1;
                     continue;
                 }
             };

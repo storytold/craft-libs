@@ -1,6 +1,6 @@
 //! Chart parts (`c:chartSpace`) → [`Chart`]. The original XML is kept in `Chart.raw`.
 
-use crate::chart::{Chart, ChartType, ErrorBars, Series, Trendline, TrendlineType};
+use crate::chart::{Chart, ChartDataTable, ChartType, ErrorBars, Series, Trendline, TrendlineType};
 use crate::style::Fill;
 
 use craft_xml::{El, Local, value};
@@ -194,6 +194,16 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         }
     }
     c.lang = root.child(Local("lang")).and_then(|c| c.attr_local("val")).map(str::to_string);
+    c.pivot_source = root.path(&[Local("pivotSource"), Local("name")]).map(|n| n.deep_text().trim().to_string()).filter(|n| !n.is_empty());
+    c.data_table = pa.child(Local("dTable")).map(|t| {
+        let flag = |name: &str| t.child(Local(name)).is_some_and(|e| e.attr_local("val").and_then(value::to_bool).unwrap_or(true));
+        ChartDataTable {
+            show_keys: flag("showKeys"),
+            horizontal_border: flag("showHorzBorder"),
+            vertical_border: flag("showVertBorder"),
+            outline: flag("showOutline"),
+        }
+    });
     let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
@@ -287,6 +297,9 @@ fn read_group_settings(g: &El, c: &mut Chart) -> Option<bool> {
     }
     if let Some(v) = g.child(Local("holeSize")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()) {
         c.hole_size = (v / 100.0).clamp(0.0, 0.9);
+    }
+    if let Some(v) = g.child(Local("firstSliceAng")).and_then(|c| c.attr_local("val")).and_then(|v| v.trim().parse::<u16>().ok()) {
+        c.first_slice_angle = v % 360;
     }
     // `<c:showVal/>` without a val attribute means true, as in the schema's default.
     // The setting belongs to this plot group: a group that asks for no labels keeps them
