@@ -37,7 +37,7 @@ pub use decode::{decode_text, decode_utf8};
 /// the same rules pick among the candidates whose records hold only their delimiters and
 /// whitespace, such as an exported row of empty cells; a candidate that finds a record with
 /// other text is left out of that pick. Comma is the fallback when neither pick finds one.
-/// Only the first 64 KiB are read. A record cut off at the end of that sample is left out,
+/// Only the first 65,536 characters are read. A record cut off at the end of that sample is left out,
 /// except when no candidate finds coherent complete records with a delimiter in each. Then a candidate
 /// that finds no complete record with other text counts the delimiters read so far in the first
 /// such record, unless it found rows of its empty cells and that record has none of its
@@ -45,11 +45,8 @@ pub use decode::{decode_text, decode_utf8};
 /// with one. When one of those candidates ends the sample inside a quoted field, each of them
 /// counts only up to that field's opening quote.
 pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    const SAMPLE_BYTES: usize = 64 * 1024;
-    let mut sample_end = text.len().min(SAMPLE_BYTES);
-    while !text.is_char_boundary(sample_end) {
-        sample_end -= 1;
-    }
+    const SAMPLE_CHARS: usize = 64 * 1024;
+    let sample_end = text.char_indices().nth(SAMPLE_CHARS).map_or(text.len(), |(at, _)| at);
     let sample = &text[..sample_end];
     let truncated = sample_end < text.len();
     let mut scans = b"\t,;".map(|delimiter| scan_delimiter(sample, delimiter, quote));
@@ -439,6 +436,15 @@ mod tests {
         // off at the end is left out.
         assert_eq!(sniff_delimiter(&format!("a;\"hello,\";b\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
         assert_eq!(sniff_delimiter(&format!("a,b,c;\"hello,\";d\n{}", "x;y;z\n".repeat(12_000)), '"'), b';');
+    }
+
+    #[test]
+    fn delimiter_sniffing_samples_characters_not_bytes() {
+        // 30,000 three-byte characters are 90,000 bytes, more than 64 KiB.
+        assert_eq!(sniff_delimiter(&format!("{};b;c\n1;2;3\n", "€".repeat(30_000)), '"'), b';');
+        // The 65,536th character is in the sample and the 65,537th is not.
+        assert_eq!(sniff_delimiter(&format!("{};x\n1;2\n", "€".repeat(65_535)), '"'), b';');
+        assert_eq!(sniff_delimiter(&format!("{};x\n1;2\n", "€".repeat(65_536)), '"'), b',');
     }
 
     // A sheet whose only value is far down exports rows of empty cells that fill the whole sample.
