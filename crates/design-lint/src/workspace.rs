@@ -135,6 +135,8 @@ const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
 /// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact or environment key that
 /// covers it, or the later task of craft-libs#2336 that removes the state. A new item in these files is flagged.
 const NO_GLOBAL_STATE: &[(&str, &str)] = &[
+    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
+    ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
@@ -435,6 +437,10 @@ mod tests {
 
     #[test]
     fn no_global_state_allowlist_is_per_item() {
+        let memo = Path::new("crates/ui-contract/src/contract/memo.rs");
+        assert!(no_global_state_allows("MemoProps", memo));
+        assert!(!no_global_state_allows("MemoProps", Path::new("crates/ui-contract/src/contract/entry.rs")));
+        assert!(!no_global_state_allows("SOMETHING", memo));
         let file = Path::new("crates/imaging/src/ui/curve/preview.rs");
         assert!(no_global_state_allows("IDENTITY", file));
         assert!(!no_global_state_allows("SECOND", file), "a new static in an allowlisted file is flagged");
