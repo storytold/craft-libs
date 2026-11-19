@@ -844,7 +844,7 @@ fn a_failed_address_does_not_hide_a_reachable_print_server() {
     assert!(result.is_ok(), "the second address was not tried");
     assert_eq!(asked_for, [refused, reachable]);
     assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
-    assert!(timeouts.windows(2).all(|pair| pair[1] <= pair[0]));
+    assert!(timeouts[0] <= CONNECT / 2, "the first address must leave time for the second");
     listener.accept().unwrap();
 }
 
@@ -858,4 +858,29 @@ fn failed_addresses_keep_the_last_error_and_empty_resolution_stays_clear() {
     assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: last refusal"));
     let result = open_tcp("printserver", 631, [], |_, _| panic!("an empty resolution must not connect"));
     assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: no address"));
+}
+
+#[test]
+fn a_slow_address_leaves_time_for_a_reachable_print_server() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reachable = listener.local_addr().unwrap();
+    let blackholed: SocketAddr = "[::1]:631".parse().unwrap();
+    let mut asked_for = Vec::new();
+    let mut timeouts = Vec::new();
+    let result = open_tcp("printserver", 631, [blackholed, reachable], |addr, timeout| {
+        asked_for.push(addr);
+        timeouts.push(timeout);
+        if addr == blackholed {
+            // Deterministically consume the first attempt's entire allowance without a real blackhole.
+            std::thread::sleep(timeout);
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "first address did not answer"))
+        } else {
+            TcpStream::connect_timeout(&addr, timeout)
+        }
+    });
+    assert!(result.is_ok(), "a timed-out first address hid a reachable second address");
+    assert_eq!(asked_for, [blackholed, reachable]);
+    assert!(timeouts[0] <= CONNECT / 2, "the first address consumed the shared budget");
+    assert!(timeouts.iter().all(|timeout| !timeout.is_zero() && *timeout <= CONNECT));
+    listener.accept().unwrap();
 }
