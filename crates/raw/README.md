@@ -219,7 +219,7 @@ bytes, and a test per limit.
 
 ## Decoder comparison reports
 
-The native `decode_report` example records the stored sensor samples and selected metadata for an
+The native `decode_report` example records the decoded sensor samples and selected metadata for an
 explicit, ordered list of local files. It reads one regular file at a time, accepts at most 512 MiB
 of encoded bytes per file, and uses `Limits::default()` for decoding.
 
@@ -236,9 +236,11 @@ schema	input	status	format	sample_type	sample_count	sensor_sha256	width	height	c
 ```
 
 `format` is a fixed lowercase decoder label, such as `dng` or `cfa_tiff`. `sample_type` is `u16` or
-`f32`. `sensor_sha256` hashes the complete stored sample sequence, encoding each integer as two
-little-endian bytes and each float's IEEE 754 bits as four little-endian bytes. The digest is 64
-lowercase hexadecimal digits. Shape and metadata have their own columns, so an orientation change
+`f32`. `sensor_sha256` hashes the complete decoded sample sequence (`RawImage::data`), encoding
+each integer as two little-endian bytes and each float's IEEE 754 bits as four little-endian bytes.
+The digest is 64 lowercase hexadecimal digits. It reflects any mapping the decoder has already
+applied, such as a DNG `LinearizationTable`, so two stored codes that map to the same value give the
+same digest. Shape and metadata have their own columns, so an orientation change
 can be distinguished from a sample change.
 
 `cfa` is `width,height,origin_x,origin_y:pattern`, where the pattern is a comma-separated row-major
@@ -257,7 +259,10 @@ To compare two pinned decoder revisions, use separate clean checkouts and keep t
 enabled features, and ordered fixture list identical. If a revision predates the example, copy both
 `examples/decode_report/main.rs` and `examples/decode_report/report.rs` at the same relative paths
 under that checkout's `crates/raw/` directory. The example uses the crate's existing `sha2` dev
-dependency. Build and save one report from each checkout, then compare them.
+dependency. It builds on `main` from
+[`ecee6933`](https://github.com/storytold/craft-libs/commit/ecee693322c27acdbcafed4b57066356404e8378)
+(#1171, 2026-11-13) onwards, the first revision whose `Cfa` has `origin_x` and `origin_y`. Older
+revisions fail to build it. Build and save one report from each checkout, then compare them.
 
 ```sh
 git diff --no-index -- before.tsv after.tsv
