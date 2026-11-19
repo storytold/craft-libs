@@ -236,6 +236,40 @@ fn paired_measure_matches_separate_calls_through_a_nested_body_and_replay() {
     assert_eq!(before_idle, after_idle, "the kept transcript needs no new paired measure on idle frames");
 }
 
+#[trial]
+fn a_nested_body_reuses_a_settled_transcript_and_remeasures_after_its_room_changes() {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let asked = Rc::new(Asked::default());
+    let sweeps = Rc::new(Cell::new(0));
+    let (shown, counts, swept) = (Rc::clone(&seen), Rc::clone(&asked), Rc::clone(&sweeps));
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("outer").show(ui, |ui, _| {
+            Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("inner").show(ui, |ui, _| {
+                if is_measuring(ui.ctx()) {
+                    swept.set(swept.get() + 1);
+                }
+                let mut child = Stretch::new(&shown, &counts);
+                child.paired = true;
+                child.track_input = true;
+                child.sizing(Sizing::FillWidth).id_salt("child").show(ui);
+            });
+        });
+    });
+    fixture.room(Vec2::new(240.0, 100.0)).settle();
+    assert!(sweeps.get() > 0 && asked.pair.get() > 0, "the first layout measures the nested body");
+    let before = seen.borrow().rect;
+    sweeps.set(0);
+    asked.pair.set(0);
+    fixture.idle(3);
+    assert_eq!(sweeps.get(), 0, "a kept transcript skips nested measuring sweeps");
+    assert_eq!(asked.pair.get(), 0, "recorded inputs need no paired measurement on idle");
+    assert_eq!(seen.borrow().rect, before, "replay keeps the same geometry");
+    fixture.room(Vec2::new(140.0, 100.0)).settle();
+    assert!(sweeps.get() > 0 && asked.pair.get() > 0, "a changed room takes the measuring fallback");
+    let after = seen.borrow().rect;
+    assert!((before.width() - after.width()).abs() > 0.5, "the changed input updates geometry: {before:?} -> {after:?}");
+}
+
 /// The rect of a row that fills a room `width` wide, scrolling along x when `scrolls`, and of the `Stretch` that fills
 /// its width alone in it.
 fn stretched(width: f32, scrolls: bool) -> (Rect, Rect) {
