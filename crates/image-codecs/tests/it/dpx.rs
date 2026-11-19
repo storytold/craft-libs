@@ -534,6 +534,9 @@ fn widened_samples_obey_the_exact_decoded_pixel_budget() {
         let options = |max_alloc| DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() };
         let budget = 5 * 3 * 3 * 2;
         assert!(decode_with(&bytes, &options(budget)).is_ok(), "the exact U16 pixel budget accepts the frame");
-        assert!(matches!(decode_with(&bytes, &options(budget - 1)), Err(CodecError::LimitExceeded(_))), "one byte below the decoded size rejects the frame");
+        assert!(
+            matches!(decode_with(&bytes, &options(budget - 1)), Err(CodecError::LimitExceeded(_))),
+            "one byte below the decoded size rejects the frame"
+        );
     }
 }
