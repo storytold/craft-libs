@@ -135,7 +135,7 @@ fn options() -> Result<Options, String> {
 /// What a job renders.
 enum Shown {
     /// One story in a card's story body.
-    Story(&'static StoryRegistration),
+    Story(StoryRegistration),
     /// The Overview card of one story group.
     Card(Spec),
 }
@@ -254,8 +254,8 @@ fn settle(frames: &mut Frames, width: f32, show: &mut dyn FnMut(&mut Ui)) {
 }
 
 /// The story in a card's body, with its dialog open when the card holds one behind its button: the rect it showed in.
-fn story(frames: &mut Frames, story: &'static StoryRegistration, job: &Job, options: &Options) -> Option<Rect> {
-    let body = StoryBody::new("sheet", story, job.surface, options.room, Pad::Regular);
+fn story(frames: &mut Frames, story: &StoryRegistration, job: &Job, options: &Options) -> Option<Rect> {
+    let body = StoryBody::new("sheet", *story, job.surface, options.room, Pad::Regular);
     let mut state = CardState::default();
     let mut flow = None;
     settle(frames, options.width, &mut |ui| flow = body.show(ui, &mut state).flow);
