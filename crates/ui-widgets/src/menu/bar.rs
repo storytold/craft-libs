@@ -233,6 +233,8 @@ struct BarState {
 #[derive(Clone, Debug, Default)]
 struct Query(String, u32, bool);
 
+craft_ui_contract::stays!(BarFact);
+
 /// What the bar published for `is_open` and `is_focused`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BarFact {

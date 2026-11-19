@@ -84,6 +84,20 @@ impl HitShape {
         }
     }
 
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        let points = |points: &[Pos2]| points.iter().map(|point| *point + by).collect();
+        match self {
+            HitShape::Rect(rect) => HitShape::Rect(rect.translate(by)),
+            HitShape::Circle { center, radius } => HitShape::Circle { center: *center + by, radius: *radius },
+            HitShape::Segment { a, b } => HitShape::Segment { a: *a + by, b: *b + by },
+            HitShape::Polyline { points: line, closed } => HitShape::Polyline { points: points(line), closed: *closed },
+            HitShape::Polygon(polygon) => HitShape::Polygon(points(polygon)),
+            HitShape::OutsidePolygon { within, polygon } => HitShape::OutsidePolygon { within: within.translate(by), polygon: points(polygon) },
+        }
+    }
+
     /// Whether `point` hits the shape grown to be at least `across` wide and high: the hit area of a part is never
     /// smaller than the pointer's target size.
     fn hit_across(&self, point: Pos2, across: f32) -> bool {
@@ -220,6 +234,14 @@ pub struct Shape<O> {
     pub local: bool,
     /// The least size across the hit area has, in points.
     pub min_across: f32,
+}
+
+impl<O: Clone> Shape<O> {
+    /// The shape moved by `by`.
+    #[must_use]
+    pub fn translated(&self, by: Vec2) -> Self {
+        Shape { shape: self.shape.translated(by), owner: self.owner.clone(), ..*self }
+    }
 }
 
 impl<O> Shape<O> {

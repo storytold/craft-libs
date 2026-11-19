@@ -193,6 +193,13 @@ impl DockSizes {
     }
 }
 
+/// A spot names panels and sides: it has no place, so a replay at another place keeps it.
+impl<P: Clone> crate::runtime::Shift for DockSpot<P> {
+    fn shifted(&self, _: &egui::RecordShift) -> Self {
+        self.clone()
+    }
+}
+
 /// Where a drop would land. A group is named by an anchor: any panel in it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -513,7 +520,7 @@ impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     /// registers its drop spots again when it replays its last run.
     fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
     where
-        A: PartialEq + Debug + Send + Sync + 'static,
+        A: PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static,
         F: Fn(&Context, &A) + Send + Sync + 'static,
     {
         crate::runtime::journal(ctx, args, again);

@@ -4,6 +4,7 @@
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
 use crate::runtime::env::{Env, Scoped};
+use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
 use std::hash::Hash;
@@ -42,8 +43,9 @@ use std::sync::Arc;
 /// sweep, a grid's cursor) does not reach in, so the room it is given reaches it only through its place. To the body
 /// around it the view is one unit, sized by its content's measure.
 ///
-/// What `show` returns holds layout facts only (a size, which part took the room). A replay returns the kept value
-/// again, so an event returned through it would arrive once per pass. Events leave a view through an [`Outbox`] in its
+/// What `show` returns holds layout facts only (a size, a rect, which part took the room). A replay returns the kept
+/// value again, moved with the record when the room moved (`Shift`), so an event returned through it would arrive once
+/// per pass. Events leave a view through an [`Outbox`] in its
 /// props (picks, closes, drags: what its components report in the pass), its bindings, its `Tracked` writes or
 /// commands. A measuring pass that takes the kept extent returns the kept value of the real run.
 ///
@@ -74,7 +76,7 @@ pub struct MemoView<P, R> {
     show: fn(&mut P, &mut Ui) -> R,
 }
 
-impl<P: MemoProps, R: Clone + PartialEq + Send + Sync + 'static> MemoView<P, R> {
+impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoView<P, R> {
     /// The view `id` showing `props` through `show`. The id is unique as a `Lazy` key is: among the memoized views and
     /// `Lazy` children of the scroll area the view is in, nested containers included, or among those of its parent `Ui`
     /// outside every scroll area. A second view with its id in one pass is reported (a debug assertion, as for other
@@ -102,7 +104,10 @@ impl<P: MemoProps, R: Clone + PartialEq + Send + Sync + 'static> MemoView<P, R> 
         });
         match shown {
             Shown::Ran(out) => Some(out),
-            Shown::Replayed(kept) => kept.and_then(|kept| kept.downcast_ref::<R>().cloned()),
+            // A replay at another place moves what the run returned with its record.
+            Shown::Replayed(kept, shift) => {
+                kept.and_then(|kept| kept.downcast_ref::<R>().map(|out| if shift.is_none() { out.clone() } else { out.shifted(&shift) }))
+            }
             Shown::OutOfView => None,
         }
     }

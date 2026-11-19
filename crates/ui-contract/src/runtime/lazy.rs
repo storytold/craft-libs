@@ -23,7 +23,8 @@ use crate::runtime::inputs::{self, Input};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
 use crate::style::EnvKey;
-use egui::{Context, Id, IdMap, IdSet, Layout, Rect, Vec2};
+use egui::emath::GuiRounding as _;
+use egui::{Context, Id, IdMap, IdSet, Layout, RecordShift, Rect, Vec2};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -67,6 +68,11 @@ impl View {
     /// them it takes nothing: its content gives its width there once it ran, so a guess never widens the content.
     pub(crate) fn estimate(&self, along: f32) -> Vec2 {
         Vec2::new(if self.axes.0 { along } else { 0.0 }, if self.axes.1 { along } else { 0.0 })
+    }
+
+    /// The view moved by `offset`, with its area.
+    fn moved(self, offset: Vec2) -> View {
+        View { rect: self.rect.translate(offset), content: self.content.translate(offset), ..self }
     }
 }
 
@@ -158,7 +164,8 @@ pub(crate) struct Measured {
     pub(crate) room: Rect,
 }
 
-/// Where a settling child ran: it is settled only while it runs at the same place, in the same environment.
+/// Where a settling child ran: it replays only at a place of the same size, layer, layout and environment, and its
+/// record moves with the room's position (`Place::shift_to`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Place {
     /// The region its parent offered it.
@@ -170,6 +177,43 @@ pub(crate) struct Place {
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
+}
+
+/// How a kept run replays at another place: the shift its record moves by, and whether the clip moved with the room.
+#[derive(Clone, Copy, Debug)]
+struct Moved {
+    shift: RecordShift,
+    with_clip: bool,
+}
+
+impl Place {
+    /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved; its
+    /// size, the layer, layout, scale and environment are the ones the run had. The record moves by the room's move
+    /// when that is a whole step of egui's UI rounding (a run rounds its rects to it, so a moved record is what a run
+    /// there gives) and, for a move, the record holds nothing a move cannot place (`movable`: no paint callback) on an
+    /// untransformed layer (`transformed`: egui's AccessKit bounds are layer space only there). Its clip rects follow
+    /// the clip when either:
+    /// - the clip moved with the room (`with_clip`): every rect and clip moves exactly, whatever the clip cut;
+    /// - the run lay wholly inside its clip: nothing of it was culled (widgets skip paint outside the clip, and every
+    ///   nested `Lazy` child in the scroll view around it ran), and every clip set inside it lies within the run's clip,
+    ///   so the run's clip becomes the clip now and inner clips move (`RecordShift::clip`).
+    ///
+    /// Otherwise it runs: a run cut by its clip lacks what was culled.
+    fn shift_to(&self, rect: Rect, now: Place, movable: bool, transformed: bool) -> Option<Moved> {
+        let offset = now.room.min - self.room.min;
+        let same = now.room.size() == self.room.size()
+            && now.layer == self.layer
+            && now.layout == self.layout
+            && now.pixels_per_point == self.pixels_per_point
+            && now.env == self.env;
+        let placeable = offset == Vec2::ZERO || (offset == offset.round_ui() && movable && !transformed);
+        if !same || !placeable {
+            return None;
+        }
+        let shift = RecordShift { offset, ran_clip: self.clip, clip: now.clip };
+        let with_clip = now.clip == self.clip.translate(offset);
+        (with_clip || self.clip.contains_rect(rect)).then_some(Moved { shift, with_clip })
+    }
 }
 
 /// The last measuring run of a measure-only child: content a pass measures and never shows, as a page `Pages` holds
@@ -367,9 +411,10 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 }
 
 /// Whether the settling child `id` adds its last real run to this pass in place of running, the extent that run
-/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), and the rect the kept real run took. The first run
-/// of a pass decides from what changed since that run; a real run also needs the child at the `place` it ran at, which
-/// a measuring run cannot tell. A sizing run of a pass that replays takes the extent the last sizing run measured of
+/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), the rect the
+/// kept real run takes now and the shift its record moves by. The first run of a pass decides from what changed since
+/// that run; a real run also needs a `place` the run can move to (`Place::shift_to`), which a measuring run cannot
+/// tell. A sizing run of a pass that replays takes the extent the last sizing run measured of
 /// the content the kept run showed (its key) in the room it offers now; when that sizing run showed other content or
 /// had another room, or there was none, it runs once as a measuring run, which keeps no record and leaves the decision
 /// of the pass alone, so the real run still replays.
@@ -395,7 +440,7 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 ///   gone.
 ///
 /// - for a memoized view: no framework input its run read outside its props has moved (`runtime::inputs`), the
-///   scroll view a nested `Lazy` child of it decided by is the same, and no command waits for a command scope instance
+///   scroll view a nested `Lazy` child of it decided by is the same (moved with it, `moved`), and no command waits for a command scope instance
 ///   of it.
 ///
 /// A memoized view's props hold every input it reads, so the two rules that infer a change of app data (input
@@ -408,7 +453,7 @@ pub(crate) fn settled(
     place: Option<Place>,
     view: Option<View>,
     key: Key,
-) -> Option<(Vec2, Rect)> {
+) -> Option<(Vec2, Rect, RecordShift)> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -417,6 +462,7 @@ pub(crate) fn settled(
     let now = frame::clock(ctx);
     let held = (input_state::dragged(ctx), focus_state::focused(ctx));
     let memo = matches!(key, Key::Memo(_));
+    let transformed = place.is_some_and(|place| ctx.layer_transform_to_global(place.layer).is_some());
     let settled = with(ctx, |store, pass_nr, frame| {
         store.changes.scan(pass_nr, frame, input);
         let changes = &store.changes;
@@ -446,25 +492,34 @@ pub(crate) fn settled(
                 replays
             }
         };
-        let at = |settled: &Settled| place.is_none_or(|place| place == settled.place);
-        let settled = entry.settled.clone().filter(|settled| replays && at(settled));
+        // A measuring run cannot tell the place: it replays where the run was.
+        let moved = |settled: &Settled| match place {
+            Some(place) => settled.place.shift_to(settled.rect, place, settled.record.movable(), transformed),
+            None => Some(Moved { shift: RecordShift::none(settled.place.clip), with_clip: true }),
+        };
+        let settled = entry.settled.clone().filter(|_| replays).and_then(|settled| Some((moved(&settled)?, settled)));
         if replays && settled.is_none() {
             entry.replays = Some((pass_nr, false));
         }
-        settled.and_then(|settled| {
+        settled.and_then(|(moved, settled)| {
+            // An extent depends on the room's size, not on where the room is.
             let size = match sizing {
-                Some(room) => entry.sizes[0].filter(|measured| measured.key == settled.key && measured.room == room)?.size,
+                Some(room) => entry.sizes[0].filter(|measured| measured.key == settled.key && measured.room.size() == room.size())?.size,
                 None => entry.sizes[1].filter(|measured| measured.key == settled.key).map_or(settled.rect.size(), |measured| measured.size),
             };
-            Some((size, settled))
+            Some((size, moved, settled))
         })
     });
     // The pointer over it, a press that started on it, the memory of the components it showed, the framework inputs it
     // read and the commands queued for its instances are read outside the store.
-    let (size, settled) = settled?;
-    if engaged(ctx, &settled)
+    let (size, Moved { shift, with_clip }, settled) = settled?;
+    let rect = shift.rect(settled.rect);
+    // The scroll view a nested child decided by: the run's, moved with the record, while the clip moved with it; a run
+    // that lay wholly in its clip ran every nested child, which holds at any view.
+    let view = place.and_then(|_| with_clip.then(|| (settled.view.map(|ran| ran.moved(shift.offset)), view)));
+    if engaged(ctx, settled.place.layer, rect.intersect(shift.clip))
         || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
-        || (memo && moved(ctx, &settled, place.map(|_| view)))
+        || (memo && moved(ctx, &settled, view))
     {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
@@ -473,32 +528,31 @@ pub(crate) fn settled(
         });
         return None;
     }
-    Some((size, settled.rect))
+    Some((size, rect, shift))
 }
 
 /// Whether something a memoized view's run read outside its props moved since: a framework input it read has another
-/// generation, the scroll view a nested `Lazy` child decided by is another (`view`, in a real run: a measuring run
-/// lays the content out from offset zero, so its view is not the one the real run decided by), or a command waits for
-/// one of its instances.
-fn moved(ctx: &Context, settled: &Settled, view: Option<Option<View>>) -> bool {
+/// generation, the scroll view a nested `Lazy` child decided by is another than the one it needs (`view`: the view it
+/// needs and the view now, in a real run whose record replays only in that view; a measuring run lays the content out
+/// from offset zero, so its view is not the one the real run decided by), or a command waits for one of its instances.
+fn moved(ctx: &Context, settled: &Settled, view: Option<(Option<View>, Option<View>)>) -> bool {
     let facts = &settled.record.facts;
     inputs::moved(ctx, facts.inputs, &settled.seen)
-        || (facts.inputs.contains(Input::Scroll) && view.is_some_and(|view| settled.view != view))
+        || (facts.inputs.contains(Input::Scroll) && view.is_some_and(|(needs, now)| needs != now))
         || crate::runtime::commands::queued_for(ctx, &facts.instances)
 }
 
-/// Whether the pointer is over the rect the settled run took on its layer, or a press that is held started there.
-fn engaged(ctx: &Context, settled: &Settled) -> bool {
-    let rect = settled.rect.intersect(settled.place.clip);
-    let screen = ctx.layer_transform_to_global(settled.place.layer).map_or(rect, |transform| transform * rect);
-    ctx.rect_contains_pointer(settled.place.layer, rect) || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin))
+/// Whether the pointer is over `rect` (shown) on `layer`, or a press that is held started there.
+fn engaged(ctx: &Context, layer: Layer, rect: Rect) -> bool {
+    let screen = ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect);
+    ctx.rect_contains_pointer(layer, rect) || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin))
 }
 
-/// Adds the last real run of the settling child `id` to the running pass, in place of running it, and returns what a
-/// memoized view's run returned.
-pub(crate) fn replay_settled(ctx: &Context, id: Id) -> Option<Output> {
+/// Adds the last real run of the settling child `id` to the running pass, in place of running it, at the place `shift`
+/// names (`settled`), and returns what a memoized view's run returned, as the run left it: the caller moves it.
+pub(crate) fn replay_settled(ctx: &Context, id: Id, shift: &RecordShift) -> Option<Output> {
     let settled = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone()))?;
-    replay::replay(ctx, &settled.record);
+    replay::replay(ctx, &settled.record, shift);
     settled.output.clone()
 }
 
@@ -536,7 +590,7 @@ pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rec
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
     let lives = crate::runtime::memory::ended_generation(ctx);
     let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives, seen, view };
-    settled.engaged |= engaged(ctx, &settled);
+    settled.engaged |= engaged(ctx, place.layer, rect.intersect(place.clip));
     with(ctx, |store, pass_nr, frame| {
         settled.frame = frame;
         settled.pass = pass_nr;
@@ -629,14 +683,33 @@ pub(crate) fn begin(ctx: &Context, owner: Id, anchor: Option<Id>, reveal: Option
 
 /// Reports, in the real run that lays out the content of `view`'s area, that the child `id` took `rect`, run or not.
 pub(crate) fn place(ctx: &Context, view: &View, id: Id, rect: Rect) {
-    note_place(ctx, view.owner, id, view.start_of(rect) - view.start_of(view.rect), rect.size());
+    note_place(ctx, view.owner, id, ChildPlace { at: view.start_of(rect) - view.start_of(view.rect), extent: rect.size(), rtl: view.rtl });
 }
 
-/// Reports that the child `id` of the area `owner` took a place `at` from the view's start and is `extent` long. A
-/// settled run around the child that is replayed later reports it again: it replays only in the view it ran in, so
-/// the place holds, and the area's anchor and first child are the ones its real run found.
-fn note_place(ctx: &Context, owner: Id, id: Id, at: Vec2, extent: Vec2) {
-    replay::journal(ctx, || (owner, id, at, extent), |ctx, &(owner, id, at, extent)| note_place(ctx, owner, id, at, extent));
+/// Where a child of a scroll area took its place: `at` from the view's start edge (the right one in a right-to-left
+/// area), `extent` long.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ChildPlace {
+    at: Vec2,
+    extent: Vec2,
+    rtl: bool,
+}
+
+/// A replay at another place moves the child within the view it ran in; the extent is a size. For an area inside the
+/// replayed run the note is dropped: the area does not run in that pass, and its places were taken (`placed`).
+impl crate::runtime::Shift for ChildPlace {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        let along = Vec2::new(if self.rtl { -by.offset.x } else { by.offset.x }, by.offset.y);
+        ChildPlace { at: self.at + along, ..*self }
+    }
+}
+
+/// Reports that the child `id` of the area `owner` took its place `place`. A settled run around the child that is
+/// replayed later reports it again, moved with the run, so the area's anchor and first child are where the replay
+/// put them.
+fn note_place(ctx: &Context, owner: Id, id: Id, place: ChildPlace) {
+    replay::journal(ctx, || (owner, id, place), |ctx, &(owner, id, place)| note_place(ctx, owner, id, place));
+    let ChildPlace { at, extent, .. } = place;
     with(ctx, |store, _, _| {
         if let Some(placed) = store.placed.get_mut(&owner) {
             placed.note(id, at, extent);

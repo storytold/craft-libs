@@ -345,6 +345,8 @@ impl CommandInput {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
+crate::stays!(CommandChain, CommandState, CommandRef, CommandScope);
+
 impl CommandChain {
     pub(crate) fn pushed(&self, scope: CommandScope, id: Id) -> Self {
         CommandChain(self.0.iter().copied().chain([(scope, id)]).collect())

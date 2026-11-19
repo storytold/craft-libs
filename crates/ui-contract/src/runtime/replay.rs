@@ -16,7 +16,8 @@ use crate::runtime::frame;
 use crate::runtime::inputs::{Input, Inputs};
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
-use egui::{Context, IdSet};
+use crate::runtime::shift::Shift;
+use egui::{Context, IdSet, RecordShift};
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
@@ -29,7 +30,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) struct Entry(Arc<dyn Noted>);
 
 trait Noted: Send + Sync {
-    fn call(&self, ctx: &Context);
+    fn call(&self, ctx: &Context, shift: &RecordShift);
     fn as_any(&self) -> &dyn Any;
     fn same(&self, other: &dyn Noted) -> bool;
     fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -42,11 +43,15 @@ struct Note<A, F> {
 
 impl<A, F> Noted for Note<A, F>
 where
-    A: PartialEq + fmt::Debug + Send + Sync + 'static,
+    A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
     F: Fn(&Context, &A) + Send + Sync + 'static,
 {
-    fn call(&self, ctx: &Context) {
-        (self.again)(ctx, &self.args);
+    fn call(&self, ctx: &Context, shift: &RecordShift) {
+        if shift.is_none() {
+            (self.again)(ctx, &self.args);
+        } else {
+            (self.again)(ctx, &self.args.shifted(shift));
+        }
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -140,6 +145,14 @@ pub(crate) struct Record {
     pub(crate) facts: Facts,
 }
 
+impl Record {
+    /// Whether a replay can add the record at another place: egui's records hold no paint callback
+    /// (`PassRecords::paints_callback`).
+    pub(crate) fn movable(&self) -> bool {
+        !self.egui.paints_callback()
+    }
+}
+
 /// Whether a record is open around the running code.
 pub(crate) fn recording(ctx: &Context) -> bool {
     OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| !recorder.open.is_empty())
@@ -203,12 +216,14 @@ fn min_wake(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
-/// Adds `record` to the running pass in place of the run that made it.
-pub(crate) fn replay(ctx: &Context, record: &Record) {
-    ctx.replay_pass_records(&record.egui);
+/// Adds `record` to the running pass in place of the run that made it, at the place `shift` names: egui's records and
+/// every journal entry move by the one shift (`Shift`). The focus transcript holds no place: a stop's place is its
+/// root widget's rect, which egui's records move.
+pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
+    ctx.replay_pass_records(&record.egui, shift);
     focus::replay(ctx, &record.focus);
     for entry in &record.journal {
-        entry.0.call(ctx);
+        entry.0.call(ctx, shift);
     }
     if let Some(at) = record.facts.wake {
         crate::runtime::egui::repaint::request_after(ctx, crate::runtime::egui::pass::current_viewport(ctx), at - frame::clock(ctx));
@@ -236,12 +251,13 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
 /// Notes, in the records open around the running code, the registration the running code made: `again(ctx, &args)`
 /// registers it again. `args` builds the arguments only while a record is open. `again` captures nothing (a function
 /// or a closure without captures; a capture does not compile), so everything the registration depends on is in the
-/// arguments, and two notes of the same `again` with equal arguments are the same registration. A service outside
+/// arguments, and two notes of the same `again` with equal arguments are the same registration. A replay at another
+/// place calls `again` with the arguments moved there (`Shift`). A service outside
 /// this crate that keeps registrations per pass (a dock's drop spots) notes each one here, so a settled region's replay
 /// makes it again.
 pub fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
 where
-    A: PartialEq + fmt::Debug + Send + Sync + 'static,
+    A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
     F: Fn(&Context, &A) + Send + Sync + 'static,
 {
     const { assert!(std::mem::size_of::<F>() == 0, "`journal`'s `again` captures nothing: pass its state in `args`") };

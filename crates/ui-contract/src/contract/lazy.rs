@@ -104,7 +104,7 @@ impl Lazy {
         };
         match self.run_keyed(ui, "Lazy", key, add) {
             Shown::Ran(out) => Some(out),
-            Shown::Replayed(_) | Shown::OutOfView => None,
+            Shown::Replayed(..) | Shown::OutOfView => None,
         }
     }
 
@@ -160,10 +160,10 @@ impl Lazy {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
         if self.settles
-            && let Some((size, ran_at)) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
+            && let Some((size, ran_at, shift)) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
         {
             let took = if memo {
-                // A real replay is at the place its run was, so the kept rect is where the run's content went.
+                // A real replay is where the run's content went, moved with the room.
                 let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
                 place_view(ui, rect)
             } else {
@@ -172,7 +172,7 @@ impl Lazy {
             let mut kept = None;
             if real {
                 layout_memory::backstop(&ctx, id, size);
-                kept = lazy::replay_settled(&ctx, id);
+                kept = lazy::replay_settled(&ctx, id, &shift);
                 if let Some(view) = view {
                     lazy::place(&ctx, &view, id, took);
                 }
@@ -181,7 +181,7 @@ impl Lazy {
             }
             #[cfg(feature = "testing")]
             count_memo_run(&ctx, name, id, MemoRun::Replayed, real);
-            return Shown::Replayed(kept);
+            return Shown::Replayed(kept, shift);
         }
         let mark = focus::mark(&ctx);
         let mut run = Run { recording: self.settles && real, output: None };
@@ -249,8 +249,8 @@ pub(super) enum Shown<R> {
     /// It ran and returned this.
     Ran(R),
     /// It took the extent of its kept run, and added that run again in a real run; with what a memoized view's run
-    /// returned.
-    Replayed(Option<lazy::Output>),
+    /// returned, as the run left it, and the shift the replay moved the run by (none in a measuring run).
+    Replayed(Option<lazy::Output>, egui::RecordShift),
     /// It is out of view in its scroll area.
     OutOfView,
 }

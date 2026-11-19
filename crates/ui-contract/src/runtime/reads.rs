@@ -35,6 +35,8 @@ pub(crate) struct Sample {
     pub took: Vec2,
 }
 
+crate::stays!(Read);
+
 #[derive(Clone, Debug, PartialEq)]
 struct Read {
     key: BindKey,

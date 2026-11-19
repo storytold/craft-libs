@@ -857,7 +857,7 @@ impl<T: Clone + Send + Sync + 'static> Facts<T> {
     #[doc(hidden)]
     pub fn register(ctx: &Context, fact: T)
     where
-        T: PartialEq + std::fmt::Debug,
+        T: PartialEq + std::fmt::Debug + crate::runtime::Shift,
     {
         crate::runtime::replay::journal(ctx, || fact.clone(), |ctx, fact| Self::register(ctx, fact.clone()));
         Self::with_record(ctx, |record| record.this.push(fact));

@@ -426,12 +426,12 @@ fn a_story_data_edit_runs_one_card() {
     assert!(ran(&view_runs(&fixture)).is_empty(), "then every card replays: {:?}", ran(&view_runs(&fixture)));
 }
 
-/// While the Overview scrolls, every card in view runs in each scrolled frame, since its place moved and a replay adds
-/// its record at the place it ran. No card out of view runs, and the frame after the scroll ends replays every card.
-/// A replay that moves its record with the scroll would run only the cards a scroll newly shows: a separate task
-/// (egui `replay_pass_records` with an offset).
+/// While the Overview scrolls, the cards that stay wholly in view replay their records moved with the scroll. Only the
+/// cards the scroll brings in run, at most one per column at the edge it brings them in at (a card its edge cut runs
+/// until a run sees it whole), and the cards the pointer enters and leaves. No card out of view runs, and the frame
+/// after the scroll ends replays every card.
 #[trial]
-fn scrolling_runs_the_cards_in_view_and_none_out_of_view() {
+fn scrolling_runs_only_the_cards_entering_the_view() {
     let mut gallery = gallery_at("Composites");
     let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
     fixture.room(Vec2::new(1400.0, 900.0)).settle().idle(2);
@@ -440,9 +440,32 @@ fn scrolling_runs_the_cards_in_view_and_none_out_of_view() {
     let listed = listed("Composites", "").len();
     for _ in 0..4 {
         fixture.frame(vec![pointer::wheel(-120.0)]);
-        let cards = cards_ran(&fixture);
-        assert!(!cards.is_empty(), "the cards in view run at their new place (until replays move with the scroll)");
-        assert!(cards.len() < listed / 2, "only the cards in view run while the Overview scrolls: {} of {listed}", cards.len());
+        let ran = cards_ran(&fixture);
+        let mut replayed: Vec<_> = last_frame_memo_runs(fixture.ctx())
+            .into_iter()
+            .filter(|(ty, id, run)| ty.contains("::CardProps") && *run == MemoRun::Replayed && !ran.contains(id))
+            .map(|(_, id, _)| id)
+            .collect();
+        replayed.sort_unstable_by_key(|id| id.value());
+        replayed.dedup();
+        let window = fixture.shown();
+        let mut columns: Vec<i64> = fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .filter(|button| fixture.tree().name_of(button.node) == Some("Open") && window.contains_rect(button.rect))
+            .map(|open| open.rect.left().round() as i64)
+            .collect();
+        columns.sort_unstable();
+        columns.dedup();
+        assert!(!replayed.is_empty(), "the cards that stay in view replay at their moved place");
+        assert!(
+            ran.len() <= columns.len() + 2,
+            "only the cards entering the view ({} columns) and the pointer's run: {} ran, {} replayed",
+            columns.len(),
+            ran.len(),
+            replayed.len()
+        );
+        assert!(ran.len() + replayed.len() < listed, "no card out of view takes part: {} of {listed}", ran.len() + replayed.len());
     }
     fixture.settle().idle(1);
     assert!(ran(&view_runs(&fixture)).is_empty(), "the frame after the scroll ends replays every card: {:?}", ran(&view_runs(&fixture)));

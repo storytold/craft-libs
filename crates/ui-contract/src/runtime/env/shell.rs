@@ -143,6 +143,8 @@ fn with_revealed<R>(ctx: &egui::Context, f: impl FnOnce(&mut RevealedRects) -> R
     PerViewport::<Stamped<RevealedRects>>::with_pass(ctx, viewport, pass::pass_nr(ctx, viewport), |rects, _| rects.0.clear(), f)
 }
 
+crate::stays!(RevealEdge);
+
 /// Registers `rect` for `edge` with the shell keyed `reveals`, on the running pass. A replayed view registers it again.
 fn note_reveal(ctx: &egui::Context, reveals: egui::Id, edge: RevealEdge, rect: Rect) {
     crate::runtime::replay::journal(ctx, || (reveals, edge, rect), |ctx, &(reveals, edge, rect)| note_reveal(ctx, reveals, edge, rect));

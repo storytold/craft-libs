@@ -56,6 +56,13 @@ pub(crate) fn keymap_platform(target: Target, os: Platform) -> Platform {
     }
 }
 
+/// A replay at another place moves the titles' rect with the bar.
+impl craft_ui::runtime::Shift for MenuBarOutput {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        MenuBarOutput { titles: by.rect(self.titles) }
+    }
+}
+
 /// What the bar did in a frame, from [`MenuBarUi::show`].
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

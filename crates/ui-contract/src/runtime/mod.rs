@@ -31,11 +31,14 @@ pub(crate) mod reads;
 pub(crate) mod replay;
 pub mod requests;
 pub mod sampler;
+pub(crate) mod shift;
 pub mod toast;
 pub mod wheel;
 pub mod windows;
 pub mod words;
 
+pub use ::egui::RecordShift;
 pub use install::{InstallError, InstallSpec, install};
 #[doc(hidden)]
 pub use replay::journal;
+pub use shift::{Clip, Shift};

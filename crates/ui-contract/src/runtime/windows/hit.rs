@@ -35,6 +35,8 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
+crate::stays!(WindowHit);
+
 /// What a part of the window does for the operating system: a press on it moves the window, resizes it from an edge,
 /// or is a caption button. A component tags a part with it through `PartBuilder::exclusive`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

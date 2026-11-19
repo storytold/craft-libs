@@ -6,6 +6,7 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, MemoProps, MemoView, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Text;
 use craft_ui::layout_components::Stack;
+use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::inspect;
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::testing::input::key_press;
@@ -47,9 +48,9 @@ struct Title {
     title: String,
 }
 
-fn title(props: &mut Title, ui: &mut Ui) -> Vec2 {
+fn title(props: &mut Title, ui: &mut Ui) -> Rect {
     TITLE_RUNS.with(|runs| runs.set(runs.get() + 1));
-    Button::new(props.title.clone()).show(ui).response.rect.size()
+    Button::new(props.title.clone()).show(ui).response.rect
 }
 
 #[derive(MemoProps)]
@@ -102,7 +103,7 @@ struct Scene {
     /// Whether only the button outside every view is shown.
     bare: bool,
     /// What each view returned in the last frame.
-    out: (Option<Vec2>, Option<usize>, Option<u32>, Option<f32>),
+    out: (Option<Rect>, Option<usize>, Option<u32>, Option<f32>),
 }
 
 impl Scene {
@@ -281,7 +282,7 @@ fn the_pointer_runs_its_view_and_a_key_elsewhere_runs_none() {
     let mut scene = Scene::new();
     let mut frames = Frames::new();
     scene.settle(&mut frames);
-    let over = region(0).min + scene.out.0.unwrap_or_default() / 2.0;
+    let over = scene.out.0.map_or(region(0).min, |rect| rect.center());
     scene.frame(&mut frames, vec![moved(over)]);
     assert_eq!(ran(&frames), runs_of_names(&frames, "Title"), "only the view under the pointer ran: {:?}", ran(&frames));
     assert_eq!(runs_of(&frames, "Title"), [MemoRun::Ran]);
@@ -567,7 +568,7 @@ fn stack_frame_in(frames: &mut Frames, room: Rect, label: &str, heading: &str) -
     let passes = frames.frame(vec![], |ui| {
         in_region(ui, room, |ui| {
             let shown = Stack::new().fill().show(ui, |ui, _| {
-                let out = MemoView::new("heading", Title { title: heading.to_owned() }, title).show(ui);
+                let out = MemoView::new("heading", Title { title: heading.to_owned() }, title).show(ui).map(|rect| rect.size());
                 if ui.is_sizing_pass() {
                     sizing.set(sizing.get() + 1);
                     measured.set(ui.min_rect().width());
@@ -646,8 +647,8 @@ struct Paragraph {
     text: String,
 }
 
-fn paragraph(props: &mut Paragraph, ui: &mut Ui) -> Vec2 {
-    Text::new(props.text.clone()).show(ui).rect.size()
+fn paragraph(props: &mut Paragraph, ui: &mut Ui) -> Rect {
+    Text::new(props.text.clone()).show(ui).rect
 }
 
 /// One frame of a stack `width` wide, sized from its content's height, holding the memoized `paragraph`. Returns the
@@ -663,7 +664,7 @@ fn paragraph_frame(frames: &mut Frames, width: f32) -> (usize, Rect, Option<Vec2
                     sizing.set(sizing.get() + 1);
                 }
                 let text = "A paragraph long enough to wrap onto more lines in a narrow room".to_owned();
-                MemoView::new("paragraph", Paragraph { text }, paragraph).show(ui)
+                MemoView::new("paragraph", Paragraph { text }, paragraph).show(ui).map(|rect| rect.size())
             });
             out = (shown.output.rect, shown.inner.flatten());
         });
@@ -739,4 +740,118 @@ fn a_view_in_a_grid_cell_replays_at_the_extent_it_ran_at() {
     assert!(last_frame_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed), "an idle frame replays both views");
     assert_eq!(passes, 1, "a replay asks for no discard pass");
     assert_eq!(took, ran, "each cell takes the extent its view ran at");
+}
+
+/// A view whose run does not paint `generation`: a new one runs it with the same output.
+#[derive(MemoProps)]
+struct Moving {
+    generation: u32,
+}
+
+/// The shell the moving view registers its revealed rect with.
+fn moving_shell() -> ShellCx {
+    ShellCx::detached(WindowKey::main(), BodyMode::Normal, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).with_reveals_key(Id::unique("moving"))
+}
+
+fn moving(_: &mut Moving, ui: &mut Ui) -> Rect {
+    let rect = Button::new("Moving").show(ui).response.rect;
+    moving_shell().reveal_rect(ui.ctx(), RevealEdge::Start, rect);
+    rect
+}
+
+/// What one frame of the moving view showed in its last pass: how it took part, the egui records of its region, the
+/// revealed rects and what it returned.
+struct MovingFrame {
+    runs: Vec<MemoRun>,
+    records: Option<egui::PassRecords>,
+    revealed: Vec<(RevealEdge, Rect)>,
+    out: Option<Rect>,
+}
+
+/// One frame of the moving view in `room`, shown through `clip` when given.
+fn moving_frame(frames: &mut Frames, room: Rect, clip: Option<Rect>, generation: u32) -> MovingFrame {
+    let (mut records, mut revealed, mut out) = (None, Vec::new(), None);
+    frames.frame(vec![], |ui| {
+        let mut show = |ui: &mut Ui| {
+            let mark = ui.ctx().pass_mark();
+            out = in_region(ui, room, |ui| MemoView::new("moving", Moving { generation }, moving).show(ui));
+            records = Some(ui.ctx().pass_records_since(&mark));
+            revealed = moving_shell().revealed_rects(ui.ctx());
+        };
+        match clip {
+            Some(clip) => {
+                ui.scope(|ui| {
+                    ui.set_clip_rect(clip);
+                    show(ui);
+                });
+            }
+            None => show(ui),
+        }
+    });
+    MovingFrame { runs: runs_of(frames, "Moving"), records, revealed, out }
+}
+
+/// The room of the moving view `down` points below its first place.
+fn moving_room(down: f32) -> Rect {
+    Rect::from_min_size(Pos2::new(10.0, 10.0 + down), SIZE)
+}
+
+/// A view whose room moved replays its record moved with it, and that is what a run there makes: the egui records of
+/// its region (paint, widget rects with the stop's root widget, AccessKit nodes), the rect it registered with the
+/// shell and what it returned. The focus transcript holds no place: a stop sits where its root widget is.
+#[trial]
+fn a_view_replayed_at_a_moved_place_equals_a_run_there() {
+    let mut frames = Frames::new();
+    for _ in 0..WARM {
+        moving_frame(&mut frames, moving_room(0.0), None, 0);
+    }
+    let first = moving_frame(&mut frames, moving_room(0.0), None, 0);
+    assert_eq!(first.runs, [MemoRun::Replayed], "the view settled");
+    let replayed = moving_frame(&mut frames, moving_room(32.0), None, 0);
+    assert_eq!(replayed.runs, [MemoRun::Replayed], "a view whose room moved replays");
+    let ran = moving_frame(&mut frames, moving_room(32.0), None, 1);
+    assert_eq!(ran.runs, [MemoRun::Ran], "a new generation runs it at the moved place");
+    let moved = |rect: Option<Rect>| rect.map(|rect| rect.translate(Vec2::new(0.0, 32.0)));
+    assert_eq!(replayed.out, moved(first.out), "the replay returns the run's rect moved with it");
+    assert_eq!(replayed.out, ran.out, "and the run there returns the same");
+    assert_eq!(replayed.revealed, vec![(RevealEdge::Start, replayed.out.expect("a rect"))], "the replay registers the moved rect");
+    assert_eq!(replayed.revealed, ran.revealed, "as the run there does");
+    let (replayed, ran) = (replayed.records.expect("records"), ran.records.expect("records"));
+    assert!(!replayed.widgets().is_empty(), "the region placed widgets");
+    let diff = replayed.first_difference(&ran);
+    assert!(diff.is_none(), "the moved replay differs from the run there: {}", diff.expect("a difference"));
+}
+
+/// A view whose room changed size runs: its extent depends on the room.
+#[trial]
+fn a_view_whose_room_changes_size_runs() {
+    let mut frames = Frames::new();
+    for _ in 0..WARM {
+        moving_frame(&mut frames, moving_room(0.0), None, 0);
+    }
+    assert_eq!(moving_frame(&mut frames, moving_room(0.0), None, 0).runs, [MemoRun::Replayed]);
+    let wider = Rect::from_min_size(moving_room(0.0).min, SIZE + Vec2::new(20.0, 0.0));
+    assert_eq!(moving_frame(&mut frames, wider, None, 0).runs, [MemoRun::Ran]);
+}
+
+/// A run its clip cut lacks what the clip culled: moved under a clip that stayed, the view runs, until a run saw it
+/// whole. Moved together with its clip, the cut record replays.
+#[trial]
+fn a_view_cut_by_its_clip_runs_when_it_moves_under_it() {
+    let clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 100.0));
+    let mut frames = Frames::new();
+    let settle = |frames: &mut Frames, down: f32, generation: u32| {
+        for _ in 0..WARM {
+            moving_frame(frames, moving_room(down), Some(clip), generation);
+        }
+        moving_frame(frames, moving_room(down), Some(clip), generation).runs
+    };
+    assert_eq!(settle(&mut frames, 70.0, 0), [MemoRun::Replayed], "the cut view settled");
+    assert_eq!(moving_frame(&mut frames, moving_room(62.0), Some(clip), 0).runs, [MemoRun::Ran], "a cut run moved under its clip runs");
+    assert_eq!(settle(&mut frames, 20.0, 0), [MemoRun::Replayed], "it settles wholly inside its clip");
+    assert_eq!(moving_frame(&mut frames, moving_room(70.0), Some(clip), 0).runs, [MemoRun::Replayed], "a whole run replays where the clip cuts it");
+    assert_eq!(moving_frame(&mut frames, moving_room(70.0), Some(clip), 1).runs, [MemoRun::Ran], "a new generation runs it cut");
+    assert_eq!(settle(&mut frames, 70.0, 1), [MemoRun::Replayed]);
+    let both = clip.translate(Vec2::new(0.0, 32.0));
+    assert_eq!(moving_frame(&mut frames, moving_room(102.0), Some(both), 1).runs, [MemoRun::Replayed], "a cut run moved with its clip replays");
 }

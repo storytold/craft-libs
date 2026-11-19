@@ -169,6 +169,16 @@ pub struct Recorded {
     pub hits: Vec<HitArea>,
 }
 
+/// A replay at another place keeps the record its run made, moved with it.
+impl crate::runtime::Shift for Arc<Recorded> {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        let elements =
+            self.elements.iter().map(|element| Element { rect: by.rect(element.rect), content: by.rect(element.content), ..element.clone() });
+        let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
+        Arc::new(Recorded { elements: elements.collect(), hits: hits.collect() })
+    }
+}
+
 impl Recorded {
     /// The rect of the element at `index` where Tab stops on it: its hit area when it has one, else its box.
     pub fn stop_rect(&self, index: usize) -> Option<Rect> {

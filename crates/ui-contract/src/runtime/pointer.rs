@@ -413,8 +413,8 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
     let shapes: Vec<Shape<Id>> = shapes.into_iter().collect();
     crate::runtime::replay::journal(
         ctx,
-        || (layer, root, clip, shapes.clone()),
-        |ctx, (layer, root, clip, shapes)| record_shapes(ctx, *layer, *root, *clip, shapes.iter().cloned()),
+        || (layer, root, crate::runtime::Clip(clip), shapes.clone()),
+        |ctx, (layer, root, clip, shapes)| record_shapes(ctx, *layer, *root, clip.0, shapes.iter().cloned()),
     );
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;

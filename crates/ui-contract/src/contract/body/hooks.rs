@@ -37,6 +37,7 @@ use crate::style::{StyleCx, SurfaceKind, band_color, scroll_bar_look, surface_st
 use craft_behavior::layout_memory::measure_tolerance;
 use craft_behavior::{CancelRule, CursorIcon, EditEvent, KeyRole, Mixed, Roving, ScrollPos, ScrollSpan, WheelRoom, WheelTaker};
 use craft_theme::variant::Tone;
+use egui::emath::GuiRounding as _;
 use egui::layers::ShapeIdx;
 use egui::{Context, CornerRadius, Id, Pos2, Rect, Shape, Ui, UiBuilder, Vec2};
 use std::any::Any;
@@ -1378,9 +1379,12 @@ impl BodyHooks<'_> {
             Pos2::new(if rtl { shows.max.x } else { shows.max.x - inset.x }, shows.max.y - inset.y),
         );
         let (width, height) = (if scroll.horizontal_on() { big } else { seen.width() }, if scroll.vertical_on() { big } else { seen.height() });
-        let x = if scroll.horizontal_on() { off.x as f32 } else { 0.0 };
+        // The content moves by whole steps of egui's UI rounding, as egui places every widget rect: a settled run moved
+        // with the content then replays where a run would be (`lazy::Place::shift_to`).
+        let (x, y) = ((off.x as f32).round_ui(), (off.y as f32).round_ui());
+        let x = if scroll.horizontal_on() { x } else { 0.0 };
         let min_x = if rtl { seen.max.x - width + x } else { seen.min.x - x };
-        let max = Rect::from_min_size(Pos2::new(min_x, seen.min.y - off.y as f32), Vec2::new(width, height));
+        let max = Rect::from_min_size(Pos2::new(min_x, seen.min.y - y), Vec2::new(width, height));
         let layout_of = *body_ui.layout();
         let mut region_ui = alloc::child(body_ui, UiBuilder::new().scope_id(sub(id, "scroll_region")).layout(layout_of).max_rect(max));
         region_ui.set_clip_rect(shows.intersect(body_ui.clip_rect()));

@@ -74,6 +74,14 @@ pub enum DropMark {
     },
 }
 
+crate::stays!(Arc<crate::style::UiTokens>);
+
+impl crate::runtime::Shift for DropMark {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        self.mapped(|point| by.pos(point))
+    }
+}
+
 impl DropMark {
     /// An insertion line from `from` to `to`.
     pub const fn line(from: Pos2, to: Pos2) -> Self {

@@ -407,6 +407,32 @@ pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
 // around it, and an arena inside it is dropped once it has not run for two passes, while the shape record still
 // names their shapes as the press winner.
 
+crate::stays!(ArenaId);
+
+impl crate::runtime::Shift for PartDecl {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        PartDecl { shape: self.shape.shifted(by), ..self.clone() }
+    }
+}
+
+impl crate::runtime::Shift for MemberDecl {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        MemberDecl { rect: by.rect(self.rect), parts: self.parts.shifted(by), ..self.clone() }
+    }
+}
+
+impl crate::runtime::Shift for RootInfo {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        RootInfo { rect: by.rect(self.rect), ..*self }
+    }
+}
+
+impl crate::runtime::Shift for RootRegistration {
+    fn shifted(&self, by: &egui::RecordShift) -> Self {
+        RootRegistration { info: self.info.shifted(by), own: self.own.shifted(by), ..self.clone() }
+    }
+}
+
 /// What a root registers in its arena at step 8, kept for a replay.
 #[derive(Clone, Debug, PartialEq)]
 struct RootRegistration {
