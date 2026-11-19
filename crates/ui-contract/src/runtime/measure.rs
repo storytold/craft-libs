@@ -166,9 +166,19 @@ pub fn take_effects(ctx: &Context) -> Vec<&'static str> {
     store::with::<EffectLog, _>(ctx, |log| if log.pass == frame { std::mem::take(&mut log.effects) } else { Vec::new() })
 }
 
+/// Whether the running code is a run of the replay audit (`runtime::audit`): that is the audit's work, not the pass's,
+/// so the count trials count nothing in it.
+#[cfg(feature = "testing")]
+fn uncounted(ctx: &Context) -> bool {
+    super::replay::in_audit_run(ctx)
+}
+
 /// Counts a measuring run of the contents of the body `id` in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_body(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<BodyRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -184,6 +194,9 @@ pub(crate) fn count_body(ctx: &Context, id: Id) {
 /// Counts a contribution a measuring run made in this pass (`delta` 1), or a draft took back (-1).
 #[cfg(feature = "testing")]
 pub(crate) fn count_contribution(ctx: &Context, delta: i64) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<Contributions, _>(ctx, |log| {
         if log.pass != pass {
@@ -217,7 +230,7 @@ pub fn body_runs(ctx: &Context) -> Vec<(Id, u32)> {
 /// Counts a run of a component of the type `name` in this pass, measuring or real. Counts nothing without `testing`.
 pub(crate) fn count_run(ctx: &Context, name: &'static str) {
     #[cfg(feature = "testing")]
-    {
+    if !uncounted(ctx) {
         let pass = ctx.cumulative_pass_nr();
         pass_state::with::<TypeRuns, _>(ctx, |log| {
             if log.pass != pass {
@@ -244,6 +257,9 @@ pub fn last_pass_runs(ctx: &Context) -> Vec<(&'static str, u32)> {
 /// Counts a build and measure of the rows of the collection `id` for the largest in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_widest(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<WidestRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -266,6 +282,9 @@ pub fn widest_runs(ctx: &Context) -> Vec<(Id, u32)> {
 /// Counts a build and measure of the height of a collection's auto row, kept under `id`, in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_row_measure(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<RowMeasures, _>(ctx, |log| {
         if log.pass != pass {
@@ -288,6 +307,9 @@ pub fn row_measures(ctx: &Context) -> Vec<(Id, u32)> {
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_least(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     store::with::<LeastRuns, _>(ctx, |log| {
         if log.pass != pass {
@@ -334,6 +356,9 @@ pub(crate) struct MemoLog {
 /// `contract::Lazy`'s one runner, which memoized views share.
 #[cfg(feature = "testing")]
 pub(crate) fn count_memo_run(ctx: &Context, name: &'static str, id: Id, run: MemoRun, real: bool) {
+    if uncounted(ctx) {
+        return;
+    }
     let pass = ctx.cumulative_pass_nr();
     let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
     pass_state::with::<MemoLog, _>(ctx, |log| {
@@ -400,6 +425,9 @@ fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R
 /// Counts `bytes` fed into a memo key in this pass: a memoized view's key, before its run and after it.
 #[cfg(feature = "testing")]
 pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| log.key_bytes += bytes);
 }
 
@@ -412,6 +440,9 @@ pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_text_layout(ctx: &Context) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| log.text_layouts += 1);
 }
 
@@ -424,6 +455,9 @@ pub fn last_pass_text_layouts(ctx: &Context) -> u32 {
 /// Counts a measure call of a leaf component of the type `name` in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_measure_ask(ctx: &Context, name: &'static str) {
+    if uncounted(ctx) {
+        return;
+    }
     totals(ctx, |log| match log.asks.iter_mut().find(|(ty, _)| *ty == name) {
         Some((_, count)) => *count += 1,
         None => log.asks.push((name, 1)),

@@ -11,6 +11,7 @@ use craft_ui::docking::{DockConfig, DockPanels, PanelDrag, PanelSpec};
 use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
+use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
 use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
@@ -95,7 +96,10 @@ struct BodyProps {
 }
 
 fn panel_body(props: &mut BodyProps, ui: &mut Ui) {
-    BODY_RUNS.with(|runs| runs.borrow_mut().push(props.panel));
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        BODY_RUNS.with(|runs| runs.borrow_mut().push(props.panel));
+    }
     Button::new(format!("Body {}", props.panel)).show(ui);
 }
 

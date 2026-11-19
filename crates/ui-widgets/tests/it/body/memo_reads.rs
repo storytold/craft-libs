@@ -7,6 +7,7 @@ use craft_ui::contract::{ContainerProps, MemoProps, MemoView, Props as _, Scroll
 use craft_ui::runtime::commands::{self, CommandInput, CommandRef};
 use craft_ui::runtime::env::{Env, EnvValue, with_env};
 use craft_ui::runtime::{frame, pointer};
+use craft_ui::testing::in_audit_run;
 use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::layout::{in_region, scroll_anchor, scroll_area};
 use craft_ui::testing::{Frames, MemoRun, last_pass_memo_runs, trial};
@@ -205,7 +206,10 @@ thread_local! {
 struct Seconds;
 
 fn seconds(_: &mut Seconds, ui: &mut Ui) {
-    CLOCK_RUNS.with(|runs| runs.set(runs.get() + 1));
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        CLOCK_RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
     let at = frame::stepped_clock(ui.ctx(), 1.0);
     Button::new(format!("{at} s")).show(ui);
 }
@@ -299,7 +303,10 @@ struct Rows;
 
 fn rows(_: &mut Rows, ui: &mut Ui) {
     const ROWS: usize = 30;
-    ROWS_RUNS.with(|runs| runs.set(runs.get() + 1));
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        ROWS_RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
     for at in 0..ROWS {
         craft_ui::contract::Lazy::new(at, 40.0).show(ui, |ui| {
             Button::new(format!("Row {at}")).show(ui);

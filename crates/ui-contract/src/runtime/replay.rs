@@ -100,6 +100,9 @@ struct Open {
     focus: focus::Mark,
     egui: egui::PassMark,
     facts: Facts,
+    /// The record is around a run of the replay audit (`runtime::audit`).
+    #[cfg(feature = "testing")]
+    audit: bool,
 }
 
 impl Open {
@@ -111,6 +114,8 @@ impl Open {
             focus: focus::mark(ctx),
             egui: ctx.pass_mark(),
             facts: Facts { blocked: crate::runtime::access::scope::depth(ctx) > 0, ..Facts::default() },
+            #[cfg(feature = "testing")]
+            audit: false,
         }
     }
 }
@@ -164,9 +169,24 @@ pub(crate) fn recording(ctx: &Context) -> bool {
 /// Opens a record around the real run of a region, which `close` ends. A run inside an open label scope cannot be
 /// replayed: the scope's patches reach nodes the record would not hold.
 pub(crate) fn open(ctx: &Context) {
-    let open = Open::empty(ctx);
+    push(ctx, Open::empty(ctx));
+}
+
+fn push(ctx: &Context, open: Open) {
     pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.push(Open { from: recorder.journal.len(), ..open }));
     OPEN.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Opens a record around a run of the replay audit, which `close` ends as any other.
+#[cfg(feature = "testing")]
+pub(crate) fn open_audit(ctx: &Context) {
+    push(ctx, Open { audit: true, ..Open::empty(ctx) });
+}
+
+/// Whether the running code is inside a run of the replay audit.
+#[cfg(feature = "testing")]
+pub(crate) fn in_audit_run(ctx: &Context) -> bool {
+    OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.iter().any(|open| open.audit))
 }
 
 /// Ends the innermost record, the one around a run on `layer`: paint or widgets on another layer block it.
@@ -197,11 +217,45 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     });
     let egui = ctx.pass_records_since(&open.egui);
     let mut facts = open.facts;
-    facts.blocked |= egui.layers().any(|on| on != layer);
+    // A paint callback's output depends on what its closure holds, which neither a view's key nor a comparison sees:
+    // its run is never replayed.
+    facts.blocked |= egui.layers().any(|on| on != layer) || egui.paints_callback();
     // Every discard request reaches egui's output (`sizing::request_discard` and egui's own); layout memory's waits
     // for the end of the pass and notes itself (`note_discard`).
     facts.discards |= discard_requests(ctx) > open.discards;
     Record { focus: focus::transcript(ctx, open.focus), journal, widgets: egui.widgets().iter().map(|widget| widget.id).collect(), egui, facts }
+}
+
+#[cfg(feature = "testing")]
+impl Record {
+    /// Whether the run painted a paint callback, which keeps it from being replayed.
+    pub(crate) fn paints_callback(&self) -> bool {
+        self.egui.paints_callback()
+    }
+
+    /// How a replay of `self` differs from the real run `run`: one line per kind that differs (paint, widget rects
+    /// and AccessKit nodes; focus registrations; the journal), each with its first difference.
+    pub(crate) fn differences(&self, run: &Record) -> Vec<String> {
+        let mut found = Vec::new();
+        match self.egui.first_difference(&run.egui) {
+            // The display names a widget by its rect only; the difference may be in its sense, state or interact rect.
+            Some(egui::PassRecordsDiff::Widget { index, left, right }) => found.push(format!("widget rect {index}: left {left:?} / right {right:?}")),
+            // The display names a node by its bounds only; the difference may be in any other property.
+            Some(egui::PassRecordsDiff::Node { index, left, right }) => found.push(format!("AccessKit node {index}: left {left:?} / right {right:?}")),
+            Some(diff) => found.push(format!("paint, widgets or AccessKit: {diff}")),
+            None => {}
+        }
+        if let Some(diff) = self.focus.first_difference(&run.focus) {
+            found.push(format!("focus: {diff}"));
+        }
+        let (left, right) = (&self.journal, &run.journal);
+        if let Some(index) =
+            left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))
+        {
+            found.push(format!("journal entry {index}: left {:?} / right {:?}", left.get(index), right.get(index)));
+        }
+        found
+    }
 }
 
 impl Facts {

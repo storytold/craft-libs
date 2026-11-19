@@ -38,6 +38,7 @@ pub mod wheel;
 pub mod windows;
 
 pub use crate::contract::{Exemption, PatternKind, PatternProbe, Probe, Registration};
+pub use crate::runtime::audit::{in_run as in_audit_run, set as audit_replays};
 #[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::forget_kept as forget_measurements;
 pub use crate::runtime::measure::{

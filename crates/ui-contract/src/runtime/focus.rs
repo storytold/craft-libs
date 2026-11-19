@@ -305,7 +305,8 @@ impl Transcript {
     /// sides, `None` on a side that has fewer records. `None` when they register the same.
     pub(crate) fn first_difference(&self, other: &Self) -> Option<String> {
         fn first<T: PartialEq + fmt::Debug>(kind: &str, left: &[T], right: &[T]) -> Option<String> {
-            let index = left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))?;
+            let index =
+                left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))?;
             Some(format!("{kind} {index}: left {:?} / right {:?}", left.get(index), right.get(index)))
         }
         let [a, b] = [self.placed(None), other.placed(None)];

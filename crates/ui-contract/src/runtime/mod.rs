@@ -1,6 +1,8 @@
 //! Per-pass and per-frame services and the one egui adapter.
 
 pub mod access;
+#[cfg(feature = "testing")]
+pub(crate) mod audit;
 pub mod commands;
 pub mod cursor;
 pub mod drag;

@@ -8,6 +8,7 @@ use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::shell::{AppShell, Slot, Title, TitleBar};
+use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::{Fixture, Frames, MemoRun, last_pass_memo_runs, trial};
 use egui::{Rect, Ui, Vec2};
@@ -120,7 +121,10 @@ struct SlotText {
 }
 
 fn slot_text(props: &mut SlotText, ui: &mut Ui) {
-    SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
+    }
     Text::new(props.text.clone()).show(ui);
 }
 
@@ -187,7 +191,10 @@ struct Revealing {
 }
 
 fn revealing(props: &mut Revealing, ui: &mut Ui) {
-    SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
+    }
     if let Some(shell) = Env::of(ui).view().get::<ShellEntry>().0 {
         shell.reveal_rect(ui.ctx(), RevealEdge::Start, props.at);
     }

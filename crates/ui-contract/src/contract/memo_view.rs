@@ -108,6 +108,10 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));
+            #[cfg(feature = "testing")]
+            {
+                run.same_output = Some(crate::runtime::audit::same::<R>);
+            }
             out
         });
         match shown {
