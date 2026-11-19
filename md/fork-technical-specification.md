@@ -3,7 +3,7 @@
 > **Repository:** `ussoewwin/craft-libs` (Branch: `next`)  
 > **Upstream Tracking:** `storytold/craft-libs` (Branch: `next`)  
 > **Target Consumer:** PhotoCraft & Native Craft Applications  
-> **Author:** ussoewwin (`ussoewwin <136552381+ussoewwin@users.noreply.github.com>`)  
+> **Author:** ussoewwin  
 > **Standard:** Strict Rust (Clean Room, `unsafe_code = "deny"`, Zero Panics / Zero Unwraps in Non-Test Code)  
 
 ---
@@ -154,11 +154,14 @@ The fork establishes a clear separation between keyboard navigation (`Enter`) an
 3. **Guarded Key Route with Space Passthrough**:
    In `crates/ui-contract/src/runtime/keys/route.rs`:
    ```rust
-   // Space activates only a stop that asks for it with `ActivateKeys::Both` (e.g. reading view).
-   // Every other stop declares Enter, so Space stays the canvas's Hand key where the app has a canvas.
+   // Space activates only a stop that asks for it with `ActivateKeys::Space` or `ActivateKeys::Both`
+   // (e.g. a reading view turning a column on Space). `ActivateKeys::Space` enables Space without also
+   // enabling Enter, while `ActivateKeys::Both` enables both. Every other stop declares Enter, so Space
+   // stays the canvas's Hand key where the app has a canvas.
    None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
    None if press.key == Key::Space => PressRoute::Free,
    ```
+   Because `ActivateKeys::space()` returns `true` for both `ActivateKeys::Space` and `ActivateKeys::Both`, a component can opt in to `Space` activation either alongside `Enter` (`ActivateKeys::Both`) or exclusively without enabling `Enter` (`ActivateKeys::Space`).
 
 4. **Preserved Opt-in for Reading View**:
    In `crates/pages/src/ui/reading.rs`:
@@ -230,14 +233,23 @@ In upstream `craft-font-manager`, font classification was restricted to Latin-ce
    Ensures that words like `WindSong` do not trigger CJK Song serif classification.
 
 2. **Strict Classifier Precedence Hierarchy**:
-   The classification pipeline enforces the following precedence order:
-   - **Monospace Check**: `is_cjk_monospace` (e.g. "等幅", "monospaced").
-   - **Serif / Mincho**: CJK Mincho/Song markers (`"mincho"`, `"明朝"`, `"みんちょう"`, `"myeongjo"`, `"명조"`, `is_cjk_song`).
-   - **Sans-Serif / Gothic**: CJK Gothic markers (`"gothic"`, `"ゴシック"`, `"ごしっく"`).
-   - **Calligraphic / Script**: Explicit script keywords (`"script"`, `"gyosho"`, `"行書"`, `"kaisho"`, `"楷書"`, `"sousho"`, `"草書"`, `"reisho"`, `"隷書"`, `"kanteiryu"`, `"勘亭流"`).
-   - **Hei (Sans-Serif)**: Evaluated *after* Script markers so `Xhei Script` resolves to `Script`, while `SimHei` resolves to `SansSerif`.
-   - **Pop (Handwritten)**: Evaluated *after* Script markers so `Pop Script` resolves to `Script`, while `HG創英角ﾎﾟｯﾌﾟ体` resolves to `Handwritten`.
-   - **Maru (Rounded Sans-Serif)**: Evaluated *after* Script and Handwritten markers so `Maru Script` keeps `Script`, while `Maru Gothic` resolves to `SansSerif`.
+   The `classify` pipeline (`crates/font-manager/src/picker/rank.rs`) evaluates font table metadata first, and then falls back to family-name heuristics in a strict `if / else if` precedence order:
+   - **Stage A — Font Table Metadata & Early Checks** (evaluated before family-name rules):
+     1. **Fixed-Pitch & PANOSE Proportion**: `fixed_pitch || (panose[0] == 2 && panose[3] == 9)` → `FontClass::Monospace`.
+     2. **Blackletter Fragments**: `"fraktur"`, `"blackletter"`, `"black letter"`, `"textura"`, `"old english"`, `"schwabacher"`, `"rotunda"` → `FontClass::Blackletter`.
+     3. **PANOSE Family Kind (`panose[0]`)**: `3` → `FontClass::Script` when `family_class >> 8 == 10`, else `FontClass::Handwritten`; `4 | 5` → `FontClass::Decorative`.
+     4. **OS/2 IBM Family Class (`family_class >> 8`)**: `1..=4 | 7` → `FontClass::Serif`; `5` → `FontClass::SlabSerif`; `8` → `FontClass::SansSerif`; `9 | 12` → `FontClass::Decorative`; `10` → `FontClass::Handwritten` if the name contains `"hand"`, `"marker"`, `"brush"`, `"pen"`, or `"chalk"`, else `FontClass::Script`.
+     5. **PANOSE Latin Text Serif Style (`panose[0] == 2`, `panose[1]`)**: `11..=15` → `FontClass::SansSerif`; `6` → `FontClass::SlabSerif`; `2..=10` → `FontClass::Serif`.
+   - **Stage B — Family-Name Fallback Rules** (evaluated when metadata does not classify the face; `Sans-Serif / Gothic` precedes `Serif / Mincho`, so a name containing both `Gothic` and `Mincho` resolves to `FontClass::SansSerif`):
+     1. **Monospace**: whole words matching `"mono"`, `"monospace"`, `"monospaced"`, `"code"`, `"courier"`, `"等幅"`, words starting with `"consol"`, or substring `"等幅"` → `FontClass::Monospace`.
+     2. **Slab Serif**: substring `"slab"` → `FontClass::SlabSerif`.
+     3. **Sans-Serif / Gothic**: substrings `"sans"`, `"grotesk"`, `"grotesque"`, `"gothic"`, `"ゴシック"`, `"ｺﾞｼｯｸ"`, `"meiryo"`, `"メイリオ"`, `"黑体"`, `"黑體"`, `"丸ゴシック"` → `FontClass::SansSerif`.
+     4. **Serif / Mincho & Song**: substrings `"serif"`, `"roman"`, `"garamond"`, `"times"`, `"bodoni"`, `"baskerville"`, `"caslon"`, `"mincho"`, `"明朝"`, `"宋体"`, `"宋體"`, or tokenized words matching `"sung"`, `"song"`, `"sungti"`, `"songti"`, or `is_cjk_song(w)` → `FontClass::Serif`.
+     5. **Handwritten / Kyokasho & Pop**: substrings `"hand"`, `"marker"`, `"brush"`, `"chalk"`, `"kyokasho"`, `"教科書"`, `"ポップ"`, `"ﾎﾟｯﾌﾟ"`, suffix `"poptai"`, or tokenized word `"poptai"` → `FontClass::Handwritten`.
+     6. **Calligraphic / Script**: substrings `"script"`, `"gyosho"`, `"行書"`, `"kaisho"`, `"楷書"`, `"sousho"`, `"草書"`, `"reisho"`, `"隷書"`, `"kanteiryu"`, `"勘亭流"` → `FontClass::Script`.
+     7. **Hei (Sans-Serif)**: tokenized word `"hei"` or `"heiti"`, or word ending with `"hei"` or `"heiti"` (evaluated *after* Script markers so `Xhei Script` resolves to `Script`, while `SimHei` resolves to `SansSerif`) → `FontClass::SansSerif`.
+     8. **Pop (Handwritten)**: tokenized word `"pop"` (evaluated *after* Script markers so `Pop Script` resolves to `Script`, while `HG創英角ﾎﾟｯﾌﾟ体` resolves to `Handwritten`) → `FontClass::Handwritten`.
+     9. **Maru (Rounded Sans-Serif)**: tokenized word `"maru"` (evaluated *after* Handwritten and Script markers so `Maru Script` and `Maru Hand` keep their own class, while standalone `Maru` resolves to `SansSerif`) → `FontClass::SansSerif`.
 
 3. **Photoshop Japanese Name Parity**:
    ```rust
@@ -294,14 +306,22 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 
 To merge upstream updates while preserving all fork-specific architectural features:
 
-1. **Fetch & Backup**:
+0. **Verify Remotes**:
    ```bash
-   git fetch origin next
+   git remote add upstream https://github.com/storytold/craft-libs.git   # skip if it already exists
+   git remote add fork https://github.com/ussoewwin/craft-libs.git      # skip if it already exists
+   git remote -v
+   ```
+   `upstream` must point to `storytold/craft-libs`, and `fork` must point to `ussoewwin/craft-libs`.
+1. **Fetch, Switch & Backup**:
+   ```bash
+   git fetch upstream next
+   git switch next
    git branch backup-next-$(date +%Y%m%d)
    ```
 2. **Merge Upstream**:
    ```bash
-   git merge origin/next -m "Merge remote-tracking branch 'origin/next' into next (preserve fork features)"
+   git merge upstream/next -m "Merge remote-tracking branch 'upstream/next' into next (preserve fork features)"
    ```
 3. **Execute Verification Gate**:
    Execute the four test commands listed in Section 4. Ensure 0 failures and 0 warnings.

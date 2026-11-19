@@ -4,4 +4,4 @@ This directory contains technical documentation and architecture specifications 
 
 ## Documents
 
-- [Fork Technical Specification & Upstream Delta Guide](file:///D:/USERFILES/GitHub/craft-libs/md/fork-technical-specification.md): Comprehensive technical specification of all fork modifications, upstream architectural differences, issue root causes, implementation details, and verification test suites.
+- [Fork Technical Specification & Upstream Delta Guide](fork-technical-specification.md): Comprehensive technical specification of all fork modifications, upstream architectural differences, issue root causes, implementation details, and verification test suites.

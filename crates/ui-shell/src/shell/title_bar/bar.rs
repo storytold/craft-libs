@@ -84,6 +84,9 @@ pub struct TitleBar<'a> {
     /// The content at the end of the bar, before the caption buttons.
     #[prop(func = "FnMut(&mut Ui, &mut crate::contract::BodyCx<'_>)")]
     trailing: Option<RegionBody<'a>>,
+    /// The width the leading content declares for itself (`HeaderRegion::inline_width`): a menu bar's titles, so
+    /// the titles are laid out at their own width instead of the share of the line the title strip beside them leaves.
+    leading_width: Option<f32>,
     title: Option<Title>,
     clicked: Option<Caption>,
     close: bool,
@@ -117,10 +120,21 @@ impl<'a> TitleBar<'a> {
             maximized: None,
             title_when_native: false,
             trailing: None,
+            leading_width: None,
             title: None,
             clicked: None,
             close: false,
         }
+    }
+
+    /// The width `leading` declares for itself (`HeaderRegion::inline_width`): a menu bar lays its titles out at
+    /// their own width rather than the room the line happens to offer.
+    pub fn leading_width(mut self, width: Option<f32>) -> Self {
+        self.leading_width = width;
+        if let Some(header) = self.props.header {
+            self.props = self.props.header(header.inline_width(width));
+        }
+        self
     }
 
     /// Shows the bar with `leading` content at its start, `title` in the gap and `trailing` content before the end's

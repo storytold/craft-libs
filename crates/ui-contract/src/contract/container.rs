@@ -270,7 +270,7 @@ pub enum HeaderEdge {
 }
 
 /// A header region, filled by `Container::header`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct HeaderRegion {
     /// What dragging the header does. A move band lies beneath the header's children, which keep their presses; an
@@ -284,6 +284,10 @@ pub struct HeaderRegion {
     pub rule_above: bool,
     /// Whether the header shares a line with the body: the header at its measured width, the body in the rest.
     pub inline: bool,
+    /// The width an inline header takes whatever room its line offers, declared by the host (a `MenuBar`'s
+    /// titles): the header is laid out at it and the body beside it takes the rest, so the header's content is not
+    /// squeezed by the share of the line a body leaves unused.
+    pub inline_width: Option<f32>,
     /// Whether the header has a trailing child region at its end edge, filled by `Container::controls`; the header
     /// itself fills the room it leaves.
     pub trailing: bool,
@@ -299,7 +303,7 @@ pub struct HeaderRegion {
 impl HeaderRegion {
     /// A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
     pub const fn new() -> Self {
-        HeaderRegion { band: DragBand::None, rule: false, rule_above: false, inline: false, trailing: false, fill: None, inset: Pad::None, gap: None }
+        HeaderRegion { band: DragBand::None, rule: false, rule_above: false, inline: false, inline_width: None, trailing: false, fill: None, inset: Pad::None, gap: None }
     }
 
     /// The surface of a band behind the header.
@@ -348,6 +352,13 @@ impl HeaderRegion {
     /// Whether the header shares a line with the body.
     pub const fn inline(mut self, on: bool) -> Self {
         self.inline = on;
+        self
+    }
+
+    /// The width an inline header takes, whatever room its line offers (`with inline(true)`), `None` for an inline
+    /// header that fills the line beside its body.
+    pub const fn inline_width(mut self, width: Option<f32>) -> Self {
+        self.inline_width = width;
         self
     }
 

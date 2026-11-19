@@ -1080,7 +1080,8 @@ impl BodyHooks<'_> {
         let inset = props.header.map_or(0.0, |header| pad_of(&env.tokens, header.inset));
         let header_env = (!plan.real).then(|| plan.region_env.derive_local(|scoped| scoped.first_line = Some(plan.first.0)));
         let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: header_env.as_ref().unwrap_or(&plan.region_env), gap: plan.gap };
-        let closed = self.header_region(comp, ui, &mut bcx, &frame, plan.regions.header, (trailing, inset, header_parts));
+        let declared = props.header.and_then(|header| header.inline_width);
+        let closed = self.header_region(comp, ui, &mut bcx, &frame, plan.regions.header, (trailing, inset, header_parts, declared));
         plan.close = plan.close.or(closed);
         for stop in after_header {
             crate::runtime::focus::register_stop(&plan.ctx, stop);

@@ -243,11 +243,18 @@ impl<'b> BodyHooks<'b> {
         bcx: &mut BodyCx<'_>,
         frame: &RegionFrame<'_>,
         header: Rect,
-        (trailing, inset, parts): (bool, f32, HeaderParts),
+        (trailing, inset, parts, declared): (bool, f32, HeaderParts, Option<f32>),
     ) -> Option<CloseReason> {
         let ctx = ui.ctx().clone();
         let (id, rtl) = (frame.id, frame.rtl);
         let (line, _) = self.header_line(header, inset, parts, rtl);
+        // A header that declares its width gets it on the line, the body beside it taking the rest: laid out by the
+        // line alone, its content is squeezed into the share of a body it shares the line with.
+        let line = match declared.filter(|width| width.is_finite()) {
+            Some(width) if rtl => Rect::from_min_max(Pos2::new((line.max.x - width).max(line.min.x), line.min.y), line.max),
+            Some(width) => Rect::from_min_max(line.min, Pos2::new((line.min.x + width).min(line.max.x), line.max.y)),
+            None => line,
+        };
         let mut header_rect = line;
         let header = line;
         let mut controls = Vec2::ZERO;
@@ -412,7 +419,10 @@ impl<'b> BodyHooks<'b> {
         let header = if inline {
             // The header keeps the width it measured, none when it measured nothing; before its first measure it
             // takes the whole line. The body takes the rest.
-            let head_w = sizes.header.map_or(width, |took| took.x.min(width));
+            let head_w = props.header.and_then(|header| header.inline_width).filter(|width| width.is_finite()).map_or_else(
+                || sizes.header.map_or(width, |took| took.x.min(width)),
+                |declared| declared.min(width),
+            );
             let cut = if head_w > 0.0 { (head_w + self.region_gap).min(width) } else { 0.0 };
             if rtl {
                 body.max.x = right - cut;

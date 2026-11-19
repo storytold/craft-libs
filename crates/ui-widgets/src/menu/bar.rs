@@ -205,6 +205,9 @@ pub struct MenuBarOutput {
     pub open: bool,
     /// The titles alone (with "…" when it shows), from the first title's reading start to the last title's end.
     pub titles: Rect,
+    /// The width every title takes side by side, before the fit: what a title bar declares for its leading region
+    /// (`TitleBar::leading_width`), so a bar squeezed into a share of the line still shows all its titles.
+    pub titles_width: f32,
 }
 
 impl Outcome for MenuBarOutput {
@@ -297,13 +300,27 @@ pub struct MenuBar<'a> {
     /// Whether the bar takes F10, Alt and Alt+letter. Off while a dialog or the shortcut recorder owns the keys.
     #[prop]
     keyboard: bool,
+    /// The width the bar takes instead of the titles' own, set by the container's leading region when it declares one
+    /// (`HeaderRegion::inline_width`): the bar then keeps the titles' row but does not fill the line.
+    #[prop]
+    width: Option<f32>,
+    /// The titles' width as the last `parts` measured them, before the fit: what a host that declares a width
+    /// (`width`) reads back as `MenuBarOutput::titles_width`.
+    natural: f32,
     open: bool,
 }
 
 impl<'a> MenuBar<'a> {
     /// A bar named `label` with one title per menu, in reading order.
     pub fn new(label: impl Into<Label>, titles: Vec<MenuTitle<'a>>) -> Self {
-        MenuBar { common: Common::new(), titles, help: None, keyboard: true, open: false }.label(label)
+        MenuBar { common: Common::new(), titles, help: None, keyboard: true, width: None, natural: 0.0, open: false }.label(label)
+    }
+
+    /// The width the bar takes instead of the titles' own, `None` to fill its line: the title bar's leading region
+    /// declares it (`HeaderRegion::inline_width`; `craft-menu`'s `MenuBarUi`).
+    pub fn own_width(mut self, width: Option<f32>) -> Self {
+        self.width = width;
+        self
     }
 
     fn in_window(env: &EnvView<'_>) -> bool {
@@ -431,17 +448,18 @@ impl Component for MenuBar<'_> {
     }
 
     /// Every title's width when the room allows it; the bar fills the row, so what is left over is room for the
-    /// overflow.
+    /// overflow. A bar given a width of its own (`width`, a title bar's leading region declaring it) takes that width
+    /// and does not fill the row: the title strip beside it keeps the rest.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         if !Self::in_window(&cx.env) {
             return Vec2::ZERO;
         }
         let (widths, height, _) = self.widths(cx);
-        Vec2::new(widths.iter().sum(), height)
+        Vec2::new(self.width.unwrap_or_else(|| widths.iter().sum()), height)
     }
 
     fn fills(&self) -> Option<Axis> {
-        Some(Axis::X)
+        self.width.is_none().then_some(Axis::X)
     }
 
     fn sense(&self) -> Sense {
@@ -453,6 +471,10 @@ impl Component for MenuBar<'_> {
             return;
         }
         let (widths, _, more) = self.widths(cx);
+        // The titles' own width, before the fit: a host that declares it (`width`) reads it back, so the bar keeps
+        // every title even when the share of the line it is laid out in is narrower (#the window and help menus
+        // fell into the overflow menu).
+        self.natural = widths.iter().sum();
         let fit = fit_titles(&widths, more, rect.width());
         let mut flow = Flow::new(rect, cx.flow.is_rtl());
         for (at, width) in widths.iter().take(fit.shown).enumerate() {
@@ -675,6 +697,6 @@ impl Component for MenuBar<'_> {
         let rects = Self::slots(found).into_iter().filter_map(|slot| cx.part_if_declared(Self::slot_part(slot)).map(|result| result.rect));
         let start = if cx.flow.is_rtl() { cx.rect.right_top() } else { cx.rect.left_top() };
         let titles = rects.reduce(Rect::union).unwrap_or_else(|| Rect::from_min_size(start, Vec2::ZERO));
-        MenuBarOutput { response: cx.response.clone(), open: self.open, titles }
+        MenuBarOutput { response: cx.response.clone(), open: self.open, titles, titles_width: self.natural }
     }
 }

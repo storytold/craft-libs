@@ -63,6 +63,9 @@ pub struct MenuBarOutput {
     /// The menu titles alone, without the room the bar leaves after them
     /// ([`craft_ui::menu::MenuBarOutput::titles`]).
     pub titles: Rect,
+    /// The width every title takes side by side, before the fit ([`craft_ui::menu::MenuBarOutput::titles_width`]):
+    /// what a title bar declares for its leading region (`TitleBar::leading_width`).
+    pub titles_width: f32,
 }
 
 /// The bar for one frame: `MenuBarUi::new(&bar).show(ui)`. Draw it at the top of the window, in a top panel.
@@ -76,12 +79,14 @@ pub struct MenuBarUi<'a> {
     preferred: &'a [(&'a str, char)],
     keyboard: Option<bool>,
     help_search: bool,
+    /// The width the bar takes instead of the titles' own, from the title bar's leading region.
+    width: Option<f32>,
 }
 
 impl<'a> MenuBarUi<'a> {
     /// The bar for `bar`, already laid out ([`crate::layout`]), on the shell's platform ([`Target::of_shell`]).
     pub fn new(bar: &'a MenuBar) -> MenuBarUi<'a> {
-        MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false }
+        MenuBarUi { bar, target: None, english: None, preferred: &[], keyboard: None, help_search: false, width: None }
     }
 
     /// The platform the bar is on, for the shortcut column ([`craft_keymap::Chord::display`]): ⌘ glyphs on
@@ -123,6 +128,13 @@ impl<'a> MenuBarUi<'a> {
         self
     }
 
+    /// The width the bar takes instead of the titles' own: the title bar's leading region declares it
+    /// (`TitleBar::leading_width`, `HeaderRegion::inline_width`).
+    pub fn width(mut self, width: Option<f32>) -> MenuBarUi<'a> {
+        self.width = width;
+        self
+    }
+
     /// Draws the bar and its open menu. Disabled rows never run. A chosen item is a fired command in the frame's
     /// output; [`Builtin::Quit`](crate::Builtin::Quit) and [`Builtin::Minimize`](crate::Builtin::Minimize) act on
     /// the root window instead.
@@ -139,10 +151,13 @@ impl<'a> MenuBarUi<'a> {
         // Collecting the search's commands walks every row of every menu: the bar does it only while Help is open.
         let (bar_model, english) = (self.bar, self.english);
         let entries = move || entries_of(bar_model, english);
-        let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles).keyboard(self.keyboard.unwrap_or(target != Target::Mac));
+        let mut bar = Bar::new(env.words::<BarWords>().label.clone(), titles)
+            .keyboard(self.keyboard.unwrap_or(target != Target::Mac))
+            .own_width(self.width);
         if let Some(menu) = help {
             bar = bar.help(MenuHelp::new(menu, &entries));
         }
-        MenuBarOutput { titles: bar.show(ui).titles }
+        let shown = bar.show(ui);
+        MenuBarOutput { titles: shown.titles, titles_width: shown.titles_width }
     }
 }

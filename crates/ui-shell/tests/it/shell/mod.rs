@@ -11,3 +11,4 @@ mod screen_mode;
 mod start;
 mod title_bar;
 mod window_parts;
+mod menu_bar_room;
