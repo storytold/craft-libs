@@ -119,15 +119,23 @@ struct Match<'a> {
     accept: &'a dyn Fn(&CommandRef) -> bool,
 }
 
-/// The chords one press can run, most specific first: the layout's candidates, then Delete and Backspace standing
-/// for each other.
-struct Chords(Vec<Chord>);
+/// The chords one press can run, most specific first: the chord with the Shift the layout dropped kept (rule 3's
+/// exception), the layout's candidates, then Delete and Backspace standing for each other.
+struct Chords(Vec<Chord>, Chord);
 
 impl Chords {
     /// `None` when the press names no key.
     fn of(layout: &Layout, input: &KeyInput) -> Option<Chords> {
         let mut chords = layout.candidates(input);
-        chords.first()?;
+        let meant = chords.first().copied()?;
+        // Rule 3's exception (`layout` docs): where the layout dropped the Shift the person held for a symbol that
+        // needs it, the chord with Shift kept is tried first, so its binding wins over the dropped chord's. The press
+        // still means the dropped chord (a double press, `Hit::exact`).
+        if input.mods.shift && !meant.mods.shift && meant.key.is_symbol() {
+            let kept = Chord::new(input.mods, meant.key);
+            chords.retain(|chord| *chord != kept);
+            chords.insert(0, kept);
+        }
         let twins: Vec<Chord> = chords
             .iter()
             .filter_map(|c| match c.key {
@@ -137,12 +145,12 @@ impl Chords {
             })
             .collect();
         chords.extend(twins);
-        Some(Chords(chords))
+        Some(Chords(chords, meant))
     }
 
     /// The chord the press means ([`Layout::resolve`]).
     fn first(&self) -> Chord {
-        self.0[0]
+        self.1
     }
 
     /// The first chord with a binding, pressed twice when `double`.

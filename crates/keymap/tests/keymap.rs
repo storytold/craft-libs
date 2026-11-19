@@ -217,3 +217,21 @@ fn a_refused_command_leaves_its_chord_to_the_next_binding() {
     let all = Matcher::new().press(&Layout::new(), &km, &press).map(|hit| hit.command);
     assert_eq!(all, Some(cmd("view.zoomIn")), "a plain press accepts every command");
 }
+
+/// Rule 3's exception (lead ruling): on a layout where `=` is ⇧0 (German), Ctrl+Shift+0 types `=` with Shift held.
+/// Rule 3 reads it as Ctrl+=, but when the keymap binds Ctrl+Shift+= that binding runs (Word's Superscript, not
+/// Subscript), as the old app did; with Ctrl+Shift+= unbound the press is Ctrl+= as before. The layout's own reading,
+/// which recording and claims use, keeps rule 3.
+#[test]
+fn a_held_shift_runs_the_shift_kept_binding_before_rule_3_drops_it() {
+    let shift_zero = KeyInput::new(Mods { cmd: true, ctrl: false, alt: false, shift: true }).with_typed(Key::Equals).with_physical(Key::Num0);
+    let ran = |defs: Vec<CommandDef>| {
+        let km = Keymap::new(defs, Scopes::new(), Platform::Linux);
+        let press = Press { input: &shift_zero, repeat: false, now: 0.0, active: &Active::NONE, outer: &[] };
+        Matcher::new().press(&Layout::new(), &km, &press).map(|hit| hit.command)
+    };
+    let both = vec![app("format.subscript", &["Cmd+="]), app("format.superscript", &["Cmd+Shift+="])];
+    assert_eq!(ran(both), Some(cmd("format.superscript")), "the Shift-kept binding wins");
+    assert_eq!(ran(vec![app("format.subscript", &["Cmd+="])]), Some(cmd("format.subscript")), "unbound, rule 3 holds");
+    assert_eq!(Layout::new().resolve(&shift_zero), Some(chord("Cmd+=")), "the press is still recorded as rule 3 reads it");
+}
