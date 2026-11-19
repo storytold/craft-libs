@@ -40,6 +40,48 @@ fn u64_at(bytes: &[u8], at: &mut usize) -> Result<u64> {
     Ok(u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
+fn has_merged_transparency(layer: &[u8], version: crate::Version) -> bool {
+    let mut at = 0usize;
+    let info_len = if version.is_psb() { u64_at(layer, &mut at).ok() } else { u32_at(layer, &mut at).ok().map(u64::from) };
+    let Some(info_len) = info_len else { return false };
+    if info_len >= 2 {
+        return layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0);
+    }
+    let Ok(info_len) = usize::try_from(info_len) else { return false };
+    let Some(next) = at.checked_add(info_len) else { return false };
+    at = next;
+    let Ok(mask_len) = u32_at(layer, &mut at) else { return false };
+    let Some(next) = at.checked_add(mask_len as usize) else { return false };
+    at = next;
+    while let Some(head) = at.checked_add(12).and_then(|end| layer.get(at..end)) {
+        let sig = &head[..4];
+        let key = &head[4..8];
+        if sig != b"8BIM" && sig != b"8B64" {
+            return false;
+        }
+        let Ok(key_arr): std::result::Result<&[u8; 4], _> = key.try_into() else { return false };
+        let len = if crate::tagged::uses_long_length(version, key_arr) {
+            let Ok(l) = u64_at(layer, &mut { at + 8 }) else { return false };
+            let Ok(l) = usize::try_from(l) else { return false };
+            at += 16;
+            l
+        } else {
+            at += 12;
+            u32::from_be_bytes([head[8], head[9], head[10], head[11]]) as usize
+        };
+        if (key == b"Lr16" || key == b"Lr32") && layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0) {
+            return true;
+        }
+        if matches!(key, b"Mtrn" | b"MTrn" | b"Mt16" | b"Mt32") {
+            return true;
+        }
+        // Global tagged blocks pad their data to 4 bytes (per psd-tools and craft-psd).
+        let Some(next) = len.checked_add(3).map(|v| v & !3).and_then(|p| at.checked_add(p)) else { return false };
+        at = next;
+    }
+    false
+}
+
 impl<'a> Merged<'a> {
     /// Open the merged section with a pixel limit. This skips layer records, preserving the ability
     /// to read a composite when its layer data is not understood. No image planes are allocated.
@@ -59,8 +101,7 @@ impl<'a> Merged<'a> {
         let mut at = usize::try_from(head.layer_section_offset).map_err(|_| PsdError::LimitExceeded("offset"))?;
         let len = if psb { u64_at(bytes, &mut at)? } else { u64::from(u32_at(bytes, &mut at)?) };
         let layer = take(bytes, &mut at, usize::try_from(len).map_err(|_| PsdError::LimitExceeded("layer section"))?)?;
-        let offset = if psb { 8 } else { 4 };
-        let transparency = layer.get(offset..offset + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0);
+        let transparency = has_merged_transparency(layer, h.version);
         let compression = u16_at(bytes, &mut at)?;
         Ok(Self { head, transparency, compression, bytes, data_offset: at })
     }
@@ -247,5 +288,32 @@ mod tests {
         unpackbits(&[3, 7, 8], &mut row).unwrap();
         assert_eq!(row, [7, 8, 0, 0]);
         assert!(unpackbits(&[0x81, 1], &mut row).is_err());
+    }
+
+    #[test]
+    fn detects_lr16_and_mt16_merged_transparency() {
+        let with_layer = |layer: &[u8]| {
+            let mut b = head(2, 0);
+            b.splice(34..38, (layer.len() as u32).to_be_bytes().iter().copied().chain(layer.iter().copied()));
+            b
+        };
+        let mut lr16 = Vec::new();
+        lr16.extend_from_slice(&0u32.to_be_bytes());
+        lr16.extend_from_slice(&0u32.to_be_bytes());
+        lr16.extend_from_slice(b"8BIMPatt");
+        lr16.extend_from_slice(&6u32.to_be_bytes());
+        lr16.extend_from_slice(&[1, 2, 3, 4, 5, 6, 0, 0]);
+        lr16.extend_from_slice(b"8BIMLr16");
+        lr16.extend_from_slice(&2u32.to_be_bytes());
+        lr16.extend_from_slice(&(-1i16).to_be_bytes());
+        assert!(Merged::open(&with_layer(&lr16), 4).unwrap().transparency);
+
+        let n = lr16.len();
+        lr16[n - 2..].copy_from_slice(&1i16.to_be_bytes());
+        assert!(!Merged::open(&with_layer(&lr16), 4).unwrap().transparency);
+
+        let mut mt16 = vec![0; 8];
+        mt16.extend_from_slice(b"8BIMMt16\0\0\0\0");
+        assert!(Merged::open(&with_layer(&mt16), 4).unwrap().transparency);
     }
 }
