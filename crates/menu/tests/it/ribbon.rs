@@ -1,5 +1,5 @@
-//! The ribbon: the fit rule, keyed group levels, a collapsed group's popover, the tab-change slide, the run model and
-//! the ribbon's own context menu.
+//! The ribbon: the fit rule, keyed group levels, a collapsed group's popover, the tab-change slide, the run model, the
+//! line group titles share and the ribbon's own context menu.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -10,7 +10,8 @@ use craft_behavior::{IconId, MotionMode};
 use craft_keymap::CommandRef;
 use craft_menu::{GroupLevel, GroupWidths, Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab, plan};
 use craft_ui::buttons::{Arrangement, Button, SplitButton};
-use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _};
+use craft_ui::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::menu::MenuItem;
 use craft_ui::runtime::env::{Direction, Env};
 use craft_ui::runtime::inspect::{Element, Recorded};
@@ -300,6 +301,34 @@ fn a_settled_ribbon_runs_each_group_body_once() {
     fixture.idle(1);
     assert!(KEYS.iter().all(|key| measured(&runs, key) == 0), "a pass with unchanged inputs measures no group: {:?}", runs.borrow());
     assert!(last_pass_measuring_runs(fixture.ctx()).is_empty(), "a pass with unchanged inputs runs no measuring run");
+}
+
+/// Every open group's title sits on one line at the foot of the row whatever its content's height: a group of one
+/// button, a group of three stacked rows and a group of one stacked button.
+#[trial]
+fn every_open_groups_title_sits_on_one_line() {
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [RibbonTab::new(0_usize, "Home")];
+        let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
+            row.group(RibbonGroup::new("short", "Short", IconId::new("list").into()), |ui| {
+                Button::new("One").show(ui);
+            });
+            row.group(RibbonGroup::new("rows", "Rows", IconId::new("list").into()), |ui| {
+                Stack::new().show(ui, |ui, _| {
+                    for label in ["First", "Second", "Third"] {
+                        Button::new(label).show(ui);
+                    }
+                });
+            });
+            group(row, "big", "Big", &["Large"]);
+        });
+    });
+    fixture.room(vec2(900.0, 400.0));
+    fixture.settle();
+    let baseline = |title: &str| fixture.texts().iter().find(|run| run.text == title).map_or(f32::NAN, |run| run.baseline);
+    let (short, rows, big) = (baseline("Short"), baseline("Rows"), baseline("Big"));
+    assert!((short - rows).abs() < 0.5, "a one-button group's title is on the line of a three-row group's: {short} against {rows}");
+    assert!((big - rows).abs() < 0.5, "a stacked button group's title is on the same line: {big} against {rows}");
 }
 
 /// Presses and releases the secondary button at `at`, a frame each.

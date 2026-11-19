@@ -74,6 +74,14 @@ impl FieldStyle {
         self
     }
 
+    /// The style of a field with no field length to widen it past its shortest width (`size.length.short`): a
+    /// ribbon's font box, which keeps that width whichever family it shows, as a word processor's does.
+    #[must_use]
+    pub fn shortest(mut self) -> FieldStyle {
+        self.metrics = self.metrics.ideal_width(self.metrics.min_size.x);
+        self
+    }
+
     /// The field's padding, gap and minimum size.
     pub fn metrics(&self) -> Metrics {
         self.metrics

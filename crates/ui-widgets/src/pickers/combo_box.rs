@@ -166,8 +166,10 @@ impl Component for ComboBox<'_> {
     type Style = crate::text::FieldStyle;
     type Output = ComboBoxOutput;
 
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) sized by its options alone, as a ribbon's font size box is.
     fn style(cx: &crate::style::StyleCx<'_>, _: ComboBoxStyleKey) -> crate::text::FieldStyle {
-        crate::text::FieldStyle::at(cx)
+        let field = crate::text::FieldStyle::at(cx);
+        if cx.env::<crate::buttons::ControlPlace>() == crate::buttons::ControlPlace::Ribbon { field.sized_by_content() } else { field }
     }
 
     /// The wheel steps the text through the options.

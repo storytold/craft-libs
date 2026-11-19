@@ -18,7 +18,7 @@ use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::buttons::IconButton;
+use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::list::{ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{EnvView, Label};
@@ -588,8 +588,11 @@ impl Component for FontPicker<'_> {
     type Style = craft_ui::text::FieldStyle;
     type Output = FontPickerOutput;
 
+    /// A field; in a ribbon (`ControlPlace::Ribbon`) at its shortest width (`size.length.short`), as a ribbon's font
+    /// box is.
     fn style(cx: &craft_ui::style::StyleCx<'_>, _: FontPickerStyleKey) -> craft_ui::text::FieldStyle {
-        craft_ui::text::FieldStyle::at(cx)
+        let field = craft_ui::text::FieldStyle::at(cx);
+        if cx.env::<ControlPlace>() == ControlPlace::Ribbon { field.shortest() } else { field }
     }
 
     /// The wheel steps the family through the list.
@@ -598,9 +601,12 @@ impl Component for FontPicker<'_> {
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
+    /// In a ribbon the style alone sets its width (`FieldStyle::shortest`): a longer name scrolls
+    /// in the field, as in a word processor's font box.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let current = cx.value().map_or("", String::as_str);
         let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
+        let widest = if cx.env.get::<ControlPlace>() == ControlPlace::Ribbon { Vec2::new(0.0, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
         Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name, note.is_some())), widest.y)

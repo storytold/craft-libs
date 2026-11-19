@@ -247,7 +247,10 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
 pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
     let control = cx.control();
     let round = f32::from(parts.radius.nw).min(control.height / 2.0);
-    Metrics::new().padding(Insets::horizontal(control.pad_x.max(round + control.gap))).min_size(Vec2::new(0.0, control.height)).gap(control.gap)
+    // The sides clear the corner round, so an edge never crosses the label. A ribbon's flat button has no edge at rest
+    // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
+    let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, control.height)).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the

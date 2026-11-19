@@ -32,6 +32,7 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2, vec2};
 pub use craft_ui::buttons::GroupLevel;
 pub use gallery::{Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput};
 pub use group::RibbonGroup;
+use group::BodyHeight;
 pub use plan::{GroupWidths, plan};
 
 craft_ui::words! {
@@ -261,15 +262,24 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             let distance = cx.style::<Region>().map_or(0.0, |style| style.slide);
             let lead = gap.clamp(-1.0, 1.0) * side * distance;
             let chevron = cx.style::<Region>().map_or(0.0, |style| style.chevron);
+            let least = cx.style::<Region>().map_or(0.0, |style| style.body);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
                 .show(ui, |ui, _| {
+                    // The titles sit under the tallest content of the last pass; a change shows in the next frame.
+                    let slot = base.with("ribbon.body");
+                    let last = with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0);
                     let row = Row::new().scroll(Scroll::horizontal()).fill_width().show(ui, |ui, _| {
-                        let mut row = RibbonRow { ui, base, groups: Vec::new() };
+                        let mut row = RibbonRow { ui, base, groups: Vec::new(), body: last.max(least), tallest: 0.0 };
                         body(&mut row, key);
-                        row.groups
+                        (row.groups, row.tallest)
                     });
-                    (row.output.id, row.output.rect, row.inner.unwrap_or_default())
+                    let (groups, tallest) = row.inner.unwrap_or_default();
+                    if tallest > 0.0 && (tallest - last).abs() >= 0.5 {
+                        with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0 = tallest);
+                        ui.ctx().request_repaint();
+                    }
+                    (row.output.id, row.output.rect, groups)
                 })
                 .inner;
             if let Some((owner, view, groups)) = shown {
@@ -350,6 +360,10 @@ pub struct RibbonRow<'a> {
     base: Id,
     /// The rect of each group this run of the row showed, in order: the units the edge chevrons step by.
     groups: Vec<Rect>,
+    /// The height under each open group's top at which its title row sits: the tallest content of the last pass.
+    body: f32,
+    /// The tallest open group content of this run, every level the row measured included.
+    tallest: f32,
 }
 
 /// What the ribbon reports for a pass.
@@ -386,6 +400,9 @@ struct RegionStyle {
     slide: f32,
     /// The width of an edge chevron: a hit target's.
     chevron: f32,
+    /// The least height of the group row's body, under which each group's title sits: three controls stacked with the
+    /// row gap between them, the ribbon's three rows of small buttons. Taller content lowers every title with it.
+    body: f32,
 }
 
 /// What a row region reports.
@@ -443,7 +460,8 @@ impl Component for Region {
     type Output = RegionOutput;
 
     fn style(cx: &StyleCx<'_>, _: RegionStyleKey) -> RegionStyle {
-        RegionStyle { metrics: Metrics::new(), slide: cx.tokens.motion.slide as f32, chevron: cx.tokens.size.hit.target }
+        let body = 3.0 * cx.control().height + 2.0 * cx.tokens.space.gap.row;
+        RegionStyle { metrics: Metrics::new(), slide: cx.tokens.motion.slide as f32, chevron: cx.tokens.size.hit.target, body }
     }
 
     fn sense(&self) -> Sense {

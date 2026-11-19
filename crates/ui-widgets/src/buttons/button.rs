@@ -240,6 +240,7 @@ impl Component for Button<'_> {
     type Output = ButtonOutput;
 
     fn style(cx: &StyleCx<'_>, key: ButtonStyleKey) -> ButtonStyle {
+        let cx = &super::placed(cx);
         let mut style = match key.tint {
             Some(tint) => ButtonStyle::tinted(cx, tint),
             None => ButtonStyle::of(cx),

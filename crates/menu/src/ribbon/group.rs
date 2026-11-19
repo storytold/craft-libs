@@ -4,7 +4,7 @@ use std::hash::Hash;
 
 use craft_behavior::IconId;
 use craft_keymap::CommandRef;
-use craft_ui::buttons::{Arrangement, Button, IconButton};
+use craft_ui::buttons::{Arrangement, Button, ControlPlace, IconButton};
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
 use craft_ui::display::{Divider, Shade, Text};
 use craft_ui::layout::levelled_unit;
@@ -14,7 +14,7 @@ use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label, with_env};
 use craft_ui::runtime::memory::key_salt;
 use craft_ui::style::TypeRole;
-use egui::{Id, Rect, Ui};
+use egui::{Id, Rect, Ui, Vec2};
 
 use super::{GroupLevel, RibbonRow};
 
@@ -51,10 +51,16 @@ impl<'a> RibbonGroup<'a> {
         self
     }
 
-    /// The group's content over its title row; the title row carries the launcher.
-    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)) {
+    /// The group's content over its title row; the title row carries the launcher. The title row sits `body` under the
+    /// content's top whatever the content's height, so every group's title shares one line at the foot of the row; a
+    /// taller content pushes it down. Returns the content's height, which sets `body` for the row's next pass.
+    fn open(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), body: f32) -> f32 {
+        let mut took = 0.0;
         Stack::new().show(ui, |ui, _| {
-            Row::new().show(ui, |ui, _| add(ui));
+            took = Row::new().show(ui, |ui, _| add(ui)).output.rect.height();
+            // Every group places this spacer, an empty one too, so each has the same gaps above its title.
+            let rest = if (body - took).is_finite() { (body - took).max(0.0) } else { 0.0 };
+            craft_ui::layout::place_in_flow(ui, Vec2::new(0.0, rest));
             Row::new().show(ui, |ui, _| {
                 Text::new(self.title.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                 if let Some(command) = &self.launcher {
@@ -64,6 +70,7 @@ impl<'a> RibbonGroup<'a> {
                 }
             });
         });
+        took
     }
 
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
@@ -84,6 +91,7 @@ impl<'a> RibbonGroup<'a> {
                 ui,
                 |overrides| {
                     overrides.values.set(GroupLevel::Full);
+                    overrides.values.set(ControlPlace::Ribbon);
                 },
                 |ui| {
                     Row::new().show(ui, |ui, _| add(ui));
@@ -93,23 +101,31 @@ impl<'a> RibbonGroup<'a> {
     }
 
     /// The group as the row shows it at `level`: one container `id`, a group node named by the title (a labelled
-    /// `Row` reports `Role::GROUP`), holding the body and the divider after it. Returns the rect it took.
-    fn unit(&self, ui: &mut Ui, id: Id, add: &mut dyn FnMut(&mut Ui), level: GroupLevel) -> Rect {
-        Row::new()
+    /// `Row` reports `Role::GROUP`), holding the body and the divider after it. An open group's title sits `body`
+    /// under its top (`open`). Returns the rect it took and the height of its open content (none when collapsed).
+    fn unit(&self, ui: &mut Ui, id: Id, add: &mut dyn FnMut(&mut Ui), level: GroupLevel, body: f32) -> (Rect, Option<f32>) {
+        let mut content = None;
+        let rect = Row::new()
             .id(id)
             .label(self.title.clone())
             .show(ui, |ui, _| {
                 if level == GroupLevel::Collapsed {
                     self.collapsed(ui, add);
                 } else {
-                    self.open(ui, add);
+                    content = Some(self.open(ui, add, body));
                 }
                 Divider::vertical().show(ui);
             })
             .output
-            .rect
+            .rect;
+        (rect, content)
     }
 }
+
+/// The height of the tallest open group content the ribbon's row showed in its last pass: the line every group's
+/// title sits under. Kept in the ribbon's session memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct BodyHeight(pub(super) f32);
 
 impl RibbonRow<'_> {
     /// Adds `group` to the row, at the level the row's fit gives it; `add` fills its content.
@@ -122,17 +138,25 @@ impl RibbonRow<'_> {
     pub fn group(&mut self, group: RibbonGroup<'_>, mut add: impl FnMut(&mut Ui)) -> &mut Self {
         let id = self.base.with(("ribbon.group", group.key));
         let mut shown = None;
+        let body = self.body;
+        let mut tallest = self.tallest;
         levelled_unit(self.ui, id, LEVELS.len(), |ui, at| {
             let level = LEVELS.get(at).copied().unwrap_or(GroupLevel::Collapsed);
-            let rect = with_env(
+            // A ribbon's controls take the ribbon's look: flat buttons, fields as long as the ribbon's.
+            let (rect, content) = with_env(
                 ui,
                 |overrides| {
                     overrides.values.set(level);
+                    overrides.values.set(ControlPlace::Ribbon);
                 },
-                |ui| group.unit(ui, id, &mut add, level),
+                |ui| group.unit(ui, id, &mut add, level, body),
             );
+            if let Some(content) = content.filter(|height| height.is_finite()) {
+                tallest = tallest.max(content);
+            }
             shown = Some(rect);
         });
+        self.tallest = tallest;
         if let Some(rect) = shown {
             self.groups.push(rect);
         }

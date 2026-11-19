@@ -14,7 +14,8 @@ use craft_font_manager::picker::{
 use craft_font_manager::{Catalog, FontEnv};
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
-use craft_ui::runtime::env::Label;
+use craft_ui::buttons::ControlPlace;
+use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Fixture, Room, trial};
@@ -287,4 +288,37 @@ fn an_action_row_is_reported_not_committed_and_a_missing_family_shows_the_note_n
     assert!(fx.part_rect(picker, PartKey::new("missing")).is_none(), "an installed family has no mark");
 }
 
+/// The width of a plain picker over `family`, in a ribbon group's place or not.
+fn picker_width(family: &'static str, ribbon: bool) -> f32 {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut fx = Fixture::new(move |ui| {
+        let mut family = family.to_owned();
+        let mut show = |ui: &mut egui::Ui| {
+            let _ = FontPicker::new("Font family", Bind::bound(&mut family), &catalog).kind(FontPickerKind::Plain).show(ui);
+        };
+        if ribbon {
+            with_env(
+                ui,
+                |overrides| {
+                    overrides.values.set(ControlPlace::Ribbon);
+                },
+                show,
+            );
+        } else {
+            show(ui);
+        }
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    fx.by_label("Font family").expect("the picker").rect.width()
+}
+
+/// In a ribbon the font box is a short field, narrower than in a form, and keeps its width whichever family it shows.
+#[trial]
+fn a_ribbons_font_box_is_short_and_keeps_its_width() {
+    let (ribbon, standard) = (picker_width("Inter", true), picker_width("Inter", false));
+    assert!(ribbon < standard - 0.5, "the ribbon's font box is narrower: {ribbon} against {standard}");
+    let long = picker_width("Source Sans Pro Semibold Condensed Extra", true);
+    assert!((long - ribbon).abs() < 0.5, "a long family name leaves its width: {long} against {ribbon}");
+}
 

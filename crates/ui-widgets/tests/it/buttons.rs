@@ -4,9 +4,11 @@
 
 use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
-use craft_ui::buttons::{Arrangement, Button, GroupLevel, SplitButton, SplitMenu, ToggleButton};
+use craft_theme::Variant;
+use craft_ui::buttons::{Arrangement, Button, ControlPlace, GroupLevel, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _};
+use craft_ui::pickers::ComboBox;
 use craft_ui::display::Picture;
 use craft_ui::list::ThumbAspect;
 use craft_ui::runtime::commands::CommandState;
@@ -324,4 +326,90 @@ fn a_click_on_a_buttons_picture_activates_the_button_which_stays_one_access_node
     }
     assert!(fixture.tree().children_of(button.node).is_empty(), "the picture adds no node under the button");
     assert!(fixture.by_role(Role::IMAGE).is_empty(), "the picture is not a node of its own");
+}
+
+/// The surface of the first style of `type_name` resolved when `show` runs alone, and the width of the control
+/// named `name`.
+fn seen(type_name: &str, name: &str, show: impl Fn(&mut Ui) + 'static) -> (Option<craft_ui::style::SurfaceLook>, f32) {
+    let mut fixture = Fixture::new(move |ui| show(ui));
+    fixture.settle();
+    let style = fixture.styles_of(type_name).into_iter().next().expect("the control resolved its style");
+    (style.looks.surface.clone(), fixture.by_label(name).expect("the control").rect.width())
+}
+
+/// Shows `show` where a ribbon group shows its content.
+fn in_ribbon(ui: &mut Ui, show: impl FnOnce(&mut Ui)) {
+    with_env(
+        ui,
+        |overrides| {
+            overrides.values.set(ControlPlace::Ribbon);
+        },
+        show,
+    );
+}
+
+/// In a ribbon a push or split button that asks for no variant is flat at rest: it draws the ghost surface, and its
+/// sides take the control's padding, so it is narrower than a ghost button elsewhere. Anywhere else a button keeps its
+/// outlined default, and in a ribbon a variant it asks for stays.
+#[trial]
+fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
+    let button = std::any::type_name::<Button<'static>>();
+    let (ribbon, narrow) = seen(button, "Copy", |ui| {
+        in_ribbon(ui, |ui| {
+            let _ = Button::new("Copy").show(ui);
+        });
+    });
+    let (ghost, wide) = seen(button, "Copy", |ui| {
+        let _ = Button::new("Copy").variant(Variant::GHOST).show(ui);
+    });
+    let (standard, _) = seen(button, "Copy", |ui| {
+        let _ = Button::new("Copy").show(ui);
+    });
+    let (primary, _) = seen(button, "Copy", |ui| {
+        in_ribbon(ui, |ui| {
+            let _ = Button::new("Copy").variant(Variant::PRIMARY).show(ui);
+        });
+    });
+    assert!(ghost.is_some(), "a button has a surface");
+    assert_eq!(ribbon, ghost, "a ribbon button draws the ghost surface");
+    assert_ne!(standard, ghost, "outside a ribbon the default look stays");
+    assert_ne!(primary, ghost, "a variant asked for in a ribbon stays");
+    assert!(narrow < wide - 0.5, "a ribbon's flat button sits close: {narrow} against {wide}");
+
+    let split = std::any::type_name::<SplitButton<'static, usize>>();
+    let (ribbon, narrow) = seen(split, "Paste", |ui| {
+        let entries = [Entry::new(1_usize, "Keep text only")];
+        in_ribbon(ui, |ui| {
+            let _ = SplitButton::new("Paste", &entries).show(ui);
+        });
+    });
+    let (ghost, wide) = seen(split, "Paste", |ui| {
+        let entries = [Entry::new(1_usize, "Keep text only")];
+        let _ = SplitButton::new("Paste", &entries).variant(Variant::GHOST).show(ui);
+    });
+    assert_eq!(ribbon, ghost, "a ribbon split button draws the ghost surface");
+    assert!(narrow < wide - 0.5, "a ribbon's flat split button sits close: {narrow} against {wide}");
+}
+
+/// In a ribbon a combo box is as wide as its widest option and its chevron, not a field length.
+#[trial]
+fn a_ribbons_combo_box_is_as_wide_as_its_options() {
+    let width = |ribbon: bool| {
+        let mut fixture = Fixture::new(move |ui| {
+            let options = [Entry::new("8".to_owned(), "8"), Entry::new("72".to_owned(), "72")];
+            let mut size = "11".to_owned();
+            let mut show = |ui: &mut Ui| {
+                let _ = ComboBox::new("Font Size", Bind::bound(&mut size), &options).show(ui);
+            };
+            if ribbon {
+                in_ribbon(ui, show);
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        fixture.by_label("Font Size").expect("the combo box").rect.width()
+    };
+    let (ribbon, standard) = (width(true), width(false));
+    assert!(ribbon < standard / 2.0, "the ribbon's combo box fits two digits and its chevron: {ribbon} against {standard}");
 }
