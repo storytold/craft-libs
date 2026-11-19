@@ -239,19 +239,32 @@ pub(crate) fn take_placed(ctx: &Context, owner: Id, read_only: bool) -> Vec<(Edi
     })
 }
 
+/// What an editor reports of the input method's composition (`EditorState::composing`, `EditorState::shows_marked`).
+#[derive(Clone, Copy)]
+pub(crate) struct Composing {
+    /// The editor shows marked text now.
+    pub(crate) now: bool,
+    /// The editor draws the marked text of the pre-edits it is given.
+    pub(crate) shows_marked: bool,
+}
+
 /// What an editor that draws its own caret reports once per pass; only the report of the editor that owns the IME
 /// counts. An editor that reported composing and now does not ended the composition itself (a press in its text, a
 /// selection, an app edit over the marked text): the OS composition is interrupted and its late events are dropped.
-/// An editor that shows no marked text reports `false` throughout and the OS composes for it until the commit.
+/// An editor that says it draws marked text (`Composing::shows_marked`) and reports none while the engine composes
+/// ended it too, in the pass its pre-edit arrived in as well (a pre-edit and a refused deletion in one frame). An editor
+/// that shows no marked text reports `false` throughout and the OS composes for it until the commit.
 ///
 /// `surrounding` is the committed text around the caret with its target's epoch; the engine copies its bounded window
 /// here, once per pass, for the end hook's observation.
-pub(crate) fn note_editor(ctx: &Context, owner: Id, composing: bool, history: (bool, bool), surrounding: Option<(u64, &EditorSurrounding<'_>)>) {
+pub(crate) fn note_editor(ctx: &Context, owner: Id, composing: Composing, history: (bool, bool), surrounding: Option<(u64, &EditorSurrounding<'_>)>) {
     current(ctx, |engine| {
         if engine.owner != Some(owner) {
             return;
         }
-        let ended = !composing && engine.editor.as_ref().is_some_and(|last| last.owner == owner && last.composing);
+        let was_composing = engine.editor.as_ref().is_some_and(|last| last.owner == owner && last.composing);
+        let ended = !composing.now && (was_composing || composing.shows_marked);
+        let composing = composing.now;
         if ended && engine.composing {
             engine.interrupt(owner);
         }

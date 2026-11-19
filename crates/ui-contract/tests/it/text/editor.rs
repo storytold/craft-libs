@@ -99,7 +99,11 @@ impl Component for Probe<'_> {
             cx.editor_state(state);
             return;
         };
-        state.composing = doc.composing.get();
+        if doc.marks.get() {
+            state = state.marked(doc.composing.get());
+        } else {
+            state.composing = doc.composing.get();
+        }
         if let Some(epoch) = doc.epoch.get() {
             state = state.surrounding(epoch, EditorSurrounding::Text { text: shown, cursor: shown.len(), anchor: shown.len() });
         }
@@ -134,6 +138,11 @@ struct Doc {
     discard: Cell<bool>,
     /// What each IME receipt the probe noted answered.
     receipts: RefCell<Vec<bool>>,
+    /// The probe says it draws marked text (`EditorState::marked`).
+    marks: Cell<bool>,
+    /// The probe refuses an input method's deletion after the caret, as a word processor refuses one into a locked
+    /// control: the refusal ends the marked text it shows.
+    refuses_after: Cell<bool>,
 }
 
 impl Doc {
@@ -148,6 +157,7 @@ impl Doc {
         for input in inputs {
             match input {
                 EditorInput::Preedit { text, .. } => self.composing.set(!text.is_empty()),
+                EditorInput::DeleteSurrounding { after, .. } if *after > 0 && self.refuses_after.get() => self.composing.set(false),
                 EditorInput::ImeCommit => {
                     by_ime = true;
                     self.composing.set(false);
@@ -670,6 +680,30 @@ fn one_frames_ime_edits_text_and_keys_reach_the_editor_in_arrival_order() {
         rig.frame(vec![Event::Text("a".into()), key_press(Key::Backspace, Modifiers::NONE), Event::Text("b".into())]);
         let expected = [EditorInput::Text("a".into()), EditorInput::delete(false, Granularity::Unit), EditorInput::Text("b".into())];
         assert_eq!(rig.take(), expected, "{name}: a key between two texts stays between them");
+    }
+}
+
+/// fwstub-1 (4): an editor that draws marked text and refuses a deletion in the frame its pre-edit arrived in ends the
+/// composition it showed for a moment: the OS composition is interrupted, as when the two come in frames of their own.
+/// An editor that shows no marked text is never interrupted for reporting none.
+#[trial]
+fn a_pre_edit_and_a_refused_deletion_in_one_frame_interrupt_the_composition() {
+    let delete_after = || Event::Ime(ImeEvent::DeleteSurrounding { before_chars: 0, after_chars: 1 });
+    for (marks, split) in [(true, false), (true, true), (false, false)] {
+        let mut rig = Rig::with(EditorPurpose::Text, Some(Doc::new("ab", Some(1))), false);
+        rig.doc().marks.set(marks);
+        rig.doc().refuses_after.set(true);
+        rig.focus();
+        let interrupted = if split {
+            rig.frame(vec![preedit("に")]);
+            rig.frame(vec![delete_after()]);
+            rig.ime().interrupt
+        } else {
+            rig.frame(vec![preedit("に"), delete_after()]);
+            rig.ime().interrupt
+        };
+        assert!(!rig.doc().composing.get(), "the probe shows no marked text after the refusal");
+        assert_eq!(interrupted, marks, "marks {marks}, split {split}: the composition is interrupted only by an editor that shows marked text");
     }
 }
 

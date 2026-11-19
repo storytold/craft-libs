@@ -142,7 +142,8 @@ impl EditorHandle {
             ime::note_caret(ctx, self.widget, self.rect, state.caret, masked);
         }
         let surrounding = state.surrounding.as_ref().map(|(epoch, report)| (*epoch, report));
-        ime::note_editor(ctx, self.widget, state.composing, (state.can_undo, state.can_redo), surrounding);
+        let composing = ime::Composing { now: state.composing, shows_marked: state.shows_marked };
+        ime::note_editor(ctx, self.widget, composing, (state.can_undo, state.can_redo), surrounding);
         if state.lines.is_empty() || !text_access::exposed(ctx, self.widget) {
             return None;
         }

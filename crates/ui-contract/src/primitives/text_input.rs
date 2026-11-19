@@ -283,6 +283,11 @@ pub struct EditorState<'a> {
     /// text, a selection, an app edit over the marked text) reports `false` and the OS composition is interrupted;
     /// an editor that shows no marked text reports `false` throughout.
     pub composing: bool,
+    /// The editor draws the marked text of the pre-edits it is given ([`EditorState::marked`]). Such an editor that
+    /// reports `composing: false` while the input method still composes ended the composition itself, even in the pass
+    /// the pre-edit arrived in (a pre-edit and a refused deletion in one frame), and the OS composition is interrupted.
+    /// An editor that shows no marked text leaves it `false`, so the OS composes for it until the commit.
+    pub shows_marked: bool,
     /// Whether undo and redo have something to do; false sends them to the app command (11.3).
     pub can_undo: bool,
     /// Whether redo has something to do.
@@ -324,7 +329,26 @@ impl<'a> EditorState<'a> {
 
     /// A state with no selection, no marked text and nothing to undo.
     pub const fn new(caret: Rect, lines: &'a [EditorLine<'a>], caret_at: TextPos) -> Self {
-        EditorState { caret, lines, caret_at, selection: None, composing: false, can_undo: false, can_redo: false, surrounding: None }
+        EditorState {
+            caret,
+            lines,
+            caret_at,
+            selection: None,
+            composing: false,
+            shows_marked: false,
+            can_undo: false,
+            can_redo: false,
+            surrounding: None,
+        }
+    }
+
+    /// Reports an editor that draws the input method's marked text, `composing` while it shows some
+    /// ([`EditorState::shows_marked`]).
+    #[must_use]
+    pub const fn marked(mut self, composing: bool) -> Self {
+        self.shows_marked = true;
+        self.composing = composing;
+        self
     }
 }
 
