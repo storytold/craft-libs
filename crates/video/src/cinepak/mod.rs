@@ -70,6 +70,22 @@ pub fn check_memory_budget(width: u32, height: u32) -> Result<()> {
     Ok(())
 }
 
+/// Checks that all simultaneously live picture buffers (working, output, and any retained reference
+/// frame, including across dimension changes) fit within [`crate::budget::DECODE_MEMORY_BUDGET`].
+pub fn check_decode_budget(width: u32, height: u32, last_frame: Option<&Frame>) -> Result<()> {
+    let working = picture_bytes(width, height).ok_or(Error::MemoryBudget { width, height })?;
+    let output = working;
+    let old_ref = match last_frame {
+        Some(f) => picture_bytes(f.width, f.height).ok_or(Error::MemoryBudget { width: f.width, height: f.height })?,
+        None => 0,
+    };
+    let total = working.checked_add(output).and_then(|sum| sum.checked_add(old_ref)).ok_or(Error::MemoryBudget { width, height })?;
+    if total > crate::budget::DECODE_MEMORY_BUDGET {
+        return Err(Error::MemoryBudget { width, height });
+    }
+    Ok(())
+}
+
 impl Frame {
     /// Allocate a new, blank frame with the given dimensions, checking the memory budget.
     pub fn new(width: u32, height: u32, is_color: bool) -> Result<Self> {
@@ -153,7 +169,7 @@ impl Decoder {
         if width == 0 || height == 0 {
             return Err(Error::InvalidHeader("width and height must be non-zero"));
         }
-        check_memory_budget(width, height)?;
+        check_decode_budget(width, height, self.last_frame.as_ref())?;
         if num_strips == 0 {
             return Err(Error::InvalidHeader("strip count must be greater than zero"));
         }
@@ -181,9 +197,6 @@ impl Decoder {
         }
 
         let is_key = !has_inter;
-        if is_key {
-            self.last_frame = None;
-        }
         let mut frame = if is_key {
             Frame::new(width, height, false)?
         } else {
@@ -315,7 +328,6 @@ impl Decoder {
         strips.truncate(num_strips);
         frame.is_color = (!is_key && frame.is_color) || strips.iter().any(|s| s.is_color);
         self.strips = strips;
-        self.last_frame = None;
         let out_frame = frame.clone();
         self.last_frame = Some(frame);
         Ok(out_frame)

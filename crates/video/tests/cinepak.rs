@@ -831,6 +831,62 @@ fn test_decode_error_leaves_decoder_state_unchanged() {
     assert!(px2[0] > 200 && px2[2] == 0, "codebook should still be red, got {px2:?}");
 }
 
+#[test]
+fn test_keyframe_decode_error_preserves_reference_frame() {
+    let mut decoder = Decoder::new();
+
+    // 1. Decode a valid initial keyframe: 4x4 red
+    let f0 = build_synthetic_v1_keyframe([72, 72, 72, 72], -37, 91);
+    let frame0 = decoder.decode(&f0).expect("decode f0");
+    assert!(frame0.pixel_rgb(0, 0).expect("pixel")[0] > 200);
+
+    // 2. Attempt to decode a keyframe whose headers are valid but fails during chunk decoding
+    let mut bad_key = Vec::new();
+    bad_key.push(0x00); // keyframe, no inherit
+    let bad_strip_len = 16u16;
+    let bad_total = (10 + bad_strip_len) as u32;
+    bad_key.extend_from_slice(&bad_total.to_be_bytes()[1..4]);
+    bad_key.extend_from_slice(&4u16.to_be_bytes()); // width 4
+    bad_key.extend_from_slice(&4u16.to_be_bytes()); // height 4
+    bad_key.extend_from_slice(&1u16.to_be_bytes()); // 1 strip
+    bad_key.extend_from_slice(&0x1000u16.to_be_bytes()); // intra strip 0x1000
+    bad_key.extend_from_slice(&bad_strip_len.to_be_bytes());
+    bad_key.extend_from_slice(&0u16.to_be_bytes());
+    bad_key.extend_from_slice(&0u16.to_be_bytes());
+    bad_key.extend_from_slice(&4u16.to_be_bytes());
+    bad_key.extend_from_slice(&4u16.to_be_bytes());
+    // Chunk with invalid size (2 < 4) triggers Error::InvalidChunk during decode
+    bad_key.push(0x20);
+    bad_key.extend_from_slice(&2u32.to_be_bytes()[1..4]);
+
+    let err = decoder.decode(&bad_key);
+    assert!(matches!(err, Err(Error::InvalidChunk(_))));
+
+    // 3. Decoder must still retain frame0 as reference.
+    // Decode an inter-frame referencing frame0.
+    let mut f2 = Vec::new();
+    f2.push(0x01);
+    let f2_strip_len = 17u16;
+    let f2_total = (10 + f2_strip_len) as u32;
+    f2.extend_from_slice(&f2_total.to_be_bytes()[1..4]);
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&1u16.to_be_bytes());
+    f2.extend_from_slice(&0x1100u16.to_be_bytes()); // inter strip
+    f2.extend_from_slice(&f2_strip_len.to_be_bytes());
+    f2.extend_from_slice(&0u16.to_be_bytes());
+    f2.extend_from_slice(&0u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.push(0x32);
+    f2.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    f2.push(0);
+
+    let frame2 = decoder.decode(&f2).expect("decode f2 after failed keyframe");
+    let px2 = frame2.pixel_rgb(0, 0).expect("pixel");
+    assert!(px2[0] > 200 && px2[2] == 0, "previous reference must be preserved");
+}
+
 /// One intra strip over rows `y0..y1` of a 4-wide frame: an optional full V1 colour codebook, then a
 /// V1-only vector chunk selecting codebook entry 0.
 fn strip_with_codebook(y0: u16, y1: u16, codebook: Option<([u8; 4], i8, i8)>) -> Vec<u8> {
