@@ -601,12 +601,15 @@ impl Component for FontPicker<'_> {
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.
-    /// In a ribbon the style alone sets its width (`FieldStyle::shortest`): a longer name scrolls
-    /// in the field, as in a word processor's font box.
+    /// In a ribbon the name field is the short field length (`size.length.short`) wide whichever family it shows, a
+    /// longer name scrolling in it as in a word processor's font box: that is its least, about the old ribbon's font
+    /// name, so a row short of room never narrows the box to its menu arrow; where the room allows the style holds
+    /// the box at the small field length (`FieldStyle::held_at`).
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let current = cx.value().map_or("", String::as_str);
         let widest = [NAME_SAMPLE, current].into_iter().map(|text| cx.field_text(&TextRun::new(text))).fold(Vec2::ZERO, Vec2::max);
-        let widest = if cx.env.get::<ControlPlace>() == ControlPlace::Ribbon { Vec2::new(0.0, widest.y) } else { widest };
+        let ribbon = cx.env.get::<ControlPlace>() == ControlPlace::Ribbon;
+        let widest = if ribbon { Vec2::new(cx.tokens.size.length.short, widest.y) } else { widest };
         let name = cx.words::<FontPickerWords>().list.clone();
         let note = self.missing_note(current, &cx.words::<MissingFontsWords>());
         Vec2::new(widest.x + reserve(cx.style, &[], &Self::trailing(name, note.is_some())), widest.y)

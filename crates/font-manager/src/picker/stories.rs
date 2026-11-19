@@ -89,7 +89,8 @@ fn font_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// The plain font box in a ribbon group's place (`ControlPlace::Ribbon`): held at the small field length whichever
-/// family it shows, as a word processor's ribbon font box is.
+/// family it shows, as a word processor's ribbon font box is; a row short of room narrows it no further than a name
+/// field the short field length wide and its arrow.
 #[story(FontPicker<'static>, covers = [], title = "In a ribbon")]
 fn font_picker_in_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let extras = Extras { kind: FontPickerKind::Plain, ..Extras::default() };

@@ -400,6 +400,11 @@ impl<'b> BodyHooks<'b> {
         } else {
             inner.width()
         };
+        // A measure with no room limit along x offers an unbounded width. Left to right the body runs from its start
+        // edge to +inf as egui allows; right to left its start edge is the right one, and an unbounded width would put
+        // its left edge at -inf and every rect laid out from it at NaN. It is as wide as a scrolling region there, as
+        // the measuring rect is (`measure_run`).
+        let width = if rtl && !width.is_finite() { crate::contract::MAX_EXTENT } else { width };
         let (left, right) = if rtl { (inner.max.x - width, inner.max.x) } else { (inner.min.x, inner.min.x + width) };
         let band = |top: f32, bottom: f32| Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom.max(top)));
         let header_top = inner.min.y + self.rules.above;
