@@ -273,34 +273,39 @@ fn a_startup_modal_waits_for_the_open_dialogs_and_opens_in_stage_order() {
     assert!(host.borrow().is_open::<Probe<4>>(), "the update opens after the warning");
 }
 
-/// On macOS Cmd+D answers Don't Save on the unsaved-changes question and the app sees no press; Linux has no such
-/// chord.
+/// The platform's chords answer Don't Save on the unsaved-changes question and the app sees no press: Cmd+D on
+/// macOS, Alt with the button's letter ("No") on Linux. Linux has no Ctrl+D, and macOS no Alt chord.
 #[trial]
-fn cmd_d_answers_dont_save_on_macos() {
-    for (os, answers) in [(Os::Mac, true), (Os::Linux, false)] {
+fn the_platform_chords_answer_dont_save() {
+    let cases = [
+        (Os::Mac, egui::Key::D, Modifiers::COMMAND, true),
+        (Os::Linux, egui::Key::D, Modifiers::COMMAND, false),
+        (Os::Linux, egui::Key::N, Modifiers::ALT, true),
+        (Os::Mac, egui::Key::D, Modifiers::ALT, false),
+    ];
+    for (os, key, mods, answers) in cases {
         let host = Rc::new(RefCell::new(DialogHost::new()));
-        let app_saw_d = Rc::new(Cell::new(false));
-        let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_d));
+        let app_saw_key = Rc::new(Cell::new(false));
+        let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_key));
         let mut fixture = Fixture::new(move |ui| {
-            let pressed =
-                ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::D, pressed: true, .. })));
+            let pressed = ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: k, pressed: true, .. } if *k == key)));
             saw.set(saw.get() || pressed);
             shown.borrow_mut().run(ui);
         });
         fixture.os(os);
         host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "poster.psd"));
         fixture.idle(6);
-        fixture.key(egui::Key::D, Modifiers::COMMAND).idle(4);
+        fixture.key(key, mods).idle(4);
         let result = host.borrow_mut().take::<UnsavedChangesDialog>();
         if answers {
             assert_eq!(
                 result.and_then(DialogResult::ok).map(|answer| answer.answer),
                 Some(CloseAnswer::DontSave),
-                "{os:?}: Cmd+D answers Don't Save"
+                "{os:?}: {mods:?}+{key:?} answers Don't Save"
             );
-            assert!(!app_saw_d.get(), "{os:?}: the press reaches nothing but the question");
+            assert!(!app_saw_key.get(), "{os:?}: the press reaches nothing but the question");
         } else {
-            assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: Ctrl+D leaves the question open");
+            assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: {mods:?}+{key:?} leaves the question open");
         }
     }
 }

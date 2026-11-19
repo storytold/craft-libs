@@ -53,6 +53,9 @@ const DONE_BUTTON: usize = 2;
 /// The image box of the preview.
 const IMAGE: PartKey = PartKey::new("image");
 
+/// The message a preview shows instead of a sheet.
+const MESSAGE: PartKey = PartKey::new("message");
+
 /// How far a crop or registration mark stands from the image box, and how long it is, in screen points.
 const MARK_GAP: f32 = 4.0;
 const MARK_LEN: f32 = 10.0;
@@ -472,7 +475,14 @@ impl Component for PrintPreview<'_> {
         }
     }
 
+    /// The image box is a button; a message standing in for the sheet is a text node with the message.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let SheetContent::Message(message) = &self.sheet.content {
+            let node = access.node(MESSAGE, Role::LABEL);
+            node.name = Name::Text(cx.env.resolve(message).as_str().to_owned());
+            node.bounds(cx.rect);
+            return;
+        }
         if self.sheet.image_box().is_none() {
             return;
         }

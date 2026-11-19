@@ -15,7 +15,7 @@ use crate::runtime::keys;
 use crate::style::{ComponentStyle, GlyphRole, RuleKind, StyleCx};
 use craft_behavior::{Insets, Metrics, OwnerClass, Sense};
 use craft_host::target::Os;
-use craft_keymap::{Chord, Key};
+use craft_keymap::{Chord, Key, Mods};
 use craft_theme::{
     Variant,
     variant::{Emphasis, Tone},
@@ -427,8 +427,9 @@ impl FooterButton {
         FooterButton { label: label.into(), role, letter: None, chord: None, enabled: true, disabled_reason: None, tooltip: None, stays_open: false }
     }
 
-    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. The
-    /// button reports it as its `access_key`.
+    /// The letter that activates the button while its dialog holds focus and no text part owns the keys. On Windows
+    /// and Linux, Alt with the letter also activates it while its dialog is the top modal, whatever has the focus. The
+    /// button reports the letter as its `access_key`.
     #[must_use]
     pub const fn letter(mut self, letter: char) -> Self {
         self.letter = Some(letter);
@@ -624,11 +625,12 @@ impl FooterBar {
                 let lettered = letters_reach_footer(&ctx);
                 // A text part does not own modified chords, so a focused field does not stop a button's chord.
                 let chorded = crate::runtime::overlay::drawing_top_modal(&ctx);
+                let os = crate::runtime::windows::os_of(&ctx);
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
                 let place = |ui: &mut Ui, shown: &mut Shown| {
-                    for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
+                    for at in display_order(&roles, os == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {
                             DialogRole::Accept => Variant::PRIMARY,
@@ -656,9 +658,14 @@ impl FooterBar {
                         // The capture, renewed each pass, holds the chord from every other component from the next input
                         // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
                         // left and does not press the button again.
-                        let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
+                        // Windows and Linux dialogs also take Alt with the letter, as their mnemonics do; on macOS Option
+                        // with a letter types a character.
+                        let key = button.letter.and_then(Key::from_char);
+                        let letter = key.map(Chord::plain).filter(|_| lettered);
+                        let alt = key.map(|key| Chord::new(Mods::ALT, key)).filter(|_| chorded && os != Os::Mac);
                         let modified = button.chord.filter(|_| chorded);
-                        for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
+                        let chords = letter.into_iter().chain(alt).chain(modified);
+                        for chord in chords.filter(|_| button.enabled && !ui.is_sizing_pass()) {
                             keys::capture(&ctx, owner, chord);
                             if keys::take_claimed(&ctx, owner, chord) {
                                 shown.picked = Some(at);

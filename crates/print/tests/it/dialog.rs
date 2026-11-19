@@ -330,6 +330,24 @@ fn a_sheet_of_pages_places_each_page_inside_the_paper() {
     assert!(!number.clip.contains(reach), "the overhang past the paper is not shown");
 }
 
+/// A message standing in for the sheet is read out as text where it is painted, inside the preview.
+#[trial]
+fn a_message_in_place_of_the_sheet_is_in_the_access_tree() {
+    const WHY: &str = "The page range selects no pages.";
+    let mut settings = Settings::default();
+    let mut fields = DialogFields::default();
+    let printers = vec![Printer::new("Office")];
+    let mut fixture = Fixture::new(move |ui| {
+        let sheet = PrintSheet::message(LETTER, WHY.into(), "No pages".into());
+        let _ = PrintDialog::new(Bind::bound(&mut settings), &printers, Bind::bound(&mut fields), &sheet).layout(PrintLayout::Document).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    fixture.settle();
+    let room = fixture.by_label("Print preview image").expect("the preview is in the access tree").rect;
+    let message = fixture.by_label(WHY).expect("the message is in the access tree");
+    assert!(room.expand(0.5).contains_rect(message.rect), "the message {:?} is read where the preview {room:?} paints it", message.rect);
+}
+
 /// Properties… on a hosted print dialog is filed in the pass that receives the press and taken once, in a frame that
 /// runs twice too: a press taken again, or lost to the second pass, leaves the app opening the driver's options twice
 /// or never.

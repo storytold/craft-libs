@@ -313,12 +313,13 @@ impl Annotation {
 }
 
 impl Annotation {
-    /// The box the annotation takes on the page: its `rect`, except for the icon kinds (Note,
-    /// Attachment, Caret), which take an `icon_side` square at the rect's corner. `icon_side` is
-    /// the icon's side in page units at the current zoom.
+    /// The box the annotation takes on the page: its `rect`, which the icon kinds (Note,
+    /// Attachment, Caret) unite with the `icon_side` square drawn at the rect's corner, so the
+    /// whole drawn icon and the whole rect both count. `icon_side` is the icon's side in page
+    /// units at the current zoom.
     pub fn extent(&self, icon_side: f64) -> Rect {
-        if matches!(self.kind, AnnotationKind::Note | AnnotationKind::Attach | AnnotationKind::Caret) {
-            Rect::from_origin_size(self.rect.origin(), (icon_side, icon_side))
+        if self.kind.is_fixed_size() {
+            self.rect.abs().union(Rect::from_origin_size(self.rect.origin(), (icon_side, icon_side)))
         } else {
             self.rect
         }

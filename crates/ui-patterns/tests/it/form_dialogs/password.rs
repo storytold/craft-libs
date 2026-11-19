@@ -2,6 +2,9 @@
 
 use craft_ui::patterns::form_dialogs::{PasswordDialog, PasswordPurpose};
 use craft_ui::testing::{Fixture, trial};
+use egui::Modifiers;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn focused_on(fixture: &Fixture, label: &str) -> bool {
     let focused = craft_ui::testing::access::focused_key(fixture.tree());
@@ -19,6 +22,33 @@ fn the_reveal_button_hands_the_focus_back_to_the_field() {
     fixture.click(&reveal).idle(4);
     assert!(fixture.by_label("Hide password").is_some(), "the press revealed the text");
     assert!(focused_on(&fixture, "Password"), "the field has the focus back, so typing goes on");
+}
+
+/// Enter in the field answers Open with the typed password; a new password answers only once both entries match.
+#[trial]
+fn enter_in_the_field_answers_while_the_entries_are_valid() {
+    for (purpose, retyped, answers) in
+        [(PasswordPurpose::open("poster.pdf"), None, true), (PasswordPurpose::Set, Some("other"), false), (PasswordPurpose::Set, Some("secret"), true)]
+    {
+        let answer = Rc::new(RefCell::new(None));
+        let seen = Rc::clone(&answer);
+        let mut fixture = Fixture::new(move |ui| {
+            let shown = PasswordDialog::new(purpose.clone()).show(ui);
+            if let Some(given) = shown.answer {
+                *seen.borrow_mut() = Some(given.secret.expose().to_owned());
+            }
+        });
+        fixture.idle(30);
+        fixture.type_text("secret").idle(2);
+        if let Some(retyped) = retyped {
+            let field = fixture.by_label("Re-type Password").expect("a new password is typed twice");
+            fixture.click(&field).idle(2);
+            fixture.type_text(retyped).idle(2);
+        }
+        fixture.key(egui::Key::Enter, Modifiers::NONE).idle(4);
+        let expected = answers.then(|| "secret".to_owned());
+        assert_eq!(*answer.borrow(), expected, "Enter after {retyped:?}");
+    }
 }
 
 /// The strength meter's fill and the top of its range: the fill grows with the rating and Strong reaches the top.
