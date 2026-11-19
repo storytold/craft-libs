@@ -374,6 +374,12 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
         || (layer, root, clip, shapes.clone()),
         |ctx, (layer, root, clip, shapes)| record_shapes(ctx, *layer, *root, *clip, shapes.iter().cloned()),
     );
+    add_shapes_in(ctx, viewport, layer, root, clip, shapes);
+}
+
+/// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
+/// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
+pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
