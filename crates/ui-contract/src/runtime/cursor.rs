@@ -2,7 +2,7 @@
 //! painted winner reaches the window as its cursor image where the window shows one.
 
 use crate::primitives::pointer_art::{self as pointers, Art};
-use crate::primitives::{IconSet, Mirror, SvgIcon};
+use crate::primitives::{Mirror, SvgIcon};
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::env::Env;
 use crate::runtime::frame::PerViewport;
@@ -90,7 +90,7 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
         PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
         PaintedCursor::Tool { icon, hotspot, badge, .. } => {
             let side = env.tokens.size.icon.md;
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
             pointers::tool(&pen, icon, *hotspot, *badge, side);
         }
         PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
@@ -105,7 +105,7 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
         PaintedCursor::PointerTool { pointer, icon, .. } => {
             // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
             let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
             pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
         }
         // `Hidden` has no marks.
