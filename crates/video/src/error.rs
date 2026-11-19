@@ -1,0 +1,73 @@
+//! [`VideoError`], the error of the codec-agnostic layer ([`crate::TrackDecoder`]).
+
+use crate::frame::FrameError;
+
+/// Errors from the codec-agnostic layer.
+///
+/// Codec errors convert into it, so code mixing [`crate::TrackDecoder`] with the codec modules can
+/// use `?` throughout: a codec's "unsupported" stays [`VideoError::Unsupported`], anything else in
+/// the input is [`VideoError::Malformed`]. The message starts with the codec's name.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub enum VideoError {
+    /// The codec, or a feature of the stream, is valid but not supported (or its decoder is not
+    /// in this build).
+    #[error("unsupported video: {0}")]
+    Unsupported(String),
+    /// The input is corrupt or not what it claims to be.
+    #[error("malformed video: {0}")]
+    Malformed(String),
+    /// A decoded picture did not convert into a [`crate::frame::VideoFrame`].
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+}
+
+#[cfg(feature = "h264-decode")]
+impl From<crate::h264::decode::Error> for VideoError {
+    fn from(e: crate::h264::decode::Error) -> Self {
+        match e {
+            crate::h264::decode::Error::Unsupported(_) => VideoError::Unsupported(format!("H.264: {e}")),
+            _ => VideoError::Malformed(format!("H.264: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "hevc-decode")]
+impl From<crate::hevc::decode::Error> for VideoError {
+    fn from(e: crate::hevc::decode::Error) -> Self {
+        match e {
+            crate::hevc::decode::Error::Unsupported(_) => VideoError::Unsupported(format!("HEVC: {e}")),
+            _ => VideoError::Malformed(format!("HEVC: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "vp9-decode")]
+impl From<crate::vp9::decode::Error> for VideoError {
+    fn from(e: crate::vp9::decode::Error) -> Self {
+        match e {
+            crate::vp9::decode::Error::Unsupported(_) => VideoError::Unsupported(format!("VP9: {e}")),
+            _ => VideoError::Malformed(format!("VP9: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "av1-decode")]
+impl From<crate::av1::decode::Error> for VideoError {
+    fn from(e: crate::av1::decode::Error) -> Self {
+        match e {
+            crate::av1::decode::Error::Unsupported(_) => VideoError::Unsupported(format!("AV1: {e}")),
+            _ => VideoError::Malformed(format!("AV1: {e}")),
+        }
+    }
+}
+
+#[cfg(feature = "mpeg2-decode")]
+impl From<crate::mpeg2::Error> for VideoError {
+    fn from(e: crate::mpeg2::Error) -> Self {
+        match e {
+            crate::mpeg2::Error::Unsupported(_) => VideoError::Unsupported(format!("MPEG-2: {e}")),
+            crate::mpeg2::Error::Invalid(_) => VideoError::Malformed(format!("MPEG-2: {e}")),
+        }
+    }
+}
