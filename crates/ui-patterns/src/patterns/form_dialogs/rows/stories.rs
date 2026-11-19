@@ -24,7 +24,7 @@ fn patterns() -> Vec<PresetRow<String>> {
 }
 
 /// One row of every kind the rows show, a section, a row that waits for a check box, a row with a unit menu, a
-/// multi-line text row, a searchable choice, a radio row with a disabled option, a radio row with its options in a row,
+/// multi-line text row, a text row forty characters wide, a searchable choice, a radio row with a disabled option, a radio row with its options in a row,
 /// a blend row, a pattern row, a files row in folder mode and a section of read-only rows.
 fn params() -> Vec<Param> {
     let mut params = Param::parse_list(SPEC);
@@ -61,6 +61,7 @@ fn params() -> Vec<Param> {
     params.push(Param::new("sharpen", "Sharpen", ParamKind::bool(false)));
     params.push(Param::new("amount", "Amount", ParamKind::range(0.0, 100.0, 50.0, Default::default())).enabled_when("sharpen", true));
     params.push(Param::new("notes", "Notes", ParamKind::text("")).multiline(3));
+    params.push(Param::new("caption", "Caption", ParamKind::text("CONFIDENTIAL")).field_chars(40));
     params.push(Param::section("Camera Data"));
     params.push(Param::read_only_text("make", "Make", "Canon"));
     params.push(Param::read_only_text("exposure", "Exposure", "1/250 s at f/8"));

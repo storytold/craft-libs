@@ -136,6 +136,21 @@ fn text_field_adorned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into()
 }
 
+/// Fields that ask for a width in characters over the field length: a short one, the field length, and a wide one
+/// (a watermark's text), one over the other so their ends show the difference.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
+fn text_field_width_chars(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut text = data.value("text", "CONFIDENTIAL".to_owned()).clone();
+    let shown = Stack::new().show(ui, |ui, _| {
+        let short = TextField::new("Short, 12 characters", Bind::bound(&mut text)).width_chars(12).show(ui);
+        TextField::new("Field length", Bind::bound(&mut text)).show(ui);
+        TextField::new("Wide, 40 characters", Bind::bound(&mut text)).width_chars(40).show(ui);
+        short
+    });
+    *data.value("text", String::new()) = text;
+    shown.inner.map(StoryOutput::from).unwrap_or_default()
+}
+
 const NOTES: &str = "Shot list\nGolden hour, wide\nDetail of the hands\nThe crowd at the gate\nClosing frame on the sign";
 
 /// A multi-line field that grows to four lines and then scrolls, and one that fills its room, both over one text and
