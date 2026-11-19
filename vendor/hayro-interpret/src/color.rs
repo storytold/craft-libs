@@ -1225,8 +1225,9 @@ struct ICCColorRepr {
     /// [`CmykSimulation`]'s own profile from one in another.
     digest: u128,
     /// PdfCraft patch (36): the transform into the separation hub (see [`Hub`]), made on first
-    /// use; `None` when the profile doesn't convert to it.
-    to_hub: OnceLock<Option<Arc<TransformF32Executor>>>,
+    /// use; `None` when the profile doesn't convert to it. Craft patch (rendering intent): one
+    /// per intent, by [`RenderIntent::index`].
+    to_hub: [OnceLock<Option<Arc<TransformF32Executor>>>; 4],
 }
 
 #[derive(Clone)]
@@ -1297,26 +1298,34 @@ impl ICCProfile {
             transform_u8,
             transform_f32: OnceLock::new(),
             digest,
-            to_hub: OnceLock::new(),
+            to_hub: Default::default(),
         })))
     }
 
     /// PdfCraft patch (36): `input` (whole colors of this profile's components) as XYZ
     /// relative to [`PCS_WHITE`], three values per color in `xyz`, through the separation hub
     /// (see [`Hub`]). L*a*b* components are scaled to the profile's encoding unless
-    /// `manual_scale` says they already are (an Indexed palette's).
-    fn to_pcs(&self, input: &[f32], manual_scale: bool, xyz: &mut [f32]) -> Option<()> {
+    /// `manual_scale` says they already are (an Indexed palette's). Craft patch (rendering
+    /// intent): through the profile's tables for `intent`, else relative colorimetric.
+    fn to_pcs(
+        &self,
+        intent: RenderIntent,
+        input: &[f32],
+        manual_scale: bool,
+        xyz: &mut [f32],
+    ) -> Option<()> {
         let transform = self
             .0
             .to_hub
+            .get(intent.index())?
             .get_or_init(|| {
-                transform_f32(
+                transform_f32_with(
+                    intent,
                     &self.0.src_profile,
                     self.0.src_layout,
                     &HUB.profile,
                     Layout::Rgb,
                 )
-                .map(|(transform, _)| transform)
             })
             .as_ref()?;
         let n = self.0.number_components;
@@ -1719,6 +1728,25 @@ impl RenderIntent {
             _ => Self::RelativeColorimetric,
         }
     }
+
+    /// A different index, `0..4`, for each intent.
+    fn index(self) -> usize {
+        match self {
+            Self::Perceptual => 0,
+            Self::RelativeColorimetric => 1,
+            Self::Saturation => 2,
+            Self::AbsoluteColorimetric => 3,
+        }
+    }
+
+    fn moxcms(self) -> RenderingIntent {
+        match self {
+            Self::Perceptual => RenderingIntent::Perceptual,
+            Self::RelativeColorimetric => RenderingIntent::RelativeColorimetric,
+            Self::Saturation => RenderingIntent::Saturation,
+            Self::AbsoluteColorimetric => RenderingIntent::AbsoluteColorimetric,
+        }
+    }
 }
 
 struct SimulationRepr {
@@ -1990,6 +2018,27 @@ fn transform_f32(
     })
 }
 
+/// Craft patch (rendering intent): a transform from `source` to `destination` with `intent`,
+/// else as [`transform_f32`].
+fn transform_f32_with(
+    intent: RenderIntent,
+    source: &ColorProfile,
+    source_layout: Layout,
+    destination: &ColorProfile,
+    destination_layout: Layout,
+) -> Option<Arc<TransformF32Executor>> {
+    let options = TransformOptions {
+        rendering_intent: intent.moxcms(),
+        ..TransformOptions::default()
+    };
+    source
+        .create_transform_f32(source_layout, destination, destination_layout, options)
+        .ok()
+        .or_else(|| {
+            transform_f32(source, source_layout, destination, destination_layout).map(|(t, _)| t)
+        })
+}
+
 /// PdfCraft patch (36): as [`transform_f32`], for bytes.
 fn transform_u8(
     source: &ColorProfile,
@@ -2148,7 +2197,7 @@ impl ColorSpace {
                     conversion.from_pcs_xyz_with(simulation.1, rgb, cmyk)?;
                 }
                 ColorSpaceType::ICCBased(icc) if self.simulated_by(simulation) => {
-                    icc.to_pcs(input, manual_scale, rgb)?;
+                    icc.to_pcs(simulation.1, input, manual_scale, rgb)?;
                     conversion.from_pcs_xyz_with(simulation.1, rgb, cmyk)?;
                 }
                 _ => return None,

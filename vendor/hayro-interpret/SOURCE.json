@@ -182,7 +182,7 @@
       "path": "src/color.rs",
       "source_sha256": "799ce29bb5e59c8fc94db202873e48c2047dd35962e6f26efd215156c47158c1",
       "source_git_blob": "56bb04f24c04ba33ab6bf99c02a24735670959ad",
-      "sha256": "6dd4835d474f515db4f115ffc2271b417ff1b4c55d202e39a666a6fb5482f58e"
+      "sha256": "ca90a834863c3605b2732ff7a6c615c62c1651654ac3198f8e582b4e5f2bd7c9"
     },
     {
       "path": "src/context.rs",

@@ -708,3 +708,37 @@ fn a_shading_converts_with_the_rendering_intent() {
     let got = Process::ALL.map(|p| tint(&t, ink(p)));
     assert!(near(got, perceptual, 1e-4), "{got:?}, want {perceptual:?}");
 }
+
+/// An ICCBased CMYK space whose perceptual and colorimetric A2B tables are `perceptual` and
+/// `colorimetric`, built from craft-cms's synthetic coated CMYK profile.
+fn icc_cmyk_object(perceptual: &craft_cms::profile::Lut, colorimetric: &craft_cms::profile::Lut) -> String {
+    let mut profile = Builtin::CoatedCmyk.profile().clone();
+    profile.a2b = [Some(perceptual.clone()), Some(colorimetric.clone()), Some(colorimetric.clone())];
+    let bytes = profile.with_encoded_bytes().to_bytes();
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+    stream("/N 4 /Filter /ASCIIHexDecode", &format!("{hex}>"))
+}
+
+#[test]
+fn an_icc_source_converts_with_the_rendering_intent() {
+    let coated = Builtin::CoatedCmyk.profile().a2b[1].clone().unwrap();
+    let fogra = Builtin::CoatedFogra39.profile().a2b[1].clone().unwrap();
+    // Profile 1 has different perceptual and colorimetric tables; profiles 2 and 3 have only
+    // its perceptual and only its colorimetric one.
+    let objects = [icc_cmyk_object(&fogra, &coated), icc_cmyk_object(&fogra, &fogra), icc_cmyk_object(&coated, &coated)];
+    let fills = |intent: &str| {
+        let content = format!(
+            "/{intent} ri /C1 cs 0.2 0.4 0.6 0.1 sc 0 0 10 10 re f \
+             /C2 cs 0.2 0.4 0.6 0.1 sc 20 0 10 10 re f /C3 cs 0.2 0.4 0.6 0.1 sc 40 0 10 10 re f"
+        );
+        let resources = "/ColorSpace << /C1 [/ICCBased 5 0 R] /C2 [/ICCBased 6 0 R] /C3 [/ICCBased 7 0 R] >>";
+        let got = fill_tints(&read(&raw_pdf(&content, resources, &objects)).0);
+        assert_eq!(got.len(), 3);
+        (got[0], got[1], got[2])
+    };
+    let (mixed, perceptual, colorimetric) = fills("Perceptual");
+    assert!(!near(perceptual, colorimetric, 0.02), "the tables must differ for this test: {perceptual:?} {colorimetric:?}");
+    assert!(near(mixed, perceptual, 1e-4), "perceptual: {mixed:?}, want {perceptual:?}");
+    let (mixed, _, colorimetric) = fills("RelativeColorimetric");
+    assert!(near(mixed, colorimetric, 1e-4), "relative colorimetric: {mixed:?}, want {colorimetric:?}");
+}
