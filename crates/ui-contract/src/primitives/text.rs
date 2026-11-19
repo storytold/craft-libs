@@ -922,7 +922,7 @@ impl ReadingMeasure {
 #[cfg(feature = "testing")]
 mod memo_tests {
     use super::{
-        Arc, Color32, Context, Cow, Direction, HAlign, LayoutRun, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UiTokens, Wrap, with_memo,
+        Arc, Context, Cow, Direction, HAlign, LayoutRun, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UiTokens, Wrap, with_memo,
     };
     use crate::testing::trial;
     use craft_theme::{Appearance, Contrast, Mode, Size, TextSize, builtins, resolve};
@@ -934,7 +934,12 @@ mod memo_tests {
         let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
         let ctx = Context::default();
         let mut output = ctx.run_pass(Default::default(), |ctx| {
-            let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: Color32::WHITE, fonts: StackFacts::default() };
+            let env = TextEnv {
+                tokens: &tokens,
+                direction: Direction::Ltr,
+                ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
+                fonts: StackFacts::default(),
+            };
             let run = TextRun::new("a label long enough to elide").elide();
             let first = run.layout(ctx, &env, 80.0);
             let second = run.layout(ctx, &env, 80.0);
@@ -1001,7 +1006,7 @@ mod memo_tests {
             changed.spans[0].strong = true;
             variants.push(changed);
             let mut changed = run.clone();
-            changed.color = Some(StyleColor(Color32::BLUE));
+            changed.color = Some(StyleColor(crate::style::rgba_color(tokens.tokens().color.text.muted)));
             variants.push(changed);
             let mut changed = run.clone();
             changed.role = TypeRole::Body;
@@ -1026,7 +1031,8 @@ mod memo_tests {
             }
             let rtl = TextEnv { direction: Direction::Rtl, ..env };
             let _ = run.layout(ctx, &rtl, 80.0);
-            let ink = TextEnv { ink: Color32::RED, ..env };
+            let ink = TextEnv { ink: crate::style::rgba_color(tokens.tokens().color.text.muted), ..env };
+            assert_ne!(ink.ink, env.ink);
             let _ = run.layout(ctx, &ink, 80.0);
             let fonts = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
             let _ = run.layout(ctx, &fonts, 80.0);
@@ -1060,7 +1066,12 @@ mod memo_tests {
         let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
         let ctx = Context::default();
         let run = TextRun::new("the initial label for the cache trial").wrap(Wrap::Wrap);
-        let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: Color32::WHITE, fonts: StackFacts::default() };
+        let env = TextEnv {
+            tokens: &tokens,
+            direction: Direction::Ltr,
+            ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
+            fonts: StackFacts::default(),
+        };
         let mut output = ctx.run_pass(Default::default(), |ctx| {
             let _ = run.layout(ctx, &env, 80.0);
             let _ = run.layout(ctx, &env, 120.0);
@@ -1077,9 +1088,10 @@ mod memo_tests {
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), before + 2);
         });
         output.textures_delta.clear();
-        ctx.set_pixels_per_point(2.0);
+        let scale = 2.0;
+        ctx.set_pixels_per_point(scale);
         let mut output = ctx.run_pass(Default::default(), |ctx| {
-            assert_eq!(ctx.pixels_per_point(), 2.0);
+            assert_eq!(ctx.pixels_per_point(), scale);
             let _ = run.layout(ctx, &env, 80.0);
             let after = with_memo(ctx, |memo| memo.order.len());
             let _ = run.layout(ctx, &env, 80.0);
