@@ -462,7 +462,7 @@ fn the_inspected_card_replays_with_the_record_of_its_run() {
         catalog
             .stories_of(CHECKBOX)
             .iter()
-            .filter_map(|story| craft_ui::runtime::inspect::recorded(fixture.ctx(), region_key(PanelId::Overview, *story)))
+            .filter_map(|story| craft_ui::runtime::inspect::recorded(fixture.ctx(), region_key(&PanelId::Overview, *story)))
             .collect()
     };
     let ran = records(&fixture);

@@ -179,15 +179,8 @@ impl Card<'_> {
     /// Shows the card in the room `ui` offers, with the states of its stories: a memoized view, which replays its last
     /// run until the card, a state of its stories or what it shows around it changes. A replay reports no events.
     pub fn show(&self, ui: &mut Ui, cells: &mut Cells) -> CardEvents {
-        for story in self.stories {
-            cells.entry(story.index).or_default();
-        }
-        let mut states: Vec<(usize, &mut CardState)> = cells
-            .iter_mut()
-            .filter(|(index, _)| self.stories.iter().any(|story| story.index == **index))
-            .map(|(index, state)| (*index, state))
-            .collect();
-        states.sort_unstable_by_key(|(index, _)| *index);
+        let indices: Vec<usize> = self.stories.iter().map(|story| story.index).collect();
+        let states = cells.states_of(&indices);
         let mut sent = Vec::new();
         let props = CardProps { card: self, states, events: Outbox::new(&mut sent) };
         let rect = MemoView::new(("gallery.card", &self.key), props, card_view).show(ui).flatten();
@@ -294,7 +287,7 @@ impl Card<'_> {
             look: self.look,
             gated: self.gated,
             caption: caption.map(str::to_owned),
-            inspect: self.inspect.map(|inspected| (region_key(inspected.tab, story.index), inspected.layers)),
+            inspect: self.inspect.as_ref().map(|inspected| (region_key(&inspected.tab, story.index), inspected.layers)),
             ..StoryBody::new(key, story.story, self.surface, self.room, Pad::None)
         }
     }

@@ -3,6 +3,7 @@
 use super::catalog::{Catalog, ComponentInfo, fold_filter};
 use craft_ui::contract::{Catalog as Levels, CatalogEntry, Level};
 use craft_ui::testing::{StoryData, StorySnapshot};
+use std::collections::BTreeMap;
 
 /// Whether a story's dialog is closed behind its button.
 #[derive(Clone, Copy, Debug, Default)]
@@ -38,12 +39,55 @@ pub struct CardState {
 /// write the card's own run makes moves the key, so the card runs once more and then replays.
 impl craft_ui::contract::MemoProps for &mut CardState {
     fn key(&self, key: &mut craft_ui::contract::MemoKey) {
-        let DialogState { known, hidden, shown, painted } = self.dialog;
-        (self.data.revision(), self.start.is_some(), (known, hidden, shown, painted), self.resets).key(key);
+        self.feed(key);
+    }
+}
+
+/// What each shown story keeps between frames, by story index, in index order.
+#[derive(Default)]
+pub struct Cells(BTreeMap<usize, CardState>);
+
+impl Cells {
+    /// The state of the story at catalog index `index`, made fresh the first time it is asked for.
+    pub fn state_of(&mut self, index: usize) -> &mut CardState {
+        self.0.entry(index).or_default()
+    }
+
+    /// The states of the stories at `indices`, in index order, each made fresh the first time it is asked for.
+    pub fn states_of(&mut self, indices: &[usize]) -> Vec<(usize, &mut CardState)> {
+        for &index in indices {
+            self.0.entry(index).or_default();
+        }
+        self.0.iter_mut().filter(|(index, _)| indices.contains(index)).map(|(index, state)| (*index, state)).collect()
+    }
+
+    /// Forgets every story's state.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+/// A view's view of every shown story's state, as one digest of each state's key (`&mut CardState`) in index order: the
+/// key stays a fixed size at any number of cells. Computing it walks the cells once per pass of the view that holds it.
+impl craft_ui::contract::MemoProps for &mut Cells {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        let mut cells = craft_ui::contract::MemoKey::new();
+        for (index, state) in &self.0 {
+            index.key(&mut cells);
+            state.feed(&mut cells);
+        }
+        cells.finish().key(key);
     }
 }
 
 impl CardState {
+    /// Feeds what a view shows from the state into `key`: the `&mut CardState` key.
+    fn feed(&self, key: &mut craft_ui::contract::MemoKey) {
+        use craft_ui::contract::MemoProps as _;
+        let DialogState { known, hidden, shown, painted } = self.dialog;
+        (self.data.revision(), self.start.is_some(), (known, hidden, shown, painted), self.resets).key(key);
+    }
+
     /// Whether the story's values differ from the ones it started with.
     pub fn changed(&self) -> bool {
         self.start.as_ref().is_some_and(|start| !self.data.changed_since(start).is_empty())

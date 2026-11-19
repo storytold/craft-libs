@@ -1,6 +1,6 @@
 //! What the viewer lists: every registered story, grouped by the component it shows.
 
-use craft_ui::contract::{self, Level, Probe, Registration};
+use craft_ui::contract::{self, Level, MemoKey, MemoProps, Probe, Registration, Tracked};
 use craft_ui::testing::{StoryRegistration, stories};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -169,7 +169,8 @@ pub fn components(entries: &[Entry]) -> Vec<ComponentInfo> {
     out
 }
 
-/// Every registered story, the components they show and what the registrations say about each type.
+/// Every registered story, the components they show and what the registrations say about each type. Fixed once
+/// built: a memoized view that reads it keys on its source, never on its contents.
 #[non_exhaustive]
 pub struct Catalog {
     /// The stories, ordered by type then story name.
@@ -180,6 +181,15 @@ pub struct Catalog {
     pub declared: HashMap<&'static str, Declared>,
     /// Each component's place in `components` and the catalog indices of its stories, in the order of its `stories`.
     by_type: HashMap<&'static str, (usize, Vec<usize>)>,
+    /// A revision source unique to this catalog: what its readers' keys hold of it.
+    source: Tracked<()>,
+}
+
+/// By the catalog's source: a catalog does not change once built, so two catalogs with one source are one catalog.
+impl MemoProps for Catalog {
+    fn key(&self, key: &mut MemoKey) {
+        self.source.key(key);
+    }
 }
 
 impl Catalog {
@@ -204,7 +214,13 @@ impl Catalog {
                 stories.push(at);
             }
         }
-        Catalog { entries, components, declared, by_type }
+        Catalog { entries, components, declared, by_type, source: Tracked::new(()) }
+    }
+
+    /// The catalog's own copy of the registered name `name`, when it lists that component: the name a saved layout or
+    /// setting resolves to.
+    pub fn component_named(&self, name: &str) -> Option<&'static str> {
+        self.by_type.get_key_value(name).map(|(type_name, _)| *type_name)
     }
 
     /// The component registered as `type_name`.
