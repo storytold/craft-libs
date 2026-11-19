@@ -33,3 +33,34 @@ fn a_minimized_group_runs_no_body() {
     assert!(runs > 0 && found, "an expanded group shows its body: {runs} runs, node {found}");
     assert_eq!(body(true), (0, false), "a minimized group runs no body and leaves no node");
 }
+
+// A panel's count follows its name on its tab and in the tab's name; the shown panel's caption sits in the header
+// under the tabs and above the body, and goes when another panel of the group is shown.
+#[trial]
+fn the_shown_panels_caption_sits_under_the_tabs_and_its_count_names_its_tab() {
+    let shown = Rc::new(Cell::new(0usize));
+    let picked = Rc::clone(&shown);
+    let panels = vec![
+        PanelTitle::new(PanelKey::new(1), "Comments").count(Some(3)).caption(Some("2 replies".into())),
+        PanelTitle::new(PanelKey::new(2), "Pages").count(Some(9)),
+    ];
+    let mut fixture = Fixture::new(move |ui| {
+        let group = DockGroup::new(1usize, &panels, panels[picked.get()].key);
+        let out = group.show_at(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 240.0)), |ui, _| {
+            Button::new("Body button").show(ui);
+        });
+        if let Some(key) = out.output.picked {
+            picked.set(panels.iter().position(|panel| panel.key == key).unwrap_or(0));
+        }
+    });
+    fixture.settle();
+    let Some(tab) = fixture.by_label("Comments, 3") else { panic!("the tab is named with its count") };
+    let Some(caption) = fixture.by_label("2 replies") else { panic!("the shown panel's caption shows") };
+    let Some(body) = fixture.by_label("Body button") else { panic!("the body shows") };
+    assert!(caption.rect.top() >= tab.rect.bottom() - 0.5, "the caption {:?} is under the tab {:?}", caption.rect, tab.rect);
+    assert!(body.rect.top() >= caption.rect.bottom() - 0.5, "the body {:?} is under the caption {:?}", body.rect, caption.rect);
+    let Some(pages) = fixture.by_label("Pages, 9") else { panic!("the other tab is named with its count") };
+    fixture.click(&pages).settle();
+    assert_eq!(shown.get(), 1, "the click shows Pages");
+    assert!(fixture.by_label("2 replies").is_none(), "Comments' caption goes with it");
+}

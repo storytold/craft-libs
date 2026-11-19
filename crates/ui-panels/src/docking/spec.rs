@@ -137,6 +137,11 @@ pub struct PanelSpec {
     /// The panel has a footer pinned under its body, which `DockPanels::footer` fills: it stays in view while the
     /// body scrolls.
     pub footer: bool,
+    /// A number after the panel's name on its tab, in faint type and in its accessible name ("Comments, 3"): what
+    /// the panel lists.
+    pub count: Option<usize>,
+    /// A line of small faint text under the header row while the panel is the one its group shows ("2 replies").
+    pub caption: Option<Label>,
 }
 
 impl PanelSpec {
@@ -154,7 +159,23 @@ impl PanelSpec {
             grid: None,
             command: None,
             footer: false,
+            count: None,
+            caption: None,
         }
+    }
+
+    /// Shows `n` after the panel's name on its tab.
+    #[must_use]
+    pub fn count(mut self, n: usize) -> Self {
+        self.count = Some(n);
+        self
+    }
+
+    /// Shows `text` under the header row while the panel is shown.
+    #[must_use]
+    pub fn caption(mut self, text: impl Into<Label>) -> Self {
+        self.caption = Some(text.into());
+        self
     }
 
     /// The panel has a footer pinned under its body, which `DockPanels::footer` fills.

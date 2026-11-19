@@ -836,7 +836,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             .iter()
             .map(|panel| {
                 let spec = scene.spec(panel);
-                PanelTitle::new(PanelKey::of(panel), spec.label).closable(scene.permissions(panel).closable).command(spec.command)
+                PanelTitle::new(PanelKey::of(panel), spec.label)
+                    .closable(scene.permissions(panel).closable)
+                    .command(spec.command)
+                    .count(spec.count)
+                    .caption(spec.caption)
             })
             .collect();
         let shown = &members[active];

@@ -111,6 +111,71 @@ fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
     }
 }
 
+/// A start screen of `files` in `view`, in a room wide enough for the rail; every action goes to the log.
+fn recent_screen(files: Vec<RecentFile>, view: RecentView) -> (Fixture, Log) {
+    let log: Log = Rc::default();
+    let seen = Rc::clone(&log);
+    let (mut view, mut sort) = (view, RecentSort::Opened);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files).show(ui);
+        seen.borrow_mut().extend(out.actions);
+    });
+    fixture.room(egui::Vec2::new(1100.0, 900.0)).settle();
+    log.borrow_mut().clear();
+    (fixture, log)
+}
+
+/// A card's remove action and a list row's revealed remove button ask to remove that file alone, and the recent menu's
+/// Clear asks to clear the list.
+#[trial]
+fn a_recent_file_is_removed_from_its_card_or_row_and_the_menu_clears_them_all() {
+    let files = || vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd"), RecentFile::new("/tmp/work/Flyer.psd", "Flyer.psd")];
+    let flyer = PathBuf::from("/tmp/work/Flyer.psd");
+
+    let (mut grid, log) = recent_screen(files(), RecentView::Grid);
+    let card = target(&grid, "Flyer.psd");
+    grid.frame(vec![moved(card.center())]).idle(2);
+    let remove = target(&grid, "Remove from Recent");
+    grid.click(&remove).idle(2);
+    assert_eq!(*log.borrow(), vec![StartAction::RemoveRecent(flyer.clone())], "the hovered card's action removes its file alone");
+
+    let (mut list, log) = recent_screen(files(), RecentView::List);
+    // A row is named by its name and its folder.
+    let row = target(&list, "Flyer.psd, /tmp/work");
+    list.frame(vec![moved(row.center())]).idle(2);
+    let remove = target(&list, "Remove Flyer.psd from Recent");
+    list.click(&remove).idle(2);
+    assert_eq!(*log.borrow(), vec![StartAction::RemoveRecent(flyer)], "the row's remove button removes its file alone");
+
+    log.borrow_mut().clear();
+    let at = target(&list, "Poster.psd, /tmp/work").center();
+    list.frame(vec![moved(at)]);
+    list.frame(vec![secondary(at, true)]);
+    list.frame(vec![secondary(at, false)]);
+    list.idle(3);
+    let clear = target(&list, "Clear Recent Files");
+    list.click(&clear).idle(2);
+    assert_eq!(*log.borrow(), vec![StartAction::ClearRecent], "the menu's Clear asks to clear the list");
+}
+
+/// In the list, a long name and a long folder path are cut short and end before the row's trailing detail, which shows
+/// whole.
+#[trial]
+fn a_long_recent_name_and_folder_are_cut_before_the_detail() {
+    let name = format!("{}.pdf", "Quarterly report final version ".repeat(10));
+    let folder = format!("/{}", "A folder with a long name".repeat(8));
+    let file = RecentFile::new(format!("{folder}/{name}"), name.clone()).note("7 pages");
+    let (fixture, _) = recent_screen(vec![file], RecentView::List);
+    let texts = fixture.texts();
+    let Some(detail) = texts.iter().find(|text| text.text == "7 pages") else { panic!("the row shows its detail") };
+    assert!(!detail.elided, "the detail shows whole");
+    for whole in [&name, &folder] {
+        let Some(text) = texts.iter().find(|text| text.text == *whole) else { panic!("the row shows {whole:?}") };
+        assert!(text.elided, "{whole:?} is cut short");
+        assert!(text.rect.right() <= detail.rect.left(), "{whole:?} ends before the detail: {:?}, {:?}", text.rect, detail.rect);
+    }
+}
+
 /// The template's detail line; a tile with a detail is named "name, detail".
 const TEMPLATE_DETAIL: &str = "210 × 297 mm";
 
@@ -228,6 +293,7 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
         PinnedFolder::new(&work, "Work").listing(FolderListing::Listed { files, total: count }),
         PinnedFolder::new("/tmp/Inbox", "Inbox").listing(FolderListing::Pending),
         PinnedFolder::new("/mnt/Gone", "Gone").listing(FolderListing::Unavailable),
+        PinnedFolder::new("/tmp/Empty", "Empty").listing(FolderListing::Listed { files: Vec::new(), total: 0 }),
     ];
     let (mut fixture, log, pins, notes) = pinned_screen(folders);
 
@@ -273,4 +339,11 @@ fn a_listed_pinned_folder_folds_shows_more_and_opens_its_files() {
     assert!((0..count).all(|n| fixture.by_label(&file_name(n)).is_none()), "a folded folder shows no file row");
     assert!(fixture.by_label("Show less").is_none(), "a folded folder shows no More row");
     assert!(fixture.by_label(&heading_name).is_some(), "a folded folder keeps its heading");
+
+    // Every folder the app lists folds, one with no files too.
+    let empty = target(&fixture, "Empty, /tmp/Empty");
+    fixture.click(&empty).idle(2);
+    log.borrow_mut().clear();
+    fixture.key(Key::ArrowLeft, Modifiers::NONE).idle(2);
+    assert_eq!(*log.borrow(), vec![StartAction::FoldPinned(PathBuf::from("/tmp/Empty"))], "an empty folder's disclosure folds it");
 }

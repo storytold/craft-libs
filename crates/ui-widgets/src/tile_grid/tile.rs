@@ -476,8 +476,8 @@ impl<'a> Tile<'a> {
         self
     }
 
-    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile or it has visible focus,
-    /// where `action_place` puts it, and reached by the keys as a part of the tile; repeatable. Its activation is
+    /// A hover action: an `IconButton::command` face shown while the pointer is over the tile, it has visible focus or
+    /// it is selected, where `action_place` puts it, and reached by the keys as a part of the tile; repeatable. Its activation is
     /// [`TilePartEvent::Action`] with its index; `command` gives its label, tooltip and enabled state, and the tile
     /// does not fire it.
     #[must_use]
@@ -860,7 +860,7 @@ impl Component for Tile<'_> {
         for (at, (mark, rect)) in self.marks.iter().zip(&placed.marks).enumerate() {
             let _ = cx.part(MARK.at(at as u64), *rect).tooltip(mark.tip.clone());
         }
-        if !placed.actions.is_empty() && (cx.hovered() || cx.focus_visible()) {
+        if !placed.actions.is_empty() && (cx.hovered() || cx.focus_visible() || cx.resolved.selected == Some(true)) {
             for (at, rect) in placed.actions.iter().enumerate() {
                 cx.part(ACTION.at(at as u64), *rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
             }

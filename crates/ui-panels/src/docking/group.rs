@@ -10,14 +10,15 @@ use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, FooterRegion, HeaderEdge, HeaderParts,
     HeaderRegion, ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role,
-    ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Show as _, ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
+use crate::display::{Shade, Text};
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
 use crate::sections::FooterBar;
-use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind, TypeRole};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};
 use craft_theme::{ControlSize, Tokens};
@@ -465,7 +466,7 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
         }
     }
 
-    /// The host's items and the tab strip, on one line.
+    /// The host's items and the tab strip, on one line, a tab with its panel's count; then the shown panel's caption.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         for (command, state) in self.command_states.drain(..) {
             cx.publish(command, state);
@@ -515,7 +516,10 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 // The panel's toggle command marks its tab as it marks the panel's rail button, with the hint to say why.
                 let resolved = panel.and_then(|panel| panel.command.clone()).map(|command| commands::resolve(&ctx, command));
                 let marked = resolved.as_ref().is_some_and(|resolved| IconButton::shows_marker(resolved));
-                let tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(marked);
+                let mut tab = Tab::new(title).closable(panel.is_some_and(closes)).marked(marked);
+                if let Some(count) = panel.and_then(|panel| panel.count) {
+                    tab = tab.detail(env.format().integer(u64::try_from(count).unwrap_or(u64::MAX)));
+                }
                 match resolved.and_then(|resolved| resolved.hint).filter(|_| marked) {
                     Some(hint) => tab.tooltip(hint),
                     None => tab,
@@ -550,6 +554,9 @@ impl<P: Clone + Hash + Send + Sync + 'static> Container for DockGroup<'_, P> {
                 reported.item = shown.inner.flatten().or(reported.item);
             }
         });
+        if let Some(caption) = panels.iter().find(|panel| panel.key == active).and_then(|panel| panel.caption.clone()) {
+            Text::new(caption).role(TypeRole::Caption).shade(Shade::Faint).show(ui);
+        }
         self.extra = extra;
     }
 }
