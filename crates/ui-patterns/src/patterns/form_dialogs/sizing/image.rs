@@ -45,9 +45,44 @@ pub struct ImageSizeValues {
     size: LinkedSize,
     method: Resample,
     scale_styles: bool,
+    physical: LastPhysical,
+}
+
+/// The physical length the sides showed last, which turning Resample off switches pixels and percent to. It is a
+/// memory, not a value the dialog shows, so it never makes two values differ: Reset, the undo steps and a held
+/// refusal compare what the dialog shows.
+#[derive(Clone, Copy, Debug)]
+struct LastPhysical(UnitKind);
+
+impl PartialEq for LastPhysical {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// Whether `unit` is a physical length the width and height can show (not pixels, percent or columns).
+fn is_physical(unit: UnitKind) -> bool {
+    matches!(unit, UnitKind::Inches | UnitKind::Centimetres | UnitKind::Millimetres | UnitKind::Points | UnitKind::Picas)
 }
 
 impl ImageSizeValues {
+    /// Remembers the shared unit when it is a physical length.
+    fn note_unit(&mut self) {
+        if is_physical(self.size.unit()) {
+            self.physical = LastPhysical(self.size.unit());
+        }
+    }
+
+    /// The physical unit turning Resample off switches pixels and percent to until the sides show another (the unit
+    /// used last, which the app keeps); Inches without one. A kind that is not a physical length is ignored.
+    #[must_use]
+    pub fn physical_unit(mut self, unit: UnitKind) -> Self {
+        if is_physical(unit) {
+            self.physical = LastPhysical(unit);
+        }
+        self
+    }
+
     /// The document's column size (the Units preference's column width and gutter): the Width row offers Columns,
     /// converted through it. Without one the row offers no Columns.
     #[must_use]
@@ -72,7 +107,7 @@ impl ImageSizeValues {
     /// The values for a document of `size` pixels, at 72 pixels per inch, in pixels, resampling automatically with
     /// Scale Styles on.
     pub fn new(size: PixelSize) -> Self {
-        ImageSizeValues { size: LinkedSize::new(size), method: Resample::Automatic, scale_styles: true }
+        ImageSizeValues { size: LinkedSize::new(size), method: Resample::Automatic, scale_styles: true, physical: LastPhysical(UnitKind::Inches) }
     }
 
     /// The resolution the document opens with, in pixels per inch.
@@ -93,6 +128,7 @@ impl ImageSizeValues {
     #[must_use]
     pub fn unit(mut self, unit: UnitKind) -> Self {
         self.size.set_unit(unit);
+        self.note_unit();
         self
     }
 
@@ -145,7 +181,9 @@ impl SizeForm for ImageSizeValues {
 ///   Reset, which restores the values from when the dialog opened and keeps the dialog open. Ctrl/Cmd+Z steps the
 ///   dialog's own settings.
 /// - With Resample off the pixel count is fixed: the width and height in pixels or percent are disabled, and a
-///   physical size changes the resolution.
+///   physical size changes the resolution. Turning the checkbox off switches them to the physical unit shown last
+///   ([`LinkedSize::check_resampling`]); Pixels is greyed in their unit menus, and the method and Dimensions are
+///   greyed.
 /// - OK is refused while a side is under 1 or over `MAX_DOCUMENT_SIDE` pixels.
 /// - Values: the `values` binding holds them; the app builds them with [`ImageSizeValues::new`] when it opens the
 ///   dialog.
@@ -177,7 +215,7 @@ impl<'a> ImageSize<'a> {
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ImageSizeOutput {
         let ImageSize { values, open, methods, bytes_per_pixel, hold } = self;
-        let kit = Kit::new(ui);
+        let kit = Kit::new(ui).resample_off_greys_pixels();
         let entries = Resample::entries(kit.words(), &methods);
         let first_method = entries.first().and_then(|entry| entry.value().copied());
 
@@ -203,9 +241,11 @@ impl<'a> ImageSize<'a> {
                     words.size_was.fill(&[("size", size.as_str()), ("old", kit.file_size(original, bytes_per_pixel).as_str())])
                 };
                 kit.readout(ui, &words.image_size, shown, tone);
-                kit.readout(ui, &words.dimensions, kit.dimensions(now), tone);
+                // Without resampling the pixel dimensions cannot change, so their line is greyed.
+                kit.readout_enabled(ui, &words.dimensions, kit.dimensions(now), tone, state.size.is_resampling());
                 kit.refusal(ui, now);
                 kit.sides(ui, &mut state.size);
+                state.note_unit();
                 kit.resolution(ui, &mut state.size);
 
                 if !ui.is_sizing_pass() && overlay::drawing_top_modal(ui.ctx()) {
@@ -223,16 +263,16 @@ impl<'a> ImageSize<'a> {
                 }
                 let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
                 if let Some(on) = on.value().copied() {
-                    state.size.resampling(on);
+                    state.size.check_resampling(on, state.physical.0);
                 }
-                if state.size.is_resampling() {
-                    Field::new(words.resample_method.clone()).id_salt("method").show(ui, |ui, _| {
-                        let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).show(ui);
-                        if let Some(method) = picked.value().copied() {
-                            state.method = method;
-                        }
-                    });
-                }
+                // Greyed, not hidden, while Resample is off: it keeps the method it returns to.
+                let resampling = state.size.is_resampling();
+                Field::new(words.resample_method.clone()).id_salt("method").enabled(resampling).show(ui, |ui, _| {
+                    let picked = Select::new(words.resample_method.clone(), Bind::given(state.method), &entries).show(ui);
+                    if let (true, Some(method)) = (resampling, picked.value().copied()) {
+                        state.method = method;
+                    }
+                });
                 let styles = Checkbox::new(Bind::given(state.scale_styles))
                     .label(words.scale_styles.clone())
                     .id_salt("scale-styles")
@@ -369,6 +409,7 @@ impl StackDialog for HostedImageSize {
         let methods = (self.build)(Bind::bound(&mut self.values)).methods;
         let values = &mut self.values;
         if let Some(done) = set_size_json(&mut values.size, field, &value) {
+            values.note_unit();
             return done;
         }
         let rejects = || FieldRefusal::Rejects(&value).message(field);
