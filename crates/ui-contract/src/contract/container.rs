@@ -226,6 +226,8 @@ impl LeastWidth {
 pub enum WrapWidth {
     /// `size.dialog.wrap`: a dialog's paragraphs.
     Dialog,
+    /// `size.dock.column`: a page's column of settings beside a preview (a Print page), as wide as a dock column.
+    Column,
 }
 
 impl WrapWidth {
@@ -233,6 +235,7 @@ impl WrapWidth {
     pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
         match self {
             WrapWidth::Dialog => tokens.size.dialog.wrap,
+            WrapWidth::Column => tokens.size.dock.column,
         }
     }
 }
