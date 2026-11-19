@@ -305,6 +305,30 @@ fn listed_header_fields_survive_a_round_trip() {
     assert_eq!(decode(&out).unwrap().meta.text, img.meta.text);
 }
 
+/// Eight-bit rows retain every sample and have zero padding to a four-byte boundary.
+#[test]
+fn eight_bit_rows_keep_samples_and_zero_word_padding() {
+    for layout in [ChannelLayout::Gray, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+        for width in 1..=5 {
+            let row_len = width as usize * layout.channels();
+            let raw: Vec<u8> = (0..row_len * 3).map(|i| (i as u8).wrapping_mul(37)).collect();
+            let img = Image::from_u8(width, 3, layout, raw.clone()).unwrap();
+            let mut expected = Vec::new();
+            for row in raw.chunks_exact(row_len) {
+                expected.extend_from_slice(row);
+                expected.extend(std::iter::repeat_n(0, (4 - row_len % 4) % 4));
+            }
+            for choice in [None, Some(DpxBits::Bits8)] {
+                let out = encode(&img, Format::Dpx, &opts(choice)).unwrap();
+                let offset = be32_at(&out, 4) as usize;
+                assert_eq!(be32_at(&out, 16) as usize, out.len());
+                assert_eq!(&out[offset..], expected, "{layout:?} width {width}, {choice:?}");
+                assert_eq!(decode(&out).unwrap().data(), img.data());
+            }
+        }
+    }
+}
+
 #[test]
 fn chosen_bit_depth_sets_the_header_and_packing() {
     let img = Image::from_u16(5, 2, ChannelLayout::Rgb, &(0..30u16).map(|i| i * 2000).collect::<Vec<_>>()).unwrap();
