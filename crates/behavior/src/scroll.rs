@@ -81,7 +81,8 @@ pub fn jump(span: &ScrollSpan, mv: NavMove) -> Option<Range<f64>> {
     })
 }
 
-fn shifted(span: &ScrollSpan, shift: f64) -> Range<f64> {
+/// Moves the visible range by `shift` content units, keeping it within the scrollable range.
+pub fn shifted(span: &ScrollSpan, shift: f64) -> Range<f64> {
     let visible = span.visible.end - span.visible.start;
     let last = (span.content.end - visible).max(span.content.start);
     let start = (span.visible.start + shift).clamp(span.content.start, last);
