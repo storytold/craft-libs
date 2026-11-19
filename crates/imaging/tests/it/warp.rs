@@ -130,7 +130,7 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.5;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
@@ -140,10 +140,9 @@ fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
         let pull = 20.0_f32;
         h.drag(at, at + out * pull);
         match h.edit.get() {
-            Some(WarpEdit::Point { index, by, .. }) => {
+            Some(WarpEdit::Point { index, .. }) => {
                 assert!(taken, "{offset} pt");
                 assert_eq!(index, 15);
-                assert!((by.hypot() - f64::from(pull)).abs() < 1e-3, "{by:?}");
             }
             other => assert!(!taken && other.is_none(), "{offset} pt: {other:?}"),
         }
@@ -155,6 +154,23 @@ fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
     h.drag(at, at + shift(0.0, -10.0));
     assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 1, .. })), "{:?}", h.edit.get());
     assert_eq!(h.picked.get(), Some(1));
+}
+
+#[trial]
+fn a_dragged_point_jumps_to_half_a_pixel_up_and_left_of_the_pointer() {
+    for (rotation, flip) in [(0.0, false), (30.0, true)] {
+        let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), rotation, flip);
+        let view = h.view.get().expect("drawn");
+        // 9 right of and 3 below the bottom right anchor, outside the mesh.
+        let from = view.to_screen(Point::new(RECT.x1 + 9.0, RECT.y1 + 3.0));
+        let to = view.to_screen(Point::new(RECT.x1 + 29.0, RECT.y1 + 13.0));
+        h.drag(from, to);
+        assert!(matches!(h.edit.get(), Some(WarpEdit::Point { index: 15, .. })), "{:?}", h.edit.get());
+        let landed = h.mesh().points[15];
+        let want = Point::new(RECT.x1 + 28.5, RECT.y1 + 12.5);
+        assert!(landed.distance(want) < 1e-3, "{rotation} deg: {landed:?}, want {want:?}");
+        assert_eq!(h.count(Seen::Commit), 1);
+    }
 }
 
 #[trial]

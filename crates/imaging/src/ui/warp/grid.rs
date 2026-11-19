@@ -4,6 +4,7 @@
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::kurbo::Rect as DocRect;
+use craft_behavior::kurbo::Vec2 as DocVec;
 use craft_behavior::{
     CancelReason, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PointerButton, PressPhase,
     PressState, Roving, Sense, resize_cursor,
@@ -24,6 +25,12 @@ use super::model::{SplitAt, WarpEdit, WarpMesh, WarpSide, WarpSplit};
 
 /// How far from the pointer the mesh's handles show, in hit targets (`size.hit.target`; 56 at an 8 target).
 const REVEAL_IN_TARGETS: f32 = 7.0;
+
+/// How far from an anchor or a handle end a press takes it, in hit targets (12 at an 8 target).
+const REACH_IN_TARGETS: f32 = 1.5;
+
+/// Where a dragged point goes, from the pointer: half a document pixel up and left of it.
+const GRAB_OFFSET: DocVec = DocVec::new(-0.5, -0.5);
 
 /// An anchor or a handle end: `POINT.at(index)` with the index into [`WarpMesh::points`].
 pub const POINT: PartKey = PartKey::new("point");
@@ -133,7 +140,8 @@ struct Report {
 /// - Look: patch boundaries `overlay.line` at `stroke.thin`; a one-patch mesh also its rule-of-thirds
 ///   lines. Anchors always show; a handle and its arm only near the pointer, while its anchor or one of
 ///   its handles is dragged, or while one of its anchor's parts is picked and the grid has the keyboard.
-/// - Pointer: the nearest anchor or handle within the hit reach drags that point; elsewhere on the
+/// - Pointer: the nearest anchor or handle within the hit reach (one and a half hit targets) drags that
+///   point, which jumps to the pointer, half a document pixel up and left of it; elsewhere on the
 ///   surface the press pulls it. One drag is one gesture; Esc cancels it.
 /// - Split: with a [`split`](Self::split) tool set, a hover over the surface previews the new lines and a
 ///   click inserts them. With no tool, Alt or Ctrl at the press is a quick split chosen by the pointer.
@@ -237,7 +245,11 @@ impl<'a> WarpGrid<'a> {
                 }
                 let by = view.to_doc(pos) - view.to_doc(start.origin);
                 let edit = match held.target {
-                    Target::Point(index) => WarpEdit::Point { index, by },
+                    // The point jumps to the pointer rather than keeping its distance from the press.
+                    Target::Point(index) => match held.mesh.points.get(index) {
+                        Some(&from) => WarpEdit::Point { index, by: view.to_doc(pos) + GRAB_OFFSET - from },
+                        None => WarpEdit::Point { index, by },
+                    },
                     Target::Surface(s, t) => WarpEdit::Surface { s, t, by },
                     Target::Split => return,
                 };
@@ -399,7 +411,7 @@ impl Component for WarpGrid<'_> {
             halo: cx.color(overlay.halo),
             anchor: cx.handle(),
             end,
-            reach: cx.tokens.size.hit.target,
+            reach: cx.tokens.size.hit.target * REACH_IN_TARGETS,
             reveal: cx.tokens.size.hit.target * REVEAL_IN_TARGETS,
         }
     }
