@@ -92,7 +92,7 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
         .and_then(|m| m.trim().parse::<f64>().ok())
         .filter(|m| m.is_finite() && *m > 0.0)
         .unwrap_or(1.0);
-    let up_axis = match asset.and_then(|a| a.child("up_axis")).map(|u| u.text().trim().into_owned()).as_deref() {
+    let up_axis = match asset.and_then(|a| a.child("up_axis")).map(|u| u.text().trim().to_owned()).as_deref() {
         Some("Z_UP") => UpAxis::ZUp,
         Some("X_UP") => UpAxis::XUp,
         _ => UpAxis::YUp,
