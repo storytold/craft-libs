@@ -4,7 +4,7 @@
 use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
-use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
+use craft_behavior::{CanvasView, Cursor, CursorBadge, CursorIcon, EditEvent, PaintedCursor, RulerUnits, Ticks};
 use craft_draw::ui::transform::{
     LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformReach, TransformSession, TransformSettings,
 };
@@ -1029,4 +1029,135 @@ fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
         assert!(pivot.distance(corner) < 1e-6, "snap {snap}: onto the corner: {pivot:?} vs {corner:?}");
         assert_eq!(h.state().quad, turned.quad, "the box never moved");
     }
+}
+
+/// The reference point's pointer: the system arrow with the target mark beside it.
+fn reference_pointer() -> Cursor {
+    PaintedCursor::badged(CursorIcon::Default, CursorBadge::Target).into()
+}
+
+/// The cursor the last pass settled on.
+fn cursor_of(h: &Harness) -> Option<Cursor> {
+    craft_ui::runtime::cursor::current(h.fixture.ctx())
+}
+
+/// Hovers `at` and returns the hovered part and the cursor there.
+fn hovered_cursor(h: &mut Harness, at: Point) -> (Option<BoxPart>, Option<Cursor>) {
+    hover(h, at);
+    (h.host.borrow().hovered, cursor_of(h))
+}
+
+/// Before a drag, with Alt held inside the box and outside it (near a corner, where it turns, and far out), and over
+/// the shown reference point with or without Alt, the pointer is the reference point's: a press there places the point.
+/// Alt over a corner or an edge keeps that handle's scale pointer, and without Alt the box keeps its pointers.
+#[trial]
+fn alt_and_the_shown_reference_point_show_the_reference_point_pointer_and_the_handles_keep_theirs() {
+    let inside = Point::new(150.0, 120.0);
+    let near = Point::new(RECT.x1 + 10.0, RECT.y1 + 10.0);
+    let far = Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0);
+    let pivot = RECT.center();
+    let corner = Point::new(RECT.x1, RECT.y1);
+    let edge = Point::new(RECT.x1, 110.0);
+    let mut plain = upright();
+    let mut alt = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+
+    for (at, part, what) in
+        [(inside, BoxPart::Inside, "inside"), (near, BoxPart::Outside, "outside near a corner"), (far, BoxPart::Outside, "far outside")]
+    {
+        assert_eq!(hovered_cursor(&mut alt, at), (Some(part), Some(reference_pointer())), "Alt {what}");
+    }
+    assert_eq!(hovered_cursor(&mut plain, inside), (Some(BoxPart::Inside), Some(Cursor::System(CursorIcon::Move))), "inside without Alt");
+    let (part, turn) = hovered_cursor(&mut plain, near);
+    assert!(
+        part == Some(BoxPart::Outside) && matches!(turn, Some(Cursor::Painted(PaintedCursor::Turn { .. }))),
+        "near a corner without Alt: {turn:?}"
+    );
+    assert_eq!(hovered_cursor(&mut plain, far), (Some(BoxPart::Outside), Some(Cursor::System(CursorIcon::Alias))), "far outside without Alt");
+
+    for (h, held) in [(&mut plain, "without Alt"), (&mut alt, "with Alt")] {
+        assert_eq!(hovered_cursor(h, pivot), (Some(BoxPart::Pivot), Some(reference_pointer())), "the shown reference point {held}");
+    }
+
+    for (at, part, what) in [(corner, BoxPart::Corner(2), "a corner"), (edge, BoxPart::Edge(1), "an edge")] {
+        let (plain_part, plain_cursor) = hovered_cursor(&mut plain, at);
+        let (alt_part, alt_cursor) = hovered_cursor(&mut alt, at);
+        assert_eq!((plain_part, alt_part), (Some(part), Some(part)), "{what}");
+        assert!(matches!(plain_cursor, Some(Cursor::System(_))), "{what}: a scale pointer: {plain_cursor:?}");
+        assert_eq!(alt_cursor, plain_cursor, "Alt over {what} keeps the scale pointer");
+    }
+
+    // A hidden reference point: an Alt press in the middle places it (pinned above), so the pointer says so.
+    let mut hidden = harness(BoxState::from_rect(RECT), |config| {
+        config.reference_point = false;
+        config.mods = Some(Mods::ALT);
+    });
+    assert_eq!(hovered_cursor(&mut hidden, pivot), (Some(BoxPart::Inside), Some(reference_pointer())), "Alt over a hidden point's middle");
+}
+
+/// A border zone takes a press outside only within its reach of the sides: with Alt the pointer is the reference
+/// point's there, and past the reach, where the press does nothing, it stays the plain arrow.
+#[trial]
+fn alt_past_a_border_zones_reach_keeps_the_plain_arrow() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.zone = RotateZone::border(28.0);
+        config.mods = Some(Mods::ALT);
+    });
+    let side = Point::new(RECT.x1, RECT.center().y);
+    assert_eq!(hovered_cursor(&mut h, side + kurbo_vec(14.0, 0.0)), (Some(BoxPart::Outside), Some(reference_pointer())), "within the reach");
+    assert_eq!(
+        hovered_cursor(&mut h, side + kurbo_vec(60.0, 0.0)),
+        (Some(BoxPart::Outside), Some(Cursor::System(CursorIcon::Default))),
+        "past the reach"
+    );
+}
+
+/// During a drag the pointer stays the one the drag had before: an Alt press inside drags the reference point with
+/// the crosshair, as does a plain drag of the shown point, and Alt pressed during a move keeps the move pointer.
+#[trial]
+fn a_drag_keeps_its_pointer_with_or_without_alt() {
+    let held = |h: &mut Harness, from: Point, mid_drag: Option<Mods>| {
+        let start = h.screen(from);
+        frame(h, vec![pointer::moved(start)]);
+        frame(h, vec![pointer::press(start)]);
+        frame(h, vec![pointer::moved(start + by(10.0, 6.0))]);
+        if let Some(mods) = mid_drag {
+            h.config.borrow_mut().mods = Some(mods);
+        }
+        frame(h, vec![pointer::moved(start + by(20.0, 12.0))]);
+        let cursor = cursor_of(h);
+        frame(h, vec![pointer::release(start + by(20.0, 12.0))]);
+        frame(h, Vec::new());
+        cursor
+    };
+    let mut alt = harness(BoxState::from_rect(RECT), |config| config.mods = Some(Mods::ALT));
+    assert_eq!(held(&mut alt, Point::new(150.0, 120.0), None), Some(Cursor::System(CursorIcon::Crosshair)), "an Alt drag from inside");
+    let mut plain = upright();
+    assert_eq!(held(&mut plain, RECT.center(), None), Some(Cursor::System(CursorIcon::Crosshair)), "a drag of the shown point");
+    let mut moving = upright();
+    assert_eq!(held(&mut moving, Point::new(150.0, 120.0), Some(Mods::ALT)), Some(Cursor::System(CursorIcon::Move)), "Alt during a move");
+}
+
+/// A box that offers only its move reach moves with Alt too, so its pointer stays the move pointer.
+#[trial]
+fn a_move_only_reach_keeps_the_move_pointer_with_alt() {
+    let session = TransformSession::<()>::new(RECT);
+    let settings = TransformSettings::default();
+    let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
+    let shown_view = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        *shown_view.borrow_mut() = at;
+        Canvas::new("Document").view(at).show(ui, |ui, body| {
+            TransformOverlay::new("Type transform", &session, &settings)
+                .reach(TransformReach::MoveOnly { points: 38.0 })
+                .mods(Some(Mods::ALT))
+                .show_at(ui, body.rect)
+        });
+    });
+    fixture.settle();
+    let at = view.borrow().to_screen(Point::new(RECT.x1 + 24.0, 150.0));
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(Vec::new());
+    assert_eq!(craft_ui::runtime::cursor::current(fixture.ctx()), Some(Cursor::System(CursorIcon::Move)));
 }
