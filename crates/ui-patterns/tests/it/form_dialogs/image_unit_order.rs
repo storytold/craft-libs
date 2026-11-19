@@ -34,14 +34,18 @@ fn unit_order(fixture: &mut Fixture, axis: &str) -> Vec<String> {
 
 fn image_host() -> Rc<RefCell<DialogHost>> {
     let mut host = DialogHost::new();
-    host.open(HostedImageSize::new(ImageSizeValues::new(SIZE).column_size(COLUMNS), |values| ImageSize::new(values)));
+    #[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime")]
+    let dialog = HostedImageSize::new(ImageSizeValues::new(SIZE).column_size(COLUMNS), |values| ImageSize::new(values));
+    host.open(dialog);
     Rc::new(RefCell::new(host))
 }
 
 #[trial]
 fn image_size_dimension_menus_put_percent_before_pixels() {
     let mut canvas = DialogHost::new();
-    canvas.open(HostedCanvasSize::new(CanvasSizeValues::new(SIZE).column_size(COLUMNS), |values| CanvasSize::new(values)));
+    #[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime")]
+    let dialog = HostedCanvasSize::new(CanvasSizeValues::new(SIZE).column_size(COLUMNS), |values| CanvasSize::new(values));
+    canvas.open(dialog);
     let mut comparison = fixture(&Rc::new(RefCell::new(canvas)));
     assert_eq!(unit_order(&mut comparison, "Width unit"), CANVAS_UNITS);
 
