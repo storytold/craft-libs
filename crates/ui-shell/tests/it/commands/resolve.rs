@@ -1,15 +1,26 @@
 //! Command resolution runs only when an input of it changed: count trials over fifty shown commands.
 
-use super::kit::{AppCommand, Pane, PaneCommand, Tap};
+use super::kit::{AppCommand, DOCK, Dock, PANE, Pane, PaneCommand, Tap};
+use craft_ui::buttons::Button;
+use craft_ui::contract::{Bind, Lazy, Trigger};
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::dialog::Dialog;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::runtime::commands::{
     AppCatalog, Binding, CommandDef, CommandGate, CommandInput, CommandRef, CommandSet as _, CommandState, CommandStates, Commands as _, Scope,
 };
+use craft_ui::runtime::commands::{EditCommands, declare_child, resolve, resolve_beneath};
 use craft_ui::runtime::focus::{FocusTarget, request};
+use craft_ui::runtime::measure::last_pass_wake_walks;
 use craft_ui::runtime::measure::{Resolve, last_pass_resolves};
+use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::moved;
+use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::{Frames, trial};
+use craft_ui::text::TextField;
 use egui::{Id, Pos2, Ui};
+use egui::{Key, Modifiers, ViewportId};
 use std::cell::{Cell, RefCell};
 
 /// The panes: each is an instance of the pane scope, so each is its own reader of the commands its taps show.
@@ -33,20 +44,28 @@ const SAVE_READERS: u32 = 5;
 /// Distinct commands shown.
 const COMMANDS: u32 = 5;
 
-/// Fifty taps in five panes; pane `a` publishes Zoom In enabled as `zoom` says. `ids` gets each tap's id.
+/// Fifty taps in five panes; pane `a` publishes Zoom In enabled as `zoom` says. `ids` gets each tap's id. With
+/// `global`, a surface with no component of its own reads Zoom In after the panes, which picks an instance by the focus.
 struct Scene {
     zoom: Cell<bool>,
     ids: RefCell<Vec<Id>>,
+    global: bool,
+    /// Pane `a` is left out of the next pass.
+    skip_a: Cell<bool>,
 }
 
 impl Scene {
     fn new() -> Self {
-        Scene { zoom: Cell::new(true), ids: RefCell::new(Vec::new()) }
+        Scene { zoom: Cell::new(true), ids: RefCell::new(Vec::new()), global: false, skip_a: Cell::new(false) }
     }
 
     fn show(&self, ui: &mut Ui) {
         self.ids.borrow_mut().clear();
+        let skip_a = self.skip_a.replace(false);
         for (pane, salt) in PANES.iter().enumerate() {
+            if pane == 0 && skip_a {
+                continue;
+            }
             Pane::new().id_salt(*salt).show(ui, |ui, cx| {
                 if pane == 0 {
                     cx.publish(PaneCommand::ZoomIn, CommandState::new().enabled(self.zoom.get()));
@@ -56,6 +75,9 @@ impl Scene {
                     self.ids.borrow_mut().push(id);
                 }
             });
+        }
+        if self.global {
+            resolve(ui.ctx(), PaneCommand::ZoomIn);
         }
     }
 }
@@ -67,18 +89,28 @@ fn counts(ctx: &egui::Context) -> (u32, u32) {
 /// One frame of `scene`, and its new and repeated resolutions summed over every pass of the frame: each pass after
 /// the first reads the one before it as it starts, and the last is read after the frame.
 fn frame(frames: &mut Frames, scene: &Scene) -> (u32, u32) {
+    let (new, again, _) = frame_walks(frames, ViewportId::ROOT, &mut |ui| scene.show(ui));
+    (new, again)
+}
+
+/// One frame of `viewport` running `show`, and its new and repeated resolutions and the kept resolutions its wakes
+/// walked, summed over every pass of the frame.
+fn frame_walks(frames: &mut Frames, viewport: ViewportId, show: &mut dyn FnMut(&mut Ui)) -> (u32, u32, u32) {
     let ctx = frames.ctx.clone();
-    let (mut new, mut again, mut pass) = (0, 0, 0);
-    frames.frame(vec![], |ui| {
+    let (mut new, mut again, mut walks, mut pass) = (0, 0, 0, 0);
+    let mut add = |ctx: &egui::Context| {
+        let (n, a) = counts(ctx);
+        (new, again, walks) = (new + n, again + a, walks + last_pass_wake_walks(ctx));
+    };
+    frames.frame_in_viewport(viewport, vec![], |ui| {
         if pass > 0 {
-            let (n, a) = counts(&ctx);
-            (new, again) = (new + n, again + a);
+            add(&ctx);
         }
         pass += 1;
-        scene.show(ui);
+        show(ui);
     });
-    let (n, a) = counts(&ctx);
-    (new + n, again + a)
+    add(&ctx);
+    (new, again, walks)
 }
 
 thread_local! {
@@ -120,8 +152,12 @@ fn one_state_change_resolves_only_its_readers() {
     frames.idle(3, |ui| scene.show(ui));
     states.set(AppCommand::Save, CommandState::new().enabled(false));
     frames.commands(gated(&states, false));
-    assert_eq!(frame(&mut frames, &scene), (0, SAVE_READERS), "only Save's readers resolve again");
-    assert_eq!(frame(&mut frames, &scene), (0, 0), "the next frame resolves nothing");
+    assert_eq!(
+        frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| scene.show(ui)),
+        (0, SAVE_READERS, SAVE_READERS),
+        "the wake walks and resolves again only Save's readers"
+    );
+    assert_eq!(frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| scene.show(ui)), (0, 0, 0), "the next frame walks nothing");
 }
 
 /// An instance publishing a new state resolves again only the readers of that instance's state.
@@ -133,8 +169,12 @@ fn a_published_state_change_resolves_only_its_readers() {
     frames.commands(gated(&states, false));
     frames.idle(3, |ui| scene.show(ui));
     scene.zoom.set(false);
-    assert_eq!(frame(&mut frames, &scene), (0, 1), "only pane a's Zoom In reader resolves again");
-    assert_eq!(frame(&mut frames, &scene), (0, 0), "publishing the same state again resolves nothing");
+    // The publish runs before its reader, which resolves again as it reads; a wake walks only that reader.
+    let (new, again, first) = frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| scene.show(ui));
+    let (_, _, second) = frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| scene.show(ui));
+    assert_eq!((new, again), (0, 1), "only pane a's Zoom In reader resolves again");
+    assert_eq!(first + second, 1, "the wakes walk only the reader of the published key");
+    assert_eq!(frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| scene.show(ui)), (0, 0, 0), "publishing the same state again walks nothing");
 }
 
 /// A change of the gate's props asks the gate once per shown command and resolves again only the readers whose answer
@@ -174,11 +214,93 @@ fn a_focus_move_resolves_no_reader_that_does_not_read_the_focus() {
     }
 }
 
-/// The testing check every 100th pass compares every kept resolution with a full one, over state, gate, keymap,
-/// publish and focus changes; a kept resolution that missed an input fails it.
+/// An instance that misses exactly one pass and registers again is live again for every kept resolution in the
+/// frame it comes back in: its return moves the inputs every resolution reads.
+#[trial]
+fn an_instance_back_after_one_missed_pass_is_live_again() {
+    let shown = Cell::new(true);
+    let enabled = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        if shown.get() {
+            Pane::new().id_salt("b").show(ui, |ui, _| {
+                Tap::new().id_salt("zoom").command(PaneCommand::ZoomIn).show(ui);
+            });
+        }
+        enabled.set(resolve(ui.ctx(), PaneCommand::ZoomIn).enabled);
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    assert!(enabled.get(), "Zoom In reaches the pane");
+    shown.set(false);
+    assert_eq!(frames.frame(vec![], &mut show), 1, "the pane misses one pass");
+    shown.set(true);
+    frames.frame(vec![], &mut show);
+    assert!(enabled.get(), "the pane is live again in the frame it comes back in");
+    frames.frame(vec![], &mut show);
+    assert!(enabled.get(), "and stays so");
+}
+
+/// A settled region that shows a command the focused stop answers for (Cut, which a text field takes) runs when that
+/// stop's answer changes: with the focus moving from the field to a tap, which takes no edits, Cut no longer waits for a
+/// selection.
+#[trial]
+fn a_settled_region_runs_when_the_focused_stops_answer_changes() {
+    let text = RefCell::new("hello".to_owned());
+    let (field, tap, cut) = (Cell::new(Id::NULL), Cell::new(Id::NULL), Cell::new(Id::NULL));
+    let runs = Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        field.set(TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).show(ui).response.id);
+        tap.set(Tap::new().id_salt("plain").show(ui).id);
+        Lazy::new("edits", 0.0).settles(true).show(ui, |ui| {
+            runs.set(runs.get() + 1);
+            cut.set(Button::command(EditCommands::Cut).show(ui).id);
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(field.get()));
+    frames.idle(30, &mut show);
+    assert!(frames.tree().is_disabled(cut.get()), "Cut does nothing with no text selected");
+    runs.set(0);
+    frames.idle(2, &mut show);
+    assert_eq!(runs.get(), 0, "the region is settled");
+    request(&frames.ctx, FocusTarget::Id(tap.get()));
+    frames.idle(2, &mut show);
+    assert_eq!(runs.get(), 1, "the new answer for Cut runs the region once");
+    assert!(!frames.tree().is_disabled(cut.get()), "which shows Cut enabled");
+}
+
+/// The testing check every 100th pass compares every kept resolution with a full one, and every kept gate answer with
+/// the gate's. The script changes, a few passes before each check, every kind of input a resolution reads: app and
+/// published states, the gate, the keymap, the focus and the focused stop's edits, a menu and a modal layer with readers
+/// inside (a palette's reader under the layer), an instance that misses one pass and a scope's parent.
 #[trial]
 fn the_hundredth_pass_check_finds_every_kept_resolution_current() {
-    let scene = Scene::new();
+    let scene = Scene { global: true, ..Scene::new() };
+    let text = RefCell::new("hello".to_owned());
+    let (field, opener) = (Cell::new(Id::NULL), Cell::new(Pos2::ZERO));
+    let modal = Cell::new(false);
+    let mut show = |ui: &mut Ui| {
+        scene.show(ui);
+        field.set(TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).show(ui).response.id);
+        Tap::new().id_salt("cut").command(EditCommands::Cut).show(ui);
+        Dock::new().id_salt("dock").show(ui, |ui, _| {
+            Tap::new().id_salt("zoom").command(PaneCommand::ZoomIn).show(ui);
+        });
+        let open = Tap::new().id_salt("opener").show(ui);
+        opener.set(open.rect.center());
+        Menu::new("Menu").opened_by(&open, Trigger::Click).show(ui, |ui, _| {
+            MenuItem::command(AppCommand::Save).show(ui);
+            MenuItem::command(EditCommands::Cut).show(ui);
+        });
+        let mut open = modal.get();
+        Dialog::new("Options").opened(Bind::bound(&mut open)).buttons([FooterButton::new("OK", DialogRole::Accept)]).show(ui, |ui, cx| {
+            cx.publish(EditCommands::Undo, CommandState::new());
+            resolve_beneath(ui.ctx(), AppCommand::Save);
+            Tap::new().id_salt("in dialog").command(EditCommands::Undo).show(ui);
+        });
+        modal.set(open);
+    };
     let mut frames = Frames::new();
     let mut states = Tracked::new(CommandStates::new());
     let mut refuses = false;
@@ -190,25 +312,51 @@ fn the_hundredth_pass_check_finds_every_kept_resolution_current() {
         gated(states, refuses).catalog(AppCatalog::new(vec![extra], generation).expect("the trial's catalog is valid"))
     };
     frames.commands(input(&states, refuses, generation));
-    let mut checked = Vec::new();
-    for frame in 0..250 {
-        match frame % 50 {
-            10 => states.set(AppCommand::Go, CommandState::new().checked(frame % 100 == 10)),
-            20 => refuses = !refuses,
-            30 => generation += 1,
-            40 => scene.zoom.set(!scene.zoom.get()),
-            45 => {
-                let id = scene.ids.borrow()[frame % 50];
-                request(&frames.ctx, FocusTarget::Id(id));
+    // Each step at the pass it names, relative to a check at 100 and 200.
+    let script: Vec<(usize, &str)> = [100, 200]
+        .into_iter()
+        .flat_map(|check| {
+            let steps: &[(usize, &str)] = if check == 100 {
+                &[(14, "focus field"), (12, "select all"), (10, "press opener"), (9, "release opener"), (6, "parent"), (3, "skip a"), (1, "state")]
+            } else {
+                &[(14, "focus field"), (12, "collapse"), (10, "modal"), (8, "keymap"), (6, "gate"), (3, "skip a"), (1, "publish")]
+            };
+            steps.iter().map(move |(before, step)| (check - before, *step)).collect::<Vec<_>>()
+        })
+        .chain([(103, "escape"), (203, "close modal")])
+        .collect();
+    let mut script = script.into_iter().peekable();
+    let (mut passes, mut checked) = (0, Vec::new());
+    while passes < 260 {
+        let mut events = Vec::new();
+        if let Some((_, step)) = script.next_if(|(at, _)| passes + 1 >= *at) {
+            match step {
+                "focus field" => {
+                    request(&frames.ctx, FocusTarget::Id(field.get()));
+                }
+                "select all" => events.push(key_press(Key::A, Modifiers::COMMAND)),
+                "collapse" => events.push(key_press(Key::ArrowRight, Modifiers::NONE)),
+                "press opener" => events.push(press(opener.get())),
+                "release opener" => events.push(release(opener.get())),
+                "escape" => events.push(key_press(Key::Escape, Modifiers::NONE)),
+                "skip a" => scene.skip_a.set(true),
+                "parent" => declare_child(&frames.ctx, DOCK, PANE),
+                "state" => states.set(AppCommand::Go, CommandState::new().checked(true)),
+                "gate" => refuses = !refuses,
+                "keymap" => generation += 1,
+                "publish" => scene.zoom.set(!scene.zoom.get()),
+                "modal" => modal.set(true),
+                _ => modal.set(false),
             }
-            _ => {}
         }
         frames.commands(input(&states, refuses, generation));
-        frames.frame(vec![], |ui| scene.show(ui));
+        passes += frames.frame(events, &mut show);
         let compared = last_pass_resolves(&frames.ctx, Resolve::Checked);
         if compared > 0 {
             checked.push(compared);
         }
     }
-    assert_eq!(checked, [KEPT, KEPT], "two checks ran, each over every kept resolution");
+    assert_eq!(script.next().map(|(_, step)| step), None, "every step ran");
+    assert_eq!(checked.len(), 2, "two checks ran: {checked:?}");
+    assert!(checked.iter().all(|compared| *compared > KEPT), "each compared the panes' readers and the script's: {checked:?}");
 }
