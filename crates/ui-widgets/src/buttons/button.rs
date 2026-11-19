@@ -256,6 +256,9 @@ impl Component for Button<'_> {
             let pad = &cx.tokens.space.pad;
             style.text.role = TypeRole::BodyLarge;
             style.metrics.padding = Insets::new(pad.roomy, pad.roomy, pad.segment, pad.segment);
+            // The row of the page shown (`selected`) keeps the band its hover shows, so the menu marks where the page is.
+            let off = style.surface.fill.off;
+            style.surface.fill = style.surface.fill.clone().on(craft_theme::States::new(off.hover, off.hover, off.pressed, off.disabled));
         }
         style
     }

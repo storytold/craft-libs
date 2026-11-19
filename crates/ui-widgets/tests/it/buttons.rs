@@ -507,3 +507,29 @@ fn a_side_menus_buttons_are_taller_rows_with_the_large_body_label() {
     let (menu, plain) = (rect(true, Arrangement::Stacked), rect(false, Arrangement::Stacked));
     assert_eq!(menu.size(), plain.size(), "a stacked button keeps its own look in a side menu");
 }
+
+/// The row of the page shown in a side menu (`selected`) keeps the band its hover shows, as WordCraft's File menu
+/// marks its current page; a selected ghost button elsewhere keeps its own look.
+#[trial]
+fn a_side_menus_selected_row_shows_its_hover_band() {
+    let button = std::any::type_name::<Button<'static>>();
+    let (menu, _) = seen(button, "Info", |ui| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::SideMenu);
+            },
+            |ui| {
+                let _ = Button::new("Info").variant(Variant::GHOST).selected(true).show(ui);
+            },
+        );
+    });
+    let (plain, _) = seen(button, "Info", |ui| {
+        let _ = Button::new("Info").variant(Variant::GHOST).selected(true).show(ui);
+    });
+    let fill = menu.expect("a side menu's row has a surface").fill;
+    let on = fill.on.expect("a side menu's row has an on look");
+    assert_eq!(on.rest, fill.off.hover, "the shown page's row rests in the hover band");
+    assert_ne!(on.rest, fill.off.rest, "the shown page's row is marked");
+    assert!(plain.expect("a ghost button has a surface").fill.on.is_none(), "a selected ghost button elsewhere keeps its look");
+}
