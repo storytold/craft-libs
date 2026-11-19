@@ -3503,6 +3503,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]
