@@ -2,9 +2,9 @@
 
 use craft_behavior::PixelSize;
 use craft_theme::Srgba;
-use craft_ui::dialog::{DialogHost, DialogResult};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    Animation, HostedSaveForWeb, PALETTE_COLOR_KEY, SaveForWebOptions, WebFormat, WebPreset, WebSlice, WebSlices, WebVariant,
+    Animation, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebOptions, WebFormat, WebPreset, WebSlice, WebSlices, WebVariant,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -47,6 +47,46 @@ fn open(web: HostedSaveForWeb) -> (Rc<RefCell<DialogHost>>, Fixture) {
 
 fn current(host: &Rc<RefCell<DialogHost>>) -> SaveForWebOptions {
     host.borrow_mut().get_mut::<HostedSaveForWeb>().map(|web| web.current().clone()).expect("the dialog is open")
+}
+
+#[trial]
+fn image_size_can_unlink_and_preserves_exact_pixels() {
+    let document = PixelSize::new(50_001, 100);
+    let mut preset_options = SaveForWebOptions::default();
+    preset_options.format = WebFormat::Png24;
+    let preset = WebPreset::new("PNG exact", preset_options);
+    let (host, mut fixture) = open(HostedSaveForWeb::new("wide.psd", document, texture()).presets(vec![preset.clone()]));
+    assert!(current(&host).constrain_proportions);
+
+    let field = |fixture: &mut Fixture, label, value| {
+        let field = fixture.by_label(label).expect("the size field");
+        fixture.click(&field).idle(2);
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(value).key(Key::Tab, Modifiers::NONE).idle(4);
+    };
+    field(&mut fixture, "Width", "22501");
+    assert_eq!(current(&host).percent, 45.0);
+
+    let link = fixture.by_label("Constrain proportions").expect("the proportions check box");
+    fixture.click(&link).idle(2);
+    field(&mut fixture, "Height", "37");
+    assert_eq!(current(&host).size, Some(PixelSize::new(22_501, 37)));
+
+    let select = fixture.by_label("Preset").expect("the Preset list");
+    fixture.click(&select).idle(2);
+    let entry = fixture.by_label("PNG exact").expect("the preset entry");
+    fixture.click(&entry).idle(4);
+    let current = current(&host);
+    assert!(preset.is_set_in(&current), "the preset remains selected after editing the size");
+    assert!(!current.constrain_proportions);
+    assert_eq!(current.size, Some(PixelSize::new(22_501, 37)));
+
+    let mut host = host.borrow_mut();
+    let web = host.get_mut::<HostedSaveForWeb>().expect("the dialog is open");
+    let wanted = web.wanted_variants();
+    assert_eq!(wanted[0].request.options.size, Some(PixelSize::new(22_501, 37)));
+    web.answer_path(SAVE_PATH_KEY, PathBuf::from("wide.png"));
+    let result = web.confirm(fixture.ctx()).expect("Save returns the exact unlinked size");
+    assert_eq!((result.width, result.height), (22_501, 37));
 }
 
 /// Shows the pictures at 100% and clicks the point `at` of the Original pane's picture.
