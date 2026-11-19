@@ -247,6 +247,7 @@ struct NoParts<'a> {
     #[common]
     common: Common,
     calls: &'a std::cell::Cell<usize>,
+    declare: bool,
 }
 
 impl Component for NoParts<'_> {
@@ -256,11 +257,14 @@ impl Component for NoParts<'_> {
     type Output = Response;
 
     fn style(_: &StyleCx<'_>, _: NoPartsStyleKey) -> PlainStyle {
-        PlainStyle::default()
+        PlainStyle::min(Vec2::splat(20.0))
     }
 
-    fn parts(&mut self, _: Rect, _: &mut PartsCx<'_, Self>) {
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         self.calls.set(self.calls.get() + 1);
+        if self.declare {
+            cx.part(craft_behavior::PartKey::new("unexpected"), rect);
+        }
     }
 
     fn paint(&mut self, _: &mut PaintUi<'_>, _: &Cx<'_, Self>) {}
@@ -275,7 +279,84 @@ fn a_component_declaring_no_parts_skips_the_parts_hook() {
     let mut frames = Frames::new();
     let calls = std::cell::Cell::new(0);
     frames.frame(vec![], |ui| {
-        NoParts { common: Common::new(), calls: &calls }.show(ui);
+        NoParts { common: Common::new(), calls: &calls, declare: false }.show(ui);
     });
     assert_eq!(calls.get(), 0, "the parts hook is skipped on ordinary runs");
+}
+
+#[trial]
+fn parts_declaration_checks_report_bad_components_and_restore_nested_checks() {
+    use craft_ui::testing::contract::check_parts_declarations;
+    let calls = std::cell::Cell::new(0);
+    let show = || {
+        Frames::new().frame(vec![], |ui| {
+            NoParts { common: Common::new(), calls: &calls, declare: true }.show(ui);
+        });
+    };
+    let outer = check_parts_declarations(|| {
+        show();
+        let inner = check_parts_declarations(show);
+        assert!(inner.iter().any(|name| name.contains("NoParts")), "{inner:?}");
+        show();
+    });
+    assert!(outer.len() >= 2 && outer.iter().all(|name| name.contains("NoParts")), "{outer:?}");
+
+    let panic = std::panic::catch_unwind(|| check_parts_declarations(|| panic!("guard test")));
+    assert!(panic.is_err());
+    let before = calls.get();
+    show();
+    assert_eq!(calls.get(), before, "the check is disabled after unwinding");
+}
+
+#[derive(Component)]
+struct FocusParts {
+    #[common]
+    common: Common,
+}
+
+impl Component for FocusParts {
+    const ROLE: Role = Role::None;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: FocusPartsStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::splat(20.0))
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
+        cx.part(craft_behavior::PartKey::new("first"), rect).focusable();
+        cx.part(craft_behavior::PartKey::new("second"), rect).focusable();
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn inspector_places_synthetic_focus_parts_after_each_owner() {
+    let mut frames = Frames::new();
+    let mut recorded = None;
+    let mut ids = Vec::new();
+    frames.frame(vec![], |ui| {
+        let (shown, record) = craft_ui::runtime::inspect::record(ui, named_id("focus-region"), |ui| {
+            ["one", "two"].map(|salt| FocusParts { common: Common::new() }.id_salt(salt).show(ui).id)
+        });
+        ids = shown.to_vec();
+        recorded = record;
+    });
+    let record = recorded.expect("real pass was recorded");
+    let mut stops = Vec::new();
+    for id in ids {
+        let owner = record.elements.iter().position(|element| element.id == id && element.part.is_none()).unwrap();
+        let parts = &record.elements[owner + 1..owner + 3];
+        assert!(parts.iter().all(|part| part.id == id && part.part.is_some() && part.facts.is_none()), "{parts:?}");
+        stops.extend(parts.iter().map(|part| part.stop.expect("part is a focus stop")));
+    }
+    stops.sort_unstable();
+    assert_eq!(stops, [1, 2, 3, 4]);
 }

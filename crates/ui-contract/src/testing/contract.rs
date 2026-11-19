@@ -55,15 +55,15 @@ thread_local! {
 }
 
 /// Run a story with the parts declaration check enabled, and return any offending component types.
-pub(crate) fn check_parts_declarations(run: impl FnOnce()) -> Vec<&'static str> {
-    struct Reset;
+pub fn check_parts_declarations(run: impl FnOnce()) -> Vec<&'static str> {
+    struct Reset(Option<Vec<&'static str>>);
     impl Drop for Reset {
         fn drop(&mut self) {
-            PARTS_CHECK.with(|check| *check.borrow_mut() = None);
+            PARTS_CHECK.with(|check| *check.borrow_mut() = self.0.take());
         }
     }
-    PARTS_CHECK.with(|check| *check.borrow_mut() = Some(Vec::new()));
-    let _reset = Reset;
+    let previous = PARTS_CHECK.with(|check| check.replace(Some(Vec::new())));
+    let _reset = Reset(previous);
     run();
     PARTS_CHECK.with(|check| check.borrow_mut().take().unwrap_or_default())
 }
