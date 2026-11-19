@@ -44,7 +44,7 @@ pub(crate) use intents::{
 };
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
-pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts};
+pub(crate) use route::{activated_member, begin, focus_in_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts};
 
 /// A menu-bar key of an in-window bar (spec 9.7). F10 reaches the bar on every OS; Alt keys only off a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,8 +103,8 @@ enum Taken {
     No,
     /// The press became an intent, a focus move or an activation.
     Yes,
-    /// With nothing focused, the window's document canvas took the press (a nudge or a page move): it is the canvas's
-    /// alone, as while the canvas has the focus, and no app shortcut runs with it.
+    /// With nothing focused, the window's document canvas took the press (a nudge it declares, `KeyUse::nudge_mods`,
+    /// or a page move): it is the canvas's alone, as while the canvas has the focus, and no app shortcut runs with it.
     Canvas,
 }
 
@@ -118,6 +118,8 @@ pub(crate) struct Shortcuts {
     pub(crate) dialog: bool,
     /// The layout that reads the presses.
     pub(crate) layout: Layout,
+    /// The content of a paste no focused component lists: the Paste command the keys fire carries it.
+    pub(crate) pasted: Option<ClipContent>,
 }
 
 /// What the input hook recorded for the next pass's begin hook.
@@ -129,6 +131,8 @@ struct Batch {
     shortcuts: Vec<Shortcut>,
     /// The content of the paste the focused component takes.
     paste: Option<ClipContent>,
+    /// The content of a paste no focused component lists, for the command its chord fires (`Fired::pasted`).
+    app_paste: Option<ClipContent>,
     /// Every text event of the pass, in order.
     texts: Vec<Typed>,
     /// How many text events the strip left in egui's input.

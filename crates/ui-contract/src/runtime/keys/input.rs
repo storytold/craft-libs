@@ -143,9 +143,14 @@ impl Strip<'_> {
             // A clipboard event behind an open menu reaches nothing: the menu keeps it, as a platform menu does. The
             // chord's own key press still runs its command, which closes the menu.
             KeyEvent::Clip { .. } if self.in_menu => false,
-            KeyEvent::Clip { command, .. } => {
+            KeyEvent::Clip { command, pasted } => {
                 // The platform sends the clipboard event in place of the chord: an unlisted one is the chord. The
-                // web sends the chord's press as well.
+                // web sends the chord's press as well. A paste's content goes with the command the chord fires.
+                if let Some(pasted) = pasted.filter(|_| command == EditCommand::Paste) {
+                    let content = batch.app_paste.get_or_insert_default();
+                    content.text = pasted.text.or(content.text.take());
+                    content.image = pasted.image.or(content.image.take());
+                }
                 let key = match command {
                     EditCommand::Cut => Key::X,
                     EditCommand::Paste => Key::V,

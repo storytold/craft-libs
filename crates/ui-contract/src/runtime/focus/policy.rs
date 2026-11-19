@@ -1,7 +1,7 @@
 //! Focus scopes, key use and the programmatic focus target (spec 9.3, 9.4).
 
 use craft_behavior::{CancelRule, DocKey, EditCommand, Input, OwnerClass, PartRef, ScopeKind};
-use craft_keymap::Chord;
+use craft_keymap::{Chord, Mods};
 use egui::Id;
 
 /// Where focus goes the first time a scope is pushed.
@@ -293,6 +293,10 @@ pub struct KeyUse {
     /// The arrows are nudges for the component's content (a canvas tool or control), not moves: they arrive as
     /// `Intents::take_nudge`.
     pub nudge: bool,
+    /// The modifiers a document canvas (`chrome_key`) acts on with the arrows: while nothing in the window has the
+    /// focus, an arrow pressed with one of them is the canvas's nudge alone, and an arrow with any other is no nudge and
+    /// stays the app's shortcut (Alt+Left of a view history). A canvas lists what its tool and body act on.
+    pub nudge_mods: NudgeMods,
     /// The component acts on Delete and Backspace (`Intent::Delete`: text edits, deleting a selection or a canvas
     /// control's object). A component that does not leaves them to the commands around the focus; a canvas tool claims
     /// them instead (`CanvasTool::claims`).
@@ -343,6 +347,7 @@ impl KeyUse {
         moves: false,
         chrome_key: true,
         nudge: true,
+        nudge_mods: NudgeMods::STEPS,
         deletes: false,
         submits: false,
         end: EndKey::LastItem,
@@ -384,6 +389,7 @@ impl KeyUse {
             moves: false,
             chrome_key: false,
             nudge: false,
+            nudge_mods: NudgeMods::NONE,
             deletes: owner_text,
             submits: false,
             end: EndKey::LastItem,
@@ -478,8 +484,48 @@ impl KeyUse {
         self
     }
 
+    /// The same use with `nudge_mods` as the modifiers a document canvas acts on with the arrows.
+    pub const fn with_nudge_mods(mut self, nudge_mods: NudgeMods) -> Self {
+        self.nudge_mods = nudge_mods;
+        self
+    }
+
     /// Whether the component claims `chord`.
     pub fn claims_chord(&self, chord: &Chord) -> bool {
         self.claims.contains(chord)
+    }
+}
+
+/// A set of modifier combinations held with the arrows (`KeyUse::nudge_mods`): each is matched exactly, so Shift alone
+/// does not admit Shift with Alt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NudgeMods(u16);
+
+impl NudgeMods {
+    /// No arrow.
+    pub const NONE: NudgeMods = NudgeMods(0);
+    /// The plain arrows and the arrows with Shift: the step and the large step every nudge reads.
+    pub const STEPS: NudgeMods = NudgeMods::NONE.with(Mods::NONE).with(Mods::SHIFT);
+
+    /// The same set with `mods` in it.
+    #[must_use]
+    pub const fn with(self, mods: Mods) -> Self {
+        NudgeMods(self.0 | Self::bit(mods))
+    }
+
+    /// Every combination of either set.
+    #[must_use]
+    pub const fn union(self, other: NudgeMods) -> Self {
+        NudgeMods(self.0 | other.0)
+    }
+
+    /// Whether `mods` is in the set.
+    pub const fn contains(self, mods: Mods) -> bool {
+        self.0 & Self::bit(mods) != 0
+    }
+
+    const fn bit(mods: Mods) -> u16 {
+        let at = (mods.cmd as u16) | ((mods.ctrl as u16) << 1) | ((mods.alt as u16) << 2) | ((mods.shift as u16) << 3);
+        1 << at
     }
 }

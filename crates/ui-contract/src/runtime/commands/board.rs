@@ -1281,6 +1281,7 @@ pub(crate) fn begin(ctx: &Context) {
                         cycle: false,
                         alt_variant: false,
                         time,
+                        pasted: None,
                     });
                 }
             }
@@ -1304,6 +1305,7 @@ pub(crate) fn begin(ctx: &Context) {
                             cycle: hit.cycle.len() > 1,
                             alt_variant: hit.alt_variant,
                             time,
+                            pasted: None,
                         };
                         with(ctx, |board| board.declined.push(declined));
                     }
@@ -1312,13 +1314,14 @@ pub(crate) fn begin(ctx: &Context) {
                 // An app-scope command a modal layer's instance declares is delivered to that instance.
                 let target = if app { resolved.instance } else { instance };
                 let key = shortcut.input.physical.or(shortcut.input.typed);
-                with(ctx, |board| {
+                let pasted = with(ctx, |board| {
                     if let Some(key) = key.filter(|_| {
                         board.def(&hit.command.id).is_some_and(|def| matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
                     }) {
                         board.held.retain(|held| held.key != key);
                         board.held.push(Held { key, command: hit.command.clone(), target });
                     }
+                    board.registry.edit_of(&hit.command.id) == Some(EditCommand::Paste)
                 });
                 fired.push(Fired {
                     command: hit.command,
@@ -1328,6 +1331,7 @@ pub(crate) fn begin(ctx: &Context) {
                     cycle: hit.cycle.len() > 1,
                     alt_variant: hit.alt_variant,
                     time,
+                    pasted: shortcuts.pasted.clone().filter(|_| pasted),
                 });
             }
         }

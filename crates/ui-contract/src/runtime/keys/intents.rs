@@ -79,7 +79,10 @@ impl Intents {
         }
     }
 
-    /// Takes the next move.
+    /// Takes the next move, whichever it is: for a component that acts on every move. A move taken is the component's,
+    /// so the Page Up, Page Down, Home and End it takes never reach the scroll owner around it (a page view under a
+    /// focused page part); a component that acts on some moves takes those with [`take_move_where`](Self::take_move_where)
+    /// and leaves the rest.
     pub fn take_move(&mut self) -> Option<(NavMove, MoveMods)> {
         self.take_move_where(|_, _| true)
     }

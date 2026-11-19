@@ -5,6 +5,7 @@ mod env;
 mod frame;
 mod latch;
 mod memory;
+mod paste;
 mod pen;
 mod pointer;
 mod wheel;

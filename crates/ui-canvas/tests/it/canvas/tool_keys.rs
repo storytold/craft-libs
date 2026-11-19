@@ -118,6 +118,20 @@ fn a_fired_command_whose_key_the_tool_claims_reaches_the_tool_as_that_key() {
     assert_eq!(canvas.tool().seen.len(), 1, "a tool that claims no delete gets none");
 }
 
+/// With nothing focused the window's canvas is the key target, as for its nudges: Edit ▸ Delete reaches the tool that
+/// claims Delete (a Select All took the focus away), and no app command runs.
+#[trial]
+fn a_fired_command_whose_key_the_tool_claims_reaches_it_with_nothing_focused() {
+    let mut canvas = ToolFixture::new("Document", Outline::new(true));
+    canvas.fixture().settle();
+    assert_eq!(canvas.fixture().focused(), None, "nothing is focused");
+    take_output(canvas.fixture().ctx());
+    commands::fire(canvas.fixture().ctx(), EditCommands::Delete, FireSource::Menu);
+    canvas.fixture().settle();
+    assert_eq!(canvas.tool().seen, [Seen::Delete { forward: true }], "the tool took Edit ▸ Delete as its Delete");
+    assert!(take_output(canvas.fixture().ctx()).fired.is_empty(), "no app command ran");
+}
+
 /// A tool that takes every key the host offers it.
 #[derive(Default)]
 struct Taker {

@@ -142,13 +142,18 @@ pub struct Fired {
     /// release arrived, also when the runtime held the event back to a later frame; the pass time for the other
     /// sources. A key's hold is the time between its press and its release, however late a frame runs them.
     pub time: f64,
+    /// The clipboard's content, for a paste the platform delivered with its event (the clipboard event that stands for
+    /// the paste chord) when no focused component lists Paste: the command that event fires carries it, so the app
+    /// pastes what the event held in the pass it runs the command. `None` for every other command, and for a paste
+    /// whose content the app reads from the clipboard itself.
+    pub pasted: Option<ClipContent>,
 }
 
 impl Fired {
     /// `command` fired from `source` in `phase` at the input time `time`, for the app scope (no target), without a group
-    /// cycle or the Alt variant.
+    /// cycle, the Alt variant or paste content.
     pub fn new(command: CommandRef, source: FireSource, phase: FirePhase, time: f64) -> Fired {
-        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time }
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false, time, pasted: None }
     }
 }
 

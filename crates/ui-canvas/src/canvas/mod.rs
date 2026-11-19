@@ -104,7 +104,7 @@ use crate::contract::{
 };
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
-use crate::runtime::focus::KeyUse;
+use crate::runtime::focus::{KeyUse, NudgeMods};
 use crate::runtime::frame;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
@@ -206,6 +206,12 @@ pub struct Canvas<'a> {
     /// itself (a page view).
     #[prop]
     keys_to_body: bool,
+    /// The arrow modifiers the body acts on besides the plain and Shift steps every tool and control reads
+    /// (`NudgeMods::STEPS`): with nothing in the window focused, those arrows are the canvas's alone, and an arrow with
+    /// modifiers neither lists stays the app's shortcut (`KeyUse::nudge_mods`). A page view lists the Cmd and Ctrl
+    /// arrows that turn its pages.
+    #[prop]
+    body_nudges: NudgeMods,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
     /// The snapping of the coordinates the pointer sets on this canvas (View > Snap To), as data over the document's
@@ -292,6 +298,7 @@ impl<'a> Canvas<'a> {
             navigation: NavigationOptions::default(),
             show_rulers: false,
             keys_to_body: false,
+            body_nudges: NudgeMods::NONE,
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
@@ -799,6 +806,10 @@ impl Component for Canvas<'_> {
     const KEYS: KeyUse = KeyUse::CANVAS.with_moves();
     type Style = CanvasStyle;
     type Output = CanvasOutput;
+
+    fn keys(&self) -> KeyUse {
+        Self::KEYS.with_nudge_mods(NudgeMods::STEPS.union(self.body_nudges))
+    }
 
     fn style(cx: &StyleCx<'_>, _: CanvasStyleKey) -> CanvasStyle {
         let surface = SurfaceLook::new(Stateful::new(cx.color(cx.tokens.color.surface.canvas))).kind(SurfaceKind::Canvas);

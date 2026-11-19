@@ -799,3 +799,37 @@ fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
     assert!(!alert(), "and raises no alert");
 }
+
+/// Escape with the focus in a form's text field, plain or masked (a password), cancels the dialog at once, typed text or
+/// not, as Escape does from any other control of the dialog: the dialog's Cancel discards the field's draft with the
+/// rest, so the draft does not hold Escape (production closed its Protect dialog on one Escape after typing).
+#[trial]
+fn escape_in_a_text_field_closes_the_form_dialog_typed_or_not() {
+    for masked in [false, true] {
+        for typed in ["", "secret"] {
+            let open = Rc::new(Cell::new(true));
+            let closed = Rc::new(Cell::new(false));
+            let (shown, seen, value) = (Rc::clone(&open), Rc::clone(&closed), Rc::new(RefCell::new(String::new())));
+            let mut fixture = Fixture::new(move |ui| {
+                let mut is_open = shown.get();
+                let mut text = value.borrow_mut();
+                let out = craft_ui::patterns::form_dialogs::FormDialog::new("Protect", Bind::bound(&mut *text)).opened(Bind::bound(&mut is_open)).show(
+                    ui,
+                    |ui, _, text| {
+                        let field = craft_ui::text::TextField::new("Type Password", Bind::bound(text));
+                        let _ = if masked { field.masked() } else { field }.show(ui);
+                        true
+                    },
+                );
+                shown.set(is_open);
+                seen.set(seen.get() || out.closed.is_some());
+            });
+            fixture.idle(10);
+            let field = fixture.by_label("Type Password").expect("the field is shown");
+            fixture.click(&field).idle(2);
+            fixture.type_text(typed).idle(2);
+            fixture.key(Key::Escape, Modifiers::NONE).idle(6);
+            assert!(closed.get() && !open.get(), "Escape in the field closes the dialog (masked {masked}, typed {typed:?})");
+        }
+    }
+}

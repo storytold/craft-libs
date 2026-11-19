@@ -35,6 +35,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims, fired)
     });
     let modal = overlay::any_open(ctx, overlay::OpenFilter::Modal);
+    let canvas = if target.is_some() { None } else { unfocused_canvas(ctx) };
     let stale_repeat = |stale: &mut bool, press: &Press| {
         if press.key != Key::Enter || !press.mods.is_none() {
             return false;
@@ -51,8 +52,6 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut routed: HashMap<Option<Id>, Routed> = HashMap::new();
     let mut activated = IdMap::default();
     let mut consumed = vec![Taken::No; batch.presses.len()];
-    // With nothing focused, the window's document canvas is the key target unless a modal layer is open.
-    let canvas = if target.is_some() || modal { None } else { focus::document_canvas(ctx) };
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
     // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
@@ -90,12 +89,17 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // edit or a dialog's default button takes it. The arrows nudge the window's canvas content (a tool or the
         // session control on a canvas), unless a modal layer is open. The window's document canvas is its key target
         // (`focus::host_canvas`): Page Up and Down, Home and End page it as they do while it has the focus. What the
-        // canvas takes is its alone, as while it has the focus: the app's shortcuts do not run with it too.
+        // canvas takes is its alone, as while it has the focus: the app's shortcuts do not run with it too. It takes the
+        // arrows with the modifiers it acts on (`KeyUse::nudge_mods`); the others are the app's.
+        let declared = |mods: Mods| canvas.as_ref().is_none_or(|canvas| canvas.stop.keys.nudge_mods.contains(mods));
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
-            } else if !modal && let Some(nudge) = nudge_of(press.key, press.mods) {
+            } else if !modal
+                && declared(press.mods)
+                && let Some(nudge) = nudge_of(press.key, press.mods)
+            {
                 routed.entry(None).or_default().nudge = Some(nudge);
                 *taken = if canvas.is_some() { Taken::Canvas } else { Taken::Yes };
             } else if let Some(canvas) = &canvas
@@ -184,6 +188,13 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     escapes
 }
 
+/// The window's document canvas as the key target of the running viewport while nothing has the focus: none while a
+/// modal layer is open. It takes the window's nudges and page keys, and a fired command whose chord it claims, as it
+/// does while it has the focus.
+pub(super) fn unfocused_canvas(ctx: &Context) -> Option<StopRec> {
+    if overlay::any_open(ctx, overlay::OpenFilter::Modal) { None } else { focus::document_canvas(ctx) }
+}
+
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
     routed.entry(target).or_default().items.push(Item { intent, horizontal });
 }
@@ -197,6 +208,13 @@ pub(crate) fn owner_at(ctx: &Context, target: Option<&StopRec>, scopes: &[Id], b
         present.push(class);
     }
     key_owner(layer == overlay::LayerKeys::Blocked, &present)
+}
+
+/// Whether the focused stop of the running viewport is in a dialog layer (`OwnerClass::Dialog`): Escape there is the
+/// dialog's Cancel, which discards a field's draft with the rest of the dialog's edits, so a draft does not hold it.
+pub(crate) fn focus_in_dialog(ctx: &Context) -> bool {
+    focus::focused_rec(ctx)
+        .is_some_and(|rec| overlay::key_layer(ctx, &focus::scope_chain(ctx, &rec), None) == overlay::LayerKeys::Class(OwnerClass::Dialog))
 }
 
 /// The shortcut events the key owner leaves to the app (9.3), and the presses the focused component holds
@@ -232,7 +250,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         })
         .copied()
         .collect();
-    (Shortcuts { keys, typing, dialog, layout: Layout::default() }, held)
+    (Shortcuts { keys, typing, dialog, layout: Layout::default(), pasted: batch.app_paste.clone() }, held)
 }
 
 /// Whether the focused stop `target`, whose keys `owner` owns, holds `press`: the press is its own and reaches neither

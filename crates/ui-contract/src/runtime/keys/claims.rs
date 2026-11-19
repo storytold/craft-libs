@@ -35,10 +35,11 @@ pub fn claim(ctx: &Context, owner: Id, chord: Chord) {
 /// Hands the first of `chords` (a fired command's keys, in binding order) that the focused component claims, as it is
 /// focused now, to the claim's owner in the next pass, as a press of the chord arrives: a command run from a menu or
 /// the palette whose key a component claims (a canvas tool's Delete) reaches the component as that key, so key and
-/// menu share one path. A menu pick returns focus in its pass before its command fires. `false` when the focused
-/// component claims none of them.
+/// menu share one path. A menu pick returns focus in its pass before its command fires. With nothing focused the
+/// window's document canvas stands for the focused component, as it takes the window's nudges
+/// (`route::unfocused_canvas`). `false` when that component claims none of them.
 pub(crate) fn fire_claimed(ctx: &Context, chords: &[Chord]) -> bool {
-    let Some(rec) = crate::runtime::focus::focused_rec(ctx) else { return false };
+    let Some(rec) = crate::runtime::focus::focused_rec(ctx).or_else(|| super::route::unfocused_canvas(ctx)) else { return false };
     let root = (rec.stop.root != rec.stop.id && !rec.stop.text).then_some(rec.stop.root);
     let found = current(ctx, |stage| {
         let held = |chord: &Chord| {

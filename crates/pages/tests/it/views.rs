@@ -1003,6 +1003,63 @@ fn an_arrow_the_tool_takes_leaves_the_page_and_one_it_leaves_turns_it() {
     assert_eq!((taken.get(), state.borrow().current), (1, 1), "an arrow the tool leaves turns the page");
 }
 
+/// With nothing focused the view takes only the arrows it acts on: a plain arrow turns the page and is the view's
+/// alone, while Alt with an arrow, which it does not read, stays in egui's input for the app's shortcuts (a view
+/// history's Alt+Left). The view used to hold every arrow, whatever was held with it.
+#[trial]
+fn with_nothing_focused_the_view_leaves_alt_and_an_arrow_to_the_app() {
+    let reached: Rc<RefCell<Vec<Modifiers>>> = Rc::default();
+    let seen = Rc::clone(&reached);
+    let start = state_with(|s| {
+        s.continuous = false;
+        s.fit = Fit::Page;
+    });
+    let Rig { mut fixture, state, .. } = rig_with(DemoPages::new(5), start, NavigationOptions::default(), true, move |ui, _| {
+        let pressed = ui.input(|input| {
+            input.events.iter().find_map(|event| match event {
+                egui::Event::Key { key: Key::ArrowRight, pressed: true, modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+        });
+        seen.borrow_mut().extend(pressed);
+    });
+    fixture.key(Key::ArrowRight, Modifiers::ALT);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 0, "Alt+Right turns no page");
+    assert!(reached.borrow().iter().any(|mods| mods.alt), "Alt+Right reaches the app");
+    reached.borrow_mut().clear();
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 1, "Right turns the page");
+    assert!(reached.borrow().is_empty(), "Right is the view's alone");
+}
+
+/// The page and end keys a focused control in the page body does not use (a button takes no moves) page the view,
+/// as they do with the canvas focused: the control leaves them untaken and they go on to the view, its scroll owner.
+#[trial]
+fn page_keys_a_focused_control_in_the_body_leaves_page_the_view() {
+    let start = state_with(|s| {
+        s.continuous = false;
+        s.fit = Fit::Page;
+    });
+    let Rig { mut fixture, state, .. } = rig_with(DemoPages::new(5), start, NavigationOptions::default(), true, |ui, _| {
+        let _ = craft_ui::buttons::Button::new("Mark").show(ui);
+    });
+    for _ in 0..4 {
+        if fixture.focused_stop().is_some() && fixture.focused_role().is_some_and(|role| !role.nudge) {
+            break;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE);
+    }
+    assert!(fixture.focused_role().is_some_and(|role| !role.nudge), "Tab reaches the button in the body");
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 1, "Page Down turns one page");
+    fixture.key(Key::End, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().current, 4, "End goes to the last page");
+}
+
 /// Cmd with Page Down turns one page in a scrolling view, where plain Page Down scrolls a screen; Right turns a
 /// spread in a scrolling two-page view, not to the other page of the spread already on screen.
 #[trial]
