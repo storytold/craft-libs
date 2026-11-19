@@ -162,7 +162,12 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_unix_resource_groups_are_serial_and_leave_windows_alone(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
-        overrides = config["profile"]["ci"]["overrides"]
+        all_overrides = config["profile"]["ci"]["overrides"]
+        # Priority tiers are overrides too: the slowest tests go first. They name no test group.
+        overrides = [override for override in all_overrides if "test-group" in override]
+        self.assertEqual([override for override in all_overrides if "test-group" not in override],
+                         [{"filter": override["filter"], "priority": override["priority"]}
+                          for override in all_overrides if "test-group" not in override])
         self.assertEqual(overrides, [
             {"platform": "cfg(unix)",
              "filter": "package(craft-ui) | package(craft-keymap) | package(craft-update)",

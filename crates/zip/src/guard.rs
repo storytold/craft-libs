@@ -119,19 +119,16 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
             if eocd64 >= locator_pos || disks > 1 {
                 continue;
             }
-            let span = (locator_pos - eocd64).min(65_536);
-            let mut buf;
-            let slice = if let Some(in_tail) = eocd64.checked_sub(tail_start).and_then(|o| usize::try_from(o).ok()) {
-                tail.get(in_tail..locator).unwrap_or_default()
-            } else {
-                let span_usize = usize::try_from(span).unwrap_or(65_536);
-                reader.seek(SeekFrom::Start(eocd64)).map_err(io_err)?;
-                buf = vec![0u8; span_usize];
-                reader.read_exact(&mut buf).map_err(io_err)?;
-                &buf
-            };
-            for (i, _) in slice.windows(4).enumerate().filter(|(_, w)| *w == EOCD64) {
-                refuse(u64_at(slice, i + 24).unwrap_or(0).max(u64_at(slice, i + 32).unwrap_or(0)))?;
+            // The whole `eocd64..locator` range, read in bounded chunks: the record can sit further back than
+            // the tail window when a stub is in front of the package, and `zip` uses it there too.
+            for offset in scan_offsets(reader, eocd64, locator_pos, EOCD64).map_err(io_err)? {
+                let mut head = [0u8; 40];
+                reader.seek(SeekFrom::Start(offset)).map_err(io_err)?;
+                if reader.read_exact(&mut head).is_err() {
+                    continue;
+                }
+                let count = |at: usize| u64::from_le_bytes([head[at], head[at + 1], head[at + 2], head[at + 3], head[at + 4], head[at + 5], head[at + 6], head[at + 7]]);
+                refuse(count(24).max(count(32)))?;
             }
             continue;
         }
@@ -140,20 +137,36 @@ pub fn check_entry_count_seekable<R: Read + Seek>(reader: &mut R, max_entries: u
         }
         let cd = u64::from(cd_offset);
         let at_pos = tail_start + at as u64;
-        if cd < at_pos {
-            let has_cd = if let Some(in_tail) = cd.checked_sub(tail_start).and_then(|o| usize::try_from(o).ok()) {
-                tail.get(in_tail..at).is_some_and(|b| b.windows(4).any(|w| w == CENTRAL_HEADER))
-            } else {
-                let mut sig = [0u8; 4];
-                reader.seek(SeekFrom::Start(cd)).map_err(io_err)?;
-                reader.read_exact(&mut sig).is_ok() && &sig == CENTRAL_HEADER
-            };
-            if has_cd {
-                return refuse(u64::from(on_disk.max(total)));
-            }
+        if cd < at_pos && !scan_offsets(reader, cd, at_pos, CENTRAL_HEADER).map_err(io_err)?.is_empty() {
+            return refuse(u64::from(on_disk.max(total)));
         }
     }
     Ok(())
+}
+
+/// The offsets of `needle` in `from..to`, read in bounded chunks: three bytes of each chunk are carried
+/// into the next, so a signature that straddles a boundary is still found. Nothing is buffered beyond one
+/// chunk, and the scan covers the same range the in-memory guard walks.
+fn scan_offsets<R: Read + Seek>(reader: &mut R, from: u64, to: u64, needle: &[u8; 4]) -> std::io::Result<Vec<u64>> {
+    const CHUNK: u64 = 64 * 1024;
+    let mut found = Vec::new();
+    let mut at = from;
+    let mut carry: Vec<u8> = Vec::new();
+    while at < to {
+        let len = usize::try_from(CHUNK.min(to - at)).map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+        let mut buf = vec![0u8; len + carry.len()];
+        buf[..carry.len()].copy_from_slice(&carry);
+        reader.seek(SeekFrom::Start(at))?;
+        reader.read_exact(&mut buf[carry.len()..])?;
+        let base = at - carry.len() as u64;
+        for (i, _) in buf.windows(4).enumerate().filter(|(_, window)| *window == needle) {
+            found.push(base + i as u64);
+        }
+        let keep = buf.len().saturating_sub(3);
+        carry = buf[keep..].to_vec();
+        at += len as u64;
+    }
+    Ok(found)
 }
 
 /// A package of one empty stored file, `a`, whose central directory lists it `entries` times (at
@@ -282,6 +295,33 @@ mod tests {
         let record = [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let f: Vec<u8> = (0..20).flat_map(|_| EOCD.iter().copied().chain(record)).collect();
         assert_eq!(check(&f, 20_000), Err(Error::TooManyEndRecords(16)));
+    }
+
+    /// A stub in front of the package moves its end records out of the trailing window: the seekable guard
+    /// reads the same ranges as the in-memory one, so both refuse the declared count.
+    #[test]
+    fn a_prefix_longer_than_the_tail_window_hides_no_end_record() {
+        use std::io::Cursor;
+
+        let mut zipped = vec![0x55u8; 70_000];
+        zipped.extend_from_slice(&zip64_entry_count_sample(20_001));
+        assert_eq!(check(&zipped, 20_000), Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 }));
+        assert_eq!(
+            check_entry_count_seekable(&mut Cursor::new(&zipped), 20_000),
+            Err(Error::TooManyEntries { declared: 20_001, limit: 20_000 })
+        );
+
+        // A plain package whose directory offset points into that stub: the central header is further on.
+        let mut plain_pkg = vec![0x55u8; 10];
+        plain_pkg.extend_from_slice(&plain(30_000, b""));
+        let eocd = plain_pkg.len() - 22;
+        plain_pkg[eocd + 16..eocd + 20].copy_from_slice(&0u32.to_le_bytes());
+        plain_pkg.splice(eocd..eocd, std::iter::repeat_n(0x55u8, 70_000));
+        assert_eq!(check(&plain_pkg, 20_000), Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 }));
+        assert_eq!(
+            check_entry_count_seekable(&mut Cursor::new(&plain_pkg), 20_000),
+            Err(Error::TooManyEntries { declared: 30_000, limit: 20_000 })
+        );
     }
 
     #[test]

@@ -45,7 +45,17 @@ fn has_merged_transparency(layer: &[u8], version: crate::Version) -> bool {
     let info_len = if version.is_psb() { u64_at(layer, &mut at).ok() } else { u32_at(layer, &mut at).ok().map(u64::from) };
     let Some(info_len) = info_len else { return false };
     if info_len >= 2 {
-        return layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0);
+        // The count's sign is the marker itself: negative means the first alpha channel holds the merged
+        // transparency. A count of zero has no layer records, so the global tagged blocks that follow can
+        // still carry one (Mt16/Mt32) and the scan below reaches them; a positive count would need every
+        // record parsed to find them, which this scan does not do.
+        let count = layer.get(at..at + 2).map(|b| i16::from_be_bytes([b[0], b[1]]));
+        if count.is_some_and(|count| count < 0) {
+            return true;
+        }
+        if count.is_none_or(|count| count != 0) {
+            return false;
+        }
     }
     let Ok(info_len) = usize::try_from(info_len) else { return false };
     let Some(next) = at.checked_add(info_len) else { return false };
@@ -315,5 +325,24 @@ mod tests {
         let mut mt16 = vec![0; 8];
         mt16.extend_from_slice(b"8BIMMt16\0\0\0\0");
         assert!(Merged::open(&with_layer(&mt16), 4).unwrap().transparency);
+    }
+    /// A layer count of zero still has the global tagged blocks after it, and `Mt16` there is the merged
+    /// transparency marker: the scan must not stop at a non-negative count.
+    #[test]
+    fn a_zero_layer_count_still_reaches_the_global_mt16_marker() {
+        let open = |layer: &[u8]| {
+            let mut b = head(2, 0);
+            b.splice(34..38, (layer.len() as u32).to_be_bytes().iter().copied().chain(layer.iter().copied()));
+            Merged::open(&b, 4).unwrap().transparency
+        };
+        let mut layer = Vec::new();
+        layer.extend_from_slice(&2u32.to_be_bytes()); // info_len: the layer count
+        layer.extend_from_slice(&0i16.to_be_bytes()); // no layer records
+        layer.extend_from_slice(&0u32.to_be_bytes()); // mask_len
+        layer.extend_from_slice(b"8BIMMt16\0\0\0\0");
+        assert!(open(&layer), "Mt16 after a zero count is the merged transparency marker");
+        // A positive count means layer records this scan does not walk: no marker is read, and nothing panics.
+        layer[4..6].copy_from_slice(&1i16.to_be_bytes());
+        assert!(!open(&layer));
     }
 }

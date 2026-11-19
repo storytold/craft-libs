@@ -429,7 +429,7 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 - `craft-ui-shell`: **94 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-menu`: **3 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-pages` (screen testing): **112 passed; 0 failed**
-- `craft-ui-panels`: **220 passed; 2 failed** (`Space fires it`, `Space activates the focused member through the group` — reproduce without the fork changes, pre-existing)
+- `craft-ui-panels`: **220 passed; 2 failed** (`Space fires it`, `Space activates the focused member through the group`). Both reproduce with the fork changes stashed, so they are pre-existing: Section 5 step 3 requires 0 failures for the suites this merge touches and asks that these two be reported as unchanged.
 - Clippy across all workspace crates: **0 warnings, exit code 0**
 
 ---
@@ -445,18 +445,22 @@ To merge upstream updates while preserving all fork-specific architectural featu
    git remote -v
    ```
    `upstream` must point to `storytold/craft-libs`, and `fork` must point to `ussoewwin/craft-libs`.
-1. **Fetch, Switch & Backup**:
+1. **Fetch, Switch, Reconcile & Backup**:
    ```bash
    git fetch upstream next
+   git fetch fork next
    git switch next
    git branch backup-next-$(date +%Y%m%d)
+   git rebase fork/next      # only if fork/next is ahead of the local branch
    ```
+   `fork/next` can be ahead of the local `next` (another checkout pushed a fix); without the rebase the backup captures the older branch, the merge lands on it, and step 4 is rejected as non-fast-forward. The rebase is a no-op when the local branch is current.
 2. **Merge Upstream**:
    ```bash
    git merge upstream/next -m "Merge remote-tracking branch 'upstream/next' into next (preserve fork features)"
    ```
 3. **Execute Verification Gate**:
-   Execute all six test commands listed in Section 4. Ensure 0 failures and 0 warnings.
+   Execute all six test commands listed in Section 4. Every suite that this merge touches must report 0 failures and 0 warnings.
+   The two `craft-ui-panels` failures recorded in Section 4 are a known pre-existing divergence (`Space` activation, measured failing without the fork changes): report them as unchanged by the merge and do not let a new failure hide behind them.
 4. **Push to Fork Remote**:
    ```bash
    git push fork next
