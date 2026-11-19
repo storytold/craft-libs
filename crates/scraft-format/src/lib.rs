@@ -124,14 +124,26 @@ mod session_io_tests {
 
     #[test]
     fn rejects_case_insensitive_duplicate_named_inputs() {
-        for names in [["Mic", "MIC"], ["\u{c9}", "\u{e9}"], ["Stra\u{df}e", "STRASSE"]] {
+        let names = ["Mic", "MIC"];
+        let mut session = Session::default();
+        for (first_channel, name) in (0..).zip(names) {
+            session.inputs.push(InputPath { name: name.into(), first_channel, format: ChannelFormat::Mono });
+        }
+        assert!(
+            matches!(Session::from_json(&session.to_json().unwrap()), Err(SessionError::Invalid(message)) if message.contains("duplicate named input"))
+        );
+    }
+
+    #[test]
+    fn preserves_non_ascii_named_inputs_from_existing_editors() {
+        for names in [["É", "é"], ["Straße", "STRASSE"]] {
             let mut session = Session::default();
             for (first_channel, name) in (0..).zip(names) {
+                let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
                 session.inputs.push(InputPath { name: name.into(), first_channel, format: ChannelFormat::Mono });
+                session.track_mut(id).unwrap().mixer.input = Route::Input(name.into());
             }
-            assert!(
-                matches!(Session::from_json(&session.to_json().unwrap()), Err(SessionError::Invalid(message)) if message.contains("duplicate named input"))
-            );
+            assert_eq!(Session::from_json(&session.to_json().unwrap()).unwrap(), session);
         }
     }
 
