@@ -19,22 +19,33 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::visit::Visit;
+use syn::visit_mut::VisitMut;
 use syn::{Data, DeriveInput};
 
-/// The impl generics, with a bound for every checked field whose type names a type parameter, and the item that
-/// checks every other checked field.
+/// What the plain-data check gives a derive.
 pub(crate) struct FieldChecks {
+    /// The impl generics: the type's own, with every type parameter bound by the derive's trait.
     pub(crate) generics: syn::Generics,
+    /// The item that checks each field not escaped, under those bounds. A derive whose impl body already uses every
+    /// field through its trait may leave it out.
     pub(crate) checks: TokenStream,
 }
 
-/// Requires `trait_path` of every field of `input` (structs, tuple structs, enums; a union is an error). A field whose
-/// type names a type parameter gets a bound on the impl; a field of a concrete type is checked by a generated
-/// `check::<Field>()` spanned at the field's type, so the error points at the field, and a recursive type (a node
-/// holding `Vec<Self>`) does not make its impl require itself. With `assume` set to an attribute name, a field
-/// carrying `#[<assume>(assume = "reason")]` is not checked.
-pub(crate) fn field_checks(input: &DeriveInput, trait_path: &TokenStream, assume: Option<&str>) -> syn::Result<FieldChecks> {
+/// The escape a derive allows for one field: `#[<attr>(<keyword> = "reason")]`.
+pub(crate) struct Escape {
+    /// The attribute's name (`plain_data`).
+    pub(crate) attr: &'static str,
+    /// The one key it takes (`assume`).
+    pub(crate) keyword: &'static str,
+}
+
+/// Requires `trait_path` of every field of `input` (structs, tuple structs, enums; a union is an error). The impl
+/// bounds each type parameter by `trait_path`; every field is checked under those bounds by a generated
+/// `check::<Field>()` spanned at the field's type, so a rejected field (`Cell<T>` included) is an error at the derive
+/// that names the field, and a recursive type (a node holding `Vec<Self>` or `Vec<Node<T>>`) does not make its impl
+/// require itself. A field type written with `Self` is checked as the type itself. A field carrying `escape` is not
+/// checked.
+pub(crate) fn field_checks(input: &DeriveInput, trait_path: &TokenStream, escape: Option<&Escape>) -> syn::Result<FieldChecks> {
     let fields: Vec<&syn::Field> = match &input.data {
         Data::Struct(data) => data.fields.iter().collect(),
         Data::Enum(data) => data.variants.iter().flat_map(|variant| variant.fields.iter()).collect(),
@@ -43,47 +54,66 @@ pub(crate) fn field_checks(input: &DeriveInput, trait_path: &TokenStream, assume
     let mut generics = input.generics.clone();
     let params: Vec<syn::Ident> = input.generics.type_params().map(|param| param.ident.clone()).collect();
     let where_clause = generics.make_where_clause();
-    let mut concrete = Vec::new();
+    for param in &params {
+        where_clause.predicates.push(syn::parse2(quote!(#param: #trait_path))?);
+    }
+    let ident = &input.ident;
+    let (_, type_generics, _) = input.generics.split_for_impl();
+    let this: syn::Type = syn::parse2(quote!(#ident #type_generics))?;
+    let mut checked = Vec::new();
     for field in fields {
-        if let Some(name) = assume
-            && assumed(field, name)?
+        if let Some(escape) = escape
+            && escaped(field, escape)?
         {
             continue;
         }
-        let ty = &field.ty;
-        if mentions(ty, &params) {
-            where_clause.predicates.push(syn::parse2(quote_spanned!(ty.span()=> #ty: #trait_path))?);
-        } else {
-            concrete.push(ty);
-        }
+        let mut ty = field.ty.clone();
+        ReplaceSelf(&this).visit_type_mut(&mut ty);
+        checked.push(quote_spanned!(field.ty.span()=> check::<#ty>();));
     }
     let (impl_generics, _, where_clause) = generics.split_for_impl();
-    let each = concrete.iter().map(|ty| quote_spanned!(ty.span()=> check::<#ty>();));
     let checks = quote! {
         const _: () = {
             #[allow(dead_code, clippy::extra_unused_type_parameters)]
             fn check<T: ?Sized + #trait_path>() {}
             #[allow(dead_code)]
             fn fields #impl_generics () #where_clause {
-                #(#each)*
+                #(#checked)*
             }
         };
     };
     Ok(FieldChecks { generics, checks })
 }
 
-/// Whether `field` carries `#[<name>(assume = "reason")]`. Any other content of the attribute, or an empty reason, is
-/// an error.
-fn assumed(field: &syn::Field, name: &str) -> syn::Result<bool> {
+/// Replaces the type `Self` with the deriving type, which the generated free function can't name as `Self`.
+struct ReplaceSelf<'t>(&'t syn::Type);
+
+impl VisitMut for ReplaceSelf<'_> {
+    fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+        if let syn::Type::Path(path) = ty
+            && path.qself.is_none()
+            && path.path.is_ident("Self")
+        {
+            *ty = self.0.clone();
+            return;
+        }
+        syn::visit_mut::visit_type_mut(self, ty);
+    }
+}
+
+/// Whether `field` carries `#[<attr>(<keyword> = "reason")]`. Any other content of the attribute, or an empty
+/// reason, is an error.
+pub(crate) fn escaped(field: &syn::Field, escape: &Escape) -> syn::Result<bool> {
+    let Escape { attr: name, keyword } = *escape;
     let mut found = false;
     for attr in field.attrs.iter().filter(|attr| attr.path().is_ident(name)) {
         attr.parse_nested_meta(|meta| {
-            if !meta.path.is_ident("assume") {
-                return Err(meta.error(format!("expected `#[{name}(assume = \"why the type is plain\")]`")));
+            if !meta.path.is_ident(keyword) {
+                return Err(meta.error(format!("expected `#[{name}({keyword} = \"reason\")]`")));
             }
             let reason: syn::LitStr = meta.value()?.parse()?;
             if reason.value().trim().is_empty() {
-                return Err(syn::Error::new(reason.span(), "`assume` needs a reason: why this field's type is plain data"));
+                return Err(syn::Error::new(reason.span(), format!("`{keyword}` needs a reason: why this field's type is plain data")));
             }
             found = true;
             Ok(())
@@ -92,43 +122,24 @@ fn assumed(field: &syn::Field, name: &str) -> syn::Result<bool> {
     Ok(found)
 }
 
-/// Whether `ty` names one of the type parameters `params`.
-fn mentions(ty: &syn::Type, params: &[syn::Ident]) -> bool {
-    struct Finder<'p> {
-        params: &'p [syn::Ident],
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for Finder<'_> {
-        fn visit_path(&mut self, path: &'ast syn::Path) {
-            if path.leading_colon.is_none() && path.segments.first().is_some_and(|segment| self.params.contains(&segment.ident)) {
-                self.found = true;
-            }
-            syn::visit::visit_path(self, path);
-        }
-    }
-    let mut finder = Finder { params, found: false };
-    finder.visit_type(ty);
-    finder.found
-}
-
-/// The path of craft-tracked as the crate being compiled reaches it: the facade's `tracked` module, a direct
-/// dependency (`::craft_tracked` in craft-tracked itself, which declares that name), or the framework's re-export in
-/// `contract`.
+/// The path of craft-tracked as the crate being compiled reaches it: a direct dependency (`::craft_tracked` in
+/// craft-tracked itself, which declares that name), else the facade's `tracked` module, else the framework's
+/// re-export in `contract`.
 fn tracked_crate() -> TokenStream {
-    match crate_name("craft") {
-        Ok(FoundCrate::Name(name)) => {
-            let name = format_ident!("{name}");
-            return quote!(::#name::tracked);
-        }
-        Ok(FoundCrate::Itself) => return quote!(::craft::tracked),
-        Err(_) => {}
-    }
     match crate_name("craft-tracked") {
         Ok(FoundCrate::Name(name)) => {
             let name = format_ident!("{name}");
-            quote!(::#name)
+            return quote!(::#name);
         }
-        Ok(FoundCrate::Itself) => quote!(::craft_tracked),
+        Ok(FoundCrate::Itself) => return quote!(::craft_tracked),
+        Err(_) => {}
+    }
+    match crate_name("craft") {
+        Ok(FoundCrate::Name(name)) => {
+            let name = format_ident!("{name}");
+            quote!(::#name::tracked)
+        }
+        Ok(FoundCrate::Itself) => quote!(::craft::tracked),
         Err(_) => {
             let k = ui_crate();
             quote!(#k::contract)
@@ -141,7 +152,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let input: DeriveInput = syn::parse2(input)?;
     let k = tracked_crate();
     let trait_path = quote!(#k::PlainData);
-    let FieldChecks { generics, checks } = field_checks(&input, &trait_path, Some("plain_data"))?;
+    let FieldChecks { generics, checks } = field_checks(&input, &trait_path, Some(&Escape { attr: "plain_data", keyword: "assume" }))?;
     let ident = &input.ident;
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, type_generics, _) = input.generics.split_for_impl();

@@ -39,6 +39,39 @@
 //! # let _ = tree;
 //! ```
 //!
+//! Generic and self-referring types derive it too; each type parameter must then be plain data, and a type that
+//! holds a parameter only in `PhantomData` (a typed id) needs nothing more:
+//!
+//! ```
+//! use craft_tracked::Tracked;
+//! use craft_ui_macros::PlainData;
+//! use std::marker::PhantomData;
+//!
+//! #[derive(PlainData)]
+//! struct Tree<T> {
+//!     value: T,
+//!     children: Vec<Tree<T>>,
+//! }
+//!
+//! #[derive(PlainData)]
+//! struct List {
+//!     name: String,
+//!     next: Option<Box<Self>>,
+//! }
+//!
+//! #[derive(PlainData)]
+//! struct Id<T> {
+//!     raw: u64,
+//!     kind: PhantomData<T>,
+//! }
+//!
+//! let mut tree = Tracked::new(Tree { value: 1_u32, children: vec![Tree { value: 2, children: Vec::new() }] });
+//! tree.children[0].value = 3;
+//! let list = Tracked::new(List { name: "a".into(), next: Some(Box::new(List { name: "b".into(), next: None })) });
+//! let id = Tracked::new(Id::<List> { raw: 7, kind: PhantomData });
+//! # let _ = (list, id);
+//! ```
+//!
 //! Two kinds of type have no derived implementation and take one of two escapes, each a stated promise that a shared
 //! reference can't change what readers see:
 //!
@@ -47,7 +80,9 @@
 //!   required; an empty one does not compile.
 //! - **A type that encapsulates interior mutability readers can't observe** (a tile whose bytes move between memory
 //!   and disk while its pixels stay the same): the crate that owns the type implements the marker by hand,
-//!   `impl PlainData for Tile {}`, with a comment saying why. UI crates have no such types and use the derive.
+//!   `impl PlainData for Tile {}`, with a comment saying why. Hand implementations are allowed by design in the
+//!   non-UI crate that owns such a type; UI crates have no such types, use the derive, and design-lint rejects a hand
+//!   implementation there.
 //!
 //! ```
 //! use craft_tracked::Tracked;
@@ -117,6 +152,15 @@
 //! }
 //! ```
 //!
+//! A generic derived type whose field is rejected for every parameter fails at the derive:
+//!
+//! ```compile_fail,E0277
+//! #[derive(craft_ui_macros::PlainData)]
+//! struct Counter<T> {
+//!     hits: std::cell::Cell<T>,
+//! }
+//! ```
+//!
 //! A generic derived type used with a rejected parameter:
 //!
 //! ```compile_fail,E0277
@@ -125,7 +169,7 @@
 //! let _ = craft_tracked::Tracked::new(Wrap(std::cell::Cell::new(1)));
 //! ```
 //!
-//! An `assume` without a reason:
+//! An `assume` without a reason (the derive reports it with `compile_error!`, which has no error code):
 //!
 //! ```compile_fail
 //! #[derive(craft_ui_macros::PlainData)]
