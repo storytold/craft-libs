@@ -330,7 +330,7 @@ fn the_hundredth_pass_check_finds_every_kept_resolution_current() {
     let mut generation = 1;
     let input = |states: &Tracked<CommandStates>, refuses: bool, generation: u64| {
         let extra = CommandDef::new(CommandRef::new("trial.extra"), "Extra", Scope::app())
-            .with_default(Binding::parse(if generation % 2 == 0 { "F7" } else { "F6" }).expect("the trial's chord parses"));
+            .with_default(Binding::parse(if generation.is_multiple_of(2) { "F7" } else { "F6" }).expect("the trial's chord parses"));
         gated(states, refuses).catalog(AppCatalog::new(vec![extra], generation).expect("the trial's catalog is valid"))
     };
     frames.commands(input(&states, refuses, generation));
