@@ -129,8 +129,13 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     }
     scope::finish(ctx, id, None);
     let carried = scope::carried_name(ctx, id);
-    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`).
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
+    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
+    // unwritten it would be reported as a node of unknown role.
     let Role::Node(role) = role else {
+        if input.node {
+            access::pass_through(ctx, id);
+        }
         scope::leave(ctx, id);
         return;
     };

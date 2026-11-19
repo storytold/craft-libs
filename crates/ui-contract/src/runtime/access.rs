@@ -52,6 +52,12 @@ pub(crate) fn hide(ctx: &egui::Context, id: Id) {
     adapter::hide(ctx, id);
 }
 
+/// Takes the node of `id` out of what assistive technology reports and keeps its children in their place: a
+/// component whose type has a node and that reports none this pass (`Access::role`), with children that have theirs.
+pub(crate) fn pass_through(ctx: &egui::Context, id: Id) {
+    adapter::pass_through(ctx, id);
+}
+
 /// Reports `id` as the focused node of this pass.
 pub(crate) fn set_focus(ctx: &egui::Context, id: Id) {
     adapter::set_focus(ctx, id);
