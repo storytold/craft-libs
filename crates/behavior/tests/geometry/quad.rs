@@ -244,6 +244,23 @@ fn a_side_drag_on_a_box_in_perspective_turns_the_side_toward_the_vanishing_point
     }
 }
 
+/// A box whose top and bottom edges converge, its top or bottom edge dragged (measured on the reference's results): the
+/// dragged edge turns onto the line from where they meet through the moved handle.
+#[test]
+fn a_top_or_bottom_drag_on_converging_edges_turns_the_edge_toward_the_vanishing_point() {
+    let one_corner_down = [(150.0, 125.0), (452.0, 165.0), (452.0, 327.0), (150.0, 327.0)];
+    let lopsided = [(180.0, 145.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        (one_corner_down, 0, (301.0, 145.0), (301.0, 115.0), [(131.18, 88.7), (477.81, 142.2), (474.43, 329.97), (127.57, 324.03)], 0.5),
+        (lopsided, 0, (316.0, 135.0), (316.0, 105.0), [(155.07, 118.66), (472.66, 91.65), (474.69, 325.33), (127.31, 328.67)], 0.25),
+        (lopsided, 2, (301.0, 327.0), (301.0, 367.0), [(149.74, 147.22), (482.26, 122.78), (485.88, 369.57), (123.94, 364.03)], 0.75),
+    ];
+    for (quad, edge, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}
+
 /// A plain rectangle scales about the opposite edge's middle as before, and ⇧ still frees the other axis.
 #[test]
 fn a_plain_edge_drag_and_a_free_one_are_unchanged() {
