@@ -34,7 +34,7 @@
 //! Several apps run at once against one account list and one keychain (RFC-0025's "Cross-app
 //! lifecycle guarantees"). Every mutation of the accounts file ([`Store::sign_in`],
 //! [`Store::update_token`], [`Store::discard`], [`Store::set_active`], [`Store::touch`]) therefore
-//! reads, changes and writes it under one OS-level file lock ([`lock::with_lock`]), never an
+//! reads, changes and writes it under one OS-level file lock (`lock::with_lock`), never an
 //! unlocked read-modify-write. A pure read ([`Store::accounts`], [`Store::shared`]) does not take
 //! the lock; [`accounts::write`] already replaces the file through a temporary file and a rename,
 //! so a reader never sees a half-written file, only one write older than the latest.
