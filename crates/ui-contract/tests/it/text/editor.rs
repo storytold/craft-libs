@@ -340,6 +340,34 @@ fn preedit(text: &str) -> Event {
     Event::Ime(ImeEvent::Preedit { text: text.to_owned(), active_range_chars: None })
 }
 
+/// The IME events of one raw batch reach the editor together, in the pass of the frame they arrived in: the one-press
+/// rule holds what follows a pointer press, not IME text, so an editor reads a replacement (a byte deletion and its
+/// commit) beside the fresh commit after it and can tell them apart by their order. Events given in frames of their
+/// own arrive in passes of their own.
+#[trial]
+fn one_raw_batch_of_ime_events_reaches_the_editor_in_one_pass() {
+    for (name, mut rig) in [("a field's editor", Rig::new()), ("a canvas's editor", Rig::canvas_editor())] {
+        rig.focus();
+        let batch = vec![Event::Ime(ImeEvent::DeleteSurroundingBytes { before_bytes: 1, after_bytes: 0 }), commit("Z"), commit("Y")];
+        rig.frame(batch.clone());
+        let inputs = rig.take();
+        let expected = [
+            EditorInput::delete_surrounding_bytes(1, 0),
+            EditorInput::ImeCommit,
+            EditorInput::Text("Z".into()),
+            EditorInput::ImeCommit,
+            EditorInput::Text("Y".into()),
+        ];
+        assert_eq!(inputs, expected, "{name}: the whole batch arrives in its own frame's pass, in order");
+        rig.frame(Vec::new());
+        assert!(rig.take().is_empty(), "{name}: nothing of the batch is held for a later frame");
+        for event in batch {
+            rig.frame(vec![event]);
+            assert!(!rig.take().is_empty(), "{name}: an event given in its own frame arrives in that frame's pass");
+        }
+    }
+}
+
 /// A reset fences the interrupted composition until its own request completes. Focus leaving an editor while it
 /// composes asks for a reset; a pass with no IME output drops the request, which the integration reports retired, so
 /// focus coming back asks again. The retired request's completion is stale and lets nothing through; the
