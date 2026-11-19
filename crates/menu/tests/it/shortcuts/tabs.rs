@@ -84,5 +84,9 @@ fn app_tabs_keep_overflow_when_the_labels_do_not_fit() {
     let overflow = overflow.and_then(|key| tree.bounds_of(key)).expect("oversized titles still have an overflow menu");
     pointer::click(&mut frames, overflow.center(), &mut show);
     let popup = frames.tree();
-    assert!(popup.keys().into_iter().any(|key| popup.name_of(key) == Some(long_label.as_str())), "the hidden toolbar remains available");
+    let hidden = popup.keys().into_iter().find(|&key| popup.name_of(key) == Some(long_label.as_str()));
+    let hidden = hidden.and_then(|key| popup.bounds_of(key)).expect("the hidden toolbar remains available");
+    pointer::click(&mut frames, hidden.center(), &mut show);
+    frames.idle(2, &mut show);
+    assert!(frames.texts().iter().any(|text| text.text == "Toolbar tool visibility"), "the overflow choice opens the Toolbar page");
 }
