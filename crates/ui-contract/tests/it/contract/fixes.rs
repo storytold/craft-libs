@@ -237,3 +237,42 @@ fn the_step_log_is_kept_in_fixture_frames_only() {
     let id = seen.borrow().id.expect("the probe ran");
     assert!(steps(&app.ctx, id).is_empty(), "an app frame records no steps");
 }
+
+/// A component whose declaration says the pipeline need not run its parts hook.
+#[derive(Component)]
+struct NoParts<'a> {
+    #[common]
+    common: Common,
+    calls: &'a std::cell::Cell<usize>,
+}
+
+impl Component for NoParts<'_> {
+    const ROLE: Role = Role::None;
+    const PARTS: bool = false;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: NoPartsStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn parts(&mut self, _: Rect, _: &mut PartsCx<'_, Self>) {
+        self.calls.set(self.calls.get() + 1);
+    }
+
+    fn paint(&mut self, _: &mut PaintUi<'_>, _: &Cx<'_, Self>) {}
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn a_component_declaring_no_parts_skips_the_parts_hook() {
+    let mut frames = Frames::new();
+    let calls = std::cell::Cell::new(0);
+    frames.frame(vec![], |ui| {
+        NoParts { common: Common::new(), calls: &calls }.show(ui);
+    });
+    assert_eq!(calls.get(), 0, "the parts hook is skipped on ordinary runs");
+}

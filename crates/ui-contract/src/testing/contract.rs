@@ -48,3 +48,33 @@ pub fn raw_widget(ui: &mut egui::Ui, rect: egui::Rect) {
 pub fn allocate(ui: &mut egui::Ui, size: egui::Vec2) {
     crate::runtime::egui::fixture::allocate_blocker(ui, size);
 }
+
+thread_local! {
+    static PARTS_CHECK: std::cell::RefCell<Option<Vec<&'static str>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run a story with the parts declaration check enabled, and return any offending component types.
+pub(crate) fn check_parts_declarations(run: impl FnOnce()) -> Vec<&'static str> {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PARTS_CHECK.with(|check| *check.borrow_mut() = None);
+        }
+    }
+    PARTS_CHECK.with(|check| *check.borrow_mut() = Some(Vec::new()));
+    let _reset = Reset;
+    run();
+    PARTS_CHECK.with(|check| check.borrow_mut().take().unwrap_or_default())
+}
+
+pub(crate) fn checking_parts() -> bool {
+    PARTS_CHECK.with(|check| check.borrow().is_some())
+}
+
+pub(crate) fn bad_parts(component: &'static str) {
+    PARTS_CHECK.with(|check| {
+        if let Some(bad) = check.borrow_mut().as_mut() {
+            bad.push(component);
+        }
+    });
+}
