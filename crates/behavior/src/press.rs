@@ -568,9 +568,10 @@ impl<T: Copy> PressMachine<T> {
         self.open.is_some_and(|open| open.released_at.is_some())
     }
 
-    /// Runs one pass. `pick` chooses the press winner and what it senses at a press position; it returns `None`
-    /// when no shape of this root takes the press.
-    pub fn step(&mut self, input: PassInput<'_>, mut pick: impl FnMut(Pos2) -> Option<PressPick<T>>) -> PressStep<T> {
+    /// Runs one pass. `pick` chooses the press winner and what it senses at a press position, for the button pressed
+    /// there; it returns `None` when no shape of this root takes the press. A secondary press goes only to a shape that
+    /// senses `Sense::CONTEXT_CLICK`, so `pick` passes over the others for it, to the next shape under the press.
+    pub fn step(&mut self, input: PassInput<'_>, mut pick: impl FnMut(Pos2, PointerButton) -> Option<PressPick<T>>) -> PressStep<T> {
         let mut pos = input.pos;
         // The press released or cancelled in this pass, and whether it was silent: one that ends silent reports nothing.
         let mut released: Option<(T, PressStart, Pos2, bool, bool, bool)> = None;
@@ -631,15 +632,15 @@ impl<T: Copy> PressMachine<T> {
                     }
                     // An open press keeps the pointer until its button comes up: no press starts over it, of its own
                     // button (a repeated Down, as a window never sends one) or another. Its moves and its release still
-                    // reach it when a modal opened over its target since. A middle or secondary press captures for a
-                    // drag (a canvas pan, a drag with the secondary button) and never clicks. A target that senses
-                    // `MIDDLE_CLICK` also takes a middle press that can click (a tab closes on it), and one that senses
-                    // `CONTEXT_CLICK` takes a secondary press, which a click-only target would not capture.
+                    // reach it when a modal opened over its target since. A middle press captures for a drag (a canvas
+                    // pan) and never clicks, unless its target senses `MIDDLE_CLICK` (a tab closes on it). A secondary
+                    // press is only a target's that senses `CONTEXT_CLICK`, which clicks and drags with it; a target that
+                    // only drags (a transform box) leaves it to the context target under it.
                     let capture_only = button != PointerButton::Primary;
                     if !matches!(button, PointerButton::Primary | PointerButton::Middle | PointerButton::Secondary) || self.open.is_some() {
                         continue;
                     }
-                    self.open = pick(at)
+                    self.open = pick(at, button)
                         .map(|pick| {
                             let clicks = match button {
                                 PointerButton::Middle => pick.sense.contains(Sense::MIDDLE_CLICK),
@@ -649,7 +650,11 @@ impl<T: Copy> PressMachine<T> {
                             let sense = if capture_only && !clicks { pick.sense - Sense::CLICK } else { pick.sense };
                             (pick, sense, clicks)
                         })
-                        .filter(|(_, sense, clicks)| !capture_only || *clicks || sense.contains(Sense::DRAG))
+                        .filter(|(_, sense, clicks)| match button {
+                            PointerButton::Primary => true,
+                            PointerButton::Middle => *clicks || sense.contains(Sense::DRAG),
+                            _ => *clicks,
+                        })
                         .map(|(pick, sense, _)| {
                             // A silent press owes no `Down`: its first phase is its `DragStart`.
                             let silent = pick.passed && sense.contains(Sense::DRAG);
@@ -761,7 +766,7 @@ mod tests {
 
     fn pass(machine: &mut PressMachine<u8>, events: &[PointerEvent], sense: Sense) -> PressStep<u8> {
         let held = machine.open.is_some() || matches!(events.last(), Some(PointerEvent::Pressed { .. }));
-        machine.step(PassInput::new(events, SLOP, pos2(0.0, 0.0), held), |_| Some(PressPick::new(1, sense)))
+        machine.step(PassInput::new(events, SLOP, pos2(0.0, 0.0), held), |_, _| Some(PressPick::new(1, sense)))
     }
 
     fn press(x: f32, time: f64) -> PointerEvent {
@@ -814,7 +819,7 @@ mod tests {
         let first = pos2(0.0, 0.0);
         let mut machine = PressMachine::new();
         let mut step = |events: &[PointerEvent]| {
-            machine.step(PassInput::new(events, SLOP, first, true), |at| (at == first).then_some(PressPick::new(1u8, Sense::DRAG)))
+            machine.step(PassInput::new(events, SLOP, first, true), |at, _| (at == first).then_some(PressPick::new(1u8, Sense::DRAG)))
         };
         step(&[press(0.0, 1.0)]);
         step(&[PointerEvent::Moved { at: pos2(40.0, 0.0), sample: None }]);
@@ -856,7 +861,7 @@ mod tests {
 
     /// One pass with the button held at its end, over a root whose press winner is target 1 and passes its drag.
     fn passing_pass(machine: &mut PressMachine<u8>, events: &[PointerEvent]) -> PressStep<u8> {
-        machine.step(PassInput::new(events, SLOP, pos2(0.0, 0.0), true), |_| Some(PressPick::new(1, PASSES)))
+        machine.step(PassInput::new(events, SLOP, pos2(0.0, 0.0), true), |_, _| Some(PressPick::new(1, PASSES)))
     }
 
     fn moved(x: f32) -> PointerEvent {

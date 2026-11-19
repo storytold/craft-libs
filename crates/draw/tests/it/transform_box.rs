@@ -350,6 +350,33 @@ fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
 }
 
 #[trial]
+fn an_edge_band_grabs_a_side_from_inside_the_box_along_its_whole_length() {
+    // A frame like a paragraph's: nothing inside moves it, so a press inside is the side's or nothing's.
+    let paragraph = |band: f32| {
+        harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules().with_edge_band(band);
+            config.inside_moves = false;
+            config.reference_point = false;
+        })
+    };
+    // The right edge runs from (300, 80) to (300, 220); 6 points inside it, away from its middle handle.
+    let inside = Point::new(294.0, 110.0);
+    let mut plain = paragraph(0.0);
+    hover(&mut plain, inside);
+    assert_ne!(plain.host.borrow().hovered, Some(BoxPart::Edge(1)), "without a band the side reaches outside only");
+
+    let mut h = paragraph(8.0);
+    hover(&mut h, inside);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "within the band inside the box, the side");
+    hover(&mut h, Point::new(200.0, 110.0));
+    assert_eq!(h.host.borrow().hovered, None, "the middle of the box is past the band");
+    drag(&mut h, inside, Point::new(314.0, 110.0));
+    let quad = h.state().quad;
+    assert!((quad[1].x - 314.0).abs() < 1e-6 && (quad[2].x - 314.0).abs() < 1e-6, "the grab dragged the side as its handle: {quad:?}");
+    assert!((quad[0].x - RECT.x0).abs() < 1e-6, "the far side stayed: {quad:?}");
+}
+
+#[trial]
 fn the_arrows_move_the_whole_box_after_a_handle_drag_leaves_focus_on_the_handle() {
     let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
     drag(&mut h, Point::new(300.0, 220.0), Point::new(320.0, 240.0));

@@ -288,6 +288,10 @@ pub struct PageViewOutput {
     pub visible: Range<usize>,
     /// The current page changed (scrolling, the wheel turning a page, a tool's view).
     pub current_changed: bool,
+    /// The reader scrolled the view this pass: the wheel (its scroll, or the page it turned), a drag or a press on a
+    /// scroll bar, or the view's page and arrow keys. A zoom, a go-to and a view the app or a tool set are not the
+    /// reader's scroll, so an app that follows something with the view (search results) stops following on this.
+    pub scrolled: bool,
     /// A double-click on the gap between pages: the app toggles Hide White Space (Word).
     pub toggle_white_space: bool,
     /// The pasteboard outside the pages (`None` when the pass drew nothing): a secondary press or the Menu key there asks the app for Photoshop's
@@ -476,6 +480,7 @@ impl<'a> PageView<'a> {
             layout: seen.geo.layout.clone(),
             visible: seen.visible,
             current_changed: seen.current_changed,
+            scrolled: seen.scrolled,
             toggle_white_space,
             pasteboard: seen.pasteboard,
             textures: seen.textures,
@@ -506,6 +511,7 @@ struct Seen {
     pages: Vec<PlacedPage>,
     visible: Range<usize>,
     current_changed: bool,
+    scrolled: bool,
     pasteboard: Option<PasteboardOutput>,
     textures: TextureStatistics,
     /// What the caller stores after the real run.
@@ -531,6 +537,7 @@ impl Seen {
             pages: Vec::new(),
             visible: 0..0,
             current_changed: false,
+            scrolled: false,
             pasteboard: None,
             textures: TextureStatistics::default(),
             next: None,
@@ -655,6 +662,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         }
     }
     let keys = KeyMoves::of(space.keys(), &state, &geo, rect, f64::from(navigation.key_line));
+    let mut scrolled = keys.moves() || wheel.is_some_and(|wheel| !zooming && wheel.scroll != Vec2::ZERO);
     want.0 += keys.pan.0;
     want.1 = if keys.to_end { f64::INFINITY } else { want.1 + keys.pan.1 };
 
@@ -753,6 +761,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let bars =
         CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(target), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
     let bar_drag = bars.view.value().is_some();
+    scrolled |= bar_drag;
     if let Some(moved) = bars.view.value() {
         want = drawn_frame.offset_of(moved.center, vw, vh);
     }
@@ -785,6 +794,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         pages,
         visible,
         current_changed,
+        scrolled,
         pasteboard: Some(pasteboard),
         textures,
         next: Some(Next { started, state, mem, edit: words.edit.as_str().to_owned() }),
@@ -898,13 +908,23 @@ struct KeyMoves {
 impl KeyMoves {
     /// Page Up and Down a screen less a key line (a row when not continuous), Home and End the first and last page, Up
     /// and Down a key line (not continuous, a turn once the row is at its edge that way), Left and Right a page when
-    /// the page fits the width, else a key line sideways.
+    /// the page fits the width, else a key line sideways. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
+    /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift or Cmd alone with the other keys,
+    /// leave them to nothing.
     fn of(keys: BodyKeys, state: &PageViewState, geo: &Placed, rect: Rect, line: f64) -> KeyMoves {
         let last = geo.layout.rects.len().saturating_sub(1);
         let top = |page: usize| Some(GoTo::Top { page, fraction: 0.0 });
         let mut moves = KeyMoves::default();
-        // Shift, Cmd and Alt leave the keys to nothing, as in the old view.
+        let end = |forward: bool| if forward && state.continuous { (true, None) } else { (false, top(if forward { last } else { 0 })) };
         let plain = |mods: &MoveMods| !mods.extend && !mods.lead && !mods.fine;
+        let to_end = match keys.page {
+            Some((step @ (NavMove::Start | NavMove::End), mods)) if !mods.fine => Some(step == NavMove::End),
+            Some((step @ (NavMove::PageUp | NavMove::PageDown), mods)) if mods.extend && mods.lead && !mods.fine => Some(step == NavMove::PageDown),
+            _ => None,
+        };
+        if let Some(forward) = to_end {
+            (moves.to_end, moves.go_to) = end(forward);
+        }
         match keys.page.filter(|(_, mods)| plain(mods)).map(|(step, _)| step) {
             Some(step @ (NavMove::PageUp | NavMove::PageDown)) => {
                 let forward = step == NavMove::PageDown;
@@ -916,10 +936,16 @@ impl KeyMoves {
                     moves.turn = Some(forward);
                 }
             }
-            Some(NavMove::Start) => moves.go_to = top(0),
-            Some(NavMove::End) if state.continuous => moves.to_end = true,
-            Some(NavMove::End) => moves.go_to = top(last),
             _ => {}
+        }
+        if let Some((direction, mods)) = keys.nudge
+            && direction.y != 0.0
+            && mods.shift
+            && (mods.cmd || mods.ctrl)
+            && !mods.alt
+        {
+            (moves.to_end, moves.go_to) = end(direction.y > 0.0);
+            return moves;
         }
         let Some((direction, _)) = keys.nudge.filter(|(_, mods)| mods.is_none()) else { return moves };
         if direction.y != 0.0 {
@@ -936,6 +962,11 @@ impl KeyMoves {
             }
         }
         moves
+    }
+
+    /// Whether the keys move the view.
+    fn moves(&self) -> bool {
+        self.pan != (0.0, 0.0) || self.to_end || self.turn.is_some() || self.go_to.is_some()
     }
 
     /// Up or Down (`forward`): a key line, or, not continuous with the row at its edge that way, a turn.

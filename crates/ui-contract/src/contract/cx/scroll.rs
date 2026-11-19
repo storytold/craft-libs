@@ -58,7 +58,9 @@ pub(crate) fn scroll_moves(decls: &[ScrollDecl], results: &PartResults) -> Vec<S
         let track = results.get(&(decl.key, None)).map(|result| result.press.phase);
         let pressed = match (thumb, track) {
             (Some(PressPhase::Drag { delta, .. }), _) => Some(craft_behavior::scroll::drag(&decl.span, length, decl.min_thumb, along(delta))),
-            (_, Some(PressPhase::Down { start, .. })) => Some(page_toward(axis_pos(start.origin))),
+            (_, Some(PressPhase::Down { start, .. })) if start.button == craft_behavior::PointerButton::Primary => {
+                Some(page_toward(axis_pos(start.origin)))
+            }
             _ => None,
         };
         let middle = decl.track.center();

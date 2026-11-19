@@ -238,6 +238,46 @@ fn a_gesture_cancelled_by_the_app_starts_no_new_one_while_the_button_stays_down(
     assert_eq!(fixture.tool().count(Call::Press), 2, "the next press starts a gesture again: {:?}", fixture.tool().calls);
 }
 
+#[trial]
+fn a_body_hides_the_pointer_over_the_canvas_over_the_tools_cursor_while_it_asks() {
+    let hide = Rc::new(Cell::new(false));
+    let asks = Rc::clone(&hide);
+    let room = Rc::new(Cell::new(Rect::NOTHING));
+    let shown_room = Rc::clone(&room);
+    let tool = RefCell::new(Recorder::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        shown_room.set(room);
+        let view = CanvasView::new(room, Point::new(600.0, 450.0), 1.0);
+        Canvas::new("Document").document(DOCUMENT).view(view).show_at(ui, room.shrink(40.0), |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut());
+                if asks.get() {
+                    pass.hide_pointer(ui);
+                }
+            }
+        });
+    });
+    fixture.settle();
+    let hidden = |fixture: &Fixture| {
+        craft_ui::runtime::cursor::current(fixture.ctx()) == Some(Cursor::Painted(craft_behavior::PaintedCursor::Hidden))
+    };
+    let (over, beside) = (room.get().center(), room.get().min + Vec2::splat(10.0));
+    fixture.frame(vec![pointer::moved(over)]);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "precondition: the tool's cursor shows over the canvas");
+    hide.set(true);
+    fixture.frame(Vec::new());
+    assert!(hidden(&fixture), "the body's request hides the pointer over the canvas");
+    fixture.frame(vec![pointer::moved(beside)]);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "beside the canvas the pointer shows");
+    fixture.frame(vec![pointer::moved(over)]);
+    hide.set(false);
+    fixture.frame(Vec::new());
+    assert!(!hidden(&fixture), "once the body stops asking, the pointer shows again");
+}
+
 /// A tool with a rubber band that follows the hovering pointer, which asks for the hover autoscroll when `scrolls`.
 struct Band {
     scrolls: bool,

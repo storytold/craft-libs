@@ -1,6 +1,6 @@
 //! The sensing core over probe roots: the press lifecycle, arenas, press targets, parts and the shape record.
 
-use craft_behavior::{CanvasTransform, HitLevel, PartKey, PressPhase, Sense};
+use craft_behavior::{CanvasTransform, HitLevel, PartKey, PointerButton, PressPhase, Sense};
 use craft_ui::testing::pointer::{self, drag};
 use craft_ui::testing::sensing::{ProbeMember, ProbePart, ProbeRoot, RootReport, SenseReport, egui_click_target, show};
 use craft_ui::testing::{Frames, trial};
@@ -522,6 +522,42 @@ fn a_press_over_a_passing_click_part_hands_its_drag_to_the_shape_below_in_its_ro
         assert!(on.iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })), "{case}: a release within slop clicks the link: {on:?}");
         let below = log.root_phases(below_root, Some(SURFACE));
         assert!(below.is_empty(), "{case}: the shape below sees no press of a click: {below:?}");
+    }
+}
+
+/// A secondary press over a part that drags and clicks but takes no context click (a transform box's) goes to the
+/// context target under it, in its own root or in the root below, and the box sees none of it; a primary press there
+/// is still the box's.
+#[trial]
+fn a_right_click_over_a_drag_only_part_reaches_the_context_target_under_it() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let box_rect = rect(150.0, 150.0, 120.0, 80.0);
+    let handle = || ProbePart::new(CORNER, box_rect, Sense::DRAG | Sense::CLICK).level(HitLevel::Handle, 0);
+    let surface = || ProbePart::new(SURFACE, page, Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK).level(HitLevel::Background, 0);
+    let own = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()).part(handle())];
+    let stacked = vec![ProbeRoot::new("page", page, Sense::empty()).part(surface()), ProbeRoot::new("box", box_rect, Sense::empty()).part(handle())];
+    for (case, roots, box_root) in [("in its own root", own, 0), ("in the root below", stacked, 1)] {
+        let (mut show_frame, log) = scene(roots);
+        let mut frames = Frames::new();
+        frames.idle(2, &mut show_frame);
+        let on_box = box_rect.center();
+        move_to(&mut frames, on_box, &mut show_frame);
+        log.borrow_mut().clear();
+        frames.frame(vec![pointer::secondary(on_box, true)], &mut show_frame);
+        frames.frame(vec![pointer::secondary(on_box, false)], &mut show_frame);
+        frames.idle(1, &mut show_frame);
+        {
+            let log = log.borrow();
+            let below = log.root_phases(0, Some(SURFACE));
+            let released = below.iter().any(|phase| matches!(phase, PressPhase::Release { start, .. } if start.button == PointerButton::Secondary));
+            assert!(released, "{case}: the context target under the box takes the right-click: {below:?}");
+            let on = log.root_phases(box_root, Some(CORNER));
+            assert!(on.is_empty(), "{case}: the box sees none of it: {on:?}");
+        }
+        log.borrow_mut().clear();
+        enter_and_click(&mut frames, on_box, &mut show_frame);
+        let log = log.borrow();
+        assert_eq!(downs(&log.root_phases(box_root, Some(CORNER))), 1, "{case}: a primary press is still the box's");
     }
 }
 

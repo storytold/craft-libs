@@ -403,18 +403,20 @@ impl<C: Component> PartsCx<'_, C> {
 
     /// Declares one axis's scroll bar: the track as part `key` and the thumb as part `key.at(THUMB)`, inside
     /// `rect`. The pipeline runs thumb drag, end drag when the span resizes its ends, and page press on the
-    /// track; `Pointer::scroll_moved(key)` reads the range the part moved to.
+    /// track; `Pointer::scroll_moved(key)` reads the range the part moved to. Both parts take a secondary press
+    /// (`Sense::CONTEXT_CLICK`), which pages nothing: a right-click on a bar is its component's, not the content's
+    /// beneath it.
     pub fn scroll(&mut self, key: PartKey, rect: Rect, axis: Axis, span: ScrollSpan) {
         let rtl = self.flow.is_rtl();
         let min_thumb = crate::style::min_thumb(self.measure.tokens);
         let thumb = crate::primitives::ScrollBar::thumb(min_thumb, rect, axis, rtl, &span);
         self.part(key, rect)
-            .sense(Sense::CLICK)
+            .sense(Sense::CLICK | Sense::CONTEXT_CLICK)
             .access_click(!thumb_covers_centre(rect, thumb, axis))
             .priority(HitPriority::new(HitLevel::Body, 0))
             .pointer_only("Page Up and Page Down scroll the region");
         self.part(key.at(THUMB), thumb)
-            .sense(Sense::DRAG)
+            .sense(Sense::DRAG | Sense::CONTEXT_CLICK)
             .priority(HitPriority::new(HitLevel::Body, 1))
             .pointer_only("Page Up and Page Down scroll the region");
         self.scrolls.push(ScrollDecl { key, axis, rtl, track: rect, thumb, span, min_thumb });

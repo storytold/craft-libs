@@ -202,6 +202,10 @@ pub struct BoxRules {
     pub min_side: f64,
     /// Which handles the box shows and takes keys and drags for.
     pub handles: BoxHandles,
+    /// How far either side of a side's line a press grabs that side, in screen points, along the whole side and as
+    /// far past its ends: a paragraph frame whose edges rewrap it. Inside the box the band reaches at most a quarter of
+    /// the way across, so a narrow box keeps its middle. 0, the default, leaves each side its band outside the box.
+    pub edge_band: f32,
 }
 
 /// Which handles of a box are shown.
@@ -227,6 +231,7 @@ impl Default for BoxRules {
             rotate_step: 15.0,
             min_side: 0.0,
             handles: BoxHandles::default(),
+            edge_band: 0.0,
         }
     }
 }
@@ -265,6 +270,12 @@ impl BoxRules {
     /// The rules with `handles` as the handles the box shows.
     pub fn with_handles(mut self, handles: BoxHandles) -> BoxRules {
         self.handles = handles;
+        self
+    }
+
+    /// The rules with each side grabbed within `points` of its line ([`edge_band`](Self::edge_band)).
+    pub fn with_edge_band(mut self, points: f32) -> BoxRules {
+        self.edge_band = points;
         self
     }
 
