@@ -135,10 +135,9 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
         let tabs = [RibbonTab::new(0_usize, "Home")];
         let entries = [Entry::new(1_usize, "Keep text only"), Entry::new(2, "Paste values")];
         let _ = Ribbon::new("Ribbon", &tabs, Bind::given(0_usize)).show(ui, |row, _| {
-            // The clipboard group is too wide to show whole beside the wide group's least, so the fit leaves it
-            // collapsed; its content alone still fits the room, so its popover shows whole.
+            // Every control is stacked, so the clipboard group is as wide at the compact level as at the full one.
             row.group(RibbonGroup::new("clip", "Clipboard", IconId::new("list").into()), |ui| {
-                if let Some(entry) = SplitButton::new("Paste", &entries).show(ui).chosen {
+                if let Some(entry) = SplitButton::new("Paste", &entries).arrangement(Arrangement::Stacked).show(ui).chosen {
                     seen.borrow_mut().push(entry);
                 }
                 for label in &WIDE[..4] {
@@ -148,7 +147,13 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
             group(row, "wide", "Wide", &WIDE);
         });
     });
-    fixture.room(vec2(400.0, 300.0));
+    // The room is the clipboard group's own width and a little more, measured where both groups show whole: its content
+    // alone fits, so its popover shows whole, but not beside the wide group's least, so the fit collapses it. Measured,
+    // not a fixed room, so the trial does not hang on the buttons' padding.
+    fixture.room(vec2(2000.0, 300.0));
+    fixture.settle();
+    let whole = fixture.by_label("Clipboard").expect("the clipboard group shows whole in a wide room").rect.width();
+    fixture.room(vec2(whole + 8.0, 300.0));
     fixture.settle();
     assert!(fixture.by_label("Paste").is_none(), "the group is collapsed");
     let button = fixture.by_label("Clipboard").expect("the collapsed group's button");
@@ -158,7 +163,7 @@ fn a_collapsed_groups_popover_stays_open_while_a_child_popup_is_used() {
     fixture.key(Key::Enter, Modifiers::NONE).idle(3);
     assert_eq!(picked.borrow().clone(), vec![1], "the split button's menu picked its first row");
     assert!(fixture.by_label("Paste").is_some(), "the group's popover is still open after a pick from a menu opened inside it");
-    fixture.click_at(Pos2::new(395.0, 295.0)).idle(3);
+    fixture.click_at(Pos2::new(whole + 3.0, 295.0)).idle(3);
     assert!(fixture.by_label("Paste").is_none(), "a press outside closes the popover");
 }
 

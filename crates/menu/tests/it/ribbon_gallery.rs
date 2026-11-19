@@ -71,9 +71,9 @@ fn the_tile_count_follows_the_group_level_and_stepping_stays_in_range_when_the_i
     assert_eq!(*picks.borrow(), vec![1], "a click on a tile picks its key");
 }
 
-/// The tiles' rects and the painted texts of a gallery of three, square and uncaptioned or two to one and named under
-/// each picture.
-fn tiles(wide: bool) -> (Vec<Rect>, Vec<String>) {
+/// The tiles' rects and the painted texts (with their rects) of a gallery of three, square and uncaptioned or two to
+/// one and named under each picture.
+fn tiles(wide: bool) -> (Vec<Rect>, Vec<(String, Rect)>) {
     let mut fixture = Fixture::new(move |ui| {
         let paint = |_: &ContentPainterCx, _: Rect| {};
         let items: Vec<GalleryItem<'_, usize>> =
@@ -84,11 +84,13 @@ fn tiles(wide: bool) -> (Vec<Rect>, Vec<String>) {
     });
     fixture.settle();
     let rects = (0..3).filter_map(|at| fixture.by_label(&format!("Tile {at}")).map(|tile| tile.rect)).collect();
-    (rects, fixture.texts().iter().map(|run| run.text.clone()).collect())
+    (rects, fixture.texts().iter().map(|run| (run.text.clone(), run.rect)).collect())
 }
 
-/// A style gallery's tiles are twice as wide as a square one's and name their items under the pictures; a plain
-/// gallery's tiles are square and show no names.
+/// A style gallery's tiles are twice as wide as a square one's and name their items under the pictures, inside the
+/// tile; a plain gallery's tiles are square and show no names. Every tile is as high as the strip (its column of
+/// buttons), as the ribbon's gallery tiles always were, so a caption takes its line inside the tile rather than
+/// making it taller.
 #[trial]
 fn a_wide_captioned_gallery_names_its_tiles_under_wide_pictures() {
     let (square, plain) = tiles(false);
@@ -96,7 +98,10 @@ fn a_wide_captioned_gallery_names_its_tiles_under_wide_pictures() {
     assert_eq!((square.len(), wide.len()), (3, 3), "every tile shows");
     let (square, wide) = (square[0], wide[0]);
     assert!(wide.width() > 1.5 * square.width(), "a two to one tile is wider: {wide:?} against {square:?}");
-    assert!(wide.height() > square.height() + 0.5, "a captioned tile keeps a line for its name: {wide:?} against {square:?}");
-    assert!(named.iter().any(|text| text == "Tile 0"), "a captioned tile paints its name: {named:?}");
-    assert!(!plain.iter().any(|text| text == "Tile 0"), "a plain tile paints no name: {plain:?}");
+    let name = named.iter().find(|(text, _)| text == "Tile 0").map(|(_, rect)| *rect);
+    let Some(name) = name else { panic!("a captioned tile paints its name: {named:?}") };
+    assert!(wide.expand(0.5).contains_rect(name), "the name {name:?} keeps its line inside its tile {wide:?}");
+    // The picture is at the tile's top, at least half as high as the square tile is wide: the name is under it.
+    assert!(name.min.y >= wide.min.y + square.width() / 2.0, "the name {name:?} is under the picture in {wide:?}");
+    assert!(!plain.iter().any(|(text, _)| text == "Tile 0"), "a plain tile paints no name: {plain:?}");
 }
