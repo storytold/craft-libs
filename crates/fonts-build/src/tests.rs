@@ -123,9 +123,17 @@ fn rejects_a_checkout_under_a_non_utf8_path() {
     use std::os::unix::ffi::OsStrExt;
     let scratch = Scratch::new("non-utf8");
     let dir = scratch.0.join(std::ffi::OsStr::from_bytes(b"craft-fonts-\xff"));
-    // macOS APFS and other filesystems reject non-UTF-8 paths at creation time (EILSEQ 92 / 84).
+    // Filesystems reject non-UTF-8 paths at creation time with OS-specific EILSEQ.
+    #[cfg(target_os = "macos")]
+    const EILSEQ: i32 = 92;
+    #[cfg(target_os = "linux")]
+    const EILSEQ: i32 = 84;
+    #[cfg(target_os = "freebsd")]
+    const EILSEQ: i32 = 86;
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+    const EILSEQ: i32 = -1;
     if let Err(e) = std::fs::create_dir_all(dir.join("fonts")) {
-        assert!(matches!(e.raw_os_error(), Some(84 | 92)) || e.kind() == std::io::ErrorKind::InvalidInput, "{e}");
+        assert!(matches!(e.raw_os_error(), Some(EILSEQ)) || e.kind() == std::io::ErrorKind::InvalidInput, "{e}");
         return;
     }
     std::fs::copy(fixture().join("fonts/sans-arabic/SansArabic.ttf"), dir.join("fonts/a.ttf")).unwrap();
@@ -945,4 +953,45 @@ fn an_oversized_manifest_and_a_directory_face_are_errors() {
     // Not required: a warning and an empty table, as for any unreadable manifest.
     let r = run(Embed::new(), Some(&dir), None);
     assert!(r.result.is_ok() && warnings(&r).iter().any(|w| w.contains("larger than")), "{:?}", r.cargo);
+}
+
+#[test]
+fn serve_outside_checkout_names_selected_hebrew_manifest() {
+    use crate::embed::{Face, Serve};
+
+    let scratch = Scratch::new("serve-hebrew-manifest");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts/a")).unwrap();
+    let font = dir.join("fonts/a/a.ttf");
+    std::fs::write(&font, b"a").unwrap();
+    let served = scratch.0.join("served");
+    let hebrew_manifest = dir.join("fonts/hebrew-manifest.txt");
+    std::fs::write(&hebrew_manifest, "Sans | Regular | ../secret.txt | Hebr,Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n").unwrap();
+
+    // `Embed::hebrew().serve(...)` reports `fonts/hebrew-manifest.txt` when selection rejects an escaping path.
+    let r = run(Embed::hebrew().serve(&served, "fonts/"), Some(&dir), Some("1"));
+    assert!(matches!(&r.result, Err(Error::OutsideCheckout { manifest, .. }) if manifest == &hebrew_manifest), "{:?}", r.result);
+
+    // `Serve::copy` itself also preserves the selected Hebrew manifest path in `Error::OutsideCheckout`.
+    let mut entry = parse_manifest("Sans | Regular | fonts/a/a.ttf | Hebr,Latn | OFL-1.1 | ../secret.txt | 00 | src\n").unwrap().pop().unwrap();
+    entry.licence_file = "../secret.txt".to_owned();
+    let face = Face { entry, path: font, index: 0, cut: false, sha256: "00".to_owned() };
+    let serve = Serve { dir: served, url_prefix: "fonts/".to_owned() };
+    let mut cargo = Vec::new();
+    let err = serve.copy(&dir, &hebrew_manifest, &[face], &mut cargo).unwrap_err();
+    assert!(matches!(&err, Error::OutsideCheckout { manifest, .. } if manifest == &hebrew_manifest), "{err:?}");
+}
+
+#[test]
+fn manifest_path_outside_checkout_is_rejected() {
+    let scratch = Scratch::new("manifest-outside");
+    let dir = scratch.0.join("craft-fonts");
+    std::fs::create_dir_all(dir.join("fonts")).unwrap();
+    let secret = scratch.0.join("secret.txt");
+    std::fs::write(&secret, "Sans | Regular | fonts/a.ttf | Latn | OFL-1.1 | fonts/OFL.txt | 00 | src\n").unwrap();
+
+    for rel in [Path::new("../secret.txt"), secret.as_path()] {
+        let r = run(Embed::new().manifest(rel), Some(&dir), Some("1"));
+        assert!(matches!(&r.result, Err(Error::OutsideCheckout { .. })), "{rel:?}: {:?}", r.result);
+    }
 }
