@@ -2960,6 +2960,8 @@ dependencies = [
  "craft-keymap",
  "craft-theme",
  "craft-ui",
+ "craft-ui-test-kit",
+ "craft-window",
  "egui",
  "egui_kittest",
  "kurbo",
