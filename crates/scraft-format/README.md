@@ -6,7 +6,7 @@ parsing, deserializes the document directly (without building a `serde_json::Val
 sanitizes and validates the resulting session. `Session::to_json` writes the same pretty JSON
 representation.
 
-Named hardware inputs use case-insensitive routing keys. Duplicate path names and keys over 256 characters are rejected.
+Named hardware inputs use Unicode default case folding to detect duplicate routing keys, while preserving their stored spelling. Duplicate path names and keys over 256 characters are rejected.
 The session format remains version 1. Older SoundCraft releases can discard unused named paths on save and cannot
 open tracks assigned to the new named input route. Keep the original project when opening a copy in an older release.
 

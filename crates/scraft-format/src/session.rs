@@ -6,6 +6,7 @@ use crate::{
     Bus, BusId, ChannelFormat, Clip, ClipId, Group, GroupId, InputPath, MarkerId, MarkerKind, MemoryLocation, OutputPath, Source, SourceId,
     SourcePool, TRACK_COLORS, Track, TrackId, TrackKind, VideoSource,
 };
+use unicode_casefold::UnicodeCaseFold;
 
 /// Native session file extension.
 pub const SESSION_EXTENSION: &str = "scraft";
@@ -907,7 +908,7 @@ impl Session {
         }
         let mut input_names = std::collections::BTreeSet::new();
         for input in &self.inputs {
-            if !input_names.insert(input.name.to_ascii_lowercase()) {
+            if !input_names.insert(input.name.as_str().case_fold().collect::<String>()) {
                 return Err(SessionError::Invalid(format!("duplicate named input {:?}", input.name)));
             }
         }
