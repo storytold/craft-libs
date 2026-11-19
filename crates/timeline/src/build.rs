@@ -34,26 +34,36 @@ impl Imported {
     /// above [`crate::rate::MAX_RATE`] per second and start timecodes beyond [`MAX_START_TIMECODE`]
     /// frames. Every importer ends with this pass, so no format can let such a number through.
     pub fn bound(&mut self, report: &mut Report) {
+        self.bound_with_report_limit(report, None);
+    }
+    /// Apply numeric bounds with an optional limit on distinct warning messages.
+    pub fn bound_with_report_limit(&mut self, report: &mut Report, limit: Option<usize>) {
         for item in self.project.items.values_mut() {
             let name = item.name.clone();
             if let Some(seq) = item.as_sequence_mut() {
                 if !plausible_rate(seq.settings.frame_rate) {
-                    report.warn(format!("sequence \"{name}\" has an implausible frame rate ({}); the default was used", seq.settings.frame_rate));
+                    report.warn_limited(
+                        limit,
+                        format!("sequence \"{name}\" has an implausible frame rate ({}); the default was used", seq.settings.frame_rate),
+                    );
                     seq.settings.frame_rate = FrameRate::default();
                 }
                 if seq.start_timecode.unsigned_abs() > MAX_START_TIMECODE {
-                    report.warn(format!("sequence \"{name}\" has an out-of-range start timecode ({} frames); it starts at 0", seq.start_timecode));
+                    report.warn_limited(
+                        limit,
+                        format!("sequence \"{name}\" has an out-of-range start timecode ({} frames); it starts at 0", seq.start_timecode),
+                    );
                     seq.start_timecode = 0;
                 }
             } else if let Some(media) = item.as_media_mut() {
                 if let Some(v) = media.info.video.as_mut()
                     && !plausible_rate(v.frame_rate)
                 {
-                    report.warn(format!("media \"{name}\" has an implausible frame rate ({}); the default was used", v.frame_rate));
+                    report.warn_limited(limit, format!("media \"{name}\" has an implausible frame rate ({}); the default was used", v.frame_rate));
                     v.frame_rate = FrameRate::default();
                 }
                 if media.info.start_timecode.is_some_and(|tc| tc.unsigned_abs() > MAX_START_TIMECODE) {
-                    report.warn(format!("media \"{name}\" has an out-of-range start timecode; it was ignored"));
+                    report.warn_limited(limit, format!("media \"{name}\" has an out-of-range start timecode; it was ignored"));
                     media.info.start_timecode = None;
                 }
             }
