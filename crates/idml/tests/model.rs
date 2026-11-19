@@ -352,6 +352,14 @@ fn designmap_schema_elements_roundtrip_expected_attributes() {
     assert_eq!(pref.attr("TextBefore"), Some("Updated "));
     assert_eq!(pref.attr("TextAfter"), Some("!"));
     assert_eq!(pref.attr("Format"), Some("yyyy-MM-dd"));
+}
+
+#[test]
+fn designmap_layers_sections_and_hyperlinks_roundtrip_expected_attributes() {
+    use craft_idml::model::{
+        LayerColorValue, LayerValues, SectionValues, hyperlink_el, hyperlink_page_destination_el, hyperlink_page_item_source_el,
+        hyperlink_url_destination_el, root_color_group_el,
+    };
 
     let layer = LayerValues {
         self_id: "u1".into(),
