@@ -706,6 +706,16 @@ pub fn append_solid_color_data(out: &mut Vec<u8>, descriptor: &dyn crate::descri
     crate::descriptor::borrowed::append_descriptor(out, descriptor);
 }
 
+/// Append SoLd data: the soLD signature, version 4 and descriptor version 16.
+///
+/// No outer block key, length or padding is written. The descriptor is supplied
+/// unchanged by the caller. This inherits the append semantics and finite,
+/// stable, acyclic borrowed-view contract of [append_layer_effects_data].
+pub fn append_smart_object_data(out: &mut Vec<u8>, descriptor: &dyn crate::descriptor::borrowed::DescriptorView) {
+    out.extend_from_slice(b"soLD\0\0\0\x04\0\0\0\x10");
+    crate::descriptor::borrowed::append_descriptor(out, descriptor);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,6 +997,11 @@ mod tests {
             let mut expected = vec![0xa5, 0x5a, 0, 0, 0, 16];
             expected.extend_from_slice(&descriptor);
             assert_eq!(color, expected);
+            let mut placed = vec![0xa5, 0x5a];
+            append_smart_object_data(&mut placed, &View(populated));
+            let mut expected = vec![0xa5, 0x5a, 0x73, 0x6f, 0x4c, 0x44, 0, 0, 0, 4, 0, 0, 0, 16];
+            expected.extend_from_slice(&descriptor);
+            assert_eq!(placed, expected);
         }
     }
 }
