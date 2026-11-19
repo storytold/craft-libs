@@ -126,3 +126,116 @@ fn an_organize_check_toggles_its_page_without_modifiers_and_goes_to_it() {
     let picked = picked.borrow();
     assert!(picked.contains(&0) && picked.contains(&1) && !picked.contains(&2), "both checked pages are picked: {picked:?}");
 }
+
+/// Each open of the Organize grid reveals the page the host asks for, once: the second open too, after a click
+/// picked a page of the first and the grid was hidden in between.
+#[trial]
+fn every_open_of_the_grid_reveals_the_asked_page() {
+    let open = Rc::new(std::cell::Cell::new(true));
+    let reveal = Rc::new(std::cell::Cell::new(Some(30_usize)));
+    let current = Rc::new(std::cell::Cell::new(30_usize));
+    let picked: Rc<RefCell<Selection<usize>>> = Rc::default();
+    let (shown, asked, at, held) = (Rc::clone(&open), Rc::clone(&reveal), Rc::clone(&current), Rc::clone(&picked));
+    let pages = DemoPages::new(60);
+    let mut zoom = 1.0;
+    let mut fixture = Fixture::new(move |ui| {
+        if shown.get() {
+            let mut picked = held.borrow_mut();
+            let out = PageThumbnails::new("Pages", &pages, &mut picked, at.get(), PAPER)
+                .arrangement(ThumbnailArrangement::Organize)
+                .size(&mut zoom)
+                .reveal(asked.take())
+                .show(ui);
+            for event in out.events {
+                if let ThumbnailEvent::Go(page) = event {
+                    at.set(page);
+                }
+            }
+        }
+    });
+    fixture.room(vec2(600.0, 600.0));
+    fixture.settle();
+    let in_view = |fixture: &Fixture, n: usize| {
+        let grid = fixture.by_role(Role::LIST_BOX).first().map(|node| node.rect).expect("the grid");
+        fixture.by_label(&format!("Page {n}")).is_some_and(|node| grid.contains_rect(node.rect))
+    };
+    assert!(in_view(&fixture, 31), "the first open shows page 31");
+    let page = tile(&fixture, 32);
+    fixture.click_at(page).settle();
+    open.set(false);
+    fixture.settle();
+    current.set(45);
+    *picked.borrow_mut() = Selection::default();
+    open.set(true);
+    reveal.set(Some(45));
+    fixture.settle();
+    assert!(in_view(&fixture, 46), "the second open shows page 46");
+    assert!(!in_view(&fixture, 31), "and not the first open's pages");
+}
+
+/// The grid reports its latched middle-button auto-scroll while it runs, so a host can show and end it.
+#[trial]
+fn the_grid_reports_its_latched_auto_scroll() {
+    let latched = Rc::new(std::cell::Cell::new(false));
+    let seen = Rc::clone(&latched);
+    let pages = DemoPages::new(60);
+    let mut picked = Selection::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER)
+            .arrangement(ThumbnailArrangement::Organize)
+            .middle_button(craft_behavior::MiddleButton::AutoScroll)
+            .show(ui);
+        seen.set(out.auto_scrolling);
+    });
+    fixture.room(vec2(600.0, 600.0));
+    fixture.settle();
+    let at = tile(&fixture, 2);
+    let middle = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: egui::Modifiers::NONE };
+    fixture.frame(vec![egui::Event::PointerMoved(at), middle(true)]);
+    fixture.frame(vec![middle(false)]);
+    fixture.frame(Vec::new());
+    assert!(latched.get(), "a middle click latches the grid's auto-scroll");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    fixture.frame(Vec::new());
+    assert!(!latched.get(), "Escape ends it");
+}
+
+/// In the strip the picked pages are kept beside the current page: Cmd/Ctrl- and Shift-clicks change them without
+/// going to a page, and a plain click goes to its page and empties them; the next Shift-click ranges from there.
+#[trial]
+fn strip_picks_stay_beside_the_current_page() {
+    let picked: Rc<RefCell<Selection<usize>>> = Rc::default();
+    let held = Rc::clone(&picked);
+    let current = Rc::new(std::cell::Cell::new(0_usize));
+    let shown = Rc::clone(&current);
+    let pages = DemoPages::new(5);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut picked = held.borrow_mut();
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, shown.get(), PAPER).picks_beside_current(true).show(ui);
+        for event in out.events {
+            if let ThumbnailEvent::Go(page) = event {
+                shown.set(page);
+            }
+        }
+    });
+    fixture.room(vec2(300.0, 1600.0));
+    fixture.settle();
+    let got = |picked: &RefCell<Selection<usize>>| (0..5).filter(|page| picked.borrow().contains(page)).collect::<Vec<_>>();
+
+    let page = tile(&fixture, 3);
+    fixture.hold(egui::Modifiers::COMMAND).click_at(page).settle();
+    fixture.hold(egui::Modifiers::NONE);
+    assert_eq!(got(&picked), [0, 2], "a Cmd/Ctrl-click picks the page beside the current one");
+    assert_eq!(current.get(), 0, "a Cmd/Ctrl-click does not go to the page");
+
+    let page = tile(&fixture, 2);
+    fixture.click_at(page).settle();
+    assert_eq!(current.get(), 1, "a plain click goes to the page");
+    assert!(got(&picked).is_empty(), "a plain click empties the pick: {:?}", got(&picked));
+
+    let page = tile(&fixture, 4);
+    fixture.hold(egui::Modifiers::SHIFT).click_at(page).settle();
+    fixture.hold(egui::Modifiers::NONE);
+    assert_eq!(got(&picked), [1, 2, 3], "a Shift-click ranges from the page the plain click went to");
+    assert_eq!(current.get(), 1, "a Shift-click does not go to the page");
+}

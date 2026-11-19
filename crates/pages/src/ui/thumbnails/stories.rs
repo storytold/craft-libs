@@ -23,6 +23,14 @@ fn strip_with_sections_and_a_picked_range(ui: &mut Ui, data: &mut StoryData) -> 
     PageThumbnails::new("Pages", &pages, picked, 4, PAPER).size(zoom).sections(&sections).marks(&marks).new_page_row(true).show(ui).into()
 }
 
+/// Acrobat's Pages panel: the picked pages beside the current one, which a plain click empties.
+#[story(PageThumbnails<'static>, covers = [], drive = Drive::Never)]
+fn strip_with_picks_beside_the_current_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (picked, zoom) = data.value("state", (Selection::new(vec![1_usize, 5], Some(5), Some(1)), 1.0_f64));
+    let pages = DemoPages::new(PAGES);
+    PageThumbnails::new("Pages", &pages, picked, 3, PAPER).size(zoom).picks_beside_current(true).show(ui).into()
+}
+
 /// The actions in each page's band in the Organize stories.
 fn organize_actions() -> [(IconId, CommandRef); 2] {
     [(IconId::new("rotate_cw"), CommandRef::new("pages.rotate")), (IconId::new("trash"), CommandRef::new("pages.delete"))]

@@ -255,6 +255,10 @@ pub struct CollectionProps {
     /// The key of the current item (the page a document shows, the slide on screen). It is not the lead or the
     /// selection: the item shows the current mark and its access node reports itself as the current one of its set.
     pub current: Option<Arc<dyn Any + Send + Sync>>,
+    /// The selection is a pick kept beside the current item (Acrobat's Pages panel): a plain click on an item moves
+    /// the lead there and empties the selection, and Cmd/Ctrl- and Shift-clicks pick without moving the lead, counting
+    /// the current item as picked while nothing is. Off, a plain click selects the item it lands on.
+    pub picks_beside_current: bool,
     /// While a drag whose payload is neither the collection's own nor one of its drop kinds rests over an item that is
     /// not selected, the item becomes the lead and the selection in that pass.
     pub select_under_drag: bool,
@@ -343,6 +347,7 @@ impl CollectionProps {
             overflow: Axis::Y,
             pages: false,
             current: None,
+            picks_beside_current: false,
             select_under_drag: false,
         }
     }
@@ -625,6 +630,13 @@ impl CollectionProps {
     #[must_use]
     pub fn current<K: Send + Sync + 'static>(mut self, key: Option<K>) -> Self {
         self.current = key.map(|key| Arc::new(key) as Arc<dyn Any + Send + Sync>);
+        self
+    }
+
+    /// Keeps the selection a pick beside the current item (see [`CollectionProps::picks_beside_current`]).
+    #[must_use]
+    pub const fn picks_beside_current(mut self, on: bool) -> Self {
+        self.picks_beside_current = on;
         self
     }
 

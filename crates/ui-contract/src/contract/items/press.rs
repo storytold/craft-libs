@@ -139,7 +139,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                         None if keep => {}
                         None => self.pick(comp, at, mods.shift, mods.cmd),
                     }
-                    self.move_lead(at, LeadSource::Pointer);
+                    // A modified click on a pick kept beside the current item changes the pick only: the lead, which the
+                    // host follows to the current item, stays.
+                    if !(props.picks_beside_current && primary && (mods.shift || mods.cmd)) {
+                        self.move_lead(at, LeadSource::Pointer);
+                    }
                     // A secondary press takes focus the way a primary press does: egui and the press classification only move it for the primary button.
                     if !primary && props.focus_on_press {
                         focus::request_now(&ctx, focus::FocusTarget::Id(cx.core.id));

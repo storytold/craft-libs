@@ -319,7 +319,7 @@ impl PageViewOutput {
         let size = view.rect.size();
         state.offset = frame.offset_of(view.center, f64::from(size.x), f64::from(size.y));
         if state.continuous && !self.layout.rects.is_empty() {
-            state.current = page_on_line(&self.layout, state.offset.1 + f64::from(size.y) / 2.0);
+            state.current = shown_most(&self.layout, state.current, state.offset.1, f64::from(size.y));
         }
     }
 }
@@ -861,7 +861,7 @@ impl Pending {
         let offset = (want.0.clamp(xs.0, xs.1), want.1.clamp(ys.0, ys.1));
         state.offset = offset;
         if state.continuous && count > 0 && !went && mem.offset.is_some_and(|last| last != offset) {
-            state.current = page_on_line(&geo.layout, offset.1 + vh / 2.0);
+            state.current = shown_most(&geo.layout, state.current, offset.1, vh);
         }
         mem.offset = Some(offset);
         mem.layout = build.cache.borrow().clone();
@@ -1254,12 +1254,31 @@ fn centred_offset(old: &Placed, new: &Placed, offset: (f64, f64), old_view: (f64
     Some((r.x0 + fx * r.width() - vw / 2.0, r.y0 + fy * r.height() - below - vh / 2.0))
 }
 
-/// The page that owns the horizontal line `y` (content coordinates); a tie at a shared edge goes half a point to the
-/// earlier page.
-fn page_on_line(layout: &PagedLayout, y: f64) -> usize {
-    let last = layout.rects.len().saturating_sub(1);
-    layout.rects.iter().zip(&layout.bands).position(|(r, &(_, bottom))| r.y0 + bottom + 0.5 > y).unwrap_or(last)
+/// The current page of a continuous view whose top is at `top` (content coordinates) and `height` tall: the page that
+/// shows the most of its height, the topmost of those within [`PAGE_TIE`]. The page `current` was stays current
+/// while it shows as much as that page, or shows whole: a short page gone to keeps the mark from a taller one below.
+// pdfcraft: crates/ui-egui/src/canvas.rs:1763 `draw_page` (best overlap), :2065 (the current page stays).
+fn shown_most(layout: &PagedLayout, current: usize, top: f64, height: f64) -> usize {
+    let shown = |page: usize| {
+        let band = band_rect(layout, page);
+        ((band.y1.min(top + height) - band.y0.max(top)).max(0.0), band.height())
+    };
+    let mut best = (current, -1.0);
+    for page in 0..layout.rects.len() {
+        let (seen, _) = shown(page);
+        if seen > best.1 + PAGE_TIE {
+            best = (page, seen);
+        }
+    }
+    match (current < layout.rects.len()).then(|| shown(current)) {
+        Some((seen, whole)) if seen >= best.1 - PAGE_TIE || seen >= whole - PAGE_TIE => current,
+        _ => best.0,
+    }
 }
+
+/// Shown heights (screen points) closer than this are equal: one page size can meet the view a fraction of a point
+/// differently once the offset is applied.
+const PAGE_TIE: f64 = 0.5;
 
 /// Zoom by `delta` keeping the page point under `pointer` where it is.
 fn zoom_about(build: &Geometry, state: &mut PageViewState, old: &Placed, rect: Rect, pointer: egui::Pos2, delta: f64) -> Arc<Placed> {

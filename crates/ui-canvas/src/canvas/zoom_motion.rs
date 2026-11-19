@@ -134,6 +134,8 @@ pub(crate) struct ViewMotion {
     pub(crate) glide: TouchpadGlide,
     /// The middle button's latched scroll.
     pub(crate) middle: MiddleScroll,
+    /// The frame of the latch's last pass: a latch whose canvas missed a frame (another tab showed) ends.
+    pub(crate) latched_in: Option<u64>,
 }
 
 impl ViewMotion {
