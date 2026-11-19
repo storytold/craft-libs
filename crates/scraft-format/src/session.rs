@@ -905,6 +905,12 @@ impl Session {
         if self.inputs.iter().map(|input| &input.name).chain(assignments).any(|name| name.chars().nth(MAX_NAME_CHARS).is_some()) {
             return Err(SessionError::Invalid(format!("a named input routing key exceeds {MAX_NAME_CHARS} characters")));
         }
+        let mut input_names = std::collections::BTreeSet::new();
+        for input in &self.inputs {
+            if !input_names.insert(input.name.to_ascii_lowercase()) {
+                return Err(SessionError::Invalid(format!("duplicate named input {:?}", input.name)));
+            }
+        }
         if self.next_id == u64::MAX {
             return Err(SessionError::Invalid("the session id space is exhausted".into()));
         }

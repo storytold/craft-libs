@@ -572,7 +572,13 @@ impl Mixer {
         }
         self.inserts.resize(INSERT_SLOTS, None);
         self.sends.resize(SEND_SLOTS, None);
+        if matches!(self.output, Route::Input(_)) {
+            self.output = Route::None;
+        }
         for s in self.sends.iter_mut().flatten() {
+            if matches!(s.target, Route::Input(_)) {
+                s.target = Route::None;
+            }
             s.level_db = finite_or(s.level_db, -144.0).clamp(-144.0, 12.0);
             s.pan = finite_or(s.pan, 0.0).clamp(-1.0, 1.0);
             if let Some(sp) = &mut s.surround {

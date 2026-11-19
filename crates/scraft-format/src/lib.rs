@@ -123,6 +123,28 @@ mod session_io_tests {
     }
 
     #[test]
+    fn rejects_case_insensitive_duplicate_named_inputs() {
+        let mut session = Session::default();
+        session.inputs = ["Mic", "MIC"]
+            .into_iter()
+            .enumerate()
+            .map(|(channel, name)| InputPath { name: name.into(), first_channel: u16::try_from(channel).unwrap(), format: ChannelFormat::Mono })
+            .collect();
+        assert!(
+            matches!(Session::from_json(&session.to_json().unwrap()), Err(SessionError::Invalid(message)) if message.contains("duplicate named input"))
+        );
+    }
+
+    #[test]
+    fn named_inputs_cannot_be_destinations() {
+        let mut session = Session::default();
+        let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
+        session.track_mut(id).unwrap().mixer.output = Route::Input("Mic".into());
+        let reopened = Session::from_json(&session.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.track(id).unwrap().mixer.output, Route::None);
+    }
+
+    #[test]
     fn rejects_an_oversized_input_path_without_truncating_its_assignment() {
         let mut session = Session::default();
         let id = session.add_track(TrackKind::Audio, ChannelFormat::Mono, None);
