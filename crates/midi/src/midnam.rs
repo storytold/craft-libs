@@ -19,7 +19,8 @@ pub struct MidnamProfile {
     /// Channel set name, prefixed with the device number and model for multiple devices.
     pub name: String,
     /// Bit zero is MIDI channel 1. Assignments from all custom modes are combined.
-    /// Without an assignment, use AvailableForChannels when present. None means no hint.
+    /// Without an assignment, use the valid declarations in AvailableForChannels.
+    /// None means no hint, and Some(0) means the declared channels are all disabled.
     pub channels: Option<u16>,
     /// Bank number is MSB * 128 + LSB.
     pub banks: BTreeMap<u16, MidnamBank>,
@@ -89,10 +90,11 @@ pub fn read_midnam(bytes: &[u8]) -> Result<Vec<MidnamProfile>, MidnamError> {
             let Some(name) = set.attr("Name").filter(|name| !name.is_empty()) else { continue };
             let banks = read_banks(set, &lists, &mut cache, &mut budget)?;
             if !banks.is_empty() {
-                let channels = assignments.get_or_insert_with(|| channel_masks(device)).get(name).copied().or_else(|| {
-                    set.child("AvailableForChannels")
-                        .map(|node| mask(node.children("AvailableChannel").filter(|a| a.attr("Available") != Some("false"))))
-                });
+                let channels = assignments
+                    .get_or_insert_with(|| channel_masks(device))
+                    .get(name)
+                    .copied()
+                    .or_else(|| set.child("AvailableForChannels").and_then(availability_mask));
                 let prefix_len = model.as_ref().map_or(0, |model| model.len() + NAME_SEPARATOR.len());
                 charge_name_bytes(&mut budget.name_bytes, prefix_len + name.len())?;
                 profiles.push(MidnamProfile {
@@ -149,8 +151,17 @@ fn channel_bit(node: &El) -> Option<u16> {
     Some(1 << (n - 1))
 }
 
-fn mask<'a>(nodes: impl Iterator<Item = &'a El>) -> u16 {
-    nodes.filter_map(channel_bit).fold(0, |mask, bit| mask | bit)
+fn availability_mask(node: &El) -> Option<u16> {
+    node.children("AvailableChannel")
+        .filter_map(|channel| {
+            let bit = channel_bit(channel)?;
+            match channel.attr("Available") {
+                None | Some("true") => Some(bit),
+                Some("false") => Some(0),
+                _ => None,
+            }
+        })
+        .reduce(|mask, bit| mask | bit)
 }
 
 fn byte(el: &El, attr: &str) -> Option<u8> {
@@ -297,6 +308,28 @@ mod tests {
         for profile in profiles {
             assert_eq!(profile.banks.len(), 48);
             assert_eq!(profile.banks[&47].programs[&127], "Voice 47-127");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_distinguishes_missing_hints_from_explicit_channel_exclusions() -> Result<(), MidnamError> {
+        for (availability, expected) in [
+            ("", None),
+            ("<AvailableForChannels/>", None),
+            (r#"<AvailableForChannels><AvailableChannel Channel="17"/></AvailableForChannels>"#, None),
+            (r#"<AvailableForChannels><AvailableChannel Channel="5" Available="false"/></AvailableForChannels>"#, Some(0)),
+            (
+                r#"<AvailableForChannels><AvailableChannel Channel="5" Available="false"/><AvailableChannel Channel="6"/></AvailableForChannels>"#,
+                Some(1 << 5),
+            ),
+        ] {
+            let xml = format!(
+                r#"<MIDINameDocument><MasterDeviceNames><ChannelNameSet Name="Keys">{availability}
+                <PatchBank><PatchNameList><Patch Name="Piano" ProgramChange="0"/></PatchNameList></PatchBank>
+                </ChannelNameSet></MasterDeviceNames></MIDINameDocument>"#
+            );
+            assert_eq!(read_midnam(xml.as_bytes())?[0].channels, expected, "{availability}");
         }
         Ok(())
     }

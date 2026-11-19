@@ -99,6 +99,8 @@ legacy conversion behavior. No application consumer cutover is claimed by this l
 
 The reader accepts UTF-8, declared ISO-8859-1 and declared Windows-1252. It combines
 channel assignments across custom modes, falling back to the set's AvailableForChannels.
+An absent, empty, or unusable fallback gives no channel hint. Valid declarations that all
+explicitly disable their channels give a zero mask.
 An external DOCTYPE is ignored and internal subsets are rejected. Input is limited to
 2 MiB, XML depth to 32, expanded names to 16 MiB, and list expansion to 1,048,576 patch
 visits. The output retains up to 65,536 bank entries across all profiles, including entries
