@@ -2,7 +2,7 @@
 
 use crate::runtime::commands::{ChromeCommand, CommandInput, CommandSet as _};
 use crate::runtime::env::RootEnv;
-use crate::runtime::focus::{FocusTarget, KeyUse, request};
+use crate::runtime::focus::{ActivateKeys, FocusTarget, KeyUse, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::{focus_holds, intents_of, take_shortcuts};
 use crate::testing::focus::{Stop, egui_focused, named_id, press_shape, register_stop, widget};
@@ -252,4 +252,38 @@ fn a_dialog_opened_in_a_pass_takes_its_escape_after_focus_moved() {
     opens.set(true);
     press(&mut frames, &mut show, Key::Escape, Modifiers::NONE);
     assert_eq!(cancels.get(), 1, "the dialog opened in the pass takes it");
+}
+
+/// Space activates only a stop that asks for it with `ActivateKeys::Both` — a reading view turns a column on Space.
+/// Every other pointer stop declares Enter, so a bare Space stays free and a canvas keeps its Hand key.
+#[trial]
+fn space_activates_only_a_stop_that_asks_for_it() {
+    let asked = Rc::new(Cell::new(0_u32));
+    let plain = Rc::new(Cell::new(0_u32));
+    let (asked_seen, plain_seen) = (Rc::clone(&asked), Rc::clone(&plain));
+    let mut show = move |ui: &mut Ui| {
+        stop(ui, "both", KeyUse::of(Input::Pointer).with_activate(ActivateKeys::Both));
+        stop(ui, "plain", KeyUse::of(Input::Pointer));
+        stop(ui, "canvas", KeyUse::CANVAS);
+        if intents_of(ui.ctx(), Some(id("both")), false).untaken(&Intent::Activate) {
+            asked_seen.set(asked_seen.get() + 1);
+        }
+        if intents_of(ui.ctx(), Some(id("plain")), false).untaken(&Intent::Activate) {
+            plain_seen.set(plain_seen.get() + 1);
+        }
+    };
+    let mut frames = shown(false, &mut show);
+    focus_on(&mut frames, &mut show, "both");
+    asked.set(0);
+    plain.set(0);
+    frames.frame(vec![key_press(Key::Space, Modifiers::NONE)], &mut show);
+    assert!(asked.get() > 0, "Space activates the stop that asked for it");
+    assert_eq!(plain.get(), 0, "and nothing else");
+
+    focus_on(&mut frames, &mut show, "plain");
+    asked.set(0);
+    plain.set(0);
+    frames.frame(vec![key_press(Key::Space, Modifiers::NONE)], &mut show);
+    assert_eq!(asked.get(), 0);
+    assert_eq!(plain.get(), 0, "a default pointer control leaves Space free");
 }

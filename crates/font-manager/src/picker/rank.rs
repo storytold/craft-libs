@@ -309,11 +309,14 @@ pub(super) fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_
     } else if has(&["hand", "marker", "brush", "chalk", "kyokasho", "教科書", "ポップ", "ﾎﾟｯﾌﾟ"])
         || name.ends_with("poptai")
         || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "poptai")
-        || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "pop")
     {
         Some(FontClass::Handwritten)
     } else if has(&["script", "gyosho", "行書", "kaisho", "楷書", "sousho", "草書", "reisho", "隷書", "kanteiryu", "勘亭流"]) {
         Some(FontClass::Script)
+    } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "pop") {
+        // A standalone `pop` is a rounded Japanese display face, not a script: after the script markers, so
+        // `Pop Script` keeps Script.
+        Some(FontClass::Handwritten)
     } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| matches!(w, "maru")) {
         // A standalone `maru` is a round gothic, so a sans serif, but only after the handwritten
         // and script markers: `Maru Script` and `Maru Hand` keep their own class.

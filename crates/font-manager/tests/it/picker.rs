@@ -208,4 +208,8 @@ fn classifies_japanese_and_cjk_families() {
     assert_eq!(FontClass::classify("STSong", 0, NONE, false), Some(FontClass::Serif));
     assert_eq!(FontClass::classify("STZhongsong", 0, NONE, false), Some(FontClass::Serif));
     assert_eq!(FontClass::classify("FZFangSong-Z02", 0, NONE, false), Some(FontClass::Serif));
+    // A generic `pop` fallback sits after the Script markers: `Pop Script` keeps Script, a bare `Pop` is the rounded
+    // display face.
+    assert_eq!(FontClass::classify("Pop Script", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("Pop", 0, NONE, false), Some(FontClass::Handwritten));
 }
