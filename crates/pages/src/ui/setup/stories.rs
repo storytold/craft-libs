@@ -30,6 +30,16 @@ fn gridded() -> PageSetup {
     PageSetup { grid: Some(DocumentGrid::new(GridKind::LinesAndChars, 40, 30)), ..PageSetup::default() }
 }
 
+/// WordCraft's Page Setup: a Document Grid with the section direction and the vertical alignment in its box, then
+/// Headers and footers; the margins, paper sides and grid counts two to a line.
+#[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
+fn page_setup_word(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let start = PageSetup { grid: Some(DocumentGrid::new(GridKind::None, 36, 39)), ..PageSetup::default() };
+    let setup = data.value("setup", start);
+    PageSetupDialog::new(Bind::bound(setup)).layout().direction().opened(Bind::given(true)).show(ui);
+    StoryOutput::default()
+}
+
 /// The dialog over a setup with a Document grid, opened by its button; the kind radios switch which counts apply.
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn page_setup_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
