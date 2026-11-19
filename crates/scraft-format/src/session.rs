@@ -934,6 +934,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clears_unrepresentable_midi_destinations_without_losing_the_session() {
+        let mut session = Session::default();
+        let source = session.add_track(TrackKind::Midi, ChannelFormat::Mono, None);
+        let target = session.add_track(TrackKind::Instrument, ChannelFormat::Stereo, None);
+        let original: serde_json::Value = serde_json::from_str(&session.to_json().unwrap()).unwrap();
+        for channel in [serde_json::json!(256), serde_json::json!(-1), serde_json::json!(1.5)] {
+            let mut edited = original.clone();
+            edited["tracks"][0]["midi_destination"] = serde_json::json!({"track": target, "channel": channel});
+            let loaded = Session::from_json(&edited.to_string()).unwrap();
+            assert_eq!(loaded.track(source).unwrap().midi_destination, None);
+            assert_eq!(loaded.tracks, session.tracks);
+        }
+    }
+
+    #[test]
     fn sanitizes_midi_destination_channel_on_load() {
         let mut session = Session::default();
         let track = session.add_track(TrackKind::Midi, ChannelFormat::Mono, None);

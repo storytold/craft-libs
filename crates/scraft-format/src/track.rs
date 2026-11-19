@@ -276,6 +276,21 @@ pub struct MidiDestination {
     pub channel: u8,
 }
 
+fn deserialize_midi_destination<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<MidiDestination>, D::Error> {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct SavedDestination {
+        track: TrackId,
+        channel: serde_json::Number,
+    }
+
+    Ok(Option::<SavedDestination>::deserialize(deserializer)?.and_then(|saved| {
+        let channel = saved.channel.as_u64().filter(|channel| (1..=16).contains(channel))?;
+        Some(MidiDestination { track: saved.track, channel: channel as u8 })
+    }))
+}
+
 /// A track.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Track {
@@ -308,7 +323,7 @@ pub struct Track {
     #[serde(default)]
     pub instrument: Option<crate::Insert>,
     /// Route MIDI clips to another track's instrument.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_midi_destination")]
     pub midi_destination: Option<MidiDestination>,
     /// Ticks (musical) or samples timebase for clips.
     #[serde(default)]
