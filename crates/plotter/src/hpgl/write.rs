@@ -126,6 +126,28 @@ mod tests {
     }
 
     #[test]
+    fn multibyte_pe_numbers_are_not_utf8() {
+        assert_eq!(encode_pe(&[&[(32, -32)]]), b"PE<=?\xc0@\xc0;");
+    }
+
+    #[test]
+    fn invalid_pens_keep_the_original_path_indices() {
+        let pens = [Pen { number: 0, rgb: [1, 2, 3] }, Pen { number: 2, rgb: [4, 5, 6] }];
+        let paths = vec![vec![vec![(100, 100)]], vec![vec![(0, 0), (10, 0)]]];
+        assert_eq!(write_hpgl2(&pens, &paths), b"IN;NP4;PC2,4,5,6;PU;SP2;PE<=\xbf\xbf\xd3\xbf;PU;SP0;");
+        assert_eq!(write_hpgl2(&[Pen { number: 256, rgb: [0, 0, 0] }], &paths), b"IN;PU;SP0;");
+    }
+
+    #[test]
+    fn palette_cap_also_caps_drawn_paths() {
+        let mut pens = vec![Pen { number: 0, rgb: [0, 0, 0] }; MAX_PENS + 1];
+        pens[MAX_PENS - 1] = Pen { number: 255, rgb: [1, 2, 3] };
+        pens[MAX_PENS] = Pen { number: 1, rgb: [4, 5, 6] };
+        let paths = vec![vec![vec![(0, 0), (10, 0)]]; MAX_PENS + 1];
+        assert_eq!(write_hpgl2(&pens, &paths), b"IN;NP256;PC255,1,2,3;PU;SP255;PE<=\xbf\xbf\xd3\xbf;PU;SP0;");
+    }
+
+    #[test]
     fn extreme_coordinates_do_not_overflow() {
         let path = [(i64::MIN, i64::MAX), (i64::MAX, i64::MIN)];
         let output = encode_pe(&[&path]);
