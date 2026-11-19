@@ -7,6 +7,7 @@ mod export;
 mod files;
 mod hosted;
 mod new_document;
+mod new_document_orientation;
 mod params;
 mod password;
 mod preview;
