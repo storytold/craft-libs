@@ -9,7 +9,8 @@
 //!   length (u32), the message kind (u8: 0 = capture and calibration, 1 = the camera's view settings), zero padding
 //!   to 32 bytes. Blocks follow each other to the end of the file; the sample has nine.
 //! - Kind 0, field 12 (repeated): one module's capture. 2 = module id (0..=4 the 28 mm A1..A5, 5..=9 the 70 mm
-//!   B1..B5, 10..=15 the 150 mm C1..C6), 4 = lens (focus) position, 8 = exposure time in ns, 13 = the red site of the
+//!   B1..B5, 10..=15 the 150 mm C1..C6), 4 = mirror position (only on the 70 mm modules of
+//!   the sample, the ones that aim their view with a mirror; signed), 8 = exposure time in ns, 13 = the red site of the
 //!   2x2 Bayer cell {1: column, 2: row}: the site whose mean is lowest under the overcast daylight of the sample and
 //!   the one that renders its sky neutral (-1 on the monochrome module A2, whose four sites read the same),
 //!   9 = the surface {2: {1: width, 2: height}, 3: format, 4: row stride in bytes, 5: data offset from the block
@@ -26,9 +27,9 @@
 //!     white to them), 6: 24 chart patches}. Matrix 3 and fields 4/5 put illuminant 0's white at xy (0.448, 0.409)
 //!     (standard A), 2's at (0.314, 0.322) (D65) and 6's at (0.379, 0.374) (TL84); A and D65 are used. Each matrix
 //!     is fields 1..=9 (f32), row-major.
-//!   - 4: vignetting {2 (repeated): {1: lens position, 2: {1: 17 columns, 2: 13 rows, 3: the gains, f32 row-major}}}:
+//!   - 4: vignetting {2 (repeated): {1: mirror position, 2: {1: 17 columns, 2: 13 rows, 3: the gains, f32 row-major}}}:
 //!     1.0 at the centre, up to 3.4 in a 28 mm module's corners, the inverse of the sample's sky falloff. The 70 mm
-//!     modules have one grid per lens position; the nearest to the capture's is used. The grid's outer points sit on
+//!     modules have one grid per mirror position; the nearest to the capture's is used. The grid's outer points sit on
 //!     the image's edges (it is symmetric about the centre point), so it is a DNG `GainMap` over the frame.
 //! - Kind 0, field 16: the sensor {2: {1: black level, 2: white level}}: 42 and 1023 on the sample, whose darkest
 //!   samples sit at 34..43.
@@ -154,8 +155,9 @@ impl<'a> Msg<'a> {
         Fields { b: self.0, pos: 0 }.map_while(Result::ok).filter(move |(n, _)| *n == num).map(|(_, v)| v)
     }
 
+    // A singular scalar field written more than once takes its last value, as protocol buffers read it.
     fn varint(&self, num: u64) -> Option<u64> {
-        self.all(num).find_map(|v| if let Val::Varint(x) = v { Some(x) } else { None })
+        self.all(num).filter_map(|v| if let Val::Varint(x) = v { Some(x) } else { None }).last()
     }
 
     /// A varint field read as a signed (two's complement) number: -1 is written as 2^64 - 1.
@@ -164,11 +166,28 @@ impl<'a> Msg<'a> {
     }
 
     fn f32(&self, num: u64) -> Option<f32> {
-        self.all(num).find_map(|v| if let Val::Fixed32(x) = v { Some(f32::from_bits(x)) } else { None }).filter(|v| v.is_finite())
+        self.all(num).filter_map(|v| if let Val::Fixed32(x) = v { Some(f32::from_bits(x)) } else { None }).last().filter(|v| v.is_finite())
     }
 
     fn bytes(&self, num: u64) -> Option<&'a [u8]> {
-        self.all(num).find_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None })
+        self.all(num).filter_map(|v| if let Val::Bytes(b) = v { Some(b) } else { None }).last()
+    }
+
+    /// Repeated float field `num` in wire order: packed records (a length-delimited run of little-endian f32s) and
+    /// single values alike. `None` past `max` values or for a packed record that isn't whole floats.
+    fn f32s(&self, num: u64, max: usize) -> Option<Vec<f32>> {
+        let mut out = Vec::new();
+        for v in self.all(num) {
+            match v {
+                Val::Fixed32(x) => out.push(f32::from_bits(x)),
+                Val::Bytes(b) if b.len() % 4 == 0 => out.extend(b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c))),
+                _ => return None,
+            }
+            if out.len() > max {
+                return None;
+            }
+        }
+        Some(out)
     }
 
     /// All sub-messages `num`; malformed nested messages are corrupt input.
@@ -235,7 +254,8 @@ struct Module<'a> {
     data: &'a [u8],
     /// The red site of the 2x2 cell (column, row); `None` on a monochrome module.
     red: Option<(usize, usize)>,
-    lens_position: u64,
+    /// Field 4, signed; 0 when absent, as on the 28 mm modules (their single grid is keyed 0).
+    mirror_position: i64,
 }
 
 fn module<'a>(block: &'a [u8], msg_at: usize, m: &Msg<'a>) -> Result<Option<Module<'a>>> {
@@ -270,7 +290,7 @@ fn module<'a>(block: &'a [u8], msg_at: usize, m: &Msg<'a>) -> Result<Option<Modu
         (x @ 0..=1, y @ 0..=1) => Some((x as usize, y as usize)),
         _ => None,
     });
-    Ok(Some(Module { id, width, height, stride, data, red, lens_position: m.varint(4).unwrap_or(0) }))
+    Ok(Some(Module { id, width, height, stride, data, red, mirror_position: m.int(4).unwrap_or(0) }))
 }
 
 /// A Bayer cell with red at (`x`, `y`): blue on the opposite corner, green on the other two.
@@ -342,16 +362,16 @@ fn colour(headers: &[&Block], id: u64) -> Result<ColorData> {
 }
 
 /// The module's vignetting gains, from its calibration records, as an `OpcodeList2` gain map over the
-/// `width x height` frame (the grid nearest `lens_position`).
-fn vignetting(headers: &[&Block], id: u64, lens_position: u64, width: usize, height: usize) -> Result<Option<Opcode>> {
-    // the grid nearest the lens position, the first of equally near ones
+/// `width x height` frame (the grid nearest `mirror_position`).
+fn vignetting(headers: &[&Block], id: u64, mirror_position: i64, width: usize, height: usize) -> Result<Option<Opcode>> {
+    // the grid nearest the mirror position, the first of equally near ones
     let mut nearest: Option<(u64, Msg)> = None;
     calibration(headers, id, |c| {
         if let Some(v) = c.sub(4)? {
             for g in v.subs(2) {
                 let g = g?;
                 if let Some(grid) = g.sub(2)? {
-                    let off = g.varint(1).unwrap_or(0).abs_diff(lens_position);
+                    let off = g.int(1).unwrap_or(0).abs_diff(mirror_position);
                     if nearest.is_none_or(|(best, _)| off < best) {
                         nearest = Some((off, grid));
                     }
@@ -366,11 +386,7 @@ fn vignetting(headers: &[&Block], id: u64, lens_position: u64, width: usize, hei
         return Ok(None);
     };
     let Some(n) = cols.checked_mul(rows).filter(|&n| (4..=MAX_GRID_POINTS).contains(&n) && cols >= 2 && rows >= 2) else { return Ok(None) };
-    let Some(raw) = grid.bytes(3) else { return Ok(None) };
-    if raw.len() != n.saturating_mul(4) {
-        return Ok(None);
-    }
-    let gains: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+    let Some(gains) = grid.f32s(3, n).filter(|g| g.len() == n) else { return Ok(None) };
     // a gain map that darkens, or a NaN, is not a vignetting correction: the gains are at least 1 (the sample's
     // centres are 1.0, or 1 - 6e-8 after f32 rounding)
     if gains.iter().any(|g| !(g.is_finite() && (MIN_GAIN..=16.0).contains(g))) {
@@ -451,9 +467,12 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let mut color = colour(&headers, m.id)?;
     color.as_shot_neutral = as_shot_neutral(&blocks)?;
     let mut opcodes = OpcodeLists::default();
-    opcodes.list2.extend(vignetting(&headers, m.id, m.lens_position, w, h)?);
+    opcodes.list2.extend(vignetting(&headers, m.id, m.mirror_position, w, h)?);
     let data = if mode == Mode::Full {
-        let mut d = vec![0u16; n];
+        // 2^30 samples are 2 GiB, more than one allocation may take on a 32-bit target: refuse rather than abort
+        let mut d = Vec::new();
+        d.try_reserve_exact(n).map_err(|_| RawError::Limit("LRI sample allocation"))?;
+        d.resize(n, 0u16);
         use rayon::prelude::*;
         d.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
             let src = m.data.get(y * m.stride..).unwrap_or_default();
@@ -562,6 +581,11 @@ mod tests {
         b
     }
 
+    /// `px` as rows of `w` samples, each packed to whole bytes (the stride `module_msg` writes).
+    fn pack10_rows(px: &[u16], w: usize) -> Vec<u8> {
+        px.chunks(w).flat_map(pack10).collect()
+    }
+
     fn pack10(px: &[u16]) -> Vec<u8> {
         let (mut acc, mut n, mut out) = (0u64, 0u32, Vec::new());
         for &p in px {
@@ -582,7 +606,7 @@ mod tests {
     /// A module capture message (field 12) with its surface at `offset`.
     fn module_msg(id: u64, w: u64, h: u64, offset: u64, red: (i64, i64)) -> Vec<u8> {
         let size = [var(1, w), var(2, h)].concat();
-        let surface = [bytes(2, &size), var(3, FORMAT_PACKED10), var(4, w * 10 / 8), var(5, offset)].concat();
+        let surface = [bytes(2, &size), var(3, FORMAT_PACKED10), var(4, (w * 10).div_ceil(8)), var(5, offset)].concat();
         let bayer = [var(1, red.0 as u64), var(2, red.1 as u64)].concat();
         bytes(12, &[var(2, id), var(8, 2_000_000), bytes(9, &surface), bytes(13, &bayer)].concat())
     }
@@ -593,7 +617,7 @@ mod tests {
         let px: Vec<u16> = (0..w * h).map(|i| 42 + (i * 37 % 900) as u16).collect();
         let higher_id_px: Vec<u16> = (0..w * h).map(|i| 100 + (i * 19 % 800) as u16).collect();
         let mono: Vec<u16> = vec![500; w * h];
-        let (a, b, c) = (pack10(&mono), pack10(&higher_id_px), pack10(&px));
+        let (a, b, c) = (pack10_rows(&mono, w), pack10_rows(&higher_id_px, w), pack10_rows(&px, w));
         let data = [a.clone(), b.clone(), c].concat();
         let time = [var(1, 2017), var(2, 9), var(3, 28), var(4, 6), var(5, 24), var(6, 20)].concat();
         let capture = [
@@ -667,6 +691,65 @@ mod tests {
         let c = colour_with([0.0; 9], good, good);
         assert_eq!(c.illuminant, [EXIF_D65, 0]);
         assert_eq!(c.forward_matrix, [Some(as_mat(forward)), None]);
+    }
+
+    /// A singular scalar written twice takes its last value, as protocol buffers read it.
+    #[test]
+    fn a_repeated_scalar_takes_its_last_value() {
+        let m = [var(1, 7), f32f(2, 1.5), var(1, 9), f32f(2, 2.5)].concat();
+        let m = Msg::parse(&m).unwrap();
+        assert_eq!((m.varint(1), m.f32(2)), (Some(9), Some(2.5)));
+    }
+
+    /// A 3x3 grid's gains, stored as `records` of field 3, keyed `key`, for module 0, read at `mirror`.
+    fn grid_gains(records: &[Vec<u8>], grids: &[(i64, f32)], mirror: i64) -> Option<Vec<f32>> {
+        let grid = |key: i64, centre: f32| {
+            let mut gains = [2.0f32; 9];
+            gains[4] = centre;
+            let body: Vec<u8> =
+                if records.is_empty() { bytes(3, &gains.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()) } else { records.concat() };
+            bytes(2, &[var(1, key as u64), bytes(2, &[var(1, 3), var(2, 3), body].concat())].concat())
+        };
+        let all: Vec<u8> = grids.iter().flat_map(|&(k, c)| grid(k, c)).collect();
+        let cal = bytes(13, &[var(1, 0), bytes(4, &all)].concat());
+        let f = block(&cal, &[], 0);
+        let blocks = blocks(&f).unwrap();
+        match vignetting(&blocks.iter().collect::<Vec<_>>(), 0, mirror, 16, 6).unwrap()? {
+            Opcode::GainMap { gains, .. } => Some(gains),
+            _ => None,
+        }
+    }
+
+    /// A repeated float field may be packed in several records or written value by value: all of them, in order,
+    /// are the gains.
+    #[test]
+    fn gains_split_over_records_are_joined() {
+        let floats = |v: &[f32]| v.iter().flat_map(|g| g.to_le_bytes()).collect::<Vec<u8>>();
+        let want = vec![2.0, 1.5, 2.0, 1.5, 1.0, 1.5, 2.0, 1.5, 2.0];
+        // four packed, then one unpacked, then four packed
+        let split = [bytes(3, &floats(&want[..4])), f32f(3, want[4]), bytes(3, &floats(&want[5..]))];
+        assert_eq!(grid_gains(&split, &[(0, 1.0)], 0), Some(want.clone()));
+        // a tenth gain, or a packed record that isn't whole floats, is not a 3x3 grid
+        let long = [bytes(3, &floats(&want)), f32f(3, 2.0)];
+        assert_eq!(grid_gains(&long, &[(0, 1.0)], 0), None);
+        let ragged = [bytes(3, &floats(&want)[..35])];
+        assert_eq!(grid_gains(&ragged, &[(0, 1.0)], 0), None);
+    }
+
+    /// The mirror position and the grids' keys are signed: read unsigned, a grid at -5 was 2^64 - 5, the farthest
+    /// from a mirror at 10 instead of the nearest.
+    #[test]
+    fn the_nearest_grid_is_chosen_by_signed_mirror_position() {
+        let centre = |g: Option<Vec<f32>>| g.and_then(|g| g.get(4).copied());
+        assert_eq!(centre(grid_gains(&[], &[(100, 1.25), (-5, 1.0)], 10)), Some(1.0));
+        assert_eq!(centre(grid_gains(&[], &[(100, 1.25), (-5, 1.0)], 80)), Some(1.25));
+    }
+
+    /// Rows are packed to whole bytes: at a width that isn't a multiple of 4 the row stride is rounded up.
+    #[test]
+    fn a_width_of_whole_bytes_per_row_decodes() {
+        let (f, px) = sample(6, 4);
+        assert_eq!(crate::decode(&f).unwrap().data, RawData::U16(px));
     }
 
     /// Gains under 1 darken the frame they are meant to brighten: such a grid is not a vignetting correction.
