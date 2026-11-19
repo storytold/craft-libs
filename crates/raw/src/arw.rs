@@ -632,14 +632,15 @@ fn recorded_size_crop(full: (u64, u64), exif: Option<(u64, u64)>, w: usize, h: u
     (height * 2 >= h).then(|| Rect::new(x, ((h - height) / 2) & !1, fw, height))
 }
 
-/// The raw image IFD: the largest CFA image or IFD with Sony's tone curve, else the largest four-sample IFD with Sony's
-/// pixel-shift photometric (32892), so a composite written without the curve is still found ([`pixel_shift_layout`]
-/// then checks it) without ever displacing a CFA image.
+/// The raw image IFD: the largest CFA image or IFD with Sony's tone curve, else the largest four-sample IFD with a
+/// pixel-shift photometric (Sony's 32892, or the LinearRaw 34892 the ILCE-1M2 writes), so a composite written without
+/// the curve is still found without ever displacing a CFA image. [`pixel_shift_layout`] then checks model and size.
 fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
     let ifds = tiff.all_ifds();
     let area = |i: &&Ifd| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0));
     let raw = ifds.iter().copied().filter(|i| i.u16(t::PHOTOMETRIC) == Some(photometric::CFA) || i.contains(TONE_CURVE)).max_by_key(area);
-    raw.or_else(|| ifds.iter().copied().filter(|i| i.u16(t::PHOTOMETRIC) == Some(32892) && i.u16(t::SAMPLES_PER_PIXEL) == Some(4)).max_by_key(area))
+    let composite = |i: &&Ifd| matches!(i.u16(t::PHOTOMETRIC), Some(32892 | 34892)) && i.u16(t::SAMPLES_PER_PIXEL) == Some(4);
+    raw.or_else(|| ifds.iter().copied().filter(composite).max_by_key(area))
 }
 
 fn valid_arw2_curve(curve: &[u64]) -> bool {
@@ -1153,6 +1154,23 @@ mod tests {
                 // three-channel RGB: no CFA is used, so none was assumed
                 assert_eq!((image.cpp, image.cfa.is_none(), image.notices.assumed_cfa), (3, true, false), "{tone_curve} {mode:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_linear_raw_composite_without_a_tone_curve_reaches_the_layout_check() {
+        use craft_tiff::Value;
+        // the ILCE-1M2 writes DNG LinearRaw (34892) for its composites: without the curve it is still found, and an
+        // unverified size is then refused by `pixel_shift_layout`, not by the IFD search
+        let mut raw = pixel_shift_composite(4, false);
+        raw.set(t::MODEL, Value::Ascii("ILCE-1M2".into()));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![34892]));
+        let file = craft_tiff::TiffWriter::default().write(&[raw]).unwrap();
+        let tiff = Tiff::parse(&file).unwrap();
+        assert_eq!(raw_ifd(&tiff).and_then(|i| i.u16(t::PHOTOMETRIC)), Some(34892));
+        for mode in [Mode::Header, Mode::Full] {
+            let result = decode(&file, mode, &Limits::default());
+            assert!(matches!(&result, Err(RawError::Unsupported(m)) if m.contains("four-channel")), "{mode:?}: {:?}", result.err());
         }
     }
 
