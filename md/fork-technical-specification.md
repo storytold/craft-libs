@@ -162,7 +162,7 @@ The fork establishes a clear separation between keyboard navigation (`Enter`) an
    None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
    None if press.key == Key::Space => PressRoute::Free,
    ```
-   Because `ActivateKeys::space()` returns `true` for both `ActivateKeys::Space` and `ActivateKeys::Both`, a component can opt in to `Space` activation either alongside `Enter` (`ActivateKeys::Both`) or exclusively without enabling `Enter` (`ActivateKeys::Space`). Stops that do not opt into Space (pointer stops default to `ActivateKeys::Enter`, while `Input::Text` and `Input::Editor` default to `ActivateKeys::Neither`) leave `Space` unconsumed, allowing it to pass through to the host canvas as the Hand tool shortcut.
+   Because `ActivateKeys::space()` returns `true` for both `ActivateKeys::Space` and `ActivateKeys::Both`, a component can opt in to `Space` activation either alongside `Enter` (`ActivateKeys::Both`) or exclusively without enabling `Enter` (`ActivateKeys::Space`). Stops that do not opt into Space (pointer stops default to `ActivateKeys::Enter`, while `Input::Text` and `Input::Editor` default to `ActivateKeys::Neither`) return `PressRoute::Free`, so the activation route does not take `Space`. A focused `Input::Text` or `Input::Editor` field still receives the typed space character. When the canvas holds `Space` (`canvas_space`), the canvas keeps `Space` from every field and `Space` acts as the Hand tool shortcut.
 
 4. **Preserved Opt-in for Reading View**:
    In `crates/pages/src/ui/reading.rs`:
