@@ -1,6 +1,6 @@
 //! A ZIP archive being written.
 
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Seek, Write};
 
 use crate::Error;
 
@@ -16,21 +16,21 @@ pub enum Compression {
     Level(u8),
 }
 
-/// A ZIP archive being written into memory. The output is deterministic: the same (1980)
+/// A ZIP archive being written. The output is deterministic: the same (1980)
 /// timestamp on every entry. Entries are written in the order they are added.
-pub struct Writer {
-    zip: zip::ZipWriter<Cursor<Vec<u8>>>,
+pub struct Writer<W: Write + Seek = Cursor<Vec<u8>>> {
+    zip: zip::ZipWriter<W>,
     legacy_utf8: bool,
 }
 
-impl Default for Writer {
-    fn default() -> Writer {
+impl Default for Writer<Cursor<Vec<u8>>> {
+    fn default() -> Writer<Cursor<Vec<u8>>> {
         Writer { zip: zip::ZipWriter::new(Cursor::new(Vec::new())), legacy_utf8: false }
     }
 }
 
-impl Writer {
-    pub fn new() -> Writer {
+impl Writer<Cursor<Vec<u8>>> {
+    pub fn new() -> Writer<Cursor<Vec<u8>>> {
         Writer::default()
     }
 
@@ -38,8 +38,31 @@ impl Writer {
     ///
     /// This keeps stored archives byte-for-byte stable for existing users while still using the
     /// shared writer for entry encoding and validation.
-    pub fn legacy_utf8() -> Writer {
+    pub fn legacy_utf8() -> Writer<Cursor<Vec<u8>>> {
         Writer { legacy_utf8: true, ..Writer::default() }
+    }
+
+    /// The finished archive.
+    pub fn finish(self) -> Result<Vec<u8>, Error> {
+        let mut bytes = self.zip.finish().map(Cursor::into_inner).map_err(|e| Error::Write(e.to_string()))?;
+        if self.legacy_utf8 {
+            patch_legacy_utf8_headers(&mut bytes)?;
+        }
+        Ok(bytes)
+    }
+}
+
+impl<W: Write + Seek> Writer<W> {
+    /// Starts writing an archive directly to a seekable destination without buffering the whole
+    /// archive in memory.
+    pub fn to_writer(destination: W) -> Self {
+        Self { zip: zip::ZipWriter::new(destination), legacy_utf8: false }
+    }
+
+    /// Adds a directory entry with the deterministic 1980 timestamp.
+    pub fn add_directory(&mut self, name: &str) -> Result<(), Error> {
+        let options = zip::write::SimpleFileOptions::default().last_modified_time(zip::DateTime::default());
+        self.zip.add_directory(name, options).map_err(|e| Error::Write(format!("{name}: {e}")))
     }
 
     /// Adds an entry from a byte slice. A name the archive already has is an error.
@@ -98,13 +121,9 @@ impl Writer {
         write(&mut self.zip).map_err(|e| fail(&e))
     }
 
-    /// The finished archive.
-    pub fn finish(self) -> Result<Vec<u8>, Error> {
-        let mut bytes = self.zip.finish().map(Cursor::into_inner).map_err(|e| Error::Write(e.to_string()))?;
-        if self.legacy_utf8 {
-            patch_legacy_utf8_headers(&mut bytes)?;
-        }
-        Ok(bytes)
+    /// Finishes writing and returns the underlying destination.
+    pub fn finish_into(self) -> Result<W, Error> {
+        self.zip.finish().map_err(|e| Error::Write(e.to_string()))
     }
 }
 
