@@ -12,6 +12,9 @@ craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "<commi
 
 | Module | From LightCraft (`a75497d6`) | Contents |
 |---|---|---|
+| `color::spline` | `crates/color/src/spline.rs` | `MonotoneCurve` (a tone curve through points that does not overshoot) and `Lut1`. |
+| `curve` | `crates/pipeline` | The parametric tone curve and its regions. |
+| `lut` | `crates/pipeline` | 3D lookup tables and the `.cube` reader. |
 | `inpaint` | `crates/inpaint` | Content-aware hole filling for spot removal: `complete` (multi-scale patch completion with PatchMatch) and `membrane_fill` (a smooth harmonic fill, its seed and fallback). Interleaved `f32` buffers of any channel count, a fixed-seed RNG, the same result on any number of threads. |
 
 ## Parity with LightCraft
@@ -36,5 +39,5 @@ Differences from LightCraft (ordinary-range output is covered by the baseline fi
 
 ## Not here yet
 
-The rest of the pipeline: colour, raster, the sensor stage, raw loading and the render stages. No app uses this crate
+The rest of the pipeline: the rest of colour, raster, the sensor stage, raw loading and the render stages. No app uses this crate
 yet.
