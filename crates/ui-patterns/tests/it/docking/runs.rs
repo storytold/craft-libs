@@ -274,13 +274,19 @@ fn a_tab_switch_runs_only_its_group() {
     workspace.borrow_mut().apply(Action::activate(3), false, |_| Permissions::ALL).expect("panel 3 is shown");
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
+    // The changed row runs in the real run; the discard pass its new size asks for measures it once (no measure of the
+    // new content is kept yet) and replays it in its real run.
     assert!(
-        rows_ran.len() == 1,
-        "only the second group's tab row ran, once: {:?}",
+        rows_ran.len() == 2 && rows_ran[0] == rows_ran[1],
+        "only the second group's tab row ran: its real run, then one measuring run in the discard pass's sizing pass: {:?}",
         frame_memo_runs(&fixture)
     );
     assert_eq!(memo_of(&fixture, "TabRow"), (0, 3), "the last pass replays every tab row: {:?}", memo_runs(&fixture));
-    assert_eq!(body_runs(), vec![3], "only the newly shown body ran");
+    assert_eq!(
+        body_runs(),
+        vec![3, 3],
+        "only the newly shown body ran: its real run, then one measuring run in the sizing pass that first measures it"
+    );
     // The tab strip's indicator moves to the new tab, which runs the row while it animates.
     fixture.idle(SETTLE).frame(Vec::new());
     assert_eq!(ran(&fixture), 0, "and they settle at it: {:?}", memo_runs(&fixture));
@@ -295,8 +301,8 @@ fn a_label_change_runs_only_its_groups_chrome() {
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
     assert!(
-        rows_ran.len() == 1,
-        "only the third group's tab row ran, once: {:?}",
+        rows_ran.len() == 2 && rows_ran[0] == rows_ran[1],
+        "only the third group's tab row ran: its real run, then one measuring run in the discard pass's sizing pass: {:?}",
         frame_memo_runs(&fixture)
     );
     assert_eq!(memo_of(&fixture, "TabRow"), (0, 3), "the last pass replays every tab row: {:?}", memo_runs(&fixture));

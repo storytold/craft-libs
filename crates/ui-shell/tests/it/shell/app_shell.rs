@@ -9,7 +9,7 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::shell::{AppShell, Slot, Title, TitleBar};
 use craft_ui::testing::pointer::{press, release};
-use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_pass_memo_runs, trial};
 use egui::{Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -125,7 +125,8 @@ fn slot_text(props: &mut SlotText, ui: &mut Ui) {
 }
 
 /// Slots whose content is a memoized view run only when their props change: at rest and for a click in the body they
-/// replay, a new status runs the status slot alone, once, and a slot the app does not memoize runs every pass.
+/// replay, a new status runs the status slot alone (one real run, one measuring run), and a slot the app does not
+/// memoize runs every pass.
 #[trial]
 fn memoized_slots_run_only_when_their_props_change() {
     let (version, plain, body) = (Cell::new(1), Cell::new(0), Cell::new(Rect::NOTHING));
@@ -163,7 +164,19 @@ fn memoized_slots_run_only_when_their_props_change() {
         assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "a click in the body ({events:?}) leaves the slots replaying");
     }
     version.set(2);
-    assert_eq!(frame(&mut frames, vec![]).0, vec!["status"], "a new status runs the status slot alone, once");
+    // One real run, then one measuring run in the first sizing pass that measures the new content: the discard pass its
+    // new size asks for, whose real run replays the first. A container that measures before the real run of one pass
+    // makes the same two runs in the other order (ui-widgets body::memo_view, the stack measured first).
+    assert_eq!(
+        frame(&mut frames, vec![]).0,
+        vec!["status", "status"],
+        "a new status runs the status slot alone: one real run and one measuring run in the sizing pass that measures it"
+    );
+    assert!(
+        last_pass_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed),
+        "the discard pass's real run replays every slot: {:?}",
+        last_pass_memo_runs(&frames.ctx)
+    );
     assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
 }
 

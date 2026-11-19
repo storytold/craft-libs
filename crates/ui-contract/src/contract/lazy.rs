@@ -200,7 +200,7 @@ impl Lazy {
         alloc::advance_past(ui, rect);
         if view.is_some() || self.settles {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, rect.size(), sizing, registered);
+            lazy::shown(&ctx, owner, id, rect.size(), sizing, key, registered);
         }
         if let Some(view) = view
             && real

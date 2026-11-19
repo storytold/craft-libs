@@ -12,7 +12,8 @@ use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::{in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{
-    Frames, MemoRun, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, measuring_run, trial,
+    Frames, MemoRun, last_frame_memo_runs, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, measuring_run,
+    trial,
 };
 use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
@@ -556,10 +557,15 @@ const STACK_ROOM: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(410.0
 /// `label`. Returns the frame's passes, the sizing passes the stack's content ran in, the width the view took in the
 /// last of them and what the view returned (its button's size) in the last real run.
 fn stack_frame(frames: &mut Frames, label: &str, heading: &str) -> (usize, usize, f32, Option<Vec2>) {
+    stack_frame_in(frames, STACK_ROOM, label, heading)
+}
+
+/// `stack_frame` with the stack in `room`.
+fn stack_frame_in(frames: &mut Frames, room: Rect, label: &str, heading: &str) -> (usize, usize, f32, Option<Vec2>) {
     let (sizing, measured) = (Cell::new(0), Cell::new(0.0));
     let mut out = None;
     let passes = frames.frame(vec![], |ui| {
-        in_region(ui, STACK_ROOM, |ui| {
+        in_region(ui, room, |ui| {
             let shown = Stack::new().fill().show(ui, |ui, _| {
                 let out = MemoView::new("heading", Title { title: heading.to_owned() }, title).show(ui);
                 if ui.is_sizing_pass() {
@@ -589,3 +595,47 @@ fn a_view_in_a_container_that_measures_again_replays_in_its_sizing_pass() {
     assert_eq!(title_runs(), 0, "the view replayed in the sizing pass and in the real run");
 }
 
+/// A changed view runs in the real run of the pass it changed in; its new size asks for a discard pass, whose sizing
+/// pass has no measure of the new content, so the view runs there once as a measuring run, and the discard pass's real
+/// run replays it. The sizing pass measures the view at its new extent, not at the one it had before the change.
+#[trial]
+fn a_changed_view_is_measured_once_in_the_sizing_pass_its_new_size_asks_for() {
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        stack_frame(&mut frames, "Label", "Heading");
+    }
+    title_runs();
+    let (passes, sizing, measured, button) = stack_frame(&mut frames, "Label", "A much longer heading than before");
+    assert_eq!(passes, 2, "the new size asks for one discard pass");
+    assert!(sizing > 0, "the discard pass measures the stack's content");
+    assert_eq!(title_runs(), 2, "one real run in pass 1 and one measuring run in pass 2's sizing pass");
+    assert_eq!(runs_of(&frames, "Title"), [MemoRun::Replayed], "pass 2's real run replays the pass-1 run");
+    let button = button.expect("the view returned its button's size");
+    assert!(measured + 0.5 >= button.x, "the sizing pass measured the new heading: {measured} for a button {button:?}");
+    stack_frame(&mut frames, "Label", "A much longer heading than before");
+    assert_eq!(title_runs(), 0, "then the view replays in every run");
+}
+
+/// Where a container measures before the real run of the pass the view changed in (here its room changed in the same
+/// frame), the changed view runs in both runs of that pass: once as a measuring run in the sizing pass, whose run in an
+/// invisible `Ui` can't be replayed in the real run, then in the real run. That is the same count as a change met by a
+/// later sizing pass, in the other order, and no later pass of the frame runs it again.
+#[trial]
+fn a_changed_view_its_container_measures_first_runs_in_the_sizing_pass_and_the_real_run() {
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        stack_frame(&mut frames, "Label", "Heading");
+    }
+    title_runs();
+    let wider = Rect::from_min_size(STACK_ROOM.min, STACK_ROOM.size() + Vec2::new(100.0, 0.0));
+    let (passes, sizing, _, _) = stack_frame_in(&mut frames, wider, "Label", "A much longer heading");
+    assert_eq!((passes, sizing), (1, 1), "the stack measures its content before the real run of the one pass");
+    assert_eq!(
+        last_frame_memo_runs(&frames.ctx).into_iter().map(|(_, _, run)| run).collect::<Vec<_>>(),
+        [MemoRun::Ran, MemoRun::Ran],
+        "one measuring run in the sizing pass, then one real run"
+    );
+    assert_eq!(title_runs(), 2, "and nothing else ran the view");
+    stack_frame_in(&mut frames, wider, "Label", "A much longer heading");
+    assert_eq!(title_runs(), 0, "then the view replays in every run");
+}
