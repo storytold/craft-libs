@@ -4,7 +4,8 @@
 //! row there too.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, Sizing, WrapWidth};
+use craft_ui::choice::{Radio, RadioGroup};
+use craft_ui::contract::{Bind, FieldLayout, Gap, LeastWidth, Pad, Props as _, Scroll, Show as _, ShowContainer as _, SideLabel, Sizing, WrapWidth};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::testing::{Fixture, trial};
@@ -154,4 +155,31 @@ fn a_wrapping_row_breaks_at_the_stacks_wrap_width() {
     assert!((plain_first.center().y - plain_last.center().y).abs() < 1.0, "without a wrap width the row keeps one line: {plain:?}");
     assert!(last.top() >= first.bottom(), "the row breaks onto a second line: {first:?} then {last:?}");
     assert!(column.width() < plain.width() * 0.75, "the wrap width keeps the stack narrow: {column:?} against {plain:?}");
+}
+
+/// Labelled radios (a group's `labelled` children, label after the circle) in a wrapping row break onto further lines
+/// as buttons do: a radio whose label would not fit what is left of the line starts the next one, at the row's start
+/// edge, and keeps its label on one line. The label step places a labelled leaf in the rest of the line before egui
+/// allocates its space, so the row used to keep every radio on its first line and squeeze the last label into the
+/// sliver left at the end (Page Setup's "Text snaps to characters").
+#[trial]
+fn labelled_radios_in_a_wrapping_row_break_onto_a_new_line() {
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = Stack::new().wrap_width(WrapWidth::Column).show(ui, |ui, _| {
+            let after = SideLabel::new().layout(FieldLayout::After);
+            let _ = RadioGroup::new("Grid", Bind::given(0u8)).show(ui, |ui, cx| {
+                Row::new().wrap(true).show(ui, |ui, _| {
+                    for (value, kind) in (0u8..).zip(KINDS) {
+                        let _ = cx.labelled(ui, kind, kind.into(), after.clone(), Radio::new(value));
+                    }
+                });
+            });
+        });
+    });
+    fixture.room(Vec2::new(1600.0, 600.0)).settle();
+    let rect = |kind: &str| fixture.by_label(kind).unwrap_or_else(|| panic!("the {kind} radio")).rect;
+    let (first, last) = (rect(KINDS[0]), rect(KINDS[KINDS.len() - 1]));
+    assert!(last.top() >= first.bottom(), "the row breaks onto a further line: {first:?} then {last:?}");
+    let starts = KINDS.iter().filter(|kind| (rect(kind).left() - first.left()).abs() < 0.5).count();
+    assert!(starts >= 2, "a radio that wraps starts its line at the row's start edge: {starts} radios do");
 }
