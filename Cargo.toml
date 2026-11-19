@@ -161,6 +161,7 @@ craft-opc = { path = "crates/opc" }
 craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
+craft-ppt-binary = { path = "crates/ppt-binary" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-pcraft-bundle = { path = "crates/pcraft-bundle" }

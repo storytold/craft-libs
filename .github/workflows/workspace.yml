@@ -39,6 +39,9 @@ jobs:
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
+      # Test binaries without debug info or symbols: about a third of the size, and a panic still
+      # names its file and line.
+      dev-strip: true
       # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
       # time. A panic still names its file and line; only backtrace frames lose theirs, and the
       # Linux and macOS legs keep line tables.
@@ -74,22 +77,28 @@ jobs:
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       command: |
         # The tests run once, with every feature, in parallel across test binaries; nextest skips
-        # doctests, so `cargo test --doc` runs them. The default-feature compile is the lint leg's
+        # doctests, so `cargo test --doc` runs them. Examples are not built, except the two whose
+        # tests run (stubicc, h264_h264enc_bench); clippy in the lint leg covers the rest. The default-feature compile is the lint leg's
         # first clippy run; the last command runs the crates whose tests check behaviour with a
         # feature off, which an all-features build cannot reach.
-        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
-        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+        cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
         cargo test --workspace --doc --all-features --locked
-        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
+        cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
 
   msrv:
     name: Rust 1.95
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      # Its own dependency-cache entry: the calls in this file share one job id, so without a name
+      # they would write the same key.
+      cache-name: msrv
       os: '["ubuntu-latest"]'
       toolchain: 1.95.0
       targets: ""
@@ -104,6 +113,7 @@ jobs:
     name: UI and settings WASM
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      cache-name: wasm
       os: '["ubuntu-latest"]'
       targets: wasm32-unknown-unknown
       tools: ""

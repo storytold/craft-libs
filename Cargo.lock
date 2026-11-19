@@ -1634,6 +1634,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media",
  "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
@@ -1794,7 +1795,9 @@ name = "craft-develop"
 version = "0.1.0"
 dependencies = [
  "craft-develop-model",
+ "craft-render-parity",
  "proptest",
+ "rayon",
  "serde",
 ]
 
@@ -2964,6 +2967,19 @@ version = "0.1.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-ppt-binary"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-pptx",
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
 
