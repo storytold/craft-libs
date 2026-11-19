@@ -247,7 +247,7 @@ impl Document {
         if params.filter == crate::crypt::PUBSEC_FILTER {
             // Before a certificate is asked for: one no certificate can open is refused here.
             if crate::cos::security::public_key_filters_disagree(self, &dict) {
-                return Err(CosError::Security("public-key crypt filters with different recipients need keys of their own".into()));
+                return Err(CosError::Security("public-key crypt filters with different recipients or key lengths need keys of their own".into()));
             }
             if let Err(e @ (crate::crypt::CryptError::Unsupported(_) | crate::crypt::CryptError::UnsupportedAlgorithm(_))) =
                 crate::crypt::SecurityHandler::open(params.clone(), &id0, None)

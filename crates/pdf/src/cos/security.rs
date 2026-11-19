@@ -168,24 +168,28 @@ fn envelopes(doc: &Document, o: &Object) -> Vec<Vec<u8>> {
     }
 }
 
-/// Whether the crypt filters `d`'s strings, streams and embedded files use (`/StrF`, `/StmF`,
-/// `/EFF`, which defaults to `/StmF`) carry different `/Recipients`. Public-key security makes
-/// a filter's key from its own envelopes (ISO 32000-2 §7.6.5.3), so such filters would need keys
-/// of their own; one file key can't read them all.
+/// Whether `d`'s crypt filters that encrypt carry different `/Recipients` or key lengths.
+/// Public-key security makes a filter's key from its own envelopes, cut to its own length
+/// (ISO 32000-2 §7.6.5.3), so such filters would need keys of their own; one file key can't read
+/// them all. Every filter counts, not only those `/StrF`, `/StmF` and `/EFF` name: a stream can
+/// name any of them in its own `/Crypt` filter.
 pub(crate) fn public_key_filters_disagree(doc: &Document, d: &Dict) -> bool {
-    let name = |k: &[u8]| d.get(k).and_then(|v| doc.resolve(v).as_name().map(<[u8]>::to_vec));
     let Some(cf) = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()) else { return false };
-    let stm = name(b"StmF");
-    let used = [stm.clone(), name(b"StrF"), name(b"EFF").or(stm)];
-    let mut found: Vec<Vec<Vec<u8>>> = Vec::new();
-    for n in used.into_iter().flatten().filter(|n| n.as_slice() != b"Identity") {
-        let Some(f) = cf.get(&n).and_then(|f| doc.resolve(f).as_dict().cloned()) else { continue };
+    let mut found: Vec<(Vec<Vec<u8>>, i64)> = Vec::new();
+    for (_, f) in cf.iter() {
+        let Some(f) = doc.resolve(f).as_dict().cloned().filter(|f| encrypts(doc, f)) else { continue };
         let Some(list) = f.get(b"Recipients").map(|r| envelopes(doc, r)) else { continue };
-        if !found.contains(&list) {
-            found.push(list);
+        let key = (list, filter_length_bits(doc, d, &f));
+        if !found.contains(&key) {
+            found.push(key);
         }
     }
     found.len() > 1
+}
+
+/// Whether crypt filter `f` encrypts: `/CFM /None` (or a method absent) leaves data as it is.
+fn encrypts(doc: &Document, f: &Dict) -> bool {
+    matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"V2" | b"AESV2" | b"AESV3"))
 }
 
 /// The file key length of a `/V 4` handler, in bits, from the crypt filter strings and streams
@@ -201,13 +205,23 @@ fn v4_length_bits(doc: &Document, d: &Dict, envelope: Option<&Dict>) -> i64 {
     let int = |o: &Object| doc.resolve(o).as_int().filter(|n| *n > 0);
     let cf = d.get(b"CF").map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned());
     let filter = |name: &[u8]| cf.as_ref().and_then(|cf| cf.get(name)).and_then(|f| doc.resolve(f).as_dict().cloned());
-    let encrypts = |f: &Dict| matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"V2" | b"AESV2" | b"AESV3"));
     let named = |key: &[u8]| {
-        d.get(key).and_then(|n| doc.resolve(n).as_name().map(<[u8]>::to_vec)).filter(|n| n != b"Identity").and_then(|n| filter(&n)).filter(encrypts)
+        d.get(key)
+            .and_then(|n| doc.resolve(n).as_name().map(<[u8]>::to_vec))
+            .filter(|n| n != b"Identity")
+            .and_then(|n| filter(&n))
+            .filter(|f| encrypts(doc, f))
     };
-    let Some(f) = envelope.filter(|f| encrypts(f)).cloned().or_else(|| named(b"StmF")).or_else(|| named(b"StrF")).or_else(|| filter(b"StdCF")) else {
-        return d.get(b"Length").and_then(int).unwrap_or(128);
-    };
+    match envelope.filter(|f| encrypts(doc, f)).cloned().or_else(|| named(b"StmF")).or_else(|| named(b"StrF")).or_else(|| filter(b"StdCF")) {
+        Some(f) => filter_length_bits(doc, d, &f),
+        None => d.get(b"Length").and_then(int).unwrap_or(128),
+    }
+}
+
+/// The key length crypt filter `f` of encryption dictionary `d` works with, in bits (see
+/// [`v4_length_bits`]).
+fn filter_length_bits(doc: &Document, d: &Dict, f: &Dict) -> i64 {
+    let int = |o: &Object| doc.resolve(o).as_int().filter(|n| *n > 0);
     if matches!(f.get(b"CFM").map(|m| doc.resolve(m)).as_deref().and_then(Object::as_name), Some(b"AESV2" | b"AESV3")) {
         return 128;
     }
@@ -508,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_in_use_with_different_recipients_disagree() {
+    fn filters_with_different_recipients_disagree() {
         let doc = doc();
         let with = |eff: &str| {
             dict(&format!(
@@ -517,7 +531,29 @@ mod tests {
             ))
         };
         assert!(public_key_filters_disagree(&doc, &with("/EFF /Files")), "streams and embedded files need two keys");
-        assert!(!public_key_filters_disagree(&doc, &with("")), "/Files is defined but unused");
-        assert!(!public_key_filters_disagree(&doc, &with("/EFF /Default")));
+        assert!(public_key_filters_disagree(&doc, &with("")), "a stream can name /Files in its own /Crypt filter");
+        assert!(public_key_filters_disagree(&doc, &with("/EFF /Default")));
+    }
+
+    #[test]
+    fn a_filter_that_encrypts_nothing_doesnt_disagree() {
+        let d = dict(
+            "<< /Filter /Adobe.PubSec /V 4 /StmF /Default /StrF /Default \
+             /CF << /Default << /CFM /AESV2 /Recipients [<AA>] >> /Plain << /CFM /None /Recipients [<BB>] >> >> >>",
+        );
+        assert!(!public_key_filters_disagree(&doc(), &d));
+    }
+
+    #[test]
+    fn filters_with_the_same_recipients_and_different_key_lengths_disagree() {
+        let with = |second: &str| {
+            dict(&format!(
+                "<< /Filter /Adobe.PubSec /V 4 /StmF /Default /StrF /Default \
+                 /CF << /Default << /CFM /V2 /Length 128 /Recipients [<AA>] >> /Other << {second} /Recipients [<AA>] >> >> >>"
+            ))
+        };
+        assert!(public_key_filters_disagree(&doc(), &with("/CFM /V2 /Length 40")));
+        assert!(!public_key_filters_disagree(&doc(), &with("/CFM /V2 /Length 16")), "16 bytes is 128 bits");
+        assert!(!public_key_filters_disagree(&doc(), &with("/CFM /AESV2")), "AESV2 takes 128 bits");
     }
 }

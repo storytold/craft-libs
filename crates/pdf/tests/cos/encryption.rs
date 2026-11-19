@@ -546,10 +546,10 @@ fn needs_certificate(bytes: Vec<u8>) -> Vec<Vec<u8>> {
 
 #[test]
 fn public_key_envelopes_come_from_the_filter_that_encrypts_the_streams() {
-    // Another filter, listed first and used by nothing, has envelopes of its own.
+    // Another filter, listed first and encrypting nothing, has envelopes of its own.
     let file = with_encrypt(
         "<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 4 /Length 128 /StmF /DefaultCryptFilter /StrF /DefaultCryptFilter \
-         /CF << /AUnused << /CFM /AESV2 /Length 128 /Recipients [<AA>] >> \
+         /CF << /AUnused << /CFM /None /Recipients [<AA>] >> \
          /DefaultCryptFilter << /CFM /AESV2 /Length 128 /Recipients [<BB> <CC>] >> >> >>",
     );
     assert_eq!(needs_certificate(file), vec![vec![0xBB], vec![0xCC]]);
