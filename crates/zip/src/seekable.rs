@@ -52,14 +52,22 @@ pub struct SeekableLimits {
 pub struct SeekableArchive<R: Read + Seek> {
     zip: zip::ZipArchive<MetadataReader<R>>,
     budget: Budget,
+    /// Two entries carry the same name: `Archive` refuses such an archive and its readers must
+    /// see the same answer here.
+    duplicates: bool,
 }
 
 impl<R: Read + Seek> SeekableArchive<R> {
     /// Indexes the trailing metadata of `reader`. The declared entry count is checked before `zip`
     /// allocates for the central directory, and indexing is bounded by
     /// [`SeekableLimits::max_metadata_bytes`].
+    ///
+    /// `zip` keeps one entry per name, so an archive that declares a name twice resolves to one of the two
+    /// entries; [`Self::has_duplicate_names`] reports it, as [`crate::Archive::has_duplicate_names`] does, and
+    /// a caller that must not read the wrong one of two conflicting entries refuses the archive on it.
     pub fn open(mut reader: R, limits: SeekableLimits) -> Result<Self, Error> {
         check_entry_count_seekable(&mut reader, limits.max_entries)?;
+        let declared_headers = central_header_count_seekable(&mut reader, limits.max_metadata_bytes);
         let (meta_reader, indexing) = MetadataReader::new(reader, limits.max_metadata_bytes).map_err(|e| Error::NotZip(e.to_string()))?;
         let zip = zip::ZipArchive::new(meta_reader).map_err(|e| Error::NotZip(e.to_string()))?;
         indexing.finish();
@@ -67,7 +75,14 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if found > limits.max_entries {
             return Err(Error::TooManyEntries { declared: found, limit: limits.max_entries });
         }
-        Ok(Self { zip, budget: Budget::new("archive", limits.max_total_bytes) })
+        // `zip` keeps one entry per name, so a directory with more headers than entries repeats one.
+        let duplicates = declared_headers > zip.len();
+        Ok(Self { zip, budget: Budget::new("archive", limits.max_total_bytes), duplicates })
+    }
+
+    /// Whether two entries carry the same name, as [`crate::Archive::has_duplicate_names`] reports it.
+    pub fn has_duplicate_names(&self) -> bool {
+        self.duplicates
     }
 
     /// The number of distinct entry names.
@@ -168,7 +183,16 @@ impl<R: Read + Seek> SeekableArchive<R> {
         if declared > self.budget.remaining() {
             return Err(Error::BudgetSpent { name: name.to_string(), limit: self.budget.limit() });
         }
-        Ok(Some(EntryReader { file, budget: &mut self.budget, declared, limit: declared, read: 0, finished: false }))
+        Ok(Some(EntryReader {
+            file,
+            budget: &mut self.budget,
+            name: name.to_string(),
+            declared,
+            limit: declared,
+            read: 0,
+            finished: false,
+            fail: None,
+        }))
     }
 
     /// Read all bytes of entry `name` into memory, or `None` when there is no such entry.
@@ -189,7 +213,9 @@ impl<R: Read + Seek> SeekableArchive<R> {
     fn read_index_named(&mut self, index: usize, name: &str, max: u64) -> Result<Option<Vec<u8>>, Error> {
         let Some(mut reader) = self.open_entry_index_named(index, name, max)? else { return Ok(None) };
         let mut out = Vec::with_capacity(usize::try_from(reader.declared).unwrap_or(64 * 1024).min(64 * 1024));
-        reader.read_to_end(&mut out).map_err(|e| Error::Entry { name: name.to_string(), msg: e.to_string() })?;
+        if let Err(e) = reader.read_to_end(&mut out) {
+            return Err(reader.take_error().unwrap_or_else(|| Error::Entry { name: name.to_string(), msg: e.to_string() }));
+        }
         Ok(Some(out))
     }
 
@@ -204,23 +230,104 @@ impl<R: Read + Seek> SeekableArchive<R> {
     }
 }
 
+/// Reads from a seekable source while the caller's metadata allowance lasts, so counting the
+/// directory cannot read more than indexing may.
+struct MetadataWindow<R> {
+    reader: R,
+    remaining: u64,
+}
+
+impl<R: Read + Seek> MetadataWindow<R> {
+    fn read_at(&mut self, at: u64, len: usize) -> Option<Vec<u8>> {
+        let wanted = u64::try_from(len).ok()?;
+        if wanted > self.remaining {
+            return None;
+        }
+        self.remaining -= wanted;
+        let mut out = vec![0u8; len];
+        self.reader.seek(io::SeekFrom::Start(at)).ok()?;
+        self.reader.read_exact(&mut out).ok()?;
+        Some(out)
+    }
+}
+
+/// The central-directory headers a seekable archive declares, counted from the directory itself the way
+/// `Archive` counts them. `zip` keeps one entry per name, so more headers than entries repeats a name,
+/// and this reader refuses what the in-memory guard refuses. Zero means the count could not be read.
+fn central_header_count_seekable<R: Read + Seek>(reader: &mut R, max_metadata_bytes: u64) -> usize {
+    let end = match reader.seek(io::SeekFrom::End(0)) {
+        Ok(end) => end,
+        Err(_) => return 0,
+    };
+    let mut window = MetadataWindow { reader, remaining: max_metadata_bytes };
+    let tail_len = usize::try_from(end.min(max_metadata_bytes.max(22))).unwrap_or(0);
+    let tail_start = end.saturating_sub(tail_len as u64);
+    let Some(tail) = window.read_at(tail_start, tail_len) else { return 0 };
+    // The end record is the last 22 bytes, followed only by its own comment.
+    let Some(end_record) = (0..tail.len().saturating_sub(21)).rev().find(|&at| {
+        tail.get(at..at + 4) == Some(b"PK\x05\x06")
+            && tail
+                .get(at + 20..at + 22)
+                .is_some_and(|b| at + 22 + usize::from(u16::from_le_bytes([b[0], b[1]])) == tail.len())
+    }) else {
+        return 0;
+    };
+    let field = |at: usize, width: usize| -> u64 {
+        let mut value = 0u64;
+        for (shift, byte) in tail.get(at..at + width).unwrap_or_default().iter().enumerate() {
+            value |= u64::from(*byte) << (8 * shift);
+        }
+        value
+    };
+    let entries = field(end_record + 10, 2) as usize;
+    let start = field(end_record + 16, 4);
+    if start == u64::from(u32::MAX) || start < tail_start {
+        return entries;
+    }
+
+    let mut at = start;
+    let mut count = 0;
+    while count <= entries {
+        let Some(header) = window.read_at(at, 46) else { break };
+        if header.get(..4) != Some(b"PK\x01\x02") {
+            break;
+        }
+        let length = |at: usize| usize::from(u16::from_le_bytes([header[at], header[at + 1]]));
+        count += 1;
+        at = at.saturating_add(46 + length(28) as u64 + length(30) as u64 + length(32) as u64);
+    }
+    count
+}
+
 /// Streaming reader for a single entry opened from [`SeekableArchive`].
 ///
 /// Enforces the declared and caller-provided byte limits and charges the archive's [`Budget`]
-/// once the full entry has been read and its CRC-32 verified.
+/// once the entry has been read to its declared size and its CRC-32 verified.
+///
+/// An entry abandoned part-read is charged nothing, even though its bytes were decompressed: a caller that
+/// stops early charges what it consumed through [`SeekableArchive::budget_mut`] when that matters.
 pub struct EntryReader<'a, R: Read> {
     file: zip::read::ZipFile<'a, MetadataReader<R>>,
     budget: &'a mut Budget,
+    name: String,
     declared: u64,
     limit: u64,
     read: u64,
     finished: bool,
+    /// The sized error behind an `io::Error` this reader returned, so its caller gets the same
+    /// `Error` variant `Archive` reports for the same archive.
+    fail: Option<Error>,
 }
 
 impl<R: Read> EntryReader<'_, R> {
     /// The uncompressed size declared by the entry header.
     pub fn declared_size(&self) -> u64 {
         self.declared
+    }
+
+    /// The sized error behind the last `io::Error` this reader returned, if it had one.
+    pub fn take_error(&mut self) -> Option<Error> {
+        self.fail.take()
     }
 }
 
@@ -231,7 +338,9 @@ impl<R: Read> Read for EntryReader<'_, R> {
         }
         let remaining = self.limit.saturating_sub(self.read);
         let max_read = usize::try_from(remaining.saturating_add(1)).unwrap_or(usize::MAX).min(buf.len());
-        let n = self.file.read(&mut buf[..max_read])?;
+        let n = self.file.read(&mut buf[..max_read]).inspect_err(|e| {
+            self.fail = Some(Error::Entry { name: self.name.clone(), msg: e.to_string() });
+        })?;
         if n == 0 {
             if self.read < self.declared {
                 return Err(io::Error::new(
@@ -239,15 +348,42 @@ impl<R: Read> Read for EntryReader<'_, R> {
                     format!("entry ended after {} bytes, declared {}", self.read, self.declared),
                 ));
             }
-            self.budget.charge(self.read).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            self.budget.charge(self.read).map_err(|e| {
+                self.fail = Some(Error::BudgetSpent { name: self.name.clone(), limit: e.limit });
+                io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+            })?;
             self.finished = true;
             return Ok(0);
         }
         let next = self.read.saturating_add(n as u64);
         if next > self.limit {
+            self.fail = Some(Error::EntryTooLarge { name: self.name.clone(), limit: self.limit });
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("entry exceeds declared size of {} bytes", self.limit)));
         }
         self.read = next;
+        if self.read == self.declared {
+            // A caller that reads exactly the declared size never asks again, so the entry is finished
+            // here: one more read lets `zip` verify the CRC-32, and the budget is charged now rather than
+            // at a zero-length read that may never come.
+            let mut probe = [0u8; 1];
+            match self.file.read(&mut probe) {
+                Ok(0) => {
+                    self.budget.charge(self.read).map_err(|e| {
+                        self.fail = Some(Error::BudgetSpent { name: self.name.clone(), limit: e.limit });
+                        io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                    })?;
+                    self.finished = true;
+                }
+                Ok(_) => {
+                    self.fail = Some(Error::EntryTooLarge { name: self.name.clone(), limit: self.limit });
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, format!("entry exceeds declared size of {} bytes", self.limit)));
+                }
+                Err(e) => {
+                    self.fail = Some(Error::Entry { name: self.name.clone(), msg: e.to_string() });
+                    return Err(e);
+                }
+            }
+        }
         Ok(n)
     }
 }
@@ -364,4 +500,89 @@ mod tests {
         drop(reader);
         assert_eq!(bad_archive.budget().used(), 0);
     }
+
+    #[test]
+    fn a_full_read_charges_the_budget_without_another_read() {
+        use std::io::{Cursor, Read, Write};
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("a", options).unwrap();
+        writer.write_all(b"abc").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let limits = SeekableLimits { max_entries: 4, max_metadata_bytes: 64 * 1024, max_total_bytes: 16 };
+        let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
+        {
+            let mut reader = archive.open_entry("a", 3).unwrap().unwrap();
+            let mut buf = [0u8; 3];
+            reader.read_exact(&mut buf).unwrap();
+        }
+        // The caller read exactly the declared size and never asked again: the charge is already made.
+        assert_eq!(archive.budget().used(), 3);
+    }
+
+    #[test]
+    fn a_budget_refusal_is_the_variant_the_in_memory_archive_returns() {
+        let mut writer = crate::Writer::new();
+        writer.add("a", b"one", crate::Compression::Stored).unwrap();
+        writer.add("b", b"two", crate::Compression::Stored).unwrap();
+        let bytes = writer.finish().unwrap();
+
+        let mut in_memory = crate::Archive::open(&bytes, crate::Limits { max_entries: 4, max_total_bytes: 3 }).unwrap();
+        assert!(in_memory.read("a", 3).unwrap().is_some());
+        let memory_err = in_memory.read("b", 3).unwrap_err();
+
+        let limits = SeekableLimits { max_entries: 4, max_metadata_bytes: 64 * 1024, max_total_bytes: 3 };
+        let mut seekable = SeekableArchive::open(Cursor::new(&bytes), limits).unwrap();
+        assert!(seekable.read("a", 3).unwrap().is_some());
+        let seekable_err = seekable.read("b", 3).unwrap_err();
+
+        assert!(matches!(memory_err, Error::BudgetSpent { limit: 3, .. }), "{memory_err:?}");
+        assert!(matches!(seekable_err, Error::BudgetSpent { limit: 3, .. }), "{seekable_err:?}");
+    }    #[test]
+    fn a_repeated_entry_name_is_reported_as_the_in_memory_archive_reports_it() {
+        let mut writer = crate::Writer::new();
+        writer.add("a", b"one", crate::Compression::Stored).unwrap();
+        let sealed = writer.finish().unwrap();
+
+        // A second central-directory record for the same entry: two names, one local header. The writer
+        // refuses a duplicate, so the archive is assembled from the one it wrote.
+        let eocd = (0..sealed.len().saturating_sub(21))
+            .rev()
+            .find(|&at| sealed.get(at..at + 4) == Some([0x50, 0x4b, 0x05, 0x06].as_slice()))
+            .unwrap();
+        let field = |at: usize, width: usize| -> u32 {
+            let mut value = 0u32;
+            for (shift, byte) in sealed.get(at..at + width).unwrap().iter().enumerate() {
+                value |= u32::from(*byte) << (8 * shift);
+            }
+            value
+        };
+        let entries = field(eocd + 10, 2);
+        let directory_size = field(eocd + 12, 4) as usize;
+        let directory_start = field(eocd + 16, 4) as usize;
+        let directory = sealed.get(directory_start..directory_start + directory_size).unwrap().to_vec();
+
+        let mut bytes = sealed.get(..eocd).unwrap().to_vec();
+        bytes.extend_from_slice(&directory);
+        bytes.extend_from_slice(sealed.get(eocd..).unwrap());
+        let trailer = eocd + directory.len();
+        bytes.get_mut(trailer + 8..trailer + 10).unwrap().copy_from_slice(&((entries + 1) as u16).to_le_bytes());
+        bytes.get_mut(trailer + 10..trailer + 12).unwrap().copy_from_slice(&((entries + 1) as u16).to_le_bytes());
+        bytes.get_mut(trailer + 12..trailer + 16).unwrap().copy_from_slice(&((directory_size * 2) as u32).to_le_bytes());
+
+        let limits = SeekableLimits { max_entries: 4, max_metadata_bytes: 64 * 1024, max_total_bytes: 1024 };
+        let in_memory = crate::Archive::open(&bytes, crate::Limits { max_entries: 4, max_total_bytes: 1024 }).unwrap();
+        let seekable = SeekableArchive::open(Cursor::new(&bytes), limits).unwrap();
+        assert_eq!(seekable.len(), in_memory.len());
+        assert!(in_memory.has_duplicate_names(), "two central-directory records name one entry");
+        assert_eq!(
+            seekable.has_duplicate_names(),
+            in_memory.has_duplicate_names(),
+            "the streaming reader answers as the in-memory archive does"
+        );
+    }
+
+
+
 }

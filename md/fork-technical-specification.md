@@ -22,7 +22,7 @@ The fork maintains strict synchronization with official upstream (`storytold/cra
 6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Enforces finite positive inline header width reservation in `wanted_width`, preventing child body layout collapse in content-sized containers.
 7. **Localized Tool Rail Names (`craft-ui-panels`)**: Gives the tool rail a translator for the names it shows, so the flyout rows, tooltips and AccessKit names follow the language the host's window draws in instead of showing the commands' English labels in every language.
 
-All modifications conform to workspace layering rules, compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`, and pass all test suites across affected crates.
+All modifications conform to workspace layering rules and compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`. Every suite this fork touches passes, with one recorded exception: `craft-ui-panels` has two `Space` activation failures (Section 4) that reproduce without these changes, so they are pre-existing and are reported rather than counted as passing.
 
 ---
 
@@ -451,9 +451,9 @@ To merge upstream updates while preserving all fork-specific architectural featu
    git fetch fork next
    git switch next
    git branch backup-next-$(date +%Y%m%d)
-   git rebase fork/next      # only if fork/next is ahead of the local branch
+   git merge fork/next -m "Merge fork/next into next (keep local merge commits)"   # only if fork/next is ahead
    ```
-   `fork/next` can be ahead of the local `next` (another checkout pushed a fix); without the rebase the backup captures the older branch, the merge lands on it, and step 4 is rejected as non-fast-forward. The rebase is a no-op when the local branch is current.
+   `fork/next` can be ahead of the local `next` (another checkout pushed a fix); without this merge the backup captures the older branch, the merge lands on it, and step 4 is rejected as non-fast-forward. It is a merge, not a rebase, because the local `next` can hold merge commits that step 2 made and step 4 never pushed: a rebase flattens them and their conflict resolutions, and a rerun of step 2 does not restore those resolutions. The merge is a no-op when the local branch is current.
 2. **Merge Upstream**:
    ```bash
    git merge upstream/next -m "Merge remote-tracking branch 'upstream/next' into next (preserve fork features)"

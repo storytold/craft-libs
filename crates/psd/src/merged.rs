@@ -79,7 +79,9 @@ fn has_merged_transparency(layer: &[u8], version: crate::Version) -> bool {
             at += 12;
             u32::from_be_bytes([head[8], head[9], head[10], head[11]]) as usize
         };
-        if (key == b"Lr16" || key == b"Lr32") && layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0) {
+        // `Layr` is the same layer info in the global blocks (an 8-bit document whose primary layer info is
+        // empty), and its count is signed the same way.
+        if matches!(key, b"Lr16" | b"Lr32" | b"Layr") && layer.get(at..at + 2).is_some_and(|b| i16::from_be_bytes([b[0], b[1]]) < 0) {
             return true;
         }
         if matches!(key, b"Mtrn" | b"MTrn" | b"Mt16" | b"Mt32") {
@@ -326,6 +328,27 @@ mod tests {
         mt16.extend_from_slice(b"8BIMMt16\0\0\0\0");
         assert!(Merged::open(&with_layer(&mt16), 4).unwrap().transparency);
     }
+    /// An 8-bit document whose primary layer info is empty carries its layer info in a global `Layr` block;
+    /// a negative count there is the merged transparency marker, as `Lr16` and `Lr32` are.
+    #[test]
+    fn a_global_layr_block_with_a_negative_count_is_merged_transparency() {
+        let open = |layer: &[u8]| {
+            let mut b = head(2, 0);
+            b.splice(34..38, (layer.len() as u32).to_be_bytes().iter().copied().chain(layer.iter().copied()));
+            Merged::open(&b, 4).unwrap().transparency
+        };
+        let mut layer = Vec::new();
+        layer.extend_from_slice(&0u32.to_be_bytes()); // info_len: no primary layer info
+        layer.extend_from_slice(&0u32.to_be_bytes()); // mask_len
+        layer.extend_from_slice(b"8BIMLayr");
+        layer.extend_from_slice(&4u32.to_be_bytes());
+        layer.extend_from_slice(&(-1i16).to_be_bytes());
+        layer.extend_from_slice(&[0, 0]);
+        assert!(open(&layer), "a negative count in Layr is the merged transparency marker");
+        layer[20..22].copy_from_slice(&1i16.to_be_bytes());
+        assert!(!open(&layer));
+    }
+
     /// A layer count of zero still has the global tagged blocks after it, and `Mt16` there is the merged
     /// transparency marker: the scan must not stop at a non-negative count.
     #[test]

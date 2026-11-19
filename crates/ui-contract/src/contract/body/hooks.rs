@@ -1080,7 +1080,7 @@ impl BodyHooks<'_> {
         let inset = props.header.map_or(0.0, |header| pad_of(&env.tokens, header.inset));
         let header_env = (!plan.real).then(|| plan.region_env.derive_local(|scoped| scoped.first_line = Some(plan.first.0)));
         let frame = RegionFrame { id: plan.id, rtl: plan.rtl, node: plan.node, env: header_env.as_ref().unwrap_or(&plan.region_env), gap: plan.gap };
-        let declared = props.header.and_then(|header| header.inline_width);
+        let declared = inline_declared_width(props.header);
         let closed = self.header_region(comp, ui, &mut bcx, &frame, plan.regions.header, (trailing, inset, header_parts, declared));
         plan.close = plan.close.or(closed);
         for stop in after_header {
@@ -1815,5 +1815,32 @@ impl BodyHooks<'_> {
             reuse: true,
             ..BodyHooks::new(&mut *self.body, Arc::clone(&self.props))
         }
+    }
+}
+
+/// The width an inline header takes from its host: only an inline header is laid out at a declared width, a
+/// stacked header keeps its full line as `size::wanted_width` counts it.
+fn inline_declared_width(header: Option<crate::contract::HeaderRegion>) -> Option<f32> {
+    header.filter(|header| header.inline).and_then(|header| header.inline_width)
+}
+
+#[cfg(test)]
+mod declared_width_tests {
+    use super::inline_declared_width;
+    use crate::contract::HeaderRegion;
+
+    #[test]
+    fn only_an_inline_header_takes_a_declared_width() {
+        assert_eq!(inline_declared_width(None), None, "no header, no width");
+        assert_eq!(
+            inline_declared_width(Some(HeaderRegion::new().inline_width(Some(40.0)))),
+            None,
+            "a stacked header fills its line whatever width it declares"
+        );
+        assert_eq!(
+            inline_declared_width(Some(HeaderRegion::new().inline(true).inline_width(Some(40.0)))),
+            Some(40.0),
+            "an inline header is laid out at the width it declares"
+        );
     }
 }
