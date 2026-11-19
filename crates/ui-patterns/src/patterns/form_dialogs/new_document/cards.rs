@@ -7,13 +7,13 @@ use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, 
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::PresetId;
-use crate::primitives::{ContentPainterCx, PaintShape};
+use crate::primitives::{ContentPainterCx, StrokeWidth};
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Ui, vec2};
+use egui::{CornerRadius, Rect, Stroke, StrokeKind, Ui, vec2};
 use std::borrow::Cow;
 use std::cell::Cell;
 
@@ -361,15 +361,17 @@ fn tile_of(card: &Card) -> Tile<'static> {
     }
 }
 
-/// The page outline in the picture: a well, and the page's outline at its aspect inside it.
+/// A page icon inside the tile's picture, in content ink so the tile alone draws the selection ring.
 fn paint_page(painter: &ContentPainterCx<'_>, picture: Rect, (width, height): (u32, u32)) {
-    let well = painter.plot_frame(picture);
-    painter.outline(&PaintShape::Rect(page_rect(well, width, height), CornerRadius::ZERO));
+    let page = page_rect(picture, width, height);
+    let stroke = Stroke::new(painter.stroke_width(StrokeWidth::Thin), painter.ink());
+    painter.painter.rect_stroke(page, CornerRadius::ZERO, stroke, StrokeKind::Inside);
 }
 
-/// The largest rect of the page's aspect that fits `room`, centred in it.
+/// The page's aspect inside `room`, capped at the 30-point size of the original outline.
 fn page_rect(room: Rect, width: u32, height: u32) -> Rect {
+    const PAGE_SIDE: f32 = 30.0;
     let (width, height) = (width.max(1) as f32, height.max(1) as f32);
-    let scale = (room.width() / width).min(room.height() / height);
+    let scale = (room.width().min(PAGE_SIDE) / width).min(room.height().min(PAGE_SIDE) / height);
     Rect::from_center_size(room.center(), vec2(width * scale, height * scale))
 }

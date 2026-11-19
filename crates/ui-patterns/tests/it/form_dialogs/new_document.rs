@@ -129,6 +129,80 @@ fn bitmap_is_one_bit_without_a_transparent_background() {
     assert!(shows(&fixture, "1 bit"));
 }
 
+#[trial]
+fn recent_preset_cards_paint_one_small_page_at_its_aspect() {
+    use craft_behavior::PixelSize;
+    use craft_host::target::Os;
+    use craft_ui::runtime::access::Role;
+    use craft_ui::testing::{Frames, install_spec, pointer};
+    use std::cell::Cell;
+
+    let wide = PixelSize::new(1200, 900);
+    let tall = PixelSize::new(600, 1200);
+    for scale in [1.0, 1.25] {
+        let mut frames = Frames::uninstalled();
+        let mut install = install_spec();
+        install.shell_info = install.shell_info.os(Os::Windows);
+        craft_ui::install(&frames.ctx, install).expect("a fresh Windows-style desktop fixture");
+        frames.screen(Vec2::new(1440.0, 900.0));
+        frames.pixels_per_point(scale);
+        let mut options = DocumentOptions::default();
+        let mut recent = DocumentOptions::default();
+        recent.size = tall;
+        let mut recents = vec![recent];
+        let selected_size = Cell::new(options.size);
+        let mut show = |ui: &mut egui::Ui| {
+            let _ = NewDocumentDialog::new(Bind::bound(&mut options)).clipboard(wide).recent(Bind::bound(&mut recents)).show(ui);
+            selected_size.set(options.size);
+        };
+        for _ in 0..30 {
+            frames.frame(Vec::new(), &mut show);
+        }
+        assert_eq!(frames.ctx.pixels_per_point(), scale);
+        assert_eq!(selected_size.get(), wide, "Recent starts with the Clipboard preset");
+        let tree = frames.tree();
+        let card = |name: &str| {
+            tree.with_role(Role::LIST_ITEM)
+                .into_iter()
+                .find(|key| tree.name_of(*key).is_some_and(|label| label.starts_with(name)))
+                .expect("the preset card")
+        };
+        let clipboard = card("Clipboard");
+        let custom = card("Custom");
+        assert_eq!(tree.selected_of(clipboard), Some(true));
+        let shapes = frames.frame_shapes(&mut show);
+        for (name, key, size) in [("Clipboard", clipboard, wide), ("Custom", custom, tall)] {
+            let card = tree.bounds_of(key).expect("visible tile bounds");
+            let caption = frames.texts().iter().find(|line| line.text == name).expect("the preset title is painted");
+            let outlines: Vec<_> = shapes
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Rect(rect)
+                        if rect.stroke.width > 0.0
+                            && (rect.rect.center().x - card.center().x).abs() <= 1.0
+                            && card.contains_rect(rect.rect)
+                            && rect.rect.bottom() <= caption.rect.top() =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(outlines.len(), 1, "one page outline and no extra frame in {name} at {scale}: {outlines:?}");
+            let page = outlines[0];
+            assert!((page.width().max(page.height()) - 30.0).abs() <= 1.0, "the compact page outline in {name}: {page:?}");
+            assert!((page.width() / page.height() - size.width as f32 / size.height as f32).abs() < 0.05, "the page has the preset's aspect");
+        }
+
+        let at = tree.bounds_of(custom).expect("the custom recent is visible").center();
+        pointer::click(&mut frames, at, &mut show);
+        assert_eq!(selected_size.get(), tall, "clicking the tall recent still loads its actual dimensions");
+        let tree = frames.tree();
+        assert_eq!(tree.selected_of(custom), Some(true));
+        assert_eq!(tree.selected_of(clipboard), Some(false));
+    }
+}
+
 /// A Web card turns Artboards on and a Photo card turns it off again; Artboards the user ticked stays on.
 #[trial]
 fn web_cards_turn_artboards_on_and_only_take_back_their_own() {
