@@ -1,4 +1,4 @@
-//! Macros of craft-ui: `#[derive(Component, Pattern, Props, ComponentStyle, TokenGroup, CommandSet, EnvValue)]`,
+//! Macros of craft-ui: `#[derive(Component, Pattern, Props, ComponentStyle, TokenGroup, CommandSet, EnvValue, PlainData)]`,
 //! `words!`, `#[story]`, `#[craft_ui::testing::trial]` and `register_contract!`.
 #![warn(missing_docs)]
 
@@ -6,6 +6,7 @@ mod command_set;
 mod component;
 mod env;
 mod pattern;
+mod plain;
 mod props;
 mod style;
 mod token_group;
@@ -80,6 +81,16 @@ pub fn register_contract(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Props, attributes(prop, collection, container))]
 pub fn derive_props(input: TokenStream) -> TokenStream {
     expanded(props::derive(input.into()))
+}
+
+/// Writes craft-tracked's `PlainData` marker and requires it of every field, so a field whose type can change behind
+/// a shared reference (interior mutability, raw pointers, `dyn` objects, closures) does not compile; the error names
+/// the field. Works on structs, tuple structs and enums. A field of a foreign plain type without an implementation
+/// carries `#[plain_data(assume = "why the type is plain")]`, which skips the check for that field; the reason is
+/// required.
+#[proc_macro_derive(PlainData, attributes(plain_data))]
+pub fn derive_plain_data(input: TokenStream) -> TokenStream {
+    expanded(plain::derive(input.into()))
 }
 
 /// Writes `ComponentStyle` from `#[style(surface)]`, `#[style(focus)]` and `#[style(metrics)]` fields (one each),

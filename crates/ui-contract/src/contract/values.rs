@@ -5,6 +5,7 @@ use crate::runtime::env::Message;
 use crate::runtime::memory::{MemoryStage, Savable, SaveKey, StageAccess};
 use crate::runtime::reads::{self, BindKey};
 use craft_behavior::{Applied, CanvasView, EditEvent, EditEvents, EditPolicy, Mixed, Value};
+use craft_tracked::{Place, PlainData, Projection, Tracked};
 use egui::Id;
 use egui::Response;
 use std::any::TypeId;
@@ -106,6 +107,8 @@ enum Source<'a, T> {
     Mut(&'a mut T),
     /// Write-through for a multi-selection field.
     MutMixed(&'a mut Mixed<T>),
+    /// Write-through to a field of a `Tracked`, whose revision moves only when an edit changes the field.
+    Tracked(Box<dyn Place<T> + 'a>),
     /// No caller value: session memory under the component id, or the saved tier.
     Kept,
 }
@@ -134,6 +137,13 @@ impl<'a, T: Value> Bind<'a, T> {
     /// Edits write through to a field that may be mixed; an edit makes it concrete.
     pub fn bound_mixed(v: &'a mut Mixed<T>) -> Self {
         Self::from_source(Source::MutMixed(v))
+    }
+
+    /// Edits write through to one field of `tracked`, chosen with `craft_tracked::field!`
+    /// (`Bind::tracked(&mut doc, field!(style.size))`). Making and reading the binding leaves the revision; only an
+    /// edit that changes the field moves it, so a binding made every pass does not invalidate the value's readers.
+    pub fn tracked<M: PlainData>(tracked: &'a mut Tracked<M>, field: Projection<M, T>) -> Self {
+        Self::from_source(Source::Tracked(Box::new(tracked.field(field))))
     }
 
     /// No caller value: the component keeps it in session memory under its id. Until something is stored, it reads
@@ -188,6 +198,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => Source::Given(value.clone()),
             Source::Mut(value) => Source::Mut(&mut **value),
             Source::MutMixed(value) => Source::MutMixed(&mut **value),
+            Source::Tracked(place) => Source::Tracked(Box::new(&mut **place)),
             Source::Kept => Source::Kept,
         };
         let check = self.check.as_deref().map(|check| Box::new(move |value: &T| check(value)) as Box<Check<'_, T>>);
@@ -211,6 +222,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(Mixed::Same(value)) => value == shown,
             Source::Mut(value) => **value == *shown,
             Source::MutMixed(Mixed::Same(value)) => value == shown,
+            Source::Tracked(place) => place.get() == shown,
             _ => false,
         }
     }
@@ -221,6 +233,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => SourceMut::Given(value),
             Source::Mut(value) => SourceMut::Mut(&mut **value),
             Source::MutMixed(value) => SourceMut::MutMixed(&mut **value),
+            Source::Tracked(place) => SourceMut::Tracked(&mut **place),
             Source::Kept => SourceMut::Kept,
         };
         BindMut { source, policy: self.policy, check: self.check.as_deref(), save: self.save.as_ref(), reset: self.reset.as_ref() }
@@ -237,6 +250,7 @@ enum SourceMut<'a, T> {
     Given(&'a Mixed<T>),
     Mut(&'a mut T),
     MutMixed(&'a mut Mixed<T>),
+    Tracked(&'a mut dyn Place<T>),
     Kept,
 }
 
@@ -258,6 +272,7 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(value) => Some((*value).clone()),
             SourceMut::Mut(value) => Some(Mixed::Same((**value).clone())),
             SourceMut::MutMixed(value) => Some((**value).clone()),
+            SourceMut::Tracked(place) => Some(Mixed::Same(place.get().clone())),
             SourceMut::Kept => None,
         }
     }
@@ -269,6 +284,7 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(_) => None,
             SourceMut::Mut(value) => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
             SourceMut::MutMixed(value) => Some(BindKey::Place(std::ptr::from_ref::<Mixed<T>>(value) as usize, TypeId::of::<Mixed<T>>())),
+            SourceMut::Tracked(place) => Some(BindKey::Place(std::ptr::from_ref::<T>(place.get()) as usize, TypeId::of::<T>())),
             SourceMut::Kept => Some(match self.save {
                 Some(save) => BindKey::Saved(Id::NULL.with(&save.key)),
                 None => BindKey::Kept(id),
@@ -290,6 +306,7 @@ impl<T: Value> BindMut<'_, T> {
         match &self.source {
             SourceMut::Given(Mixed::Same(value)) | SourceMut::MutMixed(Mixed::Same(value)) => value == shown,
             SourceMut::Mut(value) => **value == *shown,
+            SourceMut::Tracked(place) => place.get() == shown,
             _ => false,
         }
     }
@@ -388,7 +405,9 @@ impl<T: Value> BindMut<'_, T> {
     pub(crate) fn writes(&self, event: &EditEvent<T>) -> bool {
         match self.source {
             SourceMut::Given(_) | SourceMut::Kept => false,
-            SourceMut::Mut(_) | SourceMut::MutMixed(_) => self.policy == EditPolicy::WriteThrough || !matches!(event, EditEvent::Update { .. }),
+            SourceMut::Mut(_) | SourceMut::MutMixed(_) | SourceMut::Tracked(_) => {
+                self.policy == EditPolicy::WriteThrough || !matches!(event, EditEvent::Update { .. })
+            }
         }
     }
 
@@ -401,6 +420,15 @@ impl<T: Value> BindMut<'_, T> {
         match &mut self.source {
             SourceMut::Mut(value) => event.apply(&mut **value),
             SourceMut::MutMixed(value) => event.apply_mixed(&mut **value),
+            // Applied to a copy, so an event that leaves the field as it was does not move the revision.
+            SourceMut::Tracked(place) => {
+                let mut value = place.get().clone();
+                let applied = event.apply(&mut value);
+                if applied != Applied::Unchanged {
+                    place.set(value);
+                }
+                applied
+            }
             SourceMut::Given(_) | SourceMut::Kept => Applied::Unchanged,
         }
     }

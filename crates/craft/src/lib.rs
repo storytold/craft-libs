@@ -356,6 +356,8 @@ pub use craft_tiff as tiff;
 pub use craft_time as time;
 #[cfg(feature = "timeline")]
 pub use craft_timeline as timeline;
+#[cfg(feature = "tracked")]
+pub use craft_tracked as tracked;
 #[cfg(feature = "ui")]
 pub use craft_ui as ui;
 #[cfg(feature = "update")]

@@ -66,7 +66,8 @@ pub use container::{
     BandFill, Collapse, ContainerProps, DragBand, EndRegion, FooterPlace, FooterRegion, Gap, HeaderEdge, HeaderParts, HeaderRegion, LeastWidth,
     Mount, Notch, POPUP_PAD, Pad, PadEdges, PaneEdge, Scroll, ScrollAnchor, ScrollAxes, ScrollIndicator, ShellPane, Sizing, ThemeScope, WrapWidth,
 };
-pub use craft_ui_macros::{CommandSet, Component, Pattern, Props, register_contract};
+pub use craft_tracked::{Field, Place, PlainData, Projection, Revision, Tracked, field};
+pub use craft_ui_macros::{CommandSet, Component, Pattern, PlainData, Props, register_contract};
 #[doc(hidden)]
 pub use cx::THUMB;
 pub use cx::{

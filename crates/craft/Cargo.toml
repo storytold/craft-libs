@@ -143,6 +143,7 @@ craft-stream-codecs = { workspace = true, optional = true }
 craft-svg = { workspace = true, optional = true }
 craft-tga = { workspace = true, optional = true }
 craft-tiff = { workspace = true, optional = true }
+craft-tracked = { workspace = true, optional = true }
 craft-time = { workspace = true, optional = true }
 craft-vcard = { workspace = true, optional = true }
 craft-vectordrawable = { workspace = true, optional = true }
@@ -217,6 +218,8 @@ craft-xfa = { workspace = true, optional = true }
 [features]
 ui = [
     "dep:craft-ui",
+    # The framework's memoized views key app models by their `Tracked` revision.
+    "tracked",
     "dep:egui",
     "craft-automation?/ui",
     "craft-browse?/ui",
@@ -838,6 +841,8 @@ theme-editor = ["dep:craft-theme-editor"]
 theme-store = ["dep:craft-theme-store"]
 
 tiff = ["dep:craft-tiff"]
+
+tracked = ["dep:craft-tracked"]
 
 time = ["dep:craft-time"]
 

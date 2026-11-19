@@ -1914,6 +1914,7 @@ dependencies = [
  "craft-tiff",
  "craft-time",
  "craft-timeline",
+ "craft-tracked",
  "craft-ui",
  "craft-update",
  "craft-usd",
@@ -4129,6 +4130,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tracked"
+version = "0.1.0"
+dependencies = [
+ "craft-ui-macros",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 dependencies = [
@@ -4193,6 +4201,7 @@ dependencies = [
  "craft-settings",
  "craft-svg",
  "craft-theme",
+ "craft-tracked",
  "craft-ui-contract",
  "craft-ui-macros",
  "craft-ui-test-kit",
