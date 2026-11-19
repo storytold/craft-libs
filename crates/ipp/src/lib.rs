@@ -199,46 +199,127 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Try the resolved addresses within one connection budget, reserving time for later addresses
-/// when an earlier one does not answer. The connector is a parameter so refusals can be tested
-/// without racing to claim a port; the last failed attempt still reports why it failed.
-/// Each attempt gets the remaining budget divided by the remaining addresses: a slow address can
-/// time out before the full connection deadline so a later address still has a chance to connect.
+/// Try resolved addresses within one native connection budget, overlapping at most two attempts
+/// so a slow first address keeps its full window while another address can connect.
 fn open_tcp(
     host: &str,
     port: u16,
     addrs: impl IntoIterator<Item = SocketAddr>,
-    mut open: impl FnMut(SocketAddr, Duration) -> std::io::Result<TcpStream>,
+    open: impl Fn(SocketAddr, Duration) -> std::io::Result<TcpStream> + Send + Sync + 'static,
 ) -> Result<Stream> {
     let addrs: Vec<_> = addrs.into_iter().collect();
-    let count = addrs.len();
     if addrs.is_empty() {
         return Err(Error::Unreachable(format!("{host}:{port}: no address")));
     }
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    if let [addr] = addrs.as_slice() {
+        return open(*addr, CONNECT).map(tcp_stream).map_err(|error| Error::Unreachable(format!("{host}:{port}: {error}")));
+    }
+    // Browser Wasm must not enter unsupported clock/thread APIs before sockets report an error.
+    #[cfg(target_family = "wasm")]
+    {
+        #[cfg(not(target_os = "unknown"))]
+        let started = std::time::Instant::now();
+        let mut cause = "connection timed out".to_string();
+        for addr in addrs {
+            #[cfg(target_os = "unknown")]
+            let timeout = CONNECT;
+            #[cfg(not(target_os = "unknown"))]
+            let timeout = CONNECT.saturating_sub(started.elapsed());
+            if timeout.is_zero() {
+                break;
+            }
+            match open(addr, timeout) {
+                Ok(stream) => return Ok(tcp_stream(stream)),
+                Err(error) => cause = error.to_string(),
+            }
+        }
+        Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
+    }
+    #[cfg(not(target_family = "wasm"))]
+    open_tcp_overlapping(host, port, addrs, open)
+}
+
+fn tcp_stream(stream: TcpStream) -> Stream {
+    let _ = stream.set_read_timeout(Some(REQUEST));
+    let _ = stream.set_write_timeout(Some(REQUEST));
+    Stream::Tcp(stream)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn open_tcp_overlapping(
+    host: &str,
+    port: u16,
+    addrs: Vec<SocketAddr>,
+    open: impl Fn(SocketAddr, Duration) -> std::io::Result<TcpStream> + Send + Sync + 'static,
+) -> Result<Stream> {
+    const MAX_CONNECTS: usize = 2;
+    const STAGGER: Duration = Duration::from_millis(250);
     let started = std::time::Instant::now();
-    let mut last_error = None;
-    for (index, addr) in addrs.into_iter().enumerate() {
-        #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    let mut last_launch = started;
+    let open = std::sync::Arc::new(open);
+    let (send, receive) = std::sync::mpsc::channel::<(usize, std::io::Result<TcpStream>)>();
+    let mut addrs = addrs.into_iter().enumerate();
+    let mut pending = addrs.next();
+    let mut active = 0usize;
+    let mut immediate = true;
+    let mut last_error: Option<(usize, std::io::Error)> = None;
+    let mut remember_error = |index, error| {
+        if last_error.as_ref().is_none_or(|(last_index, _)| index >= *last_index) {
+            last_error = Some((index, error));
+        }
+    };
+    loop {
         let remaining = CONNECT.saturating_sub(started.elapsed());
-        // Browser Wasm has neither std sockets nor a monotonic clock: let connect report unsupported.
-        #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        let remaining = CONNECT;
         if remaining.is_zero() {
             break;
         }
-        let attempts_left = u32::try_from(count - index).unwrap_or(u32::MAX);
-        let timeout = (remaining / attempts_left).max(Duration::from_nanos(1));
-        match open(addr, timeout) {
-            Ok(s) => {
-                let _ = s.set_read_timeout(Some(REQUEST));
-                let _ = s.set_write_timeout(Some(REQUEST));
-                return Ok(Stream::Tcp(s));
+        if active < MAX_CONNECTS
+            && (immediate || last_launch.elapsed() >= STAGGER)
+            && let Some((index, addr)) = pending.take()
+        {
+            pending = addrs.next();
+            let open = std::sync::Arc::clone(&open);
+            let send = send.clone();
+            match std::thread::Builder::new().spawn(move || {
+                let timeout = CONNECT.saturating_sub(started.elapsed());
+                let result = if timeout.is_zero() {
+                    Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "connection timed out"))
+                } else {
+                    open(addr, timeout)
+                };
+                // A socket arriving after another attempt won is dropped with the failed send.
+                let _ = send.send((index, result));
+            }) {
+                Ok(_) => {
+                    active += 1;
+                    immediate = false;
+                    last_launch = std::time::Instant::now();
+                }
+                Err(error) => {
+                    remember_error(index, error);
+                    immediate = true;
+                }
             }
-            Err(error) => last_error = Some(error),
+            continue;
+        }
+        if active == 0 {
+            break;
+        }
+        let wait = if pending.is_some() && active < MAX_CONNECTS { remaining.min(STAGGER.saturating_sub(last_launch.elapsed())) } else { remaining };
+        match receive.recv_timeout(wait) {
+            Ok((index, result)) => {
+                active = active.saturating_sub(1);
+                match result {
+                    Ok(stream) => return Ok(tcp_stream(stream)),
+                    Err(error) => remember_error(index, error),
+                }
+                immediate = true;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    let cause = last_error.map(|error| error.to_string()).unwrap_or_else(|| "connection timed out".into());
+    let cause = last_error.map(|(_, error)| error.to_string()).unwrap_or_else(|| "connection timed out".into());
     Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
 }
 
