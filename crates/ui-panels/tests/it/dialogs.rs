@@ -274,12 +274,12 @@ fn a_startup_modal_waits_for_the_open_dialogs_and_opens_in_stage_order() {
 }
 
 /// The platform's chords answer Don't Save on the unsaved-changes question and the app sees no press: Cmd+D on
-/// macOS, Alt with the button's letter ("No") on Linux. Linux has no Ctrl+D, and macOS no Alt chord.
+/// macOS, Ctrl+D or Alt with the button's letter ("No") on Linux. macOS has no Alt chord.
 #[trial]
 fn the_platform_chords_answer_dont_save() {
     let cases = [
         (Os::Mac, egui::Key::D, Modifiers::COMMAND, true),
-        (Os::Linux, egui::Key::D, Modifiers::COMMAND, false),
+        (Os::Linux, egui::Key::D, Modifiers::COMMAND, true),
         (Os::Linux, egui::Key::N, Modifiers::ALT, true),
         (Os::Mac, egui::Key::D, Modifiers::ALT, false),
     ];
