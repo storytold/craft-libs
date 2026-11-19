@@ -58,19 +58,102 @@ fn hostile_seeds() -> [Vec<u8>; 3] {
     [build(7, |i| vec![i as u8; 100 + i], &to, &flags), build(5, prores_like, &to, &flags), build(4, prores_like, &[], &flags)]
 }
 
+// Partition parser calls, not the RNG: each original ordinal belongs to exactly one part.
+fn partitioned_parser(
+    part: usize,
+    parts: usize,
+    parse: impl Fn(&[u8]) + Send + Sync + 'static,
+) -> impl Fn(&[u8]) + Send + Sync + 'static {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    assert!(parts > 0 && part < parts, "invalid hostile-input partition");
+    let ordinal = AtomicUsize::new(0);
+    move |data| {
+        if ordinal.fetch_add(1, Ordering::Relaxed) % parts == part {
+            parse(data);
+        }
+    }
+}
+
+// Every truncation and mutation executes exactly once across eight parts per seed.
+// Each part regenerates the identical stream, retaining labels and the per-case watchdog.
+macro_rules! hostile_seed_parts {
+    ($seed:expr, $label:literal, $($name:ident: $part:expr),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                craft_media_testkit::hostile::hammer(
+                    $label, &hostile_seeds()[$seed], 6_000, partitioned_parser($part, 8, exercise),
+                );
+            }
+        )+
+    };
+}
+
+hostile_seed_parts!(0, "mxf seed 0",
+    hostile_input_seed_0_part_0: 0,
+    hostile_input_seed_0_part_1: 1,
+    hostile_input_seed_0_part_2: 2,
+    hostile_input_seed_0_part_3: 3,
+    hostile_input_seed_0_part_4: 4,
+    hostile_input_seed_0_part_5: 5,
+    hostile_input_seed_0_part_6: 6,
+    hostile_input_seed_0_part_7: 7,
+);
+
+hostile_seed_parts!(1, "mxf seed 1",
+    hostile_input_seed_1_part_0: 0,
+    hostile_input_seed_1_part_1: 1,
+    hostile_input_seed_1_part_2: 2,
+    hostile_input_seed_1_part_3: 3,
+    hostile_input_seed_1_part_4: 4,
+    hostile_input_seed_1_part_5: 5,
+    hostile_input_seed_1_part_6: 6,
+    hostile_input_seed_1_part_7: 7,
+);
+
+hostile_seed_parts!(2, "mxf seed 2",
+    hostile_input_seed_2_part_0: 0,
+    hostile_input_seed_2_part_1: 1,
+    hostile_input_seed_2_part_2: 2,
+    hostile_input_seed_2_part_3: 3,
+    hostile_input_seed_2_part_4: 4,
+    hostile_input_seed_2_part_5: 5,
+    hostile_input_seed_2_part_6: 6,
+    hostile_input_seed_2_part_7: 7,
+);
+
 #[test]
-fn hostile_input_seed_0_never_panics() {
-    craft_media_testkit::hostile::hammer("mxf seed 0", &hostile_seeds()[0], 6_000, exercise);
+fn hostile_partitions_preserve_exact_order_and_multiplicity() {
+    use std::sync::{Arc, Mutex};
+    let seed = [0u8, 1, 2, 3];
+    for divisor in [1usize, 2, 8] {
+        let mut cases = vec![seed.to_vec()];
+        cases.extend((0..seed.len()).step_by(divisor).map(|n| seed[..n].to_vec()));
+        cases.extend(craft_media_testkit::hostile::mutations(&seed, 37usize.div_ceil(divisor)).map(|m| m.bytes));
+        for parts in [1usize, 2, 8, 64] {
+            let mut total = 0;
+            for part in 0..parts {
+                let seen = Arc::new(Mutex::new(Vec::new()));
+                let record = Arc::clone(&seen);
+                let parse = partitioned_parser(part, parts, move |d| record.lock().unwrap().push(d.to_vec()));
+                for case in &cases {
+                    parse(case);
+                }
+                // Sequence equality retains duplicate inputs; a set comparison would not.
+                let expected: Vec<_> = cases.iter().skip(part).step_by(parts).cloned().collect();
+                assert_eq!(*seen.lock().unwrap(), expected);
+                total += expected.len();
+            }
+            assert_eq!(total, cases.len());
+        }
+    }
 }
 
 #[test]
-fn hostile_input_seed_1_never_panics() {
-    craft_media_testkit::hostile::hammer("mxf seed 1", &hostile_seeds()[1], 6_000, exercise);
-}
-
-#[test]
-fn hostile_input_seed_2_never_panics() {
-    craft_media_testkit::hostile::hammer("mxf seed 2", &hostile_seeds()[2], 6_000, exercise);
+fn hostile_partitions_reject_invalid_selection() {
+    for (part, parts) in [(0, 0), (1, 1), (8, 8)] {
+        assert!(std::panic::catch_unwind(|| partitioned_parser(part, parts, |_| {})).is_err());
+    }
 }
 
 #[test]
