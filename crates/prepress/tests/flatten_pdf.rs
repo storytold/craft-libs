@@ -709,11 +709,11 @@ fn a_shading_converts_with_the_rendering_intent() {
     assert!(near(got, perceptual, 1e-4), "{got:?}, want {perceptual:?}");
 }
 
-/// An ICCBased CMYK space whose perceptual and colorimetric A2B tables are `perceptual` and
-/// `colorimetric`, built from craft-cms's synthetic coated CMYK profile.
-fn icc_cmyk_object(perceptual: &craft_cms::profile::Lut, colorimetric: &craft_cms::profile::Lut) -> String {
+/// An ICCBased CMYK space whose perceptual, colorimetric and saturation A2B tables are `a2b`,
+/// built from craft-cms's synthetic coated CMYK profile.
+fn icc_cmyk_object(a2b: [Option<&craft_cms::profile::Lut>; 3]) -> String {
     let mut profile = Builtin::CoatedCmyk.profile().clone();
-    profile.a2b = [Some(perceptual.clone()), Some(colorimetric.clone()), Some(colorimetric.clone())];
+    profile.a2b = a2b.map(|lut| lut.cloned());
     let bytes = profile.with_encoded_bytes().to_bytes();
     let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
     stream("/N 4 /Filter /ASCIIHexDecode", &format!("{hex}>"))
@@ -723,9 +723,9 @@ fn icc_cmyk_object(perceptual: &craft_cms::profile::Lut, colorimetric: &craft_cm
 fn an_icc_source_converts_with_the_rendering_intent() {
     let coated = Builtin::CoatedCmyk.profile().a2b[1].clone().unwrap();
     let fogra = Builtin::CoatedFogra39.profile().a2b[1].clone().unwrap();
-    // Profile 1 has different perceptual and colorimetric tables; profiles 2 and 3 have only
-    // its perceptual and only its colorimetric one.
-    let objects = [icc_cmyk_object(&fogra, &coated), icc_cmyk_object(&fogra, &fogra), icc_cmyk_object(&coated, &coated)];
+    // Profile 1 has different perceptual and colorimetric tables and no saturation table;
+    // profiles 2 and 3 have only its perceptual and only its colorimetric one.
+    let objects = [icc_cmyk_object([Some(&fogra), Some(&coated), None]), icc_cmyk_object([Some(&fogra); 3]), icc_cmyk_object([Some(&coated); 3])];
     let fills = |intent: &str| {
         let content = format!(
             "/{intent} ri /C1 cs 0.2 0.4 0.6 0.1 sc 0 0 10 10 re f \
@@ -741,4 +741,7 @@ fn an_icc_source_converts_with_the_rendering_intent() {
     assert!(near(mixed, perceptual, 1e-4), "perceptual: {mixed:?}, want {perceptual:?}");
     let (mixed, _, colorimetric) = fills("RelativeColorimetric");
     assert!(near(mixed, colorimetric, 1e-4), "relative colorimetric: {mixed:?}, want {colorimetric:?}");
+    // Without a saturation table the perceptual one converts (ICC.1 clause 8.10.2).
+    let (mixed, perceptual, _) = fills("Saturation");
+    assert!(near(mixed, perceptual, 1e-4), "saturation: {mixed:?}, want {perceptual:?}");
 }

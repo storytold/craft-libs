@@ -1306,7 +1306,7 @@ impl ICCProfile {
     /// relative to [`PCS_WHITE`], three values per color in `xyz`, through the separation hub
     /// (see [`Hub`]). L*a*b* components are scaled to the profile's encoding unless
     /// `manual_scale` says they already are (an Indexed palette's). Craft patch (rendering
-    /// intent): through the profile's tables for `intent`, else relative colorimetric.
+    /// intent): through the profile's tables for `intent`, as [`transform_f32_with`] picks them.
     fn to_pcs(
         &self,
         intent: RenderIntent,
@@ -2018,8 +2018,9 @@ fn transform_f32(
     })
 }
 
-/// Craft patch (rendering intent): a transform from `source` to `destination` with `intent`,
-/// else as [`transform_f32`].
+/// Craft patch (rendering intent): a transform from `source` to `destination` with `intent`.
+/// A profile without the intent's tables converts perceptual, then relative colorimetric:
+/// ICC.1 clause 8.10.2 falls back to the perceptual tables.
 fn transform_f32_with(
     intent: RenderIntent,
     source: &ColorProfile,
@@ -2027,16 +2028,21 @@ fn transform_f32_with(
     destination: &ColorProfile,
     destination_layout: Layout,
 ) -> Option<Arc<TransformF32Executor>> {
-    let options = TransformOptions {
-        rendering_intent: intent.moxcms(),
-        ..TransformOptions::default()
-    };
-    source
-        .create_transform_f32(source_layout, destination, destination_layout, options)
-        .ok()
-        .or_else(|| {
-            transform_f32(source, source_layout, destination, destination_layout).map(|(t, _)| t)
-        })
+    [
+        intent.moxcms(),
+        RenderingIntent::Perceptual,
+        RenderingIntent::RelativeColorimetric,
+    ]
+    .into_iter()
+    .find_map(|rendering_intent| {
+        let options = TransformOptions {
+            rendering_intent,
+            ..TransformOptions::default()
+        };
+        source
+            .create_transform_f32(source_layout, destination, destination_layout, options)
+            .ok()
+    })
 }
 
 /// PdfCraft patch (36): as [`transform_f32`], for bytes.
