@@ -1303,8 +1303,9 @@ fn vertical_merge_and_alignment_kept_only_in_tc80s_are_read() {
     assert_eq!(cell(1, 1).valign, None, "a top-aligned cell sets nothing");
 }
 
-/// An explicit `sprmTVertMerge` or `sprmTVertAlign` for a cell wins over its TC80, before or
-/// after the `sprmTDefTable` in the grpprl; the cells it does not name keep their TC80's.
+/// An explicit `sprmTVertMerge` or `sprmTVertAlign` for a cell wins over its TC80; the cells
+/// it does not name keep their TC80's. Word writes the modifiers after the `sprmTDefTable`;
+/// the case with them before it pins the reader's robustness choice, not Word's behaviour.
 #[test]
 fn an_explicit_vertical_merge_or_alignment_overrides_the_tc80() {
     use craft_wordmodel::props::{VAlign, VMerge};

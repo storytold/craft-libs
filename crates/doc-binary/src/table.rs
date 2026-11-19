@@ -272,7 +272,9 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
         }
     }
     // The TC80s are each cell's starting point; an explicit `sprmTVertMerge` or
-    // `sprmTVertAlign` for the cell overrides them wherever it stands in the grpprl.
+    // `sprmTVertAlign` for the cell overrides them wherever it stands in the grpprl. Word
+    // writes the modifiers after the `sprmTDefTable`; letting them win when a file puts one
+    // before it too is a robustness choice, not an observed Word behaviour.
     for f in tc_flags {
         if let Some(m) = f.vmerge
             && !r.vmerge.iter().any(|(k, _)| *k == f.cell)
@@ -503,7 +505,7 @@ const TC80_LEN: usize = 20;
 /// The vertical merge and alignment in the `TCGRF` of each `TC80` that follows the edges of a
 /// `sprmTDefTable` operand ([MS-DOC] `TC80`, `TCGRF`): bits 5-6 are `vertMerge` (1 = continues
 /// the merge from the cell above, 3 = starts one) and bits 7-8 `vertAlign` (1 = centre,
-/// 2 = bottom). Word 2007 and later write a cell's vertical merge and alignment only here,
+/// 2 = bottom). Current Word (checked with Microsoft 365) writes a cell's vertical merge and alignment only here,
 /// with no `sprmTVertMerge` or `sprmTVertAlign`. A top-aligned or unmerged cell gives `None`,
 /// as do cells whose TC80 the operand does not hold (Word may write fewer TC80s than cells;
 /// the Word 6.0/95 translation writes none).
