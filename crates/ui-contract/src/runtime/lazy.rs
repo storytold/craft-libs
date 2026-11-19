@@ -516,8 +516,8 @@ pub(crate) fn replay_settled(ctx: &Context, id: Id, shift: &RecordShift) -> Opti
     settled.output.clone()
 }
 
-/// Compares the audit run of the settling child `name` (`id`), which added `record`, took `rect` and returned `output`,
-/// with its kept run (`runtime::audit`).
+/// Compares the audit run of the memoized view `name` (`id`), which added `record`, took `rect` and returned `output`,
+/// with its kept run replayed at the place `shift` names (`runtime::audit`).
 #[cfg(feature = "testing")]
 pub(crate) fn audit(
     ctx: &Context,
@@ -525,10 +525,11 @@ pub(crate) fn audit(
     id: Id,
     run: crate::runtime::audit::Shown<'_>,
     same: Option<crate::runtime::audit::SameOutput>,
+    shift: &RecordShift,
 ) {
     let Some(kept) = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone())) else { return };
     let kept_run = crate::runtime::audit::Shown { record: &kept.record, rect: kept.rect, output: kept.output.as_ref() };
-    crate::runtime::audit::compare(name, id, kept_run, run, same);
+    crate::runtime::audit::compare(name, id, (kept_run, shift), run, same);
 }
 
 /// What the last real run of the memoized view `id` returned, for a measuring run that takes its kept extent.

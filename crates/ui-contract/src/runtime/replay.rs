@@ -32,6 +32,9 @@ pub(crate) struct Entry(Arc<dyn Noted>);
 
 trait Noted: Send + Sync {
     fn call(&self, ctx: &Context, shift: &RecordShift);
+    /// The entry a replay at the place `shift` names calls (`call`).
+    #[cfg(feature = "testing")]
+    fn shifted(&self, shift: &RecordShift) -> Entry;
     fn as_any(&self) -> &dyn Any;
     fn same(&self, other: &dyn Noted) -> bool;
     fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
@@ -45,8 +48,13 @@ struct Note<A, F> {
 impl<A, F> Noted for Note<A, F>
 where
     A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
-    F: Fn(&Context, &A) + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
 {
+    #[cfg(feature = "testing")]
+    fn shifted(&self, shift: &RecordShift) -> Entry {
+        Entry(Arc::new(Note { args: self.args.shifted(shift), again: self.again }))
+    }
+
     fn call(&self, ctx: &Context, shift: &RecordShift) {
         if shift.is_none() {
             (self.again)(ctx, &self.args);
@@ -233,22 +241,26 @@ impl Record {
         self.egui.paints_callback()
     }
 
-    /// How a replay of `self` differs from the real run `run`: one line per kind that differs (paint, widget rects
-    /// and AccessKit nodes; focus registrations; the journal), each with its first difference.
-    pub(crate) fn differences(&self, run: &Record) -> Vec<String> {
+    /// How a replay of `self` at the place `shift` names differs from the real run `run` there: one line per kind that
+    /// differs (paint, widget rects and AccessKit nodes; focus registrations; the journal), each with its first
+    /// difference.
+    pub(crate) fn differences(&self, run: &Record, shift: &RecordShift) -> Vec<String> {
         let mut found = Vec::new();
-        match self.egui.first_difference(&run.egui) {
+        match self.egui.shifted(shift).first_difference(&run.egui) {
             // The display names a widget by its rect only; the difference may be in its sense, state or interact rect.
             Some(egui::PassRecordsDiff::Widget { index, left, right }) => found.push(format!("widget rect {index}: left {left:?} / right {right:?}")),
             // The display names a node by its bounds only; the difference may be in any other property.
-            Some(egui::PassRecordsDiff::Node { index, left, right }) => found.push(format!("AccessKit node {index}: left {left:?} / right {right:?}")),
+            Some(egui::PassRecordsDiff::Node { index, left, right }) => {
+                found.push(format!("AccessKit node {index}: left {left:?} / right {right:?}"))
+            }
             Some(diff) => found.push(format!("paint, widgets or AccessKit: {diff}")),
             None => {}
         }
         if let Some(diff) = self.focus.first_difference(&run.focus) {
             found.push(format!("focus: {diff}"));
         }
-        let (left, right) = (&self.journal, &run.journal);
+        let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.0.shifted(shift)).collect();
+        let (left, right) = (&shifted, &run.journal);
         if let Some(index) =
             left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))
         {
@@ -327,7 +339,7 @@ fn with_open(ctx: &Context, f: impl FnOnce(&mut Facts)) {
 pub fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
 where
     A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
-    F: Fn(&Context, &A) + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
 {
     const { assert!(std::mem::size_of::<F>() == 0, "`journal`'s `again` captures nothing: pass its state in `args`") };
     if recording(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying) {

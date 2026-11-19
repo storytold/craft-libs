@@ -120,9 +120,9 @@ impl Lazy {
         }
         let settled = if memo { lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key) } else { None };
         // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
-        let audited = settled.is_some() && audits(&ctx, real);
+        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
         if let Some((size, ran_at, shift)) = settled
-            && !audited
+            && audited.is_none()
         {
             // A real replay is where the run's content went, moved with the room.
             let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
@@ -151,7 +151,7 @@ impl Lazy {
         let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
         let seen = if run.recording { crate::runtime::inputs::seen(&ctx) } else { Default::default() };
         if run.recording {
-            open_record(&ctx, audited);
+            open_record(&ctx, audited.is_some());
         }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
         // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
@@ -160,8 +160,8 @@ impl Lazy {
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
         let record = run.recording.then(|| replay::close(&ctx, place.layer));
-        if audited {
-            return place_audit_run(ui, Audited { name, id, view, rect, record: record.as_ref(), memo }, out, &run);
+        if let Some(shift) = audited {
+            return place_audit_run(ui, Audited { name, id, view, rect, record: record.as_ref(), shift }, out, &run);
         }
         #[cfg(feature = "testing")]
         if let Some(record) = &record
@@ -201,28 +201,25 @@ impl Lazy {
     }
 }
 
-/// Places the audit run of a child that would have replayed, as a replay places it, and compares the run with the
-/// kept run (`runtime::audit`). It keeps the kept run: every later pass compares with what a replay adds.
+/// Places the audit run of a view that would have replayed, as a replay places it, and compares the run with the kept
+/// run replayed at the place `shift` names (`runtime::audit`). It keeps the kept run: every later pass compares with
+/// what a replay adds.
 fn place_audit_run<R>(ui: &mut Ui, audited: Audited<'_>, out: R, run: &Run) -> Shown<R> {
-    let Audited { name, id, view, rect, record, memo } = audited;
+    let Audited { name, id, view, rect, record, shift } = audited;
     let ctx = ui.ctx().clone();
     layout_memory::backstop(&ctx, id, rect.size());
-    if memo {
-        place_view(ui, rect);
-    } else {
-        alloc::advance_past(ui, rect);
-    }
+    place_view(ui, rect);
     if let Some(view) = view {
         lazy::place(&ctx, &view, id, rect);
     }
     #[cfg(feature = "testing")]
     {
         if let Some(record) = record {
-            lazy::audit(&ctx, name, id, crate::runtime::audit::Shown { record, rect, output: run.output.as_ref() }, run.same_output);
+            lazy::audit(&ctx, name, id, crate::runtime::audit::Shown { record, rect, output: run.output.as_ref() }, run.same_output, &shift);
         }
         count_memo_run(&ctx, name, id, MemoRun::Replayed, true);
     }
-    let _ = (name, record, run);
+    let _ = (name, record, run, shift);
     Shown::Ran(out)
 }
 
@@ -233,7 +230,8 @@ struct Audited<'a> {
     view: Option<lazy::View>,
     rect: Rect,
     record: Option<&'a replay::Record>,
-    memo: bool,
+    /// Where the replay would have added the kept run.
+    shift: egui::RecordShift,
 }
 
 /// Whether the replay audit runs a child that would replay in a pass whose runs are `real` (test builds only).
@@ -291,5 +289,5 @@ pub(super) struct Run {
     pub(super) output: Option<lazy::Output>,
     /// Whether two outputs of a memoized view are equal, for the replay audit.
     #[cfg(feature = "testing")]
-    pub(super) same_output: Option<fn(&lazy::Output, &lazy::Output) -> bool>,
+    pub(super) same_output: Option<crate::runtime::audit::SameOutput>,
 }

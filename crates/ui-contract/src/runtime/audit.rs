@@ -11,11 +11,12 @@
 use crate::runtime::egui::memory as store;
 use crate::runtime::lazy::Output;
 use crate::runtime::replay::{self, Record};
-use egui::{Context, Id, Rect};
+use crate::runtime::shift::Shift;
+use egui::{Context, Id, RecordShift, Rect};
 use std::collections::HashSet;
 
 /// Whether two outputs of a memoized view are equal: both of its output type, and `==`.
-pub(crate) type SameOutput = fn(&Output, &Output) -> bool;
+pub(crate) type SameOutput = fn(&Output, &Output, &RecordShift) -> bool;
 
 /// The audit's switch for one context and the views it named.
 #[derive(Default)]
@@ -47,9 +48,9 @@ pub(crate) fn runs(ctx: &Context) -> bool {
     on(ctx) && !replay::in_audit_run(ctx)
 }
 
-/// Whether two outputs are equal as `R`.
-pub(crate) fn same<R: PartialEq + 'static>(a: &Output, b: &Output) -> bool {
-    a.downcast_ref::<R>() == b.downcast_ref::<R>()
+/// Whether the kept output `kept`, as a replay at the place `shift` names returns it, equals `run`'s, as `R`.
+pub(crate) fn same<R: PartialEq + Shift + 'static>(kept: &Output, run: &Output, shift: &RecordShift) -> bool {
+    kept.downcast_ref::<R>().map(|kept| kept.shifted(shift)).as_ref() == run.downcast_ref::<R>()
 }
 
 /// What a view's kept run, or its audit run, added and returned.
@@ -59,15 +60,17 @@ pub(crate) struct Shown<'a> {
     pub(crate) output: Option<&'a Output>,
 }
 
-/// Compares the audit run `run` of the view `name` (`id`) with its kept run `kept`, and panics on a difference.
-pub(crate) fn compare(name: &'static str, id: Id, kept: Shown<'_>, run: Shown<'_>, same: Option<SameOutput>) {
+/// Compares the audit run `run` of the view `name` (`id`) with its kept run `kept` replayed at the place `shift` names,
+/// and panics on a difference.
+pub(crate) fn compare(name: &'static str, id: Id, (kept, shift): (Shown<'_>, &RecordShift), run: Shown<'_>, same: Option<SameOutput>) {
     let mut found = Vec::new();
-    if kept.rect != run.rect {
-        found.push(format!("rect: left {:?} / right {:?}", kept.rect, run.rect));
+    let kept_rect = shift.rect(kept.rect);
+    if kept_rect != run.rect {
+        found.push(format!("rect: left {:?} / right {:?}", kept_rect, run.rect));
     }
-    found.extend(kept.record.differences(run.record));
+    found.extend(kept.record.differences(run.record, shift));
     let output = match (kept.output, run.output, same) {
-        (Some(kept), Some(run), Some(same)) => same(kept, run),
+        (Some(kept), Some(run), Some(same)) => same(kept, run, shift),
         (kept, run, _) => kept.is_none() == run.is_none(),
     };
     if !output {

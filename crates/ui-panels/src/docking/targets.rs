@@ -521,7 +521,7 @@ impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
     where
         A: PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static,
-        F: Fn(&Context, &A) + Send + Sync + 'static,
+        F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
     {
         crate::runtime::journal(ctx, args, again);
     }
