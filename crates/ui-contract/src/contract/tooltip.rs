@@ -7,7 +7,8 @@
 //! A component with no tooltip shows its own label as the tooltip when its type declares `Component::SHOWS_LABEL`
 //! false (or an instance does, through `Component::shows_label`): no text paints that name, inside a field or not. A
 //! component with no label of its own is named by its field label, which is on screen, and shows none.
-//! A component that paints its label shows it whole as the tooltip when the paint cut it.
+//! A component that paints its label shows it whole as the tooltip when the paint cut it. A canvas control shows no
+//! label as its tooltip: its rect is the canvas, and its parts carry their own tooltips.
 
 use super::cx::{Decls, PartExtras};
 use super::overlay::{self, Anchor, Layer, Overlay, Place};
@@ -57,6 +58,8 @@ pub(crate) struct TipIn<'a> {
     pub parts: &'a Decls,
     /// The instance's `shows_label` fact.
     pub shows_label: bool,
+    /// The type is a canvas control (`Meta::CANVAS_CONTROL`): its label is never its tooltip.
+    pub canvas_control: bool,
     /// The validity message no enclosing container shows as its status line (step 16's report).
     pub message: Option<String>,
 }
@@ -75,13 +78,18 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 /// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
 /// label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a hint. A
 /// bound command's hint follows on a line of its own.
-fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
+///
+/// A canvas control (`canvas_control`) never shows its label: its rect is the canvas it is shown over, not a face of
+/// its own, so the label would show wherever the pointer rests on the page ("Rulers margins" over a whole page). Its
+/// parts name themselves with their own tooltips (a margin edge's "Left Margin").
+fn text_of(core: &super::CxCore<'_>, shows_label: bool, canvas_control: bool, message: Option<String>) -> Option<String> {
     if message.is_some() {
         return message;
     }
     let hint = core.command.as_deref().and_then(|command| command.hint.as_deref()).filter(|hint| !hint.is_empty());
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
         Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
+        None if canvas_control => return None,
         None => {
             let paint = core.paint.borrow();
             let unpainted = !shows_label || paint.label_dropped || hint.is_some();
@@ -163,7 +171,7 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
             part.hovered || keyboard,
             Some(part.part),
         ),
-        None => (text_of(core, input.shows_label, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None),
+        None => (text_of(core, input.shows_label, input.canvas_control, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None),
     };
     let call = TipCall {
         ctx: &core.ctx,

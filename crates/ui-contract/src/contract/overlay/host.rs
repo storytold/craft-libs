@@ -212,7 +212,11 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         if overlay.fit == OverlayFit::Resizable {
             ui.set_min_size(overlay.size_limits.min.min(placed.room));
         }
-        access::scope::outside(ctx, || body(ui));
+        // The layer's content is not part of the flow of the body it was shown from (a tooltip shown at step 16 of a
+        // control inside a body's content): no enclosing transcript takes its measure calls and no enclosing body
+        // checks them. Without the boundary a tooltip's text was checked against the body's kept transcript, which
+        // asked for a discard pass every other frame while the tooltip showed.
+        access::scope::outside(ctx, || layout_memory::boundary(ctx, true, || body(ui)));
         if real {
             focus::pop_scope(ctx);
         }

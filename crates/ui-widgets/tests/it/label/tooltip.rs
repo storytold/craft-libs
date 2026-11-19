@@ -212,3 +212,32 @@ fn a_disabled_command_with_a_hint_is_a_tab_stop_that_shows_its_reason() {
     let (reached, _) = tab_through_disabled(None);
     assert_eq!(&reached[..2], ["Before", "After"], "without a hint Tab skips the disabled button");
 }
+
+/// The tooltip of a control inside a body (a canvas control over a page body, its tip kept at the screen's bottom
+/// edge): its layer is not part of the body's flow, so the body's kept transcript does not check the tip's text. Once
+/// it shows, it keeps one rect and every frame runs one pass, none a discard pass for a tip that measured another
+/// size.
+#[trial]
+fn a_tooltip_shown_from_inside_a_body_keeps_its_rect_frame_to_frame() {
+    let mut fixture = Fixture::new(|ui| {
+        craft_ui::layout_components::Stack::new().show(ui, |ui, _| {
+            Mark { common: Common::new() }.label("Lock").show_at(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 380.0)));
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    fixture.frame(vec![moved(Pos2::new(300.0, 200.0))]);
+    fixture.advance(DELAY);
+    fixture.settle();
+    assert!(fixture.texts().iter().any(|run| run.text == "Lock"), "the tooltip shows");
+    let mut frames = Vec::new();
+    for _ in 0..6 {
+        fixture.frame(Vec::new());
+        frames.push((fixture.passes(), fixture.texts().iter().find(|run| run.text == "Lock").map(|run| run.rect)));
+    }
+    let first = frames[0].1;
+    assert!(
+        first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first),
+        "one pass a frame and one rect: {frames:?}"
+    );
+}

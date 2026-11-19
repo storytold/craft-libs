@@ -1172,7 +1172,8 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label, message });
+    let tip_in = tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label, canvas_control: facts.canvas_control, message };
+    tooltip::run(e.core_ref(), tip_in);
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;
