@@ -273,16 +273,35 @@ pub trait MemoProps {
 /// A 128-bit hash of a memoized view's props (SipHash-1-3 with a 128-bit output, a fixed key). A collision has a chance
 /// of about 2⁻¹²⁸ per compare. A [`Stateless`] callback feeds the 64 bits its `TypeId` hashes, so two callbacks key
 /// apart unless those collide.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct MemoKey {
     hasher: SipHasher13,
     bytes: usize,
+    /// The context of the view that takes the key: framework values whose writes the context counts (kept and saved
+    /// bindings) feed that count.
+    context: Option<egui::Context>,
+}
+
+impl std::fmt::Debug for MemoKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoKey").field("bytes", &self.bytes).finish_non_exhaustive()
+    }
 }
 
 impl MemoKey {
     /// An empty key.
     pub fn new() -> MemoKey {
         MemoKey::default()
+    }
+
+    /// An empty key of a view shown in `ctx`.
+    pub(crate) fn of_view(ctx: &egui::Context) -> MemoKey {
+        MemoKey { context: Some(ctx.clone()), ..MemoKey::default() }
+    }
+
+    /// The context of the view that takes the key; `None` for a key taken outside a view (`MemoKey::of`).
+    pub(crate) fn context(&self) -> Option<&egui::Context> {
+        self.context.as_ref()
     }
 
     /// The key of `props`.
@@ -613,9 +632,9 @@ impl<T: PlainData> MemoProps for Tracked<T> {
     }
 }
 
-/// A view's write access to a model: by revision, as `Tracked<T>`. The view takes its key again after it runs, so a
-/// write it makes is part of what it settles on and does not run it again. `&mut` of any other type is not props: a
-/// write to it would not move a key.
+/// A view's write access to a model: by revision, as `Tracked<T>`. A write the view makes moves the key, so the view
+/// runs once more, from the written value, and replays from then on. `&mut` of any other type is not props: a write to
+/// it would not move a key.
 impl<T: PlainData> MemoProps for &mut Tracked<T> {
     fn key(&self, key: &mut MemoKey) {
         self.revision().key(key);

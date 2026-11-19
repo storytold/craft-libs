@@ -10,13 +10,13 @@ use egui::Ui;
 
 const TRACE: [&str; 6] = ["Default", "High Fidelity Photo", "Low Fidelity Photo", "3 Colors", "Sketched Art", "Line Art"];
 
-fn taken(names: &Vec<String>, name: &str) -> Option<PresetError> {
+fn taken(names: &Vec<&str>, name: &str) -> Option<PresetError> {
     names.iter().any(|label| label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
 }
 
 /// The rows' names, as the inputs of the name check.
-fn names(rows: &[PresetRow<u32>]) -> Vec<String> {
-    rows.iter().map(|row| row.label.clone()).collect()
+fn names(rows: &[PresetRow<u32>]) -> Vec<&str> {
+    rows.iter().map(|row| row.label.as_str()).collect()
 }
 
 /// The contour editor's row: a thumbnail picker, then Load…, Save… and New… as buttons.

@@ -98,7 +98,42 @@ impl<T> Clone for SaveSpec<T> {
     }
 }
 
-type Check<'a, T> = dyn Fn(&T) -> Validity<T> + 'a;
+/// A binding's check: its verdict on a value, and the key of its inputs and its `fn`, which only a memoized view that
+/// holds the binding takes.
+trait Checker<T> {
+    fn validity(&self, value: &T) -> Validity<T>;
+    fn key(&self, key: &mut MemoKey);
+}
+
+/// A check `fn` and the inputs it reads (`Bind::check_with`).
+struct WithInputs<I, T: 'static> {
+    inputs: I,
+    check: fn(&I, &T) -> Validity<T>,
+}
+
+impl<I: MemoProps, T> Checker<T> for WithInputs<I, T> {
+    fn validity(&self, value: &T) -> Validity<T> {
+        (self.check)(&self.inputs, value)
+    }
+
+    fn key(&self, key: &mut MemoKey) {
+        self.inputs.key(key);
+        key.write(&(self.check as usize).to_le_bytes());
+    }
+}
+
+/// A borrowed check, for a reborrowed binding.
+impl<T, C: Checker<T> + ?Sized> Checker<T> for &C {
+    fn validity(&self, value: &T) -> Validity<T> {
+        (**self).validity(value)
+    }
+
+    fn key(&self, key: &mut MemoKey) {
+        (**self).key(key);
+    }
+}
+
+type Check<'a, T> = dyn Checker<T> + 'a;
 
 /// Where a binding's value lives.
 enum Source<'a, T> {
@@ -120,8 +155,8 @@ enum Source<'a, T> {
 pub struct Bind<'a, T> {
     source: Source<'a, T>,
     policy: EditPolicy,
-    /// The check and the key of its inputs (`check_with`).
-    check: Option<(Box<Check<'a, T>>, u128)>,
+    /// The check and the inputs it reads (`check_with`).
+    check: Option<Box<Check<'a, T>>>,
     save: Option<SaveSpec<T>>,
     reset: Option<T>,
 }
@@ -197,10 +232,7 @@ impl<'a, T: Value> Bind<'a, T> {
     where
         T: 'a,
     {
-        let mut key = MemoKey::new();
-        inputs.key(&mut key);
-        key.write(&(check as usize).to_le_bytes());
-        self.check = Some((Box::new(move |value: &T| check(&inputs, value)), key.finish()));
+        self.check = Some(Box::new(WithInputs { inputs, check }));
         self
     }
 
@@ -221,7 +253,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Tracked { value, count } => Source::Tracked { value: &mut **value, count },
             Source::Kept => Source::Kept,
         };
-        let check = self.check.as_ref().map(|(check, key)| (Box::new(move |value: &T| check(value)) as Box<Check<'_, T>>, *key));
+        let check = self.check.as_deref().map(|check| Box::new(check) as Box<Check<'_, T>>);
         Bind { source, policy: self.policy, check, save: self.save.clone(), reset: self.reset.clone() }
     }
 
@@ -256,31 +288,36 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Tracked { value, count } => SourceMut::Tracked { value: &mut **value, count },
             Source::Kept => SourceMut::Kept,
         };
-        BindMut {
-            source,
-            policy: self.policy,
-            check: self.check.as_ref().map(|(check, key)| (&**check, *key)),
-            save: self.save.as_ref(),
-            reset: self.reset.as_ref(),
-        }
+        BindMut { source, policy: self.policy, check: self.check.as_deref(), save: self.save.as_ref(), reset: self.reset.as_ref() }
     }
 }
 
 /// A binding's check as props (`BindMut::check_of`): by the key of its inputs and its `fn`.
 pub struct BindCheck<'c, T> {
-    check: Option<(&'c Check<'c, T>, u128)>,
+    check: Option<&'c Check<'c, T>>,
 }
 
 impl<T> BindCheck<'_, T> {
     /// The check's verdict on `value`.
     pub fn validity(&self, value: &T) -> Validity<T> {
-        self.check.map_or(Validity::Ok, |(check, _)| check(value))
+        self.check.map_or(Validity::Ok, |check| check.validity(value))
     }
 }
 
 impl<T> MemoProps for BindCheck<'_, T> {
     fn key(&self, key: &mut MemoKey) {
-        self.check.map(|(_, inputs)| inputs).key(key);
+        key_check(self.check, key);
+    }
+}
+
+/// Feeds a binding's check, or its absence.
+fn key_check<T>(check: Option<&Check<'_, T>>, key: &mut MemoKey) {
+    match check {
+        None => key.write_u32(0),
+        Some(check) => {
+            key.write_u32(1);
+            check.key(key);
+        }
     }
 }
 
@@ -294,11 +331,12 @@ impl<T> MemoProps for CheckFn<T> {
 }
 
 /// A binding in a memoized view's props: by what the view reads through it. A given value keys by value; a
-/// write-through source by its value and its address, the place the framework knows its reads by; a `Tracked` field
-/// (`bind_tracked!`) also by the write count of its `Tracked`; a kept value by its kind, since the framework tracks
-/// reads and writes of session memory itself. The policy, the reset value, the save key and the check's inputs
-/// (`check_with`) feed too. The view's key is taken again after it runs, so its own edits through the binding do not
-/// run it again.
+/// write-through source by its value and its address, the place the framework knows its reads by (a large value is
+/// bound through `bind_tracked!` or held as `&Tracked<T>` instead: its value is hashed for each key); a `Tracked` field
+/// (`bind_tracked!`) by its address and the write count of its `Tracked`; a kept value by the writes the context counts
+/// outside a component's edit: of its saved value (`set_saved_value`, `forget_saved`), or of session memory
+/// (`forget`). The framework tracks the component's own reads and edits. The policy, the reset value, the save key and
+/// the check's inputs and `fn` (`check_with`) feed too.
 impl<T: Value + MemoProps> MemoProps for Bind<'_, T> {
     fn key(&self, key: &mut MemoKey) {
         let Bind { source, policy, check, save, reset } = self;
@@ -320,16 +358,23 @@ impl<T: Value + MemoProps> MemoProps for Bind<'_, T> {
             }
             Source::Tracked { value, count } => {
                 key.write_u32(3);
-                T::key(value, key);
                 address(value).key(key);
                 count.get().key(key);
             }
-            Source::Kept => key.write_u32(4),
+            Source::Kept => {
+                key.write_u32(4);
+                let writes = key.context().map(|ctx| crate::runtime::memory::writes(ctx, save.as_ref().map(|save| &save.key)));
+                match (writes, save) {
+                    (Some((saved, _)), Some(_)) => saved.key(key),
+                    (Some((_, session)), None) => session.key(key),
+                    (None, _) => {}
+                }
+            }
         }
         key.feed_hash(policy);
         reset.key(key);
         save.as_ref().map(|save| save.key.as_str()).key(key);
-        check.as_ref().map(|(_, inputs)| *inputs).key(key);
+        key_check(check.as_deref(), key);
     }
 }
 
@@ -352,7 +397,7 @@ enum SourceMut<'a, T> {
 pub struct BindMut<'a, T> {
     source: SourceMut<'a, T>,
     policy: EditPolicy,
-    check: Option<(&'a Check<'a, T>, u128)>,
+    check: Option<&'a Check<'a, T>>,
     save: Option<&'a SaveSpec<T>>,
     reset: Option<&'a T>,
 }
@@ -407,7 +452,7 @@ impl<T: Value> BindMut<'_, T> {
     /// The check's verdict on `value`.
     #[doc(hidden)]
     pub fn validity(&self, value: &T) -> Validity<T> {
-        self.check.map_or(Validity::Ok, |(check, _)| check(value))
+        self.check.map_or(Validity::Ok, |check| check.validity(value))
     }
 
     /// The binding's check, as the inputs of a child's check (`Bind::check_with`): a composite hands its own check to

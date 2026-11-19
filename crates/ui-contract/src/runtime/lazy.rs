@@ -184,6 +184,8 @@ struct Settled {
     edits: u64,
     /// What a memoized view's run returned, which its replays return.
     output: Option<Output>,
+    /// The generation of ended shown lives after the run (`memory::ended_generation`).
+    lives: u64,
 }
 
 /// What changed in the frame for every settling child.
@@ -343,8 +345,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// took in a run of this kind (`sizing`). The first run of a pass decides from what changed since that run; a real run
 /// also needs the child at the `place` it ran at, which a measuring run cannot tell.
 ///
-/// It replays when its last run was in an earlier frame, or, for a memoized view, in an earlier pass of this frame
-/// that did not ask for the discard pass (a run that did laid out by a measure that changed), and since then:
+/// It replays when its last run was in an earlier frame, or, for a memoized view, in an earlier pass of this frame, and
+/// since then:
 /// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
 ///   loading, no wake time reached;
 /// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
@@ -358,7 +360,10 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - for a child that is not a memoized view, no frame unsettled every child (`unsettle`): an app's repaint request
 ///   outside every settling child or an edit of a given value, this frame or the one before;
 /// - for a child with no key: no input other than pointer motion this frame or the one before;
-/// - the run did nothing a replay cannot repeat (`runtime::replay`).
+/// - the run did nothing a replay cannot repeat (`runtime::replay`) and asked for no discard pass: what it added is
+///   what the pass was thrown away for;
+/// - the shown life of no component it showed ended (`memory::ended_since`): a replay would show memory state that is
+///   gone.
 ///
 /// A memoized view's props hold every input it reads, so the two rules that infer a change of app data (input
 /// arrived, a repaint was asked) do not apply to it.
@@ -386,10 +391,11 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
                         let facts = &settled.record.facts;
                         // A run of this frame read the values edited before it started.
                         let edited = edited_since(edited.as_ref(), if settled.frame < frame { 0 } else { settled.edits });
-                        (settled.frame < frame || (memo && settled.pass < pass_nr && !facts.discards))
+                        (settled.frame < frame || (memo && settled.pass < pass_nr))
                             && settled.key == key
                             && !settled.engaged
                             && !facts.blocked
+                            && !facts.discards
                             && facts.quiet(now, edited.as_ref())
                             && !settled.record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)) || routed.contains(&stop))
                             && !routed.iter().any(|id| settled.record.widgets.contains(id))
@@ -407,9 +413,10 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         let kind = usize::from(!sizing);
         settled.map(|settled| (entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(settled.rect.size()), settled))
     });
-    // The pointer over it, or a press that started on it, is read outside the store.
+    // The pointer over it, a press that started on it, and the memory of the components it showed are read outside the
+    // store.
     let (size, settled) = settled?;
-    if engaged(ctx, &settled) {
+    if engaged(ctx, &settled) || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives) {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
                 entry.replays = Some((pass_nr, false));
@@ -464,7 +471,8 @@ pub(crate) struct Ran {
 pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, output }: Ran) {
     let targets = focus::targets(ctx);
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output };
+    let lives = crate::runtime::memory::ended_generation(ctx);
+    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, key, pass: 0, edits, output, lives };
     settled.engaged |= engaged(ctx, &settled);
     with(ctx, |store, pass_nr, frame| {
         settled.frame = frame;

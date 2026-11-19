@@ -61,35 +61,48 @@ pub enum NamedPresetStyle {
     Menu,
 }
 
-type NameCheckFn<'a> = Box<dyn Fn(&str) -> Option<PresetError> + 'a>;
-
 /// Whether a name may be used: the host's answer for a typed name.
-pub struct NameCheck<'a> {
-    check: NameCheckFn<'a>,
-    /// The key of the check's inputs and its `fn`.
-    key: u128,
-}
+pub struct NameCheck<'a>(Box<dyn NameChecker + 'a>);
 
 impl<'a> NameCheck<'a> {
     /// The check `check`, reading `inputs` (the names already taken, as [`PresetNames`](super::PresetNames)). The
     /// inputs are props and `check` is a `fn`, which captures nothing, as a binding's `check_with` takes them, so a
     /// memoized view that holds the row sees every input of the check.
     pub fn new<I: MemoProps + 'a>(inputs: I, check: fn(&I, &str) -> Option<PresetError>) -> Self {
-        let mut key = MemoKey::new();
-        inputs.key(&mut key);
-        key.write(&(check as usize).to_le_bytes());
-        NameCheck { check: Box::new(move |name| check(&inputs, name)), key: key.finish() }
+        NameCheck(Box::new(WithInputs { inputs, check }))
     }
 
     fn refuses(&self, name: &str) -> Option<PresetError> {
-        (self.check)(name)
+        self.0.refuses(name)
     }
 }
 
-/// By the key of its inputs and its `fn`.
+/// By its inputs and its `fn`, walked only when a memoized view takes the key.
 impl MemoProps for NameCheck<'_> {
     fn key(&self, key: &mut MemoKey) {
-        self.key.key(key);
+        self.0.key(key);
+    }
+}
+
+/// A name check: its answer, and the key of its inputs and `fn`.
+trait NameChecker {
+    fn refuses(&self, name: &str) -> Option<PresetError>;
+    fn key(&self, key: &mut MemoKey);
+}
+
+struct WithInputs<I> {
+    inputs: I,
+    check: fn(&I, &str) -> Option<PresetError>,
+}
+
+impl<I: MemoProps> NameChecker for WithInputs<I> {
+    fn refuses(&self, name: &str) -> Option<PresetError> {
+        (self.check)(&self.inputs, name)
+    }
+
+    fn key(&self, key: &mut MemoKey) {
+        self.inputs.key(key);
+        key.write(&(self.check as usize).to_le_bytes());
     }
 }
 

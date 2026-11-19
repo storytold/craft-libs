@@ -416,7 +416,8 @@ fn with<R>(ctx: &Context, moment: &Moment, f: impl FnOnce(&mut Entries) -> R) ->
         let out = f(memory);
         (out, memory.asks != asks)
     });
-    // A run that asked for the discard pass laid out by a measure that changed: the pass that follows runs it.
+    // The ask reaches egui only in the end hook, after the runs of the pass: the record open around the run that asked
+    // notes it here, as every other discard request is counted in egui's output (`replay::close`).
     if asked {
         crate::runtime::replay::note_discard(ctx);
     }

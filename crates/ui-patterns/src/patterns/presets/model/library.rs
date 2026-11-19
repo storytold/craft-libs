@@ -399,12 +399,12 @@ impl<T> PresetLibrary<T> {
     /// Why `name` cannot be a new preset's name, if it cannot: blank, or taken ignoring case.
     /// For a named row's `check_name`.
     pub fn name_error(&self, name: &str) -> Option<PresetError> {
-        name_error(self.items().iter().map(|item| item.name.as_str()), name)
+        self.names().name_error(name)
     }
 
     /// The presets' names, as the inputs of a name check in a binding or a named row (`check_with`).
-    pub fn names(&self) -> PresetNames {
-        PresetNames(self.items().iter().map(|item| item.name.clone()).collect())
+    pub fn names(&self) -> PresetNames<'_> {
+        PresetNames(&self.root)
     }
 
     /// The number of presets.
@@ -439,7 +439,7 @@ impl<T> PresetLibrary<T> {
     }
 
     fn is_taken(&self, name: &str) -> bool {
-        self.items().iter().any(|i| same_name(&i.name, name))
+        self.root.each(&mut |taken| same_name(taken, name))
     }
 
     /// `base`, or "base 2", "base 3", … so the name is free across the library.
@@ -451,35 +451,62 @@ impl<T> PresetLibrary<T> {
     }
 }
 
-/// The names of a library's presets (`PresetLibrary::names`): what a check of a new name reads.
-#[derive(Clone, Debug, Default, PartialEq, Eq, craft_ui::contract::MemoProps)]
-pub struct PresetNames(Vec<String>);
+/// The names of a library's presets (`PresetLibrary::names`): what a check of a new name reads. It borrows the
+/// library and walks its names when a check or a memoized view's key reads them.
+#[derive(Clone, Copy)]
+pub struct PresetNames<'l>(&'l dyn EachName);
 
-impl PresetNames {
-    /// Why `name` cannot be a new preset's name, as [`PresetLibrary::name_error`] says.
+impl PresetNames<'_> {
+    /// Why `name` cannot be a new preset's name: blank, or taken ignoring case.
     pub fn name_error(&self, name: &str) -> Option<PresetError> {
-        name_error(self.0.iter().map(String::as_str), name)
+        let name = name.trim();
+        if name.is_empty() {
+            Some(PresetError::EmptyName)
+        } else if self.0.each(&mut |taken| same_name(taken, name)) {
+            Some(PresetError::NameTaken)
+        } else {
+            None
+        }
     }
 
     /// How many presets there are.
     pub fn len(&self) -> usize {
-        self.0.len()
+        let mut count = 0;
+        self.0.each(&mut |_| {
+            count += 1;
+            false
+        });
+        count
     }
 
     /// Whether there are none.
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        !self.0.each(&mut |_| true)
     }
 }
 
-/// Why `name` cannot be a new name among `names`: blank, or taken ignoring case.
-fn name_error<'n>(mut names: impl Iterator<Item = &'n str>, name: &str) -> Option<PresetError> {
-    if name.trim().is_empty() {
-        Some(PresetError::EmptyName)
-    } else if names.any(|taken| same_name(taken, name.trim())) {
-        Some(PresetError::NameTaken)
-    } else {
-        None
+/// Every name, in display order, and their count.
+impl craft_ui::contract::MemoProps for PresetNames<'_> {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        let mut count: u64 = 0;
+        self.0.each(&mut |name| {
+            craft_ui::contract::MemoProps::key(name, key);
+            count += 1;
+            false
+        });
+        craft_ui::contract::MemoProps::key(&count, key);
+    }
+}
+
+/// A walk over the names of a group's presets, its folders' included.
+trait EachName {
+    /// Calls `f` with each name until it returns `true`; whether it did.
+    fn each(&self, f: &mut dyn FnMut(&str) -> bool) -> bool;
+}
+
+impl<T> EachName for PresetGroup<T> {
+    fn each(&self, f: &mut dyn FnMut(&str) -> bool) -> bool {
+        self.items.iter().any(|item| f(&item.name)) || self.groups.iter().any(|group| group.each(f))
     }
 }
 

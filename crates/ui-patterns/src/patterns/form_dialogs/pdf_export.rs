@@ -350,7 +350,7 @@ impl<'a> PdfExportDialog<'a> {
             }
             let named = NamedPresetRow::new(words.preset.clone(), picker)
                 .suggest_name(words.new_preset_name.as_str().to_owned())
-                .check_name(NameCheck::new(presets.iter().map(|preset| preset.name.clone()).collect::<Vec<_>>(), |names, typed| {
+                .check_name(NameCheck::new(presets.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>(), |names, typed| {
                     names.iter().any(|name| name.eq_ignore_ascii_case(typed)).then_some(PresetError::NameTaken)
                 }))
                 .built_in(|key| built_in.contains(key))

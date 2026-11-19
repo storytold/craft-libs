@@ -183,6 +183,9 @@ impl Lazy {
             pixels_per_point: ctx.pixels_per_point(),
             env: Env::of(ui).key,
         };
+        if real && matches!(key, Key::Memo(_)) {
+            crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
+        }
         if self.settles
             && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), key)
         {
@@ -203,7 +206,7 @@ impl Lazy {
             return Shown::Replayed(kept);
         }
         let mark = focus::mark(&ctx);
-        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer, after: None, output: None };
+        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer, output: None };
         let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
         if run.recording {
             replay::open(&ctx);
@@ -232,7 +235,8 @@ impl Lazy {
             lazy::place(&ctx, &view, id, rect);
         }
         if let Some(record) = record {
-            let key = run.after.map_or(key, Key::Memo);
+            // The key from before the run: a run that wrote through its props moved the key, so the view runs once more,
+            // from the written value, before it replays.
             lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, output: run.output.take() });
         }
         #[cfg(feature = "testing")]
@@ -261,8 +265,6 @@ pub(super) struct Run {
     recording: bool,
     kept: bool,
     layer: Layer,
-    /// A memoized view's props key after its run: what the run wrote through its props is part of what it settles on.
-    pub(super) after: Option<u128>,
     /// What a memoized view's run returned, which its replays return.
     pub(super) output: Option<lazy::Output>,
 }

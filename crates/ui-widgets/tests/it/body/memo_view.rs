@@ -2,12 +2,28 @@
 //! took part in a pass (`last_pass_memo_runs`), as relations.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{MemoProps, MemoView, Show as _, Tracked};
+use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, MemoProps, MemoView, Show as _, Tracked};
+use craft_ui::runtime::inspect;
+use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::{in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Frames, MemoRun, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial};
-use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
+use craft_ui::testing::{
+    Frames, MemoRun, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, measuring_run, trial,
+};
+use egui::{Id, Key, Modifiers, Pos2, Rect, Ui, Vec2};
+use std::cell::Cell;
+
+thread_local! {
+    /// The runs of `title` on this trial's thread, real and measuring: `last_pass_memo_runs` sees only the last pass.
+    static TITLE_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Takes the runs of `title` counted since the last call.
+fn title_runs() -> usize {
+    TITLE_RUNS.with(|runs| runs.replace(0))
+}
 
 /// Idle frames that settle every view after a change.
 const WARM: usize = 3;
@@ -29,6 +45,7 @@ struct Title {
 }
 
 fn title(props: &mut Title, ui: &mut Ui) -> Vec2 {
+    TITLE_RUNS.with(|runs| runs.set(runs.get() + 1));
     Button::new(props.title.clone()).show(ui).response.rect.size()
 }
 
@@ -180,20 +197,65 @@ fn a_changed_prop_runs_its_view_once() {
     assert_eq!(scene.out, run, "a replay returns what the run returned");
 }
 
-/// A view that writes its own `&mut Tracked` runs once for the change that asked for the write, then replays: its key
-/// is taken again after the run.
+/// A view that writes its own `&mut Tracked` runs twice for the change that asked for the write, the writing run and
+/// one that reads the written value, then replays.
 #[trial]
-fn a_views_own_tracked_write_does_not_run_it_again() {
+fn a_views_own_tracked_write_runs_it_once_more_then_replays() {
     let mut scene = Scene::new();
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     scene.wanted = 5;
     scene.frame(&mut frames, vec![]);
-    assert_eq!(runs_of(&frames, "Counter"), [MemoRun::Ran], "{:?}", last_pass_memo_runs(&frames.ctx));
+    assert_eq!(runs_of(&frames, "Counter"), [MemoRun::Ran], "the writing run: {:?}", last_pass_memo_runs(&frames.ctx));
     assert_eq!(*scene.count, 5, "the run wrote its model");
+    scene.frame(&mut frames, vec![]);
+    assert_eq!(runs_of(&frames, "Counter"), [MemoRun::Ran], "the run that reads the written value");
     for frame in 0..WARM {
         scene.frame(&mut frames, vec![]);
         assert_eq!(runs_of(&frames, "Counter"), [MemoRun::Replayed], "frame {frame} after its own write");
+    }
+}
+
+/// A view that paints its model's value and clamps it.
+#[derive(MemoProps)]
+struct Clamped<'a> {
+    model: &'a mut Tracked<i32>,
+}
+
+fn clamped(props: &mut Clamped<'_>, ui: &mut Ui) -> i32 {
+    let shown = **props.model;
+    Button::new(format!("Value {shown}")).show(ui);
+    if shown > 10 {
+        props.model.edit(|value| *value = 10);
+    }
+    shown
+}
+
+fn painted(frames: &Frames, text: &str) -> bool {
+    frames.texts().iter().any(|run| run.text == text)
+}
+
+/// A view that clamps the model value it paints shows the clamped value once it settles, and replays that: never the
+/// value it painted before its write.
+#[trial]
+fn a_view_that_clamps_what_it_paints_settles_on_the_clamped_value() {
+    let mut model = Tracked::new(3);
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames, model: &mut Tracked<i32>| {
+        let mut out = None;
+        frames.frame(vec![], |ui| out = in_region(ui, region(0), |ui| MemoView::new("clamped", Clamped { model: &mut *model }, clamped).show(ui)));
+        (out, last_pass_memo_runs(&frames.ctx).into_iter().map(|(_, _, run)| run).collect::<Vec<_>>())
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, &mut model);
+    }
+    model.edit(|value| *value = 50);
+    assert_eq!(frame(&mut frames, &mut model), (Some(50), vec![MemoRun::Ran]), "the run paints what it found, then clamps");
+    assert_eq!(*model, 10);
+    assert_eq!(frame(&mut frames, &mut model), (Some(10), vec![MemoRun::Ran]), "the next run reads the clamped value");
+    for _ in 0..WARM {
+        assert_eq!(frame(&mut frames, &mut model), (Some(10), vec![MemoRun::Replayed]));
+        assert!(painted(&frames, "Value 10") && !painted(&frames, "Value 50"), "a replay paints the clamped value");
     }
 }
 
@@ -241,9 +303,13 @@ fn a_discard_pass_replays_the_views_that_did_not_change() {
     let mut scene = Scene::new();
     let mut frames = Frames::new();
     scene.settle(&mut frames);
+    // The title changes in the same frame: its view runs in pass 1 and replays that run in pass 2.
+    scene.title = "Another title".to_owned();
     scene.width = 90.0;
+    title_runs();
     let passes = scene.frame(&mut frames, vec![]);
     assert_eq!(passes, 2, "the new width asks for one discard pass");
+    assert_eq!(title_runs(), 1, "the title ran in pass 1 and replayed that run in pass 2");
     let runs = last_pass_memo_runs(&frames.ctx);
     let others: Vec<_> = runs.iter().filter(|(name, _, _)| !name.contains("Sized")).map(|(_, _, run)| *run).collect();
     assert_eq!(others, [MemoRun::Replayed; 3], "pass 2 replays the other views: {runs:?}");
@@ -350,4 +416,133 @@ fn an_absent_view_keeps_its_run_within_twice_the_shown_count() {
     frame(&mut frames, &[]);
     frame(&mut frames, &[]);
     assert_eq!(frame(&mut frames, &["a"]), [MemoRun::Ran], "the longest absent view was dropped");
+}
+
+/// A view that reads the record `POINTED`.
+#[derive(MemoProps)]
+struct Pointer {
+    label: String,
+}
+
+const POINTED: &str = "memo-view-pointed";
+
+fn pointer(props: &mut Pointer, ui: &mut Ui) -> Option<usize> {
+    TITLE_RUNS.with(|runs| runs.set(runs.get() + 1));
+    Button::new(props.label.clone()).show(ui);
+    inspect::pointed(ui.ctx(), Id::NULL.with(POINTED))
+}
+
+/// A run of an earlier pass of the frame is not replayed when a value it read was edited after it started: the edit
+/// comes later in the pass, asks for the discard pass, and the view runs in it.
+#[trial]
+fn an_edit_after_a_run_of_the_frame_runs_it_in_the_discard_pass() {
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames, label: &str, point: Option<usize>| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("pointer", Pointer { label: label.to_owned() }, pointer).show(ui));
+            if let Some(point) = point {
+                inspect::point_at(ui.ctx(), Id::NULL.with(POINTED), Some(point));
+            }
+        })
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, "A", Some(1));
+    }
+    title_runs();
+    assert_eq!(frame(&mut frames, "B", Some(1)), 1, "an unchanged record asks for no discard pass");
+    assert_eq!(title_runs(), 1, "the new label runs the view once");
+    assert_eq!(frame(&mut frames, "C", Some(2)), 2, "the edit after the view read it asks for the discard pass");
+    assert_eq!(title_runs(), 2, "the view runs again in pass 2: the record changed after its pass-1 run started");
+}
+
+/// A measuring run over a settled view takes its kept extent and returns the kept value without running it.
+#[trial]
+fn a_measuring_run_returns_the_kept_value() {
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames, measure: bool| {
+        let mut out = (None, None);
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| {
+                let shown = MemoView::new("measured", Title { title: "Measured".to_owned() }, title).show(ui);
+                // After the real run, so the view keeps its place; a measuring run has none to compare.
+                let ctx = ui.ctx().clone();
+                let measured =
+                    measure.then(|| measuring_run(&ctx, || MemoView::new("measured", Title { title: "Measured".to_owned() }, title).show(ui)));
+                out = (shown, measured.flatten());
+            });
+        });
+        out
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, false);
+    }
+    title_runs();
+    let (shown, measured) = frame(&mut frames, true);
+    assert!(shown.is_some(), "the view replays");
+    assert_eq!(measured, shown, "the measuring run returns the kept value");
+    assert_eq!(title_runs(), 0, "neither run ran the view");
+}
+
+/// A view whose components' shown memory was evicted while it was absent (over 0.5 s and 3 passes) runs when it is
+/// shown again, though its props key is equal: a replay would show state memory dropped.
+#[trial]
+fn a_view_back_after_its_memory_was_evicted_runs() {
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames, shown: bool| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("always", Title { title: "Always".to_owned() }, title).show(ui));
+            if shown {
+                in_region(ui, region(1), |ui| MemoView::new("back", Title { title: "Back".to_owned() }, title).show(ui));
+            }
+        });
+        last_pass_memo_runs(&frames.ctx).into_iter().skip(1).map(|(_, _, run)| run).collect::<Vec<_>>()
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, true);
+    }
+    for _ in 0..WARM {
+        frame(&mut frames, false);
+    }
+    assert_eq!(frame(&mut frames, true), [MemoRun::Replayed], "back within the grace, the view replays");
+    frame(&mut frames, false);
+    frames.advance(1.0);
+    for _ in 0..WARM {
+        frame(&mut frames, false);
+    }
+    assert_eq!(frame(&mut frames, true), [MemoRun::Ran], "back after its memory was evicted, the view runs");
+}
+
+const FLAG: SaveKey = SaveKey::new("craft_tests.memo_flag");
+
+/// A view showing a saved binding.
+#[derive(MemoProps)]
+struct Flag<'a> {
+    flag: Bind<'a, bool>,
+}
+
+fn flag(props: &mut Flag<'_>, ui: &mut Ui) -> bool {
+    Checkbox::new(props.flag.reborrowed()).show(ui);
+    true
+}
+
+/// A write of a saved value from outside every view runs the view whose props bind it, and only that view.
+#[trial]
+fn a_saved_value_written_from_outside_runs_its_view() {
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("title", Title { title: "Title".to_owned() }, title).show(ui));
+            in_region(ui, region(1), |ui| MemoView::new("flag", Flag { flag: Bind::kept().saved(FLAG) }, flag).show(ui));
+        });
+        last_pass_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).map(|(name, _, _)| name).collect::<Vec<_>>()
+    };
+    for _ in 0..WARM {
+        frame(&mut frames);
+    }
+    assert!(frame(&mut frames).is_empty(), "settled");
+    set_saved_value(&frames.ctx, &FLAG, true);
+    let ran = frame(&mut frames);
+    assert_eq!(ran.len(), 1, "one view ran: {ran:?}");
+    assert!(ran[0].contains("Flag"), "the view that binds the value ran: {ran:?}");
+    assert!(frame(&mut frames).is_empty(), "then it replays");
 }

@@ -86,6 +86,8 @@ pub(crate) struct Recorder {
 
 struct Open {
     from: usize,
+    /// How many discard requests the pass's output held when the record opened.
+    discards: usize,
     focus: focus::Mark,
     egui: egui::PassMark,
     facts: Facts,
@@ -96,6 +98,7 @@ impl Open {
     fn empty(ctx: &Context) -> Open {
         Open {
             from: 0,
+            discards: discard_requests(ctx),
             focus: focus::mark(ctx),
             egui: ctx.pass_mark(),
             facts: Facts { blocked: crate::runtime::access::scope::depth(ctx) > 0, ..Facts::default() },
@@ -114,9 +117,11 @@ pub(crate) struct Facts {
     pub(crate) wake: Option<f64>,
     /// The run did something a replay cannot repeat.
     pub(crate) blocked: bool,
-    /// The run asked for the frame's discard pass: it laid out by a measure that changed, so the pass that follows
-    /// runs it again rather than replay it.
+    /// The run asked for a discard pass: what it added is what the pass is thrown away for, so it is never replayed.
     pub(crate) discards: bool,
+    /// The components whose memory owners registered in the run (`memory::register_owner`): a replay needs their
+    /// shown-tier state still kept (`memory::ended_since`).
+    pub(crate) owners: Vec<egui::Id>,
 }
 
 /// What one real run of a region added to its pass.
@@ -158,6 +163,7 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.unsettled |= open.facts.unsettled;
             outer.facts.blocked |= open.facts.blocked;
             outer.facts.discards |= open.facts.discards;
+            outer.facts.owners.extend(open.facts.owners.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
             outer.facts.reads.extend(open.facts.reads.iter().copied());
         } else {
@@ -168,6 +174,9 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
     let egui = ctx.pass_records_since(&open.egui);
     let mut facts = open.facts;
     facts.blocked |= egui.layers().any(|on| on != layer);
+    // Every discard request reaches egui's output (`sizing::request_discard` and egui's own); layout memory's waits
+    // for the end of the pass and notes itself (`note_discard`).
+    facts.discards |= discard_requests(ctx) > open.discards;
     Record { focus: focus::transcript(ctx, open.focus), journal, widgets: egui.widgets().iter().map(|widget| widget.id).collect(), egui, facts }
 }
 
@@ -255,7 +264,18 @@ pub(crate) fn block(ctx: &Context) {
     with_open(ctx, |facts| facts.blocked = true);
 }
 
-/// Notes that the running code asked for the frame's discard pass (`layout_memory`).
+/// Notes that the running code asked for a discard pass that reaches egui only at the end of the pass (layout memory's
+/// measured changes): every other request is counted in egui's output (`close`).
 pub(crate) fn note_discard(ctx: &Context) {
     with_open(ctx, |facts| facts.discards = true);
+}
+
+/// Notes that the memory owner `owner` registered in the running code.
+pub(crate) fn note_owner(ctx: &Context, owner: egui::Id) {
+    with_open(ctx, |facts| facts.owners.push(owner));
+}
+
+/// How many discard requests the running pass's output holds.
+fn discard_requests(ctx: &Context) -> usize {
+    ctx.output(|output| output.request_discard_reasons.len())
 }
