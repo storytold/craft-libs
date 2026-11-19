@@ -9,7 +9,7 @@ use craft_ui::runtime::env::Message;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::load::SizedTexture;
-use egui::{Color32, ColorImage, Pos2, Rect, Ui, Vec2, pos2};
+use egui::{Color32, ColorImage, Rect, Ui, Vec2, pos2};
 
 fn printers() -> Vec<Printer> {
     vec![
@@ -68,11 +68,10 @@ fn print_preview_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = preview_sheet(ui);
     let paper = Rect::from_min_size(pos2(0.0, 0.0), sheet.paper);
     let size = sheet.image.size();
-    let on_paper = move |at: &Pos2| {
-        if paper.contains_rect(Rect::from_min_size(*at, size)) { Validity::Ok } else { Validity::Refuse(Message::new("Off the paper")) }
-    };
-    let position = data.value("position", pos2(400.0, 156.0));
-    PrintPreview::new("Print preview", &sheet, Bind::bound(position).check(on_paper)).show(ui).into()
+    let position = Bind::bound(data.value("position", pos2(400.0, 156.0))).check_with((paper, size), |(paper, size), at| {
+        if paper.contains_rect(Rect::from_min_size(*at, *size)) { Validity::Ok } else { Validity::Refuse(Message::new("Off the paper")) }
+    });
+    PrintPreview::new("Print preview", &sheet, position).show(ui).into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]

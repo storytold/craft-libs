@@ -414,8 +414,7 @@ impl Scoped {
                 id.key(&mut key);
             }
             key.feed_hash(&(std::mem::discriminant(&self.motion.mode), self.canvas_pattern, self.tab_toggles_chrome, self.today));
-            key.feed_hash(&(Arc::as_ptr(&self.format) as usize, Arc::as_ptr(&self.dates) as usize));
-            key.feed_hash(&self.host.as_ref().map(|host| Arc::as_ptr(host) as usize));
+            (&self.format, &self.dates, &self.host).key(&mut key);
             let value_bytes = self.values.key(&mut key);
             #[cfg(feature = "testing")]
             crate::runtime::measure::count_memo_key_bytes(&self.ctx, key.bytes() + value_bytes);

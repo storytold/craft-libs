@@ -746,6 +746,34 @@ impl<T: MemoProps> MemoProps for craft_behavior::Mixed<T> {
     }
 }
 
+/// The translator (`Words::generation`): words with the same generation read every word the same.
+impl MemoProps for craft_i18n::Words {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The format (`Format::generation`): a format writes every number the same for its whole life.
+impl MemoProps for craft_i18n::Format {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The format (`DateFormat::generation`): a format and its clones write every date the same.
+impl MemoProps for craft_i18n::DateFormat {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
+/// The host (`Host::generation`): a host and its clones hold the same services and language.
+impl MemoProps for craft_host::Host {
+    fn key(&self, key: &mut MemoKey) {
+        self.generation().key(key);
+    }
+}
+
 impl MemoProps for craft_keymap::CommandRef {
     fn key(&self, key: &mut MemoKey) {
         let craft_keymap::CommandRef { id, params } = self;

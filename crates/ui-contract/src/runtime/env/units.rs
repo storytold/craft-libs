@@ -314,6 +314,15 @@ pub struct Units {
     point_size: PointSize,
 }
 
+/// What every number it reads and writes depends on: the format, the unit words and the scope's words (each by its
+/// generation) and the point size.
+impl crate::contract::MemoProps for Units {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        let Units { format, words, scope_words, readers: _, point_size } = self;
+        crate::contract::MemoProps::key(&(format, words, scope_words, point_size), key);
+    }
+}
+
 impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
