@@ -95,7 +95,8 @@ impl crate::contract::Outcome for PaletteOutput {
 ///   runs, so its own modal layer blocks none. A disabled command is listed and does not run.
 /// - Faces: [`PaletteFace::Dialog`] is a centred modal box. [`PaletteFace::InPlace`] is a search box where it is laid
 ///   out, showing the `placeholder`; it opens to the field with the key focus in the pass that opens it and lists the
-///   results in a popup under the field.
+///   results in a popup under the field. The in-place field is the palette's face, so it is named by the palette's
+///   `label`, closed and open; the dialog face's field, inside a box named `label`, keeps the generic search name.
 /// - Empty query: with `suggested`, its heading and those commands; else the commands last run, newest first (the
 ///   `recents` binding), else the first entries.
 /// - Fallback: with `fallback`, a last row follows the matches of a query, or stands alone when nothing matches. Picking
@@ -227,7 +228,7 @@ impl<'a> CommandPalette<'a> {
             // The closed face is the search field's own look at its own size, so what sits beside it does not shift on open.
             let closed_face = !is_open
                 && clicked(
-                    &TextField::search(words.palette_search.clone(), Bind::given(String::new()))
+                    &TextField::search(label.clone(), Bind::given(String::new()))
                         .placeholder(face_hint.clone())
                         .id(field_id)
                         .show(ui)
@@ -252,7 +253,7 @@ impl<'a> CommandPalette<'a> {
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
-                let field = TextField::search(words.palette_search.clone(), Bind::bound(&mut session.query))
+                let field = TextField::search(label.clone(), Bind::bound(&mut session.query))
                     .placeholder(face_hint.clone())
                     .id(field_id)
                     .show(ui)
