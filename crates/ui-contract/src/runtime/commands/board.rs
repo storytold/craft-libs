@@ -1803,7 +1803,7 @@ pub(crate) fn begin(ctx: &Context) {
     // With this pass's vantage set, what the readers were shown is resolved again before any of them runs.
     wake_shown(ctx, viewport);
     #[cfg(feature = "testing")]
-    if pass::pass_nr(ctx, viewport) % 100 == 0 {
+    if pass::pass_nr(ctx, viewport).is_multiple_of(100) {
         check_kept(ctx, viewport);
     }
     let Some((keys, mut matcher)) = taken else { return };
