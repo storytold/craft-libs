@@ -377,6 +377,10 @@ fn test_hostile_inputs_never_panic() {
     let huge_dims = [0x00, 0, 0, 10, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1];
     assert!(matches!(decoder.decode(&huge_dims), Err(Error::MemoryBudget { .. })));
 
+    // 24,000 x 24,000 passes 5 * area (2.88 GB) but exceeds 4 GiB budget once all live staging pictures are accounted for
+    let dims_24k = [0x00, 0, 0, 10, 0x5D, 0xC0, 0x5D, 0xC0, 0, 1];
+    assert!(matches!(decoder.decode(&dims_24k), Err(Error::MemoryBudget { width: 24000, height: 24000 })));
+
     // Interframe before keyframe (inter strip 0x1100)
     let inter_first = [0x01, 0, 0, 22, 0, 16, 0, 16, 0, 1, 0x11, 0x00, 0, 12, 0, 0, 0, 0, 0, 16, 0, 16];
     assert!(matches!(decoder.decode(&inter_first), Err(Error::MissingReference)));

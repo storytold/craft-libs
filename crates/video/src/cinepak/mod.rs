@@ -45,19 +45,39 @@ pub struct Frame {
     pub is_color: bool,
 }
 
+/// Maximum bytes required for one fully-allocated Cinepak picture buffer (RGB24 + planar Y + planar U/V).
+pub fn picture_bytes(width: u32, height: u32) -> Option<u64> {
+    let w = width as u64;
+    let h = height as u64;
+    let area = w.checked_mul(h)?;
+    let rgb = area.checked_mul(3)?;
+    let y = area;
+    let uv_w = w.div_ceil(2);
+    let uv_h = h.div_ceil(2);
+    let uv = uv_w.checked_mul(uv_h)?.checked_mul(2)?;
+    rgb.checked_add(y)?.checked_add(uv)
+}
+
+/// Checks that all simultaneously live staging picture buffers (working, reference, and output)
+/// fit within [`crate::budget::DECODE_MEMORY_BUDGET`].
+pub fn check_memory_budget(width: u32, height: u32) -> Result<()> {
+    let single = picture_bytes(width, height).ok_or(Error::MemoryBudget { width, height })?;
+    // Accounts for working picture, reference picture, and output clone (3 pictures).
+    let total = single.checked_mul(3).ok_or(Error::MemoryBudget { width, height })?;
+    if total > crate::budget::DECODE_MEMORY_BUDGET {
+        return Err(Error::MemoryBudget { width, height });
+    }
+    Ok(())
+}
+
 impl Frame {
     /// Allocate a new, blank frame with the given dimensions, checking the memory budget.
     pub fn new(width: u32, height: u32, is_color: bool) -> Result<Self> {
+        check_memory_budget(width, height)?;
         let w = width as u64;
         let h = height as u64;
         let area = w.checked_mul(h).ok_or(Error::MemoryBudget { width, height })?;
         let rgb_bytes = area.checked_mul(3).ok_or(Error::MemoryBudget { width, height })?;
-
-        let total_est = rgb_bytes.checked_add(area.checked_mul(2).unwrap_or(0)).ok_or(Error::MemoryBudget { width, height })?;
-        if total_est > crate::budget::DECODE_MEMORY_BUDGET {
-            return Err(Error::MemoryBudget { width, height });
-        }
-
         let rgb_len = usize::try_from(rgb_bytes).map_err(|_| Error::MemoryBudget { width, height })?;
         let y_len = usize::try_from(area).map_err(|_| Error::MemoryBudget { width, height })?;
 
@@ -133,14 +153,7 @@ impl Decoder {
         if width == 0 || height == 0 {
             return Err(Error::InvalidHeader("width and height must be non-zero"));
         }
-        let w = width as u64;
-        let h = height as u64;
-        let area = w.checked_mul(h).ok_or(Error::MemoryBudget { width, height })?;
-        let rgb_bytes = area.checked_mul(3).ok_or(Error::MemoryBudget { width, height })?;
-        let total_est = rgb_bytes.checked_add(area.checked_mul(2).unwrap_or(0)).ok_or(Error::MemoryBudget { width, height })?;
-        if total_est > crate::budget::DECODE_MEMORY_BUDGET {
-            return Err(Error::MemoryBudget { width, height });
-        }
+        check_memory_budget(width, height)?;
         if num_strips == 0 {
             return Err(Error::InvalidHeader("strip count must be greater than zero"));
         }
@@ -168,6 +181,9 @@ impl Decoder {
         }
 
         let is_key = !has_inter;
+        if is_key {
+            self.last_frame = None;
+        }
         let mut frame = if is_key {
             Frame::new(width, height, false)?
         } else {
@@ -299,8 +315,10 @@ impl Decoder {
         strips.truncate(num_strips);
         frame.is_color = (!is_key && frame.is_color) || strips.iter().any(|s| s.is_color);
         self.strips = strips;
-        self.last_frame = Some(frame.clone());
-        Ok(frame)
+        self.last_frame = None;
+        let out_frame = frame.clone();
+        self.last_frame = Some(frame);
+        Ok(out_frame)
     }
 }
 
