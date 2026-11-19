@@ -11,6 +11,7 @@ mod filter_gallery;
 mod histogram;
 mod hosted_dialogs;
 mod layer_style;
+mod layer_style_blend_wheel;
 mod liquify;
 mod live_preview;
 mod perspective_warp;
