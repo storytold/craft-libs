@@ -211,51 +211,15 @@ pub(crate) fn drop_dangling_relations(output: &mut FullOutput) {
     prune_controls(update);
 }
 
-/// The step itself, for the tests: every `controls` id of `update` that names no node of `update` is
-/// dropped. Other relations keep their ids: they are built from nodes this pass wrote.
-fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {    let ids: std::collections::HashSet<egui::accesskit::NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
+/// The step itself: every `controls` id of `update` that names no node of `update` is dropped. Other
+/// relations keep their ids: they are built from nodes this pass wrote.
+pub fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
+    let ids: std::collections::HashSet<egui::accesskit::NodeId> = update.nodes.iter().map(|(id, _)| *id).collect();
     for (_, node) in update.nodes.iter_mut() {
         if node.controls().iter().all(|id| ids.contains(id)) {
             continue;
         }
         let kept: Vec<egui::accesskit::NodeId> = node.controls().iter().copied().filter(|id| ids.contains(id)).collect();
         node.set_controls(kept);
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use egui::accesskit::{Node, NodeId, Role, TreeId, TreeUpdate};
-
-    fn update(controls: Vec<NodeId>, carried: Vec<NodeId>) -> TreeUpdate {
-        let mut node = Node::new(Role::Button);
-        node.set_controls(controls);
-        TreeUpdate {
-            nodes: carried.into_iter().map(|id| (id, Node::new(Role::Button))).chain(std::iter::once((NodeId(1), node))).collect(),
-            tree: None,
-            tree_id: TreeId::ROOT,
-            focus: NodeId(1),
-        }
-    }
-
-    /// A popup that reports itself open on a frame where its node is not emitted leaves its id in
-    /// `controls`; the host's UIA adapter unwraps that lookup and aborts (photocraft#15597). The id
-    /// that has a node stays.
-    #[test]
-    fn controls_keep_the_ids_the_update_carries_and_drop_the_rest() {
-        let mut tree = update(vec![NodeId(2), NodeId(9)], vec![NodeId(2)]);
-        prune_controls(&mut tree);
-        let kept: Vec<NodeId> = tree.nodes.iter().find(|(id, _)| *id == NodeId(1)).map(|(_, node)| node.controls().to_vec()).unwrap_or_default();
-        assert_eq!(kept, vec![NodeId(2)], "the id without a node is gone, the one with a node stays");
-    }
-
-    #[test]
-    fn controls_with_every_node_carried_are_left_alone() {
-        let mut tree = update(vec![NodeId(2)], vec![NodeId(2)]);
-        prune_controls(&mut tree);
-        let kept: Vec<NodeId> = tree.nodes.iter().find(|(id, _)| *id == NodeId(1)).map(|(_, node)| node.controls().to_vec()).unwrap_or_default();
-        assert_eq!(kept, vec![NodeId(2)]);
     }
 }
