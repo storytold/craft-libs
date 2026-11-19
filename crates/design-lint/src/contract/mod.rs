@@ -11,6 +11,7 @@ mod egui_widget;
 mod entry;
 mod facts;
 mod global_state;
+pub(crate) use global_state::FS;
 mod keys;
 mod layers;
 mod memory;

@@ -103,10 +103,16 @@ fn global_state_counts_every_form_and_honours_the_allowlist() {
     // static, static mut, static OnceLock, thread_local!, impl MemoProps, a static in a fn, `use std::fs`, `std::fs::read`,
     // and the two derive-only forms: impl PlainData and a direct `__from_field_path`.
     assert_eq!(found.iter().filter(|f| f.rule == "contract/no-global-state").count(), 10, "{found:?}");
-    let allowed = StaticScope::new().allow("contract/no-global-state", "crates/x/src/chips");
-    // The derive-only forms have no allowed location, whatever the scope says.
+    // An entry names one item; the rest of the file is still flagged. The three derive-only forms have no entry.
+    let mut allowed = StaticScope::new();
+    for what in ["COUNTER", "RAW", "CACHE", "LOCAL", "INNER", "std::fs"] {
+        allowed = allowed.allow(&format!("contract/no-global-state:{what}"), "crates/x/src/chips");
+    }
     let left = analyze_contract(&src, Path::new(FAMILY), &allowed, false);
-    assert_eq!(left.len(), 2, "{left:?}");
+    assert_eq!(left.len(), 3, "{left:?}");
+    let some = StaticScope::new().allow("contract/no-global-state:COUNTER", "crates/x/src/chips");
+    let left = analyze_contract(&src, Path::new(FAMILY), &some, false);
+    assert_eq!(left.len(), 9, "a second static in an allowlisted file is flagged: {left:?}");
     for skipped in ["crates/x/build.rs", "crates/x/src/bin/tool.rs"] {
         assert!(rules_at(&src, skipped, &scope()).is_empty(), "{skipped}");
     }

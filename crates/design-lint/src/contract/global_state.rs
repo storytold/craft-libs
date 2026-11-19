@@ -14,6 +14,10 @@ use super::Cx;
 
 pub const ID: &str = "contract/no-global-state";
 
+/// What an allowlist entry names for file-system use.
+pub(crate) const FS: &str = "std::fs";
+const FS_MESSAGE: &str = "`std::fs` reads the file system, which the framework does not track; read it outside the view";
+
 const PATH_FS: [&str; 2] = ["std", "fs"];
 
 /// Permission keys of the two derive-only rules; no location is allowed.
@@ -24,9 +28,25 @@ const PROJECTION: &str = "contract/no-global-state:projection";
 const FROM_FIELD_PATH: &str = "__from_field_path";
 
 struct Hits {
-    found: Vec<(proc_macro2::Span, String)>,
+    found: Vec<(proc_macro2::Span, String, String)>,
     derive_only: Vec<(proc_macro2::Span, String)>,
     projection: Vec<(proc_macro2::Span, String)>,
+}
+
+/// The identifiers after `static` in a `thread_local!` or `lazy_static!` body.
+fn static_names(tokens: proc_macro2::TokenStream, out: &mut Vec<String>) {
+    let mut after_static = false;
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(i) if after_static => {
+                out.push(i.to_string());
+                after_static = false;
+            }
+            proc_macro2::TokenTree::Ident(i) => after_static = i == "static",
+            proc_macro2::TokenTree::Group(g) => static_names(g.stream(), out),
+            _ => after_static = false,
+        }
+    }
 }
 
 fn field_path_in(tokens: proc_macro2::TokenStream, out: &mut Vec<proc_macro2::Span>) {
@@ -84,17 +104,18 @@ impl Visit<'_> for Hits {
         self.found.push((
             node.static_token.span,
             format!("`{what} {}` is process-level state; use `const`, or pass it as a prop or environment key", node.ident),
+            node.ident.to_string(),
         ));
         visit::visit_item_static(self, node);
     }
 
     fn visit_item_macro(&mut self, node: &ItemMacro) {
-        self.macro_path(&node.mac.path);
+        self.macro_path(&node.mac);
         visit::visit_item_macro(self, node);
     }
 
     fn visit_stmt_macro(&mut self, node: &syn::StmtMacro) {
-        self.macro_path(&node.mac.path);
+        self.macro_path(&node.mac);
         visit::visit_stmt_macro(self, node);
     }
 
@@ -103,7 +124,7 @@ impl Visit<'_> for Hits {
         use_paths(&node.tree, &mut Vec::new(), &mut paths);
         for (span, path) in paths {
             if names_fs(&path) {
-                self.found.push((span, "`std::fs` reads the file system, which the framework does not track; read it outside the view".to_owned()));
+                self.found.push((span, FS_MESSAGE.to_owned(), FS.to_owned()));
             }
         }
         visit::visit_item_use(self, node);
@@ -127,10 +148,7 @@ impl Visit<'_> for Hits {
     fn visit_path(&mut self, node: &SynPath) {
         let names: Vec<String> = node.segments.iter().map(|s| s.ident.to_string()).collect();
         if names_fs(&names) {
-            self.found.push((
-                node.segments[0].ident.span(),
-                "`std::fs` reads the file system, which the framework does not track; read it outside the view".to_owned(),
-            ));
+            self.found.push((node.segments[0].ident.span(), FS_MESSAGE.to_owned(), FS.to_owned()));
         }
         visit::visit_path(self, node);
     }
@@ -141,7 +159,7 @@ impl Visit<'_> for Hits {
         {
             let message = format!("`{name}` is implemented by the derive only");
             if name == "MemoProps" {
-                self.found.push((node.impl_token.span, message));
+                self.found.push((node.impl_token.span, message, name));
             } else {
                 self.derive_only.push((node.impl_token.span, message));
             }
@@ -151,11 +169,20 @@ impl Visit<'_> for Hits {
 }
 
 impl Hits {
-    fn macro_path(&mut self, path: &SynPath) {
-        if let Some(last) = path.segments.last()
+    fn macro_path(&mut self, mac: &syn::Macro) {
+        if let Some(last) = mac.path.segments.last()
             && matches!(last.ident.to_string().as_str(), "thread_local" | "lazy_static")
         {
-            self.found.push((last.ident.span(), format!("`{}!` declares process-level state; pass it as a prop or environment key", last.ident)));
+            let mut names = Vec::new();
+            static_names(mac.tokens.clone(), &mut names);
+            let listed = names.join("`, `");
+            for name in if names.is_empty() { vec![last.ident.to_string()] } else { names } {
+                self.found.push((
+                    last.ident.span(),
+                    format!("`{}!` declares process-level state (`{listed}`); pass it as a prop or environment key", last.ident),
+                    name,
+                ));
+            }
         }
     }
 }
@@ -167,8 +194,8 @@ pub(super) fn check(cx: &Cx<'_>, out: &mut Vec<Finding>) {
     }
     let mut hits = Hits { found: Vec::new(), derive_only: Vec::new(), projection: Vec::new() };
     hits.visit_file(cx.file);
-    for (span, message) in hits.found {
-        cx.flag_span(out, ID, ID, span, message);
+    for (span, message, what) in hits.found {
+        cx.flag_span(out, ID, &format!("{ID}:{what}"), span, message);
     }
     for (span, message) in hits.derive_only {
         cx.flag_span(out, ID, PLAIN_DATA, span, message);
