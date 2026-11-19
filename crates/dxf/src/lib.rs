@@ -12,6 +12,7 @@
 use std::io::Write as _;
 
 pub mod drawing;
+pub mod lin_pat;
 pub mod model;
 pub mod mtext;
 pub mod mtext_tokens;

@@ -13,7 +13,9 @@ WORKFLOW = ROOT / ".github/workflows/workspace.yml"
 
 
 def block(text, name):
-    match = re.search(r"^      " + re.escape(name) + r": \|\n((?:        .*\n|\n)+)", text, re.M)
+    # The Linux call names each shared block with a YAML anchor (`command: &command |`), and the
+    # macOS and Windows call refers to it, so this first block is the one every leg runs.
+    match = re.search(r"^      " + re.escape(name) + r": (?:&[\w-]+ )?\|\n((?:        .*\n|\n)+)", text, re.M)
     if match is None:
         raise AssertionError(f"missing command block: {name}")
     return "\n".join(line[8:] for line in match[1].splitlines())
@@ -32,9 +34,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 """
 TEST_SOURCE = """
-cargo nextest run --workspace --all-features --locked --profile ci
+cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
 cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
 """
 WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'"""
 EXPECTED_SOURCE = {
@@ -90,9 +93,10 @@ COMMON = [
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
 TESTS = [
-    "nextest run --workspace --all-features --locked --profile ci",
+    "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests",
+    "nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench",
     "test --workspace --doc --all-features --locked",
-    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci",
+    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests",
 ]
 
 
@@ -172,7 +176,16 @@ class WorkspaceTests(unittest.TestCase):
     def test_workflow_stays_shared_and_keeps_platform_gates(self):
         source = WORKFLOW.read_text()
         self.assertIn("uses: storytold/craft-common-actions/.github/workflows/gate.yml@main", source)
-        self.assertIn('os: \'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
+        self.assertIn('os: \'["ubuntu-latest"]\'', source)
+        self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
+        self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
+        self.assertIn("      lint-command: &lint |\n", source)
+        self.assertIn("      command: &command |\n", source)
+        self.assertIn("      lint-command: *lint\n", source)
+        self.assertIn("      command: *command\n", source)
+        # Only the Linux leg keeps workspace crates; the cache budget has no room for the others.
+        self.assertEqual(source.count("cache-workspace-crates: true"), 1)
         self.assertIn("  msrv:", source)
         self.assertIn("  wasm:", source)
         self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "lint-command"))
