@@ -514,6 +514,12 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
 /// along its own diagonal; past the anchor the factor turns negative and the box flips. Each
 /// scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed box.
 fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxState> {
+    if !mods.shift
+        && !mods.alt
+        && let Some(kept) = side_run_scale(g, p, min_side)
+    {
+        return Some(kept);
+    }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -590,6 +596,64 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
     // ⌥ scales about the reference point, so it stays put; otherwise it rides along.
     let pivot = if mods.alt { g.pivot0 } else { carry_pivot(g.quad0, quad, g.pivot0) };
     Some(BoxState { quad, pivot })
+}
+
+/// A proportional edge drag on a skewed box, or a top or bottom edge drag on a box in perspective, as the reference
+/// application scales them (measured on its saved results). Along the top edge `u` and its normal `n`: the top edge scales by `k`
+/// about its middle, and each side keeps its run along `u` (a skew's offset, a perspective's inset) while its part
+/// along `n` scales by `k`; the opposite edge's middle holds, and the dragged edge's middle follows the pointer along the
+/// drag's axis. On a plain or turned rectangle the sides have no run along `u` and this is the frame scaling below.
+/// `None` where the frame scaling applies instead: a left or right edge of a box in perspective (not measured to
+/// follow this rule), a factor at or past zero (the box flips there, as the frame scaling flips it), or a collapsed
+/// box.
+fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let [tl, tr, br, bl] = g.quad0;
+    let u = tr - tl;
+    let len = u.hypot();
+    if len.is_nan() || len <= 1e-9 {
+        return None;
+    }
+    // A box whose top and bottom edges match is a parallelogram (plain, turned or skewed).
+    let affine = ((br - bl) - u).hypot() <= 1e-9 * len.max(1.0);
+    if !affine && (edge == 1 || edge == 3) {
+        return None;
+    }
+    let uh = u / len;
+    let mut nh = Vec2::new(-uh.y, uh.x);
+    let (left, right) = (bl - tl, br - tr);
+    if left.dot(nh) < 0.0 {
+        nh = -nh;
+    }
+    let (al, bl_n, ar, br_n) = (left.dot(uh), left.dot(nh), right.dot(uh), right.dot(nh));
+    let height = (bl_n + br_n) / 2.0;
+    if height.is_nan() || height <= 1e-9 {
+        return None;
+    }
+    let d = p - g.start;
+    let k = match edge {
+        0 => 1.0 - d.dot(nh) / height,
+        1 => 1.0 + d.dot(uh) / len,
+        2 => 1.0 + d.dot(nh) / height,
+        _ => 1.0 - d.dot(uh) / len,
+    };
+    if !(k.is_finite() && k > 0.0) {
+        return None;
+    }
+    let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
+    let (u2, left2, right2) = (u * k, uh * al + nh * (bl_n * k), uh * ar + nh * (br_n * k));
+    let shape = [Point::ZERO, Point::ZERO + u2, Point::ZERO + u2 + right2, Point::ZERO + left2];
+    // The edge that holds, by its middle: the opposite one.
+    let middle = |q: &[Point; 4], a: usize, b: usize| q[a].midpoint(q[b]);
+    let (a, b) = match edge {
+        0 => (2, 3),
+        1 => (3, 0),
+        2 => (0, 1),
+        _ => (1, 2),
+    };
+    let shift = middle(&g.quad0, a, b) - middle(&shape, a, b);
+    let quad = shape.map(|c| c + shift);
+    quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
 }
 
 /// The smallest factor a scale drag may give `quad`'s `axis` (0: u, 1: v) so its sides along that

@@ -133,3 +133,63 @@ fn a_shape_box_scales_corners_by_the_diagonal_and_edges_on_one_axis() {
         assert!(corners_are(&edge, 100.0, 98.0, 623.0, 451.0), "{mods:?}: {:?}", edge.quad);
     }
 }
+
+/// A box after `quad` with an edge dragged from `from` to `to`, no modifiers.
+fn edge_dragged(quad: [Point; 4], edge: u8, from: Point, to: Point) -> BoxState {
+    let start = BoxState::new(quad, quad[0].midpoint(quad[2]));
+    drag(&start, &start, BoxPart::Edge(edge), from, to, Mods::NONE, &BoxRules::default())
+}
+
+fn within(got: &BoxState, want: [(f64, f64); 4], tol: f64) -> bool {
+    got.quad.iter().zip(want).all(|(a, (x, y))| (a.x - x).abs() <= tol && (a.y - y).abs() <= tol)
+}
+
+/// Measured on the reference application's results (a 302 × 202 box skewed 40 px along its top edge, then an edge
+/// dragged): the skew's offset stays 40 px while the box scales, and the opposite edge's middle holds.
+#[test]
+fn an_edge_drag_on_a_skewed_box_keeps_the_skew_offset() {
+    let skewed = [p(190.0, 125.0), p(492.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let cases = [
+        (1, p(472.0, 226.0), p(522.0, 226.0), [(190.0, 108.278), (542.0, 108.278), (502.0, 343.722), (150.0, 343.722)]),
+        (3, p(170.0, 226.0), p(130.0, 226.0), [(150.0, 111.623), (492.0, 111.623), (452.0, 340.377), (110.0, 340.377)]),
+        (2, p(301.0, 327.0), p(301.0, 367.0), [(160.099, 125.0), (521.901, 125.0), (481.901, 367.0), (120.099, 367.0)]),
+        (0, p(341.0, 125.0), p(341.0, 95.0), [(167.574, 95.0), (514.426, 95.0), (474.426, 327.0), (127.574, 327.0)]),
+    ];
+    for (edge, from, to, want) in cases {
+        let got = edge_dragged(skewed, edge, from, to);
+        assert!(within(&got, want, 2e-3), "edge {edge}: {:?}", got.quad);
+    }
+    // Skewed along the other axis (the right edge 30 px down): the same rule in the box's own axes.
+    let leaning = [p(150.0, 125.0), p(452.0, 155.0), p(452.0, 357.0), p(150.0, 327.0)];
+    let got = edge_dragged(leaning, 1, p(452.0, 256.0), p(502.0, 256.0));
+    assert!(within(&got, [(151.629, 108.603), (503.14, 143.522), (499.883, 378.315), (148.371, 343.397)], 2e-3), "{:?}", got.quad);
+    let got = edge_dragged(leaning, 2, p(301.0, 342.0), p(301.0, 382.0));
+    assert!(within(&got, [(120.099, 122.03), (481.901, 157.97), (477.966, 399.579), (116.164, 363.639)], 2e-3), "{:?}", got.quad);
+}
+
+/// A box in perspective, its top or bottom edge dragged: the sides keep their insets along the top edge (measured on
+/// the reference's results, as above).
+#[test]
+fn a_top_or_bottom_edge_drag_on_a_box_in_perspective_keeps_the_insets() {
+    let narrow_top = [p(210.0, 125.0), p(392.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let got = edge_dragged(narrow_top, 2, p(301.0, 327.0), p(301.0, 367.0));
+    assert!(within(&got, [(191.98, 125.0), (410.02, 125.0), (470.02, 367.0), (131.98, 367.0)], 1e-2), "{:?}", got.quad);
+    let got = edge_dragged(narrow_top, 0, p(301.0, 125.0), p(301.0, 95.0));
+    assert!(within(&got, [(196.49, 95.0), (405.51, 95.0), (465.51, 327.0), (136.49, 327.0)], 1e-2), "{:?}", got.quad);
+    let narrow_bottom = [p(150.0, 125.0), p(452.0, 125.0), p(412.0, 327.0), p(190.0, 327.0)];
+    let got = edge_dragged(narrow_bottom, 2, p(301.0, 327.0), p(301.0, 367.0));
+    assert!(within(&got, [(120.1, 125.0), (481.9, 125.0), (441.9, 367.0), (160.1, 367.0)], 1e-2), "{:?}", got.quad);
+}
+
+/// A plain rectangle scales about the opposite edge's middle as before, and ⇧ still frees the other axis.
+#[test]
+fn a_plain_edge_drag_and_a_free_one_are_unchanged() {
+    let plain = [p(150.0, 125.0), p(452.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let got = edge_dragged(plain, 1, p(452.0, 226.0), p(502.0, 226.0));
+    assert!(within(&got, [(150.0, 108.278), (502.0, 108.278), (502.0, 343.722), (150.0, 343.722)], 2e-3), "{:?}", got.quad);
+    let skewed = [p(190.0, 125.0), p(492.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let start = BoxState::new(skewed, p(321.0, 226.0));
+    let free = drag(&start, &start, BoxPart::Edge(2), p(301.0, 327.0), p(301.0, 367.0), Mods { shift: true, ..Mods::NONE }, &BoxRules::default());
+    // ⇧ stretches along the side, as the reference does: the skew's offset grows with the height.
+    assert!(within(&free, [(190.0, 125.0), (492.0, 125.0), (444.079, 367.0), (142.079, 367.0)], 2e-3), "{:?}", free.quad);
+}
