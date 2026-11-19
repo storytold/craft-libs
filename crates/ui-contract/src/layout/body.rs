@@ -1037,14 +1037,22 @@ pub fn empty_cell(ui: &mut Ui) {
 
 /// `take_in_flow`, with `grid` the body of `ui`'s env that places its children itself.
 fn take_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> (Rect, bool) {
-    let cell = grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get_mut(&body).map(|cursor| cursor.cell(size))));
-    match cell {
-        Some(cell) => {
-            alloc::advance_past(ui, cell);
-            (cell, true)
-        }
+    match cell_in(ui, grid, size) {
+        Some(cell) => (cell, true),
         None => (alloc::space(ui, size), false),
     }
+}
+
+/// Takes the next cell of the `Grid` or spread `Row` body that encloses `ui` directly for a child of `size`, and returns
+/// it; `None`, taking nothing, outside such a body.
+pub(crate) fn take_cell(ui: &mut Ui, size: Vec2) -> Option<Rect> {
+    cell_in(ui, Env::of(ui).grid, size)
+}
+
+fn cell_in(ui: &mut Ui, grid: Option<Id>, size: Vec2) -> Option<Rect> {
+    let cell = grid.and_then(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| cursors.0.get_mut(&body).map(|cursor| cursor.cell(size))))?;
+    alloc::advance_past(ui, cell);
+    Some(cell)
 }
 
 /// The region the next child shown in flow in `ui` measures and is placed in: that of the next cell of the `Grid` or

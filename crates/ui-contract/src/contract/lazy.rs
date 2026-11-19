@@ -1,7 +1,7 @@
 //! `Lazy`: a child of a scroll area that runs only while it is in view, and a child that runs only when something it
 //! shows changed (`runtime::lazy`).
 
-use crate::layout::{flow_region, take_in_flow};
+use crate::layout::{flow_region, take_cell, take_in_flow};
 use crate::runtime::egui::alloc;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
@@ -129,10 +129,7 @@ impl Lazy {
         if let Some(view) = view {
             // A run around this child decides it by the scroll view: it replays only while the view is the same.
             replay::note_input(&ctx, crate::runtime::inputs::Input::Scroll);
-            let at = |size: Vec2| {
-                let x = if rtl { available.max.x - size.x } else { available.min.x };
-                Rect::from_min_size(Pos2::new(x, available.min.y), size)
-            };
+            let at = |size: Vec2| Rect::from_min_size(at_start(available, rtl, size), size);
             let estimate = view.estimate(self.estimate);
             if self.reveal {
                 crate::contract::queue_child_reveal(&ctx, view.owner, id);
@@ -158,14 +155,20 @@ impl Lazy {
             pixels_per_point: ctx.pixels_per_point(),
             env: Env::of(ui).key,
         };
-        if real && matches!(key, Key::Memo(_)) {
+        let memo = matches!(key, Key::Memo(_));
+        if real && memo {
             crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
         }
         if self.settles
-            && let Some(size) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
+            && let Some((size, ran_at)) = lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key)
         {
-            let (took, _) = take_in_flow(ui, size);
-            let memo = matches!(key, Key::Memo(_));
+            let took = if memo {
+                // A real replay is at the place its run was, so the kept rect is where the run's content went.
+                let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
+                place_view(ui, rect)
+            } else {
+                take_in_flow(ui, size).0
+            };
             let mut kept = None;
             if real {
                 layout_memory::backstop(&ctx, id, size);
@@ -197,7 +200,11 @@ impl Lazy {
         if real {
             layout_memory::backstop(&ctx, id, rect.size());
         }
-        alloc::advance_past(ui, rect);
+        if memo {
+            place_view(ui, rect);
+        } else {
+            alloc::advance_past(ui, rect);
+        }
         if view.is_some() || self.settles {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
             lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
@@ -220,6 +227,21 @@ impl Lazy {
         let _ = name;
         Shown::Ran(out)
     }
+}
+
+/// Where content of `size` starts in `region`: at its start edge, the right one in a right-to-left layout.
+fn at_start(region: Rect, rtl: bool, size: Vec2) -> Pos2 {
+    Pos2::new(if rtl { region.max.x - size.x } else { region.min.x }, region.min.y)
+}
+
+/// Places a memoized view's extent `rect` in flow in `ui`, as its run and its replay both do, and returns `rect`: in the
+/// `Grid` or spread `Row` body that encloses `ui` directly the view takes the next cell at its extent, as its content
+/// starts a layout room of its own and takes none; elsewhere the flow moves past `rect`.
+fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
+    if take_cell(ui, rect.size()).is_none() {
+        alloc::advance_past(ui, rect);
+    }
+    rect
 }
 
 /// What a child came to in a pass.

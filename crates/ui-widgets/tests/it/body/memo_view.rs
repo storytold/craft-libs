@@ -691,3 +691,52 @@ fn a_view_offered_another_room_in_a_sizing_pass_is_measured_again() {
     paragraph_frame(&mut frames, 150.0);
     assert!(last_frame_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed), "then the view replays in every run");
 }
+
+/// A block as tall as `height`.
+#[derive(MemoProps)]
+struct Tall {
+    height: u32,
+}
+
+fn tall(props: &mut Tall, ui: &mut Ui) -> Rect {
+    craft_ui::testing::layout::Block::new(Vec2::new(100.0, props.height as f32)).show(ui).rect
+}
+
+/// One frame of a two-column grid whose cells each hold a `Lazy` around a memoized block, the first 200 tall and the
+/// second 40. Returns the passes and the rect each cell's `Lazy` took in the last real pass.
+fn grid_frame(frames: &mut Frames) -> (usize, [Rect; 2]) {
+    const TWO: &[craft_behavior::ColumnWidth] = &[craft_behavior::ColumnWidth::fill(1.0); 2];
+    let took = [Cell::new(Rect::NOTHING), Cell::new(Rect::NOTHING)];
+    let passes = frames.frame(vec![], |ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(400.0, 400.0)), |ui| {
+            craft_ui::layout_components::Grid::new(TWO).show(ui, |ui, _| {
+                for (at, height) in [200, 40].into_iter().enumerate() {
+                    craft_ui::contract::Lazy::new(at, 0.0).show(ui, |ui| {
+                        let _ = MemoView::new(("cell", at), Tall { height }, tall).show(ui);
+                        if !ui.is_sizing_pass() {
+                            took[at].set(ui.min_rect());
+                        }
+                    });
+                }
+            });
+        });
+    });
+    (passes, took.map(Cell::into_inner))
+}
+
+/// A view in a grid cell replays at the extent it ran at, not at its row's height: a replay places its kept extent as
+/// its run placed its content, so the body around it finds the measure its kept transcript holds and asks for no
+/// discard pass.
+#[trial]
+fn a_view_in_a_grid_cell_replays_at_the_extent_it_ran_at() {
+    let mut frames = Frames::new();
+    let (_, ran) = grid_frame(&mut frames);
+    assert!(!ran[0].intersects(ran[1]), "the cells sit beside each other: {ran:?}");
+    for _ in 0..WARM {
+        grid_frame(&mut frames);
+    }
+    let (passes, took) = grid_frame(&mut frames);
+    assert!(last_frame_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed), "an idle frame replays both views");
+    assert_eq!(passes, 1, "a replay asks for no discard pass");
+    assert_eq!(took, ran, "each cell takes the extent its view ran at");
+}

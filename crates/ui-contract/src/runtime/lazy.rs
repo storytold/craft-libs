@@ -366,8 +366,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
     }
 }
 
-/// Whether the settling child `id` adds its last real run to this pass in place of running, and the extent that run
-/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass). The first run
+/// Whether the settling child `id` adds its last real run to this pass in place of running, the extent that run
+/// took in a run of this kind (`sizing`: the room a sizing run offers it, `None` outside a sizing pass), and the rect the kept real run took. The first run
 /// of a pass decides from what changed since that run; a real run also needs the child at the `place` it ran at, which
 /// a measuring run cannot tell. A sizing run of a pass that replays takes the extent the last sizing run measured of
 /// the content the kept run showed (its key) in the room it offers now; when that sizing run showed other content or
@@ -408,7 +408,7 @@ pub(crate) fn settled(
     place: Option<Place>,
     view: Option<View>,
     key: Key,
-) -> Option<Vec2> {
+) -> Option<(Vec2, Rect)> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -473,7 +473,7 @@ pub(crate) fn settled(
         });
         return None;
     }
-    Some(size)
+    Some((size, settled.rect))
 }
 
 /// Whether something a memoized view's run read outside its props moved since: a framework input it read has another
