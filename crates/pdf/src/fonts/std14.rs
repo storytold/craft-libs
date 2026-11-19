@@ -161,7 +161,7 @@ mod tests {
             (Std14::CourierBoldOblique, 'W', 600),
         ];
         for &(font, ch, want) in cases {
-            let code = super::win_ansi(&ch.to_string());
+            let code = crate::fonts::win_ansi(&ch.to_string());
             assert_eq!(code.len(), 1, "{ch:?} is one WinAnsi byte");
             assert_eq!(font.width(code[0]) as u16, want, "{font:?} {ch:?}");
         }
