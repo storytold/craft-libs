@@ -32,7 +32,7 @@ use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{Axis, CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Snap, ToolPass,
-    ToolRegion, canvas_space, tool_pass,
+    ToolRegion, canvas_space, pixel_aligned, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::EditorPurpose;
@@ -283,9 +283,10 @@ pub struct PageViewOutput {
 
 impl PageViewOutput {
     /// How many page pictures the view holds after this pass: its pages' own pictures and the pictures of the part
-    /// in view of pages larger than the texture side, shown or kept for later, as their stores count them. The
-    /// stores evict the pictures drawn longest ago past their budget, so the count stays bounded however many pages
-    /// the view scrolls through. 0 for a pass that drew nothing.
+    /// in view of pages larger than the texture side, shown or kept for later, as their stores count them. A page
+    /// scrolled out of [`PageView::picture_reach`] gives its pictures back, and the stores evict the pictures drawn
+    /// longest ago past their budget, so the count stays bounded by the pages near the view however many pages the
+    /// view scrolls through. 0 for a pass that drew nothing.
     pub fn resident_pictures(&self) -> usize {
         self.resident
     }
@@ -313,8 +314,11 @@ impl PageViewOutput {
 ///   view's style, recomputed when the viewport or the pages change; the zoom is written back so it equals what
 ///   shows. Pages draw as [`PageFrame`]s on a [`Pasteboard`], the page picture over each through `Thumbnails` at
 ///   `Priority::VISIBLE`, one row either side at `Priority::NEAR`; a page larger than the texture side adds a
-///   second picture of the part in view. Sharp renders wait while a zoom gesture or ease runs.
-/// - Layout: a scale the fit or the app changes keeps the page at the top of the view in place.
+///   second picture of the part in view. Sharp renders wait while a zoom gesture or ease runs. A page scrolled
+///   further than [`picture_reach`](Self::picture_reach) from the view gives its picture back.
+/// - Layout: a scale the fit or the app changes keeps the page at the top of the view in place. A zoom about the
+///   pointer keeps the point under it in place relative to the page there (or, in a gap, the nearest page), and one
+///   that does not ease draws its new layout, reflowed, in the pass it happens, so the next pass moves nothing.
 /// - Scrolling: the canvas folds in the wheel (the wheel scrolls, Shift or Ctrl/Cmd + wheel scrolls sideways, Alt +
 ///   wheel and a pinch zoom about the pointer, as [`NavigationOptions`] say) and the view commands; the view
 ///   reads the result back into its state. [`CanvasScrollbars`] land in their own pass. Not continuous, a page
@@ -337,7 +341,12 @@ pub struct PageView<'a> {
     snap: Option<PageSnap>,
     tool_regions: Vec<PageRegion>,
     rulers: bool,
+    reach: f32,
 }
+
+/// How far from the view, in view heights above and below it (and one view width either side), the page view keeps a
+/// page's picture once it has scrolled out: three, as WordCraft kept its page textures (#811).
+pub const PICTURE_REACH: f32 = 3.0;
 
 impl<'a> PageView<'a> {
     /// A view named `label` of the pages of `source`, with `state` kept by the app between passes, on pages of the
@@ -356,6 +365,7 @@ impl<'a> PageView<'a> {
             snap: None,
             tool_regions: Vec::new(),
             rulers: false,
+            reach: PICTURE_REACH,
         }
     }
 
@@ -417,6 +427,18 @@ impl<'a> PageView<'a> {
         self
     }
 
+    /// How far from the view a page's picture is kept once it has scrolled out, in view heights above and below the
+    /// view; sideways the view keeps one view width either side. A page further away loses its picture (and the
+    /// picture of its part in view) in the pass it leaves that reach and is rendered again when it comes back, so the
+    /// pictures held are bounded by the pages near the view, not only by the stores' budget. The pages drawn and the
+    /// pages asked for ahead (one row either side) are always kept. [`PICTURE_REACH`] by default; a negative or
+    /// non-finite reach is taken as 0.
+    #[must_use]
+    pub fn picture_reach(mut self, screens: f32) -> Self {
+        self.reach = if screens.is_finite() { screens.max(0.0) } else { 0.0 };
+        self
+    }
+
     /// Shows the view in the room left in `ui`, and runs `body` for the app's canvas controls (margins, zones,
     /// marks, grids), which it shows with `show_at(ui, body.rect)`, and its tool host, which runs on `body.pass`.
     /// `body` runs on every run of the canvas body (the measuring run and the real one), so it builds what it shows
@@ -432,7 +454,7 @@ impl<'a> PageView<'a> {
     }
 
     fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        let PageView { label, source, state, options, navigation, bodies, describer, paper, editor, snap, tool_regions, rulers } = self;
+        let PageView { label, source, state, options, navigation, bodies, describer, paper, editor, snap, tool_regions, rulers, reach } = self;
 
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
@@ -460,7 +482,7 @@ impl<'a> PageView<'a> {
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-            let next = run_pass(ui, cx, &mut held, &Inputs { source, describer, build: &build, rect, given, paper })?;
+            let next = run_pass(ui, cx, &mut held, &Inputs { source, describer, build: &build, rect, given, paper, reach })?;
             let pass = tool_pass(&cx.env);
             body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
             let decided = next.next.clone();
@@ -507,6 +529,8 @@ struct Inputs<'a> {
     rect: Rect,
     given: CanvasView,
     paper: DataColor,
+    /// `PageView::picture_reach`.
+    reach: f32,
 }
 
 /// What a pass found out, for the output.
@@ -651,7 +675,7 @@ fn placed_region(region: &PageRegion, geo: &Placed, frame: &Frame) -> Option<Too
 /// One pass of the canvas body: layout, scrolling, zoom and paging folded into the state; the pasteboard, the
 /// pictures and the scroll bars drawn.
 fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>) -> Option<Seen> {
-    let Inputs { source, describer, build, rect, given, paper } = *inputs;
+    let Inputs { source, describer, build, rect, given, paper, reach } = *inputs;
     let mut state = held.read(cx)?;
     let started = state.clone();
     let space = canvas_space(&cx.env)?;
@@ -691,6 +715,8 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         let fixed = (target.center - given.center) * (given.zoom * target.zoom / (target.zoom - given.zoom));
         let pointer = rect.center() + Vec2::new(fixed.x as f32, fixed.y as f32);
         geo = zoom_about(build, &mut state, &geo, rect, pointer, target.zoom / given.zoom);
+        let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
+        state.offset = (state.offset.0.clamp(xs.0, xs.1), state.offset.1.clamp(ys.0, ys.1));
         want = state.offset;
     } else {
         // The canvas was given the view the pass started with, so its change of it is the pan; the state's offset
@@ -706,6 +732,20 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     if wheel_left == 0.0 {
         mem.overshoot = 0.0;
     }
+    // A zoom that does not ease draws the layout it made in its own pass, through the view of the anchored offset: the
+    // pages reflow and the point under the pointer stays in the pass the zoom happens, and the next pass, given that
+    // view, moves nothing. (Drawing the layout the pass started with, scaled, put the reflow and the spacing that does
+    // not scale one pass late.) An ease draws the layout it started from, scaled, until it lands.
+    let (drawn, drawn_frame, shown) = if zooming && !space.easing() {
+        let frame = Frame::of(&geo);
+        let mut view = frame.view(rect, state.offset, geo.scale / SCREEN_POINTS_PER_POINT);
+        // As the canvas places a given view: in its own rect (inside the rulers), about the same centre.
+        view.rect = target.rect;
+        let view = if shown == target { view } else { pixel_aligned(view, ui.ctx().pixels_per_point()) };
+        (Arc::clone(&geo), frame, view)
+    } else {
+        (drawn, drawn_frame, shown)
+    };
     let keys = KeyMoves::of(space.keys(), &state, &geo, rect);
     want.0 += keys.pan.0;
     want.1 = if keys.to_end { f64::INFINITY } else { want.1 + keys.pan.1 };
@@ -780,7 +820,20 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
             (page, Vec2::new(size.width as f32, size.height as f32))
         })
         .collect();
-    let pictures = PagePictures::new(source, &pages, &near, paper).label(words.text.clone()).hold(zooming || ratio != 1.0);
+    // The pages whose pictures stay: those drawn, those asked for ahead, and those of the shown row within the reach.
+    let reach = f64::from(reach);
+    let around = DocRect::new(
+        in_view.x0 - in_view.width(),
+        in_view.y0 - reach * in_view.height(),
+        in_view.x1 + in_view.width(),
+        in_view.y1 + reach * in_view.height(),
+    );
+    let mut keep: Vec<usize> =
+        drawn.row.clone().filter(|&p| p < drawn.layout.rects.len() && overlaps(band_rect(&drawn.layout, p), around)).collect();
+    keep.extend(rows.iter().copied().chain(near.iter().map(|&(page, _)| page)));
+    keep.sort_unstable();
+    keep.dedup();
+    let pictures = PagePictures::new(source, &pages, &near, &keep, paper).label(words.text.clone()).hold(zooming || ratio != 1.0);
     let resident = match describer {
         Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
         None => pictures.show_at(ui, cx.rect),
@@ -1083,18 +1136,31 @@ fn zoom_about(build: &Geometry, state: &mut PageViewState, old: &Placed, rect: R
     state.fit = Fit::None;
     state.zoom = (state.zoom * delta).clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end());
     let new = build.of(state);
-    let (x, y) = match crate::layout::page_at(&old.layout, at) {
-        Some(page) => {
+    // The page under the pointer, or in a gap (between columns, rows or pages) the nearest: the point keeps its place
+    // relative to that page, outside it too, since the gaps keep their size and the pages may reflow.
+    let (x, y) = match crate::layout::page_at(&old.layout, at).or_else(|| nearest_page(&old.layout, at)) {
+        Some(page) if page < new.layout.rects.len() => {
             let (before, after) = (old.layout.rects[page], new.layout.rects[page]);
             (after.x0 + (at.x - before.x0) / before.width() * after.width(), after.y0 + (at.y - before.y0) / before.height() * after.height())
         }
-        None => {
+        _ => {
             let ratio = new.scale / old.scale;
             (at.x * ratio, at.y * ratio)
         }
     };
     state.offset = (x - inside.0, y - inside.1);
     new
+}
+
+/// The page whose shown band lies nearest `p` (content coordinates); the earlier page on a tie, `None` with no pages.
+fn nearest_page(layout: &PagedLayout, p: Point) -> Option<usize> {
+    let distance = |page: usize| {
+        let band = band_rect(layout, page);
+        let dx = (band.x0 - p.x).max(p.x - band.x1).max(0.0);
+        let dy = (band.y0 - p.y).max(p.y - band.y1).max(0.0);
+        dx.hypot(dy)
+    };
+    (0..layout.rects.len().min(layout.bands.len())).min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
 }
 
 /// The pages one row either side of what shows: the neighbouring rows, or the neighbouring row of a single shown
