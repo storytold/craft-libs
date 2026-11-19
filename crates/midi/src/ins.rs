@@ -73,6 +73,7 @@ pub fn read_ins(bytes: &[u8]) -> Result<Vec<InsInstrument>, InsError> {
     if bytes.len() > MAX_INS_BYTES {
         return Err(InsError::TooLarge);
     }
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     let text = match std::str::from_utf8(bytes) {
         Ok(text) => Cow::Borrowed(text),
         Err(_) => Cow::Owned(bytes.iter().copied().map(craft_codepage::cp1252).collect::<String>()),
@@ -227,6 +228,14 @@ mod tests {
         assert_eq!(melodic.banks[&6192].programs, BTreeMap::from([(0, "First=Lead".into())]));
         assert!(melodic.default_bank.as_ref().is_some_and(|bank| Arc::ptr_eq(bank, &melodic.banks[&6192])));
         assert_eq!(percussion.banks[&6192].programs[&127], "Last Kit");
+        Ok(())
+    }
+
+    #[test]
+    fn strips_bom_before_windows_1252_fallback() -> Result<(), InsError> {
+        let input = b"\xEF\xBB\xBF.Patch Names\r\n[GM]\r\n0=Pi\xE9no\r\n.Instrument Definitions\r\n[Synth]\r\nPatch[0]=GM";
+        let instruments = read_ins(input)?;
+        assert_eq!(instruments[0].banks[&0].programs[&0], "Piéno");
         Ok(())
     }
 

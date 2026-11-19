@@ -97,8 +97,8 @@ legacy conversion behavior. No application consumer cutover is claimed by this l
 
 ## Cakewalk instrument definitions
 
-The reader accepts UTF-8 and Windows-1252 with LF, CRLF, or CR line endings. Semicolons
-start comments when they are the first nonblank character. Patch-list references ignore ASCII
+The reader removes a leading UTF-8 BOM before choosing UTF-8 or the Windows-1252
+fallback, and accepts LF, CRLF, or CR line endings. Semicolons start comments when they are the first nonblank character. Patch-list references ignore ASCII
 case. Section names retain their spelling. Instruments are returned in name order and repeated
 instrument sections with the same spelling are combined.
 
