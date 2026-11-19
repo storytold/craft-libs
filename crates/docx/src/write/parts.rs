@@ -98,11 +98,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             Some(wm) if !footer => watermark::run(wm, done, &doc.last_section),
             _ => None,
         };
-        if footer {
-            wr.footer_blocks(&mut w, &blocks, &mut prels);
-        } else {
-            wr.blocks(&mut w, &blocks, &mut prels, false, 0);
-        }
+        write_header_footer_blocks(&mut wr, &mut w, &blocks, &mut prels, footer);
         // A header's watermark was taken by its own or its trailing top-level paragraph.
         wr.pending_watermark = None;
         w.close(tag);
@@ -295,6 +291,14 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
     Ok(entries)
+}
+
+fn write_header_footer_blocks(wr: &mut Writer<'_>, w: &mut W, blocks: &Blocks, rels: &mut PartRels, footer: bool) {
+    if footer {
+        wr.footer_blocks(w, blocks, rels);
+    } else {
+        wr.blocks(w, blocks, rels, false, 0);
+    }
 }
 
 fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels, ns_refs: &[(&str, &str)]) -> Vec<u8> {
