@@ -865,7 +865,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         .delta(delta)
         .cancel(cancel);
         let mut machine = std::mem::take(&mut state.machine);
-        let step = machine.step(input, |at| {
+        let step = machine.step(input, |at, button| {
             // The press-target rule (8.3): a press's click and its drag each start on one root, the one whose shape
             // is on top under it for that kind (`pointer::press_winners`); the root starts it for the kinds it won. A
             // root under a modal layer starts none; where egui names no target of the root's kind (its click target,
@@ -880,7 +880,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             } else {
                 true
             };
-            let winners = pointer::press_winners(ctx, at, targets);
+            let winners = pointer::press_winners(ctx, at, targets, button);
             let won_kinds = root.map_or(Sense::empty(), |own| winners.senses_of(own));
             let allowed = crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted) && !won_kinds.is_empty();
             if !enabled || !allowed {
@@ -908,7 +908,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let step = match step.passes {
             Some(start) => {
                 let root = state.root.map(|root| root.id);
-                let winners = pointer::press_winners(ctx, start.origin, pass_pointer.press_targets);
+                let winners = pointer::press_winners(ctx, start.origin, pass_pointer.press_targets, start.button);
                 winners
                     .drag
                     .filter(|(_, owner)| Some(*owner) == root)

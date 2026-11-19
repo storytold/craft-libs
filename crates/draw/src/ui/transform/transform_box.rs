@@ -988,7 +988,7 @@ impl Component for TransformBox<'_> {
     }
 
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
-    /// side as a pointer-only band outside it, each corner's stretch of the two bands beside it, the centre and the move
+    /// side as a pointer-only band outside it (either side of its line with the rules' edge band), each corner's stretch of the two bands beside it, the centre and the move
     /// strips where declared, and the outside. A handle, a corner's stretch, the reference point and the centre rank
     /// alike, so the nearest wins where they overlap on a small box;
     /// they rank above a side, which ranks above the inside, which ranks above the outside. Every part takes a press's
@@ -1039,7 +1039,8 @@ impl Component for TransformBox<'_> {
         }
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
-            cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, style.side_band))
+            let band = if self.rules.edge_band > 0.0 { edge_band(&quad, side, self.rules.edge_band) } else { side_band(&quad, side, style.side_band) };
+            cx.part(EDGE.at(u64::from(k)), band)
                 .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
@@ -1307,6 +1308,17 @@ fn side_band(quad: &[Pos2; 4], side: usize, width: f32) -> HitShape {
         Some(out) => band_along(a, b, out, width),
         None => HitShape::segment(a, b),
     }
+}
+
+/// The grab band of side `side` of the box `quad` by [`BoxRules::edge_band`]: `reach` out from the line and past each
+/// end, and as far in, but no more than a quarter of the way to the opposite side. A side with no length is its line.
+fn edge_band(quad: &[Pos2; 4], side: usize, reach: f32) -> HitShape {
+    let (a, b) = (quad[side], quad[(side + 1) % 4]);
+    let Some(out) = outward(quad, side) else { return HitShape::segment(a, b) };
+    let along = (b - a).normalized() * reach;
+    let across = (quad[(side + 2) % 4] - b).length();
+    let (inner, outer) = (out * -reach.min(across / 4.0).max(SIDE_LINE_INSIDE), out * reach);
+    HitShape::Polygon(vec![a - along + inner, b + along + inner, b + along + outer, a - along + outer])
 }
 
 /// The stretch of side `side`'s band next to its end `corner`: a quarter of the side, at most `width` along it, as far

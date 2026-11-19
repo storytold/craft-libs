@@ -30,7 +30,8 @@ bitflags! {
         /// The zoom share (Ctrl or Cmd with the wheel, pinch), taken without scroll; the split rule passes both scroll shares on.
         const WHEEL_ZOOM = 1024;
         /// A secondary press captures the part and its release is reported to it, so a part that senses only a click
-        /// still gets its context click. Without this bit a secondary press only captures for a drag.
+        /// still gets its context click, and one that drags drags with the secondary button too. Without this bit the
+        /// shape takes no secondary press: it goes to the next shape under it that senses this bit.
         const CONTEXT_CLICK = 2048;
         /// A container root learns of a primary press on its own surface: inside its rect, on its layer, where no
         /// shape takes the press. The root takes no press and no focus by it, so it is no click target.

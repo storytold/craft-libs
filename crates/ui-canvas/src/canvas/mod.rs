@@ -782,6 +782,17 @@ impl ToolPass {
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
         clamped(view, self.document, &self.navigation)
     }
+
+    /// Hides the pointer for this pass while it is over the canvas, over every other request, links and the tool's
+    /// cursor included (`CursorPriority::Hidden`): a body that hides a still pointer (a full-screen presentation) asks
+    /// in each pass the pointer should stay hidden, and stops asking when it moves. A measuring run publishes no pass,
+    /// so only the real run asks.
+    pub fn hide_pointer(&self, ui: &egui::Ui) {
+        if ui.ctx().pointer_hover_pos().is_some_and(|at| self.rect.contains(at)) {
+            let hidden = craft_behavior::Cursor::Painted(craft_behavior::PaintedCursor::Hidden);
+            crate::runtime::cursor::request(ui.ctx(), hidden, CursorPriority::Hidden);
+        }
+    }
 }
 
 impl Outcome for CanvasOutput {

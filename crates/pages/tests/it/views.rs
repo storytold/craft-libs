@@ -37,11 +37,13 @@ struct Out {
     visible: Range<usize>,
     /// The view on screen.
     view: egui::Rect,
+    /// Some pass since the trial last cleared it reported the reader's scroll.
+    scrolled: bool,
 }
 
 impl Default for Out {
     fn default() -> Self {
-        Out { offset: (0.0, 0.0), rects: Vec::new(), pages: Vec::new(), visible: 0..0, view: egui::Rect::NOTHING }
+        Out { offset: (0.0, 0.0), rects: Vec::new(), pages: Vec::new(), visible: 0..0, view: egui::Rect::NOTHING, scrolled: false }
     }
 }
 
@@ -89,8 +91,9 @@ fn rig_over(source: impl PageSource + 'static, start: PageViewState, navigation:
         let keep = held.borrow().clone();
         let shown =
             PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show(ui, |_, _| ());
+        let scrolled = seen.borrow().scrolled || shown.scrolled;
         *seen.borrow_mut() =
-            Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect };
+            Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect, scrolled };
         *kept.borrow_mut() = now;
     });
     fixture.room(vec2(900.0, 600.0));
@@ -327,6 +330,28 @@ fn page_keys_and_arrows_page_the_view_with_nothing_focused() {
     fixture.idle(1);
     assert_eq!(state.borrow().current, 4, "End goes to the last page");
     assert_eq!(fixture.focused_stop(), None, "the keys leave the focus where it was");
+}
+
+#[trial]
+fn shift_and_command_with_the_page_keys_and_arrows_go_to_the_ends() {
+    let both = Modifiers::COMMAND | Modifiers::SHIFT;
+    for continuous in [false, true] {
+        let (mut fixture, state, _) = layout_rig(
+            5,
+            state_with(|s| {
+                s.continuous = continuous;
+                s.fit = Fit::Page;
+            }),
+        );
+        focus_canvas(&mut fixture);
+        let keys = [(Key::PageDown, both, 4), (Key::PageUp, both, 0), (Key::ArrowDown, both, 4), (Key::ArrowUp, both, 0)];
+        let ends = [(Key::End, Modifiers::SHIFT, 4), (Key::Home, Modifiers::SHIFT, 0), (Key::End, Modifiers::COMMAND, 4), (Key::Home, Modifiers::COMMAND, 0)];
+        for (key, mods, want) in keys.into_iter().chain(ends) {
+            fixture.key(key, mods);
+            fixture.idle(2);
+            assert_eq!(state.borrow().current, want, "{key:?} with {mods:?}, continuous {continuous}");
+        }
+    }
 }
 
 #[trial]
@@ -819,4 +844,36 @@ fn a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass
     fixture.frame(vec![craft_ui::testing::pointer::release(at)]);
     fixture.settle();
     assert!(*parts.borrow() > before, "the part in view is rendered once the drag ends");
+}
+
+#[trial]
+fn the_view_reports_the_readers_wheel_and_scroll_bar_but_not_a_go_to_or_a_zoom() {
+    let Rig { mut fixture, state, out, .. } = rig(5, state_with(|s| s.fit = Fit::Width));
+    let scrolled_by =|fixture: &mut Fixture, what: &mut dyn FnMut(&mut Fixture)| {
+        out.borrow_mut().scrolled = false;
+        what(fixture);
+        fixture.settle();
+        out.borrow().scrolled
+    };
+    let go_to = scrolled_by(&mut fixture, &mut |fixture| {
+        state.borrow_mut().go_to = Some(GoTo::Top { page: 3, fraction: 0.0 });
+        fixture.idle(2);
+    });
+    assert!(!go_to, "the app's go-to is not the reader's scroll");
+    assert_eq!(state.borrow().current, 3, "precondition: the go-to moved the view");
+    let zoom = scrolled_by(&mut fixture, &mut |fixture| {
+        fixture.key(Key::Equals, Modifiers::COMMAND);
+    });
+    assert!(!zoom, "a zoom is not a scroll");
+    let wheeled = scrolled_by(&mut fixture, &mut |fixture| wheel(fixture, -1.0));
+    assert!(wheeled, "the wheel's scroll is the reader's");
+    let bar =
+        fixture.by_role(Role::SCROLL_BAR).into_iter().max_by(|a, b| a.rect.height().total_cmp(&b.rect.height())).expect("the view has scroll bars");
+    let dragged = scrolled_by(&mut fixture, &mut |fixture| {
+        let grab = pos2(bar.rect.center().x, bar.rect.max.y - 4.0);
+        fixture.frame(vec![craft_ui::testing::pointer::moved(grab)]);
+        fixture.frame(vec![craft_ui::testing::pointer::press(grab)]);
+        fixture.frame(vec![craft_ui::testing::pointer::release(grab)]);
+    });
+    assert!(dragged, "a press on the scroll bar's track is the reader's scroll");
 }

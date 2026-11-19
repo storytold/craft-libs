@@ -1,9 +1,9 @@
 //! Stories of the transform box: Free Transform with its reference point, the Move tool's controls, Distort, the
-//! Ellipse tool's centre mark, the Line tool's live-line controls, the corner-only and side-only handle sets and the
-//! rotate knob.
+//! Ellipse tool's centre mark, the Line tool's live-line controls, the corner-only and side-only handle sets, sides
+//! grabbed along an edge band, and the rotate knob.
 
-use super::{BOX, LineLook, RotateZone, TransformBox};
-use craft_behavior::geometry::quad::{BoxHandles, BoxPart, BoxRules, BoxState, TransformMode};
+use super::{BOX, EDGE, LineLook, RotateZone, TransformBox};
+use craft_behavior::geometry::quad::{BoxHandles, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -76,6 +76,14 @@ fn corners_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TransformBox<'static>, covers = [Default])]
 fn sides_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| free_box(state).rules(BoxRules::default().with_handles(BoxHandles::Sides)))
+}
+
+/// A paragraph frame whose right and left sides are grabbed anywhere along their length within 8 points either side of
+/// the line (`BoxRules::edge_band`), not only at their handles; the middle of the frame is the tool's.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(EDGE.at(1)).toward(vec2(1.0, 0.0))))]
+fn sides_edge_band(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rules = BoxRules::default().with_scale(ScaleRule::Free).with_aspect_linked(false).with_handles(BoxHandles::Sides).with_edge_band(8.0);
+    on_canvas(ui, data, |state| free_box(state).rules(rules).inside_moves(false).reference_point(false))
 }
 
 /// A box that turns by a round knob on a stem above its top side; the rest of the outside is the tool's.
