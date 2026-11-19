@@ -5,7 +5,7 @@ use std::sync::Arc;
 use craft_behavior::{IconId, Metrics, PartKey, Proposal, Sense};
 use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Role, WordSetCx as _, clicked};
+use craft_ui::contract::{Bind, Common, Component, Cx, MeasureCx, PaintUi, PartsCx, Props as _, Remember as _, Role, WordSetCx as _, clicked};
 use craft_ui::controls::disclosure::DisclosureGlyph;
 use craft_ui::primitives::{HAlign, IconSpec, PaintShape, StrokeWidth, TextRun, Wrap};
 use craft_ui::runtime::env::Label;
@@ -164,6 +164,10 @@ pub(crate) enum CardActions {
     Buttons,
 }
 
+/// The message whose inline editor a row showed at its last pass, if any.
+#[derive(Clone, Copy, Default)]
+struct EditShown(Option<usize>);
+
 /// A card or a heading of the card collection.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub(crate) struct CommentRow<'r> {
@@ -181,6 +185,9 @@ pub(crate) struct CommentRow<'r> {
     /// The activation key reached the card this pass: its reply box takes the focus, when it shows one.
     #[prop]
     focus_reply: bool,
+    /// The inline editor opened this pass (it did not show the pass before): its field takes the keyboard, so the
+    /// first click that opens an edit is enough to type.
+    focus_edit: bool,
     /// What the card's buttons are.
     actions: CardActions,
     /// The most rows of a message's text the card shows, if limited.
@@ -208,6 +215,7 @@ impl<'r> CommentRow<'r> {
             editing: None,
             reply: "",
             focus_reply: false,
+            focus_edit: false,
             actions: CardActions::default(),
             body_rows: None,
             words: None,
@@ -509,6 +517,8 @@ struct Paint<'a, 'b> {
     ctx: &'a egui::Context,
     /// Set when the reply box takes the focus as it shows.
     focus_reply: bool,
+    /// Set when the inline editor's field takes the focus as it shows.
+    focus_edit: bool,
     /// The reply field's id once it is shown, for the Reply button to focus.
     reply_id: Option<egui::Id>,
     events: &'a mut Vec<CardEvent>,
@@ -618,6 +628,8 @@ impl Sink for Paint<'_, '_> {
             if self.focus_reply {
                 focus::request(self.ctx, FocusTarget::Id(out.response.id));
             }
+        } else if self.focus_edit {
+            focus::request(self.ctx, FocusTarget::Id(out.response.id));
         }
         height
     }
@@ -725,6 +737,15 @@ impl Component for CommentRow<'_> {
         }
     }
 
+    /// Notes whether the inline editor opened this pass: the row remembers which message's editor it showed, and an
+    /// editor it did not show the pass before takes the keyboard.
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        let editing = self.editing.map(|(index, _)| index);
+        let shown = cx.memory::<EditShown>();
+        self.focus_edit = editing.is_some() && shown.0 != editing;
+        shown.0 = editing;
+    }
+
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         self.words = Some(cx.words::<CommentsWords>());
         let st = cx.style;
@@ -760,6 +781,7 @@ impl Component for CommentRow<'_> {
             buttons: self.buttons,
             ctx: &cx.ctx,
             focus_reply: self.focus_reply,
+            focus_edit: self.focus_edit,
             reply_id: None,
             events: &mut events,
         };

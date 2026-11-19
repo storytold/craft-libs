@@ -764,6 +764,15 @@ impl ToolPass {
         }
     }
 
+    /// Asks for the OS composition to be interrupted this pass because the body refused an input method's edit, as
+    /// [`EditorHandle::ime_interrupt`]: a commit the body applied after the refusal keeps its `InputMethod` cause. A
+    /// canvas without an editor part asks nothing.
+    pub fn ime_interrupt(&self, ctx: &Context) {
+        if let Some(editor) = &self.editor {
+            editor.ime_interrupt(ctx);
+        }
+    }
+
     /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {

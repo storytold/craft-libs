@@ -273,6 +273,27 @@ pub(crate) fn note_editor(ctx: &Context, owner: Id, composing: Composing, histor
     });
 }
 
+/// The editor `owner` asks for the OS composition to be interrupted this pass: it refused an input method's edit, so
+/// the input method's view of the text is stale. The engine folds a frame's events before the editor runs, so a refused
+/// deletion followed by commits in one batch ends with nothing composing, and only the editor knows it refused one.
+///
+/// The end hook writes the interrupt beside this pass's change cause, so a commit the editor applied after the refusal
+/// keeps its receipt (`InputMethod`). A composition still running is ended and fenced as when the editor stops showing
+/// it (`note_editor`); with none running there are no late events to drop, so the editor's later input is not fenced.
+/// Nothing happens for an editor that does not own the IME.
+pub(crate) fn request_interrupt(ctx: &Context, owner: Id) {
+    current(ctx, |engine| {
+        if engine.owner != Some(owner) {
+            return;
+        }
+        if engine.composing {
+            engine.interrupt(owner);
+        } else {
+            engine.interrupt = Some(owner);
+        }
+    });
+}
+
 /// Whether the editor `owner` had something to undo and to redo at its last report as the IME owner.
 pub(crate) fn editor_history(ctx: &Context, owner: Id) -> (bool, bool) {
     current(ctx, |engine| {

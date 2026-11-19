@@ -1,7 +1,7 @@
 //! The editor contract: a component with an editor part receives one ordered input stream, a read-only editor
 //! receives only inputs that change no text, and its visible lines become AccessKit run nodes.
 
-use craft_behavior::{EditorInput, Granularity, PartKey, Sense, TextPos};
+use craft_behavior::{EditorInput, Granularity, PartKey, Sense, SurroundingUnit, TextPos};
 use craft_ui::contract::{Common, Component, Cx, EditorHandle, PaintUi, PartsCx, Props as _, Role, Show as _};
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp};
 use craft_ui::runtime::focus::KeyUse;
@@ -143,6 +143,9 @@ struct Doc {
     /// The probe refuses an input method's deletion after the caret, as a word processor refuses one into a locked
     /// control: the refusal ends the marked text it shows.
     refuses_after: Cell<bool>,
+    /// The probe refuses an input method's byte-counted deletion, as a word processor refuses one inside an equation:
+    /// it drops the commit right after it (the refused deletion's replacement) and asks for an interrupt.
+    refuses_bytes: Cell<bool>,
 }
 
 impl Doc {
@@ -154,8 +157,16 @@ impl Doc {
     /// is the application's.
     fn apply<C: Component>(&self, cx: &Cx<'_, C>, inputs: &[EditorInput]) {
         let mut by_ime = false;
+        let mut drop_replacement = false;
         for input in inputs {
             match input {
+                EditorInput::DeleteSurrounding { unit: SurroundingUnit::Bytes, .. } if self.refuses_bytes.get() => {
+                    drop_replacement = true;
+                    self.composing.set(false);
+                    cx.ime_interrupt();
+                }
+                EditorInput::ImeCommit if drop_replacement => {}
+                EditorInput::Text(_) if std::mem::take(&mut drop_replacement) => {}
                 EditorInput::Preedit { text, .. } => self.composing.set(!text.is_empty()),
                 EditorInput::DeleteSurrounding { after, .. } if *after > 0 && self.refuses_after.get() => self.composing.set(false),
                 EditorInput::ImeCommit => {
@@ -503,6 +514,43 @@ fn an_editors_surrounding_text_and_receipts_reach_the_ime_output() {
     let seen = rig.ime();
     assert_eq!(seen.surrounding, IMESurroundingText::Unavailable, "an owner that reports nothing publishes no text");
     assert_eq!(seen.generation, second, "a pass with no report keeps the target's epoch, so the context stays");
+}
+
+fn delete_bytes(before: usize) -> Event {
+    Event::Ime(ImeEvent::DeleteSurroundingBytes { before_bytes: before, after_bytes: 0 })
+}
+
+/// An editor that refuses an input method's edit asks for the interrupt itself (`Cx::ime_interrupt`). One raw batch of
+/// a refused deletion, its replacement commit and a fresh commit ends with nothing composing, so the engine could not
+/// see the refusal: the editor's request interrupts, and the fresh commit it applied stays the input method's change.
+/// With no composition running, the next frame's commit is not fenced; with one running, the request ends it and its
+/// late events are dropped until the reset completes.
+#[trial]
+fn an_editor_that_refuses_an_input_method_edit_asks_for_the_interrupt() {
+    let mut rig = Rig::with(EditorPurpose::Code, Some(Doc::new(TEXT, Some(1))), false);
+    rig.doc().refuses_bytes.set(true);
+    rig.focus();
+    rig.frame(Vec::new());
+
+    rig.frame(vec![delete_bytes(1), commit("Z"), commit("W")]);
+    assert_eq!(*rig.doc().text.borrow(), "fn mainW", "the replacement is dropped and the fresh commit applies");
+    let seen = rig.ime();
+    assert!(seen.interrupt && seen.reset.is_some(), "the editor's refusal interrupts the input method: {seen:?}");
+    assert_eq!(seen.cause, ImeChangeCause::InputMethod, "the fresh commit is still the input method's change");
+
+    rig.frame(vec![commit("Y")]);
+    assert_eq!(*rig.doc().text.borrow(), "fn mainWY", "with nothing composing, the next commit is not fenced");
+    let seen = rig.ime();
+    assert!(!seen.interrupt, "the interrupt is asked once");
+    assert_eq!(seen.cause, ImeChangeCause::InputMethod);
+
+    rig.frame(vec![preedit("p")]);
+    let reset = rig.frame_reset(vec![delete_bytes(1)]).expect("a refusal while composing interrupts and asks for a reset");
+    rig.frame(vec![preedit("pq"), commit("pq")]);
+    assert_eq!(*rig.doc().text.borrow(), "fn mainWY", "the interrupted composition's late events are fenced");
+    rig.frame(vec![Event::ImeResetCompleted { request_id: reset }]);
+    rig.frame(vec![commit("V")]);
+    assert_eq!(*rig.doc().text.borrow(), "fn mainWYV", "after the reset, input applies again");
 }
 
 /// While the editor composes, and for one guard frame after a commit, Enter, Space, Backspace, Escape and Delete

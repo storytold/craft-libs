@@ -88,7 +88,9 @@ pub enum BalloonPlace {
 ///   card's top is its anchor's, or the bottom of the card before it plus a gap when that is lower.
 ///   The stacking starts again at each page.
 /// - A comment card's message is cut to ten rows, so a long body never pushes the next card out of view.
-/// - The selected card shows Reply, Resolve or Reopen, and Delete; a click on a card selects it.
+/// - The selected card shows Reply, Resolve or Reopen, and Delete; a click on a card selects it. A card selected
+///   again keeps its own edit draft (one the app could not write back), and an edit takes the keyboard in the pass
+///   it opens, so one click on a balloon whose edit the app opens is enough to type.
 /// - A dashed leader runs on the page to the page's edge, a solid one on to the card.
 #[must_use = "show the balloons with `show`"]
 #[derive(Pattern)]
