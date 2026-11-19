@@ -25,6 +25,8 @@ pub(crate) enum BindKey {
     Record(Id),
     /// A command's state on the board: the command's number and the instance whose state it is, `None` for the app's.
     Command(u32, Option<Id>),
+    /// A command the focused stop answers for (an edit it takes): the command's number.
+    FocusedEdit(u32),
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.
