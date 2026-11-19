@@ -48,7 +48,9 @@ fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 /// The two width roles of a content-sized stack: a side menu held at its least width with short items, and a column
-/// of settings whose paragraph breaks at the column's line length instead of widening it.
+/// of settings whose paragraph breaks at the column's line length instead of widening it. The column also holds a
+/// dialog's least width, wider than its line length: where a paragraph's lines break moves with the text size, and the
+/// least width keeps the story as wide in every density and text size, so it only grows as the text does.
 #[story(Stack<'static>, covers = [], title = "Width roles")]
 fn stack_width_roles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| {
@@ -56,7 +58,8 @@ fn stack_width_roles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             .gap(Gap::Section)
             .show(ui, |ui, _| {
                 Stack::new().least_width(LeastWidth::SideMenu).gap(Gap::Tight).pad(Pad::Regular).show(ui, |ui, _| words(ui, 0..2));
-                Stack::new().wrap_width(WrapWidth::Column).gap(Gap::Stack).pad(Pad::Regular).show(ui, |ui, _| {
+                let column = Stack::new().wrap_width(WrapWidth::Column).least_width(LeastWidth::Dialog);
+                column.gap(Gap::Stack).pad(Pad::Regular).show(ui, |ui, _| {
                     let _ = Text::new(
                         "Save a copy in another format. Printing goes through a PDF you can print from any viewer, and the pages \
                          picked here are the ones that print.",

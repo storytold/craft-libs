@@ -405,6 +405,7 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     });
     assert!(ghost.is_some(), "a button has a surface");
     assert_eq!(ribbon, ghost, "a ribbon button draws the ghost surface");
+    let flat = ribbon.clone().expect("a ribbon button has a surface");
     assert_ne!(standard, ghost, "outside a ribbon the default look stays");
     assert_ne!(primary, ghost, "a variant asked for in a ribbon stays");
     assert!(narrow < wide - 0.5, "a ribbon's flat button sits close: {narrow} against {wide}");
@@ -423,8 +424,9 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
     assert_eq!(ribbon, ghost, "a ribbon split button draws the ghost surface");
     assert!(narrow < wide - 0.5, "a ribbon's flat split button sits close: {narrow} against {wide}");
 
-    // A labelled toggle is flat at rest too, with no outlined capsule: the ghost surface, which shows the on plate
-    // while on.
+    // A labelled toggle is flat at rest too, as the ribbon's push buttons are: no surface kind and no edge until the
+    // pointer is over it, and the on plate while on. A ghost toggle outside a ribbon keeps its raised, outlined edge,
+    // so the ribbon toggle is checked against the ribbon's flat push button, not against it.
     let toggle = std::any::type_name::<ToggleButton<'static>>();
     let (ribbon, narrow) = seen(toggle, "Track Changes", |ui| {
         in_ribbon(ui, |ui| {
@@ -440,8 +442,14 @@ fn a_ribbons_buttons_are_flat_at_rest_unless_they_ask_for_a_variant() {
         let mut on = false;
         let _ = ToggleButton::new("Track Changes", Bind::bound(&mut on)).show(ui);
     });
-    assert_eq!(ribbon, ghost, "a ribbon toggle draws the ghost surface");
+    let ribbon = ribbon.expect("a ribbon toggle has a surface");
+    assert_eq!(ribbon.kind, flat.kind, "a ribbon toggle draws no surface kind at rest, as a ribbon button");
+    assert_eq!(ribbon.fill.off, flat.fill.off, "a ribbon toggle's fill while off is a ribbon button's");
+    let edge = ribbon.border.as_ref().map(|border| border.off.rest);
+    assert!(edge.is_none() || edge == Some(ribbon.fill.off.rest), "a ribbon toggle shows no edge at rest: {edge:?}");
+    assert!(ribbon.fill.on.is_some(), "a ribbon toggle shows the on plate while on");
     assert_ne!(standard, ghost, "outside a ribbon a toggle keeps its outlined default");
+    assert_ne!(Some(ribbon), standard, "a ribbon toggle is not the outlined default");
     assert!(narrow < wide - 0.5, "a ribbon's flat toggle sits close: {narrow} against {wide}");
 }
 

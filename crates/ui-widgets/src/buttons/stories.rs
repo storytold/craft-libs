@@ -224,7 +224,7 @@ fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
                 overrides.values.set(ControlPlace::SideMenu);
             },
             |ui| {
-                for (name, icon) in [("Home", IconId::new("home")), ("Open", IconId::new("open")), ("Print", IconId::new("print"))] {
+                for (name, icon) in [("Home", IconId::new("home")), ("Open", IconId::new("open")), ("Save", IconId::new("save"))] {
                     Button::new(name)
                         .icon(icon)
                         .variant(Variant::GHOST)
