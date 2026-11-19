@@ -12,7 +12,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// What a [`PresetFooter`] reports. A browser's footer reports these as `PresetEvent::Footer`, in order with its
 /// other events.

@@ -15,8 +15,8 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 
 mod commands;
-mod lines;
-mod panel;
+pub(crate) mod lines;
+pub(crate) mod panel;
 mod session;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;

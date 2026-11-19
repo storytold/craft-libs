@@ -9,7 +9,7 @@ use craft_behavior::{CanvasView, EditEvents};
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// What the Navigator panel reports.
 #[derive(Debug)]

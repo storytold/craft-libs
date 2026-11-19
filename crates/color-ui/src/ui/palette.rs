@@ -11,7 +11,7 @@ use egui::{Response, Ui};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// What a [`SwatchPalette`] reports.
 #[derive(Debug)]

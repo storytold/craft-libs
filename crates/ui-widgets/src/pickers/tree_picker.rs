@@ -5,7 +5,7 @@
 //! Typing lists the items whose path holds every typed word instead of the tree.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::SelectFace;
 use super::face::toggle_on_key;

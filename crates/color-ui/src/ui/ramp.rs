@@ -18,7 +18,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The bar: a press picks the colour under the pointer.
 const BAR: PartKey = PartKey::new("bar");

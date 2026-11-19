@@ -8,8 +8,8 @@ mod bars;
 mod detail;
 mod header;
 #[cfg(feature = "suite")]
-mod stories;
-mod table;
+pub(crate) mod stories;
+pub(crate) mod table;
 
 use std::borrow::Cow;
 

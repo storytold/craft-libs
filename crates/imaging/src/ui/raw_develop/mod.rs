@@ -13,14 +13,14 @@
 //! [`FullWindowWorkspace`]: craft_ui::dialog::FullWindowWorkspace
 
 mod commands;
-mod controls;
-mod filmstrip;
+pub(crate) mod controls;
+pub(crate) mod filmstrip;
 mod mixer;
 mod preview;
-mod scopes;
+pub(crate) mod scopes;
 mod source;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 use std::cell::RefCell;

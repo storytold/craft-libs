@@ -12,7 +12,7 @@ use craft_ui::runtime::env::Env;
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The Perspective Crop options: W × H × Resolution, Front Image, Clear, a divider and Show Grid.
 ///

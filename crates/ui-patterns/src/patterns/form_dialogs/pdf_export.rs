@@ -5,7 +5,7 @@ mod summary;
 mod words;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use self::sections::{ArtboardChoice, PasswordSwitches, Sections};
 pub use self::summary::RangeError;

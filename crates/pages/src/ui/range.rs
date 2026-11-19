@@ -3,7 +3,7 @@
 //! Acrobat's Page Range Options.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{Codec, NotAValue, NumberCodec};
 use craft_ui::buttons::IconButton;

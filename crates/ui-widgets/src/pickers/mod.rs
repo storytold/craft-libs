@@ -1,18 +1,18 @@
 //! Dropdown pickers: `Select`, `ComboBox`, `TreePicker`, `Autocomplete`, `DatePicker` and `IconPicker`.
 
-mod combo_box;
-mod date;
+pub(crate) mod combo_box;
+pub(crate) mod date;
 mod dress;
-mod face;
-mod icon_picker;
+pub(crate) mod face;
+pub(crate) mod icon_picker;
 mod rows;
 mod search;
-mod select;
-mod tree_picker;
-mod unit_select;
+pub(crate) mod select;
+pub(crate) mod tree_picker;
+pub(crate) mod unit_select;
 mod words;
 
-mod reference_point;
+pub(crate) mod reference_point;
 
 pub use combo_box::ComboBox;
 pub use date::{

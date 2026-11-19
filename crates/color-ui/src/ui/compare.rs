@@ -13,7 +13,7 @@ use super::picker::ColorPickerWords;
 use super::warning::{ColorWarning, ColorWarningChip};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a compare block: the size of the block and of each half, the edge round it and the gap between a
 /// caption and the block.

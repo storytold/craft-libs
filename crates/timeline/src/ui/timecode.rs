@@ -1,8 +1,8 @@
 //! The timecode field, its codec and the Timecode panel.
 
-mod readout;
+pub(crate) mod readout;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::nav::LARGE_STEPS;
 use craft_behavior::{Caret, Codec, IconId, NavMove, NotAValue, PartKey, Sense, ValueDrag};

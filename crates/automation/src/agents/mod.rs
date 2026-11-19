@@ -27,7 +27,7 @@
 //!
 //! The Agents page of Preferences is [`crate::ui::agents`].
 
-mod settings;
+pub(crate) mod settings;
 pub use settings::{AgentSettings, WhenAppClosed, agents_allowed, folder};
 
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]

@@ -1,18 +1,18 @@
 //! `List` and its rows: `ListRow`, `FindingsList`, `EventList` and `UndoList`.
 
-mod events;
-mod findings;
+pub(crate) mod events;
+pub(crate) mod findings;
 mod predicate;
 #[doc(hidden)]
 pub mod row;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod toggle;
 mod tree;
-mod undo;
-mod view;
+pub(crate) mod undo;
+pub(crate) mod view;
 #[cfg(feature = "suite")]
-mod view_stories;
+pub(crate) mod view_stories;
 mod view_words;
 mod words;
 

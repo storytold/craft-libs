@@ -8,7 +8,7 @@
 //! within the padding costs nothing and the work is bounded by the viewport.
 
 #[cfg(feature = "suite")]
-pub(super) mod stories;
+pub(crate) mod stories;
 
 use crate::canvas::{PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

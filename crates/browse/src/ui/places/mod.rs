@@ -16,7 +16,7 @@
 //! ```
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::path::{Path, PathBuf};
 

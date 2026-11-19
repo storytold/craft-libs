@@ -9,7 +9,7 @@ use craft_theme::{Stateful, States};
 use egui::{Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of an icon.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

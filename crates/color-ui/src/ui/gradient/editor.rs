@@ -18,7 +18,7 @@ use crate::gradient::{GradientStops, Sampler, StopRules};
 mod bar;
 mod fields;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use bar::GradientBar;
 pub use bar::StopDrop;

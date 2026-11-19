@@ -18,7 +18,7 @@ use egui::{CornerRadius, Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The face: the circle the pointer points at.
 const FACE: PartKey = PartKey::new("face");

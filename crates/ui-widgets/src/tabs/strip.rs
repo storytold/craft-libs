@@ -7,7 +7,7 @@
 //! carries panels reads the same payload with the panel key as `K`.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::rules::{FitMode, OverflowMenu, OverflowPlace, TabKind};
 use super::words::StripWords;

@@ -250,7 +250,7 @@ impl Component for SelectFace<'_> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Opens the popup of a picker whose face part toggles it, from the keyboard: Enter and Space (an activation by key)
 /// toggle it. A click on the face reaches the popup through the part's `toggles`, so the pointer is not read here.

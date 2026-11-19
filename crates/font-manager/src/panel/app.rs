@@ -2,7 +2,7 @@
 //! reading start, the family cards, the details sheet and the download consent.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::collections::HashMap;
 use std::sync::Arc;

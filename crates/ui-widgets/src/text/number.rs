@@ -5,7 +5,7 @@
 //! is not in edit scrubs it; a click enters edit, where a drag selects text.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::adorn::{Adornment, Placed, place, reserve};
 use super::words::TextWords;

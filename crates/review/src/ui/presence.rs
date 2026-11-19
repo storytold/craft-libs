@@ -23,7 +23,7 @@ use super::chat::{BubbleLook, paint_chat_bubble};
 use crate::collab::{CHAT_FADE_S, CHAT_HOLD_S, CollabRequest, CollabTransport, Participant, ParticipantId, chat_alpha};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Most selection outlines drawn for one person.
 const MAX_OUTLINES: usize = 500;

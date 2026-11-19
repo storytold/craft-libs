@@ -14,27 +14,29 @@ pub mod fixture;
 pub mod focus;
 pub mod frames;
 #[cfg(feature = "suite")]
-mod host_key_trials;
+pub(crate) mod host_key_trials;
 #[cfg(feature = "suite")]
-mod icon_trials;
+pub(crate) mod icon_trials;
 #[cfg(feature = "suite")]
 pub mod index;
 pub mod input;
 #[cfg(feature = "suite")]
-mod key_trials;
+pub(crate) mod key_trials;
 pub mod layout;
 pub mod memory;
 pub mod pictures;
 pub mod pointer;
+#[cfg(feature = "suite")]
+mod registry;
 pub mod relations;
 #[cfg(feature = "suite")]
-mod replay_trials;
+pub(crate) mod replay_trials;
 pub mod sensing;
 #[cfg(all(feature = "snapshot", not(target_arch = "wasm32")))]
 pub mod snapshot;
 mod stage;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 pub mod story;
 pub mod style;
 #[cfg(feature = "suite")]
@@ -54,9 +56,9 @@ pub use crate::runtime::measure::{
 pub use craft_ui_macros::{story, trial};
 pub use fixture::{Fixture, Impure, Room, Target};
 pub use frames::Frames;
-pub use stage::{room_height, stage, stage_fitting, stage_width};
 #[cfg(feature = "suite")]
-pub use story::stories;
+pub use registry::{Registered, Registry};
+pub use stage::{room_height, stage, stage_fitting, stage_width};
 #[doc(hidden)]
 pub use story::{
     CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item,
@@ -97,28 +99,22 @@ impl Trial {
     }
 }
 
-#[cfg(feature = "suite")]
-inventory::collect!(Trial);
-
-/// Every `#[trial]` linked into the running binary, by full name.
-#[cfg(feature = "suite")]
-pub fn trials() -> Vec<&'static Trial> {
-    let mut all: Vec<_> = inventory::iter::<Trial>().collect();
-    all.sort_by_key(|trial| trial.full_name());
-    all
-}
-
 /// Runs a test executable and exits: the `#[trial]`s declared in the crate whose root module is `crate_root` or in
 /// `package`'s library crate, and the suite's trials over `registered`. Every test executable's `main` calls it, with
 /// its own `module_path!()`.
 #[cfg(feature = "suite")]
-pub fn run(crate_root: &str, package: &'static str, registered: &[&'static Registration]) -> ! {
+pub fn run(crate_root: &str, package: &'static str, registry: &Registry) -> ! {
+    if !registry.install_story_sets() {
+        eprintln!("a different set of story commands was already installed");
+        std::process::exit(1);
+    }
     let library = package.replace('-', "_");
     let own = |module: &str| {
         [crate_root, library.as_str()].into_iter().any(|root| module.strip_prefix(root).is_some_and(|rest| rest.is_empty() || rest.starts_with("::")))
     };
-    let mut tests: Vec<libtest_mimic::Trial> = trials()
-        .into_iter()
+    let mut tests: Vec<libtest_mimic::Trial> = registry
+        .trials()
+        .iter()
         .filter(|trial| own(trial.module))
         .map(|trial| {
             let run = trial.run;
@@ -129,42 +125,12 @@ pub fn run(crate_root: &str, package: &'static str, registered: &[&'static Regis
             .with_ignored_flag(trial.ignored)
         })
         .collect();
-    tests.extend(suite::trials(package, registered));
+    tests.extend(suite::trials(package, registry));
     // A trial that re-runs its executable as a stand-in for another program passes that program's arguments after
     // `--`; they are the stand-in's, not the runner's.
     let args = libtest_mimic::Arguments::from_iter(std::env::args().take_while(|arg| arg != "--"));
     libtest_mimic::run(&args, tests).exit()
 }
 
-/// Every registration declared in the library crate of the package `crate_name` and linked into the running
-/// binary, by module and type name. Types declared in the package's integration binaries are fixtures, not the package's.
 #[cfg(feature = "suite")]
-pub fn registered_in(crate_name: &str) -> Vec<&'static Registration> {
-    let library = crate_name.replace('-', "_");
-    crate::contract::registrations()
-        .into_iter()
-        .filter(|registration| registration.crate_name() == crate_name && registration.crate_target() == library)
-        .collect()
-}
-
-/// Writes `pub fn registered()` for the invoking package: its library crate's registrations in the running binary.
-/// A crate invokes it once, in its `testing` module, and its integration binary calls the function by name. The
-/// call references the library, so the linker includes it; the registrations are constructors in the library's
-/// object files, which run as long as those files are linked.
-#[macro_export]
-macro_rules! testing_registered {
-    () => {
-        /// Every registration of this package linked into the running binary.
-        pub fn registered() -> ::std::vec::Vec<&'static $crate::testing::Registration> {
-            $crate::testing::registered_in(env!("CARGO_PKG_NAME"))
-        }
-    };
-}
-
-#[cfg(feature = "suite")]
-testing_registered!();
-
-#[doc(hidden)]
-pub mod __private {
-    pub use inventory;
-}
+craft_ui_macros::registry!();

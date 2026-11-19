@@ -24,7 +24,7 @@
 mod commands;
 mod edits;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::ops::Range;
 

@@ -14,7 +14,7 @@ use egui::{Response, Ui};
 use super::SamplerReadout;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// What a missing value shows.
 const DASH: &str = "–";

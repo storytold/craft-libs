@@ -6,7 +6,7 @@
 //! move gesture into the cards' new positions.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

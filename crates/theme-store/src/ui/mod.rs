@@ -1,13 +1,12 @@
 //! The Preferences appearance page over the suite selection: [`AppearancePage`] and its [`ThemeChip`]s.
 
-mod chip;
-mod page;
+pub(crate) mod chip;
+pub(crate) mod page;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
-#[cfg(feature = "screen-testing")]
 #[cfg(feature = "suite")]
-craft_ui::testing_registered!();
+craft_ui::registry!();
 
 pub use chip::{ThemeChip, ThemeChipOutput, ThemeChipStyle};
 pub use page::{AppearancePage, AppearancePageOutput, AppearanceWords};

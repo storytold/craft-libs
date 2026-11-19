@@ -44,9 +44,9 @@
 //! [`FullWindowSide`]: craft_ui::dialog::FullWindowSide
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod canvas;
+pub(crate) mod canvas;
 mod commands;
-mod panel;
+pub(crate) mod panel;
 mod session;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;

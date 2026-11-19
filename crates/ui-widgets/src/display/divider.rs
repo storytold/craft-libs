@@ -6,7 +6,7 @@ use craft_behavior::{Metrics, Sense};
 use egui::{Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a divider.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

@@ -2,7 +2,7 @@
 //! and `WorkspaceAsk::Which`.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::words::WorkspaceDialogWords;
 use crate::choice::Checkbox;

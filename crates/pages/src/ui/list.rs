@@ -21,7 +21,7 @@
 //! ```
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, Selection, SelectionChange, keyed};
 use craft_ui::contract::{

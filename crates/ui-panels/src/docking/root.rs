@@ -14,7 +14,7 @@ use craft_behavior::{Metrics, Sense};
 use egui::Response;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a dock root: the docking sizes of its drop bands, columns, groups and floating windows. Colours,
 /// surfaces and shapes belong to the parts the pattern assembles.

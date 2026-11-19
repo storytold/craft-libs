@@ -1,8 +1,8 @@
 //! Markers on a ruler or a clip bar, and the Marker dialog (N1.12).
 
-mod dialog;
+pub(crate) mod dialog;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use dialog::{MarkerDialog, MarkerDialogAction, MarkerDialogResult, MarkerDraft};
 

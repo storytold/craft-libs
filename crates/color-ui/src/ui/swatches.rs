@@ -3,11 +3,11 @@
 //! change as a resolved [`SwatchEdit`] (new, rename, delete, move, group edits, import) that the host runs, with
 //! [`SwatchLibrary::apply`] for an in-memory host.
 
-mod library;
+pub(crate) mod library;
 mod menu;
-mod panel;
+pub(crate) mod panel;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows};
 pub use menu::{SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput};

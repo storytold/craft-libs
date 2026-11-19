@@ -25,9 +25,9 @@ pub use words::{PreferencesWords, SettingsDocumentWords};
 
 // The window, its body and its rows.
 mod body;
-mod path_setting;
+pub(crate) mod path_setting;
 mod rows;
-mod window;
+pub(crate) mod window;
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 

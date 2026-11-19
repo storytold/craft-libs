@@ -4,7 +4,7 @@
 
 mod dialogs;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use self::dialogs::{ShellDialogsCx, WindowDialogs};
 use super::canvas_shell::slots as keys;

@@ -19,7 +19,7 @@ use craft_ui::text::{NumberField, TextField};
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The builder's words, English by default.

@@ -24,7 +24,7 @@ use crate::self_update;
 use crate::updater::Status;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 const PROMPT_KEY: &str = "updateDialog.prompt";
 const CHECK_KEY: &str = "updateDialog.check";

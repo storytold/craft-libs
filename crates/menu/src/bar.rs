@@ -9,7 +9,7 @@
 //! `Builtin::Quit` and `Builtin::Minimize` act on the root window through the runtime.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_keymap::{CommandRef, Platform};
 use craft_ui::contract::Show as _;

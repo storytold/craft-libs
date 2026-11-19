@@ -13,7 +13,7 @@ use craft_theme::Stateful;
 use egui::{Rect, Response, Vec2, pos2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a chord.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

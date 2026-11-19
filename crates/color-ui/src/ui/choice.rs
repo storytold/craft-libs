@@ -2,7 +2,7 @@
 //! (Preferences, Interface), the Crop shield colour and the Note colour.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};

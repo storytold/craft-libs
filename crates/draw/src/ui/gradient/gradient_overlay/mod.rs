@@ -6,7 +6,7 @@ mod keys;
 mod parts;
 mod pointer;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

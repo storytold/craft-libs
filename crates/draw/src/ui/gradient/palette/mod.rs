@@ -8,7 +8,7 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 

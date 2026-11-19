@@ -2,7 +2,7 @@
 //! `TimelineView` around it.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{Axis, CursorIcon, HitLevel, HitPriority, Metrics, NavMove, PartKey, PointerButton, PressPhase, RulerUnits, Sense, Ticks};
 use craft_ui::canvas::{Rulers, StepLadder, TickRule};

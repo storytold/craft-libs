@@ -32,9 +32,9 @@ use egui::{Color32, Context, Pos2, Rect, Ui, pos2, vec2};
 
 use super::ScreenPickGesture;
 
-mod capture;
+pub(crate) mod capture;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use capture::{CaptureView, CaptureWindow};
 

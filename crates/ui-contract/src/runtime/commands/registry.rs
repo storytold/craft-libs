@@ -27,8 +27,6 @@ pub struct SetEntry {
     pub typing: Option<CommandScope>,
     /// The defaults of one platform, which replace the command's other defaults there.
     pub platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
-    /// A story's set (`#[command(story)]`): loaded only by an install that shows stories.
-    pub story: bool,
 }
 
 impl SetEntry {
@@ -42,13 +40,7 @@ impl SetEntry {
         typing: Option<CommandScope>,
         platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     ) -> Self {
-        SetEntry { name, defs, no_default_on, edits, holds, typing, platform_defaults, story: false }
-    }
-
-    /// The entry as a story's set.
-    pub const fn story(mut self) -> Self {
-        self.story = true;
-        self
+        SetEntry { name, defs, no_default_on, edits, holds, typing, platform_defaults }
     }
 }
 
@@ -69,9 +61,6 @@ pub fn sets() -> Vec<&'static SetEntry> {
 macro_rules! __register_command_set {
     ($ty:ty) => {
         $crate::__register_command_set!(@entry $ty, ::core::convert::identity);
-    };
-    ($ty:ty, story) => {
-        $crate::__register_command_set!(@entry $ty, $crate::runtime::commands::SetEntry::story);
     };
     (@entry $ty:ty, $mark:expr) => {
         const _: () = {
@@ -153,6 +142,30 @@ impl std::error::Error for CommandDefError {}
 
 /// The shared registries: the app's sets, and the app's sets with the stories' (`[apps, with stories]`).
 static LOADED: [OnceLock<Arc<Registry>>; 2] = [OnceLock::new(), OnceLock::new()];
+#[cfg(feature = "suite")]
+static STORY_SETS: OnceLock<Vec<SetEntry>> = OnceLock::new();
+#[cfg(feature = "suite")]
+static STORY_SETS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Selects the story command sets before the first story context is installed.
+#[cfg(feature = "suite")]
+pub(crate) fn configure_story_sets(sets: &[SetEntry]) -> bool {
+    let _guard = STORY_SETS_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if STORY_SETS.get().is_none() && LOADED[1].get().is_some() {
+        return sets.is_empty();
+    }
+    let selected = STORY_SETS.get_or_init(|| sets.to_vec());
+    selected.len() == sets.len()
+        && selected.iter().zip(sets).all(|(a, b)| {
+            (a.name)() == (b.name)()
+                && std::ptr::fn_addr_eq(a.defs, b.defs)
+                && std::ptr::fn_addr_eq(a.no_default_on, b.no_default_on)
+                && std::ptr::fn_addr_eq(a.edits, b.edits)
+                && std::ptr::fn_addr_eq(a.holds, b.holds)
+                && std::ptr::fn_addr_eq(a.platform_defaults, b.platform_defaults)
+                && a.typing.map(CommandScope::name) == b.typing.map(CommandScope::name)
+        })
+}
 
 /// Indexes the definition at `at` under its id `id`; an id already in `index` is refused (`Duplicate`). The registry
 /// and an app's catalog index their definitions through it.
@@ -186,7 +199,19 @@ impl Registry {
     /// Loads every linked set; the stories' sets only with `stories`.
     pub(crate) fn load(stories: bool) -> Result<Registry, CommandDefError> {
         let mut registry = Registry { stories, ..Registry::default() };
-        for entry in sets().into_iter().filter(|entry| stories || !entry.story) {
+        let entries = sets();
+        #[cfg(feature = "suite")]
+        let entries = {
+            let mut entries = entries;
+            if stories {
+                if let Some(story_sets) = STORY_SETS.get() {
+                    entries.extend(story_sets.iter());
+                    entries.sort_by_key(|entry| (entry.name)());
+                }
+            }
+            entries
+        };
+        for entry in entries {
             for def in (entry.defs)()? {
                 registry.add(def)?;
             }
@@ -204,6 +229,8 @@ impl Registry {
     /// The registry of every linked set (the stories' sets only with `stories`), loaded once per process: the sets are
     /// static, so every context shares one. A load that fails is not kept, so each install reports its error.
     pub(crate) fn shared(stories: bool) -> Result<Arc<Registry>, CommandDefError> {
+        #[cfg(feature = "suite")]
+        let _guard = stories.then(|| STORY_SETS_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let slot = &LOADED[usize::from(stories)];
         if let Some(loaded) = slot.get() {
             return Ok(loaded.clone());

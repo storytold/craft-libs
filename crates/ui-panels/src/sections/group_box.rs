@@ -11,7 +11,7 @@ use craft_behavior::{Metrics, Sense};
 use egui::Ui;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The heading level AccessKit reports for a section header.
 pub(super) const SECTION_LEVEL: usize = 3;

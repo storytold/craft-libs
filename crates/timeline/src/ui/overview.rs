@@ -1,7 +1,7 @@
 //! The whole timeline in miniature (N1.13).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{Axis, Metrics, PointerButton, PressPhase, Sense};
 use craft_ui::contract::{

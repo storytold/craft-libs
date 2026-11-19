@@ -10,7 +10,7 @@ use craft_behavior::{CanvasView, EditEvents, ZoomLadder};
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The decimals the zoom range's ends are written with in the message, as the field shows a zoom.
 const MESSAGE_DECIMALS: usize = 2;

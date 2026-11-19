@@ -1,7 +1,7 @@
 //! `Bar` and `BarItems`.
 
-mod bar;
-mod breadcrumb;
-mod constraint_fields;
-mod items;
-mod overflow;
+pub(crate) mod bar;
+pub(crate) mod breadcrumb;
+pub(crate) mod constraint_fields;
+pub(crate) mod items;
+pub(crate) mod overflow;

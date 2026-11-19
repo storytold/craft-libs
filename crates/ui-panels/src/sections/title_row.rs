@@ -21,7 +21,7 @@ use craft_theme::{ControlSize, Stateful, States};
 use egui::{Id, Rect, Response, Ui, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// How much weight a header carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

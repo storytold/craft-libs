@@ -33,7 +33,7 @@ use std::ops::RangeInclusive;
 const THUMB_WIDTH_IN_SMALL_HANDLES: f32 = 0.5;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The row-wide part: a press off the thumbs lands here.
 pub(crate) const ROW: PartKey = PartKey::new("row");

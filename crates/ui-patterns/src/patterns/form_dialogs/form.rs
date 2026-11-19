@@ -31,7 +31,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words a form dialog adds beside the common OK and Cancel.

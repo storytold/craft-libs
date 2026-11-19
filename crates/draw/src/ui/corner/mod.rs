@@ -9,7 +9,7 @@ mod geometry;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;
-mod widgets;
+pub(crate) mod widgets;
 mod words;
 
 use kurbo::Point;

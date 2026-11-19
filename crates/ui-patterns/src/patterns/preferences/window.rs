@@ -2,7 +2,7 @@
 //! exist.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::body::{self, BodyOut};
 use super::model::{Closed, PreferencesModel, PreferencesOutput};

@@ -2,8 +2,8 @@
 //! [`PinWarpBar`]). The solver is the app's ([`PinSolver`]); the warped picture is drawn by the
 //! transform preview through `PreviewMap::pins`.
 
-mod bar;
-mod overlay;
+pub(crate) mod bar;
+pub(crate) mod overlay;
 mod session;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;

@@ -10,7 +10,7 @@ use craft_theme::variant::Tone;
 use egui::{AsIdSalt, IdSalt, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// A properties panel: a `Panel` whose header names the target (icon and name, and the kind at the end), and whose body
 /// the caller fills with the target's controls, labelled as inspector rows (`LabelScheme::Inspector`).

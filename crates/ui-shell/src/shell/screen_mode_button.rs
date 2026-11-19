@@ -8,7 +8,7 @@ use crate::runtime::env::Env;
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// A flyout button over the three screen modes, with `mode` marked: a click, Enter or Space cycles; a hold, a drag away
 /// or a right click lists the three modes without cycling. The face is the Cycle command's icon and tooltip; disabled

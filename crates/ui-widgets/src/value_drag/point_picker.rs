@@ -20,7 +20,7 @@ use egui::{Pos2, Rect, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The point: a drag on it follows the pointer.
 const THUMB: PartKey = PartKey::new("thumb");

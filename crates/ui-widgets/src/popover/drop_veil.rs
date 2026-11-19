@@ -13,7 +13,7 @@ use craft_behavior::{Metrics, Proposal, Sense};
 use egui::{Rect, Response};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a drop veil: the scrim comes from the surface kind; the card is a child.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

@@ -10,7 +10,7 @@
 //! document.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::words::CanvasWords;
 use crate::contract::{

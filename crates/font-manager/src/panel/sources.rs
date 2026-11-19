@@ -3,7 +3,7 @@
 //! and downloading them all again.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

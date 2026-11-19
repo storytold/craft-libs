@@ -21,7 +21,7 @@ use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// What a tab's own parts report, besides what the collection reads from the pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

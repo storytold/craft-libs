@@ -17,7 +17,7 @@ use craft_ui::style::{ComponentStyle, FocusLook, MarkerLook, StyleColor, StyleCx
 use egui::{Color32, Mesh, Pos2, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The disc: a press on it grabs the nearest marker within reach.
 const DISC: PartKey = PartKey::new("disc");

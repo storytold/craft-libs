@@ -3,16 +3,16 @@
 //! None of them takes input or a Tab stop. A tooltip, or a label no text paints, gives the root a hover sense so the
 //! tooltip can show.
 
-mod badge;
-mod divider;
-mod icon;
-mod inspect_overlay;
-mod kbd;
-mod picture;
-mod progress;
-mod spinner;
-mod target_mark;
-mod text;
+pub(crate) mod badge;
+pub(crate) mod divider;
+pub(crate) mod icon;
+pub(crate) mod inspect_overlay;
+pub(crate) mod kbd;
+pub(crate) mod picture;
+pub(crate) mod progress;
+pub(crate) mod spinner;
+pub(crate) mod target_mark;
+pub(crate) mod text;
 mod words;
 
 pub use badge::{Badge, BadgeStyle};

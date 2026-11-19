@@ -9,7 +9,7 @@
 //! [`PreviewMode`]: crate::selection::PreviewMode
 //! [`QuickMaskLook`]: crate::selection::QuickMaskLook
 
-mod overlay;
+pub(crate) mod overlay;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 

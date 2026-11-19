@@ -37,17 +37,17 @@
 #![warn(missing_docs)]
 
 mod backend;
-mod client;
+pub(crate) mod client;
 mod copy;
 mod dir;
 #[cfg(not(target_arch = "wasm32"))]
 mod disk;
-mod selection;
+pub(crate) mod selection;
 mod store;
 pub mod testing;
 #[cfg(feature = "ui")]
 pub mod ui;
-mod watch;
+pub(crate) mod watch;
 
 pub use backend::{FileStamp, LibraryFile};
 pub use client::{SuiteClient, SuiteView};
@@ -61,18 +61,18 @@ pub use store::{Imported, LOCK_TIMEOUT, Library, ParseCounts, Problem, Saved, St
 pub use watch::{Op, OpOutput, RESULTS_KEPT, STAT_INTERVAL, Snapshot, SuiteWatch, VERIFY_INTERVAL};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 extern crate self as craft_theme_store;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 #[cfg(test)]
 #[path = "../tests/two_processes.rs"]
-mod two_processes;
+pub(crate) mod two_processes;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[crate::ui::register]));
 }

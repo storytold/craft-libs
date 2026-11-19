@@ -24,7 +24,7 @@ mod icon;
 mod list;
 mod search;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::cell::RefCell;
 use std::hash::Hash;

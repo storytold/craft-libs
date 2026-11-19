@@ -30,7 +30,7 @@ use crate::versions::{Branch, BranchId, BranchState, HistoryRow, Version, Versio
 const DESCRIPTION_LINES: u8 = 3;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The panel's words, English by default.

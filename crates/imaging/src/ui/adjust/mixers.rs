@@ -1,10 +1,10 @@
 //! The channel-mixing adjustments: Black & White, Channel Mixer and Selective Color.
 
-mod black_white;
-mod channel_mixer;
-mod selective_color;
+pub(crate) mod black_white;
+pub(crate) mod channel_mixer;
+pub(crate) mod selective_color;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use black_white::{BlackWhite, BlackWhiteEditor, BlackWhiteOutput};
 pub use channel_mixer::{ChannelMixer, ChannelMixerEditor};

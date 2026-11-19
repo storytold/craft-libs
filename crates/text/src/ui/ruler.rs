@@ -29,7 +29,7 @@ mod items;
 mod paint;
 mod run;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use geometry::{Geometry, Shapes};
 use items::{COLUMN, Item, SELECTOR, STRIP};

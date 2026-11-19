@@ -4,10 +4,10 @@
 //! dialog stack. Both search with [`crate::find`]; the document's text and the replacing are the app's.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
-mod bar;
-mod dialog;
+pub(crate) mod bar;
+pub(crate) mod dialog;
 
 pub use bar::{FindBar, FindBarOutput, FindBarState, FindStep};
 pub use dialog::{FindReplaceDialog, FindRequest, FindTab};

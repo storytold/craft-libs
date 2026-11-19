@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The column of the source marks.
 const SOURCE: ColumnKey = ColumnKey::new("historySource");

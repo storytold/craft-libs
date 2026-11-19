@@ -18,8 +18,8 @@
 
 mod grab;
 mod model;
-mod overlay;
-mod panel;
+pub(crate) mod overlay;
+pub(crate) mod panel;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod style;

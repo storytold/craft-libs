@@ -3,7 +3,7 @@
 //! are the caller's closures. Files from the OS drop between the tabs when the host takes them.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::{Tab, TabStrip};
 use crate::contract::{

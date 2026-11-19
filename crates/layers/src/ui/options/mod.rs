@@ -4,7 +4,7 @@
 //! `LayersOptions` is the value the dialog edits and returns, held by the settings.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{Bind, FieldLayout, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};

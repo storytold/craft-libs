@@ -22,7 +22,7 @@ struct Declared {
     exempt: Vec<(LitStr, LitStr)>,
     /// The function that makes an instance of a leaf for the suite: `sample = path`.
     sample: Option<syn::Path>,
-    /// The first sentence of the type's doc comment; empty for `register_contract!`.
+    /// The first sentence of the type's doc comment, or an explicit manual registration purpose.
     purpose: String,
 }
 
@@ -61,6 +61,8 @@ impl Declared {
                 (Some(case), Some(reason)) => self.exempt.push((case, reason)),
                 _ => return Err(meta.error("`exempt` needs both `case = \"..\"` and `reason = \"..\"`")),
             }
+        } else if path.is_ident("purpose") {
+            self.purpose = meta.value()?.parse::<LitStr>()?.value();
         } else if path.is_ident("sample") {
             if self.sample.is_some() {
                 return Err(meta.error("`sample` is declared once"));
@@ -198,6 +200,16 @@ pub(crate) fn gate_for(manifest: &str) -> TokenStream {
     if declares { quote!(#[cfg(feature = "suite")]) } else { quote!() }
 }
 
+fn registry_helper(types: &[Type]) -> syn::Result<Ident> {
+    let Some(Type::Path(path)) = types.first() else {
+        return Err(syn::Error::new(proc_macro2::Span::call_site(), "a registration needs a named type"));
+    };
+    let Some(name) = path.path.segments.last() else {
+        return Err(syn::Error::new_spanned(path, "a registration needs a named type"));
+    };
+    Ok(format_ident!("__registry_component_{}", crate::command_set::snake(&name.ident.to_string())))
+}
+
 fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Shape) -> syn::Result<TokenStream> {
     if let Some(sample) = &declared.sample {
         if shape != Shape::Leaf {
@@ -218,7 +230,13 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
     let purpose = &declared.purpose;
     let each = types.iter().map(|ty| quote!(#k::__register_contract!(#ty, #shape, #overlay, [#(#exempt),*], [#(#sample)*], #purpose);));
     let gate = registration_gate();
+    let helper = registry_helper(types)?;
     Ok(quote! {
+        #gate
+        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        }
+
         // Outside the gate: the sample exists in every build, so it is never dead code where the registration is absent.
         #(const _: () = { let _ = #sample; };)*
         #gate
@@ -234,7 +252,15 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
 pub(crate) fn pattern_registrations(k: &TokenStream, types: &[Type], purpose: &str, probe: &TokenStream) -> TokenStream {
     let each = types.iter().map(|ty| quote!(#k::__register_pattern!(#ty, #purpose, #probe);));
     let gate = registration_gate();
+    let helper = match registry_helper(types) {
+        Ok(helper) => helper,
+        Err(error) => return error.to_compile_error(),
+    };
     quote! {
+        #gate
+        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        }
         #gate
         const _: () = {
             #(#each)*

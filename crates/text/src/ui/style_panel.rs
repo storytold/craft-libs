@@ -20,7 +20,7 @@ use std::cell::Cell;
 
 mod picker;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use picker::{NamedStyleRow, StylePreview, style_rows};
 

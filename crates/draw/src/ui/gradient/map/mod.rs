@@ -5,7 +5,7 @@
 //! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color-ui.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, Mixed};
 use craft_ui::buttons::Button;

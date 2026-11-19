@@ -186,6 +186,8 @@ pub struct StoryRegistration {
     pub crate_target: &'static str,
     /// The registered name of the type the story shows.
     pub type_name: fn() -> &'static str,
+    /// The registration of the type shown by this story.
+    pub registration: fn() -> crate::contract::Registration,
     /// The story.
     pub story: Story,
     /// The source file of the declaration.
@@ -196,8 +198,14 @@ pub struct StoryRegistration {
 
 impl StoryRegistration {
     /// The registration `#[story]` writes.
-    pub const fn new(crate_name: &'static str, crate_target: &'static str, type_name: fn() -> &'static str, story: Story) -> Self {
-        StoryRegistration { crate_name, crate_target, type_name, story, file: "", line: 0 }
+    pub const fn new(
+        crate_name: &'static str,
+        crate_target: &'static str,
+        type_name: fn() -> &'static str,
+        registration: fn() -> crate::contract::Registration,
+        story: Story,
+    ) -> Self {
+        StoryRegistration { crate_name, crate_target, type_name, registration, story, file: "", line: 0 }
     }
 
     /// The registration declared at `line` of `file`.
@@ -206,29 +214,6 @@ impl StoryRegistration {
         self.line = line;
         self
     }
-}
-
-#[cfg(feature = "suite")]
-inventory::collect!(StoryRegistration);
-
-/// Every story linked into the running binary, by type name; of each type, the stories of the package that registers
-/// it first, then those other packages declare; each in the order they are declared in.
-#[doc(hidden)]
-#[cfg(feature = "suite")]
-pub fn stories() -> Vec<&'static StoryRegistration> {
-    let homes: HashMap<&str, &str> = crate::contract::registrations()
-        .into_iter()
-        .filter_map(|registration| {
-            let name = registration.probe().map(|probe| probe.type_name()).or_else(|| registration.pattern_probe().map(|probe| probe.type_name()))?;
-            Some((name, registration.crate_name()))
-        })
-        .collect();
-    let mut all: Vec<_> = inventory::iter::<StoryRegistration>().collect();
-    all.sort_by_key(|entry| {
-        let name = (entry.type_name)();
-        (name, homes.get(name) != Some(&entry.crate_name), entry.file, entry.line)
-    });
-    all
 }
 
 /// The values a story shows, by name. Each is a `Value`, so the runner compares them before and after a drive.

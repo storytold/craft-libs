@@ -873,7 +873,7 @@ pub struct TopStripStyle {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The model of the pattern's registration probe: no tracks.
 struct EmptySequence(crate::time::TimeView);

@@ -6,10 +6,10 @@
 //! ```
 
 mod mention;
-mod pins;
-mod popover;
+pub(crate) mod pins;
+pub(crate) mod popover;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use mention::{insert_mention, mention_matches, mention_query};
 pub use pins::{CommentPin, CommentPins, CommentPinsOutput, PinCluster, PinMove, cluster};

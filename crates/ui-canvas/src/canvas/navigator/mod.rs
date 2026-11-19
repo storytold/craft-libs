@@ -10,11 +10,11 @@
 //! | The panel menu | [`NavigatorCommands`] |
 
 mod menu;
-mod preview;
+pub(crate) mod preview;
 mod proxy;
 #[cfg(feature = "suite")]
-mod stories;
-mod zoom_row;
+pub(crate) mod stories;
+pub(crate) mod zoom_row;
 
 pub use menu::NavigatorCommands;
 pub use preview::{Navigator, NavigatorOutput, NavigatorPreview, NavigatorStyle};

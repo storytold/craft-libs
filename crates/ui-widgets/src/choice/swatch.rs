@@ -15,7 +15,7 @@ use craft_theme::{Rgba, Srgba, Stateful, States, over};
 use egui::{Color32, CornerRadius, Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Opacity of the black or white ring that stands out from a well's colour.
 const INNER_EDGE_ALPHA: u8 = 0x80;

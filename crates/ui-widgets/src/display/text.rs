@@ -9,7 +9,7 @@ use craft_theme::{Stateful, States, variant::Tone};
 use egui::{Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// How strongly the text reads against its surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

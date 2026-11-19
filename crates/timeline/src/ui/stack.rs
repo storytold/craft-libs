@@ -818,4 +818,4 @@ pub(crate) fn set_event<T>(before: T, after: T, label: &str) -> EditEvent<T> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

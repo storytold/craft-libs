@@ -5,12 +5,12 @@
 //! Stroke reflection, path symmetry and the brush engine stay in the app's paint engine; the library carries only the
 //! axis geometry the screens need.
 
-mod handles;
-mod menu;
+pub(crate) mod handles;
+pub(crate) mod menu;
 mod model;
-mod overlay;
+pub(crate) mod overlay;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod transform;
 
 pub use handles::{SymmetryHandles, SymmetryHandlesOutput, SymmetryHandlesStyle};

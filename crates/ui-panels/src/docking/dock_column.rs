@@ -23,7 +23,7 @@ use egui::{Context, Id, Pos2, Rect, Response, Ui};
 use std::hash::Hash;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 mod bar;
 mod sizing;

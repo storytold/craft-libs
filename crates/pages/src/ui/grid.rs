@@ -3,7 +3,7 @@
 //! pages, under the selection.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::view::PlacedPage;
 use craft_behavior::{Input, Metrics, Sense};

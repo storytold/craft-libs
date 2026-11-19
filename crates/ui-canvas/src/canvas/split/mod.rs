@@ -8,7 +8,7 @@
 //! ([`SplitViews::follow`]).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::words::SplitWords;
 use crate::contract::{

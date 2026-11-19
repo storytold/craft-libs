@@ -1,7 +1,7 @@
 //! `BlendRows`: Blend mode, Opacity, Lock and Fill as one block.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, EditEvents, IconId};
 use craft_theme::ControlSize;

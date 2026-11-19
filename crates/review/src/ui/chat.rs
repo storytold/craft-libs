@@ -15,7 +15,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Response, Ui, Vec2};
 use crate::collab::CollabRequest;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The chat box's words, English by default.

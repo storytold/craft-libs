@@ -4,7 +4,7 @@
 //! frame whose story does not fit, and frame outlines with their in and out ports.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, Input, Metrics, Sense};

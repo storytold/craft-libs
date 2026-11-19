@@ -7,7 +7,7 @@
 
 mod data;
 pub mod paint;
-mod plot;
+pub(crate) mod plot;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;

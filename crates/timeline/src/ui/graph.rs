@@ -2,7 +2,7 @@
 //! plot and parts for the keys, the handles and the bottom bar.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::kurbo;
 use craft_behavior::{

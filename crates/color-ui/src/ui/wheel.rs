@@ -16,7 +16,7 @@ use egui::{Mesh, Pos2, Rect, Vec2, vec2};
 use std::f32::consts::TAU;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The hue ring: a press on it sets the hue to the pointer's angle.
 const RING: PartKey = PartKey::new("ring");

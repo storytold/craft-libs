@@ -25,7 +25,7 @@ use egui::{Rect, Response, Ui};
 use std::borrow::Cow;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// A group of the drawer: a heading over the tools that belong under it.
 #[derive(Clone, Debug)]

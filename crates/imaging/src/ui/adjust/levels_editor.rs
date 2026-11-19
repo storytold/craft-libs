@@ -2,7 +2,7 @@
 //! and fields, editing one channel's [`Levels`].
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 

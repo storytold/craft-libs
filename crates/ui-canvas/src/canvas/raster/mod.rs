@@ -16,7 +16,7 @@
 
 mod detail;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use detail::{DetailPlan, snap_to_texels};
 

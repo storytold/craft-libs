@@ -18,7 +18,7 @@ use craft_behavior::{Axis, CursorIcon, Flow, IconId, Metrics, NavShape, PartKey,
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 const HIDDEN: PartKey = PartKey::new("hidden");
 const CRUMB: PartKey = PartKey::new("crumb");

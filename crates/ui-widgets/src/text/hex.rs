@@ -2,7 +2,7 @@
 //! the codec behind it.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::TextField;
 use crate::contract::{Bind, GlyphLabel, LabelKind, SideLabel};

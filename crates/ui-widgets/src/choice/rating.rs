@@ -204,4 +204,4 @@ impl Component for Rating<'_> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

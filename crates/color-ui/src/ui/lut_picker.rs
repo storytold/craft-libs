@@ -20,7 +20,7 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The LUT picker's rows, English by default, and the built-in looks' names in

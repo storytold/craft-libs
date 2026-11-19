@@ -25,9 +25,9 @@ mod input;
 mod model;
 mod paint;
 mod reference;
-mod row;
+pub(crate) mod row;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use geometry::{GridLayout, HEADER_MIN_ZOOM, SheetGeometry, SheetMetrics};
 pub use model::{CellEdit, CellProblem, ColumnFilter, GridEdit, GridMenuTarget, GridModel, GridState};

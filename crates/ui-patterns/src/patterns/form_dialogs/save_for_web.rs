@@ -35,7 +35,7 @@ mod options;
 mod panes;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use panes::WebPane;
 

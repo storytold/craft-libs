@@ -1,7 +1,7 @@
 //! What the viewer lists: every registered story, grouped by the component it shows.
 
 use craft_ui::contract::{self, Level, Probe, Registration};
-use craft_ui::testing::{StoryRegistration, stories};
+use craft_ui::testing::StoryRegistration;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -108,7 +108,10 @@ pub fn fold_filter(filter: &str) -> String {
 /// The registry's catalog of the types linked into the running binary: each one's level and plain name.
 pub(crate) fn linked_catalog() -> &'static contract::Catalog {
     static CATALOG: OnceLock<contract::Catalog> = OnceLock::new();
-    CATALOG.get_or_init(|| contract::catalog(&contract::registrations()))
+    CATALOG.get_or_init(|| {
+        let registrations: Vec<_> = crate::registry().registrations().iter().collect();
+        contract::catalog(&registrations)
+    })
 }
 
 /// The plain name of the component registered as `type_name`; the registered name when the registry lists no such type.
@@ -118,7 +121,7 @@ pub fn display_name(type_name: &str) -> String {
 
 /// Every story linked into the viewer, ordered by type then story name.
 pub fn entries() -> Vec<Entry> {
-    stories().into_iter().map(|registration| Entry { registration, type_name: (registration.type_name)() }).collect()
+    crate::registry().stories().iter().map(|registration| Entry { registration, type_name: (registration.type_name)() }).collect()
 }
 
 /// What a registration says about a type: where it is declared and what it is for.
@@ -136,7 +139,7 @@ pub struct Declared {
 /// The registration of each registered component and pattern type, by the type's registered name.
 pub fn declared() -> HashMap<&'static str, Declared> {
     let mut out = HashMap::new();
-    for registration in contract::registrations() {
+    for registration in crate::registry().registrations() {
         match registration {
             Registration::Component(probe) => {
                 out.insert(probe.type_name(), Declared { module: probe.module, purpose: probe.purpose, probe: Some(probe) });

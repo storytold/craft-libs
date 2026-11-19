@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The commands of a section, run on the section that holds the focus: its header menu rows and any chord the keymap
 /// binds. Showing a hidden section is a row of the menu, one per section, because a hidden section cannot hold focus.

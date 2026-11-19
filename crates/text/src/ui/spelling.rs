@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The dialog's words, English by default.

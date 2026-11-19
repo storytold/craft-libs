@@ -19,7 +19,7 @@ use super::popover::compact_picker;
 use super::{ColorPicker, PickedColor, ScreenPickGesture};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// One of the wells, `WELL.at(0)` the primary and `WELL.at(1)` the secondary.
 const WELL: PartKey = PartKey::new("well");

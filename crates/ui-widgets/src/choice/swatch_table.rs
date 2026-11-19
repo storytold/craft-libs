@@ -13,7 +13,7 @@ use craft_theme::Srgba;
 use egui::{Response, Ui, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The entries of a colour table as an item source: keyed by index, named for type-ahead.
 #[derive(Clone, Copy, Debug)]

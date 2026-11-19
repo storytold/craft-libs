@@ -22,7 +22,7 @@ use craft_ui::style::{SurfaceKind, TypeRole};
 use egui::{Id, Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The pane's words, English by default.

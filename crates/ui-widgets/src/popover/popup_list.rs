@@ -9,7 +9,7 @@ use craft_behavior::{Metrics, Sense};
 use egui::Response;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The style of a popup list: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

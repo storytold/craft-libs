@@ -16,7 +16,7 @@ use craft_ui::style::{ComponentStyle, FocusLook, StyleCx, TextLook};
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The statistics' names, English by default (Excel's).

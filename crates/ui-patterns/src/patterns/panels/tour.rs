@@ -20,7 +20,7 @@ use egui::{Rect, Ui};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The keys of a tour: Right goes to the next step and Left back (the keymap mirrors them in a right-to-left
 /// interface). They belong to the tour that holds the focus.

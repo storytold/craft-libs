@@ -16,7 +16,7 @@ use egui::{Response, Ui};
 use std::time::Duration;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Shown for an item whose value the host does not know.
 const MISSING: &str = "\u{2014}";

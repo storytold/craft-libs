@@ -261,4 +261,4 @@ pub(crate) fn save_as(mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

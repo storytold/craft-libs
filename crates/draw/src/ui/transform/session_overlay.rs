@@ -2,7 +2,7 @@
 //! and turns its reports into [`TransformEdit`]s, and `TransformTool`: the canvas tool of the open session.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::CancelReason;
 use craft_behavior::geometry::SnapLine;

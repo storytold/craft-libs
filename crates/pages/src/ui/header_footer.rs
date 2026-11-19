@@ -4,7 +4,7 @@
 //! rectangle. What a section holds, its fields and the editor are the app's.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{HitLevel, HitPriority, Input, Intent, Metrics, PartKey, Sense};

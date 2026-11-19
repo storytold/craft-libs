@@ -16,10 +16,10 @@
 //! ```
 
 mod badge;
-mod dialog;
-mod list;
+pub(crate) mod dialog;
+pub(crate) mod list;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use badge::StatusBadge;
 pub use dialog::{CandidateChecker, RelinkCriterion, RelinkDialog, RelinkLayout, RelinkOptions, RelinkOutcome, RelinkRow, RelinkWords};

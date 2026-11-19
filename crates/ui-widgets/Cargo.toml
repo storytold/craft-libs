@@ -39,7 +39,7 @@ craft-host = { workspace = true }
 craft-i18n = { workspace = true, features = ["collate"] }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 
 [[test]]

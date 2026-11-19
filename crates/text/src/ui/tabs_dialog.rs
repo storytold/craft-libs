@@ -31,7 +31,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 const POSITION: ColumnKey = ColumnKey::new("position");
 const ALIGNMENT: ColumnKey = ColumnKey::new("alignment");

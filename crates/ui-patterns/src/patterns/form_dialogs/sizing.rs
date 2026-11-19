@@ -20,10 +20,10 @@ use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-mod canvas;
-mod image;
+pub(crate) mod canvas;
+pub(crate) mod image;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use canvas::{CanvasSize, CanvasSizeOutput, CanvasSizeResult, CanvasSizeValues, HostedCanvasSize};
 pub use image::{HostedImageSize, ImageSize, ImageSizeOutput, ImageSizeResult, ImageSizeValues};

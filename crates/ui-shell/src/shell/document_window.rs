@@ -1,7 +1,7 @@
 //! `DocumentWindow`: a document's window, a container in its own OS viewport.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use crate::contract::overlay::OverlayFit;
 use crate::contract::{

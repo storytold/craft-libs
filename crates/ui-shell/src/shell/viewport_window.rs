@@ -1,7 +1,7 @@
 //! `ViewportWindow`: an app window in its own OS window where windows exist, else a dialog layer over the parent.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use crate::contract::{Bind, BodyCx, NoValue, Outcome, Overlay, Pattern, Props, SaveKey, ShowContainer as _};
 use crate::dialog::Dialog;

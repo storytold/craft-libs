@@ -3,7 +3,7 @@
 //! name, and a drag moves the margin as one edit gesture (one undo step).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 

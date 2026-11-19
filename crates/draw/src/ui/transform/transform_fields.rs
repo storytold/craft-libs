@@ -2,7 +2,7 @@
 //! rows.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod units;
 
 use self::units::Conversion;

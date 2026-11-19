@@ -2,7 +2,7 @@
 //! layer, so Reset returns to them once the user edited.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The settings an adjustment layer had when the Properties panel started showing it, and whether
 /// the panel edited them since (or since the last Reset). A plain value the app keeps per panel;

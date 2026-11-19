@@ -27,9 +27,9 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 #[cfg(feature = "suite")]
-mod trials;
+pub(crate) mod trials;
 
 const CELL: PartKey = PartKey::new("cell");
 const NAME: PartKey = PartKey::new("name");

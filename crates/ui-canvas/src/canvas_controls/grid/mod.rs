@@ -3,7 +3,7 @@
 //! carries the state. Show it before guides and frames.
 
 #[cfg(feature = "suite")]
-pub(super) mod stories;
+pub(crate) mod stories;
 
 use crate::canvas::{CanvasSpace, GuideLine, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

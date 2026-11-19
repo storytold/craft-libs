@@ -3,7 +3,7 @@
 //! reports a guide being placed; a drag from the corner moves the zero point.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod ticks;
 
 pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};

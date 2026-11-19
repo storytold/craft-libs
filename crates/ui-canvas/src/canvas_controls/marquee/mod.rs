@@ -3,7 +3,7 @@
 //! It takes no pointer and no key: the press, the drag and the modifier rules are the canvas tool's.
 
 #[cfg(feature = "suite")]
-pub(super) mod stories;
+pub(crate) mod stories;
 
 use super::words::CanvasControlWords;
 use crate::canvas::{MARCH_SECONDS, MARCH_TICK, canvas_space, march_shift};

@@ -326,7 +326,7 @@ impl<'a> MetadataTable<'a> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The rows stamp of a filter query: the same query keeps the layout, another one rebuilds it.
 fn query_stamp(query: &str) -> u64 {

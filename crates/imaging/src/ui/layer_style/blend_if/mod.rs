@@ -1,7 +1,7 @@
 //! `BlendIfBar`: one Blend If slider (This Layer or Underlying Layer) with its four handles, over `ThumbRow`.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvents, Mixed};
 use craft_ui::contract::{Bind, EditResponse, Props as _, Show as _, ShowContainer as _};

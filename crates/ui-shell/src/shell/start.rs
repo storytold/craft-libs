@@ -2,7 +2,7 @@
 //! pinned folders and templates.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
 use super::words::ShellWords;

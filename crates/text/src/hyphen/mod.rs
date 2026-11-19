@@ -14,9 +14,9 @@
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 #[cfg(feature = "generator")]
-pub mod dict;
+pub(crate) mod dict;
 #[cfg(not(feature = "generator"))]
-mod dict;
+pub(crate) mod dict;
 #[cfg(feature = "generator")]
 pub mod patgen;
 mod patterns;
@@ -516,4 +516,4 @@ fn heuristic_points(c: &[char]) -> Vec<usize> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

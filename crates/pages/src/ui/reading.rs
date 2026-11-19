@@ -23,7 +23,7 @@ use super::view::PageSource;
 use crate::layout::SCREEN_POINTS_PER_POINT;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The page-turn parts: one over each gap between the columns and one over each side margin, indexed from the left.
 /// A click on one turns toward its side and a swipe starting on one turns by the swipe's direction.

@@ -6,7 +6,7 @@
 //! keeps the prompt open.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::event::PresetEvent;
 use super::files::{PresetFileRequest, PresetFiles};

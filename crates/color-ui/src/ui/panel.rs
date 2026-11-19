@@ -30,7 +30,7 @@ use super::{
 use crate::{CmykModel, GrayModel, not_web_safe};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The Color panel's words.
@@ -821,7 +821,7 @@ impl Body<'_> {
 const WEB_STEP: f64 = 51.0;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     use super::*;

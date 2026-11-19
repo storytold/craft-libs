@@ -6,7 +6,7 @@
 //! `ui.set layerFilter {by, kinds, name, effect, mode, attribute, color, smart}`) without the panel.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvent, IconId, Mixed, SelectionChange};
 use craft_theme::{ControlSize, LabelColor};

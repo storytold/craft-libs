@@ -3,7 +3,7 @@
 //! glyphs in a row at the top. Double-click or Enter inserts the glyph where the app can insert.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

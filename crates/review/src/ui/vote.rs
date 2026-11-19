@@ -14,7 +14,7 @@ use egui::{Response, Ui};
 use crate::collab::{CollabRequest, CollabTransport, VoteScope};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Votes per person a new vote starts with.
 const DEFAULT_VOTES: u32 = 3;

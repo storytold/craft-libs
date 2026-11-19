@@ -14,11 +14,11 @@ mod footer;
 mod menu;
 #[cfg(feature = "screen-testing")]
 pub mod mock;
-mod panel;
+pub(crate) mod panel;
 mod prompt;
 mod rows;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 pub use body::{ActionMove, ActionPlace};

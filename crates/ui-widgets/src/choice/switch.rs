@@ -114,4 +114,4 @@ impl Component for Switch<'_> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

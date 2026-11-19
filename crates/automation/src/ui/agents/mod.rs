@@ -1,7 +1,7 @@
 //! `AgentsPage`: the Agents page of Preferences, over the agent settings in the Preferences draft.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 pub use words::AgentsWords;

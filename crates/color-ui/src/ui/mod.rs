@@ -11,39 +11,39 @@
 //! Colour edits are values of a colour model ([`ModelValues`](craft_theme::ModelValues)) or of [`PickedColor`], and
 //! report through the edit lifecycle of the contract.
 
-mod area;
+pub(crate) mod area;
 mod channels;
-mod choice;
-mod compare;
-mod disc;
-mod droppers;
-mod eyedropper;
+pub(crate) mod choice;
+pub(crate) mod compare;
+pub(crate) mod disc;
+pub(crate) mod droppers;
+pub(crate) mod eyedropper;
 pub mod gradient;
-mod harmony;
+pub(crate) mod harmony;
 mod hex;
-mod hud;
-mod info;
-mod lut_picker;
-mod paint_chip;
-mod pair;
-mod palette;
-mod panel;
-mod picker;
+pub(crate) mod hud;
+pub(crate) mod info;
+pub(crate) mod lut_picker;
+pub(crate) mod paint_chip;
+pub(crate) mod pair;
+pub(crate) mod palette;
+pub(crate) mod panel;
+pub(crate) mod picker;
 mod picker_dialog;
-mod popover;
-mod profile_prompts;
-mod ramp;
-mod readout;
-mod sample_size;
-mod samplers;
-mod screen_picker;
-mod strip;
-mod swatches;
+pub(crate) mod popover;
+pub(crate) mod profile_prompts;
+pub(crate) mod ramp;
+pub(crate) mod readout;
+pub(crate) mod sample_size;
+pub(crate) mod samplers;
+pub(crate) mod screen_picker;
+pub(crate) mod strip;
+pub(crate) mod swatches;
 /// The stories and trials this crate registers for the integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing;
-mod warning;
-mod wheel;
+pub(crate) mod warning;
+pub(crate) mod wheel;
 
 pub use crate::AreaMode;
 pub use area::{AreaShape, ColorArea, ColorAreaStyle};

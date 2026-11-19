@@ -22,7 +22,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the password dialog beside the common Cancel. `{name}` is the file's name, `{strength}` one of

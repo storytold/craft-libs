@@ -8,7 +8,7 @@ mod auto;
 pub(crate) mod bezier;
 mod curvature_mode;
 mod mode;
-mod options;
+pub(crate) mod options;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;

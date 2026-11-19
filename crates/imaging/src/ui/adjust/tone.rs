@@ -6,7 +6,7 @@
 //! colour management and mode, so the app does that, as with the Eyedropper.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{CancelReason, Cursor, IconId, PaintedCursor};
 use craft_theme::Srgba;

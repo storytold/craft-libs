@@ -12,11 +12,11 @@ pub mod ghost;
 mod group;
 mod held;
 mod hosted;
-mod items;
-mod label;
+pub(crate) mod items;
+pub(crate) mod label;
 mod lazy;
 #[cfg(feature = "suite")]
-mod level;
+pub(crate) mod level;
 #[cfg(feature = "suite")]
 mod level_table;
 mod looks;
@@ -94,9 +94,6 @@ pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, 
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
-#[doc(hidden)]
-#[cfg(feature = "suite")]
-pub use registry::registrations;
 #[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
 pub use sampler::{CanvasGesture, Sampler};

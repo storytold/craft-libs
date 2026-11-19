@@ -18,7 +18,7 @@ use craft_ui::style::{ComponentStyle, FocusLook, Ink, StyleCx, SurfaceKind, Surf
 use egui::{Rect, Response, Ui, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The field claims bare Escape while recording, so it reaches the field as a chord (the keymap's recorder reads it as
 /// cancel) and neither leaves the row nor closes the dialog.

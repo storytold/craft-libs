@@ -7,9 +7,9 @@
 //! if let Some(request) = out.requests.take_path() { /* open the file dialog, store the picture, set `fill.source` */ }
 //! ```
 
-mod editor;
+pub(crate) mod editor;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 pub use editor::{PICTURE_FILL_KEY, PictureFillEditor, PictureFillOutput};

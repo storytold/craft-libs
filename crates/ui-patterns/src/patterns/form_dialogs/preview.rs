@@ -22,7 +22,7 @@ use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The well: a drag on it pans the picture and a click centres the view on the point clicked.
 const WELL: PartKey = PartKey::new("well");

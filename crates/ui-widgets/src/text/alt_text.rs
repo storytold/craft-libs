@@ -1,7 +1,7 @@
 //! `AltTextField`: an object's description for people who cannot see it, with a Mark as decorative check.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::{FieldStyle, text_part};
 use crate::choice::Checkbox;

@@ -30,7 +30,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// Where a pane is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

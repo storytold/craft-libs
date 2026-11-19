@@ -20,7 +20,7 @@
 //! SelectionOverlay::new("Selection", &proxy_mask).visible(state.view.recipe().ants).reduction(k).show_at(ui, canvas_rect);
 //! ```
 
-mod controls;
+pub(crate) mod controls;
 mod keys;
 mod state;
 #[cfg(feature = "suite")]

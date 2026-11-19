@@ -5,7 +5,7 @@ mod footer;
 mod labels;
 mod menu;
 mod model;
-mod panel;
+pub(crate) mod panel;
 mod rows;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;

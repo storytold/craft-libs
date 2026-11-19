@@ -186,4 +186,4 @@ fn classify_error(e: &zbus::Error) -> Option<bool> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

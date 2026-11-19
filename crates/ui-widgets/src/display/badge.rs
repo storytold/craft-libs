@@ -13,7 +13,7 @@ use egui::{Response, Vec2};
 use std::borrow::Cow;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The largest count a count badge shows; more reads `99+`.
 pub const MAX_COUNT: u32 = 99;

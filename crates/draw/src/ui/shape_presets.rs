@@ -12,7 +12,7 @@ use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, Ui, pos2};
 use kurbo::{BezPath, PathEl};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The error bound, in points, when the glyph's curves are flattened.
 const FLATTEN_TOLERANCE: f64 = 0.1;

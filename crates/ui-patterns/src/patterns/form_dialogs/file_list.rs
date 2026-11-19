@@ -21,7 +21,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The list shows this many rows, then scrolls.
 const LIST_ROWS: u16 = 6;

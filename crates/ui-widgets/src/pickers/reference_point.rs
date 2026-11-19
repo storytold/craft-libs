@@ -15,7 +15,7 @@ use craft_behavior::{Anchor9, Metrics, NavShape, PartKey, PartRef, Roving, Sense
 use egui::{Pos2, Rect, Vec2, vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 const CELL: PartKey = PartKey::new("cell");
 

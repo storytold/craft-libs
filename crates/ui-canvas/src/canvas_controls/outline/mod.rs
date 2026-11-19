@@ -4,7 +4,7 @@
 
 mod hover;
 #[cfg(feature = "suite")]
-pub(super) mod stories;
+pub(crate) mod stories;
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

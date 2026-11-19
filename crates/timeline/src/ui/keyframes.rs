@@ -1,7 +1,7 @@
 //! Keyframe lanes, the keyframe navigator and the animation toggle (N1.04).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

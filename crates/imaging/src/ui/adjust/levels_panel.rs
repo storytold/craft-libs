@@ -2,7 +2,7 @@
 //! Channel select, Auto and the editor over the shown channel's histogram.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

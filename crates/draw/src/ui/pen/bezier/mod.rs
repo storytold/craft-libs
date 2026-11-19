@@ -6,7 +6,7 @@ mod mark;
 mod model;
 mod ops;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod style;
 mod tools;
 mod words;

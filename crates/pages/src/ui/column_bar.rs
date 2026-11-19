@@ -3,7 +3,7 @@
 //! its least share, and the other columns keep theirs.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::divider::{Give, Segment, resize, travel};
 use craft_behavior::{Axis, Metrics, PartKey};

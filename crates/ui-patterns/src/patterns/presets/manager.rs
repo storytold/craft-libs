@@ -2,7 +2,7 @@
 //! kind, with rename and delete, and the host's own action buttons.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::browser::PresetBrowser;
 use super::event::PresetEvent;

@@ -207,4 +207,4 @@ impl Container for Popover<'_> {
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

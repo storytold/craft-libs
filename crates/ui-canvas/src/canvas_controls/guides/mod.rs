@@ -4,7 +4,7 @@
 mod place;
 pub mod reading;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use reading::GuideReading;
 

@@ -17,7 +17,7 @@ use egui::{CornerRadius, Response, Ui, Vec2};
 use crate::revisions::{Revision, RevisionAction, RevisionKind};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The detail lines a card shows.
 const DETAIL_LINES: usize = 8;

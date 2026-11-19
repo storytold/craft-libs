@@ -7,7 +7,7 @@
 //! commands routed to it ([`ViewCommands`]), keeps the document in view with Overscroll off, eases a zoom under
 //! Animated Zoom, publishes the view it shows as a [`CanvasSpace`] to its body, and reports the view the app copies.
 
-mod crop;
+pub(crate) mod crop;
 mod frame_step;
 // The full-window dialog family; `dialog` re-exports it.
 pub(crate) mod full_window;
@@ -16,7 +16,7 @@ mod march;
 mod readout;
 mod space;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 #[cfg(feature = "testing")]
 pub(crate) mod testing;
 mod words;
@@ -42,14 +42,14 @@ pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, Tool
 mod raster_source;
 pub use raster_source::{PixelRect, RasterSource};
 
-mod pasteboard;
-mod split;
+pub(crate) mod pasteboard;
+pub(crate) mod split;
 pub use pasteboard::{PageBorder, PageFrame, Pasteboard, PasteboardColor, PasteboardOutput, PasteboardStyle};
 pub use split::{SplitAt, SplitLayout, SplitPane, SplitStyle, SplitViews, SplitViewsOutput};
 pub use words::SplitWords;
 
 mod app_paint;
-mod raster;
+pub(crate) mod raster;
 pub use app_paint::AppPaint;
 pub use raster::{DetailPlan, Extent, RasterDisplay, RasterDisplayOutput, RasterStyle, snap_to_texels};
 
@@ -65,8 +65,8 @@ pub use space::{BackgroundPress, BodyKeys, CanvasRulers, context_click};
 
 // canvas-navigate-a
 mod momentary;
-mod navigate;
-mod rotate;
+pub(crate) mod navigate;
+pub(crate) mod rotate;
 mod tools;
 mod zoom_motion;
 
@@ -78,15 +78,15 @@ pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
 pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewRequest, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
-mod rulers;
-mod scrollbars;
+pub(crate) mod rulers;
+pub(crate) mod scrollbars;
 pub use rulers::{
     INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule,
 };
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
 // canvas-navigator-a
-mod navigator;
+pub(crate) mod navigator;
 pub use navigator::{
     Navigator, NavigatorCommands, NavigatorOutput, NavigatorPreview, NavigatorZoomRow, NavigatorZoomRowOutput, preview_rect, proxy_quad,
     view_center_for, zoom_to_document_rect,

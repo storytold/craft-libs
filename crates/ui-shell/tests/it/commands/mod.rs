@@ -1,6 +1,6 @@
 //! The command board: registry, state, the gate, firing and scoped delivery.
 
-mod app_catalog;
-mod app_scope;
-mod board;
-mod kit;
+pub(crate) mod app_catalog;
+pub(crate) mod app_scope;
+pub(crate) mod board;
+pub(crate) mod kit;

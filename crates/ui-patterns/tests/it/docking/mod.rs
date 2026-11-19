@@ -4,27 +4,27 @@ use craft_theme::{Contrast, ControlSize, Mode, Variant};
 use craft_ui::docking::DockSizes;
 use craft_ui::testing::style::{tokens, with_cx};
 
-mod render;
+pub(crate) mod render;
 
-mod panel_menu;
-mod runs;
+pub(crate) mod panel_menu;
+pub(crate) mod runs;
 
-mod split;
+pub(crate) mod split;
 
-mod drop;
-mod drop_preview;
-mod drop_session;
+pub(crate) mod drop;
+pub(crate) mod drop_preview;
+pub(crate) mod drop_session;
 
-mod floating;
-mod floating_area;
-mod hidden;
+pub(crate) mod floating;
+pub(crate) mod floating_area;
+pub(crate) mod hidden;
 
-mod columns;
-mod dock_back;
-mod group_view;
-mod workspace_dialogs;
+pub(crate) mod columns;
+pub(crate) mod dock_back;
+pub(crate) mod group_view;
+pub(crate) mod workspace_dialogs;
 
-mod native;
+pub(crate) mod native;
 
 /// The docking sizes of the default theme with the given divider gap, least pane and strip height.
 fn sizes(gap: f32, least_pane: f32, strip: f32) -> DockSizes {

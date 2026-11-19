@@ -19,6 +19,7 @@ mod pipeline_only;
 mod platform;
 mod pointer;
 mod props;
+mod registry_expansion;
 mod runtime_egui;
 mod scope;
 mod shape;
@@ -39,7 +40,7 @@ use crate::report::Finding;
 use sites::Site;
 
 /// Every rule id of this module, for the marker and exemption validation in [`crate::RULES`].
-pub(crate) const IDS: [&str; 39] = [
+pub(crate) const IDS: [&str; 40] = [
     egui_import::ID,
     runtime_egui::ID,
     text_edit::ID,
@@ -79,12 +80,13 @@ pub(crate) const IDS: [&str; 39] = [
     shape::OVERLAY_FLAG,
     shape::REGISTRATION,
     unsafe_allow::ID,
+    registry_expansion::ID,
 ];
 
 type Check = fn(&Cx<'_>, &mut Vec<Finding>);
 
 /// REGISTRY: add a rule by adding its `check` here and its ids to [`IDS`].
-const REGISTRY: [Check; 21] = [
+const REGISTRY: [Check; 22] = [
     egui_import::check,
     runtime_egui::check,
     text_edit::check,
@@ -106,6 +108,7 @@ const REGISTRY: [Check; 21] = [
     entry::check,
     shape::check,
     unsafe_allow::check,
+    registry_expansion::check,
 ];
 
 /// One file as the rules see it.

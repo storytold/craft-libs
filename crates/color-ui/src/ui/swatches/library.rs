@@ -569,7 +569,7 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

@@ -10,7 +10,7 @@ use egui::{Response, Ui};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The panel's buttons in their fixed order, each with the one modifier it latches: Shift, the command key (⌘ on
 /// macOS, Ctrl elsewhere) and Alt (⌥ on macOS).

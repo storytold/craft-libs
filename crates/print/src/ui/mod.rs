@@ -1,10 +1,10 @@
 //! Printer selection and asynchronous job feedback, independent of any spooler or document.
 //! Hosts provide workers; applications own PDF generation, commands and translated wording.
 
-mod dialog;
-mod panel;
+pub(crate) mod dialog;
+pub(crate) mod panel;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use dialog::{HostedPrint, PrintAnswer, PrintDialog, PrintDialogOutput, PrintDialogWords, PrintFinish, PrintMarks, PrintSection, PrintSheet};
 pub use panel::{PrintPanel, PrintPanelOutput, PrintWords};

@@ -21,7 +21,7 @@ pub fn set_window_movable(ctx: &Context, movable: bool) {
 }
 
 // The bar, its title and its two ends.
-mod bar;
+pub(crate) mod bar;
 mod measure;
 mod style;
 mod title;

@@ -16,7 +16,7 @@
 //! matches by label, English label or menu path, each as a command row with its path as detail.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;

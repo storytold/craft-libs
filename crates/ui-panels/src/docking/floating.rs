@@ -32,7 +32,7 @@ use std::cell::RefCell;
 use std::hash::Hash;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.
 pub(crate) fn title_row(tokens: &UiTokens) -> f32 {

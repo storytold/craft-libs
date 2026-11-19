@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// One row of a properties tab.
 #[derive(Clone, Debug, PartialEq)]

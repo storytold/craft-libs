@@ -1,8 +1,8 @@
 //! The file service's UI part: [`PathField`], and the words of the service's native boxes.
 
-mod path_field;
+pub(crate) mod path_field;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use path_field::{PathField, PathFieldOutput, PathFieldWords};
 

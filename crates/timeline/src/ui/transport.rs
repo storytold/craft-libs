@@ -1,7 +1,7 @@
 //! A monitor's transport bar and the compact media controls.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::{EditEvents, IconId};
 use craft_ui::bars::{Bar, BarKind};

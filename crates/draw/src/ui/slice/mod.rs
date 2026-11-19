@@ -35,11 +35,11 @@ use craft_behavior::{Axis, CancelReason, EditEvent, GestureId, Mixed};
 use craft_keymap::Mods;
 use std::sync::Arc;
 
-mod bar;
+pub(crate) mod bar;
 mod dialogs;
-mod overlay;
+pub(crate) mod overlay;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod tool;
 mod words;
 

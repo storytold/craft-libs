@@ -16,7 +16,7 @@ use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx}
 use egui::{CornerRadius, Mesh, Pos2, Rect, Vec2, pos2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The strip itself: a press on it sets the value there.
 const STRIP: PartKey = PartKey::new("strip");

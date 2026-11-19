@@ -31,7 +31,7 @@ use crate::ui::length::DocUnit;
 use super::FontPickerSource;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the style options editor, English by default: the three short alignment names its rows show. The

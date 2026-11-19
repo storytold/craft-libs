@@ -22,9 +22,9 @@ pub use hosted::{FullWindowWorkspace, HostedWorkspace, WorkspaceCx, WorkspacePas
 
 mod hosted;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 #[cfg(feature = "suite")]
-mod trials;
+pub(crate) mod trials;
 
 /// The style of a full-window dialog: the surface comes from the container.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]

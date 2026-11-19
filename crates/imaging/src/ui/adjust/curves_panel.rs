@@ -4,7 +4,7 @@
 //! ([`CurvesPanel::add_point_from_sample`]).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

@@ -5,7 +5,7 @@
 use craft_theme::Srgba;
 
 mod dialog;
-mod editor;
+pub(crate) mod editor;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod words;

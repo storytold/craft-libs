@@ -21,7 +21,7 @@ use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 pub use words::PaintBarWords;

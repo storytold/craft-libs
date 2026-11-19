@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The standard words of the list manager; the app's own actions bring their labels.

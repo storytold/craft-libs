@@ -22,7 +22,7 @@ use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The ratio, a ratio field, a preset or W × H × Resolution changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

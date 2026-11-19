@@ -13,7 +13,7 @@ use egui::{Response, Ui};
 use crate::collab::{CollabRequest, CollabTransport, JoinState};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The field's words, English by default.

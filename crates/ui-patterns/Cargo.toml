@@ -44,7 +44,7 @@ zeroize = "1.9"
 craft-ui-patterns = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 serde = { workspace = true }
 

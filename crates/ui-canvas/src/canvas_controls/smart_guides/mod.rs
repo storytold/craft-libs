@@ -2,7 +2,7 @@
 //! (20.6). It has no parts, so a press never lands on it.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use crate::canvas::{CanvasRulers, canvas_space};
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Role};

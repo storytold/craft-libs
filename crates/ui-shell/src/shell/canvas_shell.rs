@@ -19,7 +19,7 @@
 //! ```
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::app_shell::{RegionBody, ShellRegion};
 use super::words::ShellWords;

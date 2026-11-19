@@ -17,7 +17,7 @@ use egui::{Response, Ui};
 use serde_json::{Value, json};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the report dialog beside the common OK.

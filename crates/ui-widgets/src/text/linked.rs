@@ -2,7 +2,7 @@
 //! equal (four sides).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::NumberField;
 use crate::buttons::ToggleButton;

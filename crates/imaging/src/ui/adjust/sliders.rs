@@ -6,7 +6,7 @@
 //! gesture of the whole value.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 use std::sync::Arc;

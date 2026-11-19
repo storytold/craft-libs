@@ -1,11 +1,11 @@
 //! Photoshop's four small adjustments: Brightness/Contrast, Threshold, Color Balance and Photo Filter.
 
-mod brightness_contrast;
-mod color_balance;
-mod photo_filter;
+pub(crate) mod brightness_contrast;
+pub(crate) mod color_balance;
+pub(crate) mod photo_filter;
 #[cfg(feature = "suite")]
-mod stories;
-mod threshold;
+pub(crate) mod stories;
+pub(crate) mod threshold;
 
 pub use brightness_contrast::{BrightnessContrast, BrightnessContrastEditor};
 pub use color_balance::{ColorBalance, ColorBalanceEditor, ColorBalanceOutput, ColorBalanceTone};

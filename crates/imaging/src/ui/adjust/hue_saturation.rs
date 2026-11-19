@@ -2,7 +2,7 @@
 //! that wrap at 360°.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use craft_behavior::Mixed;
 use craft_theme::{Hsb, Srgba};

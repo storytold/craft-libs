@@ -18,7 +18,7 @@ use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, St
 use egui::{Rect, Response, Ui, Vec2, pos2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The slicer's words, English by default.

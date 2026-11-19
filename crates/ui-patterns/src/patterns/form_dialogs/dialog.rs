@@ -41,7 +41,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the parameter dialog beside the common OK and Cancel.

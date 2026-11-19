@@ -3,7 +3,7 @@
 //! "missing fonts" warning on open; VectorCraft's and FigCraft's Document Fonts lists).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::borrow::Cow;
 use std::sync::Arc;

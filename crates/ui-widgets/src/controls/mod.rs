@@ -2,4 +2,4 @@
 
 pub mod disclosure;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

@@ -4,7 +4,7 @@
 mod body;
 mod events;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 mod words;
 
 pub use events::{LayerCompsEvent, LayerCompsOutput, LayerCompsRowCommands};

@@ -2,7 +2,7 @@
 //! where a line limit stops the list, and Clear All.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::{FieldStyle, text_part};
 use crate::buttons::IconButton;

@@ -6,7 +6,7 @@
 //! caption goes, whether a detail line is reserved, and the zoom.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::headers::Outline;
 use super::layout::{Around, ArrangeSpacing, GridLayout, Recipe, Slot, TailRow, TileGroup, Tiling, arrange, aspects_of, slot_at};

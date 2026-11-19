@@ -5,8 +5,8 @@
 //! and named stroke types. The editor edits geometry only; width, colour and paint are the host's
 //! controls. The value is [`StrokeStyle`], re-exported here.
 
-mod button;
-mod editor;
+pub(crate) mod button;
+pub(crate) mod editor;
 mod preview;
 #[cfg(feature = "suite")]
 pub(crate) mod stories;

@@ -12,7 +12,7 @@ mod footer;
 mod menu;
 mod row;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use drag::{LayersDrag, document_hash};
 pub use events::{

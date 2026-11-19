@@ -4,7 +4,7 @@
 //! name selects the artboard.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};

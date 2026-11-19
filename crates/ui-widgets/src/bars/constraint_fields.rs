@@ -17,7 +17,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The three kinds of [`Constraint`], as the Style select lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

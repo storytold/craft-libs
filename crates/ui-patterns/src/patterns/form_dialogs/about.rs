@@ -4,7 +4,7 @@
 mod contributors;
 mod credits;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use contributors::{CommitShare, ContributorSort, NameMode};
 pub use credits::{AboutInfo, AboutLink, Contributor, Credits, ModelCredit};

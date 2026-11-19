@@ -13,7 +13,7 @@ use std::sync::Arc;
 mod drag;
 mod edge;
 pub(super) mod empty_text;
-mod header;
+pub(crate) mod header;
 mod marquee;
 mod request;
 

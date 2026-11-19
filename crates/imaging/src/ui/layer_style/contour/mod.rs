@@ -3,7 +3,7 @@
 
 mod editor;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

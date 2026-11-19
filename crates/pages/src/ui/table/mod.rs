@@ -7,7 +7,7 @@ pub mod properties;
 pub mod selection;
 pub mod size_picker;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use edges::{BorderEdges, BorderPreset, EdgeKey, EdgePicker, EdgePickerStyle, EdgePickerWords};
 pub use properties::{CellAlign, RowHeight, TableChange, TableProperties, TablePropertiesOutput, TablePropertiesWords, TableValues, TextDirection};

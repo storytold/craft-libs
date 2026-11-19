@@ -20,7 +20,7 @@ use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 use craft_ui::choice::{SwatchTable, SwatchTableOutput};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The words of the harmony controls and of the Color Guide panel menu.

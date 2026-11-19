@@ -6,7 +6,7 @@
 //! The notes are the app's; [`NotesText`] is the shape the editor reads and writes.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 mod text;
 

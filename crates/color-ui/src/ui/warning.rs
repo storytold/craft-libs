@@ -12,7 +12,7 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// A warning the host shows beside a colour's swatch, as the out-of-gamut and web-colour warnings of Photoshop's Color
 /// Picker and Color panel: an icon and a chip of the nearest colour that passes. A click on it sets that colour;

@@ -6,7 +6,7 @@
 //! field (`open_at`) and let the user resize it (`resizable`).
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@
 //! the arrow and Page keys to step from anywhere in the preview, Escape or Close to leave.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::view::PageSource;
 use craft_behavior::IconId;

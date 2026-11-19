@@ -5,7 +5,7 @@
 //! the list. The option the keys make active puts its text in the field; the list's Escape puts back what was typed.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::dress::RowDress;
 use super::rows::EntryRows;

@@ -96,7 +96,7 @@ craft-host = { workspace = true }
 craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
 # The oracle for the deflated default faces (`tests/it/fonts/on_demand.rs`).

@@ -16,7 +16,7 @@ use craft_behavior::{HitLevel, HitPriority, IconId, Metrics, PartKey, PointerBut
 use egui::{Rect, Response, Vec2};
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The face over the whole button.
 const FACE: PartKey = PartKey::new("face");

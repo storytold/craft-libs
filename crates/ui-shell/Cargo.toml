@@ -50,7 +50,7 @@ craft-ui-shell = { path = ".", features = ["suite"] }
 craft-behavior = { workspace = true }
 craft-host = { workspace = true }
 craft-theme = { workspace = true }
-craft-ui-test-kit = { workspace = true }
+craft-ui-test-kit = { workspace = true, features = ["suite"] }
 craft-window = { workspace = true }
 egui = { workspace = true }
 

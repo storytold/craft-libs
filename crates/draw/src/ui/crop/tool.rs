@@ -789,4 +789,4 @@ pub fn crop_to_form(words: &CropWords, frame: &CropBox) -> ParamDialog<'static> 
 }
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;

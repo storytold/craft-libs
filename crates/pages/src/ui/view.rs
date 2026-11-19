@@ -18,9 +18,9 @@
 //! if let Some(view) = reply.and_then(|reply| reply.view) { out.adopt(&mut view_state, &view); }
 //! ```
 
-mod pictures;
+pub(crate) mod pictures;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use self::pictures::{PageMetrics, PagePictures};
 use super::access::AccessDescriber;

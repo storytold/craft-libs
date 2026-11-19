@@ -5,9 +5,9 @@
 //! `NodeKind`.
 
 mod kind;
-mod node;
+pub(crate) mod node;
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 pub use kind::{NodeEvent, NodeId, NodeKind, PortRef, Wire, WireDrag};
 pub use node::{Node, NodeOutput, NodeStyle};

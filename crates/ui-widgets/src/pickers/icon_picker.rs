@@ -4,7 +4,7 @@
 //! tiles, Enter picks the active tile, and focus stays in the field. A click on a tile picks it.
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 use super::words::PickerWords;
 use crate::contract::{

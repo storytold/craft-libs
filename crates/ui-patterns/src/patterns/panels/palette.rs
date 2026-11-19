@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[cfg(feature = "suite")]
-mod stories;
+pub(crate) mod stories;
 
 /// The most commands the empty query lists when the app has run none.
 const FIRST_ROWS: usize = 12;
