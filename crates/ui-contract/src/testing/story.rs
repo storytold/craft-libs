@@ -4,6 +4,7 @@ use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
 use crate::runtime::commands::CommandInput;
 use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
+use craft_tracked::{Revision, Tracked};
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -239,6 +240,10 @@ pub struct StoryData {
     notes: HashMap<(&'static str, TypeId), Box<dyn Any>>,
     /// The story's `disabled_text`.
     disabled_text: Option<&'static str>,
+    /// Moves when [`StoryData::settle`] finds the values changed: the revision a memoized view of the story keys on.
+    written: Tracked<()>,
+    /// The values as the last [`StoryData::settle`] found them.
+    settled: Option<StorySnapshot>,
 }
 
 /// How the Properties editor edits a value, beyond what its type says.
@@ -354,6 +359,27 @@ impl StoryData {
                 now.assign(&**was);
             }
         }
+        self.settle();
+    }
+
+    /// Moves the [`revision`](Self::revision) when a value was added or changed since the last call. The accessors hand
+    /// out `&mut T`, so a write leaves no trace of its own: comparing the values after code that may have written them
+    /// (a story's run, an editor's pass) is the only signal that one happened. Notes are not compared: only a run
+    /// writes them, and a run is what a reader of the revision would repeat.
+    pub fn settle(&mut self) {
+        let same = self.settled.as_ref().is_some_and(|last| {
+            last.values.len() == self.values.len() && last.values.iter().all(|(key, was)| self.values.get(key).is_some_and(|now| now.same(&**was)))
+        });
+        if !same {
+            *self.written = ();
+            self.settled = Some(self.snapshot());
+        }
+    }
+
+    /// The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a
+    /// change, so equal revisions mean the values a memoized view showed.
+    pub fn revision(&self) -> Revision {
+        self.written.revision()
     }
 
     /// The names of the values that differ from `before`; a value added since counts as changed.
@@ -384,6 +410,14 @@ impl StoryData {
     /// A copy of every value.
     pub fn snapshot(&self) -> StorySnapshot {
         StorySnapshot { values: self.values.iter().map(|(key, value)| (*key, value.copy())).collect() }
+    }
+}
+
+/// A story's data as props, by its [`revision`](StoryData::revision). A view that shows the story settles the data at
+/// the end of its run, so a run that changed a value runs once more, from the changed values, and then replays.
+impl crate::contract::MemoProps for &mut StoryData {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        crate::contract::MemoProps::key(&self.revision(), key);
     }
 }
 
