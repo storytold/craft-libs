@@ -1790,6 +1790,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-develop"
+version = "0.1.0"
+dependencies = [
+ "craft-develop-model",
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-develop-model"
 version = "0.1.0"
 dependencies = [
@@ -2224,6 +2233,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-null"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+]
+
+[[package]]
+name = "craft-gpu-providers"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+]
+
+[[package]]
+name = "craft-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-providers",
+ "pollster 0.4.0",
+ "wgpu",
+]
+
+[[package]]
 name = "craft-gridcraft-format"
 version = "0.1.0"
 dependencies = [
@@ -2378,6 +2421,10 @@ dependencies = [
  "sha2 0.10.9",
  "widestring",
 ]
+
+[[package]]
+name = "craft-ipp"
+version = "0.1.0"
 
 [[package]]
 name = "craft-java-class"
@@ -2915,6 +2962,7 @@ dependencies = [
 name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
+ "kurbo 0.13.1",
  "serde",
  "thiserror 2.0.21",
 ]
