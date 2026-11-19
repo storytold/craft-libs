@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::hammer;
-use crate::gltf::{MAX_ZERO_COMPONENTS, glb_container, read, split_glb, write_glb};
+use crate::gltf::{MAX_ZERO_COMPONENTS, glb_container, read, split_glb, uri_decode, write_glb};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
     TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
