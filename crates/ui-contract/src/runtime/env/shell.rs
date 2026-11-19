@@ -346,8 +346,7 @@ pub struct ShellEntry(#[doc(hidden)] pub Option<ShellCx>);
 impl crate::contract::MemoProps for ShellEntry {
     fn key(&self, key: &mut crate::contract::MemoKey) {
         let Some(shell) = &self.0 else { return key.write_u32(0) };
-        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, reveals: _, dialog: _ } =
-            &*shell.inner;
+        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, reveals: _, dialog: _ } = &*shell.inner;
         key.write_u32(1);
         key.feed_hash(window);
         key.feed_hash(&std::mem::discriminant(mode));
