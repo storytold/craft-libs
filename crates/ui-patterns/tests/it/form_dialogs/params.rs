@@ -130,6 +130,29 @@ fn a_row_that_resets_drops_its_dependents_when_its_value_changes() {
     assert_ne!(values.borrow().int("layer"), Some(7), "a click on another option resets the dependent");
 }
 
+// A radio row is captioned by its label with its options in a column; with `options_in_row` its options stand side by
+// side with no caption, and still pick the value.
+#[trial]
+fn a_radio_row_in_a_row_stands_its_options_side_by_side_without_a_caption() {
+    let layouts = || ParamKind::radio(vec![("diagonal".into(), "Diagonal".into()), ("horizontal".into(), "Horizontal".into())], Some("diagonal".into()));
+    let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|painted| painted.text == text);
+
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let fixture = rows(vec![Param::new("layout", "Layout", layouts())], &values);
+    let (first, second) = (fixture.by_label("Diagonal").expect("the first option"), fixture.by_label("Horizontal").expect("the second option"));
+    assert!(painted(&fixture, "Layout"), "a radio row is captioned by its label");
+    assert!(second.rect.top() >= first.rect.bottom(), "the options stand in a column");
+
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![Param::new("layout", "Layout", layouts()).options_in_row()], &values);
+    let (first, second) = (fixture.by_label("Diagonal").expect("the first option"), fixture.by_label("Horizontal").expect("the second option"));
+    assert!(!painted(&fixture, "Layout"), "no caption over the options");
+    assert!(second.rect.left() >= first.rect.right(), "the second option stands after the first");
+    assert!((second.rect.center().y - first.rect.center().y).abs() < 1.0, "the options share one line");
+    fixture.click(&second).settle();
+    assert_eq!(values.borrow().text("layout"), Some("horizontal"));
+}
+
 // A read-only row shows its text, selectable, and keeps no value.
 #[trial]
 fn a_read_only_row_shows_its_text_and_keeps_no_value() {

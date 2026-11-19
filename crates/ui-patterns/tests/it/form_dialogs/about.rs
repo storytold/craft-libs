@@ -3,7 +3,7 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
-use craft_ui::patterns::form_dialogs::{AboutAppTab, AboutDialog, AboutInfo, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use craft_ui::patterns::form_dialogs::{AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
 use craft_ui::testing::{Fixture, access, trial};
 use egui::Vec2;
 use serde_json::json;
@@ -40,6 +40,35 @@ fn a_click_on_a_name_in_the_grab_bag_reports_its_profile() {
     let table = fixture.by_label("Table").expect("the View control offers Table");
     fixture.click(&table).idle(10);
     assert!(!fixture.by_role(Role::TABLE).is_empty(), "Table shows the contributors as a table");
+}
+
+// The listed layout stands the name, version, blurb, links and built-with line in one column from the start edge,
+// the links in the community-then-links order, one to a line; a link click reports its URL and the button is Close.
+#[trial]
+fn the_listed_about_tab_stands_one_item_to_a_line_and_closes_with_close() {
+    let info = AboutInfo::new("PhotoCraft", "An image editor.", "1.0")
+        .community(AboutLink::new("Chat", "https://chat.example"))
+        .links([AboutLink::new("Website", "https://example.org"), AboutLink::new("Source", "https://example.org/source")])
+        .built_with("MIT");
+    let links = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&links);
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = AboutDialog::new(&info, &CREDITS).layout(AboutLayout::Listed).show(ui);
+        seen.borrow_mut().extend(shown.link);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    assert!(fixture.by_label("OK").is_none(), "no OK button");
+    assert!(fixture.by_label("Close").is_some(), "Close closes the listed dialog");
+    let [chat, website, source] = ["Chat", "Website", "Source"].map(|name| fixture.by_label(name).expect("every link shows").rect);
+    let painted = |text: &str| fixture.texts().iter().find(|painted| painted.text == text).map(|painted| painted.rect).expect("the text shows");
+    let (name, version) = (painted("PhotoCraft"), painted("Version 1.0"));
+    assert!(name.bottom() <= version.top() && version.bottom() <= painted("An image editor.").top(), "name, version, blurb in order");
+    assert!(chat.bottom() <= website.top() && website.bottom() <= source.top(), "one link to a line, community first");
+    assert!((chat.left() - website.left()).abs() < 1.0 && (website.left() - name.left()).abs() < 1.0, "every line starts at one edge");
+    assert!(source.bottom() <= painted("MIT").top(), "the built-with line comes last");
+    let website = fixture.by_label("Website").expect("the website link");
+    fixture.click(&website).idle(4);
+    assert_eq!(links.borrow().as_slice(), ["https://example.org".to_owned()]);
 }
 
 #[trial]
