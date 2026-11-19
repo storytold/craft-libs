@@ -187,7 +187,9 @@ impl Extras<'_> {
 /// and one footer button per answer.
 ///
 /// - Answers: `FooterButton`s with a `DialogRole` each, placed in the platform's order. A bare letter given with
-///   `FooterButton::letter` answers while the focus is inside the prompt and no text part owns keys.
+///   `FooterButton::letter` answers while the focus is inside the prompt and no text part owns keys; on Windows and
+///   Linux, Alt with the letter answers while the prompt is the top modal. A button's `FooterButton::chord` (Cmd+D
+///   for Don't Save on macOS) answers while the prompt is the top modal.
 /// - Escape and the close action give the escape answer (Cancel, else the first Other answer, else the default
 ///   answer); Enter, when no part takes it, gives the Accept answer while that button is enabled. Both come back as
 ///   `PromptOutput::picked`.

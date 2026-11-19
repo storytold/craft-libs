@@ -447,6 +447,7 @@ impl<'a> PasswordDialog<'a> {
         };
         let mut dialog = Dialog::new(title)
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
+            .close_on_enter(true)
             .close_guard(move |_, cx| cx.memory::<Entries>().valid.unwrap_or(!setting))
             .settle_buttons(move |cx, buttons| {
                 let valid = cx.memory::<Entries>().valid.unwrap_or(!setting);

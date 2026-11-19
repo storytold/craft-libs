@@ -72,7 +72,7 @@ fn hit_prefers_handles_then_the_topmost_body() {
 }
 
 /// One pick serves the comment part, the hover outline and the marker: a marker before any body, the last listed
-/// marker first; then the topmost body, a markup by its quads and a note by its icon.
+/// marker first; then the topmost body, a markup by its quads and a note by its icon and its rect.
 #[trial]
 fn pick_at_takes_the_marker_before_any_body_and_the_topmost_body_after() {
     // The markup's quads lie away from its rect, so only the quads can pick it.
@@ -81,7 +81,9 @@ fn pick_at_takes_the_marker_before_any_body_and_the_topmost_body_after() {
     let boxed = square(2, AnnotationKind::Rectangle);
     // A note's rect smaller than its icon: the icon's extent picks it.
     let note = annotation(3, AnnotationKind::Note, Rect::new(100.0, 100.0, 104.0, 104.0));
-    let all = [markup, boxed, note];
+    // A note's rect larger than its icon: the rect beyond the icon picks it too.
+    let wide = annotation(4, AnnotationKind::Note, Rect::new(300.0, 300.0, 340.0, 340.0));
+    let all = [markup, boxed, note, wide];
     let over_box = Point::new(25.0, 20.0);
     let markers = [(AnnotationId(1), Rect::new(20.0, 15.0, 32.0, 27.0)), (AnnotationId(3), Rect::new(22.0, 17.0, 30.0, 25.0))];
 
@@ -92,6 +94,7 @@ fn pick_at_takes_the_marker_before_any_body_and_the_topmost_body_after() {
     assert_eq!(pick_at(&all, Point::new(30.0, 70.0), 0.0, ICON, &[]), None, "a markup's rect outside its quads");
     assert_eq!(pick_at(&all, Point::new(112.0, 112.0), 0.0, ICON, &[]), Some(AnnotationId(3)), "the note by its icon");
     assert_eq!(pick_at(&all, Point::new(120.0, 120.0), 0.0, ICON, &[]), None);
+    assert_eq!(pick_at(&all, Point::new(335.0, 335.0), 0.0, ICON, &[]), Some(AnnotationId(4)), "the note by its rect beyond its icon");
 }
 
 /// The marker is clamped inside the page whatever its bounds: at the page's right edge, with inverted or fractional

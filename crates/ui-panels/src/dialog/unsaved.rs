@@ -95,8 +95,8 @@ impl UnsavedChangesDialog {
         self
     }
 
-    /// The answers in the order the buttons are given: what each means and how it is asked. On macOS Cmd+D also
-    /// answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
+    /// The answers in the order the buttons are given: what each means and how it is asked. Cmd+D (Ctrl+D off macOS)
+    /// also answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
     fn replies(&self, words: &DialogWords, cancel: Label, os: Os) -> Vec<(CloseAnswer, Reply)> {
         let mac = os == Os::Mac;
         self.offered()
@@ -105,10 +105,10 @@ impl UnsavedChangesDialog {
                 let reply = match answer {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
-                    CloseAnswer::DontSave if mac => {
-                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
+                    CloseAnswer::DontSave => {
+                        let word = if mac { &words.unsaved_dont_save } else { &words.unsaved_no };
+                        Reply::new(word.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
                     }
-                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Other),
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)
