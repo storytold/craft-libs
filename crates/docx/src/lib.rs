@@ -49,12 +49,12 @@ pub use crypt::{
     DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
     encrypt_with_spin_count, is_encrypted, protection_hash,
 };
-pub use flat::{XmlKind, sniff_xml, write as write_flat};
+pub use flat::{XmlKind, sniff_xml, write as write_flat, write_with_options as write_flat_with_options};
 pub use fonts::{EmbeddedFont, embedded_fonts};
 pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
-pub use write::{write, write_as};
+pub use write::{WriteOptions, write, write_as, write_as_with_options};
 
 /// Largest `.xml` file read as a Word XML document.
 pub const MAX_XML_FILE: usize = 1 << 30;
@@ -196,4 +196,7 @@ pub enum DocxError {
     /// (or encrypting failed).
     #[error("encrypted document: {0}")]
     Encryption(String),
+    /// The retained mail-merge settings cannot be written with their original source.
+    #[error("mail merge: {0}")]
+    MailMerge(String),
 }
