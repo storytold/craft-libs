@@ -134,6 +134,21 @@ fn growth_past_the_modules_own_maximum_returns_minus_one_like_the_spec() {
     assert_eq!(inst.call(Export::Invoke, &[20, 0, 0, 0, 0], &b).unwrap(), -1);
 }
 
+/// A grow past both the module's maximum and the host cap is still the module's -1. wasmi 2.0.0
+/// checked the module maximum before it called the limiter. 2.0.1 calls the limiter first, and the
+/// limiter turned this case into a trap, so a guest allocator could not report a failed grow.
+#[test]
+fn growth_past_both_the_module_maximum_and_the_cap_returns_minus_one() {
+    let (engine, _) = engine_with_step(Duration::ZERO, DEFAULT_SLICE_FUEL);
+    let mut b = budget();
+    b.memory_bytes = 4 * PAGE; // declared max is 16 pages, so 20 pages is past both
+    let mut inst = instance(&engine, "grow", no_host(), &b);
+    assert_eq!(inst.call(Export::Invoke, &[20, 0, 0, 0, 0], &b).unwrap(), -1);
+    assert_eq!(inst.mem_len(), PAGE as usize, "the refused grow changed nothing");
+    // A grow past the cap but inside the module maximum still traps.
+    assert_eq!(inst.call(Export::Invoke, &[8, 0, 0, 0, 0], &b).unwrap_err(), Trap::OutOfMemory);
+}
+
 #[test]
 fn initial_memory_over_the_cap_does_not_instantiate() {
     let (engine, _) = engine_with_step(Duration::ZERO, DEFAULT_SLICE_FUEL);
