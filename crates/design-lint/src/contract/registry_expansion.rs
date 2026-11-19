@@ -62,15 +62,16 @@ fn has_registration(tokens: TokenStream) -> bool {
             }
             continue;
         }
-        if let TokenTree::Ident(ident) = &trees[i] {
-            if ident == "register_contract" && trees.get(i + 1).is_some_and(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '!')) {
-                return true;
-            }
+        if let TokenTree::Ident(ident) = &trees[i]
+            && ident == "register_contract"
+            && trees.get(i + 1).is_some_and(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '!'))
+        {
+            return true;
         }
-        if let TokenTree::Group(group) = &trees[i] {
-            if has_registration(group.stream()) {
-                return true;
-            }
+        if let TokenTree::Group(group) = &trees[i]
+            && has_registration(group.stream())
+        {
+            return true;
         }
         i += 1;
     }
