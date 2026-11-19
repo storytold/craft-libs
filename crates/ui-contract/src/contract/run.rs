@@ -677,6 +677,7 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
 fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
+        let decl = &decl.part;
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
         (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
