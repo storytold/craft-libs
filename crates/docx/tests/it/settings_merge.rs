@@ -83,7 +83,8 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     doc.settings.track_changes = false;
     let files = save(&doc);
     let s = text(&files, "word/settings.xml");
-    // Kept byte for byte: everything the model doesn't hold, the original root and zoom.
+    // Unmodelled children and the original root are kept byte for byte. The regenerated zoom
+    // still has its original 120 percent value when the model has not changed it.
     for kept in [
         r#"<w:zoom w:percent="120"/>"#,
         r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
@@ -124,6 +125,37 @@ fn unmodelled_settings_survive_a_save_and_owned_ones_follow_the_model() {
     // A second generation is identical.
     let again = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
     assert_eq!(text(&save(&again), "word/settings.xml"), s);
+}
+
+#[test]
+fn changed_zoom_survives_merged_settings_and_reads_back_as_page_width() {
+    let old_zoom = r#"<w:zoom w:percent="120"/>"#;
+    let updated_zoom = r#"<w:zoom w:val="bestFit" w:percent="145"/>"#;
+    for original in [SETTINGS.to_string(), SETTINGS.replace(old_zoom, "")] {
+        let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
+        assert!(doc.passthrough.contains_key("wordcraft:settings.orig"));
+        doc.settings.zoom = Some(craft_wordmodel::Zoom { percent: 145, fit: Some(craft_wordmodel::ZoomFit::PageWidth) });
+        let bytes = craft_docx::write(&doc).unwrap();
+        let settings = text(&unzip(&bytes), "word/settings.xml");
+        assert_eq!(settings.matches("<w:zoom ").count(), 1, "{settings}");
+        assert!(settings.contains(updated_zoom), "{settings}");
+        // The retained root and unrelated child bytes still belong to the original file.
+        let root_end = original.find("><w:").unwrap() + 1;
+        assert!(settings.starts_with(&original[..root_end]), "{settings}");
+        for kept in [
+            r#"<w:proofState w:spelling="clean" w:grammar="clean"/>"#,
+            r#"<w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars>"#,
+            r#"<w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/></w:rsids>"#,
+        ] {
+            assert!(settings.contains(kept), "{kept} lost: {settings}");
+        }
+        assert!(pos(&settings, "<w:zoom ") < pos(&settings, "<w:proofState"));
+        let again = craft_docx::read(&bytes).unwrap();
+        let zoom = again.settings.zoom.unwrap();
+        assert_eq!(zoom.percent, 145);
+        assert!(matches!(zoom.fit, Some(craft_wordmodel::ZoomFit::PageWidth)));
+        assert_eq!(text(&save(&again), "word/settings.xml"), settings);
+    }
 }
 
 #[test]
