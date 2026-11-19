@@ -114,7 +114,8 @@ pub(in crate::docking) fn show_bar<P: Clone + Hash + Send + Sync + 'static>(
     let mut sent = Vec::new();
     ui.scope_builder(UiBuilder::new().max_rect(band), |ui| {
         let props = BarProps { expanded, auto_collapse, arrow, icons, unit, active, ghost, name, sent: Outbox::new(&mut sent) };
-        // Keyed by its column's scope id: unique among the bars of a scroll area's columns.
+        // Keyed by its column's scope id: unique among the bars of a scroll area's columns. As for the tab row, the env
+        // around it holds only values its key follows, so it replays at rest.
         let _ = MemoView::new(ui.scope_id(), props, column_bar::<P>).show(ui);
     });
     for event in sent {

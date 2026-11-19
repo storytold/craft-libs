@@ -532,6 +532,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
                     size: self.size,
                     sent: Outbox::new(&mut sent),
                 };
+                // The env around the tab row holds only values its key follows (the shell, the dock's arrangement, a
+                // floating window's layer), no handle or context rebuilt each pass, so it replays at rest.
                 MemoView::new(("tabs", cx.id), row, tab_row::<P>).show(ui)
             })
             .inner;
