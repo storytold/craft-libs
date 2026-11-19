@@ -23,6 +23,7 @@ mod drawing;
 mod fib;
 mod fkp;
 mod fmt;
+mod form;
 mod list;
 mod media;
 mod metadata;
@@ -91,10 +92,13 @@ enum Cost {
     AltText,
     /// A floating object copied into its anchor: past it the object is left out.
     FloatingObject,
+    /// A legacy form field's settings (`w:ffData`) copied into its field: past it the field is
+    /// kept without them.
+    FormField,
 }
 
 impl Cost {
-    const ALL: [Cost; 4] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject];
+    const ALL: [Cost; 5] = [Cost::Formatting, Cost::LinkTarget, Cost::AltText, Cost::FloatingObject, Cost::FormField];
 
     /// What is left out, for the log.
     fn left_out(self) -> &'static str {
@@ -103,6 +107,7 @@ impl Cost {
             Cost::LinkTarget => "some hyperlinks' text is kept without its link",
             Cost::AltText => "some pictures are left without their alt text",
             Cost::FloatingObject => "some floating shapes and pictures are left out",
+            Cost::FormField => "some form fields are kept without their settings",
         }
     }
 }
@@ -111,12 +116,12 @@ impl Cost {
 /// the document has been read, [`Work::log`]).
 struct Work {
     left: std::cell::Cell<u64>,
-    dropped: std::cell::Cell<[bool; 4]>,
+    dropped: std::cell::Cell<[bool; 5]>,
 }
 
 impl Work {
     fn new(budget: u64) -> Self {
-        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 4]) }
+        Work { left: std::cell::Cell::new(budget), dropped: std::cell::Cell::new([false; 5]) }
     }
 
     /// Spends `cost` bytes on `what`: false (and `what` noted as left out) when they aren't left.
@@ -160,6 +165,9 @@ thread_local! {
 }
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
+/// `sprmCFData`: on the 0x01 character of a form field's instruction, `sprmCPicLocation` points
+/// at the field's FFData, not at a picture.
+const C_F_DATA: u16 = 0x0806;
 /// `sprmCSymbol`: the record font and character of a symbol character ([MS-DOC] §2.6.1); the
 /// text stream holds the placeholder U+0028 at its position.
 const C_SYMBOL: u16 = 0x6A09;
@@ -784,7 +792,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     Some(f) => {
                         f.depth = f.depth.saturating_add(1);
                     }
-                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp) }),
+                    None => {
+                        field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None, anchor: anchor_props(ctx, cp), form: String::new() })
+                    }
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -815,6 +825,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
+                if form_data(ctx, field.as_mut(), chpx) {
+                    cp = cp.saturating_add(units);
+                    continue;
+                }
                 let fc_pic = pic_location(chpx);
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
                     Some(p) => {
@@ -891,6 +905,8 @@ struct FieldBuild {
     sep: Option<FieldResult>,
     /// The begin character's revision marks, for the field object's anchor.
     anchor: CharProps,
+    /// A legacy form field's settings, as `w:ffData` XML ([`form`]); empty for other fields.
+    form: String,
 }
 
 /// A field's cached result: its text and, as runs, the formatting of that text. A run is added
@@ -963,8 +979,38 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
         }
         return;
     }
+    let form = if is_form_field(&instr) { f.form } else { String::new() };
     pb.push('\u{FFFC}', f.anchor);
-    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form });
+}
+
+/// Whether a field instruction is a legacy form field's (`FORMCHECKBOX`, `FORMTEXT`,
+/// `FORMDROPDOWN`), the only fields whose `w:ffData` Word reads.
+fn is_form_field(instr: &str) -> bool {
+    let name = instr.split_whitespace().next().unwrap_or_default();
+    ["FORMCHECKBOX", "FORMTEXT", "FORMDROPDOWN"].iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
+/// A 0x01 character in a field's instruction with `sprmCFData` on: its `sprmCPicLocation`
+/// points at a form field's FFData ([MS-DOC] §2.9.75), not at a picture. The outermost field
+/// keeps it as `w:ffData` XML, charged to the work budget; true when the character was one.
+fn form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8]) -> bool {
+    let Some(f) = field.filter(|f| f.sep.is_none()) else { return false };
+    if !f_data(chpx) {
+        return false;
+    }
+    if f.depth == 1
+        && let Some(xml) = pic_location(chpx).and_then(|at| form::ff_data_xml(ctx.data, at))
+        && ctx.work.charge(xml.len() as u64, Cost::FormField)
+    {
+        f.form = xml;
+    }
+    true
+}
+
+/// Whether a CHPX grpprl turns `sprmCFData` on.
+fn f_data(chpx: &[u8]) -> bool {
+    sprm::iter(chpx).filter(|p| p.op == C_F_DATA).last().is_some_and(|p| p.operand.first().is_some_and(|b| *b & 1 != 0))
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
