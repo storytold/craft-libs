@@ -26,8 +26,17 @@ fn known_formats_separate_build_disabled_and_unsupported_operations() {
     #[cfg(not(feature = "raster-codecs"))]
     assert_eq!(jpeg.read, Availability::BuildDisabled);
 
+    // Whether this build reads JPEG XL is craft-image-codecs' `jxl` feature to decide, and this
+    // crate cannot see that through `cfg!`: a workspace build turns it on without this crate
+    // selecting anything, which is how a plain equality here failed every `--all-features` gate.
+    // The codec's own answer is the one to check against, so a wrong read status is still caught.
     #[cfg(feature = "raster-codecs")]
-    assert!(matches!(Format::Jxl.capabilities().read, Availability::Available | Availability::Unsupported));
+    {
+        let codec = Format::Jxl.raster_codec();
+        assert!(codec.is_some(), "JXL is handled by craft-image-codecs and must map to one of its formats");
+        let expected = if codec.is_some_and(|codec| codec.caps().read) { Availability::Available } else { Availability::Unsupported };
+        assert_eq!(Format::Jxl.capabilities().read, expected);
+    }
     #[cfg(not(feature = "raster-codecs"))]
     assert_eq!(Format::Jxl.capabilities().read, Availability::Unsupported);
     #[cfg(not(feature = "raster-codecs"))]
