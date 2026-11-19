@@ -4,6 +4,7 @@
 //! about every fault through `end_call(Faulted)` with the checkpoint it opened in `begin_call`.
 //! Restoring the document is the app's job and is not tested here.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

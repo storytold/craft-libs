@@ -1,6 +1,7 @@
 //! Lifecycle tests: install, grants, reload, disable, remove, restore. Every failure test
 //! also proves generation N still works afterward, because that is the promise under test.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

@@ -1,6 +1,7 @@
 //! The VectorCraft v1 shim against a generated stand-in plugin (`common/v1.rs`) and a matrix of
 //! hostile modules.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

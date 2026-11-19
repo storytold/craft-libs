@@ -2,6 +2,7 @@
 //! `pc_` export prefix must not skip the resource caps of the policy gate. Each test asserts the
 //! safe behavior and fails if the rule is removed. Grant and namespace rules are in `grants_and_namespace.rs`.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

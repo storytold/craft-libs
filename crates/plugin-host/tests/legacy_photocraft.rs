@@ -2,6 +2,7 @@
 //! `common/v1.rs`) and a matrix of hostile modules. PhotoCraft's `Surface`, tiles and selection blend stay in the app, so
 //! these tests run on plain interleaved `f32` buffers.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

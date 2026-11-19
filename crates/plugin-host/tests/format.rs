@@ -3,6 +3,7 @@
 //! a raw RGB reader and writer. Error paths run the `echo` WAT fixture, whose entries trap, answer
 //! `{"error"}`, answer text that is not JSON, or echo the request.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

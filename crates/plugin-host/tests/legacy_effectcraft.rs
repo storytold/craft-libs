@@ -3,6 +3,7 @@
 //! render failure recovery, float determinism. The modules are that crate's WebAssembly text, built
 //! with the `wat` crate. EffectCraft is `MIT OR Apache-2.0`, the license of this repository.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

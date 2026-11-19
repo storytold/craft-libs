@@ -1,5 +1,6 @@
 //! `MissingPluginRef`: what a document keeps for a contribution whose plugin is not installed.
 
+#![cfg(not(target_arch = "wasm32"))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
