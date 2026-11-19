@@ -259,9 +259,8 @@ fn a_body_hides_the_pointer_over_the_canvas_over_the_tools_cursor_while_it_asks(
         });
     });
     fixture.settle();
-    let hidden = |fixture: &Fixture| {
-        craft_ui::runtime::cursor::current(fixture.ctx()) == Some(Cursor::Painted(craft_behavior::PaintedCursor::Hidden))
-    };
+    let hidden =
+        |fixture: &Fixture| craft_ui::runtime::cursor::current(fixture.ctx()) == Some(Cursor::Painted(craft_behavior::PaintedCursor::Hidden));
     let (over, beside) = (room.get().center(), room.get().min + Vec2::splat(10.0));
     fixture.frame(vec![pointer::moved(over)]);
     fixture.frame(Vec::new());

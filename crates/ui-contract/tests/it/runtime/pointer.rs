@@ -519,7 +519,10 @@ fn a_press_over_a_passing_click_part_hands_its_drag_to_the_shape_below_in_its_ro
         pointer::click(&mut frames, on_link, &mut show_frame);
         let log = log.borrow();
         let on = log.root_phases(link_root, Some(LINK));
-        assert!(on.iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })), "{case}: a release within slop clicks the link: {on:?}");
+        assert!(
+            on.iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })),
+            "{case}: a release within slop clicks the link: {on:?}"
+        );
         let below = log.root_phases(below_root, Some(SURFACE));
         assert!(below.is_empty(), "{case}: the shape below sees no press of a click: {below:?}");
     }

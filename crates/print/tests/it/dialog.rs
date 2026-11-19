@@ -6,8 +6,7 @@ use std::sync::mpsc::channel;
 
 use craft_behavior::EditEvent;
 use craft_print::ui::{
-    Destination, DriverControls, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSection, PrintSheet, Printer, Settings, SheetPage,
-    State,
+    Destination, DriverControls, HostedPrint, PrintDialog, PrintFinish, PrintLayout, PrintSection, PrintSheet, Printer, Settings, SheetPage, State,
 };
 use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog as _, dialog_id};

@@ -189,9 +189,9 @@ pub(crate) fn run_frame(
         .dropped
         .iter()
         .map(|name| Arc::new(super::files::DroppedPath(name.into())) as egui::DroppedFileHandle)
-        .chain(files.given.into_iter().map(|(name, bytes)| {
-            Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle
-        }))
+        .chain(
+            files.given.into_iter().map(|(name, bytes)| Arc::new(super::files::DroppedBytes { name: name.into(), bytes }) as egui::DroppedFileHandle),
+        )
         .collect();
     // The web drop of a pathless file: its reads open in the pass of the drop, and their bytes arrive after it.
     if !files.read.is_empty() {

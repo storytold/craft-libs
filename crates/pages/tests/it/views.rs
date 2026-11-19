@@ -345,7 +345,12 @@ fn shift_and_command_with_the_page_keys_and_arrows_go_to_the_ends() {
         );
         focus_canvas(&mut fixture);
         let keys = [(Key::PageDown, both, 4), (Key::PageUp, both, 0), (Key::ArrowDown, both, 4), (Key::ArrowUp, both, 0)];
-        let ends = [(Key::End, Modifiers::SHIFT, 4), (Key::Home, Modifiers::SHIFT, 0), (Key::End, Modifiers::COMMAND, 4), (Key::Home, Modifiers::COMMAND, 0)];
+        let ends = [
+            (Key::End, Modifiers::SHIFT, 4),
+            (Key::Home, Modifiers::SHIFT, 0),
+            (Key::End, Modifiers::COMMAND, 4),
+            (Key::Home, Modifiers::COMMAND, 0),
+        ];
         for (key, mods, want) in keys.into_iter().chain(ends) {
             fixture.key(key, mods);
             fixture.idle(2);
@@ -849,7 +854,7 @@ fn a_scroll_bar_drag_holds_the_sharp_renders_of_the_part_in_view_in_its_own_pass
 #[trial]
 fn the_view_reports_the_readers_wheel_and_scroll_bar_but_not_a_go_to_or_a_zoom() {
     let Rig { mut fixture, state, out, .. } = rig(5, state_with(|s| s.fit = Fit::Width));
-    let scrolled_by =|fixture: &mut Fixture, what: &mut dyn FnMut(&mut Fixture)| {
+    let scrolled_by = |fixture: &mut Fixture, what: &mut dyn FnMut(&mut Fixture)| {
         out.borrow_mut().scrolled = false;
         what(fixture);
         fixture.settle();
