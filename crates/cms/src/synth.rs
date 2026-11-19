@@ -313,7 +313,8 @@ fn solve_cmy_by<F: Forward + ?Sized>(model: &F, k: f64, limit: f64, seeds: &[[f6
 
 const SEEDS: [[f64; 3]; 5] = [[0.3, 0.3, 0.3], [0.05, 0.05, 0.05], [0.8, 0.8, 0.8], [0.9, 0.2, 0.2], [0.2, 0.9, 0.9]];
 
-/// Black for a gray component `g` (the smallest of C, M, Y without black).
+/// Black for a gray component `g` (the smallest of C, M, Y without black), at most the total ink
+/// limit: the CMY solve gets `tac - k`, so black above `tac` would break the limit on its own.
 fn gcr(p: &CmykParams, g: f64) -> f64 {
     let Some(first) = p.gcr_curve.first() else {
         // The Photocraft profile's curve.
@@ -329,7 +330,7 @@ fn gcr(p: &CmykParams, g: f64) -> f64 {
             break;
         }
     }
-    k.clamp(0.0, 1.0)
+    k.clamp(0.0, 1.0).min(p.tac)
 }
 
 /// Colorimetric separation of a relative Lab target: GCR black generation then a CMY solve.
@@ -860,6 +861,17 @@ mod tests {
         for curve in [vec![[0.5, 0.2], [0.5, 0.3]], vec![[0.5, 0.2], [0.2, 0.3]], vec![[0.0, 1.5]], vec![[f64::NAN, 0.0]]] {
             let p = CmykParams { grid_a2b: 2, grid_b2a: 2, gcr_curve: curve.clone(), ..CmykParams::default() };
             assert!(cmyk_profile(&p).is_err(), "{curve:?}");
+        }
+    }
+
+    #[test]
+    fn curve_black_stays_within_the_ink_limit() {
+        let p = CmykParams { tac: 0.5, gcr_curve: vec![[0.0, 0.75]], ..CmykParams::default() };
+        let m = CmykModel::coated(p.tvi);
+        assert_eq!(gcr(&p, 0.5), 0.5);
+        for target in [[50.0, 0.0, 0.0], [90.0, 0.0, 0.0], [30.0, 20.0, -10.0]] {
+            let (cmyk, _) = separate(&m, &p, target, None);
+            assert!(cmyk.iter().sum::<f64>() <= p.tac + 1e-6, "{target:?} -> {cmyk:?}");
         }
     }
 
