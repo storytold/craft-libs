@@ -1,5 +1,7 @@
 //! Trials of the replay records: their notes and their comparison.
 
+#![allow(clippy::expect_used, reason = "trial code: clippy.toml allows expect in tests, and trials are compiled into the library")]
+
 use crate::primitives::sensing::{self, MemberSpec};
 use crate::runtime::egui::{fixture, repaint};
 use crate::runtime::env::ArenaId;
