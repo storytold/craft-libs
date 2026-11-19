@@ -569,7 +569,9 @@ fn a_split_bodys_request_close_closes_the_menu_layer_and_it_opens_again_with_its
     let swatch = fixture.by_label("Red").expect("the body's swatch is shown");
     fixture.click(&swatch).settle();
     assert_eq!(picked.get(), 1, "the swatch ran once");
-    assert!(fixture.by_role(Role::MENU).is_empty(), "the body's close closed the menu layer");
+    assert!(fixture.by_role(Role::MENU).is_empty(), "the body's close closed the menu");
+    // An arrow click on a layer left open around an empty body would only close it: the layer itself must have closed
+    // for the click to open the menu with its body.
     open_menu(&mut fixture);
     assert!(fixture.by_label("Red").is_some(), "opened again, the menu shows its body");
 }
