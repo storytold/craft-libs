@@ -378,6 +378,60 @@ fn latch_rig() -> LatchRig {
     (fixture, view, canvas)
 }
 
+/// A latched middle scroll ends when the window loses focus, when the pointer leaves the window and when the canvas
+/// is not shown for a pass (another tab), and does not come back with it; a press, a move and a release that arrive in
+/// one frame latch it as a click does, measured from the press.
+#[trial]
+fn a_latched_middle_scroll_ends_on_blur_pointer_gone_and_a_hidden_canvas_and_latches_from_one_frame() {
+    let mut options = NavigationOptions::default();
+    options.middle_button = MiddleButton::AutoScroll;
+    let view = Rc::new(Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0)));
+    let open = Rc::new(Cell::new(true));
+    let (shown, visible) = (Rc::clone(&view), Rc::clone(&open));
+    let mut fixture = Fixture::new(move |ui| {
+        if !visible.get() {
+            return;
+        }
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let anchor = view.get().rect.center();
+    let below = anchor + Vec2::new(0.0, 80.0);
+    let latch = |fixture: &mut Fixture| {
+        middle(fixture, anchor, true);
+        middle(fixture, anchor, false);
+        fixture.frame(vec![pointer::moved(below)]);
+    };
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches the scroll");
+    fixture.frame(vec![pointer::window_blurred()]);
+    assert!(!scrolls(&mut fixture, &view), "a window blur ends the latch");
+    fixture.frame(vec![egui::Event::WindowFocused(true), pointer::moved(below)]);
+    assert!(!scrolls(&mut fixture, &view), "the window's return does not bring it back");
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    fixture.frame(vec![egui::Event::PointerGone]);
+    assert!(!scrolls(&mut fixture, &view), "the pointer leaving the window ends the latch");
+
+    let button = |pressed, at| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![pointer::moved(anchor), button(true, anchor), pointer::moved(below), button(false, below)]);
+    assert!(scrolls(&mut fixture, &view), "a press, a move and a release in one frame latch the scroll");
+    fixture.key(Key::Escape, Modifiers::NONE);
+
+    latch(&mut fixture);
+    assert!(scrolls(&mut fixture, &view), "a click latches again");
+    open.set(false);
+    fixture.idle(2);
+    open.set(true);
+    fixture.frame(vec![pointer::moved(below)]);
+    assert!(!scrolls(&mut fixture, &view), "a canvas shown again does not resume the latch");
+}
+
 /// The middle button going down (`pressed`) or up at `at`, with the pointer there. The testing kit has no
 /// middle-button helper.
 fn middle(fixture: &mut Fixture, at: Pos2, pressed: bool) {

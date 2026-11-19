@@ -852,6 +852,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             pending_drop: self.drags.pending.clone(),
             hovered: self.hovered.take(),
             menu: self.drags.menu.clone().filter(|request| self.index_of(&request.key).is_some()),
+            auto_scrolling: cx.core.memory.session::<MiddleScroll>(sub(id, "middle")).active(),
         }));
         cx.core.visible_rows = self.visible.clone();
         cx.core.gestures = Gestures::of(comp.items());

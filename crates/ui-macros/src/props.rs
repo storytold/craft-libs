@@ -211,6 +211,11 @@ const COLLECTION: &[Forwarded] = &[
         "::core::option::Option<impl ::core::marker::Send + ::core::marker::Sync + 'static>",
         "The key of the current item, which shows the current mark and reports itself as the current one of its set.",
     ),
+    (
+        "picks_beside_current",
+        "bool",
+        "The selection is a pick beside the current item: a plain click empties it, modified clicks pick without moving the lead.",
+    ),
 ];
 
 /// The `ContainerProps` builders a `#[container]` field forwards: the ones a collection or container takes from its

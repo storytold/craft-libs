@@ -502,6 +502,16 @@ impl<'a> Canvas<'a> {
             PressPhase::Cancel { .. } if latching => motion.middle.cancel(),
             _ => {}
         }
+        // A latch ends when the window loses focus or the pointer leaves it, and when the canvas missed a frame, so it
+        // never comes back with the window or the canvas.
+        let frame_nr = frame::running(&ctx).map_or(0, |pass| pass.frame_nr);
+        let left = crate::runtime::pointer::with_pass_pointer(&ctx, |pass| {
+            pass.focus_lost || pass.events.iter().any(|event| matches!(event, craft_behavior::PointerEvent::Gone))
+        });
+        let away = motion.latched_in.is_some_and(|last| frame_nr > last.saturating_add(1));
+        if motion.middle.active() && (left || away || !crate::runtime::egui::viewports::current(&ctx).focused) {
+            motion.middle.cancel();
+        }
         // A latch with the button up ends on Escape, claimed only while it runs, and when the canvas loses focus.
         if motion.middle.active() && !held {
             if cx.take_claimed(LATCH_ESCAPE) || !cx.is_focused() {
@@ -531,6 +541,7 @@ impl<'a> Canvas<'a> {
         if held_pan {
             cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);
         }
+        motion.latched_in = motion.middle.active().then_some(frame_nr);
         let auto_scrolling = motion.middle.active() || held_pan;
         let mark = motion.middle.anchor();
         if let Some(delta) = self.background_press(cx, swallowed).1 {

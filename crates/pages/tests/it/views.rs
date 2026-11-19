@@ -1062,6 +1062,53 @@ fn right_scrolls_a_page_wider_than_the_view_then_turns_at_its_edge() {
     assert!(left >= 0.0 && shown.rects[1].x1 - shown.offset.0 > view, "the next page shows from its left edge: {left}");
 }
 
+/// In a continuous view the current page is the one that shows the most of itself, the topmost of a tie; the page
+/// gone to stays current while it shows wholly or as much as any other, as the reader scrolls (production's rule,
+/// not the page under the view's middle).
+#[trial]
+fn the_current_page_shows_the_most_of_itself_and_a_page_gone_to_stays_while_it_shows_whole() {
+    let Rig { mut fixture, state, out, .. } = rig(
+        6,
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 0.25;
+        }),
+    );
+    let shown = |out: &Out, page: usize| {
+        let r = out.rects[page];
+        let (top, bottom) = (out.offset.1, out.offset.1 + f64::from(out.view.height()));
+        (r.y1.min(bottom) - r.y0.max(top)).max(0.0)
+    };
+    // The last page, gone to, sits wholly at the bottom of the view; a line up the wheel leaves it current.
+    state.borrow_mut().go_to(5);
+    fixture.settle();
+    wheel(&mut fixture, 1.0);
+    fixture.settle();
+    {
+        let out = out.borrow();
+        assert!(shown(&out, 5) >= out.rects[5].height() - 0.5, "precondition: the last page shows whole");
+        assert_eq!(state.borrow().current, 5, "the page gone to stays current while it shows whole");
+    }
+    // From the top the wheel scrolls down until the second page shows more of itself than the first.
+    state.borrow_mut().go_to(0);
+    fixture.settle();
+    for _ in 0..40 {
+        let more = {
+            let out = out.borrow();
+            shown(&out, 1) > shown(&out, 0) + 1.0 && shown(&out, 1) > shown(&out, 2) + 1.0
+        };
+        if more {
+            break;
+        }
+        wheel(&mut fixture, -1.0);
+        fixture.settle();
+    }
+    let out = out.borrow();
+    let most = (0..6).max_by(|&a, &b| shown(&out, a).total_cmp(&shown(&out, b)).then(b.cmp(&a))).unwrap_or(0);
+    assert_eq!(most, 1, "precondition: the second page shows the most");
+    assert_eq!(state.borrow().current, 1, "the page that shows the most of itself is current");
+}
+
 /// Pages shorter than the view sit in its middle, a page or the column of a scrolling view, and so does a page that
 /// fits only without its margins. The scroll area used to be at least the view's height, from the top.
 #[trial]

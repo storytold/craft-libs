@@ -191,6 +191,9 @@ pub struct PageThumbnailsOutput {
     /// While files from the OS are held over the grid, the page they would land before (the page count after the
     /// last).
     pub file_gap: Option<usize>,
+    /// A middle-button auto-scroll is latched on the grid ([`PageThumbnails::middle_button`] with
+    /// `MiddleButton::AutoScroll`).
+    pub auto_scrolling: bool,
 }
 
 impl Outcome for PageThumbnailsOutput {
@@ -209,7 +212,8 @@ impl Outcome for PageThumbnailsOutput {
 ///   with the page label (`PageSource::page_label`). The current page is the grid's current tile; picked pages are
 ///   its selected tiles. Pictures come from `Thumbnails<usize>` over [`PageSource`].
 /// - Pointer (behaviour: Photoshop's panels, then PdfCraft, as the grid): a plain click goes to the page
-///   ([`ThumbnailEvent::Go`]); Cmd/Ctrl-click toggles a page in the picked set and Shift-click extends it.
+///   ([`ThumbnailEvent::Go`]) and picks it; Cmd/Ctrl-click toggles a page in the picked set and Shift-click extends
+///   it. With [`picks_beside_current`](Self::picks_beside_current) the picked set is kept beside the current page.
 /// - Drag (when editable): the grid's reorder rule; the grid draws the insert line and scrolls near its edges.
 /// - Keys (one Tab stop, the grid's): arrows go to the next page, Shift extends, Home and End, Enter activates,
 ///   Delete and Backspace delete (the current page when nothing is picked), Cmd/Ctrl+] and [ move the picked
@@ -238,6 +242,7 @@ pub struct PageThumbnails<'a> {
     invert_middle: bool,
     id: IdSource,
     reveal: Option<usize>,
+    picks_beside_current: bool,
 }
 
 impl<'a> PageThumbnails<'a> {
@@ -264,7 +269,18 @@ impl<'a> PageThumbnails<'a> {
             invert_middle: false,
             id: IdSource::Auto,
             reveal: None,
+            picks_beside_current: false,
         }
+    }
+
+    /// Keeps the picked pages beside the current page (Acrobat's Pages panel): a plain click goes to its page and
+    /// empties the pick, and Cmd/Ctrl- and Shift-clicks change the pick without going to the page, the current page
+    /// counting as picked while nothing is. Off (PowerPoint's slide strip, Organize), a plain click picks the page it
+    /// goes to.
+    #[must_use]
+    pub fn picks_beside_current(mut self, on: bool) -> Self {
+        self.picks_beside_current = on;
+        self
     }
 
     /// How the thumbnails are arranged: the side strip, or the Organize grid.
@@ -403,6 +419,7 @@ impl<'a> PageThumbnails<'a> {
             invert_middle,
             id,
             reveal,
+            picks_beside_current,
         } = self;
         let organize = arrangement == ThumbnailArrangement::Organize;
         let env = Env::of(ui);
@@ -444,6 +461,7 @@ impl<'a> PageThumbnails<'a> {
             .zoom(grid_zoom)
             .caption(caption)
             .current(Some(current))
+            .picks_beside_current(picks_beside_current)
             .groups(&groups)
             .tail(&tail);
         if let Some(page) = reveal {
@@ -550,7 +568,8 @@ impl<'a> PageThumbnails<'a> {
                 _ => {}
             }
         }
-        PageThumbnailsOutput { response: shown.response.response, events, drop_target, file_gap }
+        let auto_scrolling = shown.response.auto_scrolling;
+        PageThumbnailsOutput { response: shown.response.response, events, drop_target, file_gap, auto_scrolling }
     }
 }
 

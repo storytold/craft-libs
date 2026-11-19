@@ -104,6 +104,8 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                         Some(current) => self.change(SelectionChange::Set(vec![self.source.key(current), key])),
                         None => self.change(SelectionChange::Toggle(key)),
                     }
+                } else if comp.items().picks_beside_current {
+                    self.change(SelectionChange::Clear);
                 } else {
                     self.change(SelectionChange::Set(vec![key]));
                 }
