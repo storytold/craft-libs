@@ -181,6 +181,69 @@ fn a_top_or_bottom_edge_drag_on_a_box_in_perspective_keeps_the_insets() {
     assert!(within(&got, [(120.1, 125.0), (481.9, 125.0), (441.9, 367.0), (160.1, 367.0)], 1e-2), "{:?}", got.quad);
 }
 
+/// A box in perspective, its left or right edge dragged (measured on the reference's results, as above): with parallel
+/// sides the right side keeps its offset from the left one; with converging sides the dragged side turns onto the line
+/// from their meeting point through the moved handle.
+#[test]
+fn a_side_drag_on_a_box_in_perspective_turns_the_side_toward_the_vanishing_point() {
+    let cases = [
+        // Parallel sides, the top and bottom converging.
+        (
+            [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)],
+            1,
+            (452.0, 226.0),
+            (502.0, 226.0),
+            [(152.14, 108.85), (503.28, 155.36), (499.0, 309.66), (147.86, 343.15)],
+            0.01,
+        ),
+        (
+            [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)],
+            3,
+            (150.0, 226.0),
+            (110.0, 226.0),
+            [(112.4, 106.87), (453.71, 152.08), (450.29, 299.92), (108.98, 334.71)],
+            0.01,
+        ),
+        // Converging sides: a narrow top, a narrow bottom, a lopsided top and a skewed one.
+        (
+            [(180.0, 125.0), (422.0, 125.0), (452.0, 327.0), (150.0, 327.0)],
+            1,
+            (437.0, 226.0),
+            (487.0, 226.0),
+            [(180.0, 104.48), (462.39, 104.48), (511.87, 348.16), (150.0, 348.16)],
+            0.4,
+        ),
+        (
+            [(150.0, 125.0), (452.0, 125.0), (412.0, 327.0), (190.0, 327.0)],
+            3,
+            (170.0, 226.0),
+            (130.0, 226.0),
+            [(100.34, 111.43), (452.0, 111.43), (412.0, 340.14), (159.44, 340.14)],
+            0.3,
+        ),
+        (
+            [(190.0, 125.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)],
+            1,
+            (452.0, 226.0),
+            (502.0, 226.0),
+            [(190.0, 105.86), (497.79, 105.86), (506.23, 346.39), (150.0, 346.39)],
+            0.2,
+        ),
+        (
+            [(200.0, 125.0), (472.0, 125.0), (452.0, 327.0), (150.0, 327.0)],
+            3,
+            (175.0, 226.0),
+            (135.0, 226.0),
+            [(166.0, 110.29), (472.0, 110.29), (452.0, 341.99), (103.85, 341.99)],
+            0.2,
+        ),
+    ];
+    for (quad, edge, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}
+
 /// A plain rectangle scales about the opposite edge's middle as before, and ⇧ still frees the other axis.
 #[test]
 fn a_plain_edge_drag_and_a_free_one_are_unchanged() {

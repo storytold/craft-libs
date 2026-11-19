@@ -598,14 +598,15 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
     Some(BoxState { quad, pivot })
 }
 
-/// A proportional edge drag on a skewed box, or a top or bottom edge drag on a box in perspective, as the reference
-/// application scales them (measured on its saved results). Along the top edge `u` and its normal `n`: the top edge scales by `k`
-/// about its middle, and each side keeps its run along `u` (a skew's offset, a perspective's inset) while its part
-/// along `n` scales by `k`; the opposite edge's middle holds, and the dragged edge's middle follows the pointer along the
-/// drag's axis. On a plain or turned rectangle the sides have no run along `u` and this is the frame scaling below.
-/// `None` where the frame scaling applies instead: a left or right edge of a box in perspective (not measured to
-/// follow this rule), a factor at or past zero (the box flips there, as the frame scaling flips it), or a collapsed
-/// box.
+/// A proportional edge drag on a skewed box or a box in perspective, as the reference application scales them
+/// (measured on its saved results). Along the top edge `u` and its normal `n`: the top edge scales by `k` about its
+/// middle, and each side keeps its run along `u` (a skew's offset, a perspective's inset) while its part along `n`
+/// scales by `k`; the opposite edge's middle holds, and the dragged edge's middle follows the pointer along the drag's
+/// axis. Dragged left or right, the right side keeps its px offset from the left one instead, and where the two sides
+/// meet (a box in perspective) the dragged side turns onto the line from that point through the moved handle, its
+/// corners on the top and bottom edges. On a plain or turned rectangle the sides have no run along `u` and this is the
+/// frame scaling below. `None` where the frame scaling applies instead: a factor at or past zero (the box flips there,
+/// as the frame scaling flips it), or a collapsed box.
 fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
     let [tl, tr, br, bl] = g.quad0;
@@ -614,11 +615,7 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     if len.is_nan() || len <= 1e-9 {
         return None;
     }
-    // A box whose top and bottom edges match is a parallelogram (plain, turned or skewed).
-    let affine = ((br - bl) - u).hypot() <= 1e-9 * len.max(1.0);
-    if !affine && (edge == 1 || edge == 3) {
-        return None;
-    }
+    let sideways = edge == 1 || edge == 3;
     let uh = u / len;
     let mut nh = Vec2::new(-uh.y, uh.x);
     let (left, right) = (bl - tl, br - tr);
@@ -641,7 +638,9 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
         return None;
     }
     let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
-    let (u2, left2, right2) = (u * k, uh * al + nh * (bl_n * k), uh * ar + nh * (br_n * k));
+    let (u2, left2) = (u * k, uh * al + nh * (bl_n * k));
+    // Sideways the right side keeps its offset from the left one in px (on a parallelogram that's the same thing).
+    let right2 = if sideways { left2 + (right - left) } else { uh * ar + nh * (br_n * k) };
     let shape = [Point::ZERO, Point::ZERO + u2, Point::ZERO + u2 + right2, Point::ZERO + left2];
     // The edge that holds, by its middle: the opposite one.
     let middle = |q: &[Point; 4], a: usize, b: usize| q[a].midpoint(q[b]);
@@ -652,8 +651,33 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
         _ => (1, 2),
     };
     let shift = middle(&g.quad0, a, b) - middle(&shape, a, b);
-    let quad = shape.map(|c| c + shift);
+    let mut quad = shape.map(|c| c + shift);
+    if sideways {
+        // Where the dragged side and the opposite one meet (a box in perspective), the dragged side goes onto the
+        // line through that point and the dragged handle; its corners stay on the top and bottom edges' lines.
+        let ([d0, d1], [o0, o1]) = if edge == 1 { ([1, 2], [0, 3]) } else { ([0, 3], [1, 2]) };
+        let [q0, q1] = [g.quad0[d0], g.quad0[d1]];
+        if let Some(v) = crossing(q0, q1 - q0, g.quad0[o0], g.quad0[o1] - g.quad0[o0]) {
+            let line = q0.midpoint(q1) + d - v;
+            let c0 = crossing(quad[o0], quad[d0] - quad[o0], v, line);
+            let c1 = crossing(quad[o1], quad[d1] - quad[o1], v, line);
+            if let (Some(c0), Some(c1)) = (c0, c1) {
+                quad[d0] = c0;
+                quad[d1] = c1;
+            }
+        }
+    }
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+}
+
+/// Where the line through `p` along `dp` crosses the one through `q` along `dq`; `None` for (nearly) parallel lines.
+fn crossing(p: Point, dp: Vec2, q: Point, dq: Vec2) -> Option<Point> {
+    let den = dp.cross(dq);
+    if den.abs() <= 1e-9 * dp.hypot() * dq.hypot() {
+        return None;
+    }
+    let at = p + dp * ((q - p).cross(dq) / den);
+    at.is_finite().then_some(at)
 }
 
 /// The smallest factor a scale drag may give `quad`'s `axis` (0: u, 1: v) so its sides along that
