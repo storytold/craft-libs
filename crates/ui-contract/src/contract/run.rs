@@ -939,16 +939,22 @@ fn sense_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, e
     if !inert && facts.text() {
         parts.text.commit_now = focus::commit_now(&ctx) == Some(id);
     }
-    // A component that declares no parts skips the step; a debug build runs it anyway to check the declaration.
     let declares_parts = facts.parts || e.declares_parts();
-    if !inert && (declares_parts || cfg!(debug_assertions)) {
+    #[cfg(feature = "testing")]
+    let checking_parts = !inert && !declares_parts && crate::testing::contract::checking_parts();
+    #[cfg(not(feature = "testing"))]
+    let checking_parts = false;
+    if !inert && (declares_parts || checking_parts) {
         let input = MeasureIn { ui: &*ui, env, proposal: Proposal::Ideal, room: p.room };
         e.parts(rect, flow, content_rect, &mut parts, &input, rtl);
     }
-    if facts.canvas_control && p.trace.recording() {
+    #[cfg(feature = "testing")]
+    if checking_parts && !declares_parts && !steps::declares_none(&parts) {
+        crate::testing::contract::bad_parts(facts.name);
+    }
+    if facts.canvas_control && !ui.is_sizing_pass() {
         inspect::canvas_control(&ctx, facts.name);
     }
-    debug_assert!(declares_parts || steps::declares_none(&parts), "`{}` sets `PARTS = false` and declares a part", facts.name);
     steps::check_parts(&ctx, facts.name, &parts);
     let keys = e.keys();
     let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
