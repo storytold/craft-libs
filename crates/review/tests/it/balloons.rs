@@ -127,6 +127,48 @@ fn selecting_a_card_and_posting_a_reply_report_the_matching_edits() {
     assert!(shown.state.borrow().reply.is_empty(), "a posted reply clears the binding");
 }
 
+/// An edit draft the app could not write back stays when its card is selected again, as the old WordCraft kept a
+/// refused draft for when its balloon was selected again; selecting another card drops it.
+#[trial]
+fn reselecting_a_card_keeps_its_edit_draft() {
+    let threads = vec![(thread(1, "First"), 100.0), (thread(2, "Second"), 400.0)];
+    // The app left the balloon (no card selected) and kept the draft the document refused.
+    let left = CommentsPanelState { editing: Some((ThreadId(1), 0, "Edited".into())), ..CommentsPanelState::default() };
+    let mut shown = Shown::new(threads, left, BalloonPlace::Column, room(), Direction::Ltr);
+    // A click on the card's heading, above the open edit's field.
+    let card = shown.card(1);
+    shown.fixture.click_at(card.left_top() + vec2(30.0, 8.0)).settle();
+    assert_eq!(shown.state.borrow().selected, Some(ThreadId(1)), "the click selects the card");
+    assert_eq!(shown.state.borrow().editing, Some((ThreadId(1), 0, "Edited".into())), "the card's own draft survives its selection");
+
+    let other = shown.card(2);
+    shown.fixture.click_at(other.center()).settle();
+    assert_eq!(shown.state.borrow().selected, Some(ThreadId(2)));
+    assert_eq!(shown.state.borrow().editing, None, "selecting another card drops the draft, as before");
+}
+
+/// The inline editor takes the keyboard in the pass it opens, so typing needs no second click on its field, as the
+/// old WordCraft's balloon took typing once selected. An editor that stays open does not take the keyboard back.
+#[trial]
+fn an_edit_that_opens_takes_the_keyboard() {
+    let threads = vec![(thread(1, "First"), 100.0)];
+    let selected = CommentsPanelState { selected: Some(ThreadId(1)), ..CommentsPanelState::default() };
+    let mut shown = Shown::new(threads, selected, BalloonPlace::Column, room(), Direction::Ltr);
+    let words = CommentsWords::default();
+    // The app opens the edit of the selected card's comment, as on a click on its balloon.
+    shown.state.borrow_mut().editing = Some((ThreadId(1), 0, "First".into()));
+    shown.fixture.settle();
+    shown.fixture.type_text("!").settle();
+    let draft = shown.state.borrow().editing.as_ref().map(|(.., text)| text.clone());
+    assert!(draft.as_deref().is_some_and(|text| text.contains('!') && text.len() == "First!".len()), "typing reaches the edit that opened: {draft:?}");
+
+    // The reply field takes the keyboard; the open edit does not take it back.
+    let reply = shown.fixture.by_label(words.reply.as_str()).expect("the selected card's reply field");
+    shown.fixture.click(&reply).settle();
+    shown.fixture.type_text("x").settle();
+    assert_eq!(shown.state.borrow().reply, "x", "the reply field keeps the keyboard");
+}
+
 /// Guards `CommentBalloons::read_only`: while comments cannot change, a selected card takes no typing, as the panel's
 /// rows do: it shows no reply field, and text typed after a click on it reaches no reply.
 #[trial]

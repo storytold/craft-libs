@@ -262,7 +262,9 @@ pub(crate) fn age_text(env: &EnvView<'_>, then: i64, now: i64) -> String {
 ///   cards. A card shows the kind's icon, author, age (relative under a week, then the date), the
 ///   text, a status icon, the checkmark, a lock icon and the replies, each with its own "..." menu.
 /// - The selected card has the accent bar, the reply box and "..." (Edit, Set status, Delete).
-///   Locked threads and `read_only` hide the editing items.
+///   Locked threads and `read_only` hide the editing items. An inline editor takes the keyboard in
+///   the pass it opens. Selecting another card drops the reply draft and the edit of another
+///   thread; a card selected again keeps its own edit draft.
 /// - Keyboard: Up and Down move between cards (selecting them), Enter puts the focus in the selected
 ///   card's reply box, Cmd+Enter (Ctrl+Enter off macOS) in the reply box or an inline editor posts,
 ///   Escape in a control of a card returns to the card.
@@ -356,13 +358,17 @@ fn toggle<T: PartialEq>(list: &mut Vec<T>, value: T) {
     }
 }
 
-/// Makes `thread` the selected one; false when it already was.
+/// Makes `thread` the selected one; false when it already was. The reply draft and an edit of another thread go; an
+/// edit of `thread` itself stays, so a draft the app could not write back (a document that refused it) is there again
+/// when its card is selected again.
 fn select_thread(state: &mut CommentsPanelState, thread: ThreadId) -> bool {
     let changed = state.selected != Some(thread);
     if changed {
         state.selected = Some(thread);
         state.reply.clear();
-        state.editing = None;
+        if state.editing.as_ref().is_some_and(|(editing, ..)| *editing != thread) {
+            state.editing = None;
+        }
     }
     changed
 }
