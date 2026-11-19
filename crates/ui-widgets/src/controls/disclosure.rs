@@ -53,11 +53,11 @@ pub struct DisclosureGlyph {
 }
 
 /// The arrow of a field or picker.
-static DROPDOWN: DisclosureGlyph = DisclosureGlyph::dropdown_form();
+const DROPDOWN: DisclosureGlyph = DisclosureGlyph::dropdown_form();
 /// The arrow of a button that opens a menu.
-static MENU_BUTTON: DisclosureGlyph = DisclosureGlyph { open: 1.0, form: ArrowForm::Dropdown, stroke: StrokeWidth::Medium };
+const MENU_BUTTON: DisclosureGlyph = DisclosureGlyph { open: 1.0, form: ArrowForm::Dropdown, stroke: StrokeWidth::Medium };
 /// The submenu arrow.
-static SUBMENU: DisclosureGlyph = DisclosureGlyph { open: 0.0, form: ArrowForm::Submenu, stroke: StrokeWidth::Thin };
+const SUBMENU: DisclosureGlyph = DisclosureGlyph { open: 0.0, form: ArrowForm::Submenu, stroke: StrokeWidth::Thin };
 
 impl DisclosureGlyph {
     /// The disclosure triangle `open` of the way turned.

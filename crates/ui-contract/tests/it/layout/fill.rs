@@ -128,6 +128,16 @@ struct Asked {
     ideal: Cell<usize>,
     min: Cell<usize>,
     pair: Cell<usize>,
+    observed: Cell<(u64, u32, u32)>,
+}
+
+impl Asked {
+    fn note(&self, ctx: &egui::Context, pair: bool) {
+        let pass = ctx.cumulative_pass_nr();
+        let (old, count, pairs) = self.observed.get();
+        let (count, pairs) = if old == pass { (count, pairs) } else { (0, 0) };
+        self.observed.set((pass, count + 1, pairs + u32::from(pair)));
+    }
 }
 
 /// A leaf `IDEAL` wide that narrows to `LEAST`, whatever its room; it counts the measures it answers in measuring runs.
@@ -157,6 +167,7 @@ impl Component for Stretch<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        self.asked.note(cx.ui.ctx(), false);
         if self.track_input {
             let _ = cx.column_room();
         }
@@ -173,6 +184,7 @@ impl Component for Stretch<'_> {
         if !self.paired {
             return None;
         }
+        self.asked.note(ideal.ui.ctx(), true);
         assert_eq!(ideal.proposal, Proposal::Ideal);
         assert_eq!(least.proposal, Proposal::Min);
         if self.track_input {
@@ -196,6 +208,29 @@ impl Component for Stretch<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+#[trial]
+fn paired_measure_is_counted_once_as_a_measure_ask() {
+    let asked = Rc::new(Asked::default());
+    let shown = Rc::clone(&asked);
+    let mut fixture = Fixture::new(move |ui| {
+        let seen = RefCell::new(Seen::default());
+        Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("row").show(ui, |ui, _| {
+            let mut child = Stretch::new(&seen, &shown);
+            child.paired = true;
+            child.sizing(Sizing::FillWidth).id_salt("child").show(ui);
+        });
+    });
+    fixture.room(Vec2::new(240.0, 100.0)).frame(Vec::new());
+    let (pass, actual, pairs) = asked.observed.get();
+    assert_eq!(pass, fixture.ctx().cumulative_pass_nr().saturating_sub(1));
+    assert!(pairs > 0, "the final pass used the paired hook");
+    let counted = craft_ui::testing::last_pass_measure_asks(fixture.ctx())
+        .into_iter()
+        .find_map(|(name, count)| name.contains("Stretch").then_some(count))
+        .unwrap_or(0);
+    assert_eq!(counted, actual, "paired and separate calls are each counted once");
 }
 
 /// Compare the paired path with the legacy component calls through a nested filling body and its kept transcript.

@@ -27,6 +27,8 @@ pub(crate) fn measure_content<C: Component>(
     value: Option<&ValueOf<C>>,
 ) -> (Vec2, Inputs) {
     let cx = measure_cx::<C>(input, style, resolved, value);
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_measure_ask(input.ui.ctx(), std::any::type_name::<C>());
     layout_memory::measure_call(input.ui.ctx(), || comp.measure(&cx))
 }
 
@@ -43,6 +45,10 @@ pub(crate) fn measure_content_pair<C: Component>(
     let ideal_cx = measure_cx::<C>(ideal, style, resolved, value);
     let least_cx = measure_cx::<C>(least, style, resolved, value);
     let (pair, inputs) = layout_memory::measure_call(ideal.ui.ctx(), || comp.measure_pair(&ideal_cx, &least_cx));
+    #[cfg(feature = "testing")]
+    if pair.is_some() {
+        crate::runtime::measure::count_measure_ask(ideal.ui.ctx(), std::any::type_name::<C>());
+    }
     pair.map(|pair| (pair, inputs))
 }
 
