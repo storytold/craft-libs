@@ -225,9 +225,29 @@ impl CanvasSpace {
         self.easing
     }
 
-    /// The page and arrow keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
+    /// The page keys the canvas left to its body in this pass ([`Canvas::keys_to_body`](super::Canvas)).
     pub fn keys(&self) -> BodyKeys {
         self.keys
+    }
+
+    /// Takes this pass's arrow that nothing in the canvas's body took: the one routed to the focused canvas, or, with
+    /// nothing in the window focused, the window's. A body that pages its document itself
+    /// ([`Canvas::keys_to_body`](super::Canvas)) runs its tool host and controls first, which take the arrows a tool
+    /// or a session claims, and moves its view with what is left in the same pass. `None` when the arrow was taken,
+    /// or there was none; a measuring run reads it without taking it.
+    pub fn take_nudge(&self, ctx: &egui::Context) -> Option<(Vec2, Mods)> {
+        let canvas = self.canvas?;
+        let mut own = crate::runtime::keys::intents_of(ctx, Some(canvas), false);
+        if let Some(nudge) = own.take_nudge() {
+            crate::runtime::keys::settle(ctx, Some(canvas), &own);
+            return Some(nudge);
+        }
+        let mut nudge = None;
+        crate::runtime::keys::with_window_intents(ctx, false, |window| {
+            nudge = window.take_nudge();
+            nudge.is_some()
+        });
+        nudge
     }
 
     /// Device pixels per document unit (1 is 100 %) of the view at this scale.
@@ -313,15 +333,14 @@ pub struct BackgroundPress {
     pub context_key: bool,
 }
 
-/// The keys a canvas that leaves them to its body took in a pass, one of each kind: a key held down repeats over
-/// passes, not within one.
+/// The page keys a canvas that leaves them to its body took in a pass: a key held down repeats over passes, not
+/// within one. The arrows stay with the body's tool host and controls first; the body takes what they left with
+/// [`CanvasSpace::take_nudge`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct BodyKeys {
     /// Page Up, Page Down, Home or End, with the modifiers held.
     pub page: Option<(NavMove, MoveMods)>,
-    /// An arrow: a unit direction on screen and the modifiers held.
-    pub nudge: Option<(Vec2, Mods)>,
 }
 
 impl BackgroundPress {

@@ -200,9 +200,10 @@ pub struct Canvas<'a> {
     /// Whether the rulers show along the top and left edges (View > Rulers): the view lies inside them.
     #[prop]
     show_rulers: bool,
-    /// Whether the canvas leaves Page Up, Page Down, Home, End and the arrows to its body: it applies no page keys
-    /// and gives no tool or session control the arrows, and its body reads them in [`CanvasSpace::keys`]. For a
-    /// body that pages its document itself (a page view).
+    /// Whether the canvas leaves Page Up, Page Down, Home, End and the arrows to its body: it applies no page keys,
+    /// which its body reads in [`CanvasSpace::keys`], and the arrows reach the body's tool host and session controls
+    /// first, then the body with [`CanvasSpace::take_nudge`], in the same pass. For a body that pages its document
+    /// itself (a page view).
     #[prop]
     keys_to_body: bool,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
@@ -543,7 +544,8 @@ impl<'a> Canvas<'a> {
             jumped = true;
         }
         // Page Up and Down, Home and End scroll the view as in Photoshop; the arrows are the tool's nudges. A canvas
-        // that leaves its keys to its body hands both to it.
+        // that leaves its keys to its body hands it the page keys; the arrows stay routed, for the body's tool host
+        // first and then the body (`CanvasSpace::take_nudge`).
         let mut keys = BodyKeys::default();
         let mut moves = Vec::new();
         while let Some(mv) = cx.intents().take_move() {
@@ -557,17 +559,6 @@ impl<'a> Canvas<'a> {
             } else if let (Some(document), Some(key)) = (self.document_size(), PageKey::of(step, mods, area.size())) {
                 jumped |= key.apply(&mut view, document);
             }
-        }
-        if self.keys_to_body {
-            // With nothing focused the window's arrows are the canvas's too: no tool here takes them.
-            keys.nudge = cx.intents().take_nudge().or_else(|| {
-                let mut nudge = None;
-                crate::runtime::keys::with_window_intents(&ctx, false, |window| {
-                    nudge = window.take_nudge();
-                    nudge.is_some()
-                });
-                nudge
-            });
         }
         // A pan or a scroll takes over from an ease, here or in a tool.
         let mut steer = motion.steer.take();

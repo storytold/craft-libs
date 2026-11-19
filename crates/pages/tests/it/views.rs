@@ -4,14 +4,14 @@
 use craft_behavior::{GESTURE_GAP, kurbo};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{GoTo, PagePreview, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
-use craft_ui::canvas::NavigationOptions;
-use craft_ui::contract::{Role, Show as _};
+use craft_pages::ui::{GoTo, PageBody, PagePreview, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
+use craft_ui::canvas::{CanvasTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, pos2, vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -81,6 +81,17 @@ struct Rig {
 
 /// A rig over `source` in a 900 × 600 room, settled when `settle`.
 fn rig_over(source: impl PageSource + 'static, start: PageViewState, navigation: NavigationOptions, settle: bool) -> Rig {
+    rig_with(source, start, navigation, settle, |_, _| ())
+}
+
+/// A rig over `source` whose page body runs `body` (the app's tool host), in a 900 × 600 room, settled when `settle`.
+fn rig_with(
+    source: impl PageSource + 'static,
+    start: PageViewState,
+    navigation: NavigationOptions,
+    settle: bool,
+    mut body: impl FnMut(&mut egui::Ui, &PageBody<'_>) + 'static,
+) -> Rig {
     let state = Rc::new(RefCell::new(start));
     let out: Rc<RefCell<Out>> = Rc::default();
     let keep: Rc<RefCell<Vec<usize>>> = Rc::default();
@@ -90,7 +101,7 @@ fn rig_over(source: impl PageSource + 'static, start: PageViewState, navigation:
         let offset = now.offset;
         let keep = held.borrow().clone();
         let shown =
-            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show(ui, |_, _| ());
+            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show(ui, &mut body);
         let scrolled = seen.borrow().scrolled || shown.scrolled;
         *seen.borrow_mut() =
             Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect, scrolled };
@@ -132,8 +143,10 @@ fn assert_centre_kept(out: &Out, before: (usize, kurbo::Point), what: &str) {
     );
 }
 
+/// A written zoom keeps the point at the centre; a new room (a panel opened beside the view) refits and keeps the
+/// current page's top where it was, as production did.
 #[trial]
-fn a_changed_zoom_keeps_the_point_at_the_centre_in_place() {
+fn a_changed_zoom_keeps_the_point_at_the_centre_and_a_new_room_the_current_pages_top() {
     // The app's zoom.
     let mut zoomed = rig(
         5,
@@ -153,13 +166,19 @@ fn a_changed_zoom_keeps_the_point_at_the_centre_in_place() {
 
     // A fit over a new room.
     let mut fitted = rig(5, state_with(|s| s.fit = Fit::Width));
-    let third = fitted.out.borrow().rects[2];
-    fitted.state.borrow_mut().offset.1 = third.y0 + 0.4 * third.height();
-    fitted.fixture.idle(2);
-    let before = centre_point(&fitted.out.borrow());
+    fitted.state.borrow_mut().go_to_fraction(2, 0.2);
+    fitted.fixture.idle(3);
+    let below_top = |out: &Out, page: usize| out.rects[page].y0 - out.offset.1;
+    let (page, before) = (fitted.state.borrow().current, below_top(&fitted.out.borrow(), 2));
+    assert_eq!(page, 2, "precondition: the third page is current");
+    let scale = fitted.out.borrow().rects[2].height();
     fitted.fixture.room(vec2(700.0, 500.0));
     fitted.fixture.idle(3);
-    assert_centre_kept(&fitted.out.borrow(), before, "a fit after a new room");
+    let out = fitted.out.borrow();
+    assert!(out.rects[2].height() < scale, "precondition: the fit shrank the pages");
+    assert_eq!(fitted.state.borrow().current, 2, "the page stays current");
+    let after = below_top(&out, 2);
+    assert!((after - before).abs() < 1.0, "the current page's top stays put: {before} then {after}");
 }
 
 /// A wheel step of `lines` over the middle of the room.
@@ -881,4 +900,186 @@ fn the_view_reports_the_readers_wheel_and_scroll_bar_but_not_a_go_to_or_a_zoom()
         fixture.frame(vec![craft_ui::testing::pointer::release(grab)]);
     });
     assert!(dragged, "a press on the scroll bar's track is the reader's scroll");
+}
+
+/// A tool that takes the arrows while `takes` holds (a selected picture's nudge), and counts them.
+struct Nudges {
+    takes: Rc<Cell<bool>>,
+    taken: Rc<Cell<usize>>,
+}
+
+impl CanvasTool for Nudges {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: craft_behavior::CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        let take = matches!(key, ToolKey::Nudge { .. }) && self.takes.get();
+        if take {
+            self.taken.set(self.taken.get() + 1);
+        }
+        take
+    }
+
+    fn paint(&self, _: &craft_ui::primitives::Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the nudged object's position fields")
+    }
+}
+
+/// The page view gives the window's arrows to its body's tool host first and turns the page only with what the tool
+/// left, in the same pass. The view used to take them before its body ran, so a selected object never moved.
+#[trial]
+fn an_arrow_the_tool_takes_leaves_the_page_and_one_it_leaves_turns_it() {
+    let (takes, taken) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(0)));
+    let mut tool = Nudges { takes: Rc::clone(&takes), taken: Rc::clone(&taken) };
+    let start = state_with(|s| {
+        s.continuous = false;
+        s.fit = Fit::Page;
+    });
+    let Rig { mut fixture, state, .. } = rig_with(DemoPages::new(5), start, NavigationOptions::default(), true, move |ui, body| {
+        if let Some(pass) = body.pass {
+            let reply = ToolHost::new().run(ui, pass, &mut tool);
+            assert!(reply.view.is_none(), "the tool moves no view");
+        }
+    });
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(taken.get(), 1, "the tool takes the arrow");
+    assert_eq!(state.borrow().current, 0, "an arrow the tool took leaves the page");
+    takes.set(false);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!((taken.get(), state.borrow().current), (1, 1), "an arrow the tool leaves turns the page");
+}
+
+/// Cmd with Page Down turns one page in a scrolling view, where plain Page Down scrolls a screen; Right turns a
+/// spread in a scrolling two-page view, not to the other page of the spread already on screen.
+#[trial]
+fn command_page_down_turns_a_page_and_right_a_spread_in_a_scrolling_view() {
+    let (mut fixture, state, out) = layout_rig(5, state_with(|s| s.fit = Fit::Page));
+    focus_canvas(&mut fixture);
+    fixture.key(Key::PageDown, Modifiers::COMMAND);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 1, "Cmd+Page Down turns one page");
+    let top = out.borrow().rects[1].y0 - out.borrow().offset.1;
+    assert!(top >= 0.0 && top < 40.0, "the page's top comes to the view's top: {top}");
+    fixture.key(Key::PageUp, Modifiers::COMMAND);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 0, "Cmd+Page Up turns back");
+
+    let (mut fixture, state, _) = layout_rig(
+        6,
+        state_with(|s| {
+            s.fit = Fit::Page;
+            s.display = PageDisplay::TwoUp;
+        }),
+    );
+    focus_canvas(&mut fixture);
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 2, "Right moves a spread");
+}
+
+/// Right on a page wider than the view scrolls it a line, turns at its right edge, and the next page comes from its
+/// left edge, so Right scrolls across it rather than turning again. The view used to scroll the wide layout for ever.
+#[trial]
+fn right_scrolls_a_page_wider_than_the_view_then_turns_at_its_edge() {
+    let (mut fixture, state, out) = layout_rig(
+        3,
+        state_with(|s| {
+            s.continuous = false;
+            s.fit = Fit::None;
+            s.zoom = 3.0;
+        }),
+    );
+    focus_canvas(&mut fixture);
+    let start = state.borrow().offset.0;
+    fixture.key(Key::ArrowRight, Modifiers::NONE);
+    fixture.idle(2);
+    assert_eq!(state.borrow().current, 0, "Right scrolls the wide page");
+    assert!(state.borrow().offset.0 > start, "the page moved left");
+    let mut presses = 1;
+    while state.borrow().current == 0 {
+        fixture.key(Key::ArrowRight, Modifiers::NONE);
+        fixture.idle(2);
+        presses += 1;
+        assert!(presses < 300, "Right never reached the page's edge");
+    }
+    assert!(presses > 3, "Right scrolled across the page before turning ({presses} presses)");
+    let shown = out.borrow();
+    let (left, view) = (shown.rects[1].x0 - shown.offset.0, f64::from(shown.view.width()));
+    assert!(left >= 0.0 && shown.rects[1].x1 - shown.offset.0 > view, "the next page shows from its left edge: {left}");
+}
+
+/// Pages shorter than the view sit in its middle, a page or the column of a scrolling view, and so does a page that
+/// fits only without its margins. The scroll area used to be at least the view's height, from the top.
+#[trial]
+fn pages_shorter_than_the_view_sit_in_its_middle() {
+    let middle = |out: &Out, rows: Range<usize>| {
+        let column = rows.map(|page| out.rects[page]).reduce(|a, b| a.union(b)).expect("pages");
+        let (top, bottom) = (column.y0 - out.offset.1, column.y1 - out.offset.1);
+        let view = f64::from(out.view.height());
+        assert!(bottom - top < view, "precondition: {top}..{bottom} is shorter than {view}");
+        assert!((top - (view - bottom)).abs() < 1.0, "{top}..{bottom} sits in the middle of {view}");
+    };
+    let small = |continuous: bool, zoom: f64| {
+        state_with(|s| {
+            s.continuous = continuous;
+            s.fit = Fit::None;
+            s.zoom = zoom;
+        })
+    };
+    let (_, _, out) = layout_rig(1, small(false, 0.25));
+    middle(&out.borrow(), 0..1);
+    let (_, _, out) = layout_rig(2, small(true, 0.25));
+    middle(&out.borrow(), 0..2);
+
+    // A page that fits the view only without its margins shows whole, in the middle.
+    let height = out.borrow().rects[0].height();
+    let room = f64::from(out.borrow().view.height());
+    let (_, _, out) = layout_rig(1, small(false, 0.25 * (room - 8.0) / height));
+    middle(&out.borrow(), 0..1);
+}
+
+/// The reader's wheel over the pages scrolls the view and reports it while a field above the view (a find bar's
+/// query) has the focus.
+#[trial]
+fn the_wheel_over_the_pages_scrolls_and_reports_it_while_a_field_beside_them_has_the_focus() {
+    let state = Rc::new(RefCell::new(state_with(|s| s.fit = Fit::Width)));
+    let scrolled = Rc::new(Cell::new(false));
+    let (kept, seen) = (Rc::clone(&state), Rc::clone(&scrolled));
+    let source = DemoPages::new(5);
+    let mut query = String::new();
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::text::TextField::new("Find", Bind::bound(&mut query)).show(ui);
+        let mut now = kept.borrow().clone();
+        let shown = PageView::new("Pages", &source, &mut now, PAPER).show(ui, |_, _| ());
+        seen.set(seen.get() || shown.scrolled);
+        *kept.borrow_mut() = now;
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    assert!(fixture.focused_role().is_some_and(|role| role.text), "precondition: the field has the focus");
+    let before = state.borrow().offset.1;
+    fixture.frame(vec![egui::Event::PointerMoved(pos2(450.0, 350.0))]);
+    scrolled.set(false);
+    fixture.frame(vec![egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -20.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+    }]);
+    fixture.idle(4);
+    assert!(state.borrow().offset.1 > before, "the wheel scrolls the pages");
+    assert!(scrolled.get(), "the view reports the reader's scroll");
 }

@@ -30,9 +30,10 @@ use crate::layout::{
     Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages, shown_row,
 };
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
-use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, ZoomLadder};
+use craft_behavior::{CanvasView, NavMove, PressPhase, ZoomLadder};
+use craft_keymap::Mods;
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
     tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
@@ -330,7 +331,11 @@ impl PageViewOutput {
 ///   `Priority::VISIBLE`, one row either side at `Priority::NEAR`; a page larger than the texture side adds a
 ///   second picture of the part in view. Sharp renders wait while a zoom gesture or ease runs, and those of the part
 ///   in view while the view pans too. While the view scrolls, the two rows ahead are asked for instead.
-/// - Layout: a scale the fit or the app changes keeps the document point at the centre of the view in place.
+/// - Layout: a scale the fit or the app changes keeps the document point at the centre of the view in place; a new
+///   room keeps the current page's top where it was. Pages (a page or spread, or a scrolling column) shorter than
+///   the view without their margins sit in its middle.
+/// - Keys: the arrows go to the app's tool host first ([`PageBody::pass`]); the view moves with those it leaves, in
+///   the same pass.
 /// - Scrolling: the canvas folds in the wheel (the wheel scrolls, Shift or Ctrl/Cmd + wheel scrolls sideways, Alt +
 ///   wheel and a pinch zoom about the pointer, as [`NavigationOptions`] say) and the view commands; the view
 ///   reads the result back into its state. [`CanvasScrollbars`] land in their own pass. Not continuous, a page
@@ -449,9 +454,11 @@ impl<'a> PageView<'a> {
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let inputs = Inputs { source, describer, build: &build, rect, given, paper, navigation, border, keep };
-            let next = run_pass(ui, cx, &mut held, &inputs)?;
+            let (mut next, pending) = run_pass(ui, cx, &mut held, &inputs)?;
             let pass = tool_pass(&cx.env);
             body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
+            // The body's tool host took the arrows a tool claims; the view moves with the keys it left.
+            pending.finish(ui.ctx(), &mut next, &inputs);
             let decided = next.next.clone();
             seen = Some(next);
             decided
@@ -531,7 +538,7 @@ impl Seen {
     /// A pass whose canvas body did not run (no area).
     fn empty(view: CanvasView, frame: Frame) -> Seen {
         Seen {
-            geo: Arc::new(Placed { layout: PagedLayout::default(), scale: SCREEN_POINTS_PER_POINT, row: 0..0, doc: DocRect::ZERO }),
+            geo: Arc::new(Placed { layout: PagedLayout::default(), scale: SCREEN_POINTS_PER_POINT, row: 0..0, doc: DocRect::ZERO, pages: DocRect::ZERO }),
             frame,
             view,
             pages: Vec::new(),
@@ -601,9 +608,10 @@ impl Frame {
     }
 }
 
-/// One pass of the canvas body: layout, scrolling, zoom and paging folded into the state; the pasteboard, the
-/// pictures and the scroll bars drawn.
-fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>) -> Option<Seen> {
+/// One pass of the canvas body up to the app's body: layout, the wheel, a pinch and a pan folded into the state; the
+/// pasteboard, the pictures and the scroll bars drawn. The keys, the turns and the go-to wait for [`Pending::finish`],
+/// after the app's body.
+fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>) -> Option<(Seen, Pending)> {
     let Inputs { source, describer, build, rect, given, paper, navigation, border, keep } = *inputs;
     let mut state = held.read(cx)?;
     let started = state.clone();
@@ -634,11 +642,18 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
 
     // A scale the fit (a new viewport or pages) or the app changed keeps the document point at the centre of the
     // view where it was, unless the app moved the view or asked for a go-to in the same breath.
+    // A new room (a resized window, a panel opened beside the view) keeps the current page's top where it was instead.
     let unmoved = mem.offset == Some(state.offset);
-    if let Some((key, previous)) = previous.filter(|(_, p)| !scale_settled(p.scale, geo.scale)).filter(|_| unmoved && state.go_to.is_none())
-        && let Some(offset) = centred_offset(&previous, &geo, state.offset, (key.viewport.width, key.viewport.height), (vw, vh))
-    {
-        state.offset = offset;
+    if let Some((key, previous)) = previous.filter(|(_, p)| !scale_settled(p.scale, geo.scale)).filter(|_| unmoved && state.go_to.is_none()) {
+        let room = (key.viewport.width, key.viewport.height);
+        let centred = centred_offset(&previous, &geo, state.offset, room, (vw, vh));
+        let top_kept = |(x, _): (f64, f64)| {
+            let (before, after) = (previous.layout.rects.get(state.current)?, geo.layout.rects.get(state.current)?);
+            Some((x, after.y0 - (before.y0 - state.offset.1)))
+        };
+        if let Some(offset) = if room == (vw, vh) { centred } else { centred.and_then(top_kept) } {
+            state.offset = offset;
+        }
     }
     state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
 
@@ -661,52 +676,20 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
             want = (state.offset.0 + along_x, state.offset.1 + along_y);
         }
     }
-    let keys = KeyMoves::of(space.keys(), &state, &geo, rect, f64::from(navigation.key_line));
-    let mut scrolled = keys.moves() || wheel.is_some_and(|wheel| !zooming && wheel.scroll != Vec2::ZERO);
-    want.0 += keys.pan.0;
-    want.1 = if keys.to_end { f64::INFINITY } else { want.1 + keys.pan.1 };
+    let mut scrolled = wheel.is_some_and(|wheel| !zooming && wheel.scroll != Vec2::ZERO);
 
-    // A key or the app's step turns the page; else, not continuous, the wheel turns it at the row's edge.
-    // The edge is read at the offset the pass started with, not at `want.1`: the share that pans a long page to
-    // its edge has not been marked moved yet, and must not also turn.
+    // Not continuous, the wheel turns the page at the row's edge. The edge is read at the offset the pass started
+    // with, not at `want.1`: the share that pans a long page to its edge has not been marked moved yet, and must not
+    // also turn.
     let wheel_turned = wheel
         .filter(|_| !state.continuous)
         .and_then(|wheel| wheel_turn(&wheel, edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0), f64::from(navigation.wheel_line)));
-    let step = state.turn.take();
-    let mut go_to = keys.go_to;
-    if let Some(forward) = keys.turn.or(step).or(wheel_turned) {
-        let options = build.layout_options(&state);
-        let row = if state.continuous { shown_row(count, state.current, &options) } else { geo.row.clone() };
-        match turned_row(count, &row, &options, forward) {
-            // A continuous view scrolls to the row, as a go-to of its first page.
-            Some(next) if state.continuous => go_to = go_to.or(Some(GoTo::Top { page: next, fraction: 0.0 })),
-            Some(next) => {
-                state.current = next;
-                geo = build.of(&state);
-                state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
-                let (lo, hi) = offset_range(geo.doc.y0, geo.doc.y1, vh);
-                want.1 = if forward { lo } else { hi };
-            }
-            // Past either end there is nowhere to go: the view stays where it was.
-            None => want.1 = state.offset.1,
-        }
-    }
 
     // The pasteboard and the pictures are drawn through the view the canvas shows; a zoom still
     // under way draws the layout the view was made for, scaled. A pointer zoom runs while the canvas zooms this pass
     // or its eased zoom is still arriving on screen.
     let ratio = shown.zoom / drawn_frame.zoom;
     let pointer_zoom = zooming || ratio != 1.0;
-
-    // A key's or the step's go-to replaces a pending one. While a pointer zoom runs, the go-to is placed at the zoom's
-    // new scale and kept, so the zoom anchors on it; the first pass without one lets it go.
-    let go_to = go_to.or(state.go_to);
-    state.go_to = go_to.filter(|_| pointer_zoom);
-    let went = go_to.is_some();
-    if let Some(go_to) = go_to {
-        geo = place_go_to(build, &mut state, go_to, (vw, vh));
-        want = go_to_offset(go_to, &geo, state.continuous, want, (vw, vh), &build.spacing);
-    }
     let travel = travel_of(mem.offset, want, wheel.as_ref());
 
     let seen = shown.visible();
@@ -762,9 +745,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         CanvasScrollbars::new(words.scroll_bars.clone(), Bind::given(target), DocRect::from_origin_size(Point::ZERO, document)).show_at(ui, cx.rect);
     let bar_drag = bars.view.value().is_some();
     scrolled |= bar_drag;
-    if let Some(moved) = bars.view.value() {
-        want = drawn_frame.offset_of(moved.center, vw, vh);
-    }
+    let bar_want = bars.view.value().map(|moved| drawn_frame.offset_of(moved.center, vw, vh));
     let bar_shapes = slot.take_after(&ctx);
 
     // The part in view waits while the view zooms or moves.
@@ -777,28 +758,113 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let textures = thumbs.cache().statistics(&ctx) + details.cache().statistics(&ctx);
     PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, bar_shapes);
 
-    // The bars' drag landed in `want` above, so it lands in this pass's clamp.
-    let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), offset_range(geo.doc.y0, geo.doc.y1, vh));
-    let offset = (want.0.clamp(xs.0, xs.1), want.1.clamp(ys.0, ys.1));
-    state.offset = offset;
-    if state.continuous && count > 0 && !went && mem.offset.is_some_and(|last| last != offset) {
-        state.current = page_on_line(&geo.layout, offset.1 + vh / 2.0);
-    }
-    mem.offset = Some(offset);
-    mem.layout = build.cache.borrow().clone();
-    let current_changed = state.current != started_on;
-    Some(Seen {
+    let seen = Seen {
         geo: drawn,
         frame: drawn_frame,
         view: shown,
         pages,
         visible,
-        current_changed,
+        current_changed: false,
         scrolled,
         pasteboard: Some(pasteboard),
         textures,
-        next: Some(Next { started, state, mem, edit: words.edit.as_str().to_owned() }),
-    })
+        next: None,
+    };
+    let pending =
+        Pending { started, state, mem, geo, want, bar_want, wheel_turned, pointer_zoom, started_on, space, edit: words.edit.as_str().to_owned() };
+    Some((seen, pending))
+}
+
+/// What a pass decides after the app's body ran in it: the keys the body's tool host left, the turns, the go-to and
+/// the clamp of the offset.
+struct Pending {
+    started: PageViewState,
+    state: PageViewState,
+    mem: Memory,
+    geo: Arc<Placed>,
+    /// The offset the wheel, a pinch and a pan ask for.
+    want: (f64, f64),
+    /// The offset a scroll bar's drag or press asks for, which overrides every other move.
+    bar_want: Option<(f64, f64)>,
+    wheel_turned: Option<bool>,
+    pointer_zoom: bool,
+    started_on: usize,
+    space: CanvasSpace,
+    edit: String,
+}
+
+impl Pending {
+    /// Folds the page keys and the arrow nothing in the body took into the state, with the app's step, the wheel's
+    /// turn and the go-to, clamps the offset, and hands `seen` what the caller stores.
+    fn finish(self, ctx: &egui::Context, seen: &mut Seen, inputs: &Inputs<'_>) {
+        let Pending { started, mut state, mut mem, mut geo, mut want, bar_want, wheel_turned, pointer_zoom, started_on, space, edit } = self;
+        let build = inputs.build;
+        let (vw, vh) = (build.viewport.width, build.viewport.height);
+        let count = build.sizes.len();
+        let options = build.layout_options(&state);
+        let keys = KeyMoves::of(space.keys(), space.take_nudge(ctx), &state, &geo, &options, inputs.rect, f64::from(inputs.navigation.key_line));
+        seen.scrolled |= keys.moves();
+        want.0 += keys.pan.0;
+        want.1 = if keys.to_end { f64::INFINITY } else { want.1 + keys.pan.1 };
+
+        // A key or the app's step turns the page; else, not continuous, the wheel turns it at the row's edge.
+        let step = state.turn.take();
+        let mut go_to = keys.go_to;
+        let before_turn = state.current;
+        if let Some(forward) = keys.turn.or(step).or(wheel_turned) {
+            let row = if state.continuous { shown_row(count, state.current, &options) } else { geo.row.clone() };
+            match turned_row(count, &row, &options, forward) {
+                // A continuous view scrolls to the row, as a go-to of its first page.
+                Some(next) if state.continuous => go_to = go_to.or(Some(GoTo::Top { page: next, fraction: 0.0 })),
+                Some(next) => {
+                    state.current = next;
+                    geo = build.of(&state);
+                    state.zoom = geo.scale / SCREEN_POINTS_PER_POINT;
+                    let (lo, hi) = geo.y_range(vh);
+                    want.1 = if forward { lo } else { hi };
+                }
+                // Past either end there is nowhere to go: the view stays where it was.
+                None => want.1 = state.offset.1,
+            }
+        }
+
+        // A key's or the step's go-to replaces a pending one. While a pointer zoom runs, the go-to is placed at the
+        // zoom's new scale and kept, so the zoom anchors on it; the first pass without one lets it go.
+        let go_to = go_to.or(state.go_to);
+        state.go_to = go_to.filter(|_| pointer_zoom);
+        let went = go_to.is_some();
+        if let Some(go_to) = go_to {
+            geo = place_go_to(build, &mut state, go_to, (vw, vh));
+            want = go_to_offset(go_to, &geo, state.continuous, want, (vw, vh), &build.spacing);
+        }
+        // Turned by Left or Right at an edge, a row wider than the view starts at the edge the reader comes from, so
+        // the next key scrolls across it rather than turning again.
+        if let Some(forward) = keys.across.filter(|_| state.current != before_turn)
+            && let Some(row) = row_rect(&geo, state.current, &options)
+            && row.width() + 2.0 * build.spacing.side > vw
+        {
+            want.0 = if forward { row.x0 - build.spacing.side } else { row.x1 + build.spacing.side - vw };
+        }
+        if let Some(bar) = bar_want {
+            want = bar;
+        }
+
+        let (xs, ys) = (offset_range(geo.doc.x0, geo.doc.x1, vw), geo.y_range(vh));
+        let offset = (want.0.clamp(xs.0, xs.1), want.1.clamp(ys.0, ys.1));
+        state.offset = offset;
+        if state.continuous && count > 0 && !went && mem.offset.is_some_and(|last| last != offset) {
+            state.current = page_on_line(&geo.layout, offset.1 + vh / 2.0);
+        }
+        mem.offset = Some(offset);
+        mem.layout = build.cache.borrow().clone();
+        seen.current_changed = state.current != started_on;
+        seen.next = Some(Next { started, state, mem, edit });
+    }
+}
+
+/// The page or spread `current` shows in, content coordinates; `None` with no pages.
+fn row_rect(geo: &Placed, current: usize, options: &LayoutOptions) -> Option<DocRect> {
+    shown_row(geo.layout.rects.len(), current, options).filter_map(|page| geo.layout.rects.get(page).copied()).reduce(|a, b| a.union(b))
 }
 
 /// Which way the view travels this pass along the page column: `1.0` down the document, `-1.0` up, `0.0` still. The
@@ -818,7 +884,7 @@ fn travel_of(last: Option<(f64, f64)>, want: (f64, f64), wheel: Option<&craft_be
 /// The edge of the shown row the view sits at in the direction it would move: `Some(true)` the end, going forward,
 /// `Some(false)` the start, going back, `None` when the row still has room that way. A row that fits sits at both.
 fn edge_ahead(geo: &Placed, y: f64, view_height: f64, forward: bool) -> Option<bool> {
-    let (lo, hi) = offset_range(geo.doc.y0, geo.doc.y1, view_height);
+    let (lo, hi) = geo.y_range(view_height);
     if forward { (y >= hi - EDGE).then_some(true) } else { (y <= lo + EDGE).then_some(false) }
 }
 
@@ -892,31 +958,33 @@ craft_ui::words! {
     }
 }
 
-/// What this pass's keys ask of the view (plain keys only).
+/// What this pass's keys ask of the view.
 #[derive(Default)]
 struct KeyMoves {
     /// Screen points to move the offset.
     pan: (f64, f64),
     /// End in a continuous view: the bottom.
     to_end: bool,
-    /// Turn to the next (`true`) or previous row when not continuous.
+    /// Turn to the next (`true`) or previous row or spread.
     turn: Option<bool>,
+    /// The turn is Right's (`true`) or Left's at the row's edge: a wide row lands at the edge the reader comes from.
+    across: Option<bool>,
     /// Where to take the view.
     go_to: Option<GoTo>,
 }
 
 impl KeyMoves {
-    /// Page Up and Down a screen less a key line (a row when not continuous), Home and End the first and last page, Up
-    /// and Down a key line (not continuous, a turn once the row is at its edge that way), Left and Right a page when
-    /// the page fits the width, else a key line sideways. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
-    /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift or Cmd alone with the other keys,
+    /// Page Up and Down a screen less a key line (a row when not continuous, and with Cmd), Home and End the first
+    /// and last page, Up and Down a key line (not continuous, a turn once the row is at its edge that way), Left and
+    /// Right a key line sideways while the current page or spread has more to show that way, else a turn of a page or
+    /// spread; Cmd with Left or Right turns at once. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
+    /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift alone with the other keys,
     /// leave them to nothing.
-    fn of(keys: BodyKeys, state: &PageViewState, geo: &Placed, rect: Rect, line: f64) -> KeyMoves {
+    fn of(keys: BodyKeys, nudge: Option<(Vec2, Mods)>, state: &PageViewState, geo: &Placed, options: &LayoutOptions, rect: Rect, line: f64) -> KeyMoves {
         let last = geo.layout.rects.len().saturating_sub(1);
         let top = |page: usize| Some(GoTo::Top { page, fraction: 0.0 });
         let mut moves = KeyMoves::default();
         let end = |forward: bool| if forward && state.continuous { (true, None) } else { (false, top(if forward { last } else { 0 })) };
-        let plain = |mods: &MoveMods| !mods.extend && !mods.lead && !mods.fine;
         let to_end = match keys.page {
             Some((step @ (NavMove::Start | NavMove::End), mods)) if !mods.fine => Some(step == NavMove::End),
             Some((step @ (NavMove::PageUp | NavMove::PageDown), mods)) if mods.extend && mods.lead && !mods.fine => Some(step == NavMove::PageDown),
@@ -925,10 +993,10 @@ impl KeyMoves {
         if let Some(forward) = to_end {
             (moves.to_end, moves.go_to) = end(forward);
         }
-        match keys.page.filter(|(_, mods)| plain(mods)).map(|(step, _)| step) {
-            Some(step @ (NavMove::PageUp | NavMove::PageDown)) => {
+        match keys.page.filter(|(_, mods)| !mods.extend && !mods.fine) {
+            Some((step @ (NavMove::PageUp | NavMove::PageDown), mods)) => {
                 let forward = step == NavMove::PageDown;
-                if state.continuous {
+                if state.continuous && !mods.lead {
                     // A key line of the last screen stays in view, so the reader keeps their place.
                     let screen = (f64::from(rect.height()) - line).max(line);
                     moves.pan.1 += if forward { screen } else { -screen };
@@ -938,7 +1006,7 @@ impl KeyMoves {
             }
             _ => {}
         }
-        if let Some((direction, mods)) = keys.nudge
+        if let Some((direction, mods)) = nudge
             && direction.y != 0.0
             && mods.shift
             && (mods.cmd || mods.ctrl)
@@ -947,18 +1015,19 @@ impl KeyMoves {
             (moves.to_end, moves.go_to) = end(direction.y > 0.0);
             return moves;
         }
-        let Some((direction, _)) = keys.nudge.filter(|(_, mods)| mods.is_none()) else { return moves };
-        if direction.y != 0.0 {
+        let Some((direction, mods)) = nudge.filter(|(_, mods)| !mods.shift && !mods.alt) else { return moves };
+        let lead = mods.cmd || mods.ctrl;
+        if direction.y != 0.0 && !lead {
             moves.line_down(direction.y > 0.0, state, geo, rect, line);
         } else if direction.x != 0.0 {
             let forward = direction.x > 0.0;
-            if geo.doc.width() > f64::from(rect.width()) {
-                moves.pan.0 += if forward { line } else { -line };
-            } else if state.continuous {
-                let next = if forward { state.current + 1 } else { state.current.saturating_sub(1) };
-                moves.go_to = top(next.min(last));
-            } else {
+            if lead {
                 moves.turn = Some(forward);
+            } else if side_edge(geo, state, options, rect, forward) {
+                moves.turn = Some(forward);
+                moves.across = Some(forward);
+            } else {
+                moves.pan.0 += if forward { line } else { -line };
             }
         }
         moves
@@ -979,6 +1048,17 @@ impl KeyMoves {
     }
 }
 
+/// Whether the view shows the edge of the current page or spread to the right (`forward`) or left: the row is shown
+/// whole that way, or the content can scroll no farther. The current row decides, not the widest page, so a narrow
+/// page beside wide ones turns at once.
+fn side_edge(geo: &Placed, state: &PageViewState, options: &LayoutOptions, rect: Rect, forward: bool) -> bool {
+    let width = f64::from(rect.width());
+    let (lo, hi) = offset_range(geo.doc.x0, geo.doc.x1, width);
+    let x = state.offset.0;
+    let row = row_rect(geo, state.current, options);
+    if forward { x >= hi - EDGE || row.is_some_and(|r| r.x1 <= x + width + EDGE) } else { x <= lo + EDGE || row.is_some_and(|r| r.x0 >= x - EDGE) }
+}
+
 /// Two scales a pass apart that are the same scale (round trips through the zoom differ in the last bits).
 fn scale_settled(before: f64, after: f64) -> bool {
     (before - after).abs() <= before.abs().max(after.abs()) * 1e-9
@@ -992,8 +1072,23 @@ struct Placed {
     scale: f64,
     /// The pages that show: all when continuous, else the current page or spread.
     row: Range<usize>,
-    /// The scroll area in content coordinates: the whole layout, or the shown row with its margins.
+    /// The scroll area in content coordinates: the pages that show with the margins above and below them.
     doc: DocRect,
+    /// The part of the pages that show, without the margins.
+    pages: DocRect,
+}
+
+impl Placed {
+    /// The offsets a view `view_height` tall can take down the shown pages: the pages in the view's middle when they
+    /// fit it without their margins, else anywhere over the scroll area.
+    fn y_range(&self, view_height: f64) -> (f64, f64) {
+        if self.pages.height() <= view_height {
+            let middle = self.pages.y0 - (view_height - self.pages.height()) / 2.0;
+            (middle, middle)
+        } else {
+            offset_range(self.doc.y0, self.doc.y1, view_height)
+        }
+    }
 }
 
 /// What a layout is made from, so a pass with the same inputs reuses the last layout.
@@ -1081,14 +1176,12 @@ impl Geometry<'_> {
         }
         let count = self.sizes.len();
         let row = if state.continuous { 0..count } else { shown_row(count, state.current, &options) };
+        // The layout is at least the viewport's height; the scroll area is the pages' own, so pages shorter than the
+        // view sit in its middle.
         let whole = DocRect::new(0.0, 0.0, layout.size.width, layout.size.height);
-        let doc = if state.continuous || row.is_empty() {
-            whole
-        } else {
-            let shown = row.clone().map(|p| band_rect(&layout, p)).reduce(|a, b| a.union(b)).unwrap_or(whole);
-            DocRect::new(0.0, shown.y0 - self.spacing.margin, layout.size.width, shown.y1 + self.spacing.margin)
-        };
-        Placed { layout, scale, row, doc }
+        let pages = row.clone().map(|p| band_rect(&layout, p)).reduce(|a, b| a.union(b));
+        let doc = pages.map_or(whole, |shown| DocRect::new(0.0, shown.y0 - self.spacing.margin, layout.size.width, shown.y1 + self.spacing.margin));
+        Placed { layout, scale, row, doc, pages: pages.unwrap_or(whole) }
     }
 }
 
