@@ -33,10 +33,11 @@ fn gallery_registers_each_suite_dependency() {
     }
     if let Some(features) = manifest.get("features").and_then(toml::Value::as_table) {
         for value in features.values().filter_map(toml::Value::as_array).flatten().filter_map(toml::Value::as_str) {
-            if let Some(name) = value.strip_suffix("/suite") {
-                if name.starts_with("craft-") && name != "craft-ui" {
-                    dependencies.insert(name.to_owned());
-                }
+            if let Some(name) = value.strip_suffix("/suite")
+                && name.starts_with("craft-")
+                && name != "craft-ui"
+            {
+                dependencies.insert(name.to_owned());
             }
         }
     }
