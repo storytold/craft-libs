@@ -1,6 +1,6 @@
 //! `ImageSize`: the Image Size dialog.
 
-use super::{Hold, Kit, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
+use super::{Hold, Kit, LENGTH_UNITS, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
@@ -13,6 +13,7 @@ use craft_behavior::PixelSize;
 use craft_keymap::{Chord, Mods};
 use egui::Ui;
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 /// What Image Size answers with at OK.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,10 +50,31 @@ pub struct ImageSizeValues {
 }
 
 /// The physical length the sides showed last, which turning Resample off switches pixels and percent to. It is a
-/// memory, not a value the dialog shows, so it never makes two values differ: Reset, the undo steps and a held
-/// refusal compare what the dialog shows.
-#[derive(Clone, Copy, Debug)]
-struct LastPhysical(UnitKind);
+/// memory of the dialog, not a value it shows: the clones the dialog makes of its values (the copy a pass edits, the
+/// opening values Reset puts back, the undo steps) share one memory, so a change to it is never lost with a copy and
+/// Reset and undo leave it. It takes no part in equality, which compares what the dialog shows.
+#[derive(Clone, Debug)]
+struct LastPhysical(Arc<Mutex<UnitKind>>);
+
+impl LastPhysical {
+    fn new(unit: UnitKind) -> Self {
+        LastPhysical(Arc::new(Mutex::new(unit)))
+    }
+
+    /// The unit remembered; Inches if the memory cannot be read.
+    fn get(&self) -> UnitKind {
+        self.0.lock().map_or(UnitKind::Inches, |unit| *unit)
+    }
+
+    /// Remembers `unit` when it is a physical length.
+    fn note(&self, unit: UnitKind) {
+        if is_physical(unit)
+            && let Ok(mut remembered) = self.0.lock()
+        {
+            *remembered = unit;
+        }
+    }
+}
 
 impl PartialEq for LastPhysical {
     fn eq(&self, _: &Self) -> bool {
@@ -60,26 +82,23 @@ impl PartialEq for LastPhysical {
     }
 }
 
-/// Whether `unit` is a physical length the width and height can show (not pixels, percent or columns).
+/// Whether `unit` is a physical length the width and height can show: a length unit of the rows other than pixels
+/// and percent.
 fn is_physical(unit: UnitKind) -> bool {
-    matches!(unit, UnitKind::Inches | UnitKind::Centimetres | UnitKind::Millimetres | UnitKind::Points | UnitKind::Picas)
+    !matches!(unit, UnitKind::Pixels | UnitKind::Percent) && LENGTH_UNITS.contains(&unit)
 }
 
 impl ImageSizeValues {
     /// Remembers the shared unit when it is a physical length.
-    fn note_unit(&mut self) {
-        if is_physical(self.size.unit()) {
-            self.physical = LastPhysical(self.size.unit());
-        }
+    fn note_unit(&self) {
+        self.physical.note(self.size.unit());
     }
 
     /// The physical unit turning Resample off switches pixels and percent to until the sides show another (the unit
     /// used last, which the app keeps); Inches without one. A kind that is not a physical length is ignored.
     #[must_use]
-    pub fn physical_unit(mut self, unit: UnitKind) -> Self {
-        if is_physical(unit) {
-            self.physical = LastPhysical(unit);
-        }
+    pub fn physical_unit(self, unit: UnitKind) -> Self {
+        self.physical.note(unit);
         self
     }
 
@@ -107,7 +126,12 @@ impl ImageSizeValues {
     /// The values for a document of `size` pixels, at 72 pixels per inch, in pixels, resampling automatically with
     /// Scale Styles on.
     pub fn new(size: PixelSize) -> Self {
-        ImageSizeValues { size: LinkedSize::new(size), method: Resample::Automatic, scale_styles: true, physical: LastPhysical(UnitKind::Inches) }
+        ImageSizeValues {
+            size: LinkedSize::new(size),
+            method: Resample::Automatic,
+            scale_styles: true,
+            physical: LastPhysical::new(UnitKind::Inches),
+        }
     }
 
     /// The resolution the document opens with, in pixels per inch.
@@ -263,7 +287,7 @@ impl<'a> ImageSize<'a> {
                 }
                 let on = Checkbox::new(Bind::given(state.size.is_resampling())).label(words.resample.clone()).id_salt("resample").show(ui);
                 if let Some(on) = on.value().copied() {
-                    state.size.check_resampling(on, state.physical.0);
+                    state.size.check_resampling(on, state.physical.get());
                 }
                 // Greyed, not hidden, while Resample is off: it keeps the method it returns to.
                 let resampling = state.size.is_resampling();

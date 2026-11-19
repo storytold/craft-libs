@@ -595,6 +595,29 @@ fn image_size_resample_off_greys_pixels_the_method_and_the_dimensions() {
     assert_eq!(menu_rows(&mut fixture, "Width unit"), (false, false), "Pixels is pickable again");
 }
 
+/// The physical unit picked in the Width menu stays remembered when Reset puts back the opening values: the memory is
+/// not a shown value, and no copy of the values the dialog makes (here the opening copy Reset restores) loses it.
+/// Resample off then switches to it.
+#[trial]
+fn image_size_remembers_a_picked_physical_unit_through_reset() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(image_size());
+    fixture.settle();
+    let select = fixture.by_label("Width unit").expect("the Width unit select");
+    fixture.access(AccessActionKind::Click, &select).idle(4);
+    let centimetres = fixture.by_label("Centimetres").expect("the Centimetres row");
+    fixture.access(AccessActionKind::Click, &centimetres).settle();
+    assert_eq!(open_fields(&host)["unit"], json!("centimetres"), "the pick shows Centimetres");
+    fixture.hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    fixture.click(&reset).idle(2);
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(open_fields(&host)["unit"], json!("pixels"), "Reset puts back Pixels");
+    click_resample(&mut fixture);
+    assert_eq!(open_fields(&host)["unit"], json!("centimetres"), "Resample off switches to the unit picked last");
+}
+
 /// PhotoCraft #14797 (measured in Photoshop): 400 x 300 px at 72 ppi, Centimeters used last, Resample off, Width
 /// 28.22 cm keeps 400 x 300 px and gives 36.0028 px/in and a height of 21.165 cm.
 #[trial]
