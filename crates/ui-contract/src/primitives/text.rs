@@ -363,12 +363,11 @@ impl TextMemo {
         // Bound retained text and galleys, including colliding keys.
         if self.order.len() >= 4096
             && let Some(old) = self.order.pop_front()
+            && let Some(bucket) = self.entries.get_mut(&old)
         {
-            if let Some(bucket) = self.entries.get_mut(&old) {
-                bucket.remove(0);
-                if bucket.is_empty() {
-                    self.entries.remove(&old);
-                }
+            bucket.remove(0);
+            if bucket.is_empty() {
+                self.entries.remove(&old);
             }
         }
         self.entries.entry(hash).or_default().push(CachedText { key: key.owned(), layout, least });
