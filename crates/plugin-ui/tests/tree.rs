@@ -259,6 +259,35 @@ fn param_form_read_only_values_obey_the_widget_text_rules() {
     assert!(matches!(form("json", json!(many)), Err(TreeError::TooLong { .. })));
 }
 
+/// The budget is the length of the JSON text the form draws, not a count of nodes. An array of
+/// nulls costs five bytes each (`null,`), so 13,107 fill `MAX_TEXT_LEN` exactly and one more
+/// does not. The same holds for numbers, booleans, escaped strings and objects.
+#[test]
+fn param_form_read_only_values_are_bounded_by_their_serialized_length() {
+    let form = |kind: &str, value: serde_json::Value| {
+        from_value(json!({"type": "param_form", "id": "f", "schema": {"g": {"type": kind}}, "values": {"g": value}}))
+    };
+    let nulls = |n: usize| serde_json::Value::Array(vec![serde_json::Value::Null; n]);
+    assert_eq!(nulls(13_107).to_string().len(), MAX_TEXT_LEN);
+    for kind in ["file", "layer", "json", "point2", "point3"] {
+        assert!(form(kind, nulls(13_107)).is_ok(), "{kind}: exactly at the cap");
+        assert!(matches!(form(kind, nulls(13_108)), Err(TreeError::TooLong { .. })), "{kind}: one value over the cap");
+        // 65,535 nulls was the case that passed before: it draws 327,679 bytes.
+        assert!(matches!(form(kind, nulls(MAX_TEXT_LEN - 1)), Err(TreeError::TooLong { .. })), "{kind}");
+    }
+    let many = |item: serde_json::Value| serde_json::Value::Array(vec![item; MAX_TEXT_LEN / 2]);
+    for item in [json!(1), json!(true), json!(false), json!(-1.5), json!({}), json!([]), json!("\"")] {
+        assert!(matches!(form("json", many(item.clone())), Err(TreeError::TooLong { .. })), "{item}");
+    }
+    // A string whose escapes double its length: half the cap of quotes draws more than the cap.
+    assert!(matches!(form("json", json!("\"".repeat(MAX_TEXT_LEN / 2))), Err(TreeError::TooLong { .. })));
+    assert!(form("json", json!("\"".repeat(MAX_TEXT_LEN / 2 - 1))).is_ok());
+    // Object keys and the colons and commas between entries count too.
+    let object: serde_json::Map<String, serde_json::Value> = (0..9_000).map(|i| (format!("k{i}"), json!(0))).collect();
+    assert!(serde_json::Value::Object(object.clone()).to_string().len() > MAX_TEXT_LEN);
+    assert!(matches!(form("json", serde_json::Value::Object(object)), Err(TreeError::TooLong { .. })));
+}
+
 /// Ids reach assistive tools as accessible names, so they follow the single-line text rule.
 #[test]
 fn widget_ids_reject_unsafe_characters() {

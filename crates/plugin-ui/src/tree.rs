@@ -578,37 +578,115 @@ fn check_value(id: &str, name: &str, field: &'static str, def: &ParamDef, v: &Va
     }
 }
 
-/// Apply the text rules to every string and object key inside `v`. The walk spends one byte of a
-/// `MAX_TEXT_LEN` budget per node plus the length of each string, so the JSON text the renderer
-/// draws stays under the same cap as any other text prop. The stack is explicit, so deep input
-/// cannot overflow the call stack.
+/// Apply the text rules to every string and object key inside `v`, and bound the text the
+/// renderer draws for it. The renderer shows `v.to_string()`, so the walk counts those exact
+/// bytes (brackets, commas, colons, quotes, escapes and number text) against `MAX_TEXT_LEN`.
+/// The stack is explicit, so deep input cannot overflow the call stack.
 fn json_text(id: &str, field: &'static str, v: &Value) -> Result<(), TreeError> {
-    let mut budget = MAX_TEXT_LEN;
+    json_len(id, field, v, MAX_TEXT_LEN).map(|_| ())
+}
+
+/// The length of `v.to_string()`, after the text rules passed for every string and key in it.
+/// Fails with `TooLong` as soon as the count passes `limit`, before the walk reads more nodes.
+fn json_len(id: &str, field: &'static str, v: &Value, limit: usize) -> Result<usize, TreeError> {
+    let too_long = || TreeError::TooLong { id: id.to_owned(), field, max: limit };
+    let mut used = 0usize;
     let mut spend = |bytes: usize| {
-        budget = budget.checked_sub(bytes.saturating_add(1)).ok_or_else(|| TreeError::TooLong { id: id.to_owned(), field, max: MAX_TEXT_LEN })?;
-        Ok::<(), TreeError>(())
+        used = used.saturating_add(bytes);
+        if used > limit { Err(too_long()) } else { Ok(()) }
     };
     let mut stack = vec![v];
     while let Some(node) = stack.pop() {
         match node {
+            Value::Null | Value::Bool(true) => spend(4)?,
+            Value::Bool(false) => spend(5)?,
+            Value::Number(n) => spend(n.to_string().len())?,
             Value::String(s) => {
-                spend(s.len())?;
                 text_len(id, field, s)?;
+                spend(quoted_len(s))?;
             }
             Value::Array(items) => {
-                spend(0)?;
+                // `[`, `]` and one comma between each pair. Spent before the items are queued, so
+                // a huge array fails without being walked.
+                spend(2usize.saturating_add(items.len().saturating_sub(1)))?;
                 stack.extend(items);
             }
             Value::Object(map) => {
-                spend(0)?;
+                // `{`, `}` and a comma between each pair, then `"key":` for each entry.
+                spend(2usize.saturating_add(map.len().saturating_sub(1)))?;
                 for (k, child) in map {
-                    spend(k.len())?;
                     text_len(id, field, k)?;
+                    spend(quoted_len(k).saturating_add(1))?;
                     stack.push(child);
                 }
             }
-            Value::Null | Value::Bool(_) | Value::Number(_) => spend(0)?,
         }
     }
-    Ok(())
+    Ok(used)
+}
+
+/// The length of `s` as a JSON string, quotes and escapes included, as `serde_json` writes it.
+fn quoted_len(s: &str) -> usize {
+    s.chars().fold(2usize, |len, c| {
+        len.saturating_add(match c {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+            c if c < '\u{20}' => 6,
+            c => c.len_utf8(),
+        })
+    })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod json_len_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    /// `json_len` is the byte count of what the renderer draws, for every kind of node.
+    #[test]
+    fn json_len_equals_the_serialized_length() {
+        let samples = [
+            json!(null),
+            json!(true),
+            json!(false),
+            json!(0),
+            json!(-17),
+            json!(3.5),
+            json!(1.0e300),
+            json!(u64::MAX),
+            json!(""),
+            json!("plain"),
+            json!("quote \" and back\\slash"),
+            json!("tab\there\nnewline"),
+            json!("unicode \u{e9}\u{4e2d}\u{1f600}"),
+            json!([]),
+            json!({}),
+            json!([null]),
+            json!([1, 2, 3]),
+            json!({"a": 1}),
+            json!({"a": 1, "b\"q": [true, null, {"c": "d"}], "": []}),
+            json!([[[[[]]]], {"k": {"k": {"k": 0.25}}}]),
+        ];
+        for value in &samples {
+            assert_eq!(json_len("id", "value", value, usize::MAX).unwrap(), value.to_string().len(), "{value}");
+        }
+    }
+
+    /// Every Unicode scalar value, alone and inside a string, so no escape rule drifts from
+    /// `serde_json` (control characters take six bytes, `\\n` and friends take two).
+    #[test]
+    fn quoted_len_equals_the_serialized_length_of_every_char() {
+        for c in (0..=0x10_FFFFu32).filter_map(char::from_u32) {
+            let s = c.to_string();
+            assert_eq!(quoted_len(&s), serde_json::to_string(&s).unwrap().len(), "U+{:04X}", u32::from(c));
+        }
+    }
+
+    #[test]
+    fn json_len_stops_at_the_limit() {
+        let value = json!([1, 2, 3]);
+        assert_eq!(json_len("id", "value", &value, 7).unwrap(), 7);
+        assert!(matches!(json_len("id", "value", &value, 6), Err(TreeError::TooLong { max: 6, .. })));
+    }
 }
