@@ -779,84 +779,84 @@ Nikon	ZR	NEF	2024	unverified	NEF decoder (uncompressed, lossless, lossy, lossy a
 Nokia	Lumia 1020	DNG	2013	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Nokia	HMD Global Nokia 9 PureView Front Camera	DNG	2018	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 Nokia	HMD Global Nokia 9 PureView Rear Camera	DNG	2018	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
-OM Digital Solutions	OM System OM-1	ORF	2021	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM System OM-5	ORF	2022	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM System TG - 7	ORF	2023	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM System OM-1 MARK II	ORF	2023	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM System OM-3	ORF	2024	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM-5 Mark II	ORF	2024	preview	compressed ORF is unsupported; embedded preview when available
-OM Digital Solutions	OM-3 Astro	ORF	2025	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	AIR A01	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Camedia C-5050 Zoom	ORF	2003	unverified	uncompressed / packed ORF
+OM Digital Solutions	OM System OM-1	ORF	2021	verified	crates/raw/tests/orf_corpus.rs: CC0 5283, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-5	ORF	2022	verified	crates/raw/tests/orf_corpus.rs: CC0 6343, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System TG - 7	ORF	2023	verified	crates/raw/tests/orf_corpus.rs: CC0 6946, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-1 MARK II	ORF	2023	verified	crates/raw/tests/orf_corpus.rs: CC0 7262, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM System OM-3	ORF	2024	verified	crates/raw/tests/orf_corpus.rs: CC0 7796, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM-5 Mark II	ORF	2024	verified	crates/raw/tests/orf_corpus.rs: CC0 8549, full sensor SHA256 exact against unprocessed_raw 0.22.2
+OM Digital Solutions	OM-3 Astro	ORF	2025	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	AIR A01	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Camedia C-5050 Zoom	ORF	2003	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 Olympus	Camedia C-5060 Zoom	ORF	2003	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	Camedia C-7070 Wide Zoom	ORF	2005	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Camedia C-8080 Wide Zoom	ORF	2003	unverified	uncompressed / packed ORF
+Olympus	Camedia C-8080 Wide Zoom	ORF	2003	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 Olympus	E-1	ORF	2003	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
-Olympus	E-3	ORF	2007	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-5	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	E-3	ORF	2007	verified	crates/raw/tests/orf_corpus.rs: CC0 1803, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	E-5	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 Olympus	E-10	ORF	2003	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash)
-Olympus	E-20	ORF	2003	unverified	uncompressed / packed ORF
-Olympus	E-30	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-420	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-450	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-520	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-600	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	E-620	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	E-20	ORF	2003	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-30	ORF	2008	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-420	ORF	2008	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-450	ORF	2008	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-520	ORF	2008	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-600	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	E-620	ORF	2008	verified	crates/raw/tests/orf_corpus.rs: CC0 1805, full sensor SHA256 exact against unprocessed_raw 0.22.2
 Olympus	EVOLT E-300	ORF	2005	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-330	ORF	2005	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	EVOLT E-400	ORF	2005	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
-Olympus	EVOLT E-410	ORF	2007	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	EVOLT E-410	ORF	2007	verified	crates/raw/tests/orf_corpus.rs: CC0 1173, full sensor SHA256 exact against unprocessed_raw 0.22.2
 Olympus	EVOLT E-500	ORF	2005	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	EVOLT E-510	ORF	2007	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M1	ORF	2013	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
-Olympus	OM-D E-M1X	ORF	2018	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M1 Mark II	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M1 Mark III	ORF	2019	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M5	ORF	2012	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M5 Mark II	ORF	2015	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	OM-D E-M5 Mark III	ORF	2019	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M10	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M10 Mark II	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M10 Mark III	ORF	2017	preview	compressed ORF support withdrawn pending provenance review; embedded JPEG
-Olympus	OM-D E-M10 Mark III S	ORF	2019	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	OM-D E-M10 Mark IV	ORF	2019	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-P1	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-P2	ORF	2008	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-P3	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-P5	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-P7	ORF	2020	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL1	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL1s	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL10	ORF	2019	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL2	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL3	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL6	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL5	ORF	2012	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL7	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL8	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PL9	ORF	2017	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PM1	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN E-PM2	ORF	2012	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	PEN-F	ORF	2015	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	SP-310	ORF	2005	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	SP-320	ORF	2005	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	SP-350	ORF	2005	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	SP-500 UZ	ORF	2005	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	EVOLT E-510	ORF	2007	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M1	ORF	2013	verified	crates/raw/tests/orf_corpus.rs: CC0 1051, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1X	ORF	2018	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M1 Mark II	ORF	2015	verified	crates/raw/tests/orf_corpus.rs: CC0 1993, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M1 Mark III	ORF	2019	verified	crates/raw/tests/orf_corpus.rs: CC0 3800, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5	ORF	2012	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M5 Mark II	ORF	2015	verified	crates/raw/tests/orf_corpus.rs: CC0 2857 ORI companion (compressed ORF container), full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M5 Mark III	ORF	2019	verified	crates/raw/tests/orf_corpus.rs: CC0 3573 compressed 80 MP high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10	ORF	2013	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M10 Mark II	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M10 Mark III	ORF	2017	verified	crates/raw/tests/orf_corpus.rs: CC0 1787, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	OM-D E-M10 Mark III S	ORF	2019	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	OM-D E-M10 Mark IV	ORF	2019	verified	crates/raw/tests/orf_corpus.rs: CC0 4126, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P1	ORF	2008	verified	crates/raw/tests/orf_corpus.rs: CC0 5099, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P2	ORF	2008	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-P3	ORF	2010	verified	crates/raw/tests/orf_corpus.rs: CC0 241, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-P5	ORF	2013	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-P7	ORF	2020	verified	crates/raw/tests/orf_corpus.rs: CC0 5980, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-PL1	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL1s	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL10	ORF	2019	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL2	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL3	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL6	ORF	2013	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL5	ORF	2012	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL7	ORF	2013	verified	crates/raw/tests/orf_corpus.rs: CC0 1431, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	PEN E-PL8	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PL9	ORF	2017	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PM1	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN E-PM2	ORF	2012	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	PEN-F	ORF	2015	verified	crates/raw/tests/orf_corpus.rs: CC0 2977 80 MP 12.8-bpp high-res, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	SP-310	ORF	2005	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	SP-320	ORF	2005	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	SP-350	ORF	2005	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	SP-500 UZ	ORF	2005	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 Olympus	SP-510 UZ	ORF	2005	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-550 UZ	ORF	2007	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	SP-560 UZ	ORF	2007	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	SP-560 UZ	ORF	2007	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 Olympus	SP-565 UZ	ORF	2008	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
 Olympus	SP-570 UZ	ORF	2007	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Stylus 1	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Stylus 1s	ORF	2013	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Stylus SH-2	ORF	2015	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	Stylus SH-3	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Stylus Tough TG-4	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Stylus Tough TG-5	ORF	2015	preview	compressed ORF is unsupported; embedded preview when available
-Olympus	Stylus Tough TG-6	ORF	2018	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	Stylus 1	ORF	2013	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Stylus 1s	ORF	2013	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Stylus SH-2	ORF	2015	verified	crates/raw/tests/orf_corpus.rs: CC0 792, full sensor SHA256 exact against unprocessed_raw 0.22.2
+Olympus	Stylus SH-3	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Stylus Tough TG-4	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Stylus Tough TG-5	ORF	2015	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
+Olympus	Stylus Tough TG-6	ORF	2018	verified	crates/raw/tests/orf_corpus.rs: CC0 3210, full sensor SHA256 exact against unprocessed_raw 0.22.2
 Olympus	Stylus XZ-2 iHS	ORF	2012	verified	corpus: crates/raw/tests/it/corpus.rs (xtask RAW_SAMPLES)
 Olympus	Stylus XZ-10	ORF	2012	verified	corpus: crates/raw/tests/it/olympus_samsung_corpus.rs (pinned sensor hash, camera-JPEG check)
-Olympus	XZ-1	ORF	2010	preview	compressed ORF is unsupported; embedded preview when available
+Olympus	XZ-1	ORF	2010	unverified	ORF decoder (lossless compressed, uncompressed, packed 12-bit / 12.8 bpp)
 OnePlus	7T Front Camera	DNG	2019	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 OnePlus	7T Rear Main Camera	DNG	2019	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
 OnePlus	8 Front Camera	DNG	2020	unverified	DNG decoder (uncompressed, LJ92, lossy, Deflate, JPEG XL, LinearRaw)
