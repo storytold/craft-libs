@@ -199,29 +199,34 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Try the resolved addresses within one connection budget, so an unreachable IPv6 address does
-/// not hide a working IPv4 address. The connector is a parameter so refusals can be tested without
-/// racing to claim a port; the last failed attempt still reports why it failed.
+/// Try the resolved addresses within one connection budget, reserving time for later addresses
+/// when an earlier one does not answer. The connector is a parameter so refusals can be tested
+/// without racing to claim a port; the last failed attempt still reports why it failed.
 fn open_tcp(
     host: &str,
     port: u16,
     addrs: impl IntoIterator<Item = SocketAddr>,
     mut open: impl FnMut(SocketAddr, Duration) -> std::io::Result<TcpStream>,
 ) -> Result<Stream> {
-    let mut addrs = addrs.into_iter();
-    let first = addrs.next().ok_or_else(|| Error::Unreachable(format!("{host}:{port}: no address")))?;
+    let addrs: Vec<_> = addrs.into_iter().collect();
+    let count = addrs.len();
+    if addrs.is_empty() {
+        return Err(Error::Unreachable(format!("{host}:{port}: no address")));
+    }
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     let started = std::time::Instant::now();
     let mut last_error = None;
-    for addr in std::iter::once(first).chain(addrs) {
+    for (index, addr) in addrs.into_iter().enumerate() {
         #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-        let timeout = CONNECT.saturating_sub(started.elapsed());
+        let remaining = CONNECT.saturating_sub(started.elapsed());
         // Browser Wasm has neither std sockets nor a monotonic clock: let connect report unsupported.
         #[cfg(all(target_family = "wasm", target_os = "unknown"))]
-        let timeout = CONNECT;
-        if timeout.is_zero() {
+        let remaining = CONNECT;
+        if remaining.is_zero() {
             break;
         }
+        let attempts_left = u32::try_from(count - index).unwrap_or(u32::MAX);
+        let timeout = (remaining / attempts_left).max(Duration::from_nanos(1));
         match open(addr, timeout) {
             Ok(s) => {
                 let _ = s.set_read_timeout(Some(REQUEST));
