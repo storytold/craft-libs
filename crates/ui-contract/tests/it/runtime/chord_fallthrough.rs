@@ -8,15 +8,17 @@ use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
 use craft_ui::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _, Sizing,
 };
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet, CommandState, Commands as _, Scope, WindowCommand};
-use craft_ui::runtime::focus::{FocusTarget, request};
+use craft_behavior::Input;
+use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet, CommandState, Commands as _, Scope, TypingRule, WindowCommand};
+use craft_ui::runtime::focus::{FocusTarget, KeyUse, request};
+use craft_ui::testing::focus::{Stop, named_id, register_stop, widget};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use egui::{Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Event, Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::RefCell;
 
 /// The app's command on Alt+F7.
@@ -68,13 +70,52 @@ impl Container for Floating<'_> {
 /// catalog binding it to `SPELLING` that drops `window.move`'s defaults with `dropped`: the commands it fired into
 /// the output, and whether a keyboard move began.
 fn alt_f7(move_disabled: bool, dropped: bool) -> (Vec<String>, bool) {
+    alt_f7_at(Focus::Inside, move_disabled, dropped)
+}
+
+/// Where the focus is when Alt+F7 is pressed.
+#[derive(Clone, Copy, PartialEq)]
+enum Focus {
+    /// In the floating window's body.
+    Inside,
+    /// On a control beside the floating window, in no window's scope.
+    Beside,
+    /// On a control, with no floating window shown.
+    NoWindow,
+    /// Nowhere, beside a floating window, under a word processor's typing rule, with the key's text in the press's
+    /// frame.
+    Nothing,
+    /// On a text stop beside a floating window (a word processor's page), as `Nothing` otherwise.
+    Typing,
+}
+
+impl Focus {
+    /// The focus a word processor's page gives: its typing rule, and the text its platform sends with an Alt chord.
+    fn page_like(self) -> bool {
+        matches!(self, Focus::Nothing | Focus::Typing)
+    }
+}
+
+/// `alt_f7` with the focus at `focus`.
+fn alt_f7_at(focus: Focus, move_disabled: bool, dropped: bool) -> (Vec<String>, bool) {
     let Ok(binding) = Binding::parse("Alt+F7") else { return (vec!["the trial's chord does not parse".to_owned()], false) };
     let Ok(catalog) = AppCatalog::new(vec![CommandDef::new(SPELLING, "Spelling", Scope::app()).with_default(binding)], 1) else {
         return (vec!["the trial's catalog is refused".to_owned()], false);
     };
     let catalog = if dropped { catalog.replace_defaults(WindowCommand::Move.id(), Vec::new()) } else { catalog };
-    let (log, seen) = (RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+    let catalog = if focus.page_like() { catalog.typing_rule(TypingRule::PlainKeysWait) } else { catalog };
+    let (log, seen, beside) = (RefCell::new(Vec::new()), RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+    let page = named_id("page");
     let mut show = |ui: &mut Ui| {
+        if focus == Focus::Typing {
+            widget(ui, page);
+            register_stop(ui.ctx(), Stop::new(page, KeyUse::of(Input::Text)));
+        } else {
+            Probe::new(&beside).id_salt("beside").size(BODY).sense(Sense::CLICK | Sense::FOCUS).show(ui);
+        }
+        if focus == Focus::NoWindow {
+            return;
+        }
         let props = ContainerProps::new()
             .mount(Mount::Layer(Overlay::floating().movable(true).placed(START)))
             .sizing(Sizing::Content)
@@ -87,14 +128,27 @@ fn alt_f7(move_disabled: bool, dropped: bool) -> (Vec<String>, bool) {
     let mut frames = Frames::new();
     frames.commands(CommandInput::new().catalog(catalog));
     frames.idle(4, &mut show);
-    // The focus goes into the window, where its commands are.
-    let Some(inside) = seen.borrow().id else { return (vec!["the window's body never showed".to_owned()], false) };
-    request(&frames.ctx, FocusTarget::Id(inside));
-    frames.idle(2, &mut show);
-    assert_eq!(frames.ctx.memory(|memory| memory.focused()), Some(inside), "the window's body has the focus");
+    // The focus goes into the window, where its commands are, or to the control beside it.
+    let target = match focus {
+        Focus::Inside => seen.borrow().id,
+        Focus::Beside | Focus::NoWindow => beside.borrow().id,
+        Focus::Typing => Some(page),
+        Focus::Nothing => None,
+    };
+    if let Some(target) = target {
+        request(&frames.ctx, FocusTarget::Id(target));
+        frames.idle(2, &mut show);
+    } else if focus != Focus::Nothing {
+        return (vec!["the focus target never showed".to_owned()], false);
+    }
+    assert_eq!(frames.ctx.memory(|memory| memory.focused()), target, "the target has the focus");
     take_output(&frames.ctx);
     log.borrow_mut().clear();
-    frames.frame(vec![key_press(Key::F7, Modifiers::ALT)], &mut show);
+    let mut events = vec![key_press(Key::F7, Modifiers::ALT)];
+    if focus.page_like() {
+        events.push(Event::Text("x".into()));
+    }
+    frames.frame(events, &mut show);
     frames.idle(2, &mut show);
     let fired = take_output(&frames.ctx).fired.into_iter().map(|fired| fired.command.id).collect();
     let began = log.borrow().iter().any(|change| change.kind == PlacementKind::Keyboard && change.phase == GesturePhase::Begin);
@@ -118,4 +172,20 @@ fn a_disabled_binding_leaves_its_chord_to_the_next_one() {
 #[trial]
 fn an_app_catalog_drops_a_linked_set_s_default_chord() {
     assert_eq!(alt_f7(false, true), (vec![SPELLING.to_owned()], false), "with Move's defaults dropped, Alt+F7 is the app's");
+}
+
+/// fwstub-1 (3): outside a floating window `window.move` is disabled (no window is around the focus), so it hands
+/// Alt+F7 on to the app's enabled binding, with a floating window beside the focus and with none shown, and the app
+/// need not drop the default.
+#[trial]
+fn outside_a_floating_window_alt_f7_is_the_apps() {
+    let cases = [
+        (Focus::Beside, "beside a floating window"),
+        (Focus::NoWindow, "with no floating window"),
+        (Focus::Nothing, "with nothing focused"),
+        (Focus::Typing, "from a text stop, with the key's text"),
+    ];
+    for (focus, name) in cases {
+        assert_eq!(alt_f7_at(focus, false, false), (vec![SPELLING.to_owned()], false), "{name}: Alt+F7 runs the app's command");
+    }
 }
