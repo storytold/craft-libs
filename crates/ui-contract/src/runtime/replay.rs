@@ -89,6 +89,8 @@ static OPEN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) struct Recorder {
     journal: Vec<Entry>,
     open: Vec<Open>,
+    /// A replay is calling its journal's entries (`replay`): what they register is noted already.
+    replaying: bool,
 }
 
 struct Open {
@@ -223,8 +225,20 @@ fn min_wake(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
     ctx.replay_pass_records(&record.egui, shift);
     focus::replay(ctx, &record.focus);
+    // The records open around the replay hold its journal as it was: an entry's call notes nothing, whether it is a
+    // service's own registration call or not.
+    let noting = recording(ctx);
+    if noting {
+        pass_state::with::<Recorder, _>(ctx, |recorder| {
+            recorder.journal.extend(record.journal.iter().cloned());
+            recorder.replaying = true;
+        });
+    }
     for entry in &record.journal {
         entry.0.call(ctx, shift);
+    }
+    if noting {
+        pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying = false);
     }
     if let Some(at) = record.facts.wake {
         crate::runtime::egui::repaint::request_after(ctx, crate::runtime::egui::pass::current_viewport(ctx), at - frame::clock(ctx));
@@ -262,7 +276,7 @@ where
     F: Fn(&Context, &A) + Send + Sync + 'static,
 {
     const { assert!(std::mem::size_of::<F>() == 0, "`journal`'s `again` captures nothing: pass its state in `args`") };
-    if recording(ctx) {
+    if recording(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying) {
         let entry = Entry(Arc::new(Note { args: args(), again }));
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.journal.push(entry));
     }

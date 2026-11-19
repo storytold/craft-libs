@@ -71,6 +71,26 @@ fn journal_entries_compare_by_their_call_and_arguments() {
     assert_ne!(first.journal[1], other_call.journal[1], "another call with the same arguments");
 }
 
+/// A registration whose `again` notes itself, as the services' public registration calls do.
+fn renote(ctx: &egui::Context, args: &(egui::Id, u32)) {
+    replay::journal(ctx, || *args, renote);
+}
+
+// A record replayed inside the run of another record is part of that run: the outer record holds each of its journal
+// entries once, whether the entry's call notes itself again or not, so the outer record's own replay registers them.
+#[trial]
+fn a_record_replayed_inside_another_run_is_in_its_journal() {
+    let mut frames = Frames::new();
+    let id = fixture::named_id("owner");
+    let inner = record(&mut frames, |ctx| {
+        replay::journal(ctx, || (id, 1), note_a);
+        renote(ctx, &(id, 2));
+    });
+    assert_eq!(inner.journal.len(), 2, "both notes are in the inner record");
+    let outer = record(&mut frames, |ctx| replay::replay(ctx, &inner, &egui::RecordShift::none(Rect::EVERYTHING)));
+    assert_eq!(outer.journal, inner.journal, "the outer record holds the replayed journal, each entry once");
+}
+
 // A focus transcript with one changed stop compares unequal to the run before it; one with the same stops equal.
 #[trial]
 fn a_transcript_with_one_changed_stop_compares_unequal() {
