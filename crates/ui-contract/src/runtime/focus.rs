@@ -453,9 +453,11 @@ pub(crate) fn register_menu_bar(ctx: &Context, id: Id, by_claim: bool) {
 }
 
 /// Whether a stop with these keys takes typed letters: a text field or a shortcut recorder. The letters a keytip or a
-/// menu mnemonic would take are then the stop's own.
+/// menu mnemonic would take are then the stop's own. A document canvas's editor part (`KeyUse::is_document_editor`)
+/// does not count: the menu bar and keytips work over the document, as a word processor's do, and its letters still
+/// type while no lone Alt or F10 has started them.
 pub fn takes_letters(keys: &KeyUse) -> bool {
-    matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder)
+    matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder) && !keys.is_document_editor()
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this

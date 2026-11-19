@@ -125,8 +125,8 @@ struct Reported {
 /// - A letter a badge or a sequence can still need is claimed while the keytips show, so it never types into the
 ///   focused document, and the letters of one frame apply in the order they arrived; a letter no badge has is not
 ///   taken.
-/// - Off while a text field or a shortcut recorder has focus, under a modal layer, while the window is in the
-///   background, and when the app passes `false` to [`Keytips::new`] because its window shows an in-window menu bar,
+/// - Off while a text field or a shortcut recorder has focus (`focus::takes_letters`), under a modal layer, while the
+///   window is in the background, and when the app passes `false` to [`Keytips::new`] because its window shows an in-window menu bar,
 ///   which takes Alt and F10 itself.
 ///
 /// The badges paint in the layer of the `Ui` the keytips show in, over its whole clip rect, so the keytips show after
@@ -340,8 +340,8 @@ fn digit_badge(index: usize, count: usize) -> String {
     }
 }
 
-/// Whether the keytips stay off: a text field or a shortcut recorder has focus (the letters are typed), a modal layer
-/// is open, or the window is in the background.
+/// Whether the keytips stay off: a text field or a shortcut recorder has focus (the letters are typed; a document's
+/// editor is neither, see `focus::takes_letters`), a modal layer is open, or the window is in the background.
 fn suppressed(ctx: &Context) -> bool {
     let typing = focus::focused_rec(ctx).is_some_and(|rec| focus::takes_letters(&rec.stop.keys));
     typing || overlay::any_open(ctx, OpenFilter::Modal) || !ctx.input(|input| input.focused)

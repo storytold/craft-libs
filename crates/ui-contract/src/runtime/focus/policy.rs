@@ -465,6 +465,13 @@ impl KeyUse {
         self
     }
 
+    /// Whether the component is a document canvas's editor part: the document (`chrome_key`) holding its editor's
+    /// text keys. It types letters as a text field does, but it is the document the window's menu keys act over, not
+    /// a field inside the chrome.
+    pub const fn is_document_editor(&self) -> bool {
+        self.chrome_key && matches!(self.owner, OwnerClass::Text)
+    }
+
     /// Whether the component claims `chord`.
     pub fn claims_chord(&self, chord: &Chord) -> bool {
         self.claims.contains(chord)

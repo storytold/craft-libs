@@ -1,13 +1,13 @@
 //! Keytips: a lone Alt tap or F10 shows them, a letter a badge takes is claimed and never types, a second letter
 //! narrows the badges, the badges sit on the controls of the pass's own record and stay off in a text field or under
-//! a modal, badges never start one another, a host sequence waits, ends on Escape and fires once, and a real ribbon's
+//! a modal but show over a focused document editor, badges never start one another, a host sequence waits, ends on Escape and fires once, and a real ribbon's
 //! tab ids place the tab badges.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use craft_behavior::IconId;
+use craft_behavior::{IconId, Input};
 use craft_host::target::Os;
 use craft_i18n::Folder;
 use craft_keymap::mnemonic::assign_keytips;
@@ -18,13 +18,14 @@ use craft_ui::layout_components::{Row, Stack};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{CommandRef, FireSource};
 use craft_ui::runtime::env::Label;
+use craft_ui::runtime::focus::{self, FocusTarget, KeyUse};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::runtime::inspect::{self, Recorded};
 use craft_ui::testing::input::key_reached;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::text::TextField;
-use egui::{Event, Id, Key, Modifiers, Pos2, Rect};
+use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Sense};
 
 /// The commands of the trial's controls and sequences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
@@ -66,8 +67,23 @@ struct Pass {
     frame: u64,
 }
 
-/// A window with a recorded region (an optional text field, the tabs Home and Insert, the controls) and keytips over
-/// it, with two host sequences.
+/// What the rig shows besides the ribbon's controls, for focus to go to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Focusable {
+    Nothing,
+    /// A text field in the recorded region.
+    Field,
+    /// The window's document: an app widget hosted as a document canvas with an editor's keys.
+    Document,
+}
+
+/// The id of the rig's document.
+fn document_id() -> Id {
+    Id::NULL.with("trial.keytips.document")
+}
+
+/// A window with a recorded region (an optional text field, the tabs Home and Insert, the controls), an optional
+/// document, and keytips over them, with two host sequences.
 struct Rig {
     fixture: Fixture,
     passes: Rc<RefCell<Vec<Pass>>>,
@@ -76,15 +92,20 @@ struct Rig {
 }
 
 impl Rig {
-    fn new(field: bool) -> Rig {
+    fn new(focusable: Focusable) -> Rig {
         let passes = Rc::new(RefCell::new(Vec::<Pass>::new()));
         let (modal, rerun) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
         let (seen, shown_modal, shown_rerun) = (Rc::clone(&passes), Rc::clone(&modal), Rc::clone(&rerun));
         let mut notes = String::new();
         let fixture = Fixture::new(move |ui| {
+            if focusable == Focusable::Document {
+                let rect = ui.allocate_response(egui::vec2(160.0, 80.0), Sense::hover()).rect;
+                ui.interact(rect, document_id(), Sense::click());
+                focus::host_canvas(ui.ctx(), document_id(), KeyUse::of(Input::Editor));
+            }
             let (_, recorded) = inspect::record(ui, Id::NULL.with("trial.keytips"), |ui| {
                 Stack::new().show(ui, |ui, _| {
-                    if field {
+                    if focusable == Focusable::Field {
                         TextField::new("Notes", Bind::bound(&mut notes)).show(ui);
                     }
                     Row::new().show(ui, |ui, _| {
@@ -169,7 +190,7 @@ fn sits_on(letters: Rect, control: Rect) -> bool {
 
 #[trial]
 fn a_lone_alt_tap_toggles_the_keytips_but_a_chord_a_pointer_press_or_altgr_does_not() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new(Focusable::Nothing);
     // The framework arms the menu key from a lone Alt only off macOS; the trial does not depend on its runner.
     rig.fixture.os(Os::Windows);
     rig.fixture.settle();
@@ -223,7 +244,7 @@ fn a_lone_alt_tap_toggles_the_keytips_but_a_chord_a_pointer_press_or_altgr_does_
 
 #[trial]
 fn a_letter_a_badge_takes_never_types_and_a_second_letter_narrows_the_badges() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new(Focusable::Nothing);
     rig.fixture.settle();
     take_output(rig.fixture.ctx());
     rig.key(Key::F10);
@@ -258,7 +279,7 @@ fn a_letter_a_badge_takes_never_types_and_a_second_letter_narrows_the_badges() {
 
 #[trial]
 fn badges_sit_on_the_controls_of_this_passes_record_and_stay_off_in_a_text_field_or_under_a_modal() {
-    let mut rig = Rig::new(true);
+    let mut rig = Rig::new(Focusable::Field);
     rig.fixture.settle();
     rig.key(Key::F10);
     let recorded = rig.last().recorded.unwrap_or_else(|| panic!("the region ran"));
@@ -287,7 +308,7 @@ fn badges_sit_on_the_controls_of_this_passes_record_and_stay_off_in_a_text_field
     rig.key(Key::F10);
     assert!(!rig.last().output.active, "F10 in a text field shows none");
 
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new(Focusable::Nothing);
     rig.fixture.settle();
     rig.key(Key::F10);
     assert!(rig.last().output.active);
@@ -301,6 +322,37 @@ fn badges_sit_on_the_controls_of_this_passes_record_and_stay_off_in_a_text_field
     rig.fixture.settle();
     rig.key(Key::F10);
     assert!(rig.last().output.active, "F10 shows them again once the modal is gone");
+}
+
+/// The document's editor takes letters as a text field does, but it is what the keytips work over: with it focused a
+/// lone Alt tap or F10 shows them and a badge letter is theirs, and a letter typed with the keytips off is the
+/// document's.
+#[trial]
+fn a_focused_document_editor_types_its_letters_and_a_lone_alt_or_f10_still_shows_the_keytips() {
+    let mut rig = Rig::new(Focusable::Document);
+    rig.fixture.os(Os::Windows);
+    rig.fixture.settle();
+    focus::request(rig.fixture.ctx(), FocusTarget::Id(document_id()));
+    rig.fixture.settle();
+    assert!(focus::has(rig.fixture.ctx(), document_id()), "the document has focus");
+
+    let passes = rig.key(Key::Q);
+    assert!(passes.iter().any(|pass| pass.reached.contains(&Key::Q)), "a letter typed with the keytips off reaches the document");
+    assert!(!rig.last().output.active, "and shows no keytips");
+
+    rig.alt_tap();
+    assert!(rig.last().output.active, "a lone Alt tap over the document shows the keytips");
+    let passes = rig.key(Key::H);
+    assert!(passes.iter().all(|pass| !pass.reached.contains(&Key::H)), "the tab badge's letter never types into the document");
+    assert_eq!(passes.iter().filter_map(|pass| pass.output.tab.clone()).collect::<Vec<_>>(), ["H"], "H picks Home");
+    rig.key(Key::Escape);
+    assert!(!rig.last().output.active, "Escape ends them");
+
+    rig.key(Key::F10);
+    assert!(rig.last().output.active, "F10 over the document shows them");
+    rig.key(Key::Escape);
+    let passes = rig.key(Key::T);
+    assert!(passes.iter().any(|pass| pass.reached.contains(&Key::T)), "once they end, letters are the document's again");
 }
 
 /// What one pass of the ribbon rig saw: the keytips' output, the ribbon's record and its tab ids.
@@ -393,7 +445,7 @@ fn assign_keytips_keeps_given_letters_and_no_badge_is_a_prefix_of_another() {
 
 #[trial]
 fn a_host_sequence_ignores_a_letter_that_leads_nowhere_ends_on_escape_and_fires_a_complete_sequence_once() {
-    let mut rig = Rig::new(false);
+    let mut rig = Rig::new(Focusable::Nothing);
     rig.fixture.settle();
     take_output(rig.fixture.ctx());
     rig.key(Key::F10);
