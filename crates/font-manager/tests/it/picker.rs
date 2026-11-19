@@ -186,3 +186,20 @@ fn a_click_on_the_focused_closed_field_selects_the_name_so_typing_replaces_it() 
         assert_eq!(seen.borrow().picks.last().map(|(picked, _)| picked.as_str()), Some(family), "the typed name is picked");
     }
 }
+
+#[trial]
+fn classifies_japanese_and_cjk_families() {
+    use craft_font_manager::picker::FontClass;
+    const NONE: [u8; 10] = [0; 10];
+    assert_eq!(FontClass::classify("MS Mincho", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("ＭＳ 明朝", 0, NONE, false), Some(FontClass::Serif));
+    assert_eq!(FontClass::classify("Yu Gothic", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("游ゴシック", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("Meiryo", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("メイリオ", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("HG行書体", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("HG正楷書体-PRO", 0, NONE, false), Some(FontClass::Script));
+    assert_eq!(FontClass::classify("UD デジタル 教科書体", 0, NONE, false), Some(FontClass::Handwritten));
+    assert_eq!(FontClass::classify("HG創英角ﾎﾟｯﾌﾟ体", 0, NONE, false), Some(FontClass::Handwritten));
+    assert_eq!(FontClass::classify("MS Gothic 等幅", 0, NONE, false), Some(FontClass::Monospace));
+}

@@ -78,6 +78,14 @@ fn has_arabic_sample(drawn: &dyn Fn(&str) -> bool, latin: &str, arabic: &str) ->
     drawn(latin) && drawn(ARABIC_CORE) && drawn(arabic)
 }
 
+/// The Japanese Kana sample a font that draws it gets: the canonical five basic vowels.
+const KANA_SAMPLE: &str = "\u{3042}\u{3044}\u{3046}\u{3048}\u{304A}"; // "あいうえお"
+
+/// Whether a face gets the Japanese Kana sample: `drawn` draws the five basic vowels.
+fn has_kana_sample(drawn: &dyn Fn(&str) -> bool) -> bool {
+    drawn(KANA_SAMPLE)
+}
+
 impl Infos {
     fn build(catalog: &Catalog) -> Infos {
         let mut groups: HashMap<String, Vec<FaceInfo>> = HashMap::new();
@@ -136,6 +144,10 @@ fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: 
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
     let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some());
+    if has_kana_sample(&drawn) {
+        let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
+        return Some(Samples { latin: KANA_SAMPLE.to_owned(), arabic });
+    }
     if drawn(sample) {
         let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
         return Some(Samples { latin: sample.to_owned(), arabic });
@@ -173,7 +185,10 @@ pub(super) fn regular_face(faces: &[FaceInfo]) -> Option<&FaceInfo> {
 /// The name shown for a family: its record in the interface language, else the family name.
 pub(super) fn shown_name(info: &Info, family: &str, language: &str, english: bool) -> String {
     let primary = |tag: &str| tag.split(['-', '_']).next().unwrap_or(tag).to_ascii_lowercase();
-    if english || primary(language) == "en" {
+    let is_ja = primary(language) == "ja";
+    // In a Japanese interface, Photoshop always lists Japanese font names in Japanese,
+    // regardless of the English font names preference. In other languages, English names preference decides.
+    if (!is_ja && english) || primary(language) == "en" {
         return family.to_owned();
     }
     let exact = |n: &&LocalizedName| n.language.as_deref().is_some_and(|l| l.replace('_', "-").eq_ignore_ascii_case(&language.replace('_', "-")));
@@ -207,6 +222,19 @@ pub(super) fn class_of(catalog: &Catalog, family: &str) -> Option<FontClass> {
 
 /// Name fragments (lowercase) that mark a blackletter face; the tables have no class for it.
 const BLACKLETTER: [&str; 7] = ["fraktur", "blackletter", "black letter", "textura", "old english", "schwabacher", "rotunda"];
+
+fn is_cjk_boundary(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3040}'..='\u{309F}'
+        | '\u{30A0}'..='\u{30FF}'
+        | '\u{31F0}'..='\u{31FF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{AC00}'..='\u{D7AF}'
+    )
+}
 
 /// Classify from the OS/2 `sFamilyClass` (high byte: the IBM class), the PANOSE digits, the
 /// `post` fixed-pitch flag and, last, the family name.
@@ -249,18 +277,38 @@ pub(super) fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_
         }
     }
     // Last, the name.
-    if words.iter().any(|w| matches!(*w, "mono" | "monospace" | "monospaced" | "code" | "courier") || w.starts_with("consol")) {
+    if words.iter().any(|w| matches!(*w, "mono" | "monospace" | "monospaced" | "code" | "courier" | "等幅") || w.starts_with("consol"))
+        || has(&["等幅"])
+    {
         Some(FontClass::Monospace)
     } else if has(&["slab"]) {
         Some(FontClass::SlabSerif)
-    } else if has(&["sans", "grotesk", "grotesque", "gothic"]) {
+    } else if has(&["sans", "grotesk", "grotesque", "gothic", "ゴシック", "ｺﾞｼｯｸ", "meiryo", "メイリオ", "黑体", "黑體", "丸ゴシック"])
+    {
         Some(FontClass::SansSerif)
-    } else if has(&["serif", "roman", "garamond", "times", "bodoni", "baskerville", "caslon"]) {
+    } else if has(&["serif", "roman", "garamond", "times", "bodoni", "baskerville", "caslon", "mincho", "明朝", "宋体", "宋體"])
+        || name
+            .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
+            .any(|w| matches!(w, "sung" | "song" | "sungti" | "songti") || w.ends_with("song") || w.ends_with("sungti") || w.ends_with("songti"))
+    {
         Some(FontClass::Serif)
-    } else if has(&["hand", "marker", "brush", "chalk"]) {
+    } else if name
+        .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
+        .any(|w| matches!(w, "hei" | "heiti") || w.ends_with("hei") || w.ends_with("heiti"))
+    {
+        Some(FontClass::SansSerif)
+    } else if has(&["hand", "marker", "brush", "chalk", "kyokasho", "教科書", "ポップ", "ﾎﾟｯﾌﾟ"])
+        || name.ends_with("poptai")
+        || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "poptai")
+        || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "pop")
+    {
         Some(FontClass::Handwritten)
-    } else if has(&["script"]) {
+    } else if has(&["script", "gyosho", "行書", "kaisho", "楷書", "sousho", "草書", "reisho", "隷書", "kanteiryu", "勘亭流"]) {
         Some(FontClass::Script)
+    } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| matches!(w, "maru")) {
+        // A standalone `maru` is a round gothic, so a sans serif, but only after the handwritten
+        // and script markers: `Maru Script` and `Maru Hand` keep their own class.
+        Some(FontClass::SansSerif)
     } else {
         None
     }
@@ -399,5 +447,71 @@ mod tests {
             let partial: String = all.chars().filter(|c| *c != missing).collect();
             assert!(!has_arabic_sample(&maps(&partial), LATIN, ARABIC), "without U+{:04X}", missing as u32);
         }
+    }
+
+    #[trial]
+    fn a_kana_sample_needs_every_canonical_vowel() {
+        assert!(super::has_kana_sample(&maps(super::KANA_SAMPLE)));
+        assert!(!super::has_kana_sample(&maps(LATIN)), "a Latin-only face");
+        for missing in super::KANA_SAMPLE.chars() {
+            let partial: String = super::KANA_SAMPLE.chars().filter(|c| *c != missing).collect();
+            assert!(!super::has_kana_sample(&maps(&partial)), "without U+{:04X}", missing as u32);
+        }
+    }
+
+    #[trial]
+    fn classifies_japanese_and_cjk_families() {
+        use super::classify;
+        use crate::picker::FontClass;
+        const NONE: [u8; 10] = [0; 10];
+        assert_eq!(classify("MS Mincho", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("ＭＳ 明朝", 0, NONE, false), Some(FontClass::Serif));
+        assert_eq!(classify("Yu Gothic", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("游ゴシック", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("Meiryo", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("メイリオ", 0, NONE, false), Some(FontClass::SansSerif));
+        assert_eq!(classify("HG行書体", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("HG正楷書体-PRO", 0, NONE, false), Some(FontClass::Script));
+        assert_eq!(classify("UD デジタル 教科書体", 0, NONE, false), Some(FontClass::Handwritten));
+        assert_eq!(classify("HG創英角ﾎﾟｯﾌﾟ体", 0, NONE, false), Some(FontClass::Handwritten));
+        assert_eq!(classify("MS Gothic 等幅", 0, NONE, false), Some(FontClass::Monospace));
+    }
+
+    #[trial]
+    fn a_japanese_interface_lists_japanese_family_names() {
+        use super::{FontFormat, Info, shown_name};
+        use craft_font_catalog::{FaceInfo, LocalizedName, Outlines, Source};
+
+        let localized = vec![
+            LocalizedName { language: Some("ja".into()), name: "ＭＳ ゴシック".into() },
+            LocalizedName { language: Some("en".into()), name: "MS Gothic".into() },
+        ];
+        let regular = FaceInfo {
+            family: "MS Gothic".into(),
+            style: "Regular".into(),
+            weight: 400.0,
+            italic: false,
+            width: 100.0,
+            monospaced: true,
+            variable: false,
+            outlines: Outlines::TrueType,
+            fs_type: 0,
+            code_pages: [0, 0],
+            path: None,
+            index: 0,
+            source: Source::Bundled,
+            blob: None,
+            variations: Vec::new(),
+            localized_families: localized.clone(),
+        };
+        let info = Info { localized, format: FontFormat::TrueType, styles: 1, regular };
+
+        // In a Japanese interface, always Japanese regardless of the English font names preference:
+        assert_eq!(shown_name(&info, "MS Gothic", "ja", true), "ＭＳ ゴシック");
+        assert_eq!(shown_name(&info, "MS Gothic", "ja", false), "ＭＳ ゴシック");
+        // In other languages:
+        assert_eq!(shown_name(&info, "MS Gothic", "en", true), "MS Gothic");
+        assert_eq!(shown_name(&info, "MS Gothic", "en", false), "MS Gothic");
+        assert_eq!(shown_name(&info, "MS Gothic", "fr", true), "MS Gothic");
     }
 }
