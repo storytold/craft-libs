@@ -24,8 +24,10 @@ const PATH_FS: [&str; 2] = ["std", "fs"];
 const PLAIN_DATA: &str = "contract/no-global-state:plain-data";
 const PROJECTION: &str = "contract/no-global-state:projection";
 
-/// The hidden `Tracked::__split_for_bind`, called only by `bind_tracked!`; the lint reads source before macro expansion, so every textual hit is a direct call.
+/// The hidden `Tracked::__split_for_bind`, called only by `bind_tracked!`; the lint reads source before macro expansion, so every textual hit outside its definition is a direct call.
 const SPLIT_FOR_BIND: &str = "__split_for_bind";
+/// The macro that calls [`SPLIT_FOR_BIND`]; its definition is not a call site.
+const BIND_TRACKED: &str = "bind_tracked";
 
 struct Hits {
     found: Vec<(proc_macro2::Span, String, String)>,
@@ -110,6 +112,10 @@ impl Visit<'_> for Hits {
     }
 
     fn visit_item_macro(&mut self, node: &ItemMacro) {
+        // `bind_tracked!`'s own definition is the one place that names the hidden call.
+        if node.mac.path.is_ident("macro_rules") && node.ident.as_ref().is_some_and(|i| i == BIND_TRACKED) {
+            return;
+        }
         self.macro_path(&node.mac);
         visit::visit_item_macro(self, node);
     }
