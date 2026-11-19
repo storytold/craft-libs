@@ -256,6 +256,7 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
         };
         if skip { Decision::Skip(size) } else { Decision::Run }
     });
+    #[cfg(feature = "testing")]
     if matches!(decision, Decision::Skip(_)) {
         crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::OutOfView);
     }
@@ -302,17 +303,11 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - for a child with no content version: no input other than pointer motion this frame or the one before;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
 pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
-    use crate::runtime::measure::{Settle, count_memo_key_bytes, count_settle};
-    // The 8 bytes of a keyed call's content version are the key fed in.
+    // Keyed calls feed their 8-byte content version into the key.
+    #[cfg(feature = "testing")]
     if content.is_some() {
-        count_memo_key_bytes(ctx, 8);
+        crate::runtime::measure::count_memo_key_bytes(ctx, 8);
     }
-    let size = decide_settled(ctx, owner, id, sizing, place, content);
-    count_settle(ctx, id, if size.is_some() { Settle::Replayed } else { Settle::Ran });
-    size
-}
-
-fn decide_settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -355,15 +350,23 @@ fn decide_settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place:
         settled.map(|settled| (entry.sizes[kind].or(entry.sizes[1 - kind]).unwrap_or(settled.rect.size()), settled))
     });
     // The pointer over it, or a press that started on it, is read outside the store.
-    let (size, settled) = settled?;
+    let Some((size, settled)) = settled else {
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Ran);
+        return None;
+    };
     if engaged(ctx, &settled) {
         with(ctx, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
                 entry.replays = Some((pass_nr, false));
             }
         });
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Ran);
         return None;
     }
+    #[cfg(feature = "testing")]
+    crate::runtime::measure::count_settle(ctx, id, crate::runtime::measure::Settle::Replayed);
     Some(size)
 }
 
