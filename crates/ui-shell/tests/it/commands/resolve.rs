@@ -52,11 +52,13 @@ struct Scene {
     global: bool,
     /// Pane `a` is left out of the next pass.
     skip_a: Cell<bool>,
+    /// Salts the panes' ids, so two windows show panes of their own.
+    window: &'static str,
 }
 
 impl Scene {
     fn new() -> Self {
-        Scene { zoom: Cell::new(true), ids: RefCell::new(Vec::new()), global: false, skip_a: Cell::new(false) }
+        Scene { zoom: Cell::new(true), ids: RefCell::new(Vec::new()), global: false, skip_a: Cell::new(false), window: "" }
     }
 
     fn show(&self, ui: &mut Ui) {
@@ -66,7 +68,7 @@ impl Scene {
             if pane == 0 && skip_a {
                 continue;
             }
-            Pane::new().id_salt(*salt).show(ui, |ui, cx| {
+            Pane::new().id_salt((self.window, *salt)).show(ui, |ui, cx| {
                 if pane == 0 {
                     cx.publish(PaneCommand::ZoomIn, CommandState::new().enabled(self.zoom.get()));
                 }
@@ -140,6 +142,26 @@ fn an_idle_frame_resolves_no_command() {
     assert_eq!(counts(&frames.ctx), (0, 0), "an idle frame resolves nothing");
     assert_eq!(frames.frame(vec![moved(Pos2::new(900.0, 900.0))], |ui| scene.show(ui)), 1, "so does a pointer move");
     assert_eq!(counts(&frames.ctx), (0, 0), "a pointer move away from the taps resolves nothing");
+}
+
+/// Two windows with frames alternating between them, idle: each frame resolves nothing and walks nothing, as the
+/// child stays open across the root's frames and the root's across the child's.
+#[trial]
+fn idle_frames_alternating_between_two_windows_resolve_nothing() {
+    let root = Scene::new();
+    let other = Scene { window: "child", ..Scene::new() };
+    let child = ViewportId::from_hash_of("second window");
+    let mut frames = Frames::new();
+    let states = Tracked::new(CommandStates::new());
+    frames.commands(gated(&states, false));
+    for _ in 0..3 {
+        frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| root.show(ui));
+        frame_walks(&mut frames, child, &mut |ui| other.show(ui));
+    }
+    for round in 0..4 {
+        assert_eq!(frame_walks(&mut frames, ViewportId::ROOT, &mut |ui| root.show(ui)), (0, 0, 0), "root frame {round}");
+        assert_eq!(frame_walks(&mut frames, child, &mut |ui| other.show(ui)), (0, 0, 0), "child frame {round}");
+    }
 }
 
 /// Editing one app-scope state resolves again only that command's readers, once.

@@ -189,7 +189,10 @@ impl Frames {
     /// per pass. Returns the number of passes. The child opens with its first frame and stays open, listed in the root's
     /// frames too, until [`close_viewport`](Self::close_viewport) or a `ViewportCommand::Close` for it.
     pub fn frame_in_viewport(&mut self, viewport: egui::ViewportId, events: Vec<Event>, mut ui: impl FnMut(&mut Ui)) -> usize {
-        set_input(&self.ctx, self.input());
+        // The app's input is the root's, once per app frame: a child window's frame runs inside it.
+        if viewport == egui::ViewportId::ROOT {
+            set_input(&self.ctx, self.input());
+        }
         let mut passes = 0;
         self.run(viewport, events, |root| {
             passes += 1;
