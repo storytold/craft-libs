@@ -13,10 +13,32 @@ const HEADER: &str = concat!(
     "active_area\tcrop\torientation\tbaseline_exposure_bits\n",
 );
 
-fn fixture_dir(test: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("decode-report-{test}-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+struct FixtureDir(PathBuf);
+
+impl FixtureDir {
+    fn new(test: &str) -> Self {
+        let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        for attempt in 0..1000 {
+            let path = root.join(format!("decode-report-{test}-{}-{attempt}", std::process::id()));
+            // Only clean up a directory this test created, even if a process ID was reused.
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create fixture directory {}: {error}", path.display()),
+            }
+        }
+        panic!("no free fixture directory for {test}");
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for FixtureDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 fn integer_raw() -> RawImage {
@@ -54,21 +76,22 @@ fn run_report(paths: &[OsString], max_input_bytes: u64, limits: &Limits) -> Vec<
 
 #[test]
 fn reports_exact_samples_shape_and_metadata_in_argument_order() {
-    let dir = fixture_dir("success");
+    let fixtures = FixtureDir::new("success");
+    let dir = fixtures.path();
     let original = integer_raw();
-    let integer = write_fixture(&dir, "integer.dng", &original, ByteOrder::Little);
-    let float = write_fixture(&dir, "float.dng", &float_raw(), ByteOrder::Big);
+    let integer = write_fixture(dir, "integer.dng", &original, ByteOrder::Little);
+    let float = write_fixture(dir, "float.dng", &float_raw(), ByteOrder::Big);
 
     let mut changed_sample = original.clone();
     let RawData::U16(samples) = &mut changed_sample.data else {
         panic!("integer fixture must contain integer samples");
     };
     samples[127] += 1;
-    let changed_sample = write_fixture(&dir, "changed-sample.dng", &changed_sample, ByteOrder::Little);
+    let changed_sample = write_fixture(dir, "changed-sample.dng", &changed_sample, ByteOrder::Little);
 
     let mut rotated = original;
     rotated.orientation = Orientation::Normal;
-    let rotated = write_fixture(&dir, "changed-orientation.dng", &rotated, ByteOrder::Little);
+    let rotated = write_fixture(dir, "changed-orientation.dng", &rotated, ByteOrder::Little);
 
     let paths = [integer.clone(), float, changed_sample, rotated, integer];
     let limits = Limits::default();
@@ -100,22 +123,23 @@ fn report_rows(text: &str) -> Vec<Vec<&str>> {
 
 #[test]
 fn reports_mixed_failures_and_keeps_the_last_success() {
-    let dir = fixture_dir("mixed");
-    let integer = write_fixture(&dir, "integer.dng", &integer_raw(), ByteOrder::Little);
+    let fixtures = FixtureDir::new("mixed");
+    let dir = fixtures.path();
+    let integer = write_fixture(dir, "integer.dng", &integer_raw(), ByteOrder::Little);
     let unreadable = dir.join("missing.dng").into_os_string();
-    let text = write_bytes(&dir, "private-fixture-name.txt", b"not a recognized RAW header");
+    let text = write_bytes(dir, "private-fixture-name.txt", b"not a recognized RAW header");
 
     let mut unsupported = base_ifd(8, 6, 16, 2, false);
     unsupported.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![vec![0; 8 * 6 * 2 * 2]] });
-    let unsupported = write_bytes(&dir, "unsupported.dng", &dng(unsupported, ByteOrder::Little));
+    let unsupported = write_bytes(dir, "unsupported.dng", &dng(unsupported, ByteOrder::Little));
 
     let mut corrupt = base_ifd(8, 6, 16, 1, true);
     corrupt.set(tags::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 2]));
     corrupt.set_image(ImageData::Strips { rows_per_strip: 6, strips: vec![vec![0; 8 * 6 * 2]] });
-    let corrupt = write_bytes(&dir, "corrupt.dng", &dng(corrupt, ByteOrder::Little));
+    let corrupt = write_bytes(dir, "corrupt.dng", &dng(corrupt, ByteOrder::Little));
 
     let missing_strips = dng(base_ifd(8, 6, 16, 1, true), ByteOrder::Little);
-    let tiff_error = write_bytes(&dir, "missing-strips.dng", &missing_strips);
+    let tiff_error = write_bytes(dir, "missing-strips.dng", &missing_strips);
     let paths = [integer.clone(), unreadable, text, unsupported, corrupt, tiff_error, integer];
     let limits = Limits::default();
     let first = run_report(&paths, report::MAX_INPUT_BYTES, &limits);
@@ -140,8 +164,9 @@ fn reports_mixed_failures_and_keeps_the_last_success() {
 
 #[test]
 fn separates_encoded_file_and_shared_decoder_limits() {
-    let dir = fixture_dir("limits");
-    let integer = write_fixture(&dir, "integer.dng", &integer_raw(), ByteOrder::Little);
+    let fixtures = FixtureDir::new("limits");
+    let dir = fixtures.path();
+    let integer = write_fixture(dir, "integer.dng", &integer_raw(), ByteOrder::Little);
     let size = std::fs::metadata(Path::new(&integer)).unwrap().len();
     let paths = [integer];
     for (max_input_bytes, max_samples, status) in [(size, 256, "ok"), (size - 1, 256, "input_limit"), (size, 255, "decode_limit")] {
@@ -181,8 +206,9 @@ impl Write for BrokenOutput {
 
 #[test]
 fn write_and_flush_errors_fail_the_invocation() {
-    let dir = fixture_dir("output-error");
-    let integer = write_fixture(&dir, "integer.dng", &integer_raw(), ByteOrder::Little);
+    let fixtures = FixtureDir::new("output-error");
+    let dir = fixtures.path();
+    let integer = write_fixture(dir, "integer.dng", &integer_raw(), ByteOrder::Little);
     for (write_error, kind) in [(true, io::ErrorKind::BrokenPipe), (false, io::ErrorKind::WriteZero)] {
         let mut out = BrokenOutput { write_error };
         let result = report::run([integer.clone()], &mut out, report::MAX_INPUT_BYTES, &Limits::default());
