@@ -46,6 +46,11 @@ fn harness(mesh: WarpMesh) -> Harness {
 }
 
 fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
+    harness_with(mesh, rotation, flip, None)
+}
+
+/// A harness with the split tool `tool` armed.
+fn harness_with(mesh: WarpMesh, rotation: f64, flip: bool, tool: Option<WarpSplit>) -> Harness {
     let id = Rc::new(Cell::new(Id::NULL));
     let mesh = Rc::new(RefCell::new(mesh));
     let view = Rc::new(Cell::new(None));
@@ -61,7 +66,11 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
         view.set(Some(shown_view));
         let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
             let mut held = mesh.borrow_mut();
-            WarpGrid::new("Warp", Bind::bound(&mut *held), RECT).show_at(ui, body.rect)
+            let grid = WarpGrid::new("Warp", Bind::bound(&mut *held), RECT);
+            match tool {
+                Some(tool) => grid.split(tool).show_at(ui, body.rect),
+                None => grid.show_at(ui, body.rect),
+            }
         });
         if let Some(output) = canvas.inner {
             id.set(output.mesh.response.id);
@@ -242,6 +251,19 @@ fn a_split_cuts_half_a_pixel_up_and_left_of_the_pointer() {
     let (u, v) = (39.5 / RECT.width(), 29.5 / RECT.height());
     assert!(mesh.us.iter().any(|k| (k - u).abs() < 1e-4), "{:?}, want {u}", mesh.us);
     assert!(mesh.vs.iter().any(|k| (k - v).abs() < 1e-4), "{:?}, want {v}", mesh.vs);
+}
+
+#[trial]
+fn a_split_less_than_a_pixel_beside_a_line_is_a_new_line_and_one_on_it_is_none() {
+    // The 2 x 2 mesh's middle column is at x 190, its patches 90 wide: 0.6 is under 1 % of one.
+    let line = RECT.x0 + 0.5 * RECT.width();
+    for (beside, inserted) in [(0.6, true), (0.0, false)] {
+        let mut h = harness_with(WarpMesh::identity(RECT, 2, 2), 0.0, false, Some(WarpSplit::Vertical));
+        // The split cuts half a pixel left of the pointer.
+        let at = h.screen(Point::new(line + beside + 0.5, RECT.y0 + 30.0));
+        h.click(at, Modifiers::NONE);
+        assert_eq!(h.size().0, if inserted { 3 } else { 2 }, "{beside} beside: {:?}", h.mesh().us);
+    }
 }
 
 fn warped(mesh: &mut WarpMesh) {

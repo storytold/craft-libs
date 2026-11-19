@@ -458,8 +458,8 @@ impl WarpMesh {
 }
 
 /// How close to a patch's edge, as a share of the patch, a split line may lie before it counts as
-/// on the existing line.
-const SPLIT_EDGE: f64 = 0.01;
+/// on the existing line: a line half a pixel beside another is a new one.
+const SPLIT_EDGE: f64 = 0.001;
 
 /// The lines a pointer would insert ([`WarpMesh::split_at`]).
 #[derive(Clone, Copy, Debug)]
