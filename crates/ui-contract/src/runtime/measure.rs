@@ -297,6 +297,31 @@ pub fn chord_texts(ctx: &Context) -> u32 {
     last_totals(ctx, |log| log.chord_texts, 0)
 }
 
+/// What a command resolution was for.
+#[cfg(feature = "testing")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Resolve {
+    /// A resolution nothing kept: a reader's first, or one for a key press or a fire.
+    New,
+    /// A kept resolution made again because an input of it changed.
+    Again,
+    /// A kept resolution compared with a full one by the testing check every 100th pass.
+    Checked,
+}
+
+/// Counts a command resolution in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_resolve(ctx: &Context, what: Resolve) {
+    totals(ctx, |log| log.resolves[what as usize] += 1);
+}
+
+/// The command resolutions of the last pass of kind `what`.
+#[cfg(feature = "testing")]
+pub fn last_pass_resolves(ctx: &Context, what: Resolve) -> u32 {
+    last_totals(ctx, |log| log.resolves[what as usize], 0)
+}
+
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_least(ctx: &Context, id: Id) {
@@ -367,6 +392,7 @@ pub(crate) struct PassTotals {
     key_bytes: usize,
     text_layouts: u32,
     chord_texts: u32,
+    resolves: [u32; 3],
     asks: Vec<(&'static str, u32)>,
 }
 
