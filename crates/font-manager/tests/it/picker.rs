@@ -212,4 +212,7 @@ fn classifies_japanese_and_cjk_families() {
     // display face.
     assert_eq!(FontClass::classify("Pop Script", 0, NONE, false), Some(FontClass::Script));
     assert_eq!(FontClass::classify("Pop", 0, NONE, false), Some(FontClass::Handwritten));
+    // A `hei` (黑) suffix is a CJK sans, but not against an explicit script marker: `Xhei Script` is a script.
+    assert_eq!(FontClass::classify("SimHei", 0, NONE, false), Some(FontClass::SansSerif));
+    assert_eq!(FontClass::classify("Xhei Script", 0, NONE, false), Some(FontClass::Script));
 }

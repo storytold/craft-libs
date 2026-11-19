@@ -301,11 +301,6 @@ pub(super) fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_
             .any(|w| matches!(w, "sung" | "song" | "sungti" | "songti") || is_cjk_song(w))
     {
         Some(FontClass::Serif)
-    } else if name
-        .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
-        .any(|w| matches!(w, "hei" | "heiti") || w.ends_with("hei") || w.ends_with("heiti"))
-    {
-        Some(FontClass::SansSerif)
     } else if has(&["hand", "marker", "brush", "chalk", "kyokasho", "教科書", "ポップ", "ﾎﾟｯﾌﾟ"])
         || name.ends_with("poptai")
         || name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "poptai")
@@ -313,6 +308,13 @@ pub(super) fn classify(family: &str, family_class: i16, panose: [u8; 10], fixed_
         Some(FontClass::Handwritten)
     } else if has(&["script", "gyosho", "行書", "kaisho", "楷書", "sousho", "草書", "reisho", "隷書", "kanteiryu", "勘亭流"]) {
         Some(FontClass::Script)
+    } else if name
+        .split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c))
+        .any(|w| matches!(w, "hei" | "heiti") || w.ends_with("hei") || w.ends_with("heiti"))
+    {
+        // A `hei` (黑) name is a CJK sans serif, but a name that also carries a script marker is a script: this
+        // waits until after the script markers, so `Xhei Script` keeps Script and `SimHei` stays a sans.
+        Some(FontClass::SansSerif)
     } else if name.split(|c: char| !c.is_alphabetic() || is_cjk_boundary(c)).any(|w| w == "pop") {
         // A standalone `pop` is a rounded Japanese display face, not a script: after the script markers, so
         // `Pop Script` keeps Script.
