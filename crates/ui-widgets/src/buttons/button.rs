@@ -10,7 +10,7 @@ use crate::primitives::{HAlign, IconSpec, PaintShape};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, DataColor, FocusLook, IconLook, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
-use craft_behavior::{Metrics, PartKey, PressPhase, Sense};
+use craft_behavior::{Insets, Metrics, PartKey, PressPhase, Sense};
 use craft_keymap::Mods;
 use craft_theme::{
     Rgba, Stateful, Variant,
@@ -212,17 +212,17 @@ impl<'a> Button<'a> {
         self
     }
 
-    /// The face as it shows `label`: the painted text in its place when set.
-    fn spec<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
-        self.face_of(self.painted.as_ref().map_or(label, Label::as_str))
+    /// The face as it shows `label` in `style`: the painted text in its place when set.
+    fn spec<'s>(&'s self, label: &'s str, style: &ButtonStyle) -> FaceSpec<'s> {
+        self.face_of(self.painted.as_ref().map_or(label, Label::as_str), style)
     }
 
-    /// The face showing `label` as it is.
-    fn face_of<'s>(&'s self, label: &'s str) -> FaceSpec<'s> {
+    /// The face showing `label` as it is: in the label role, unless `style` names another (a side menu's row).
+    fn face_of<'s>(&'s self, label: &'s str, style: &ButtonStyle) -> FaceSpec<'s> {
         FaceSpec {
             arrangement: self.arrangement,
             label,
-            role: None,
+            role: (style.text.role != TypeRole::Label).then_some(style.text.role),
             lead: self.icon.as_ref(),
             picture: self.picture.as_ref().map(|(aspect, _)| *aspect),
             trail: self.trailing_icon.as_ref(),
@@ -251,13 +251,19 @@ impl Component for Button<'_> {
         if let Some(least) = key.least_width {
             style.metrics.min_size.x = style.metrics.min_size.x.max(least.points(cx.tokens));
         }
+        // A side menu's row: the large body text, padded as a list row of places, not as a control.
+        if cx.env::<super::ControlPlace>() == super::ControlPlace::SideMenu && key.arrangement == Arrangement::Inline {
+            let pad = &cx.tokens.space.pad;
+            style.text.role = TypeRole::BodyLarge;
+            style.metrics.padding = Insets::new(pad.roomy, pad.roomy, pad.segment, pad.segment);
+        }
         style
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let shown = face::measure(cx, &self.spec(cx.resolved.label));
+        let shown = face::measure(cx, &self.spec(cx.resolved.label, cx.style));
         match &self.room_for {
-            Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str()))),
+            Some(room) => shown.max(face::measure(cx, &self.face_of(room.as_str(), cx.style))),
             None => shown,
         }
     }
@@ -271,12 +277,12 @@ impl Component for Button<'_> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
         if self.loading {
-            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl);
+            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, cx.style),&cx.style.face, cx.style.icon.side, area, rtl);
             if let Some(rect) = spinner {
                 cx.part(SPINNER, rect);
             }
         } else if self.picture.is_some()
-            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label), &cx.style.face, cx.style.icon.side, area, rtl)
+            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style),&cx.style.face, cx.style.icon.side, area, rtl)
         {
             cx.part(PICTURE, rect);
         }
@@ -300,7 +306,7 @@ impl Component for Button<'_> {
             ui.draw().data_fill(&shape, DataColor::new(Color32::from(craft_theme::Srgba::from(tint))));
             ui.draw().fill(&shape, cx.resolve(&cx.style.overlay));
         }
-        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label), cx.content_rect);
+        face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, cx.style), cx.content_rect);
         if cx.part_if_declared(SPINNER).is_some() {
             ui.face(SPINNER, Spinner::new().size(cx.resolved.size));
         }

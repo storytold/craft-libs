@@ -42,6 +42,10 @@ pub enum GroupLevel {
 ///   sides take the control's padding (`space.pad.control`), not its corner round;
 /// - a `ComboBox` is as wide as its widest option and its chevron, not a field length, and a font picker is a short
 ///   field (`size.length.short`) whichever family it shows.
+///
+/// A page's side menu (a File page's list of pages) sets `SideMenu` for its rows: a `Button` there shows its label in
+/// the large body role (`TypeRole::BodyLarge`), with `space.pad.segment` above and below it and `space.pad.roomy`
+/// at its sides, so the menu reads as a list of places rather than a row of controls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
 #[env(style)]
 #[non_exhaustive]
@@ -51,6 +55,8 @@ pub enum ControlPlace {
     Standard,
     /// In a ribbon group.
     Ribbon,
+    /// In a page's side menu.
+    SideMenu,
 }
 
 /// The style context a push or split button draws in: in a ribbon (`ControlPlace::Ribbon`) the default variant

@@ -410,3 +410,35 @@ fn a_ribbons_combo_box_is_as_wide_as_its_options() {
     let (ribbon, standard) = (width(true), width(false));
     assert!(ribbon < standard / 2.0, "the ribbon's combo box fits two digits and its chevron: {ribbon} against {standard}");
 }
+
+/// A page's side menu (`ControlPlace::SideMenu`) shows its buttons as rows of places: the label in the large body role
+/// and padded above and below, so a row is taller and wider than the same ghost button elsewhere. A stacked button
+/// there keeps its own look.
+#[trial]
+fn a_side_menus_buttons_are_taller_rows_with_the_large_body_label() {
+    let rect = |side: bool, arrangement: Arrangement| {
+        let mut fixture = Fixture::new(move |ui| {
+            let show = |ui: &mut Ui| {
+                let _ = Button::new("Print").icon(IconId::new("print")).variant(Variant::GHOST).arrangement(arrangement).show(ui);
+            };
+            if side {
+                with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(ControlPlace::SideMenu);
+                    },
+                    show,
+                );
+            } else {
+                show(ui);
+            }
+        });
+        fixture.settle();
+        fixture.by_label("Print").expect("the button").rect
+    };
+    let (menu, plain) = (rect(true, Arrangement::Inline), rect(false, Arrangement::Inline));
+    assert!(menu.height() > plain.height() + 8.0, "a side menu's row is padded as a list row: {} against {}", menu.height(), plain.height());
+    assert!(menu.width() > plain.width() + 4.0, "its label is in the larger role: {} against {}", menu.width(), plain.width());
+    let (menu, plain) = (rect(true, Arrangement::Stacked), rect(false, Arrangement::Stacked));
+    assert_eq!(menu.size(), plain.size(), "a stacked button keeps its own look in a side menu");
+}

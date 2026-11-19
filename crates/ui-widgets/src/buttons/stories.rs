@@ -1,15 +1,15 @@
 //! Stories of the buttons.
 
-use super::{Arrangement, Button, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
-use crate::contract::{Bind, BodyCx, Entry, Props as _, Show as _, ShowContainer as _, Validity};
+use super::{Arrangement, Button, ControlPlace, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
+use crate::contract::{Bind, BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::display::{Picture, Shade, Text};
-use crate::layout_components::{Grid, Row};
+use crate::layout_components::{Grid, Row, Stack};
 use crate::list::ThumbAspect;
 use crate::menu::MenuItem;
-use crate::primitives::{AppIcons, IconMark, IconSpec, register_app_icons};
+use crate::primitives::{AppIcons, HAlign, IconMark, IconSpec, register_app_icons};
 use crate::runtime::commands::EditCommands;
 use crate::runtime::env::{Message, with_env};
-use crate::style::DataColor;
+use crate::style::{DataColor, SurfaceKind};
 use crate::testing::pictures::sample_picture;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{ColumnWidth, IconId, Mixed, Proposal};
@@ -207,6 +207,32 @@ fn button_compact_in_group(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
             |ui| {
                 Button::new("Save").icon(IconId::new("save")).id_salt("compact").show(ui);
                 SplitButton::new("Trace", &entries).icon(IconId::new("image")).id_salt("compact split").show(ui);
+            },
+        );
+    });
+    shown.into()
+}
+
+/// A page's side menu: full-width ghost buttons on the brand surface, in the `SideMenu` place, at least the side
+/// menu's width, one of them current, as a File page's list of pages shows them.
+#[story(Button<'static>, covers = [], drive = Drive::Never, title = "In a side menu")]
+fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let shown = Stack::new().surface(SurfaceKind::Brand).least_width(LeastWidth::SideMenu).show(ui, |ui, _| {
+        with_env(
+            ui,
+            |overrides| {
+                overrides.values.set(ControlPlace::SideMenu);
+            },
+            |ui| {
+                for (name, icon) in [("Home", IconId::new("home")), ("Open", IconId::new("open")), ("Print", IconId::new("print"))] {
+                    Button::new(name)
+                        .icon(icon)
+                        .variant(Variant::GHOST)
+                        .sizing(Sizing::FillWidth)
+                        .align(HAlign::Start)
+                        .selected(name == "Open")
+                        .show(ui);
+                }
             },
         );
     });

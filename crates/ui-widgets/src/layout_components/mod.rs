@@ -2,7 +2,7 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, LeastWidth, Pad,
     Role, Scroll, Sizing, ThemeScope,
 };
 use crate::layout::{BodyLayout, RowAlign};
@@ -258,6 +258,14 @@ impl<'a> Stack<'a> {
         if let Some(footer) = self.props.footer {
             self.props = self.props.footer(footer.gap(gap));
         }
+        self
+    }
+
+    /// The least width of the stack's content from the size role `least`: a stack sized from its content is at least
+    /// that wide (a page's side menu, `LeastWidth::SideMenu`), and wider content still widens it.
+    #[must_use]
+    pub fn least_width(mut self, least: LeastWidth) -> Self {
+        self.props = self.props.least_width(least);
         self
     }
 

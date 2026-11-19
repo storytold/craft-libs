@@ -200,6 +200,9 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
+    /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
+    /// band beside the page, not as buttons cut to their labels.
+    SideMenu,
 }
 
 impl LeastWidth {
@@ -211,6 +214,7 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
+            LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
         }
     }
 }
