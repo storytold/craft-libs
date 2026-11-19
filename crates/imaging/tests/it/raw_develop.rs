@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use craft_behavior::PixelSize;
+use craft_behavior::{CanvasView, PixelSize};
 use craft_imaging::raw::{Demosaic, RawDevelopSettings};
 use craft_imaging::scopes::ClippingMask;
 use craft_imaging::ui::raw_develop::{
@@ -15,7 +15,7 @@ use craft_imaging::ui::raw_develop::{
 use craft_imaging::ui::scopes::{ScopeFrame, ScopeReadout};
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_imaging::ui::{ChannelColor, HistogramSet, ScopeChannel};
-use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::canvas::{AppPaint, PixelRect, RasterSource};
 use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace as _, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
@@ -56,23 +56,38 @@ impl RasterSource for Grey {
     }
 }
 
-/// The app's side: two pictures, a count of the develops asked for, and whether the scope gets a histogram.
+/// The app's side: two pictures, a count of the develops asked for, whether the scope gets a histogram, and, when
+/// the app paints the after picture itself, a count of its paints.
 struct Source {
     after: Grey,
     before: Grey,
     develops: AtomicUsize,
     histogram: bool,
+    paints: Option<AtomicUsize>,
 }
 
 impl Source {
     /// A source whose scope shows no frame.
     fn new() -> Arc<Self> {
-        Arc::new(Source { after: Grey::new(0x80), before: Grey::new(0x40), develops: AtomicUsize::new(0), histogram: false })
+        Arc::new(Source::plain(false, None))
     }
 
     /// A source whose scope shows a flat histogram, so the plot and its tone zones show.
     fn with_histogram() -> Arc<Self> {
-        Arc::new(Source { after: Grey::new(0x80), before: Grey::new(0x40), develops: AtomicUsize::new(0), histogram: true })
+        Arc::new(Source::plain(true, None))
+    }
+
+    /// A source that paints the after picture itself, as an app keeping it on the GPU does.
+    fn painting() -> Arc<Self> {
+        Arc::new(Source::plain(false, Some(AtomicUsize::new(0))))
+    }
+
+    fn plain(histogram: bool, paints: Option<AtomicUsize>) -> Self {
+        Source { after: Grey::new(0x80), before: Grey::new(0x40), develops: AtomicUsize::new(0), histogram, paints }
+    }
+
+    fn paints(&self) -> usize {
+        self.paints.as_ref().map_or(0, |paints| paints.load(Ordering::Relaxed))
     }
 }
 
@@ -83,6 +98,13 @@ impl RawDevelopSource for Source {
 
     fn before(&self) -> &dyn RasterSource {
         &self.before
+    }
+
+    fn paint_after(&self) -> Option<AppPaint<'_, CanvasView>> {
+        let paints = self.paints.as_ref()?;
+        Some(AppPaint::new(move |_, _| {
+            paints.fetch_add(1, Ordering::Relaxed);
+        }))
     }
 
     fn develop(&self, _: &RawPreviewRequest) -> Job<PreviewDone, String> {
@@ -273,6 +295,27 @@ fn before_shows_the_before_picture_and_edits_nothing() {
     assert!(events.iter().all(|event| !matches!(event, RawDevelopEvent::Settings(_))), "Before edits nothing: {events:?}");
     fixture.key(Key::Z, Modifiers::COMMAND).idle(4);
     assert_eq!(exposure(&host), 0.0, "Before records no history step");
+}
+
+#[trial]
+fn an_after_picture_the_app_paints_is_painted_and_before_still_reads_its_pixels() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    let source = Source::painting();
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::Filter)), source.clone()));
+    fixture.idle(10);
+    focus_canvas(&mut fixture);
+    assert!(source.paints() > 0, "the app's paint draws the after picture");
+    assert_eq!(source.after.reads.load(Ordering::Relaxed), 0, "the after picture's pixels are not read while the app paints it");
+
+    fixture.frame(vec![key_event(Key::Y, true)]).idle(6);
+    let (paints, before_reads) = (source.paints(), source.before.reads.load(Ordering::Relaxed));
+    assert!(before_reads > 0, "Y held shows the before picture's pixels");
+    fixture.idle(4);
+    assert_eq!(source.paints(), paints, "Before does not paint the after picture");
+    fixture.frame(vec![key_event(Key::Y, false)]).idle(4);
+    assert!(source.paints() > paints, "releasing Y paints the after picture again");
+    assert_eq!(source.after.reads.load(Ordering::Relaxed), 0);
 }
 
 #[trial]

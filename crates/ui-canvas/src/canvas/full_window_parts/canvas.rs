@@ -2,7 +2,8 @@
 
 use super::view::FullWindowView;
 use crate::canvas::{
-    Canvas, CanvasTool, HandTool, Momentary, NavigationOptions, PixelRect, RasterDisplay, RasterSource, ToolHost, ToolHostResponse, tool_pass,
+    AppPaint, Canvas, CanvasTool, HandTool, Momentary, NavigationOptions, PixelRect, RasterDisplay, RasterSource, ToolHost, ToolHostResponse,
+    tool_pass,
 };
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::DialogWords;
@@ -13,7 +14,7 @@ use crate::runtime::measure;
 use crate::runtime::memory::{global, with_session};
 use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::{Point, Rect as Rect64};
-use craft_behavior::{EditEvent, Mixed, PixelSize};
+use craft_behavior::{CanvasView, EditEvent, Mixed, PixelSize};
 use egui::{Color32, ColorImage, Rect, Response, Ui};
 use std::sync::Arc;
 
@@ -121,7 +122,8 @@ type ControlsFn<'a> = Box<dyn FnMut(&mut Ui, Rect) + 'a>;
 /// regions left.
 ///
 /// - **Look.** The canvas surface; the image through `RasterDisplay` over the [checkerboard](Self::checkerboard), with
-///   the divider rule outside its edge;
+///   the divider rule outside its edge (the source's pixels, or the app's own paint of them when
+///   [`painted`](Self::painted));
 ///   then each [`RasterOverlay`] in the order given (they paint and have no AccessKit node of their own); then the canvas controls of [`controls`](Self::controls); then
 ///   the tool's own painting and cursor.
 /// - **View.** [`FullWindowView`], bound by the app, fits the image on the first pass and keeps fitting it until the
@@ -140,6 +142,7 @@ type ControlsFn<'a> = Box<dyn FnMut(&mut Ui, Rect) + 'a>;
 pub struct FullWindowCanvas<'a> {
     view: Bind<'a, FullWindowView>,
     source: &'a dyn RasterSource,
+    paint: Option<AppPaint<'a, CanvasView>>,
     checkerboard: Option<Checker>,
     overlays: Vec<RasterOverlay<'a>>,
     tool: Option<&'a mut dyn CanvasTool>,
@@ -157,12 +160,21 @@ impl<'a> FullWindowCanvas<'a> {
         FullWindowCanvas {
             view,
             source,
+            paint: None,
             checkerboard: None,
             overlays: Vec::new(),
             tool: None,
             navigation: NavigationOptions::default(),
             controls: None,
         }
+    }
+
+    /// Draws the image with the app's own `paint` (a GPU texture, say) instead of reading the source's pixels: the
+    /// canvas shows it through [`RasterDisplay::painted`] at the source's size, with the same checkerboard and edge.
+    /// The source still gives the size, and the overlays and the tool read it as before.
+    pub fn painted(mut self, paint: AppPaint<'a, CanvasView>) -> Self {
+        self.paint = Some(paint);
+        self
     }
 
     /// The user's transparency grid under the image; without one the image draws straight on the canvas.
@@ -198,7 +210,7 @@ impl<'a> FullWindowCanvas<'a> {
 
     /// Shows the canvas in the rest of `ui`.
     pub fn show(self, ui: &mut Ui) -> FullWindowCanvasOutput {
-        let FullWindowCanvas { mut view, source, checkerboard, overlays, mut tool, navigation, mut controls } = self;
+        let FullWindowCanvas { mut view, source, mut paint, checkerboard, overlays, mut tool, navigation, mut controls } = self;
         let ppp = ui.pixels_per_point();
         let label: Label = Env::of(ui).words::<DialogWords>().full_window_canvas.clone();
         let name: Arc<str> = Arc::from(label.as_str());
@@ -241,8 +253,13 @@ impl<'a> FullWindowCanvas<'a> {
                             }
                         }));
                     }
-                    // The image and its overlays paint in the canvas's picture slot, under the controls and the tool.
-                    let mut image = RasterDisplay::new(label.clone(), source).outlined().picture();
+                    // The image and its overlays paint in the canvas's picture slot, under the controls and the tool. The
+                    // app's paint, like the tool, is reborrowed for each run of the body.
+                    let display = match paint.as_mut() {
+                        Some(paint) => RasterDisplay::painted(label.clone(), size, paint.reborrowed()),
+                        None => RasterDisplay::new(label.clone(), source),
+                    };
+                    let mut image = display.outlined().picture();
                     if let Some(checker) = checkerboard {
                         image = image.checkerboard(checker);
                     }
