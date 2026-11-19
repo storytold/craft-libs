@@ -10,6 +10,12 @@ pub fn tree_of(output: &mut crate::runtime::egui::fixture::FullOutput) -> Access
     crate::runtime::egui::access::tree_of(output).unwrap_or_else(AccessTree::none)
 }
 
+/// Drops every `controls` id of `update` that names no node of `update`, as the runtime does to each
+/// frame's AccessKit output.
+pub fn prune_controls(update: &mut egui::accesskit::TreeUpdate) {
+    crate::runtime::egui::access::prune_controls(update);
+}
+
 /// Opens the label scope of `container` with `label`, as a field container's body step does; the container's
 /// report step closes it.
 pub fn begin_label_scope(ctx: &Context, container: Id, label: FieldLabel) {
