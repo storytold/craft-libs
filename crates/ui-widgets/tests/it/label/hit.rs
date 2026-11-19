@@ -175,7 +175,12 @@ fn a_click_on_a_label_focuses_its_control_inside_an_unlabelled_row() {
     fixture.settle();
     let control = NodeKey::of(field.get());
     let tree = fixture.tree();
-    let label = tree.keys().into_iter().find(|key| *key != control && tree.name_of(*key) == Some("Turn"));
+    // The field's group is named "Turn" too and is labelled by the label: the label is the "Turn" node that no other
+    // node labels. Picking the first "Turn" node clicked the group whenever the tree listed it first.
+    let label = tree
+        .keys()
+        .into_iter()
+        .find(|key| *key != control && tree.name_of(*key) == Some("Turn") && tree.labelled_by_key(*key).is_empty());
     let label = label.and_then(|key| fixture.target(key)).expect("the field's label node");
     fixture.access(AccessActionKind::Click, &label).settle();
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), Some(field.get()), "the click on the label focuses the number field");
