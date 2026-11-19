@@ -10,7 +10,7 @@ use crate::contract::ValueOf;
 use crate::contract::collection::{
     CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
 };
-use crate::contract::cx::{BodyCx, Pointer as _};
+use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
@@ -341,29 +341,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        use crate::contract::Pointer as _;
         let rect = self.rows_rect(cx);
         let view = rect.height();
         let rtl = cx.core.flow.is_rtl();
         self.xf = comp.props(Internal::new()).transform.map(|zoom| areas::body_map(rect.min, zoom.scale, zoom.offset));
-        if let Some(range) = cx.scroll_moved(SCROLL) {
-            self.offset = range.start;
-        }
-        if self.scrolls {
-            // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
-            let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
-            let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx);
-            if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
-                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
-                let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
-                let (by, shown) = crate::contract::steps::reveal_move(asked, along);
-                self.offset += f64::from(by.y);
-                if !quiet {
-                    crate::contract::Focus::reveal(cx, shown);
-                }
-            }
-        }
-        self.offset = self.offset.clamp(0.0, self.max_offset(view));
+        self.offset = scroll_rows(cx.core, rect, self.scrolls, self.offset, self.max_offset(view));
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
@@ -456,15 +438,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
-            let size = self.content.max(rect.size());
-            let left = if rtl { rect.max.x + self.offset_x as f32 - size.x } else { rect.min.x - self.offset_x as f32 };
-            let content = Rect::from_min_size(Pos2::new(left, rect.min.y - self.offset as f32), size);
-            crate::runtime::egui::widgets::note_scroll_region(&ctx, rect.intersect(ui.clip_rect()), content);
-            // The header row scrolls sideways with the rows.
-            if let Some(header) = self.header.view() {
-                let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
-                crate::runtime::egui::widgets::note_scroll_region(&ctx, header.intersect(ui.clip_rect()), row);
-            }
+            note_scroll_regions(ui, rect, self.content, offset, rtl, self.header.view());
         }
         let sheet = Self::selects_cells(comp);
         let columns: Vec<u64> = match layout.grid() {
@@ -924,6 +898,41 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                 }
             }
         }
+    }
+}
+
+/// Apply the collection's wheel displacement and any reveal left by a descendant.
+fn scroll_rows(core: &mut CxCore<'_>, rect: Rect, scrolls: bool, mut offset: f64, maximum: f64) -> f64 {
+    if let Some(range) = core.scroll_moved(SCROLL) {
+        offset = range.start;
+    }
+    if scrolls {
+        // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
+        let (ctx, id) = (core.ctx.clone(), core.id);
+        let quiet = core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+        if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
+            // The rows scroll along y only: the reveal moves them along it and passes the rest on.
+            let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
+            let (by, shown) = crate::contract::steps::reveal_move(asked, along);
+            offset += f64::from(by.y);
+            if !quiet {
+                crate::contract::Focus::reveal(core, shown);
+            }
+        }
+    }
+    offset.clamp(0.0, maximum)
+}
+
+/// Record the scrolled rows and their header at the same horizontal offset.
+fn note_scroll_regions(ui: &Ui, rect: Rect, content_size: Vec2, offset: ScrollPos, rtl: bool, header: Option<Rect>) {
+    let size = content_size.max(rect.size());
+    let left = if rtl { rect.max.x + offset.x as f32 - size.x } else { rect.min.x - offset.x as f32 };
+    let content = Rect::from_min_size(Pos2::new(left, rect.min.y - offset.y as f32), size);
+    crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
+    // The header row scrolls sideways with the rows.
+    if let Some(header) = header {
+        let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
+        crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), header.intersect(ui.clip_rect()), row);
     }
 }
 
