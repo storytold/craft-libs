@@ -121,9 +121,11 @@ fn decode_declared_encoding(bytes: &[u8]) -> Cow<'_, [u8]> {
             let quote = value.chars().next().filter(|&c| matches!(c, '\'' | '"'))?;
             value.get(1..)?.split_once(quote).map(|(name, _)| name)
         });
-    match encoding {
-        Some(name) if name.eq_ignore_ascii_case("ISO-8859-1") => Cow::Owned(bytes.iter().copied().map(char::from).collect::<String>().into_bytes()),
-        Some(name) if name.eq_ignore_ascii_case("windows-1252") => {
+    match encoding.map(str::to_ascii_lowercase).as_deref() {
+        Some("iso-8859-1" | "iso_8859-1" | "iso_8859-1:1987" | "latin1" | "l1" | "ibm819" | "cp819" | "csisolatin1" | "iso-ir-100") => {
+            Cow::Owned(bytes.iter().copied().map(char::from).collect::<String>().into_bytes())
+        }
+        Some("windows-1252" | "cswindows1252" | "cp1252") => {
             Cow::Owned(bytes.iter().copied().map(craft_codepage::cp1252).collect::<String>().into_bytes())
         }
         _ => Cow::Borrowed(bytes),
@@ -214,6 +216,8 @@ fn read_banks<'a>(
                 Entry::Vacant(entry) => entry.insert(resolve_list(reference.1, address, &mut budget.patch_visits, &mut budget.name_bytes)?),
             }
         };
+        // Cache hits avoid decoding and copying, but each address still requires a merge lookup.
+        budget.patch_visits = budget.patch_visits.checked_sub(resolved.len()).ok_or(MidnamError::TooManyPatches)?;
         for (&address, programs) in resolved {
             match banks.entry(address) {
                 Entry::Vacant(entry) => {
@@ -355,6 +359,33 @@ mod tests {
     }
 
     #[test]
+    fn cached_banks_charge_merge_work_and_keep_last_definition() -> Result<(), MidnamError> {
+        let device = Options::local().strict().parse(
+            br#"
+          <MasterDeviceNames>
+            <PatchNameList Name="A"><Patch Name="Piano" ProgramChange="0"/></PatchNameList>
+            <PatchNameList Name="B"><Patch Name="Organ" ProgramChange="0"/></PatchNameList>
+            <ChannelNameSet Name="Keys">
+              <PatchBank Name="First"><UsesPatchNameList Name="A"/></PatchBank>
+              <PatchBank><UsesPatchNameList Name="B"/></PatchBank>
+              <PatchBank><UsesPatchNameList Name="A"/></PatchBank>
+            </ChannelNameSet>
+          </MasterDeviceNames>"#,
+        )?;
+        let lists: BTreeMap<_, _> = device.children("PatchNameList").filter_map(|list| Some((list.attr("Name")?, list))).collect();
+        let set = device.child("ChannelNameSet").ok_or(MidnamError::NoBanks)?;
+        let mut budget = ReadBudget { patch_visits: 4, name_bytes: 1024, bank_entries: 1 };
+        assert_eq!(read_banks(set, &lists, &mut BTreeMap::new(), &mut budget), Err(MidnamError::TooManyPatches));
+
+        let mut budget = ReadBudget { patch_visits: 5, name_bytes: 1024, bank_entries: 1 };
+        let banks = read_banks(set, &lists, &mut BTreeMap::new(), &mut budget)?;
+        assert_eq!(budget.patch_visits, 0);
+        assert_eq!(banks[&0].programs[&0], "Piano");
+        assert_eq!(banks[&0].name, "First");
+        Ok(())
+    }
+
+    #[test]
     fn cached_unnamed_banks_count_against_the_document_limit() -> Result<(), MidnamError> {
         let device = Options::local().strict().parse(
             br#"
@@ -366,11 +397,29 @@ mod tests {
         )?;
         let lists: BTreeMap<_, _> = device.children("PatchNameList").filter_map(|list| Some((list.attr("Name")?, list))).collect();
         let mut sets = device.children("ChannelNameSet");
-        let mut budget = ReadBudget { patch_visits: 1, name_bytes: 1024, bank_entries: 1 };
+        let mut budget = ReadBudget { patch_visits: 3, name_bytes: 1024, bank_entries: 1 };
         let mut cache = BTreeMap::new();
         assert_eq!(read_banks(sets.next().ok_or(MidnamError::NoBanks)?, &lists, &mut cache, &mut budget)?.len(), 1);
-        assert_eq!(budget.patch_visits, 0);
+        assert_eq!(budget.patch_visits, 1);
         assert_eq!(read_banks(sets.next().ok_or(MidnamError::NoBanks)?, &lists, &mut cache, &mut budget), Err(MidnamError::TooManyBanks));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_declared_latin1_and_windows_1252_aliases() -> Result<(), MidnamError> {
+        for (alias, label, byte) in [("latin1", "Piéno", 0xE9), ("CP819", "Piéno", 0xE9), ("cp1252", "Pi–no", 0x96)] {
+            let mut xml = format!("<?xml version='1.0' encoding='{alias}'?>").into_bytes();
+            xml.extend_from_slice(
+                b"<MIDINameDocument><MasterDeviceNames><ChannelNameSet Name='Keys'>\
+                <PatchBank><PatchNameList><Patch Name='Pi",
+            );
+            xml.push(byte);
+            xml.extend_from_slice(
+                b"no' ProgramChange='0'/></PatchNameList></PatchBank>\
+                </ChannelNameSet></MasterDeviceNames></MIDINameDocument>",
+            );
+            assert_eq!(read_midnam(&xml)?[0].banks[&0].programs[&0], label);
+        }
         Ok(())
     }
 
