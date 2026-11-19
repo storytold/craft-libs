@@ -87,9 +87,13 @@ pub fn write(doc: &Document) -> String {
         }
         let lines: Vec<String> = lines.iter().map(|l| l.replace('|', "\u{ff5c}")).collect();
         out.push_str(&format!("{}={}\n", clock(c.start), lines.join("|")));
+        let end = if clock(c.end) == clock(c.start) { Tick(c.end.0.saturating_add(crate::TICKS_PER_MS * 10)) } else { c.end };
         let next = cues.get(i + 1).map(|n| clock(n.start));
-        if next.as_deref() != Some(clock(c.end).as_str()) {
-            out.push_str(&format!("{}=\n", clock(c.end)));
+        if next.as_deref() != Some(clock(end).as_str()) {
+            let next_too_early = cues.get(i + 1).is_some_and(|n| clock(n.start) <= clock(c.start));
+            if !next_too_early {
+                out.push_str(&format!("{}=\n", clock(end)));
+            }
         }
     }
     out
@@ -98,6 +102,20 @@ pub fn write(doc: &Document) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn short_duration_cue_preserves_positive_duration_on_write_and_read() {
+        let mut doc = Document::default();
+        // A cue from 0 to 1 ms collapses to 00:00:00.00 under centisecond rounding.
+        doc.cues.push(Cue { start: ms_to_tick(0), end: ms_to_tick(1), text: "Short".to_string(), ..Default::default() });
+        let written = write(&doc);
+        assert_eq!(written, "00:00:00.00=Short\n00:00:00.01=\n");
+        let parsed = parse(&written).unwrap();
+        assert_eq!(parsed.cues.len(), 1);
+        assert_eq!(parsed.cues[0].text, "Short");
+        assert_eq!(parsed.cues[0].start, ms_to_tick(0));
+        assert_eq!(parsed.cues[0].end, ms_to_tick(10));
+    }
 
     #[test]
     fn separators_and_ends() {
