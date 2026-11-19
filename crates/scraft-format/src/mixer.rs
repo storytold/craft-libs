@@ -570,7 +570,15 @@ impl Mixer {
         }
         self.inserts.resize(INSERT_SLOTS, None);
         self.sends.resize(SEND_SLOTS, None);
+        // An instrument's output bus is only ever an input: a file naming it as the
+        // output or a send target gets the unrouted default for that field.
+        if matches!(self.output, Route::Instrument { .. }) {
+            self.output = Route::Main;
+        }
         for s in self.sends.iter_mut().flatten() {
+            if matches!(s.target, Route::Instrument { .. }) {
+                s.target = Route::None;
+            }
             s.level_db = finite_or(s.level_db, -144.0).clamp(-144.0, 12.0);
             s.pan = finite_or(s.pan, 0.0).clamp(-1.0, 1.0);
             if let Some(sp) = &mut s.surround {
@@ -680,6 +688,24 @@ mod tests {
         assert_eq!(serde_json::from_str::<Route>(&json).unwrap(), r);
         // Routes saved before multi-out routing still load.
         assert_eq!(serde_json::from_str::<Route>(r#"{"Hardware":"in 1-2"}"#).unwrap(), Route::Hardware("in 1-2".to_string()));
+    }
+
+    #[test]
+    fn sanitize_clears_an_instrument_route_used_as_output_or_send() {
+        // Route::Instrument is input-side only: a file naming it as the output or a send
+        // target deserializes, then sanitize resets the field instead of keeping it.
+        let mut m = Mixer::new(ChannelFormat::Stereo);
+        m.output = Route::Instrument { track: TrackId(9), bus: 1 };
+        m.sends[0] = Some(SendSlot::new(Route::Instrument { track: TrackId(9), bus: 2 }));
+        m.sends[1] = Some(SendSlot::new(Route::Bus(BusId(3))));
+        m.sanitize();
+        assert_eq!(m.output, Route::Main);
+        assert_eq!(m.sends[0].as_ref().unwrap().target, Route::None);
+        assert_eq!(m.sends[1].as_ref().unwrap().target, Route::Bus(BusId(3)), "other routes are untouched");
+        // And an instrument route stays valid as an input.
+        m.input = Route::Instrument { track: TrackId(9), bus: 1 };
+        m.sanitize();
+        assert_eq!(m.input, Route::Instrument { track: TrackId(9), bus: 1 });
     }
 
     #[test]
