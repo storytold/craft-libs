@@ -1,12 +1,13 @@
 //! New Document: saved presets, the Save Document Preset pane, Bitmap's depth, the Web and Mobile cards' Artboards and
 //! the pixel aspect ratio.
 
+use craft_behavior::PixelSize;
 use craft_ui::contract::{Bind, SaveKey};
-use craft_ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode, DocumentOptions, NewDocumentDialog};
+use craft_ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode, DocumentOptions, NewDocumentDialog, RecentDocumentAction};
 use craft_ui::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary};
 use craft_ui::runtime::memory::MemoryStage;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers, Vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -22,6 +23,76 @@ fn save_preset(fixture: &mut Fixture, name: &str) {
 
 fn shows(fixture: &Fixture, text: &str) -> bool {
     fixture.texts().iter().any(|painted| painted.text == text)
+}
+
+fn right_click(fixture: &mut Fixture, at: Pos2) {
+    fixture.frame(vec![Event::PointerMoved(at)]);
+    for pressed in [true, false] {
+        fixture.frame(vec![Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE }]);
+    }
+    fixture.idle(3);
+}
+
+#[trial]
+fn new_document_recent_menu_reports_the_original_index_of_a_duplicate() {
+    let mut web = DocumentOptions::default();
+    web.size = PixelSize::new(1024, 768);
+    web.pixels_per_inch = 72.0;
+    let mut bad = web.clone();
+    bad.pixels_per_inch = f64::NAN;
+    let mut film = web.clone();
+    film.size = PixelSize::new(1280, 720);
+    let recent = Rc::new(RefCell::new(vec![web.clone(), bad, film, web]));
+    let listed = recent.clone();
+    let actions = Rc::new(RefCell::new(Vec::new()));
+    let reported = actions.clone();
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let shown = NewDocumentDialog::new(Bind::bound(&mut options))
+            .recent(Bind::given(listed.borrow().clone()))
+            .recent_menu(true)
+            .clipboard(PixelSize::new(640, 480))
+            .show(ui);
+        assert!(shown.result.is_none(), "using the menu does not create a document");
+        reported.borrow_mut().extend(shown.recent_action);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+
+    let title = |fixture: &Fixture, label: &str| {
+        fixture.texts().iter().find(|painted| painted.text == label).unwrap_or_else(|| panic!("the {label} card is visible")).rect.center()
+    };
+    for label in ["Clipboard", "Default Size"] {
+        let at = title(&fixture, label);
+        right_click(&mut fixture, at);
+        assert!(fixture.by_label("Clear All").is_none(), "{label} has no Recent menu");
+    }
+
+    let duplicates: Vec<_> = fixture.texts().iter().filter(|painted| painted.text == "Web Minimum").collect();
+    assert_eq!(duplicates.len(), 2);
+    let older = duplicates.iter().map(|painted| painted.rect.center()).max_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
+    right_click(&mut fixture, older);
+    let delete = fixture.by_label("Delete").expect("the older record has a Delete action");
+    fixture.click(&delete).idle(6);
+    assert_eq!(*actions.borrow(), [RecentDocumentAction::Remove(3)]);
+
+    let other = title(&fixture, "HDTV 720p");
+    right_click(&mut fixture, other);
+    let clear = fixture.by_label("Clear All").expect("the menu has a Clear All action");
+    fixture.click(&clear).idle(6);
+    assert_eq!(*actions.borrow(), [RecentDocumentAction::Remove(3), RecentDocumentAction::Clear]);
+
+    let other = title(&fixture, "HDTV 720p");
+    right_click(&mut fixture, other);
+    assert!(fixture.by_label("Delete").is_some());
+    recent.borrow_mut().rotate_left(1);
+    fixture.idle(6);
+    assert!(fixture.by_label("Delete").is_none(), "a menu for the previous order closes");
+
+    let moved = title(&fixture, "HDTV 720p");
+    right_click(&mut fixture, moved);
+    let delete = fixture.by_label("Delete").expect("the moved entry has a fresh menu");
+    fixture.click(&delete).idle(6);
+    assert_eq!(*actions.borrow(), [RecentDocumentAction::Remove(3), RecentDocumentAction::Clear, RecentDocumentAction::Remove(1)]);
 }
 
 #[trial]
