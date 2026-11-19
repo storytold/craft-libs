@@ -1,7 +1,7 @@
 //! GPU traits, job envelope, and provider registry for Craft apps and the web runtime.
 //!
 //! Application crates register [`GpuProvider`] implementations; generic hosts dispatch
-//! [`GpuJob`] values by [`ProviderId`] without importing app project types.
+//! [`GpuJob`] values by [`GpuJob::provider_id`] without importing app project types.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 

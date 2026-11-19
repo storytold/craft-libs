@@ -1,4 +1,4 @@
-//! wgpu-backed [`GpuContext`](craft_gpu::GpuContext).
+//! wgpu-backed [`GpuContext`].
 //!
 //! WebGPU on `wasm32`; native APIs when backend features are enabled. With the `adapter-probe`
 //! feature (native only, pollster) and at least one `native-*` backend feature,
@@ -13,7 +13,7 @@
 //! Readback is asynchronous end to end (`request_read` + `poll_reads`), because WebGPU can only
 //! map a buffer that way. Native, with a real device, drives it with `Buffer::map_async` plus
 //! `Device::poll`. The blocking `read_buffer` convenience (see
-//! [`GpuContext`](craft_gpu::GpuContext)'s trait docs) blocks efficiently on native by polling
+//! [`GpuContext`]'s trait docs) blocks efficiently on native by polling
 //! the device while it waits. On `wasm32` the backing is always the in-memory staging store
 //! today, whose reads complete synchronously, and `read_buffer` serves them; only a read that
 //! did not complete synchronously returns a fault there, since blocking would freeze the one
