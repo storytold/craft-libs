@@ -19,6 +19,7 @@
 //!    - Final printed concept booklet / pitch deck -> `DesignCraft` / `PdfCraft`
 //! 3. **Structured Execution Graph:** Produces an ordered, dependency-aware Directed Acyclic Graph (DAG)
 //!    of executable native tool calls dispatched directly through `craft-agent-bridge`.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 use craft_studio_director::{AestheticStyle, AppCommandDispatch};
 use serde::{Deserialize, Serialize};

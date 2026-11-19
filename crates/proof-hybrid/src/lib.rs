@@ -10,6 +10,7 @@
 //!    - Linux: `libenchant` / system hunspell
 //! 3. **Tier 3 (Contextual AI & Grammar):** Asynchronous LLM/Neural check for real-word errors,
 //!    homophones ('אם/עם', 'קר/קרה/קרא', 'their/there'), and grammatical agreement.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use craft_proof::{Issue, IssueKind, ProofLang};
 use serde::{Deserialize, Serialize};
@@ -134,9 +135,12 @@ impl HybridProofCoordinator {
 
     /// Full paragraph or sentence proofing combining lexical issues and contextual checks.
     pub fn check_text(&self, text: &str, lang: ProofLang) -> Vec<Issue> {
+        if !self.primary_tier.supports_lang(lang) {
+            return Vec::new();
+        }
         let mut issues = craft_proof::check_spelling_in(text, lang);
 
-        if self.ai_enabled && self.primary_tier.supports_lang(lang) {
+        if self.ai_enabled {
             let context_issues = self.primary_tier.check_sentence_context(text, lang);
             for ci in context_issues {
                 issues.push(Issue {
@@ -202,6 +206,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod unsupported_lang_tests {
     use super::*;
 
@@ -230,6 +235,6 @@ mod unsupported_lang_tests {
         let coordinator = HybridProofCoordinator::new(Box::new(RejectAllLangsBackend), true);
         assert!(coordinator.check_word_instant("zzzz", ProofLang::Other));
         assert!(coordinator.get_instant_suggestions("zzzz", ProofLang::Other).is_empty());
-        let _issues = coordinator.check_text("hello", ProofLang::Other);
+        assert!(coordinator.check_text("helooo", ProofLang::Other).is_empty());
     }
 }

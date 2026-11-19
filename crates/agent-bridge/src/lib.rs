@@ -12,6 +12,7 @@
 //! - Native Tool definitions conforming to MCP 2024-11-05
 //! - Auto-generated Hermes Agent Skill markdown (`SKILL.md`) for any app in the suite
 //! - Safe state inspection, rollback, and execution without graphical lag
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -81,11 +82,7 @@ impl AgentBridgeServer {
     }
 
     /// Runs a blocking JSON-RPC 2.0 loop over buffered reader and writer streams (e.g. stdio).
-    pub fn serve_stdio<R: std::io::BufRead, W: std::io::Write>(
-        &self,
-        reader: R,
-        mut writer: W,
-    ) -> std::io::Result<()> {
+    pub fn serve_stdio<R: std::io::BufRead, W: std::io::Write>(&self, reader: R, mut writer: W) -> std::io::Result<()> {
         for line in reader.lines() {
             let line = line?;
             let trimmed = line.trim();
@@ -100,30 +97,18 @@ impl AgentBridgeServer {
         Ok(())
     }
 
-    fn validate_tool_call(
-        &self,
-        tool_name: &str,
-        arguments: &serde_json::Value,
-    ) -> Option<JsonRpcError> {
+    fn validate_tool_call(&self, tool_name: &str, arguments: &serde_json::Value) -> Option<JsonRpcError> {
         let Some(tool) = self.tools.get(tool_name) else {
-            return Some(JsonRpcError {
-                code: -32602,
-                message: format!("Unknown tool: {tool_name}"),
-                data: None,
-            });
+            return Some(JsonRpcError { code: -32602, message: format!("Unknown tool: {tool_name}"), data: None });
         };
         if let Some(required) = tool.input_schema.get("required").and_then(|v| v.as_array()) {
             let obj = arguments.as_object();
             for key in required.iter().filter_map(|v| v.as_str()) {
-                let present = obj
-                    .and_then(|map| map.get(key))
-                    .is_some_and(|v| !v.is_null());
+                let present = obj.and_then(|map| map.get(key)).is_some_and(|v| !v.is_null());
                 if !present {
                     return Some(JsonRpcError {
                         code: -32602,
-                        message: format!(
-                            "Missing required argument '{key}' for tool '{tool_name}'"
-                        ),
+                        message: format!("Missing required argument '{key}' for tool '{tool_name}'"),
                         data: None,
                     });
                 }
@@ -166,12 +151,7 @@ impl AgentBridgeServer {
                 })),
                 error: None,
             },
-            "ping" => JsonRpcResponse {
-                jsonrpc: "2.0".into(),
-                id: req.id,
-                result: Some(serde_json::json!({})),
-                error: None,
-            },
+            "ping" => JsonRpcResponse { jsonrpc: "2.0".into(), id: req.id, result: Some(serde_json::json!({})), error: None },
             "tools/list" => {
                 let tool_list: Vec<&McpTool> = self.tools.values().collect();
                 JsonRpcResponse { jsonrpc: "2.0".into(), id: req.id, result: Some(serde_json::json!({ "tools": tool_list })), error: None }
@@ -342,11 +322,7 @@ mod protocol_tests {
             }]
         }
 
-        fn execute_action(
-            &self,
-            tool_name: &str,
-            arguments: serde_json::Value,
-        ) -> Result<serde_json::Value, String> {
+        fn execute_action(&self, tool_name: &str, arguments: serde_json::Value) -> Result<serde_json::Value, String> {
             Ok(serde_json::json!({ "tool": tool_name, "arguments": arguments }))
         }
     }
@@ -354,9 +330,7 @@ mod protocol_tests {
     #[test]
     fn mcp_tool_serializes_camel_case_input_schema() {
         let server = AgentBridgeServer::new(Box::new(EchoHandler));
-        let raw = server
-            .handle_rpc_message(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
-            .expect("tools/list response");
+        let raw = server.handle_rpc_message(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).expect("tools/list response");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
         let tool = &parsed["result"]["tools"][0];
         assert!(tool.get("inputSchema").is_some(), "expected inputSchema key in {tool}");
@@ -367,15 +341,11 @@ mod protocol_tests {
     fn notifications_return_none_and_ping_succeeds() {
         let server = AgentBridgeServer::new(Box::new(EchoHandler));
         assert!(
-            server
-                .handle_rpc_message(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-                .is_none(),
+            server.handle_rpc_message(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none(),
             "notifications without id must not emit a response"
         );
 
-        let raw = server
-            .handle_rpc_message(r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#)
-            .expect("ping response");
+        let raw = server.handle_rpc_message(r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#).expect("ping response");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
         assert_eq!(parsed["id"], 7);
         assert_eq!(parsed["result"], serde_json::json!({}));
@@ -388,9 +358,7 @@ mod protocol_tests {
 
         let unknown: serde_json::Value = serde_json::from_str(
             &server
-                .handle_rpc_message(
-                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"missing_tool","arguments":{}}}"#,
-                )
+                .handle_rpc_message(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"missing_tool","arguments":{}}}"#)
                 .expect("unknown tool response"),
         )
         .expect("json");
@@ -398,9 +366,7 @@ mod protocol_tests {
 
         let missing_req: serde_json::Value = serde_json::from_str(
             &server
-                .handle_rpc_message(
-                    r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"open_doc","arguments":{}}}"#,
-                )
+                .handle_rpc_message(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"open_doc","arguments":{}}}"#)
                 .expect("missing required arg response"),
         )
         .expect("json");
@@ -408,9 +374,7 @@ mod protocol_tests {
 
         let valid: serde_json::Value = serde_json::from_str(
             &server
-                .handle_rpc_message(
-                    r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"open_doc","arguments":{"path":"doc.docx"}}}"#,
-                )
+                .handle_rpc_message(r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"open_doc","arguments":{"path":"doc.docx"}}}"#)
                 .expect("valid tool call response"),
         )
         .expect("json");
@@ -428,9 +392,7 @@ mod protocol_tests {
             "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"open_doc\",\"arguments\":{\"path\":\"a.docx\"}}}\n"
         );
         let mut out = Vec::new();
-        server
-            .serve_stdio(Cursor::new(input.as_bytes()), &mut out)
-            .expect("serve_stdio");
+        server.serve_stdio(Cursor::new(input.as_bytes()), &mut out).expect("serve_stdio");
         let output_str = String::from_utf8(out).expect("utf8");
         let lines: Vec<&str> = output_str.lines().collect();
         assert_eq!(lines.len(), 2);

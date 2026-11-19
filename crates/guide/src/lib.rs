@@ -7,6 +7,7 @@
 //! `WordCraft`, `PdfCraft`, `PhotoCraft`, `CADCraft`, `VectorCraft`, `FilmCraft`,
 //! `TextureCraft`, `MaterialCraft`, `LightCraft`, `AniCraft`, `DesignCraft`,
 //! `FigCraft`, `DeckCraft`, `GridCraft`, `SoundCraft`, and `Craft Launcher`.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod app_catalog;
 use egui::{Color32, Pos2, Rect, Response, Vec2};
@@ -58,7 +59,7 @@ impl Default for GuideController {
             active_tour: None,
             current_step: 0,
             registered_targets: HashMap::new(),
-            hover_hint: "💡 Press F1 or open the interactive guide for step-by-step walkthroughs / לחץ F1 או פתח מדריך לליווי צעד-אחר-צעד".into(),
+            hover_hint: "Press F1 or open the interactive guide for step-by-step walkthroughs".into(),
         }
     }
 }
@@ -137,11 +138,7 @@ impl GuideController {
         let dim_color = Color32::from_black_alpha(160);
 
         // Guard against zero-area or off-screen bounding boxes before cutting a spotlight hole.
-        let valid_target = self
-            .registered_targets
-            .get(&step.target_id)
-            .copied()
-            .filter(|r| r.is_positive() && screen_rect.intersects(*r));
+        let valid_target = self.registered_targets.get(&step.target_id).copied().filter(|r| r.is_positive() && screen_rect.intersects(*r));
         let Some(target_rect) = valid_target else {
             painter.rect_filled(screen_rect, 0.0, dim_color);
             return;
@@ -164,9 +161,9 @@ impl GuideController {
         }
         painter.rect_stroke(padded, 4.0, egui::Stroke::new(2.5, Color32::from_rgb(0, 120, 212)), egui::StrokeKind::Outside);
 
-                // Popover callout card, kept inside the screen on both axes (see
-                // `callout_card_rect`): not `f32::clamp`, whose bounds cross on a viewport
-                // narrower than the card, and `clamp` panics on that.
+        // Popover callout card, kept inside the screen on both axes (see
+        // `callout_card_rect`): not `f32::clamp`, whose bounds cross on a viewport
+        // narrower than the card, and `clamp` panics on that.
         let card_rect = callout_card_rect(screen_rect, padded);
 
         painter.rect_filled(card_rect, 8.0, Color32::from_rgb(255, 255, 255));
@@ -289,12 +286,7 @@ mod tests {
             id: "photocraft.crop_and_resize".into(),
             title: "חיתוך ושינוי גודל תמונה".into(),
             summary: String::new(),
-            steps: vec![Step {
-                target_id: "toolbar.crop".into(),
-                title: "כלי החיתוך".into(),
-                description: String::new(),
-                tip: None,
-            }],
+            steps: vec![Step { target_id: "toolbar.crop".into(), title: "כלי החיתוך".into(), description: String::new(), tip: None }],
         });
         controller.register_target("toolbar.crop", target);
         controller
@@ -365,13 +357,8 @@ mod tests {
 
         let ctx = egui::Context::default();
         let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                ..Default::default()
-            },
-            |ui| controller.render_spotlight_overlay(ui.ctx()),
-        );
+        let mut output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| controller.render_spotlight_overlay(ui.ctx()));
         let texts: Vec<String> = output
             .shapes
             .iter()

@@ -20,6 +20,7 @@
 //!     - Script & storyboards -> `WordCraft`
 //!     - Timeline assembly & grading -> `FilmCraft`
 //!     - Final delivery & packaging -> `PdfCraft`
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

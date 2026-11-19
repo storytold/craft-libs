@@ -3,6 +3,7 @@
 //! Universal Floating AI Assistant & FAQ Search Panel integrated into the Ribbon across
 //! all 15 ArtCraft applications. Allows users to type in plain language (Hebrew, English, etc.)
 //! and immediately triggers interactive step-by-step walkthroughs (`craft-guide`) on the canvas.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 use craft_guide::GuideController;
 use egui::{Context, RichText, Vec2, Window};
@@ -45,10 +46,7 @@ impl AiAssistantPanel {
 
     /// Evaluates user query against available tours in the app catalog.
     pub fn refresh_results(&mut self) {
-        let tours = self
-            .custom_tours
-            .clone()
-            .unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
+        let tours = self.custom_tours.clone().unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
         let q = self.query.trim().to_lowercase();
 
         if q.is_empty() {
@@ -107,10 +105,7 @@ impl AiAssistantPanel {
                 }
 
                 if let Some(tid) = triggered_tour_id {
-                    let tours = self
-                        .custom_tours
-                        .clone()
-                        .unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
+                    let tours = self.custom_tours.clone().unwrap_or_else(|| craft_guide::app_catalog::tours_for_app(&self.app_id));
                     if let Some(t) = tours.into_iter().find(|t| t.id == tid) {
                         guide_controller.start_tour(t);
                         self.is_open = false;
@@ -149,10 +144,7 @@ mod dialog_behavior_tests {
         panel.query = "table".into();
         panel.refresh_results();
         assert!(
-            panel
-                .search_results
-                .iter()
-                .any(|r| r.tour_id == "wordcraft.insert_table"),
+            panel.search_results.iter().any(|r| r.tour_id == "wordcraft.insert_table"),
             "expected wordcraft.insert_table in search results for 'table'"
         );
     }
@@ -164,12 +156,7 @@ mod dialog_behavior_tests {
             id: "test.tour".into(),
             title: "Sample Tour".into(),
             summary: "Sample summary".into(),
-            steps: vec![craft_guide::Step {
-                target_id: "btn.target".into(),
-                title: "Step 1".into(),
-                description: "Click target".into(),
-                tip: None,
-            }],
+            steps: vec![craft_guide::Step { target_id: "btn.target".into(), title: "Step 1".into(), description: "Click target".into(), tip: None }],
         };
         let mut panel = AiAssistantPanel::with_tours("wordcraft", vec![tour]);
         panel.is_open = true;
@@ -181,31 +168,17 @@ mod dialog_behavior_tests {
 
         // Warm up two frames so egui's Window completes its initial sizing pass.
         for _ in 0..2 {
-            let mut out = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(screen),
-                    ..Default::default()
-                },
-                |ui| panel.render(ui.ctx(), &mut guide),
-            );
+            let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| panel.render(ui.ctx(), &mut guide));
             out.textures_delta.clear();
         }
 
         // Frame 3: find the "Start tour" button center from painted shapes.
-        let mut out1 = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                ..Default::default()
-            },
-            |ui| panel.render(ui.ctx(), &mut guide),
-        );
+        let mut out1 = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| panel.render(ui.ctx(), &mut guide));
         let btn_center = out1
             .shapes
             .iter()
             .find_map(|s| match &s.shape {
-                egui::epaint::Shape::Text(t) if t.galley.text().contains("▶") => {
-                    Some(t.visual_bounding_rect().center())
-                }
+                egui::epaint::Shape::Text(t) if t.galley.text().contains("▶") => Some(t.visual_bounding_rect().center()),
                 _ => None,
             })
             .expect("start tour button text should be painted");
