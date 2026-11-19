@@ -272,6 +272,7 @@ fn narrow(v: u16, max: u64) -> u16 {
     ((u64::from(v) * 2 * max + 65535) / (2 * 65535)) as u16
 }
 
+/// Decode the first unsigned DPX element, retaining its code mapping and header metadata.
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let h = parse(bytes)?;
     let e = h.element;
@@ -330,8 +331,11 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         16 => Image::from_u16(h.width, h.height, layout, &codes)?,
         b => {
             let max = (1u64 << b) - 1;
-            let wide: Vec<u16> = codes.iter().map(|&c| widen(c, max)).collect();
-            Image::from_u16(h.width, h.height, layout, &wide)?
+            // Reuse the owned codes instead of holding another full-frame sample buffer.
+            for code in &mut codes {
+                *code = widen(*code, max);
+            }
+            Image::from_u16(h.width, h.height, layout, &codes)?
         }
     };
     if h.elements > 1 {
@@ -413,8 +417,10 @@ pub(crate) fn decode_cineon(bytes: &[u8], limits: &Limits) -> Result<Image, Code
         let line = data.get(start..start + line_len).ok_or_else(|| err("truncated image data"))?;
         unpack_line(line, o, 10, 1, row)?;
     }
-    let wide: Vec<u16> = codes.iter().map(|&c| widen(c, 1023)).collect();
-    Image::from_u16(width, height, layout, &wide)
+    for code in &mut codes {
+        *code = widen(*code, 1023);
+    }
+    Image::from_u16(width, height, layout, &codes)
 }
 
 /// Cineon's generic plus film header: where our image data starts.

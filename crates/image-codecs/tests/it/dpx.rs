@@ -549,3 +549,15 @@ fn any_image_saves_as_ten_bit_cineon() {
     let gray8 = Image::from_u8(2, 1, ChannelLayout::Gray, vec![0, 255]).unwrap();
     assert_eq!(cineon_written(&encode(&gray8, Format::Cineon, &EncodeOptions::default()).unwrap()), (1, 2, 1, vec![0, 1023]));
 }
+
+/// Allocation limits describe decoded U16 pixels, even when the stored codes use fewer bits.
+#[test]
+fn widened_samples_obey_the_exact_decoded_pixel_budget() {
+    let frames = [Fixture::new(50, 10, 1, 5, 3).bytes(), Fixture::new(50, 12, 1, 5, 3).bytes(), cineon_bytes(3, 5, 3, &cineon_codes(45))];
+    for bytes in frames {
+        let options = |max_alloc| DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() };
+        let budget = 5 * 3 * 3 * 2;
+        assert!(decode_with(&bytes, &options(budget)).is_ok(), "the exact U16 pixel budget accepts the frame");
+        assert!(matches!(decode_with(&bytes, &options(budget - 1)), Err(CodecError::LimitExceeded(_))), "one byte below the decoded size rejects the frame");
+    }
+}
