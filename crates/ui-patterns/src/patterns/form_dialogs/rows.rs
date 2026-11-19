@@ -870,6 +870,9 @@ impl<'p> Pass<'p> {
                     if options.mono() {
                         field = field.mono();
                     }
+                    if let Some(chars) = options.field_chars() {
+                        field = field.width_chars(chars);
+                    }
                     if let Some(hint) = line.param.hint_text() {
                         field = field.placeholder(hint.clone());
                     }

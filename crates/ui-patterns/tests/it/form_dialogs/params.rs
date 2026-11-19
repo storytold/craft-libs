@@ -153,6 +153,23 @@ fn a_radio_row_in_a_row_stands_its_options_side_by_side_without_a_caption() {
     assert_eq!(values.borrow().text("layout"), Some("horizontal"));
 }
 
+// A text row with `field_chars` asks for that many characters instead of the field length: a wide row's field is wider
+// than a plain row's, and `0` keeps the field length.
+#[trial]
+fn a_text_row_takes_the_width_in_characters_it_asks_for() {
+    let params = vec![
+        Param::new("name", "Name", ParamKind::text("")),
+        Param::new("text", "Text", ParamKind::text("CONFIDENTIAL")).field_chars(48),
+        Param::new("plain", "Plain", ParamKind::text("")).field_chars(0),
+    ];
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let fixture = rows(params, &values);
+    let width = |label: &str| fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field")).rect.width();
+    let (name, text, plain) = (width("Name"), width("Text"), width("Plain"));
+    assert!(text > name, "the wide row's field is wider than the field length: {text} against {name}");
+    assert!((plain - name).abs() < 0.5, "0 characters keep the field length: {plain} against {name}");
+}
+
 // A read-only row shows its text, selectable, and keeps no value.
 #[trial]
 fn a_read_only_row_shows_its_text_and_keeps_no_value() {

@@ -92,6 +92,14 @@ impl FieldStyle {
         self
     }
 
+    /// The width of a field that holds `chars` characters: `chars` times the width of a `0` in the body face (CSS's
+    /// `ch`), plus the field's padding on both sides. [`held_at`](Self::held_at) takes it as the field's length.
+    pub fn chars_width(cx: &StyleCx<'_>, chars: u16) -> f32 {
+        let digit = cx.text_width(crate::style::TypeRole::Body, "0");
+        let digit = if digit.is_finite() && digit > 0.0 { digit } else { 0.0 };
+        f32::from(chars) * digit + 2.0 * cx.control().pad_x
+    }
+
     /// The field's padding, gap and minimum size.
     pub fn metrics(&self) -> Metrics {
         self.metrics

@@ -476,6 +476,8 @@ pub(crate) struct RowOptions {
     max_chars: Option<usize>,
     /// Whether a text row shows its text in the monospace face ([`Param::mono`]).
     mono: bool,
+    /// The width a text row's field asks for, in characters ([`Param::field_chars`]).
+    field_chars: Option<u16>,
     units: Option<UnitChoices>,
     /// The ids of the options a choice row shows disabled.
     disabled_options: Vec<String>,
@@ -782,6 +784,16 @@ impl Param {
         self
     }
 
+    /// The width of a [`ParamKind::Text`] row's field, in characters (`TextField::width_chars`): the field asks for
+    /// `chars` times the width of a `0` in its face instead of the field length, so one row of a form can be wider or
+    /// narrower than the others (a watermark's text against a short name). A row that lacks room still narrows it.
+    /// `0` keeps the field length; other kinds, and a text row with a Browse button, are unchanged.
+    #[must_use]
+    pub fn field_chars(mut self, chars: u16) -> Self {
+        self.options.get_or_insert_default().field_chars = (chars > 0).then_some(chars);
+        self
+    }
+
     /// Hover text for the whole row, label and control, of any kind.
     #[must_use]
     pub fn tooltip(mut self, text: impl Into<Label>) -> Self {
@@ -1019,6 +1031,11 @@ impl RowOptions {
     /// Whether a text row shows its text in the monospace face.
     pub(crate) fn mono(&self) -> bool {
         self.mono
+    }
+
+    /// The width a text row's field asks for, in characters; `None` for the field length.
+    pub(crate) fn field_chars(&self) -> Option<u16> {
+        self.field_chars
     }
 
     /// Whether a choice row's select has a search field.

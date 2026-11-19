@@ -118,7 +118,8 @@ pub enum AboutLayout {
     #[default]
     Centred,
     /// From the start edge, one item to a line: the app's name as a heading, the version, the blurb, the community
-    /// link and then the other links in their order, the built-with line as a faint caption; Close closes.
+    /// link and then the other links in their order, the built-with line as a faint caption, the links set apart from
+    /// the lines above and below them by the item gap; Close closes.
     Listed,
 }
 
@@ -386,10 +387,14 @@ impl Shown<'_> {
     fn about(&self, ui: &mut Ui, link: &RefCell<Option<String>>) {
         let (words, info) = (self.words, self.info);
         if self.layout == AboutLayout::Listed {
-            Stack::new().show(ui, |ui, _| {
-                Text::new(info.app_name.clone()).role(TypeRole::Heading).show(ui);
-                Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
-                Text::new(info.blurb.clone()).show(ui);
+            // Three blocks set apart by the item gap, as WordCraft's About spaced them: the name, version and blurb; the
+            // links; the built-with line.
+            Stack::new().gap(Gap::Item).show(ui, |ui, _| {
+                Stack::new().show(ui, |ui, _| {
+                    Text::new(info.app_name.clone()).role(TypeRole::Heading).show(ui);
+                    Text::new(words.version.fill(&[("version", info.version.as_str())])).show(ui);
+                    Text::new(info.blurb.clone()).show(ui);
+                });
                 Stack::new().show(ui, |ui, _| {
                     for (at, item) in info.community.iter().chain(info.links.iter()).enumerate() {
                         if clicked(&Link::new(item.label.clone()).id_salt(("link", at)).show(ui)) {

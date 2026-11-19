@@ -76,6 +76,10 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     caret: Option<Bind<'a, usize>>,
     /// The most lines a multi-line field grows to before its text scrolls inside it.
     max_lines: Option<usize>,
+    /// The width the field asks for, in characters ([`width_chars`](Self::width_chars)); `None` asks for the field
+    /// length (`size.length.field`).
+    #[style_key]
+    width_chars: Option<u16>,
 }
 
 impl<'a> TextField<'a, PlainText> {
@@ -112,6 +116,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             drives: None,
             caret: None,
             max_lines: None,
+            width_chars: None,
         }
         .label(label)
     }
@@ -182,6 +187,17 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
     #[must_use]
     pub fn max_lines(mut self, lines: usize) -> Self {
         self.max_lines = Some(lines.max(1));
+        self
+    }
+
+    /// The field asks for the width of `chars` characters instead of the field length (`size.length.field`): `chars`
+    /// times the width of a `0` in the field's body face, as CSS's `ch` unit, plus the field's padding. The width
+    /// follows the text size and the face, as the field length does. It is the width the field asks for, not a fixed
+    /// one: a row that lacks room still narrows it, and a field sized `Sizing::Content` or `Sizing::FillWidth` takes
+    /// its own width as before. `0` keeps the field length.
+    #[must_use]
+    pub fn width_chars(mut self, chars: u16) -> Self {
+        self.width_chars = (chars > 0).then_some(chars);
         self
     }
 
@@ -298,8 +314,11 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
     type Output = EditResponse<C::Value>;
 
     /// The field's shortest width (`size.length.short`) is `measure`'s, so a content-sized field can go without it.
-    fn style(cx: &crate::style::StyleCx<'_>, _: TextFieldStyleKey<C>) -> FieldStyle {
+    fn style(cx: &crate::style::StyleCx<'_>, key: TextFieldStyleKey<C>) -> FieldStyle {
         let mut style = FieldStyle::at(cx);
+        if let Some(chars) = key.width_chars {
+            style = style.held_at(FieldStyle::chars_width(cx, chars));
+        }
         style.metrics = style.metrics.min_size(Vec2::new(0.0, style.metrics.min_size.y));
         style
     }
