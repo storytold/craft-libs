@@ -1,6 +1,7 @@
 //! `TextRun`, the one description of UI text for measure, layout and paint, and `TextLayout`, its laid-out form.
 
 use crate::fonts::StackFacts;
+use crate::runtime::egui::memory;
 use crate::runtime::egui::text_layout;
 pub use crate::style::Span;
 use crate::style::text_measure::{paragraph_job, span_format};
@@ -9,6 +10,8 @@ use craft_i18n::Direction;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Color32, Context, Galley};
 use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -150,6 +153,14 @@ impl<'a> TextRun<'a> {
     pub fn full_text(&self) -> String {
         self.spans.iter().map(|s| s.text.as_ref()).collect()
     }
+
+    /// Borrows the common single-span case; only a multi-span run needs joining.
+    fn full_text_cow(&self) -> Cow<'_, str> {
+        match self.spans.as_slice() {
+            [span] => Cow::Borrowed(&span.text),
+            _ => Cow::Owned(self.full_text()),
+        }
+    }
 }
 
 /// The galley moved so its rect starts at x = 0: egui anchors a centred or right-aligned galley at its centre or
@@ -215,12 +226,138 @@ pub(crate) fn line_baseline(ctx: &Context, env: &TextEnv<'_>, role: TypeRole, ce
     centre - line.size().y / 2.0 + line.first_baseline
 }
 
+/// A bounded per-context cache. Equality compares the complete input, rather than trusting a hash collision.
+#[derive(Clone, PartialEq)]
+struct LayoutKey {
+    run: TextRun<'static>,
+    tokens: u64,
+    direction: Direction,
+    ink: Color32,
+    fonts: StackFacts,
+    width: u32,
+    scale: u32,
+}
+
+struct CachedText {
+    key: LayoutKey,
+    layout: Option<Arc<TextLayout>>,
+    least: Option<f32>,
+}
+
+#[derive(Default)]
+struct TextMemo {
+    entries: HashMap<u64, Vec<CachedText>>,
+    order: VecDeque<u64>,
+    generation: u64,
+    sentinel: Option<Arc<Galley>>,
+}
+
+fn with_memo<R>(ctx: &Context, f: impl FnOnce(&mut TextMemo) -> R) -> R {
+    // Egui clears its galley cache whenever the atlas or any layout input owned by fonts changes.
+    // Keeping this cached empty galley lets us observe that reset, including external providers and rasterizers.
+    let sentinel = ctx.fonts_mut(|fonts| fonts.layout_job(LayoutJob::default()));
+    memory::with::<TextMemo, _>(ctx, |memo| {
+        if memo.sentinel.as_ref().is_none_or(|old| !Arc::ptr_eq(old, &sentinel)) {
+            memo.entries.clear();
+            memo.order.clear();
+            memo.generation = memo.generation.wrapping_add(1);
+            memo.sentinel = Some(sentinel);
+        }
+        f(memo)
+    })
+}
+
+impl LayoutKey {
+    // Hash the text and the common discriminators. Equality checks the remaining fields and resolves collisions.
+    fn hash(&self) -> u64 {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        for span in &self.run.spans {
+            span.text.hash(&mut hash);
+        }
+        self.run.role.hash(&mut hash);
+        self.tokens.hash(&mut hash);
+        self.direction.hash(&mut hash);
+        self.width.hash(&mut hash);
+        self.scale.hash(&mut hash);
+        hash.finish()
+    }
+}
+
+impl TextMemo {
+    fn get(&self, key: &LayoutKey) -> Option<&CachedText> {
+        self.entries.get(&key.hash())?.iter().find(|entry| entry.key == *key)
+    }
+
+    fn put(&mut self, key: LayoutKey, layout: Option<Arc<TextLayout>>, least: Option<f32>) {
+        // Large document text should not pin galleys in a UI-label cache.
+        if key.run.spans.iter().fold(0usize, |len, span| len.saturating_add(span.text.len())) > 16 * 1024 {
+            return;
+        }
+        let hash = key.hash();
+        if let Some(entry) = self.entries.get_mut(&hash).and_then(|bucket| bucket.iter_mut().find(|entry| entry.key == key)) {
+            if layout.is_some() {
+                entry.layout = layout;
+            }
+            if least.is_some() {
+                entry.least = least;
+            }
+            return;
+        }
+        // Bound retained text and galleys, including colliding keys.
+        if self.order.len() >= 4096
+            && let Some(old) = self.order.pop_front()
+        {
+            if let Some(bucket) = self.entries.get_mut(&old) {
+                bucket.remove(0);
+                if bucket.is_empty() {
+                    self.entries.remove(&old);
+                }
+            }
+        }
+        self.entries.entry(hash).or_default().push(CachedText { key, layout, least });
+        self.order.push_back(hash);
+    }
+}
+
 impl TextRun<'_> {
+    /// All inputs read by `job`, the cutting and row-alignment steps.
+    fn layout_key(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> LayoutKey {
+        let spans = self
+            .spans
+            .iter()
+            .map(|span| Span {
+                text: Cow::Owned(span.text.to_string()),
+                italic: span.italic,
+                tabular: span.tabular,
+                mono: span.mono,
+                muted: span.muted,
+                shortcut: span.shortcut,
+                highlight: span.highlight,
+                underline: span.underline,
+                strong: span.strong,
+            })
+            .collect();
+        LayoutKey {
+            run: TextRun { spans, role: self.role, color: self.color, wrap: self.wrap, ltr: self.ltr, align: self.align, rotation: self.rotation },
+            tokens: env.tokens.key(),
+            direction: env.direction,
+            ink: env.ink,
+            fonts: env.fonts,
+            width: max_width.to_bits(),
+            scale: ctx.pixels_per_point().to_bits(),
+        }
+    }
+
     /// The one text layout behind `MeasureCx::layout`, `PartsCx::layout`, `TextParts::layout` and `Draw::text`: the
     /// paragraph direction comes from the caller's env, so measure and paint agree. `max_width` is the room; a
     /// `Line` run ignores it.
     pub(crate) fn layout(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> TextLayout {
-        let full = self.full_text();
+        let key = self.layout_key(ctx, env, max_width);
+        let (cached, generation) = with_memo(ctx, |memo| (memo.get(&key).and_then(|entry| entry.layout.clone()), memo.generation));
+        if let Some(layout) = cached {
+            return (*layout).clone();
+        }
+        let full = self.full_text_cow();
         // Every cut goes through the one cut that `least_width` measures, so a run shown at its least keeps its
         // readable characters.
         let galley = match self.wrap {
@@ -228,8 +365,13 @@ impl TextRun<'_> {
             _ => text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), max_width)),
         };
         let elided = galley.elided || self.wrap.cuts() && galley.job.text != full;
-        let mut layout = TextLayout::new(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, full);
+        let mut layout = TextLayout::new(aligned_rows(galley, self.align, self.is_rtl(env), ctx.pixels_per_point()), elided, full.into_owned());
         layout.rotation = self.rotation;
+        with_memo(ctx, |memo| {
+            if memo.generation == generation {
+                memo.put(key, Some(Arc::new(layout.clone())), None);
+            }
+        });
         layout
     }
 
@@ -237,7 +379,22 @@ impl TextRun<'_> {
     /// [`READABLE_CHARACTERS`](Self::READABLE_CHARACTERS) and the ellipsis, or whole when it has no more than one
     /// character beyond them.
     pub(crate) fn least_width(&self, ctx: &Context, env: &TextEnv<'_>) -> f32 {
-        let full = self.full_text();
+        let key = self.layout_key(ctx, env, f32::INFINITY);
+        let (cached, generation) = with_memo(ctx, |memo| (memo.get(&key).and_then(|entry| entry.least), memo.generation));
+        if let Some(least) = cached {
+            return least;
+        }
+        let least = self.compute_least_width(ctx, env);
+        with_memo(ctx, |memo| {
+            if memo.generation == generation {
+                memo.put(key, None, Some(least));
+            }
+        });
+        least
+    }
+
+    fn compute_least_width(&self, ctx: &Context, env: &TextEnv<'_>) -> f32 {
+        let full = self.full_text_cow();
         let whole = text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), f32::INFINITY)).size().x;
         let ends: Vec<usize> = full.char_indices().map(|(at, _)| at).chain([full.len()]).collect();
         if ends.len() - 1 <= Self::READABLE_CHARACTERS + 1 {
@@ -563,5 +720,108 @@ impl ReadingMeasure {
         let sample = TextRun::new(Self::SAMPLE).role(role);
         let average = layout(&sample).size().x / Self::SAMPLE_CHARACTERS;
         ReadingMeasure { target: average * Self::TARGET_CHARACTERS, least: average * Self::LEAST_CHARACTERS }
+    }
+}
+
+#[cfg(feature = "testing")]
+mod memo_tests {
+    use super::*;
+    use crate::testing::trial;
+    use craft_theme::{Appearance, Contrast, Mode, Size, TextSize, builtins, resolve};
+
+    #[trial]
+    fn layouts_reuse_equal_inputs_and_font_updates_invalidate_them() {
+        let appearance =
+            Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
+        let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
+        let ctx = Context::default();
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: Color32::WHITE, fonts: StackFacts::default() };
+            let run = TextRun::new("a label long enough to elide").elide();
+            let first = run.layout(ctx, &env, 80.0);
+            let second = run.layout(ctx, &env, 80.0);
+            assert!(Arc::ptr_eq(&first.galley, &second.galley));
+            let _ = run.layout(ctx, &env, 120.0);
+            let _ = run.least_width(ctx, &env);
+            let least_key = run.layout_key(ctx, &env, f32::INFINITY);
+            with_memo(ctx, |memo| {
+                assert_eq!(memo.order.len(), 3);
+                assert!(memo.get(&least_key).is_some_and(|entry| entry.least.is_some()));
+            });
+            let mut variants = Vec::new();
+            let mut changed = run.clone();
+            changed.spans[0].text = Cow::Borrowed("a different label");
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].italic = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].tabular = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].mono = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].muted = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].shortcut = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].highlight = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].underline = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.spans[0].strong = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.color = Some(StyleColor(Color32::BLUE));
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.role = TypeRole::Body;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.wrap = Wrap::Clip;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.align = HAlign::Center;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.ltr = true;
+            variants.push(changed);
+            let mut changed = run.clone();
+            changed.rotation = 0.5;
+            variants.push(changed);
+            for changed in variants {
+                let before = with_memo(ctx, |memo| memo.order.len());
+                let _ = changed.layout(ctx, &env, 80.0);
+                let _ = changed.layout(ctx, &env, 80.0);
+                assert_eq!(with_memo(ctx, |memo| memo.order.len()), before + 1);
+            }
+            let rtl = TextEnv { direction: Direction::Rtl, ..env };
+            let _ = run.layout(ctx, &rtl, 80.0);
+            let ink = TextEnv { ink: Color32::RED, ..env };
+            let _ = run.layout(ctx, &ink, 80.0);
+            let fonts = TextEnv { fonts: StackFacts { semibold: true, ..env.fonts }, ..env };
+            let _ = run.layout(ctx, &fonts, 80.0);
+            let mut changed_tokens = (**tokens.tokens()).clone();
+            changed_tokens.color.text.muted = craft_theme::Rgba([12, 34, 56, 255]);
+            let changed_tokens = UiTokens::new(Arc::new(changed_tokens), Contrast::Standard, Size::Compact);
+            let styled = TextEnv { tokens: &changed_tokens, ..env };
+            let _ = run.layout(ctx, &styled, 80.0);
+            let before = with_memo(ctx, |memo| memo.order.len());
+            assert_eq!(before, 22);
+        });
+        output.textures_delta.clear();
+        // A direct egui font replacement bypasses framework hooks; the sentinel must detect it.
+        let mut definitions = ctx.fonts(|fonts| fonts.definitions().clone());
+        definitions.families.insert(egui::FontFamily::Name("memo trial".into()), Vec::new());
+        ctx.set_fonts(definitions);
+        let mut output = ctx.run_pass(Default::default(), |ctx| {
+            with_memo(ctx, |memo| assert!(memo.order.is_empty()));
+        });
+        output.textures_delta.clear();
     }
 }

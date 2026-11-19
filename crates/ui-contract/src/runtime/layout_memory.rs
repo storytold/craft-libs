@@ -1235,6 +1235,7 @@ pub(crate) mod guard {
         ("runtime::egui::painted::Elisions", "elisions: written where text paints, which a measuring run does not"),
         ("Stamped<std::collections::hash::set::HashSet<egui::id::Id>>", "per-pass id sets: read"),
         // Caches: equal inputs give equal values, whichever run fills them.
+        ("primitives::text::TextMemo", "text layouts: a bounded cache keyed by the layout inputs and egui's font-cache generation"),
         ("style::cache::StyleCache", "style cache"),
         ("style::replacements::Frozen", "frozen style replacements: cache"),
         ("runtime::env::tokens::RootTokenCache", "root tokens: cache"),
