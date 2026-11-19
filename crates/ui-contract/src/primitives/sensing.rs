@@ -113,7 +113,7 @@ impl<V> TextOutcome<V> {
 
 /// A part as the sensing core registers it.
 // F2-MERGE: F3 (`PartBuilder` adds tooltip and `pointer_only`)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PartDecl {
     pub key: PartKey,
     pub index: Option<u64>,
@@ -153,7 +153,7 @@ impl PartDecl {
 }
 
 /// One member's registration for this pass.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MemberDecl {
     pub id: Id,
     pub rect: Rect,
@@ -174,7 +174,7 @@ impl MemberDecl {
 }
 
 /// What a root registers at step 8: its id and rect.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct RootInfo {
     id: Id,
     rect: Rect,
@@ -396,7 +396,7 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
 
 /// Records the transformed body's egui layer.
 pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| set_layer(ctx, arena, layer));
+    crate::runtime::replay::journal(ctx, || (arena, layer), |ctx, &(arena, layer)| set_layer(ctx, arena, layer));
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     with_arena(ctx, arena, pass_nr, |state| state.layer = Some(layer));
 }
@@ -408,7 +408,7 @@ pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
 // names their shapes as the press winner.
 
 /// What a root registers in its arena at step 8, kept for a replay.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct RootRegistration {
     info: RootInfo,
     own: Vec<PartDecl>,
@@ -419,10 +419,11 @@ struct RootRegistration {
 
 /// Notes a root's step-8 registration in the open records.
 fn journal_root(ctx: &Context, arena: ArenaId, info: RootInfo, own: &[PartDecl], widgets: &[Id], (layer, sense): (Layer, Sense)) {
-    crate::runtime::replay::journal(ctx, || {
-        let registration = RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer, sense };
-        move |ctx: &Context| register_root_again(ctx, arena, registration.clone())
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer, sense }),
+        |ctx, (arena, registration)| register_root_again(ctx, *arena, registration.clone()),
+    );
 }
 
 /// A replayed root's step-8 registration: its own parts, rect, widgets, layer and sense, with no press run.
@@ -441,10 +442,7 @@ fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistra
 
 /// Notes in the open records the members that joined `arena`, as they joined.
 fn journal_join(ctx: &Context, arena: ArenaId, joined: &[MemberDecl]) {
-    crate::runtime::replay::journal(ctx, || {
-        let joined = joined.to_vec();
-        move |ctx: &Context| join_again(ctx, arena, joined.clone())
-    });
+    crate::runtime::replay::journal(ctx, || (arena, joined.to_vec()), |ctx, (arena, joined)| join_again(ctx, *arena, joined.clone()));
 }
 
 /// Replayed members join their arena again.
@@ -463,7 +461,7 @@ fn join_again(ctx: &Context, arena: ArenaId, joined: Vec<MemberDecl>) {
 /// Places the `over` parts of the root of `arena` (`member` None) or of its member `member` above the members joined
 /// so far, as `place_over_widgets` does; journaled for a replay.
 fn place_over(ctx: &Context, arena: ArenaId, member: Option<Id>) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| place_over(ctx, arena, member));
+    crate::runtime::replay::journal(ctx, || (arena, member), |ctx, &(arena, member)| place_over(ctx, arena, member));
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);

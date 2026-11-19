@@ -42,7 +42,7 @@ pub enum FocusShape {
 pub(crate) type StopKey = (Id, Option<PartRef>);
 
 /// A registered stop with its place in the scope tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct StopRec {
     #[doc(hidden)]
@@ -50,7 +50,7 @@ pub struct StopRec {
     pub(crate) scope: Option<Id>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScopeRec {
     pub(crate) policy: FocusPolicy,
     pub(crate) parent: Option<Id>,
@@ -116,7 +116,7 @@ pub(crate) struct BeginIn {
 
 /// The row groups of one collection's visible rows in a pass: every one is a flat roving group of the same owner
 /// and direction, so the collection registers them as one record.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RowGroups {
     owner: Id,
     rtl: bool,
@@ -261,7 +261,7 @@ pub(crate) struct Mark {
 /// What one run of a child registered with the focus service: its stops, the scopes it pushed, the roving groups
 /// its stops belong to and its collections' row groups. A child out of view registers it again without running
 /// (`runtime::lazy`), so its stops keep their place in Tab and F6 order.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Transcript {
     stops: Vec<StopRec>,
     scopes: Vec<(Id, ScopeRec)>,
@@ -431,7 +431,7 @@ pub(crate) fn pop_scope(ctx: &Context) {
 /// Registers that the menu bar `bar` takes the menu-bar keys of the next input hook (spec 9.7). A settled bar
 /// registers again when it replays its last run, and the keys it takes run it (`keys::routed_to`).
 pub(crate) fn register_menu_bar(ctx: &Context, bar: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_menu_bar(ctx, bar));
+    crate::runtime::replay::journal(ctx, || bar, |ctx, &bar| register_menu_bar(ctx, bar));
     with(ctx, |state| state.menu_bar = Some(bar));
 }
 

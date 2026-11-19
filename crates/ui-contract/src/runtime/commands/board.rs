@@ -696,7 +696,7 @@ pub(crate) fn register_instance(ctx: &Context, scope: CommandScope, id: Id) {
 
 /// `register_instance` in the layer `layer`, which a replay of the registration keeps.
 fn register_in(ctx: &Context, scope: CommandScope, id: Id, layer: Option<Id>) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_in(ctx, scope, id, layer));
+    crate::runtime::replay::journal(ctx, || (scope, id, layer), |ctx, &(scope, id, layer)| register_in(ctx, scope, id, layer));
     let viewport = pass::current_viewport(ctx);
     let stamp = pass::pass_nr(ctx, viewport);
     with(ctx, |board| match board.instances.iter_mut().find(|i| i.id == id) {
@@ -1019,10 +1019,11 @@ pub(crate) fn publish(ctx: &Context, chain: &CommandChain, command: &CommandRef,
     if !measure::effect(ctx, "commands::publish") {
         return;
     }
-    replay::journal(ctx, || {
-        let (chain, command, state) = (chain.clone(), command.clone(), state.clone());
-        move |ctx: &Context| publish(ctx, &chain, &command, state.clone())
-    });
+    replay::journal(
+        ctx,
+        || (chain.clone(), command.clone(), state.clone()),
+        |ctx, (chain, command, state)| publish(ctx, chain, command, state.clone()),
+    );
     let changed = with(ctx, |board| {
         let scope = board.scope_of(command);
         let declared = board.def(&command.id).is_some_and(|def| def.modal == ModalRule::Declared);
