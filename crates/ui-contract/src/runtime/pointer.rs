@@ -369,10 +369,17 @@ pub(crate) fn record_shapes(ctx: &Context, layer: Layer, root: Id, clip: Rect, s
 /// `record_shapes` for a caller that already read the running viewport.
 pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: impl IntoIterator<Item = Shape<Id>>) {
     let shapes: Vec<Shape<Id>> = shapes.into_iter().collect();
-    crate::runtime::replay::journal(ctx, || {
-        let shapes = shapes.clone();
-        move |ctx: &Context| record_shapes(ctx, layer, root, clip, shapes.iter().cloned())
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (layer, root, clip, shapes.clone()),
+        |ctx, (layer, root, clip, shapes)| record_shapes(ctx, *layer, *root, *clip, shapes.iter().cloned()),
+    );
+    add_shapes_in(ctx, viewport, layer, root, clip, shapes);
+}
+
+/// `record_shapes_in` with no note in the run records, for a caller whose own note makes the shapes again: shapes at
+/// stack positions a replay takes from the arena it joins (`sensing`), not from the recorded run.
+pub(crate) fn add_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, clip: Rect, shapes: Vec<Shape<Id>>) {
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let order = record.next;
         record.next += 1;
@@ -385,7 +392,7 @@ pub(crate) fn record_shapes_in(ctx: &Context, viewport: ViewportId, layer: Layer
 /// Records the egui widget `widget` that the component `owner` made for its own text (a field's text, a selection
 /// part): a press egui gives it is the widget's own and goes to no root, and the hover goes to `owner`.
 pub(crate) fn record_text_widget(ctx: &Context, widget: Id, owner: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_text_widget(ctx, widget, owner));
+    crate::runtime::replay::journal(ctx, || (widget, owner), |ctx, &(widget, owner)| record_text_widget(ctx, widget, owner));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_texts.insert(widget, owner);
     });
@@ -403,7 +410,7 @@ pub(crate) fn record_layer_widget(ctx: &Context, widget: Id) {
 /// Records that `layer` shows the transformed body of the root `root`, which is itself shown on `parent`: a press on
 /// the body layer reaches the root's own shapes beneath the body's.
 pub(crate) fn record_body_layer(ctx: &Context, layer: Layer, parent: Layer, root: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| record_body_layer(ctx, layer, parent, root));
+    crate::runtime::replay::journal(ctx, || (layer, parent, root), |ctx, &(layer, parent, root)| record_body_layer(ctx, layer, parent, root));
     PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
         record.this_bodies.insert(layer, (root, parent));
     });
@@ -417,10 +424,11 @@ pub(crate) fn record_widgets(ctx: &Context, layer: Layer, root: Id, widgets: &[I
 
 /// `record_widgets` for a caller that already read the running viewport.
 pub(crate) fn record_widgets_in(ctx: &Context, viewport: ViewportId, layer: Layer, root: Id, widgets: &[Id], click: bool) {
-    crate::runtime::replay::journal(ctx, || {
-        let widgets = widgets.to_vec();
-        move |ctx: &Context| record_widgets(ctx, layer, root, &widgets, click)
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (layer, root, widgets.to_vec(), click),
+        |ctx, (layer, root, widgets, click)| record_widgets(ctx, *layer, *root, widgets, *click),
+    );
     PerViewport::<Shapes>::with(ctx, viewport, |record| {
         let entry = record.this.entry(layer).or_default().entry(root).or_default();
         entry.widgets.extend_from_slice(widgets);

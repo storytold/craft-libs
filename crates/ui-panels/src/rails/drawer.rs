@@ -167,11 +167,11 @@ enum DrawerKey {
 /// headings.
 struct Rows<'a> {
     keys: Vec<DrawerKey>,
-    resolved: &'a [Vec<ResolvedCommand>],
+    resolved: &'a [Vec<std::sync::Arc<ResolvedCommand>>],
 }
 
 impl<'a> Rows<'a> {
-    fn new(resolved: &'a [Vec<ResolvedCommand>]) -> Self {
+    fn new(resolved: &'a [Vec<std::sync::Arc<ResolvedCommand>>]) -> Self {
         let mut keys = Vec::new();
         for (group, tools) in resolved.iter().enumerate().filter(|(_, tools)| !tools.is_empty()) {
             keys.push(DrawerKey::Group(group));
@@ -221,7 +221,7 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
         let words = env.words::<RailWords>();
         let os = os_of(ui.ctx());
         let ctx = ui.ctx().clone();
-        let resolved: Vec<Vec<ResolvedCommand>> =
+        let resolved: Vec<Vec<std::sync::Arc<ResolvedCommand>>> =
             groups.iter().map(|group| group.tools.iter().map(|tool| commands::resolve(&ctx, tool.command.clone())).collect()).collect();
         let mut edits: Vec<ToolbarEdit<T>> = dropped.and_then(|dropped| drop_edit(dropped.drag, dropped.at, groups, toolbar)).into_iter().collect();
         let mut select: Option<T> = None;

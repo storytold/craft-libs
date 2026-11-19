@@ -673,7 +673,12 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
 /// Registers the outer-edge bands and the new-dock bands as the dock's drop spots for the next pass, from the leaves
 /// the split area placed this pass (each as its tree path and rect). A new-dock band runs along a start or end edge
 /// that holds no dock.
-fn register_bands<P: Clone + Eq + Hash + Send + Sync + 'static>(scene: &Scene<'_, P>, ctx: &Context, area: Rect, leaves: &[(Vec<bool>, Rect)]) {
+fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
+    scene: &Scene<'_, P>,
+    ctx: &Context,
+    area: Rect,
+    leaves: &[(Vec<bool>, Rect)],
+) {
     if scene.layout.root.is_none() {
         return;
     }

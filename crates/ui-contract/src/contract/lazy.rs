@@ -137,7 +137,7 @@ impl Lazy {
         let real = !sizing && !crate::runtime::measure::active(&ctx);
         let owner = view.map(|view| view.owner);
         // A run around this one that is replayed later keeps the child's entry.
-        replay::journal(&ctx, || move |ctx: &egui::Context| lazy::keep(ctx, owner, id));
+        replay::journal(&ctx, || (owner, id), |ctx, &(owner, id)| lazy::keep(ctx, owner, id));
         if let Some(view) = view {
             let at = |size: Vec2| {
                 let x = if rtl { available.max.x - size.x } else { available.min.x };

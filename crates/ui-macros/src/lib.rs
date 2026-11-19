@@ -228,7 +228,7 @@ impl Parse for StoryArgs {
 /// reason to show while disabled, which the story takes from `StoryData::tooltip`. `title = ".."` is the caption a
 /// viewer shows over the story. `group = ".."` puts the story in a named group with the type's other stories that
 /// name it, in declaration order; a viewer shows a group together, each story under its caption.
-/// `commands = <fn>` names a `fn(CommandInput) -> CommandInput` that sets the command states the story runs under.
+/// `commands = <fn>` names a `fn(&mut CommandStates)` that sets the app-scope command states the story runs under.
 /// The type's registration and the story meet by the type's registered name.
 #[proc_macro_attribute]
 pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
