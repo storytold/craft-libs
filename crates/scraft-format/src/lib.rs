@@ -125,11 +125,9 @@ mod session_io_tests {
     #[test]
     fn rejects_case_insensitive_duplicate_named_inputs() {
         let mut session = Session::default();
-        session.inputs = ["Mic", "MIC"]
-            .into_iter()
-            .enumerate()
-            .map(|(channel, name)| InputPath { name: name.into(), first_channel: u16::try_from(channel).unwrap(), format: ChannelFormat::Mono })
-            .collect();
+        for (first_channel, name) in [(0, "Mic"), (8, "MIC")] {
+            session.inputs.push(InputPath { name: name.into(), first_channel, format: ChannelFormat::Mono });
+        }
         assert!(
             matches!(Session::from_json(&session.to_json().unwrap()), Err(SessionError::Invalid(message)) if message.contains("duplicate named input"))
         );
