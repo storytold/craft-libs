@@ -512,3 +512,47 @@ fn a_tracked_changes_before_copy_is_marked_by_its_own_formatting() {
     let old = paras(&r)[0].runs[0].props.fmt_change.as_ref().map(|c| c.old.clone()).expect("kept");
     assert!(r.styles.resolve_char(Some("Normal"), &old).uses_complex('A'));
 }
+
+/// A tracked formatting change's "before" copy is marked where it needs it, even where the run
+/// itself needs nothing. Here the run has no character style, so only its Thai letter is marked;
+/// before the change it had a character style saying `w:cs`, which Word doesn't count, so WordCraft
+/// drew all of it, the space and Latin text too, in the complex-script formatting. Rejecting the
+/// change in Word must bring that back.
+#[test]
+fn a_tracked_changes_before_copy_is_marked_where_only_it_needs_it() {
+    use craft_wordmodel::props::PropChange;
+    use craft_wordmodel::{Revision, RevisionKind, Style, StyleKind};
+    use std::sync::Arc;
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.default_chr =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    sheet.upsert(Style {
+        id: "CsOn".into(),
+        name: "CsOn".into(),
+        kind: StyleKind::Character,
+        chr: CharProps { cs: Some(true), ..Default::default() },
+        ..Default::default()
+    });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+    let before = CharProps { style: Some("CsOn".into()), ..Default::default() };
+    let run = CharProps { fmt_change: PropChange::boxed(0, before), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("\u{0E17} ABC", run))];
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let run = xml.split("<w:r>").find(|r| r.contains("ABC</w:t>")).unwrap_or_else(|| panic!("no run: {xml}"));
+    let (now, before) = run.split_once("<w:rPrChange").expect("the change is written");
+    assert!(!now.contains("<w:cs"), "the Latin text needs nothing itself: {now}");
+    assert!(before.contains("<w:cs/>"), "its before copy is complex script as WordCraft drew it: {before}");
+    // As Word reads the before copy (a character style's `w:cs` doesn't count), each character
+    // takes the complex-script formatting, as WordCraft drew it.
+    let r = craft_docx::read(&bytes).unwrap();
+    let p = paras(&r)[0];
+    for (range, props) in p.run_ranges() {
+        let old = props.fmt_change.as_ref().map(|c| CharProps { style: None, ..c.old.clone() }).expect("kept");
+        let rc = r.styles.resolve_char(None, &old);
+        for ch in p.text[range].chars() {
+            assert!(rc.uses_complex(ch), "{ch:?} in {:?}", p.text);
+        }
+    }
+}

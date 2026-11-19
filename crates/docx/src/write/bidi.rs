@@ -144,47 +144,41 @@ pub(super) fn complex_script_spans<'a>(
 ) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
     let mut out = Vec::with_capacity(spans.len());
     for (range, props) in spans {
-        let Some(run) = text.get(range.clone()).filter(|_| props.cs.is_none() && props.rtl.is_none()) else {
+        let Some(run) = text.get(range.clone()) else {
             out.push((range, props));
             continue;
         };
-        let rc = styles.resolve_char_in(para_style, table, &props);
-        let cs = rc.complex();
-        if rc.font == cs.font && rc.size == cs.size && rc.bold == cs.bold && rc.italic == cs.italic {
-            out.push((range, props));
-            continue;
-        }
-        let word = styles.resolve_char_in(para_style, table, &CharProps { style: None, ..props.as_ref().clone() });
-        let word_cs = word.cs || word.rtl;
-        // What a character needs written: `Some(complex)` where Word would draw it otherwise.
-        // A run that is right to left by its styles stays complex script with `w:cs w:val="0"`,
-        // so that isn't written.
-        let need = |c: char| {
-            let draws = rc.uses_complex(c);
-            (draws != word_cs && (draws || !word.rtl)).then_some(draws)
-        };
-        if run.chars().all(|c| need(c).is_none()) {
-            out.push((range, props));
-            continue;
-        }
+        let need = marks(styles, para_style, table, &props);
         // A tracked formatting change's "before" copy, where it doesn't say either, is marked as
         // WordCraft draws it, by its own character style: rejecting the change in Word then
-        // brings back the look it had, and the change lists the mark only where the look changed.
-        let old = props.fmt_change.as_ref().filter(|ch| ch.old.cs.is_none() && ch.old.rtl.is_none());
-        let old_rc = old.map(|ch| styles.resolve_char_in(para_style, table, &ch.old));
+        // brings back the look it had. Where the run is marked, the before copy is marked too, so
+        // the change lists the mark only where the look changed; elsewhere it is marked by what
+        // it needs itself.
+        let old = props.fmt_change.as_ref().map(|ch| &ch.old).filter(|o| o.cs.is_none() && o.rtl.is_none());
+        let old_rc = old.map(|o| styles.resolve_char_in(para_style, table, o));
+        let old_need = old.and_then(|o| marks(styles, para_style, table, o));
         let key = |c: char| {
-            let n = need(c);
-            (n, n.and(old_rc.as_ref().map(|r| r.uses_complex(c))))
+            let n = need.as_ref().and_then(|f| f(c));
+            let o = if n.is_some() { old_rc.as_ref().map(|r| r.uses_complex(c)) } else { old_need.as_ref().and_then(|f| f(c)) };
+            (n, o)
         };
-        let marked = |(cs, old_cs): (bool, Option<bool>)| {
+        if run.chars().all(|c| key(c) == (None, None)) {
+            out.push((range, props));
+            continue;
+        }
+        let piece = |(n, old_cs): (Option<bool>, Option<bool>)| {
+            if n.is_none() && old_cs.is_none() {
+                return props.clone();
+            }
             let mut p = props.clone().into_owned();
-            p.cs = Some(cs);
+            if n.is_some() {
+                p.cs = n;
+            }
             if let (Some(ch), Some(o)) = (p.fmt_change.as_mut(), old_cs) {
                 ch.old.cs = Some(o);
             }
             Cow::Owned(p)
         };
-        let piece = |(n, old_cs): (Option<bool>, Option<bool>)| n.map_or_else(|| props.clone(), |cs| marked((cs, old_cs)));
         let mut start = range.start;
         let mut cur: Option<(Option<bool>, Option<bool>)> = None;
         for (i, c) in run.char_indices() {
@@ -201,6 +195,28 @@ pub(super) fn complex_script_spans<'a>(
         out.push((start..range.end, piece(cur.unwrap_or((None, None)))));
     }
     out
+}
+
+/// For [`complex_script_spans`]: what each character of a run of formatting `p` needs written,
+/// `Some(complex)` where Word would draw it otherwise than WordCraft does; `None` for a run that
+/// says whether it is complex script or right to left, or whose two formattings look the same.
+/// A run that is right to left by its styles stays complex script with `w:cs w:val="0"`, so that
+/// isn't written.
+fn marks(styles: &StyleSheet, para_style: Option<&str>, table: Option<&CharProps>, p: &CharProps) -> Option<impl Fn(char) -> Option<bool> + use<>> {
+    if p.cs.is_some() || p.rtl.is_some() {
+        return None;
+    }
+    let rc = styles.resolve_char_in(para_style, table, p);
+    let cs = rc.complex();
+    if rc.font == cs.font && rc.size == cs.size && rc.bold == cs.bold && rc.italic == cs.italic {
+        return None;
+    }
+    let word = styles.resolve_char_in(para_style, table, &CharProps { style: None, ..p.clone() });
+    let (word_cs, word_rtl) = (word.cs || word.rtl, word.rtl);
+    Some(move |c: char| {
+        let draws = rc.uses_complex(c);
+        (draws != word_cs && (draws || !word_rtl)).then_some(draws)
+    })
 }
 
 #[cfg(test)]
