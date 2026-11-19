@@ -179,3 +179,34 @@ fn legacy_f0_packets_without_a_continuation_survive_export() {
     assert_eq!(sequence.notes, smf.tracks[0].sequence.notes);
     assert_eq!(sequence.ctrls, smf.tracks[1].sequence.ctrls);
 }
+
+#[test]
+fn later_same_tick_sysex_packets_keep_their_source_order() {
+    let body = vec![0, 0xC0, 7, 0, 0xF0, 1, 0x43, 0, 0xF7, 2, 0x10, 0xF7, 0, 0xF0, 2, 0x41, 0xF7, 0, 0xFF, 0x2F, 0];
+    for format in [0, 1] {
+        let smf = read_smf(&file(format, std::slice::from_ref(&body))).unwrap();
+        let bytes = write_smf(&smf).unwrap();
+        assert_eq!(read_smf(&bytes).unwrap(), smf);
+        assert!(bytes.windows(body.len()).any(|window| window == body));
+    }
+}
+
+#[test]
+fn nonterminating_continuations_still_block_later_channel_events() {
+    for format in [0, 1] {
+        for terminated in [false, true] {
+            let mut body = vec![0, 0xF0, 1, 0x43, 10, 0xF7, 1 + u8::from(terminated), 0x10];
+            if terminated {
+                body.push(0xF7);
+            }
+            body.extend([10, 0xC0, 7, 0, 0xFF, 0x2F, 0]);
+            let smf = read_smf(&file(format, &[body])).unwrap();
+            let result = write_smf(&smf);
+            if terminated {
+                assert_eq!(read_smf(&result.unwrap()).unwrap(), smf);
+            } else {
+                assert!(matches!(result, Err(MidiError::Write(message)) if message.contains("interleave")));
+            }
+        }
+    }
+}

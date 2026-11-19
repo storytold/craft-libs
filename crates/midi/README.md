@@ -80,9 +80,10 @@ of two, more than 65535 tracks or a gap beyond the 28-bit delta limit is an erro
 
 Same-tick events normally write as note-offs, SysEx, controllers, then note-ons.
 A split SysEx message opens after same-tick channel events and continues before channel
-events on later ticks. Packets belonging to the message on its opening tick retain their
-source order. Interleaving a transmittable event within an actual split returns a write
-error, including when merging tracks. Meta events may appear between packets. A legacy
+events on later ticks. Same-tick packets from that track retain their order, including
+packets following the split. Interleaving a transmittable event within an actual split
+returns a write error, including when merging tracks. Exhausting continuation packets
+without a terminating F7 leaves the split open for this check. Meta events may appear between packets. A legacy
 F0 with no continuation is exported with its original payload and tick.
 
 ## Sources and clean room

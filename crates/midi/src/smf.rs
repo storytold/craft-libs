@@ -656,7 +656,7 @@ struct WEvent {
 
 enum SplitPacket {
     Start(usize),
-    Continue { track: usize, last: bool },
+    Continue(usize),
 }
 
 impl WEvent {
@@ -745,10 +745,10 @@ fn check_split_sysex_order(events: &[WEvent]) -> Result<(), MidiError> {
                 active = Some(*track);
                 unterminated = true;
             }
-            (Some(SplitPacket::Continue { track, last }), Some(owner)) if *track == owner => {
-                if *last {
+            (Some(SplitPacket::Continue(track)), Some(owner)) if *track == owner => {
+                if terminated {
                     active = None;
-                    unterminated = !terminated;
+                    unterminated = false;
                 }
             }
             (None, _) if status == Some(0xFF) => {} // Meta events are local to the file.
@@ -867,7 +867,8 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 /// clamped to their MIDI ranges, and note-on velocity 0 is written as 1 (0 would mean
 /// note-off). At each tick the default order is note-offs, SysEx, controllers, then note-ons.
 /// Split SysEx starts after same-tick channel events and continues before channel events on
-/// later ticks. An unterminated legacy F0 with no continuation retains its original bytes.
+/// later ticks. Later SysEx packets on the opening tick follow the split in source order.
+/// An unterminated legacy F0 with no continuation retains its original bytes.
 ///
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
 /// (1..=128), more than 65535 tracks, a gap beyond the 28-bit delta limit, an invalid
@@ -953,26 +954,30 @@ fn append_sysex_events(events: &mut Vec<WEvent>, track: usize, packets: &[SysExE
     let mut ordered: Vec<_> = packets.iter().collect();
     ordered.sort_by_key(|packet| clamp_tick(packet.tick));
     let mut packets = ordered.into_iter().peekable();
+    let mut opening_tick = None;
     while let Some(packet) = packets.next() {
         let tick = clamp_tick(packet.tick);
         let starts_split = packet.status == 0xF0 && packet.data.last() != Some(&0xF7) && packets.peek().is_some_and(|next| next.status == 0xF7);
         if !starts_split {
-            events.push(encode_sysex(packet, 2)?);
+            // Later packets at the opening tick keep their position after the split.
+            let order = if opening_tick == Some(tick) { 5 } else { 2 };
+            events.push(encode_sysex(packet, order)?);
             continue;
         }
 
         // Start after channel events. Subsequent ticks continue before channel events.
+        opening_tick = Some(tick);
         let mut start = encode_sysex(packet, 5)?;
         start.split = Some(SplitPacket::Start(track));
         events.push(start);
         while let Some(packet) = packets.next_if(|next| next.status == 0xF7) {
-            let last = packet.data.last() == Some(&0xF7) || packets.peek().is_none_or(|next| next.status != 0xF7);
+            let terminated = packet.data.last() == Some(&0xF7);
             // Same-tick continuations stay after their own F0 in source order.
             let order = if clamp_tick(packet.tick) == tick { 5 } else { 0 };
             let mut continuation = encode_sysex(packet, order)?;
-            continuation.split = Some(SplitPacket::Continue { track, last });
+            continuation.split = Some(SplitPacket::Continue(track));
             events.push(continuation);
-            if last {
+            if terminated {
                 break;
             }
         }
