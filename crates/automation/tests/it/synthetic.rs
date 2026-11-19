@@ -278,10 +278,10 @@ fn bad_input_params_are_refused_before_anything_is_queued() {
         ("ui.click", json!({"x": 10, "button": "thumb"})),
         ("ui.click", json!({"x": 10, "hold": true, "count": MAX_CLICKS + 1})),
         ("ui.click", json!({"x": far, "hold": true})),
-        ("ui.move", json!({"x": 10, "nudge": 1})),
-        ("ui.move", json!({"x": 10, "rest": "long"})),
-        ("ui.move", json!({"x": 10, "coordinates": "page"})),
-        ("ui.move", json!({"y": -far})),
+        ("ui.move", json!({"x": 10, "y": 10, "nudge": 1})),
+        ("ui.move", json!({"x": 10, "y": 10, "rest": "long"})),
+        ("ui.move", json!({"x": 10, "y": 10, "coordinates": "page"})),
+        ("ui.move", json!({"x": 10, "y": -far})),
         ("ui.key", json!({"key": "A", "hold": true, "nudge": 1})),
         ("ui.key", json!({"key": 5})),
         ("ui.key", json!({"key": "NoSuchKey", "hold": true})),
@@ -416,4 +416,19 @@ fn a_point_that_is_not_finite_is_refused() {
         }
     }
     assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
+}
+
+/// `ui.move` requires both `x` and `y`: omitting either coordinate refuses the request before anything is queued
+/// instead of silently moving to 0 on the missing axis.
+#[trial]
+fn ui_move_refuses_a_missing_coordinate() {
+    let mut rig = Rig::new();
+    rig.fx.settle();
+    let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
+    for params in [json!({"x": 1}), json!({"y": 1}), json!({})] {
+        let answer = input_method("ui.move", &params, &host, ViewportId::ROOT, &map);
+        assert!(matches!(answer, Some(Err(_))), "ui.move {params} is refused: {answer:?}");
+        assert!(host.injected_idle(), "ui.move {params} left nothing waiting");
+        assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "ui.move {params} queued nothing");
+    }
 }

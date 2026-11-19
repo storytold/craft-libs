@@ -288,6 +288,40 @@ mod tests {
         assert_eq!(files.written(), written);
     }
 
+    /// `Files::exists` reports files already present or written through the service and ignores refused writes:
+    /// batch writers rely on it to pick a fresh name instead of replacing an existing file.
+    #[test]
+    fn exists_reports_present_and_written_files() {
+        let existing = std::path::Path::new("/batch/notes.pdf");
+        let missing = std::path::Path::new("/batch/new.pdf");
+        let refused = std::path::Path::new("/batch/refused.pdf");
+        let files = ScriptedFiles::new().with_file(existing, b"keep".to_vec()).failing_writes(refused);
+        assert!(files.exists(existing), "a pre-existing scripted file exists");
+        assert!(!files.exists(missing), "a path not in the service does not exist");
+        assert!(files.write(refused, b"no", WriteIntent::SaveAs).is_err());
+        assert!(!files.exists(refused), "a refused write does not create an entry");
+        assert_eq!(files.write(missing, b"ok", WriteIntent::SaveAs), Ok(false));
+        assert!(files.exists(missing), "an accepted write exists afterwards");
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dir = std::env::temp_dir().join(format!("craft-host-exists-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let on_disk = dir.join("present.pdf");
+            let absent = dir.join("absent.pdf");
+            let _ = std::fs::remove_file(&on_disk);
+            let _ = std::fs::remove_file(&absent);
+            let disk = NoPickFiles::default();
+            assert!(!disk.exists(&on_disk));
+            assert!(!disk.exists(&absent));
+            assert_eq!(disk.write(&on_disk, b"data", WriteIntent::SaveAs), Ok(false));
+            assert!(disk.exists(&on_disk), "NoPickFiles reports a written file on disk");
+            assert!(!disk.exists(&absent), "NoPickFiles reports a missing path as absent");
+            let _ = std::fs::remove_file(&on_disk);
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+
     #[cfg(feature = "ui")]
     #[test]
     fn installed_host_survives_a_memory_reset() {

@@ -651,6 +651,11 @@ impl Component for CommentRow<'_> {
                 access.node(MORE.at(index as u64), Role::BUTTON).name = craft_ui::contract::Name::Text(words.more.as_str().to_owned());
             }
         }
+        if let Some(heading) = &self.heading {
+            let parts = if heading.count.is_empty() { vec![heading.title.clone()] } else { vec![heading.title.clone(), heading.count.clone()] };
+            access.name(craft_ui::contract::Name::Joined(parts));
+            return;
+        }
         let Some(thread) = self.thread else { return };
         let Some(first) = thread.messages.first() else { return };
         let named = |name: String, message: &CommentMessage| {

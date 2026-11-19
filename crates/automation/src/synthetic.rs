@@ -79,9 +79,21 @@ impl At {
         let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
         let x = p.number_in("x", "x", range)?.unwrap_or(0.0) as f32;
         let y = p.number_in("y", "y", range)?.unwrap_or(0.0) as f32;
+        Self::in_space(p, pos2(x, y))
+    }
+
+    /// `x` and `y`, both required, in the space `coordinates` names (`screen`, the default, or `document`).
+    fn required(p: &Params<'_>) -> Result<Self, String> {
+        let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
+        let x = p.number_in("x", "x", range)?.ok_or_else(|| "missing `x`".to_owned())? as f32;
+        let y = p.number_in("y", "y", range)?.ok_or_else(|| "missing `y`".to_owned())? as f32;
+        Self::in_space(p, pos2(x, y))
+    }
+
+    fn in_space(p: &Params<'_>, pos: Pos2) -> Result<Self, String> {
         Ok(match p.choice("coordinates", "coordinates", &["screen", "document"])?.unwrap_or("screen") {
-            "document" => Self::Document(pos2(x, y)),
-            _ => Self::Screen(pos2(x, y)),
+            "document" => Self::Document(pos),
+            _ => Self::Screen(pos),
         })
     }
 
@@ -252,12 +264,12 @@ pub struct Move {
 }
 
 impl Move {
-    /// `{x?, y?, coordinates?, rest?, modifiers…}`, no other fields. `rest` is seconds between 0 and [`MAX_REST`].
+    /// `{x, y, coordinates?, rest?, modifiers…}`, no other fields. `rest` is seconds between 0 and [`MAX_REST`].
     pub fn from_params(params: &Value) -> Result<Self, String> {
         let p = only(params, &["rest"])?;
         let p = Params(&p);
         Ok(Self {
-            at: At::from_params(&p)?,
+            at: At::required(&p)?,
             mods: p.modifiers(&KEY_MODIFIERS)?,
             rest: p.number_in("rest", "rest", Some((0.0, MAX_REST)))?.unwrap_or(0.0),
         })

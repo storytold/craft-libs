@@ -1,6 +1,5 @@
 //! The canvas tool: presses, drags, the "New Annotation..." form and the [`CanvasTool`] implementation.
 
-use craft_behavior::geometry::turn_to_45;
 use craft_behavior::{CancelReason, CanvasView, Cursor, CursorIcon, EditEvent, GestureId, Mixed, PointerButton, SelectionChange};
 use craft_keymap::Mods;
 use craft_theme::Srgba;
@@ -185,7 +184,8 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point, reach: f64) -> bool {
 ///   [`SelectOptions::shift_lock`]); a press on empty page starts a marquee. Moves, resizes and reshapes are
 ///   `EditEvent<AnnotationEdit>` gestures; a move within [`SLIP_MOVE`] or a resize within [`SLIP_RESIZE`] ends
 ///   as a cancel, Esc cancels and the release after it is ignored. [`SelectOptions`] names the variations.
-/// - A drawing tool: a drag draws the kind (Shift: squares, circles, 45 degree lines), and a shape smaller
+/// - A drawing tool: a drag draws the kind (Shift: squares, circles, and lines held by
+///   [`SelectOptions::shift_lock`]), and a shape smaller
 ///   than [`MIN_SHAPE`] makes none; PolyLine, Polygon and Cloud add a point per click, close on a click at
 ///   their first point (not PolyLine), take back their last point with Backspace and end with a double click
 ///   or Enter; Ink and freehand highlight record strokes until the tool changes, or make one annotation per
@@ -410,7 +410,7 @@ pub struct SelectOptions {
     pub toggle: ToggleMods,
     /// What opens a note or text box.
     pub open: OpenOn,
-    /// The Shift rule of a point drag.
+    /// The Shift rule of a point drag and of drawn lines and polygon sides.
     pub shift_lock: ShiftLock,
     /// The modifiers that nudge by the far step.
     pub far_nudge: FarNudge,
@@ -847,9 +847,14 @@ impl AnnotateTool {
                     // shape without adding one.
                     self.finish_poly(kind, &reading.words);
                 } else {
+                    let next = if pointer.mods.shift {
+                        self.poly.last().map_or(at, |&last| self.select_options.shift_lock.apply(last, at))
+                    } else {
+                        at
+                    };
                     let repeat = reading.view.doc_len(REPEAT_POINT);
-                    if !self.poly.last().is_some_and(|&last| (last - at).hypot() < repeat) {
-                        self.poly.push(at);
+                    if !self.poly.last().is_some_and(|&last| (last - next).hypot() < repeat) {
+                        self.poly.push(next);
                     }
                 }
                 ToolAction::Done
@@ -873,7 +878,7 @@ impl AnnotateTool {
         use AnnotationKind as K;
         match kind {
             K::Line | K::Arrow => {
-                let end = if shift { turn_to_45(origin, current) } else { current };
+                let end = if shift { self.select_options.shift_lock.apply(origin, current) } else { current };
                 if (end - origin).hypot() < MIN_SHAPE {
                     return None;
                 }
@@ -1208,7 +1213,7 @@ impl CanvasTool for AnnotateTool {
                 let color = drawn(*kind);
                 match kind {
                     AnnotationKind::Line | AnnotationKind::Arrow => {
-                        let end = if shift { turn_to_45(*origin, *current) } else { *current };
+                        let end = if shift { self.select_options.shift_lock.apply(*origin, *current) } else { *current };
                         outline(screen(&[*origin, end]), false, color);
                     }
                     AnnotationKind::Oval => {
@@ -1248,7 +1253,20 @@ impl CanvasTool for AnnotateTool {
             && !self.poly.is_empty()
         {
             let mut path = self.poly.clone();
-            path.extend(self.hover);
+            if let Some(hover) = self.hover {
+                let next = if let Some(&first) = self.poly.first()
+                    && kind != AnnotationKind::PolyLine
+                    && self.poly.len() >= 3
+                    && (first - hover).hypot() <= view.doc_len(cx.slop)
+                {
+                    first
+                } else if shift {
+                    self.poly.last().map_or(hover, |&last| self.select_options.shift_lock.apply(last, hover))
+                } else {
+                    hover
+                };
+                path.push(next);
+            }
             outline(screen(&path), false, drawn(kind));
         }
     }

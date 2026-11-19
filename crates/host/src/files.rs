@@ -260,6 +260,12 @@ pub trait Files: Send + Sync {
     /// Writes atomically where the platform allows (temp file and rename). `Ok(true)` when a host page took the bytes
     /// (a browser embedded in a page), `Ok(false)` when they were written here.
     fn write(&self, path: &Path, bytes: &[u8], intent: WriteIntent) -> Result<bool, FileError>;
+    /// Whether something already exists at `path`. `false` when the service has no file system to
+    /// check (a browser).
+    fn exists(&self, path: &Path) -> bool {
+        let _ = path;
+        false
+    }
     /// The folder the last answered pick of `purpose` chose.
     fn last_folder(&self, purpose: &str) -> Option<PathBuf>;
     /// Answers the next pick, or the oldest pick still open, with `picked` instead of showing a
@@ -323,6 +329,16 @@ impl Files for NoPickFiles {
     #[cfg(target_arch = "wasm32")]
     fn write(&self, _path: &Path, _bytes: &[u8], _intent: WriteIntent) -> Result<bool, FileError> {
         Err(FileError::Unsupported)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn exists(&self, _path: &Path) -> bool {
+        false
     }
 
     fn last_folder(&self, _purpose: &str) -> Option<PathBuf> {
@@ -506,6 +522,10 @@ impl Files for ScriptedFiles {
         state.files.insert(path.to_owned(), bytes.to_vec());
         state.written.push(path.to_owned());
         Ok(false)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        self.state().files.contains_key(path)
     }
 
     /// Answers the oldest open pick of a [`held`](ScriptedFiles::held) service; otherwise the

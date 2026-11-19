@@ -192,7 +192,7 @@ pub const SLIP_RESIZE: f64 = 4.0;
 /// The smallest side of a shape the tool keeps, in page units.
 pub const MIN_SHAPE: f64 = 2.0;
 
-/// The Shift rule of a point drag, held from the neighbouring point.
+/// The Shift rule of a point drag or drawn line, held from its anchor point.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShiftLock {
@@ -201,6 +201,23 @@ pub enum ShiftLock {
     Angle45,
     /// The segment stays level or plumb.
     LevelOrPlumb,
+}
+
+impl ShiftLock {
+    /// `to` held to this rule from `anchor`.
+    pub(crate) fn apply(self, anchor: Point, to: Point) -> Point {
+        match self {
+            ShiftLock::Angle45 => turn_to_45(anchor, to),
+            // The nearer axis from the anchor: the segment goes level or plumb.
+            ShiftLock::LevelOrPlumb => {
+                if (to.x - anchor.x).abs() >= (to.y - anchor.y).abs() {
+                    Point::new(to.x, anchor.y)
+                } else {
+                    Point::new(anchor.x, to.y)
+                }
+            }
+        }
+    }
 }
 
 /// `points` with the callout's point `i` moved to `to`: the knee (`i == 1`) moves along its knee line only (level
@@ -493,15 +510,7 @@ pub fn reshaped(points: &[Point], i: usize, to: Point, lock: Option<ShiftLock>) 
     let mut out = points.to_vec();
     let anchor = if i == 0 { points.get(1) } else { points.get(i - 1) };
     let to = match (anchor, lock) {
-        (Some(&a), Some(ShiftLock::Angle45)) => turn_to_45(a, to),
-        // The nearer axis from the neighbour: the segment goes level or plumb.
-        (Some(&a), Some(ShiftLock::LevelOrPlumb)) => {
-            if (to.x - a.x).abs() >= (to.y - a.y).abs() {
-                Point::new(to.x, a.y)
-            } else {
-                Point::new(a.x, to.y)
-            }
-        }
+        (Some(&a), Some(lock)) => lock.apply(a, to),
         _ => to,
     };
     if let Some(p) = out.get_mut(i) {
