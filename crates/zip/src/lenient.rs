@@ -91,7 +91,7 @@ impl ZipEntry {
             9 => "deflate64",
             12 => "bzip2",
             14 => "lzma",
-            93 => "zstd",
+            20 | 93 => "zstd",
             95 => "xz",
             99 => "aes",
             _ => "other",
@@ -463,7 +463,7 @@ pub fn read_entry_unverified(data: &[u8], e: &ZipEntry, max_bytes: u64) -> Resul
         })?,
         12 | 95 => decode_bzip2_or_xz(raw, e, max_bytes)?,
         14 => decode_lzma(raw, e, max_bytes)?,
-        93 => decode_zstd(raw, e, max_bytes)?,
+        20 | 93 => decode_zstd(raw, e, max_bytes)?,
         m => return Err(ZipError::Unsupported(format!("compression method {m} ({}) for {}", e.method_name(), e.name))),
     };
     if out.len() as u64 != e.uncompressed_size {
