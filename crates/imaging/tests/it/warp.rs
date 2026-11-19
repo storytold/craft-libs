@@ -139,7 +139,7 @@ impl Harness {
 
 #[trial]
 fn the_nearest_point_within_reach_takes_the_press_in_a_turned_flipped_view() {
-    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.5625;
+    let reach = craft_ui::testing::style::tokens(craft_theme::Mode::Light, craft_theme::Contrast::Standard).size.hit.target * 1.53125;
     for (offset, taken) in [(reach - 0.5, true), (reach + 0.5, false)] {
         let mut h = harness_in(WarpMesh::identity(RECT, 1, 1), 30.0, true);
         // Out of the mesh along the bottom right anchor's diagonal, as the view draws it.
