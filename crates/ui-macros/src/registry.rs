@@ -82,14 +82,12 @@ fn contains_suite_item(items: &[Item]) -> bool {
 
 fn module_file(dir: &Path, path_dir: &Path, module: &ItemMod) -> Option<PathBuf> {
     for attr in &module.attrs {
-        if attr.path().is_ident("path") {
-            if let Meta::NameValue(value) = &attr.meta {
-                if let syn::Expr::Lit(expr) = &value.value {
-                    if let syn::Lit::Str(path) = &expr.lit {
-                        return Some(path_dir.join(path.value()));
-                    }
-                }
-            }
+        if attr.path().is_ident("path")
+            && let Meta::NameValue(value) = &attr.meta
+            && let syn::Expr::Lit(expr) = &value.value
+            && let syn::Lit::Str(path) = &expr.lit
+        {
+            return Some(path_dir.join(path.value()));
         }
     }
     let plain = dir.join(format!("{}.rs", module.ident));
@@ -170,13 +168,13 @@ fn walk(
             }
             Item::Macro(item) if item.mac.path.segments.last().is_some_and(|s| s.ident == "register_contract") => {
                 let FirstType(ty) = syn::parse2(item.mac.tokens.clone())?;
-                if let Type::Path(ty) = ty {
-                    if let Some(name) = ty.path.segments.last() {
-                        let helper = format_ident!("__registry_component_{}", crate::command_set::snake(&name.ident.to_string()));
-                        let mut cfg = inherited.to_vec();
-                        cfg.extend(attrs_cfg(&item.attrs));
-                        calls.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
-                    }
+                if let Type::Path(ty) = ty
+                    && let Some(name) = ty.path.segments.last()
+                {
+                    let helper = format_ident!("__registry_component_{}", crate::command_set::snake(&name.ident.to_string()));
+                    let mut cfg = inherited.to_vec();
+                    cfg.extend(attrs_cfg(&item.attrs));
+                    calls.push(quote! { #(#cfg)* crate::#(#path::)*#helper(registry); });
                 }
             }
             _ => {}
