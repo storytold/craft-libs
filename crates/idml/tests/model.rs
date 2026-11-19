@@ -284,9 +284,8 @@ fn text_variable_decoration_uses_preference_and_falls_back_to_legacy_root_values
 #[test]
 fn designmap_schema_elements_roundtrip_expected_attributes() {
     use craft_idml::model::{
-        ConditionValues, KinsokuTableValues, LayerColorValue, LayerValues, MojikumiRow, MojikumiTableValues, NumberingListValues, SectionValues,
-        TextDateKind, TextVariableKind, TextVariableValues, default_languages, default_xref_text_variables, hyperlink_el,
-        hyperlink_page_destination_el, hyperlink_page_item_source_el, hyperlink_url_destination_el, root_color_group_el,
+        ConditionValues, KinsokuTableValues, MojikumiRow, MojikumiTableValues, NumberingListValues, TextDateKind, TextVariableKind,
+        TextVariableValues, default_languages, default_xref_text_variables,
     };
 
     let langs = default_languages();
