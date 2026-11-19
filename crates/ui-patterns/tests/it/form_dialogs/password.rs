@@ -27,9 +27,11 @@ fn the_reveal_button_hands_the_focus_back_to_the_field() {
 /// Enter in the field answers Open with the typed password; a new password answers only once both entries match.
 #[trial]
 fn enter_in_the_field_answers_while_the_entries_are_valid() {
-    for (purpose, retyped, answers) in
-        [(PasswordPurpose::open("poster.pdf"), None, true), (PasswordPurpose::Set, Some("other"), false), (PasswordPurpose::Set, Some("secret"), true)]
-    {
+    for (purpose, retyped, answers) in [
+        (PasswordPurpose::open("poster.pdf"), None, true),
+        (PasswordPurpose::Set, Some("other"), false),
+        (PasswordPurpose::Set, Some("secret"), true),
+    ] {
         let answer = Rc::new(RefCell::new(None));
         let seen = Rc::clone(&answer);
         let mut fixture = Fixture::new(move |ui| {

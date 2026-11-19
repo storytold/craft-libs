@@ -4,8 +4,8 @@ use craft_ui::testing::trial;
 use kurbo::{Point, Rect};
 
 use crate::annotate::{
-    Annotation, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, CALLOUT_KNEE_GAP, HandleRule, ShiftLock, callout_reshaped, handles, hit,
-    marker_rect, pick_at,
+    Annotation, AnnotationHandle, AnnotationHit, AnnotationId, AnnotationKind, CALLOUT_KNEE_GAP, HandleRule, ShiftLock, callout_reshaped, handles,
+    hit, marker_rect, pick_at,
 };
 
 /// The icon side, in page units, the hit tests are given.

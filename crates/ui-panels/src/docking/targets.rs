@@ -130,11 +130,7 @@ impl DockSizes {
 
     /// The width of a column before the dock's room shrinks it.
     pub fn width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
-        if column.iconic {
-            self.iconic_width(column, spec)
-        } else {
-            self.expanded_width(column, spec)
-        }
+        if column.iconic { self.iconic_width(column, spec) } else { self.expanded_width(column, spec) }
     }
 
     /// The width of the icons of `column`, whether it is iconic or expanded beside a rail of its icons

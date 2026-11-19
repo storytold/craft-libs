@@ -9,15 +9,14 @@ use super::{PanelDrag, PanelKey, PanelTitle};
 use crate::buttons::IconButton;
 use crate::contract::{
     Access, Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, ContextMenuRequest, Cx, FooterRegion, HeaderEdge, HeaderParts,
-    HeaderRegion,
-    ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role, ShowCollection as _,
-    ShowContainer as _, Sizing, WordSetCx as _,
+    HeaderRegion, ListDrag, MeasureCx, Name, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Role,
+    ShowCollection as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::menu::{GroupItem, Menu, PanelMenu, PanelRow};
 use crate::runtime::commands::{self, CommandSet as _, CommandState, Commands as _};
-use crate::sections::FooterBar;
 use crate::runtime::env::Label;
 use crate::runtime::focus::{self, FocusTarget};
+use crate::sections::FooterBar;
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{DockSide, IconId, Metrics, PartKey, PressPhase, Sense, keyed};

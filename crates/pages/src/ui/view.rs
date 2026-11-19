@@ -33,8 +33,8 @@ use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, NavMove, PressPhase, ZoomLadder};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
-    tool_pass,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass,
+    canvas_space, tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::PaintSlot;
@@ -538,7 +538,13 @@ impl Seen {
     /// A pass whose canvas body did not run (no area).
     fn empty(view: CanvasView, frame: Frame) -> Seen {
         Seen {
-            geo: Arc::new(Placed { layout: PagedLayout::default(), scale: SCREEN_POINTS_PER_POINT, row: 0..0, doc: DocRect::ZERO, pages: DocRect::ZERO }),
+            geo: Arc::new(Placed {
+                layout: PagedLayout::default(),
+                scale: SCREEN_POINTS_PER_POINT,
+                row: 0..0,
+                doc: DocRect::ZERO,
+                pages: DocRect::ZERO,
+            }),
             frame,
             view,
             pages: Vec::new(),
@@ -980,7 +986,15 @@ impl KeyMoves {
     /// spread; Cmd with Left or Right turns at once. Home and End with Shift or Cmd, and Page Up, Page Down, Up and
     /// Down with Shift and Cmd together, go to the first or last page; Alt, and Shift alone with the other keys,
     /// leave them to nothing.
-    fn of(keys: BodyKeys, nudge: Option<(Vec2, Mods)>, state: &PageViewState, geo: &Placed, options: &LayoutOptions, rect: Rect, line: f64) -> KeyMoves {
+    fn of(
+        keys: BodyKeys,
+        nudge: Option<(Vec2, Mods)>,
+        state: &PageViewState,
+        geo: &Placed,
+        options: &LayoutOptions,
+        rect: Rect,
+        line: f64,
+    ) -> KeyMoves {
         let last = geo.layout.rects.len().saturating_sub(1);
         let top = |page: usize| Some(GoTo::Top { page, fraction: 0.0 });
         let mut moves = KeyMoves::default();

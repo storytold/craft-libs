@@ -31,7 +31,10 @@ pub(crate) fn register_wheel(
     if let Some(taker) = taker {
         wheel::register(
             ctx,
-            taker.value(value_control).field(value_control && text && sensed.is_some()).gated(scope == WheelScope::Gated || (value_control && !free && !zone)),
+            taker
+                .value(value_control)
+                .field(value_control && text && sensed.is_some())
+                .gated(scope == WheelScope::Gated || (value_control && !free && !zone)),
         );
     }
 }

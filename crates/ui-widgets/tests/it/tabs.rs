@@ -282,7 +282,8 @@ fn drag(frames: &mut Frames, from: Pos2, to: Pos2, show: &mut impl FnMut(&mut Ui
 fn a_tab_that_does_not_move_keeps_its_place() {
     use craft_ui::tabs::{DocumentTab, DocumentTabs, DocumentTabsEvent};
     let seen = RefCell::new(Vec::new());
-    let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+    let tabs =
+        [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
         let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
@@ -321,7 +322,8 @@ fn a_stacking_key_does_not_move_a_tab_past_a_fixed_one() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let held = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
-        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
+        let tabs =
+            [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two").movable(false), DocumentTab::new(2, "Three"), DocumentTab::new(3, "Four")];
         let out = DocumentTabs::new("Documents", &tabs).selected(0).reorderable(true).show(ui);
         held.borrow_mut().extend(out.events);
     });

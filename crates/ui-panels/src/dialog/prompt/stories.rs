@@ -2,8 +2,7 @@
 
 use super::super::stories::hosted;
 use super::super::{
-    Alert, DialogHost, HostedAlert, Prompt, PromptChoice, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt,
-    UnsavedChangesDialog,
+    Alert, DialogHost, HostedAlert, Prompt, PromptChoice, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
 };
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};

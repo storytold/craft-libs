@@ -234,10 +234,15 @@ enum KneeSide {
 impl KneeSide {
     /// The side `knee` lies farthest outside of the normalised `rect`; inside it, the nearest edge's side.
     fn of(rect: Rect, knee: Point) -> KneeSide {
-        [(KneeSide::Left, rect.x0 - knee.x), (KneeSide::Right, knee.x - rect.x1), (KneeSide::Above, rect.y0 - knee.y), (KneeSide::Below, knee.y - rect.y1)]
-            .into_iter()
-            .fold((KneeSide::Left, f64::NEG_INFINITY), |best, side| if side.1 > best.1 { side } else { best })
-            .0
+        [
+            (KneeSide::Left, rect.x0 - knee.x),
+            (KneeSide::Right, knee.x - rect.x1),
+            (KneeSide::Above, rect.y0 - knee.y),
+            (KneeSide::Below, knee.y - rect.y1),
+        ]
+        .into_iter()
+        .fold((KneeSide::Left, f64::NEG_INFINITY), |best, side| if side.1 > best.1 { side } else { best })
+        .0
     }
 }
 
@@ -260,12 +265,8 @@ pub fn marker_rect(annotation: &Annotation, page: Rect, icon_side: f64) -> Optio
     let page = page.abs();
     let gap = icon_side * MARKER_GAP;
     let wanted = Point::new(target.x1 + gap, target.y0 - gap - icon_side);
-    let fits = page.is_finite()
-        && target.is_finite()
-        && wanted.is_finite()
-        && icon_side > 0.0
-        && page.width() >= icon_side
-        && page.height() >= icon_side;
+    let fits =
+        page.is_finite() && target.is_finite() && wanted.is_finite() && icon_side > 0.0 && page.width() >= icon_side && page.height() >= icon_side;
     let on_page = target.x0 <= page.x1 && target.x1 >= page.x0 && target.y0 <= page.y1 && target.y1 >= page.y0;
     if !fits || !on_page {
         return None;
@@ -318,11 +319,7 @@ impl Annotation {
     /// whole drawn icon and the whole rect both count. `icon_side` is the icon's side in page
     /// units at the current zoom.
     pub fn extent(&self, icon_side: f64) -> Rect {
-        if self.kind.is_fixed_size() {
-            self.rect.abs().union(Rect::from_origin_size(self.rect.origin(), (icon_side, icon_side)))
-        } else {
-            self.rect
-        }
+        if self.kind.is_fixed_size() { self.rect.abs().union(Rect::from_origin_size(self.rect.origin(), (icon_side, icon_side))) } else { self.rect }
     }
 }
 

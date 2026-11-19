@@ -288,7 +288,8 @@ fn the_platform_chords_answer_dont_save() {
         let app_saw_key = Rc::new(Cell::new(false));
         let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_key));
         let mut fixture = Fixture::new(move |ui| {
-            let pressed = ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: k, pressed: true, .. } if *k == key)));
+            let pressed =
+                ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: k, pressed: true, .. } if *k == key)));
             saw.set(saw.get() || pressed);
             shown.borrow_mut().run(ui);
         });
