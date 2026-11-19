@@ -50,6 +50,23 @@ impl std::error::Error for Error {}
 
 type Result<T> = std::result::Result<T, Error>;
 
+/// Optional discovery probes may fail, but a malformed reply must never be accepted as complete.
+#[derive(Debug)]
+enum ReplyError {
+    Malformed(Error),
+    Other(Error),
+}
+
+impl From<ReplyError> for Error {
+    fn from(error: ReplyError) -> Self {
+        match error {
+            ReplyError::Malformed(error) | ReplyError::Other(error) => error,
+        }
+    }
+}
+
+type ReplyResult<T> = std::result::Result<T, ReplyError>;
+
 /// A printer the server knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Printer {
@@ -199,8 +216,9 @@ impl std::fmt::Display for Endpoint {
     }
 }
 
-/// Try resolved addresses within one native connection budget, overlapping at most two attempts
-/// so a slow first address keeps its full window while another address can connect.
+/// Try resolved addresses within one native connection budget, with staggered overlapping attempts
+/// so earlier addresses keep their full remaining window. At most twelve attempts run together;
+/// the shared deadline can expire before every address in an arbitrary resolver list is tried.
 fn open_tcp(
     host: &str,
     port: u16,
@@ -252,7 +270,7 @@ fn open_tcp_overlapping(
     addrs: Vec<SocketAddr>,
     open: impl Fn(SocketAddr, Duration) -> std::io::Result<TcpStream> + Send + Sync + 'static,
 ) -> Result<Stream> {
-    const MAX_CONNECTS: usize = 2;
+    const MAX_CONNECTS: usize = 12;
     const STAGGER: Duration = Duration::from_millis(250);
     let started = std::time::Instant::now();
     let mut last_launch = started;
@@ -548,7 +566,11 @@ fn parse_message(b: &[u8]) -> Result<ParsedMessage> {
 /// POSTs `body` (IPP, with any document data after it) to `path` and returns the parsed reply with
 /// its private group boundaries.
 fn post(endpoint: &Endpoint, path: &str, body: &[u8]) -> Result<ParsedMessage> {
-    let mut stream = endpoint.connect()?;
+    post_classified(endpoint, path, body).map_err(Error::from)
+}
+
+fn post_classified(endpoint: &Endpoint, path: &str, body: &[u8]) -> ReplyResult<ParsedMessage> {
+    let mut stream = endpoint.connect().map_err(ReplyError::Other)?;
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         endpoint.host(),
@@ -558,20 +580,25 @@ fn post(endpoint: &Endpoint, path: &str, body: &[u8]) -> Result<ParsedMessage> {
         .write_all(head.as_bytes())
         .and_then(|()| stream.write_all(body))
         .and_then(|()| stream.flush())
-        .map_err(|e| Error::Protocol(format!("sending: {e}")))?;
-    let raw = read_response(&mut stream)?;
-    let (status, headers, body) = http_response(&raw)?;
+        .map_err(|e| ReplyError::Other(Error::Protocol(format!("sending: {e}"))))?;
+    let raw = read_response_classified(&mut stream)?;
+    let (status, headers, body) =
+        http_response(&raw).map_err(|error| if raw.is_empty() { ReplyError::Other(error) } else { ReplyError::Malformed(error) })?;
     if status != 200 {
-        return Err(Error::Protocol(match status {
+        return Err(ReplyError::Other(Error::Protocol(match status {
             401 => "the print server asks for authentication (HTTP 401)".to_string(),
             403 => "the print server forbids this request (HTTP 403)".to_string(),
             s => format!("HTTP {s}"),
-        }));
+        })));
     }
-    let body = if headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked")) { dechunk(body)? } else { body.to_vec() };
-    let reply = parse_message(&body)?;
+    let body = if headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked")) {
+        dechunk(body).map_err(ReplyError::Malformed)?
+    } else {
+        body.to_vec()
+    };
+    let reply = parse_message(&body).map_err(ReplyError::Malformed)?;
     if reply.reply.status >= 0x0400 {
-        return Err(Error::Status(reply.reply.status, reply.reply.status_message()));
+        return Err(ReplyError::Other(Error::Status(reply.reply.status, reply.reply.status_message())));
     }
     Ok(reply)
 }
@@ -582,7 +609,12 @@ type Headers = Vec<(String, String)>;
 /// Reads one HTTP response: the headers, then as much body as `Content-Length` says, or up to
 /// the last chunk, or to the end of the stream when the server says neither. A server that keeps
 /// the connection open would otherwise hold the reply until the read times out.
+#[cfg(test)]
 fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
+    read_response_classified(stream).map_err(Error::from)
+}
+
+fn read_response_classified(stream: &mut Stream) -> ReplyResult<Vec<u8>> {
     let mut raw = Vec::new();
     let mut buf = [0u8; 16 * 1024];
     let mut body_at = None;
@@ -595,27 +627,38 @@ fn read_response(stream: &mut Stream) -> Result<Vec<u8>> {
     let started = std::time::Instant::now();
     loop {
         if started.elapsed() > REPLY_DEADLINE {
-            return Err(Error::Protocol("the print server took too long to reply".into()));
+            return Err(ReplyError::Other(Error::Protocol("the print server took too long to reply".into())));
         }
-        let n = stream.read(&mut buf).map_err(|e| Error::Protocol(format!("reading: {e}")))?;
+        let n = stream.read(&mut buf).map_err(|e| ReplyError::Other(Error::Protocol(format!("reading: {e}"))))?;
         if n == 0 {
             // A Content-Length body is complete only after every promised byte (RFC 9112).
             if expected.is_some() && !chunked {
-                return Err(Error::Protocol("incomplete HTTP body".into()));
+                return Err(ReplyError::Malformed(Error::Protocol("incomplete HTTP body".into())));
             }
             return Ok(raw);
         }
         raw.extend_from_slice(buf.get(..n).unwrap_or_default());
         if raw.len() > MAX_REPLY {
-            return Err(Error::Protocol("the reply is larger than 16 MiB".into()));
+            return Err(ReplyError::Malformed(Error::Protocol("the reply is larger than 16 MiB".into())));
         }
         if body_at.is_none()
             && let Some(end) = raw.get(head_at..).and_then(|r| r.windows(4).position(|w| w == b"\r\n\r\n")).map(|p| head_at + p)
         {
             body_at = Some(end + 4);
-            let (_, headers, _) = http_response(&raw)?;
-            expected = headers.iter().find(|(k, _)| k == "content-length").and_then(|(_, v)| v.parse().ok());
+            let (_, headers, _) = http_response(&raw).map_err(ReplyError::Malformed)?;
             chunked = headers.iter().any(|(k, v)| k == "transfer-encoding" && v.contains("chunked"));
+            if !chunked {
+                for (_, value) in headers.iter().filter(|(key, _)| key == "content-length") {
+                    let length = (!value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+                        .then(|| value.parse::<usize>().ok())
+                        .flatten()
+                        .ok_or_else(|| ReplyError::Malformed(Error::Protocol("invalid Content-Length".into())))?;
+                    if expected.is_some_and(|previous| previous != length) {
+                        return Err(ReplyError::Malformed(Error::Protocol("conflicting Content-Length".into())));
+                    }
+                    expected = Some(length);
+                }
+            }
         }
         let Some(at) = body_at else {
             head_at = raw.len().saturating_sub(3);
@@ -727,14 +770,14 @@ fn queue_path(name: &str, is_class: bool) -> Result<String> {
 pub fn printers(endpoint: &Endpoint) -> Result<Vec<Printer>> {
     let mut out = queues(endpoint, OP_CUPS_GET_PRINTERS, false)?;
     // A server without classes answers "not found"; an older server may not know the operation.
-    match queues(endpoint, OP_CUPS_GET_CLASSES, true) {
+    match queues_classified(endpoint, OP_CUPS_GET_CLASSES, true) {
         Ok(classes) => out.extend(classes),
-        Err(error @ Error::Protocol(_)) => return Err(error),
+        Err(ReplyError::Malformed(error)) => return Err(error),
         Err(_) => {}
     }
-    let default = match default_printer(endpoint) {
+    let default = match default_printer_classified(endpoint) {
         Ok(default) => default,
-        Err(error @ Error::Protocol(_)) => return Err(error),
+        Err(ReplyError::Malformed(error)) => return Err(error),
         Err(_) => None,
     };
     for p in &mut out {
@@ -744,19 +787,23 @@ pub fn printers(endpoint: &Endpoint) -> Result<Vec<Printer>> {
 }
 
 fn queues(endpoint: &Endpoint, op: u16, is_class: bool) -> Result<Vec<Printer>> {
+    queues_classified(endpoint, op, is_class).map_err(Error::from)
+}
+
+fn queues_classified(endpoint: &Endpoint, op: u16, is_class: bool) -> ReplyResult<Vec<Printer>> {
     let mut r = Request::new(op, 1);
     r.attr_many(TAG_KEYWORD, "requested-attributes", &["printer-name", "printer-info", "printer-state", "printer-is-accepting-jobs"]);
-    let parsed = match post(endpoint, "/", &r.end()) {
+    let parsed = match post_classified(endpoint, "/", &r.end()) {
         Ok(reply) => reply,
         // CUPS answers "not found" ("No destinations added.") when no printer is set up.
-        Err(Error::Status(0x0406, _)) => return Ok(Vec::new()),
+        Err(ReplyError::Other(Error::Status(0x0406, _))) => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
     let mut out = Vec::new();
     let attributes = &parsed.reply.attributes;
     for group in parsed.groups.iter().filter(|group| group.tag == TAG_PRINTER_GROUP) {
         let Some(group_attributes) = attributes.get(group.start..group.end) else {
-            return Err(Error::Protocol("invalid printer attribute group range".into()));
+            return Err(ReplyError::Malformed(Error::Protocol("invalid printer attribute group range".into())));
         };
         let mut name = None;
         let mut info = String::new();
@@ -780,12 +827,16 @@ fn queues(endpoint: &Endpoint, op: u16, is_class: bool) -> Result<Vec<Printer>> 
 
 /// The server's default printer (CUPS-Get-Default), `None` when there is none.
 pub fn default_printer(endpoint: &Endpoint) -> Result<Option<String>> {
+    default_printer_classified(endpoint).map_err(Error::from)
+}
+
+fn default_printer_classified(endpoint: &Endpoint) -> ReplyResult<Option<String>> {
     let mut r = Request::new(OP_CUPS_GET_DEFAULT, 2);
     r.attr_many(TAG_KEYWORD, "requested-attributes", &["printer-name"]);
-    match post(endpoint, "/", &r.end()) {
+    match post_classified(endpoint, "/", &r.end()) {
         Ok(reply) => Ok(reply.reply.attributes.iter().find(|a| a.name == "printer-name").map(Attribute::text).filter(|n| !n.is_empty())),
         // CUPS answers "not found" when no default is set.
-        Err(Error::Status(0x0406, _)) => Ok(None),
+        Err(ReplyError::Other(Error::Status(0x0406, _))) => Ok(None),
         Err(e) => Err(e),
     }
 }
