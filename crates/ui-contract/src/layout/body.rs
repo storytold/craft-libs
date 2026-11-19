@@ -1528,7 +1528,7 @@ pub(crate) fn run_body_measured<R>(
                 // radios that would not fit there takes a second line instead of widening the dialog.
                 // A room unbounded at its end edge (a measuring run's) is cut from its start edge.
                 RowAlign::Start | RowAlign::SpaceBetween if *wrap => env
-                    .measure()
+                    .measure
                     .filter(|measure| *measure < room.width() && (!rtl || room.right().is_finite()))
                     .map(|measure| Flow::new(room, rtl).span(0.0, measure)),
                 RowAlign::Start | RowAlign::SpaceBetween => None,
