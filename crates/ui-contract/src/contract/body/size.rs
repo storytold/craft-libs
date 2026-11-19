@@ -246,7 +246,7 @@ impl<'b> BodyHooks<'b> {
         self.measured_body.map(|body| {
             let (mut header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
             // A finite declared inline width is the header's reserved width, as `regions` places the header at it.
-            if let Some(declared) = props.header.filter(|header| header.inline).and_then(|header| header.inline_width).filter(|width| width.is_finite()) {
+            if let Some(declared) = props.header.filter(|header| header.inline).and_then(|header| header.inline_width).filter(|width| width.is_finite() && *width > 0.0) {
                 header.x = declared;
             }
             let wanted = self.regions_size(props, body, header, self.measured_footer, end).x.max(self.least_width);
