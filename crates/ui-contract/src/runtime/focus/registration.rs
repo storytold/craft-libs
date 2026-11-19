@@ -8,7 +8,7 @@ use craft_behavior::{KeyRole, PartRef};
 use egui::{Context, Id};
 
 /// A stop as registered at step 7 of the pipeline.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Stop {
     /// The component.
@@ -124,7 +124,7 @@ impl Stop {
 }
 
 /// A roving group's registration: one Tab stop whose members take moves.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Group {
     /// The group.

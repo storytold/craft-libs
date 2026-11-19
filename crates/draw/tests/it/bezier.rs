@@ -919,6 +919,63 @@ fn add_anchor_selects_and_edits_existing_anchors_and_handles() {
     }
 }
 
+// Add Anchor reaches a segment within 5 screen points, as the reference application does (PhotoCraft #12732): a click
+// 2 to 5 points above or below a straight segment adds an anchor and shows the pen with "+", one 5.5 or 6 points away
+// adds nothing; Delete Anchor and Direct Selection keep a line's reach.
+#[trial]
+fn add_anchor_reaches_a_segment_within_5_points() {
+    use craft_behavior::{Cursor, CursorBadge, PaintedCursor};
+    let segment = p(110.0, 60.0);
+    let at_tool = |tool: BezierTool| {
+        let mut h = two_paths();
+        h.update(|st| st.tool = tool);
+        h
+    };
+    let click = |h: &mut Harness, at: Pos2| {
+        h.press_at(at);
+        h.release_at(at);
+    };
+    let pen_plus = |h: &Harness| {
+        matches!(
+            craft_ui::runtime::cursor::current(h.fixture.ctx()),
+            Some(Cursor::Painted(PaintedCursor::Tool { badge: Some(CursorBadge::Add), .. }))
+        )
+    };
+    for off in [2.0_f32, 3.0, 4.5, 5.0, -2.0, -5.0] {
+        let mut h = at_tool(BezierTool::AddAnchor);
+        let at = h.screen(segment) + vec2(0.0, off);
+        h.move_to(at);
+        h.fixture.frame(Vec::new());
+        assert!(pen_plus(&h), "{off}: the pen with + shows where a click adds");
+        click(&mut h, at);
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::InsertAnchor { path: 1, segment, .. }) if *segment == kr(0)), "{off}: {:?}", st.changes);
+        assert_eq!(st.paths[0].subpaths[0].knots.len(), 5, "{off}");
+    }
+    for off in [5.5_f32, 6.0, -6.0] {
+        let mut h = at_tool(BezierTool::AddAnchor);
+        let at = h.screen(segment) + vec2(0.0, off);
+        h.move_to(at);
+        h.fixture.frame(Vec::new());
+        assert!(!pen_plus(&h), "{off}: no + past the reach");
+        click(&mut h, at);
+        let st = h.state.borrow();
+        assert!(st.changes.is_empty() && st.seen.is_empty(), "{off}: {:?} {:?}", st.changes, st.seen);
+        assert_eq!(st.paths, [path_a(), path_b()], "{off}");
+    }
+    // The other tools keep a line's reach: 4.5 points from the segment misses it, 3 points hits it.
+    for tool in [BezierTool::DeleteAnchor, BezierTool::Direct] {
+        let mut h = at_tool(tool);
+        let near = h.screen(segment) + vec2(0.0, 3.0);
+        h.drag(near, vec2(0.0, FAR));
+        assert!(matches!(h.last_change(), Some(PathEdit::BendSegment { path: 1, .. })), "{tool:?}: {:?}", h.last_change());
+        let mut h = at_tool(tool);
+        let past = h.screen(segment) + vec2(0.0, 4.5);
+        h.drag(past, vec2(0.0, FAR));
+        assert!(!matches!(h.last_change(), Some(PathEdit::BendSegment { .. })), "{tool:?}: {:?}", h.last_change());
+    }
+}
+
 // The anchor tools' canvas tool: a press off the paths begins nothing (it never starts a path), and off the paths the
 // cursor says what a click does: the arrow for Add Anchor (with "+" under ⌥, PhotoCraft #12709), the pen
 // with "-" for Delete Anchor, the Convert Point icon, the arrow for Direct Selection and under ⌘, the crosshair when

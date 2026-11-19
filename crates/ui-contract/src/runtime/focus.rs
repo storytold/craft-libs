@@ -42,7 +42,7 @@ pub enum FocusShape {
 pub(crate) type StopKey = (Id, Option<PartRef>);
 
 /// A registered stop with its place in the scope tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct StopRec {
     #[doc(hidden)]
@@ -50,7 +50,7 @@ pub struct StopRec {
     pub(crate) scope: Option<Id>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScopeRec {
     pub(crate) policy: FocusPolicy,
     pub(crate) parent: Option<Id>,
@@ -116,7 +116,7 @@ pub(crate) struct BeginIn {
 
 /// The row groups of one collection's visible rows in a pass: every one is a flat roving group of the same owner
 /// and direction, so the collection registers them as one record.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RowGroups {
     owner: Id,
     rtl: bool,
@@ -260,8 +260,9 @@ pub(crate) struct Mark {
 
 /// What one run of a child registered with the focus service: its stops, the scopes it pushed, the roving groups
 /// its stops belong to and its collections' row groups. A child out of view registers it again without running
-/// (`runtime::lazy`), so its stops keep their place in Tab and F6 order.
-#[derive(Clone, Default)]
+/// (`runtime::lazy`), so its stops keep their place in Tab and F6 order. Two transcripts are equal when their replays
+/// register the same records under the same open scope (`Transcript::placed`).
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Transcript {
     stops: Vec<StopRec>,
     scopes: Vec<(Id, ScopeRec)>,
@@ -276,7 +277,33 @@ impl Transcript {
     pub(crate) fn stop_ids(&self) -> impl Iterator<Item = Id> + '_ {
         self.stops.iter().map(|rec| rec.stop.id)
     }
+
+    /// The transcript as a replay registers it with `outer` the innermost open scope: a record under the scope that
+    /// was open around the run goes under `outer`, and a replayed scope is no new scope (`entering` is false).
+    fn placed(&self, outer: Option<Id>) -> Transcript {
+        let place = |scope: Option<Id>| if scope == self.outer { outer } else { scope };
+        Transcript {
+            stops: self.stops.iter().map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }).collect(),
+            scopes: self
+                .scopes
+                .iter()
+                .map(|(id, scope)| (*id, ScopeRec { parent: place(scope.parent), entering: scope.entering.map(|_| false), ..scope.clone() }))
+                .collect(),
+            groups: self.groups.clone(),
+            row_sets: self.row_sets.clone(),
+            outer,
+        }
+    }
 }
+
+impl PartialEq for Transcript {
+    fn eq(&self, other: &Self) -> bool {
+        let [a, b] = [self.placed(None), other.placed(None)];
+        (a.stops, a.scopes, a.groups, a.row_sets) == (b.stops, b.scopes, b.groups, b.row_sets)
+    }
+}
+
+impl Eq for Transcript {}
 
 /// Where the running pass's registrations stand.
 pub(crate) fn mark(ctx: &Context) -> Mark {
@@ -310,21 +337,19 @@ pub(crate) fn transcript(ctx: &Context, mark: Mark) -> Transcript {
 pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
     let frame = crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx));
     with(ctx, |state| {
-        let outer = state.open.last().map(|(id, _)| *id);
-        let place = |scope: Option<Id>| if scope == transcript.outer { outer } else { scope };
-        for (id, scope) in &transcript.scopes {
-            let parent = place(scope.parent);
-            state.scopes.insert(*id, ScopeRec { parent, entering: scope.entering.map(|_| false), ..scope.clone() });
-            state.scope_order.push(*id);
+        let placed = transcript.placed(state.open.last().map(|(id, _)| *id));
+        for (id, scope) in placed.scopes {
             if scope.entering.is_none() {
-                state.seen.insert(*id, frame);
+                state.seen.insert(id, frame);
             }
+            state.scopes.insert(id, scope);
+            state.scope_order.push(id);
         }
-        state.stops.extend(transcript.stops.iter().map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }));
-        for group in &transcript.groups {
-            state.groups.insert(group.id, *group);
+        state.stops.extend(placed.stops);
+        for group in placed.groups {
+            state.groups.insert(group.id, group);
         }
-        state.row_sets.extend(transcript.row_sets.iter().cloned());
+        state.row_sets.extend(placed.row_sets);
     });
 }
 
@@ -431,7 +456,7 @@ pub(crate) fn pop_scope(ctx: &Context) {
 /// Registers that the menu bar `bar` takes the menu-bar keys of the next input hook (spec 9.7). A settled bar
 /// registers again when it replays its last run, and the keys it takes run it (`keys::routed_to`).
 pub(crate) fn register_menu_bar(ctx: &Context, bar: Id) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_menu_bar(ctx, bar));
+    crate::runtime::replay::journal(ctx, || bar, |ctx, &bar| register_menu_bar(ctx, bar));
     with(ctx, |state| state.menu_bar = Some(bar));
 }
 

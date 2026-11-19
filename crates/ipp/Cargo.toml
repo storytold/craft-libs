@@ -1,0 +1,13 @@
+[package]
+name = "craft-ipp"
+description = "A small IPP client for CUPS (list printers, default printer, print a PDF), pure Rust, no dependencies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
