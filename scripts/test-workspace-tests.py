@@ -13,7 +13,9 @@ WORKFLOW = ROOT / ".github/workflows/workspace.yml"
 
 
 def block(text, name):
-    match = re.search(r"^      " + re.escape(name) + r": \|\n((?:        .*\n|\n)+)", text, re.M)
+    # The Linux call names each shared block with a YAML anchor (`command: &command |`), and the
+    # macOS and Windows call refers to it, so this first block is the one every leg runs.
+    match = re.search(r"^      " + re.escape(name) + r": (?:&[\w-]+ )?\|\n((?:        .*\n|\n)+)", text, re.M)
     if match is None:
         raise AssertionError(f"missing command block: {name}")
     return "\n".join(line[8:] for line in match[1].splitlines())
@@ -160,12 +162,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_unix_resource_groups_are_serial_and_leave_windows_alone(self):
         config = tomllib.loads((ROOT / ".config/nextest.toml").read_text())
-        # The priority overrides (slowest tests first) set no group or platform; only the group
-        # overrides are the resource audit's.
-        overrides = [o for o in config["profile"]["ci"]["overrides"] if "priority" not in o]
-        for o in config["profile"]["ci"]["overrides"]:
-            if "priority" in o:
-                self.assertEqual(set(o), {"filter", "priority"})
+        overrides = config["profile"]["ci"]["overrides"]
         self.assertEqual(overrides, [
             {"platform": "cfg(unix)",
              "filter": "package(craft-ui) | package(craft-keymap) | package(craft-update)",
@@ -179,8 +176,16 @@ class WorkspaceTests(unittest.TestCase):
     def test_workflow_stays_shared_and_keeps_platform_gates(self):
         source = WORKFLOW.read_text()
         self.assertIn("uses: storytold/craft-common-actions/.github/workflows/gate.yml@main", source)
-        # Pushes to next run Linux only; every other run keeps all three.
-        self.assertIn('\'["ubuntu-latest","windows-latest","macos-latest"]\'', source)
+        self.assertIn('os: \'["ubuntu-latest"]\'', source)
+        self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
+        self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
+        self.assertIn("      lint-command: &lint |\n", source)
+        self.assertIn("      command: &command |\n", source)
+        self.assertIn("      lint-command: *lint\n", source)
+        self.assertIn("      command: *command\n", source)
+        # Only the Linux leg keeps workspace crates; the cache budget has no room for the others.
+        self.assertEqual(source.count("cache-workspace-crates: true"), 1)
         self.assertIn("  msrv:", source)
         self.assertIn("  wasm:", source)
         self.assertIn("python3 scripts/test-workspace-tests.py", block(source, "lint-command"))
