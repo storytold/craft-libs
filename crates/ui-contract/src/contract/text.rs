@@ -426,16 +426,12 @@ pub(crate) fn run<C: Component>(
     let read_only = cx.core.resolved.read_only || !enabled;
     let ink = decl.options.ink.map_or(ink, |own| crate::style::ink_color(&crate::runtime::env::Env::of(ui).tokens, own));
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
-<<<<<<< HEAD
-    let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
+    let held = cx.popup(EDIT_MENU).is_open_in(cx.core);
     // The bound caret is compared with the widget's before anything else this pass moves it (AccessKit, Select All,
     // the typing): last pass reported the widget's caret, so only an app write differs here. A composition keeps its
     // caret.
     let caret_placed =
         state.preedit.is_none() && adapter::place_caret(&ctx, widget, state.draft.as_deref().unwrap_or(&decl.shown), decl.options.caret);
-=======
-    let held = cx.popup(EDIT_MENU).is_open_in(cx.core);
->>>>>>> up/next
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     if std::mem::take(&mut state.select_all) {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();

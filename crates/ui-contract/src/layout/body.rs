@@ -1602,118 +1602,11 @@ pub(crate) fn run_body_measured<R>(
     // Each layout runs in its own function, so a body nested in bodies keeps only its own layout's frame on the stack.
     let line = RowIn { id, gap, shared, sizing, rtl };
     match layout {
-<<<<<<< HEAD
-        BodyLayout::Stack => {
-            // Each leaf shows at most the stack's room, never below its least.
-            let env = env.derive_local(|scoped| scoped.shrink = Some(Shrink::Fit));
-            let installed = Env::install_for(ui, env.clone());
-            // A held child of a column whose own room is unbounded keeps the width it measured at.
-            let inner = if env.content_column && flow_room(ui).x.is_finite() {
-                run_column(ui, &env, id, child::column_layout(rtl), body)
-            } else {
-                run_sharing(ui, &env, id, Axis::Y, child::column_layout(rtl), body)
-            };
-            Env::restore(&ctx, installed);
-            (inner, None)
-        }
-        BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => {
-            let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
-                let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
-                let installed = Env::install_for(
-                    ui,
-                    env.derive_local(|scoped| {
-                        scoped.grid = Some(id);
-                        scoped.row_line = Some(line);
-                        scoped.first_line = None;
-                    }),
-                );
-                let inner = run_spread(ui, id, gap.x, rtl, &mut body);
-                Env::restore(&ctx, installed);
-                record_line(ui, sizing, id, shared);
-                inner
-            });
-            inner
-        }
-        BodyLayout::Row { wrap: false, align: RowAlign::Start } => {
-            let room = ui.available_rect_before_wrap();
-            let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
-            let inner = run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
-                let installed = Env::install_for(
-                    ui,
-                    Env::of(ui).derive_local(|scoped| {
-                        scoped.row_room = Some(room.width());
-                        scoped.row_line = Some(line);
-                        scoped.first_line = None;
-                    }),
-                );
-                let inner = run_shrinking(ui, id, &mut body);
-                Env::restore(&ctx, installed);
-                record_line(ui, sizing, id, shared);
-                inner
-            });
-            (inner, None)
-        }
-        BodyLayout::Row { wrap, align } => {
-            let room = ui.available_rect_before_wrap();
-            let rect = match *align {
-                // A wrapping row wraps at the line length its container sets for paragraphs (a dialog's), as the
-                // paragraphs beside it do: a dialog sized from its content stays as wide as its text, and a row of
-                // radios that would not fit there takes a second line instead of widening the dialog.
-                // A room unbounded at its end edge (a measuring run's) is cut from its start edge.
-                RowAlign::Start | RowAlign::SpaceBetween if *wrap => env
-                    .measure
-                    .filter(|measure| *measure < room.width() && (!rtl || room.right().is_finite()))
-                    .map(|measure| Flow::new(room, rtl).span(0.0, measure)),
-                RowAlign::Start | RowAlign::SpaceBetween => None,
-                RowAlign::Center | RowAlign::End => {
-                    let last = this_pass(&ctx, sizing, id);
-                    // In a body that scrolls along x the band is the width its view shows, not the scroll region.
-                    let band = if Env::of(ui).unbounded.0 { shrink_room(ui) } else { room.width() };
-                    // Without a measuring run, or in a band without an end, the block is placed as `Start`.
-                    last.filter(|last| band.is_finite() && last.x > 0.0 && last.x < band).map(|last| {
-                        let spare = band - last.x;
-                        let lead = if *align == RowAlign::Center { spare / 2.0 } else { spare };
-                        Flow::new(room, rtl).take_start(lead).1.rect()
-                    })
-                }
-            };
-            // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
-            // first line.
-            let line = (!*wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
-            // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
-            // line of its own.
-            let block_layout = if *wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, *wrap) };
-            let (inner, took) = child::block(ui, rect, block_layout, |ui| {
-                let installed = Env::install_for(
-                    ui,
-                    env.derive_local(|scoped| {
-                        scoped.row_room = Some(room.width());
-                        scoped.row_line = line;
-                        if line.is_some() {
-                            scoped.first_line = None;
-                        }
-                    }),
-                );
-                let inner = if *wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
-                Env::restore(&ctx, installed);
-                if !*wrap {
-                    record_line(ui, sizing, id, shared);
-                }
-                inner
-            });
-            if *align != RowAlign::Start {
-                found(&ctx, sizing, id, room.size(), took.size());
-            }
-            (inner, (*align != RowAlign::Start).then(|| took.width()))
-        }
-        BodyLayout::Grid { columns } => (run_grid(ui, env, id, columns, gap, body), None),
-=======
         BodyLayout::Stack => (run_stack(ui, env, &line, body), None),
         BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => run_spread_row(ui, env, &line, body),
         BodyLayout::Row { wrap: false, align: RowAlign::Start } => (run_start_row(ui, env, &line, body), None),
         BodyLayout::Row { wrap, align } => run_row(ui, env, &line, (*wrap, *align), body),
         BodyLayout::Grid { columns, fit, cells } => (run_grid(ui, env, id, (&columns[..], *fit, *cells), gap, body), None),
->>>>>>> up/next
     }
 }
 
@@ -1795,6 +1688,14 @@ fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign
     let RowIn { id, shared, sizing, rtl, .. } = *at;
     let room = ui.available_rect_before_wrap();
     let rect = match align {
+        // A wrapping row wraps at the line length its container sets for paragraphs (a dialog's), as the paragraphs
+        // beside it do: a dialog sized from its content stays as wide as its text, and a row of radios that would not
+        // fit there takes a second line instead of widening the dialog. A room unbounded at its end edge (a measuring
+        // run's) is cut from its start edge.
+        RowAlign::Start | RowAlign::SpaceBetween if wrap => env
+            .measure
+            .filter(|measure| *measure < room.width() && (!rtl || room.right().is_finite()))
+            .map(|measure| Flow::new(room, rtl).span(0.0, measure)),
         RowAlign::Start | RowAlign::SpaceBetween => None,
         RowAlign::Center | RowAlign::End => {
             let last = this_pass(&ctx, sizing, id);

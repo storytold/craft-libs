@@ -138,13 +138,9 @@ pub(crate) struct Board {
     matcher: Matcher,
     held: Vec<Held>,
     /// The top modal layer's root container of each viewport that has one.
-<<<<<<< HEAD
-    modal_roots: Vec<(ViewportId, Id)>,
-    /// The root of the page region the window's shell shows, per viewport: where keys with nothing focused also go.
-    page_roots: Vec<(ViewportId, Id)>,
-=======
     modal_roots: HashMap<ViewportId, Id>,
->>>>>>> up/next
+    /// The root of the page region the window's shell shows, per viewport: where keys with nothing focused also go.
+    page_roots: HashMap<ViewportId, Id>,
     /// The states published this pass, and the pass before, by an instance inside the top modal layer.
     modal_published: HashSet<StateKey>,
     modal_published_last: HashSet<StateKey>,
@@ -841,8 +837,7 @@ pub(crate) fn set_modal_open(ctx: &Context, open: bool, viewport: ViewportId, ro
 #[doc(hidden)]
 pub fn note_page_root(ctx: &Context, viewport: ViewportId, root: Id) {
     with(ctx, |board| {
-        board.page_roots.retain(|(of, _)| *of != viewport);
-        board.page_roots.push((viewport, root));
+        board.page_roots.insert(viewport, root);
     });
 }
 
@@ -1308,14 +1303,8 @@ pub(crate) fn begin(ctx: &Context) {
             board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default()
         });
         // Nothing focused inside a modal: the modal's root takes the commands, as a plain Enter goes to its default button.
-<<<<<<< HEAD
-
-        let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.iter().find(|(of, _)| *of == viewport)) {
-            (true, Some((_, root))) => vec![*root],
-=======
         let chain = match (chain.is_empty() && focused.is_none(), board.modal_roots.get(&viewport)) {
             (true, Some(root)) => vec![*root],
->>>>>>> up/next
             _ => chain,
         };
         if !chain.is_empty() {
@@ -1325,7 +1314,7 @@ pub(crate) fn begin(ctx: &Context) {
         // before an app command's, and the page region's after it. Nothing holds focus there, so the chain last focused
         // stays.
         let chain = if chain.is_empty() && focused.is_none() {
-            let page = board.page_roots.iter().find(|(of, _)| *of == viewport).map(|(_, root)| *root);
+            let page = board.page_roots.get(&viewport).copied();
             shell.into_iter().chain(page).collect()
         } else {
             chain

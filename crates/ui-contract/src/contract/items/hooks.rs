@@ -185,12 +185,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let scx = &scx.measured_by(ui).owned_by(id, env.motion);
         self.room = room;
         self.indent_step = scx.control().icon;
-<<<<<<< HEAD
-        let room = Self::inner_room(comp, &env.tokens, room);
-=======
-        let env = Env::of(ui);
         let room = Self::inner_room(comp, scx.tokens, room);
->>>>>>> up/next
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
         // across the width the column settles on.

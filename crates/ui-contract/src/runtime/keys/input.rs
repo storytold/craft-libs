@@ -464,11 +464,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
     let keys = record.keys;
-<<<<<<< HEAD
     let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !focus::takes_letters(&keys));
-=======
-    let menu_bar = record.menu_bar.is_some() && keys.is_none_or(|keys| !matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder));
->>>>>>> up/next
     let before = events.len();
     let canvas = focus::canvas_keys(ctx, viewport).filter(|_| keys.is_none() && !record.foreign);
     let lists_edits = |keys: &KeyUse| EditCommands::ALL.iter().any(|command| command.edit().is_some_and(|edit| keys.edits.contains(edit)));

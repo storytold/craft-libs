@@ -95,9 +95,6 @@ pub struct IconSpec<'a> {
     pub color: Option<StyleColor>,
     /// Mirroring under right-to-left.
     pub mirror: Mirror,
-<<<<<<< HEAD
-    /// The set an SVG icon is drawn from.
-    pub set: IconSet,
     /// A data-colour mark on the icon: a dot at the bottom-trailing corner (see [`badge`](Self::badge)) or a bar across
     /// the bottom (see [`with_mark`](Self::with_mark)).
     pub badge: Option<IconMark>,
@@ -128,10 +125,6 @@ impl IconMark {
     pub const fn weighted_bar(color: DataColor, weight: f32) -> Self {
         IconMark::Bar { color, weight: Some(weight) }
     }
-=======
-    /// A dot of a colour from data at the icon's bottom-trailing corner; see [`badge`](Self::badge).
-    pub badge: Option<DataColor>,
->>>>>>> up/next
 }
 
 impl<'a> IconSpec<'a> {
@@ -254,13 +247,8 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
         }
         IconSource::Glyph(glyph) => glyph.paint(painter, tokens, square, color, rtl && glyph.directional() && spec.mirror == Mirror::Auto),
         IconSource::Svg(id) => {
-<<<<<<< HEAD
-            if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.set, spec.mirror) {
-                icon.paint_layers(painter, square, LayerInks::of(tokens, color, single_ink));
-=======
             if let Some(icon) = SvgIcon::of(tokens, direction, side, id, spec.mirror) {
-                icon.paint(painter, square, color);
->>>>>>> up/next
+                icon.paint_layers(painter, square, LayerInks::of(tokens, color, single_ink));
             }
         }
         IconSource::Mark(badge) => super::pointer_art::paint_badge(painter, tokens, direction, square, *badge, color),

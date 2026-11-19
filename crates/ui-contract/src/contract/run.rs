@@ -1287,12 +1287,8 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         },
     );
     let shows_label = e.shows_label();
-<<<<<<< HEAD
-    let tip_in = tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &parts.decls, shows_label, canvas_control: facts.canvas_control, message };
+    let tip_in = tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, canvas_control: facts.canvas_control, message };
     tooltip::run(e.core_ref(), tip_in);
-=======
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
->>>>>>> up/next
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;

@@ -89,6 +89,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
     let flags = core.state.flags;
     let resolved = core.resolved;
+    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
+    // for the inspected region, which keytips place their badges by.
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {
@@ -98,11 +101,18 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
             enabled: resolved.enabled,
         };
         scope::finish(ctx, id, Some(facts));
+        scope::leave(ctx, id);
         return;
     }
     scope::finish(ctx, id, None);
     let carried = scope::carried_name(ctx, id);
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
+    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
+    // unwritten it would be reported as a node of unknown role.
     let Role::Node(role) = role else {
+        if input.node {
+            access::pass_through(ctx, id);
+        }
         scope::leave(ctx, id);
         return;
     };
@@ -138,39 +148,6 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         access.position =
             input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
     }
-<<<<<<< HEAD
-    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
-    // for the inspected region, which keytips place their badges by.
-    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
-    let paint = core.paint.borrow();
-    if role == Role::Merged {
-        let facts = scope::Merged {
-            name: resolved.label.to_owned(),
-            description: access.description.clone().or_else(|| resolved.description.map(str::to_owned)).or_else(|| validity.clone()),
-            flags,
-            enabled: resolved.enabled,
-        };
-        scope::finish(ctx, id, Some(facts));
-        scope::leave(ctx, id);
-        return;
-    }
-    scope::finish(ctx, id, None);
-    let carried = scope::carried_name(ctx, id);
-    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
-    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
-    // unwritten it would be reported as a node of unknown role.
-    let Role::Node(role) = role else {
-        if input.node {
-            access::pass_through(ctx, id);
-        }
-        scope::leave(ctx, id);
-        return;
-    };
-    if !input.node {
-        return;
-    }
-=======
->>>>>>> up/next
     let inner_of = access::fold::owner_of(ctx, id);
     let folded = access::fold::take(ctx, id);
     if access.value.is_none() {

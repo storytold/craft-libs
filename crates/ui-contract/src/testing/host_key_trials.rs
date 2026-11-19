@@ -4,13 +4,8 @@ use crate::contract::{Common, Component, Container, ContainerProps, Cx, Mount, O
 use crate::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet as _, EditCommands, NavCommand, Scope, TypingRule};
 use crate::runtime::drag::{self, DragPreview};
 use crate::runtime::egui::{areas, fixture};
-<<<<<<< HEAD
-use crate::runtime::env::RootEnv;
-use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
-=======
 use crate::runtime::env::{Env, RootEnv};
-use crate::runtime::focus::{EditSet, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
->>>>>>> up/next
+use crate::runtime::focus::{EditSet, FocusPolicy, FocusTarget, KeepKeys, KeyUse, host_canvas, request};
 use crate::runtime::frame::{ChromeToggle, take_output};
 use crate::runtime::keys::with_window_intents;
 use crate::style::{ComponentStyle, StyleCx};

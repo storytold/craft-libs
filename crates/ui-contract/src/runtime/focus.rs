@@ -80,16 +80,11 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
-<<<<<<< HEAD
     /// The component that registered as the window's menu bar (`register_menu_bar`) in the last pass: it takes the
     /// menu-bar keys, and its state-dependent claims (the letters keytips badges take) hold beside the focused one's.
     pub(crate) menu_bar: Option<Id>,
     /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics (`register_menu_bar_by_claim`).
     pub(crate) menu_bar_by_claim: bool,
-=======
-    /// The menu bar the last pass registered, which takes F10, a lone Alt and Alt with a letter.
-    pub(crate) menu_bar: Option<Id>,
->>>>>>> up/next
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -160,11 +155,8 @@ pub(crate) struct State {
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
     pub(super) menu_bar: Option<Id>,
-<<<<<<< HEAD
     /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics.
     pub(super) menu_bar_by_claim: bool,
-=======
->>>>>>> up/next
     /// The menu bar that took focus and the stop it took focus from, for the bar or a menu pick to give back.
     pub(super) bar_return: Option<(Id, StopKey)>,
     pub(crate) press: press::PressState,
@@ -472,14 +464,15 @@ pub(crate) fn pop_scope(ctx: &Context) {
     apply(ctx, acts);
 }
 
-<<<<<<< HEAD
 /// Registers the component `id` as the menu bar that can take the menu-bar keys of the next input hook (spec 9.7).
 /// Its claims hold as the focused component's do, so a bar that is not a focus stop (keytips) keeps the letters it
-/// takes from the focused field. The last registration of a pass wins.
+/// takes from the focused field. The last registration of a pass wins. A settled bar registers again when it replays
+/// its last run, and the keys it takes run it (`keys::routed_to`).
 ///
 /// With `by_claim` the bar has no mnemonic letters of its own: an Alt+letter reaches it only as a chord it claims, and
 /// any other stays the app's shortcut. A menu bar's titles name their letters, so it registers without.
 pub(crate) fn register_menu_bar(ctx: &Context, id: Id, by_claim: bool) {
+    crate::runtime::replay::journal(ctx, || (id, by_claim), |ctx, &(id, by_claim)| register_menu_bar(ctx, id, by_claim));
     with(ctx, |state| {
         state.menu_bar = Some(id);
         state.menu_bar_by_claim = by_claim;
@@ -492,13 +485,6 @@ pub(crate) fn register_menu_bar(ctx: &Context, id: Id, by_claim: bool) {
 /// type while no lone Alt or F10 has started them.
 pub fn takes_letters(keys: &KeyUse) -> bool {
     matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder) && !keys.is_document_editor()
-=======
-/// Registers that the menu bar `bar` takes the menu-bar keys of the next input hook (spec 9.7). A settled bar
-/// registers again when it replays its last run, and the keys it takes run it (`keys::routed_to`).
-pub(crate) fn register_menu_bar(ctx: &Context, bar: Id) {
-    crate::runtime::replay::journal(ctx, || bar, |ctx, &bar| register_menu_bar(ctx, bar));
-    with(ctx, |state| state.menu_bar = Some(bar));
->>>>>>> up/next
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this

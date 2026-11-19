@@ -19,15 +19,9 @@ pub use registry::{SetEntry, sets};
 pub use board::declare_child;
 #[doc(hidden)]
 pub use board::focus_within;
-<<<<<<< HEAD
 pub use board::keymap;
-#[cfg(feature = "testing")]
-#[doc(hidden)]
-pub use board::keymap_builds;
 #[doc(hidden)]
 pub use board::note_page_root;
-=======
->>>>>>> up/next
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::runs_now;
 pub(crate) use board::take as take_for_instance;

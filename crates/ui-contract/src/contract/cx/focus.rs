@@ -107,7 +107,6 @@ impl Focus for CxCore<'_> {
     }
 
     fn register_menu_bar(&mut self) {
-<<<<<<< HEAD
         focus::register_menu_bar(&self.ctx, self.id, false);
     }
 
@@ -117,9 +116,6 @@ impl Focus for CxCore<'_> {
 
     fn take_first_claimed(&mut self, chords: &[Chord]) -> Option<Chord> {
         crate::runtime::keys::take_first_claimed(&self.ctx, self.id, chords)
-=======
-        focus::register_menu_bar(&self.ctx, self.id);
->>>>>>> up/next
     }
 
     fn take_menu_keys(&mut self) -> Vec<MenuKey> {

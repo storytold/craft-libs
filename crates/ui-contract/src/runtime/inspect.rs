@@ -355,13 +355,8 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
                 let Some(owner) = index.get(&(id, None)).copied() else { continue };
                 let rect = hits.iter().find(|hit| hit.owner == id && hit.part == part).map_or(elements[owner].rect, |hit| hit.rect);
                 let depth = elements[owner].depth + 1;
-<<<<<<< HEAD
                 let element =
                     Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None, command: None };
-                elements.insert(owner + 1, element);
-                owner + 1
-=======
-                let element = Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None };
                 let at = owner + 1;
                 elements.insert(at, element);
                 for old in index.values_mut() {
@@ -371,7 +366,6 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
                 }
                 index.insert((id, part), at);
                 at
->>>>>>> up/next
             }
         };
         elements[at].stop = Some(stop + 1);

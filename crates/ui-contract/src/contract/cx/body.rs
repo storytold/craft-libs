@@ -46,13 +46,9 @@ impl<'a> BodyCx<'a> {
         shared: Option<RegionShare<'a>>,
     ) -> Self {
         memory.claim(id);
-<<<<<<< HEAD
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed: false, close: None, exiting: false, field_message: None, owner: None }
-=======
         let (gate_mixed, field_message, owner) =
             shared.map_or((false, None, None), |shared| (shared.gate_mixed, shared.field_message, Some(shared.owner)));
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, field_message, owner }
->>>>>>> up/next
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, exiting: false, field_message, owner }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -70,7 +66,6 @@ impl<'a> BodyCx<'a> {
         self.env.host()?.files().take_answer(ticket)
     }
 
-<<<<<<< HEAD
     pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
         self.exiting = exiting;
         self
@@ -82,18 +77,6 @@ impl<'a> BodyCx<'a> {
         self.exiting
     }
 
-    pub(crate) fn with_gate_mixed(mut self, mixed: bool) -> Self {
-        self.gate_mixed = mixed;
-        self
-    }
-
-    pub(crate) fn with_field_message(mut self, message: Option<(Message, craft_theme::variant::Tone)>) -> Self {
-        self.field_message = message;
-        self
-    }
-
-=======
->>>>>>> up/next
     /// The validity message of the first control in the container's label scope, recorded last frame, with the
     /// tone it shows in: a container whose footer declares `FooterRegion::status` shows it as its status text. `None`
     /// when the container has no label or no control reported one.
