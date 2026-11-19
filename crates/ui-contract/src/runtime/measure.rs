@@ -305,3 +305,111 @@ pub(crate) fn count_least(ctx: &Context, id: Id) {
 pub fn least_runs(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<LeastRuns, _>(ctx, |log| log.runs.clone())
 }
+
+/// What a settling child's decision was.
+#[cfg(feature = "testing")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Settle {
+    /// The child ran.
+    Ran,
+    /// The child's last run was replayed in place of running.
+    Replayed,
+    /// The child is out of view and took its last extent without running.
+    OutOfView,
+}
+
+/// The settled-test decisions of one pass.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct SettleLog {
+    pass: u64,
+    decisions: Vec<(Id, Settle)>,
+}
+
+/// Counts the decision about the settling child `id` in this pass. Fed by `lazy::settled` (ran, replayed) and
+/// `lazy::decide` (out of view); a rename of that decision point moves both calls.
+#[cfg(feature = "testing")]
+pub(crate) fn count_settle(ctx: &Context, id: Id, what: Settle) {
+    let pass = ctx.cumulative_pass_nr();
+    pass_state::with::<SettleLog, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = SettleLog { pass, decisions: Vec::new() };
+        }
+        log.decisions.push((id, what));
+    });
+}
+
+/// The settled-test decisions of the last pass, by child id, in the order they were made; empty when that pass made none.
+#[cfg(feature = "testing")]
+pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
+}
+
+/// Bytes fed into memo keys in one pass, and the layouts and measure asks of that pass.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct PassTotals {
+    pass: u64,
+    key_bytes: usize,
+    text_layouts: u32,
+    asks: Vec<(&'static str, u32)>,
+}
+
+#[cfg(feature = "testing")]
+fn totals<R>(ctx: &Context, f: impl FnOnce(&mut PassTotals) -> R) -> R {
+    let pass = ctx.cumulative_pass_nr();
+    pass_state::with::<PassTotals, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = PassTotals { pass, ..PassTotals::default() };
+        }
+        f(log)
+    })
+}
+
+#[cfg(feature = "testing")]
+fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
+}
+
+/// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
+/// per call with a content version).
+#[cfg(feature = "testing")]
+pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
+    totals(ctx, |log| log.key_bytes += bytes);
+}
+
+/// The bytes fed into memo keys in the last pass.
+#[cfg(feature = "testing")]
+pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
+    last_totals(ctx, |log| log.key_bytes, 0)
+}
+
+/// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_text_layout(ctx: &Context) {
+    totals(ctx, |log| log.text_layouts += 1);
+}
+
+/// The text layouts handed to egui in the last pass.
+#[cfg(feature = "testing")]
+pub fn last_pass_text_layouts(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.text_layouts, 0)
+}
+
+/// Counts a measure call of a leaf component of the type `name` in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_measure_ask(ctx: &Context, name: &'static str) {
+    totals(ctx, |log| match log.asks.iter_mut().find(|(ty, _)| *ty == name) {
+        Some((_, count)) => *count += 1,
+        None => log.asks.push((name, 1)),
+    });
+}
+
+/// The leaf types that were asked to measure in the last pass, and how many times each.
+#[cfg(feature = "testing")]
+pub fn last_pass_measure_asks(ctx: &Context) -> Vec<(&'static str, u32)> {
+    last_totals(ctx, |log| log.asks.clone(), Vec::new())
+}

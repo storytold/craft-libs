@@ -127,6 +127,8 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
             }
             None => job.append(text, 0.0, plain),
         }
+        #[cfg(feature = "testing")]
+        crate::runtime::measure::count_text_layout(ui.ctx());
         ui.fonts_mut(|fonts| crate::runtime::egui::text_layout::layout_with(fonts, job))
     };
     let hint_text = hint.map(|hint| egui::RichText::new(hint).font(FontId::proportional(font_id.size)));
