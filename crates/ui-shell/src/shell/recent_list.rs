@@ -7,6 +7,7 @@ use super::start::{
 };
 use super::words::ShellWords;
 use crate::buttons::Button;
+use crate::display::{Shade, Text};
 use crate::contract::{
     ActivateOn, BodyCx, CollectionEvent, Gap, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
     clicked,
@@ -83,7 +84,15 @@ impl<'a> RecentList<'a> {
         let shown = Section::fixed(words.recent.clone())
             .header_gap(Gap::Section)
             .command_scope(StartRecentCommands::SCOPE)
-            .show(ui, |ui, cx| recent_body(&page, ui, cx, &files, RecentView::List, &empty));
+            .show(ui, |ui, cx| {
+                // A list on a page says it is empty in a muted line at the reading start under its heading, where its
+                // rows would begin; the start screen's empty state stays the centred notice of `recent_body`.
+                if files.is_empty() {
+                    let _ = Text::new(empty.clone()).shade(Shade::Muted).show(ui);
+                } else {
+                    recent_body(&page, ui, cx, &files, RecentView::List, &empty);
+                }
+            });
         StartOutput { response: shown.output.response, actions: actions.into_inner() }
     }
 }
