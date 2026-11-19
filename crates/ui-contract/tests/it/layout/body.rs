@@ -63,6 +63,84 @@ const TEXT: f32 = 240.0;
 const WORD: f32 = 60.0;
 const LINE: f32 = 20.0;
 
+#[trial]
+fn a_fill_before_a_wrapping_sibling_keeps_its_geometry_after_replay_and_resize() {
+    let rects = Rc::new(Cell::new([Rect::NOTHING; 2]));
+    let shown = Rc::clone(&rects);
+    let mut fixture = Fixture::new(move |ui| {
+        let (fill, wrap) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+        let measures = Measures::default();
+        Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("row").show(ui, |ui, _| {
+            Probe::new(&fill).size(Vec2::new(20.0, LINE)).sizing(Sizing::FillWidth).id_salt("fill").show(ui);
+            Wrap::new(&wrap, &measures).id_salt("wrap").show(ui);
+        });
+        shown.set([fill.borrow().rect, wrap.borrow().rect]);
+    });
+    for width in [400.0, 240.0, 400.0] {
+        fixture.room(Vec2::new(width, 400.0)).settle();
+        let [fill, wrap] = rects.get();
+        assert!(fill.width() > 0.0 && wrap.width() >= WORD - SLACK, "fill and wrap are visible: {fill:?}, {wrap:?}");
+        assert!(fill.max.x <= wrap.min.x + SLACK, "wrap follows fill: {fill:?}, {wrap:?}");
+        fixture.idle(3);
+        let replayed = rects.get();
+        assert_eq!([fill, wrap], replayed, "replay preserves the measured geometry");
+    }
+}
+
+#[derive(Component)]
+struct ConditionalDemand {
+    #[common]
+    common: Common,
+}
+
+impl Component for ConditionalDemand {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: ConditionalDemandStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::new(if cx.proposal == Proposal::Min { 10.0 } else { 100.0 }, LINE)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn a_nested_body_can_have_different_children_in_its_least_probe() {
+    let saw = Rc::new(RefCell::new(Vec::new()));
+    let found = Rc::clone(&saw);
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("outer").show(ui, |ui, _| {
+            Panel::new().layout(BodyLayout::row()).id_salt("nested").show(ui, |ui, _| {
+                ConditionalDemand { common: Common::new() }.id_salt("a").show(ui);
+                let width = ui.available_rect_before_wrap().width();
+                let unbounded = !width.is_finite();
+                if is_measuring(ui.ctx()) {
+                    found.borrow_mut().push(width);
+                }
+                if unbounded {
+                    Block::new(Vec2::new(200.0, LINE)).show(ui);
+                }
+            });
+            Block::new(Vec2::new(180.0, LINE)).show(ui);
+        });
+    });
+    fixture.room(Vec2::new(200.0, 300.0)).settle();
+    assert!(!craft_ui::testing::shrink_least_runs(fixture.ctx()).is_empty(), "the outer row ran its least probe");
+    let saw = saw.borrow();
+    assert!(saw.iter().any(|width| width.is_finite()) && saw.iter().any(|width| !width.is_finite()), "observed {saw:?}");
+}
+
 /// How many ideal measures a `Wrap` answered in measuring runs, without a room and in one.
 #[derive(Default)]
 struct Measures {
