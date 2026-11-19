@@ -154,6 +154,11 @@ struct HeldStates {
 }
 
 impl HeldStates {
+    fn take(&mut self, ctx: &Context) -> Option<Held> {
+        self.get(ctx)?;
+        Some(self.entries.swap_remove(self.current.get()))
+    }
+
     /// Service reads in the same context reuse its slot. A nested context or a swap on release
     /// can change the slot, so verify its owner before reusing it.
     fn get(&self, ctx: &Context) -> Option<&PassState> {
@@ -169,6 +174,49 @@ impl HeldStates {
 thread_local! {
     /// The pass states this thread holds: one per context with a pass running here, and one a panic left behind.
     static HELD: RefCell<HeldStates> = const { RefCell::new(HeldStates { entries: Vec::new(), current: Cell::new(0) }) };
+}
+
+scoped_tls::scoped_thread_local!(static RUNNING: Held);
+
+/// Descendants use the binding of their outer component. A nested, different context
+/// continues to find its own state among the thread's other held contexts.
+pub(crate) fn in_component_tree() -> bool {
+    RUNNING.is_set()
+}
+
+fn bound(ctx: &Context) -> bool {
+    RUNNING.is_set() && RUNNING.with(|entry| entry.ctx == *ctx)
+}
+
+pub(crate) fn with_component_tree(ctx: &Context, run: impl FnOnce()) {
+    let entry = HELD.with(|held| held.try_borrow_mut().ok()?.take(ctx));
+    let Some(entry) = entry else { return run() };
+
+    // The binding unwinds before this guard, so a panic also returns the state to its owner.
+    struct Restore(Option<Held>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(entry) = self.0.take() {
+                if frame::running(&entry.ctx).is_some() {
+                    keep(entry);
+                } else {
+                    park(entry);
+                }
+            }
+        }
+    }
+    let restore = Restore(Some(entry));
+    if let Some(entry) = &restore.0 {
+        RUNNING.set(entry, run);
+    }
+}
+
+fn keep(entry: Held) {
+    HELD.with(|held| {
+        let mut held = held.borrow_mut();
+        held.current.set(held.entries.len());
+        held.entries.push(entry);
+    });
 }
 
 /// The state of a context between passes; `None` while a thread holds it.
@@ -197,6 +245,17 @@ pub(crate) fn with<S: PassLocal, R>(ctx: &Context, f: impl FnOnce(&mut S) -> R) 
 
 /// The thread-local lookup and the parked-state slow path are shared by every service and caller.
 fn visit(ctx: &Context, f: &mut dyn FnMut(&PassState)) {
+    if RUNNING.is_set()
+        && RUNNING.with(|entry| {
+            if entry.ctx != *ctx {
+                return false;
+            }
+            f(&entry.state);
+            true
+        })
+    {
+        return;
+    }
     let found = HELD.with(|held| {
         let held = held.borrow();
         let Some(state) = held.get(ctx) else { return false };
@@ -225,6 +284,9 @@ fn visit(ctx: &Context, f: &mut dyn FnMut(&PassState)) {
 /// Moves the context's state into this thread unless it holds it already: the begin hook. States of other contexts
 /// with no pass running here (a pass a panic left open) go back to their contexts first.
 pub(crate) fn hold(ctx: &Context) {
+    if bound(ctx) {
+        return;
+    }
     let stale: Vec<Held> =
         HELD.with(|held| held.borrow_mut().entries.extract_if(.., |entry| entry.ctx != *ctx && frame::running(&entry.ctx).is_none()).collect());
     for held in stale {
@@ -236,27 +298,52 @@ pub(crate) fn hold(ctx: &Context) {
     let state = Service::<Parked>::run(ctx, |parked| parked.0.take());
     debug_assert!(state.is_some(), "another thread holds this context's pass state");
     let state = state.unwrap_or_default();
-    HELD.with(|held| {
-        let mut held = held.borrow_mut();
-        held.current.set(held.entries.len());
-        held.entries.push(Held { ctx: ctx.clone(), state });
-    });
+    keep(Held { ctx: ctx.clone(), state });
 }
 
 /// Moves the context's state back into its context data unless a pass of it still runs on this thread: the end hook.
 pub(crate) fn release(ctx: &Context) {
-    if frame::running(ctx).is_some() {
+    if bound(ctx) || frame::running(ctx).is_some() {
         return;
     }
-    let held = HELD.with(|held| {
-        let mut held = held.borrow_mut();
-        held.entries.iter().position(|held| held.ctx == *ctx).map(|at| held.entries.swap_remove(at))
-    });
-    if let Some(held) = held {
+    if let Some(held) = HELD.with(|held| held.borrow_mut().take(ctx)) {
         park(held);
     }
 }
 
 fn park(held: Held) {
     Service::<Parked>::run(&held.ctx, |parked| parked.0 = Some(held.state));
+}
+
+#[cfg(feature = "testing")]
+mod binding_tests {
+    use super::{PassState, bound, hold, in_component_tree, visit, with_component_tree};
+    use crate::testing::trial;
+    use egui::Context;
+
+    fn address(ctx: &Context) -> *const PassState {
+        let mut address = std::ptr::null();
+        visit(ctx, &mut |state| address = std::ptr::from_ref(state));
+        address
+    }
+
+    #[trial]
+    fn component_tree_restores_its_state_after_nested_context_access_and_unwind() {
+        let outer = Context::default();
+        let inner = Context::default();
+        hold(&outer);
+        let original = address(&outer);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_component_tree(&outer, || {
+                assert!(bound(&outer));
+                assert!(!bound(&inner));
+                assert_ne!(address(&inner), original);
+                assert_eq!(address(&outer), original);
+                std::panic::resume_unwind(Box::new("component unwound"));
+            });
+        }));
+        assert!(unwound.is_err_and(|reason| reason.downcast_ref::<&str>() == Some(&"component unwound")));
+        assert!(!in_component_tree());
+        assert_eq!(address(&outer), original);
+    }
 }

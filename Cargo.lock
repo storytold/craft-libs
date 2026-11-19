@@ -4208,6 +4208,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "proc-macro2",
+ "scoped-tls",
  "serde",
  "skrifa 0.44.0",
  "smallvec",

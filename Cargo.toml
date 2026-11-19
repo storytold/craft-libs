@@ -260,6 +260,7 @@ md5 = { package = "md-5", version = "0.10", default-features = false }
 jxl-oxide = { version = "0.12", default-features = false }
 jixel = "=0.3.4"
 rayon = "1"
+scoped-tls = "1"
 smallvec = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

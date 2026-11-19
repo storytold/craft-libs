@@ -48,6 +48,7 @@ craft-quit = { workspace = true }
 craft-platform = { workspace = true, features = ["appearance"] }
 craft-i18n = { workspace = true, features = ["collate"] }
 log = "0.4"
+scoped-tls = { workspace = true }
 smallvec = { workspace = true }
 inventory = "0.3.25"
 serde = { workspace = true }

@@ -1385,6 +1385,14 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    if crate::runtime::pass_state::in_component_tree() {
+        return run_in_context(t, ui, at, tip);
+    }
+    let ctx = ui.ctx().clone();
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip));
+}
+
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {
