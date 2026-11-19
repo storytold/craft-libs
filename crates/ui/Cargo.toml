@@ -38,6 +38,8 @@ system_fonts = ["craft-ui-contract/system_fonts"]
 share = ["craft-cloud-ui/share"]
 # `cloud`: Open and Save against cloud storage (craft-cloud-ui).
 cloud = ["share", "craft-cloud-ui/cloud"]
+# `esign`: the request-signatures dialog (craft-cloud-ui).
+esign = ["craft-cloud-ui/esign"]
 
 [dependencies]
 craft-ui-contract = { workspace = true }

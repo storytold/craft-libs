@@ -31,6 +31,11 @@ usvg = { version = "=0.48.1", default-features = false, optional = true }
 resvg = { version = "=0.48.1", default-features = false, optional = true }
 
 data-url = { version = "0.3.2", optional = true }
+# Renderer-specific validation uses the same resolved backends as resvg0.48.1.
+# JPEG validation uses the existing backend in craft-image-codecs.
+gif = { version = "=0.14.2", optional = true }
+image-webp = { version = "=0.2.4", optional = true }
+
 
 [features]
 default = ["paths"]
@@ -50,6 +55,11 @@ tree-system-fonts = ["tree-text", "usvg/system-fonts"]
 # Bounded drawing of a parsed tree through the matching resvg/tiny-skia versions, without text or
 # raster images (`tree::draw::render`, `render_node`, the `resvg` and `tiny_skia` re-exports).
 draw = ["tree-core", "dep:resvg"]
-# Bounded rendering of a parsed tree with its text and raster images.
-tree-render = ["tree", "draw", "resvg/text", "resvg/raster-images"]
+# Bounded rendering of a parsed tree with its text and raster images, and the raster validation
+# through the decoders resvg uses.
+tree-render = ["tree", "draw", "resvg/text", "resvg/raster-images", "dep:gif", "dep:image-webp"]
 tree-render-system-fonts = ["tree-render", "resvg/system-fonts"]
+
+[dev-dependencies]
+# Already resolved in the workspace; test-only Cargo.lock edge inspection.
+toml = "=1.1.8"

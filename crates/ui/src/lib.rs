@@ -6,12 +6,14 @@
 //! The library is built as crates along its layers: craft-ui-contract (runtime to contract, and the test kit),
 //! craft-ui-widgets, craft-ui-panels, then craft-ui-canvas, craft-ui-patterns and craft-ui-shell side by side. This
 //! crate re-exports all of them under one root, so every `craft_ui::…` path names the same item as in the crate that
-//! defines it. It also re-exports storytold main's cloud and share UI (`account`, `cloud`, `share`, `presence`) from
-//! craft-cloud-ui, which is still raw egui.
+//! defines it. It also re-exports storytold main's cloud, share and e-sign UI (`account`, `cloud`, `esign`, `share`,
+//! `presence`) from craft-cloud-ui, which is still raw egui.
 #![warn(missing_docs)]
 
 #[cfg(feature = "cloud")]
 pub use craft_cloud_ui::cloud;
+#[cfg(feature = "esign")]
+pub use craft_cloud_ui::esign;
 pub use craft_cloud_ui::presence;
 #[cfg(feature = "share")]
 pub use craft_cloud_ui::{account, share};
