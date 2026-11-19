@@ -1,6 +1,7 @@
 //! The accessibility emitter: the label scope and merge rule, announcements, modal inertness, viewports.
 
 pub(crate) mod bounds;
+pub(crate) mod controls;
 pub(crate) mod face_record;
 pub(crate) mod face_state;
 pub(crate) mod nodes;
