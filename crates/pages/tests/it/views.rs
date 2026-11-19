@@ -262,3 +262,24 @@ fn the_reading_view_turns_on_the_wheel_but_leaves_cmd_or_ctrl_with_the_wheel_to_
     wheel_with(&mut fixture, -1.0, Modifiers::NONE);
     assert!(state.borrow().column > 0, "the wheel alone turns");
 }
+
+/// A reading view turns a column on Space, its documented key, and Enter still does.
+#[trial]
+fn the_reading_view_turns_a_column_on_space_and_enter() {
+    let state = Rc::new(RefCell::new(ReadingState::default()));
+    let kept = Rc::clone(&state);
+    let pages = DemoPages::new(6);
+    let mut fixture = Fixture::new(move |ui| {
+        ReadingView::new("Document", &pages, &mut kept.borrow_mut(), PAPER).show(ui);
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    fixture.key(Key::Space, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().column, 1, "Space turns one column");
+    fixture.key(Key::Enter, Modifiers::NONE);
+    fixture.idle(1);
+    assert_eq!(state.borrow().column, 2, "Enter still turns one column");
+}
