@@ -649,7 +649,21 @@ pub struct TimedEvent {
     pub bytes: Vec<u8>,
 }
 
-type WEvent = TimedEvent;
+struct WEvent {
+    event: TimedEvent,
+    split: Option<SplitPacket>,
+}
+
+enum SplitPacket {
+    Start(usize),
+    Continue { track: usize, last: bool },
+}
+
+impl WEvent {
+    fn new(tick: u64, order: u8, bytes: Vec<u8>) -> Self {
+        Self { event: TimedEvent { tick, order, bytes }, split: None }
+    }
+}
 
 /// Encode an SMF meta event, without its delta time.
 pub fn encode_meta_event(kind: u8, data: &[u8]) -> Result<Vec<u8>, MidiError> {
@@ -714,31 +728,48 @@ fn meta(kind: u8, data: &[u8]) -> Result<Vec<u8>, MidiError> {
 }
 
 fn write_track(out: &mut Vec<u8>, mut events: Vec<WEvent>) -> Result<(), MidiError> {
-    events.sort_by_key(|e| (e.tick, e.order));
+    events.sort_by_key(|e| (e.event.tick, e.event.order));
     check_split_sysex_order(&events)?;
-    write_track_policy(out, events, false, true)
+    write_track_policy(out, events.into_iter().map(|e| e.event), false, true)
 }
 
-// Validate the actual emitted order, after canonical sorting and note-overlap trimming.
+// Check the actual emitted order and the source of each continuation.
 fn check_split_sysex_order(events: &[WEvent]) -> Result<(), MidiError> {
-    let mut open = false;
+    let mut active = None;
+    let mut unterminated = false;
     for event in events {
-        match event.bytes.first() {
-            Some(0xFF) => {} // Meta events are local to the file, so they do not interrupt the MIDI message.
-            Some(0xF7) if open => open = event.bytes.last() != Some(&0xF7),
-            _ if open => return Err(MidiError::Write("event ordering would interleave split SysEx packets".into())),
-            Some(0xF0) => open = event.bytes.last() != Some(&0xF7),
-            _ => {}
+        let status = event.event.bytes.first().copied();
+        let terminated = event.event.bytes.last() == Some(&0xF7);
+        match (&event.split, active) {
+            (Some(SplitPacket::Start(track)), None) => {
+                active = Some(*track);
+                unterminated = true;
+            }
+            (Some(SplitPacket::Continue { track, last }), Some(owner)) if *track == owner => {
+                if *last {
+                    active = None;
+                    unterminated = !terminated;
+                }
+            }
+            (None, _) if status == Some(0xFF) => {} // Meta events are local to the file.
+            (None, None) if status == Some(0xF0) => unterminated = !terminated,
+            (None, None) if status != Some(0xF7) || !unterminated => {}
+            _ => return Err(MidiError::Write("event ordering would interleave split SysEx packets".into())),
         }
     }
     Ok(())
 }
 
-fn write_track_policy(out: &mut Vec<u8>, events: Vec<WEvent>, clamp_deltas: bool, running_status: bool) -> Result<(), MidiError> {
+fn write_track_policy(
+    out: &mut Vec<u8>,
+    events: impl IntoIterator<Item = TimedEvent>,
+    clamp_deltas: bool,
+    running_status: bool,
+) -> Result<(), MidiError> {
     let mut body = Vec::new();
     let mut last_tick = 0u64;
     let mut running: Option<u8> = None;
-    for e in &events {
+    for e in events {
         let delta = e.tick - last_tick;
         push_vlq(&mut body, if clamp_deltas { delta.min(MAX_VLQ) } else { delta })?;
         last_tick = e.tick;
@@ -773,21 +804,21 @@ fn conductor_events(smf: &Smf) -> Result<Vec<WEvent>, MidiError> {
         }
         let us = (60_000_000.0 / bpm).round().clamp(1.0, f64::from(0x00FF_FFFFu32)) as u32;
         let [_, a, b, c] = us.to_be_bytes();
-        ev.push(WEvent { tick: clamp_tick(t), order: 0, bytes: meta(0x51, &[a, b, c])? });
+        ev.push(WEvent::new(clamp_tick(t), 0, meta(0x51, &[a, b, c])?));
     }
     for &(t, num, den) in &smf.meters {
         if den == 0 || !den.is_power_of_two() {
             return Err(MidiError::Write(format!("meter denominator {den} is not a power of two")));
         }
         let dd = den.trailing_zeros() as u8;
-        ev.push(WEvent { tick: clamp_tick(t), order: 1, bytes: meta(0x58, &[num, dd, 24, 8])? });
+        ev.push(WEvent::new(clamp_tick(t), 1, meta(0x58, &[num, dd, 24, 8])?));
     }
     for &(t, sf, minor) in &smf.key_sigs {
         let sf = sf.clamp(-7, 7);
-        ev.push(WEvent { tick: clamp_tick(t), order: 2, bytes: meta(0x59, &[sf as u8, u8::from(minor)])? });
+        ev.push(WEvent::new(clamp_tick(t), 2, meta(0x59, &[sf as u8, u8::from(minor)])?));
     }
     for (t, text) in &smf.markers {
-        ev.push(WEvent { tick: clamp_tick(*t), order: 3, bytes: meta(0x06, text.as_bytes())? });
+        ev.push(WEvent::new(clamp_tick(*t), 3, meta(0x06, text.as_bytes())?));
     }
     Ok(ev)
 }
@@ -834,7 +865,9 @@ fn trim_overlaps(notes: &[Note], ends: &mut [u64], dropped: &mut [bool]) {
 /// Track 1 is a conductor track holding tempos, meters, key signatures and markers; every
 /// [`SmfTrack`] follows as its own track, with its name when it is not empty. Format 0 is one track holding all of that. Negative ticks are clamped to 0, data values are
 /// clamped to their MIDI ranges, and note-on velocity 0 is written as 1 (0 would mean
-/// note-off). At each tick note-offs are written before SysEx packets, then controllers, then note-ons.
+/// note-off). At each tick the default order is note-offs, SysEx, controllers, then note-ons.
+/// Split SysEx starts after same-tick channel events and continues before channel events on
+/// later ticks. An unterminated legacy F0 with no continuation retains its original bytes.
 ///
 /// Errors: invalid tempo (non-finite or <= 0 bpm), meter denominator that is not a power of two
 /// (1..=128), more than 65535 tracks, a gap beyond the 28-bit delta limit, an invalid
@@ -858,9 +891,6 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     out.extend_from_slice(b"MThd");
     out.extend_from_slice(&6u32.to_be_bytes());
     let single = smf.format == 0;
-    if single && smf.tracks.len() > 1 {
-        check_merged_sysex(&smf.tracks)?;
-    }
     out.extend_from_slice(&u16::from(!single).to_be_bytes());
     out.extend_from_slice(&(if single { 1 } else { ntrks }).to_be_bytes());
     out.extend_from_slice(&u16::try_from(PPQ).unwrap_or(960).to_be_bytes());
@@ -871,10 +901,10 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
         write_track(&mut out, std::mem::take(&mut merged))?;
     }
 
-    for track in &smf.tracks {
+    for (track_index, track) in smf.tracks.iter().enumerate() {
         let mut ev = Vec::new();
         if !track.name.is_empty() {
-            ev.push(WEvent { tick: 0, order: 0, bytes: meta(0x03, track.name.as_bytes())? });
+            ev.push(WEvent::new(0, 0, meta(0x03, track.name.as_bytes())?));
         }
         let notes = &track.sequence.notes;
         let mut ends: Vec<u64> = notes.iter().map(|n| clamp_tick(n.end()).max(clamp_tick(n.start).saturating_add(1))).collect();
@@ -888,8 +918,8 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
             let pitch = n.pitch.min(127);
             let start = clamp_tick(n.start);
             let end = ends.get(i).copied().unwrap_or(start.saturating_add(1));
-            ev.push(WEvent { tick: start, order: 4, bytes: vec![0x90 | ch, pitch, n.velocity.clamp(1, 127)] });
-            ev.push(WEvent { tick: end, order: 1, bytes: vec![0x80 | ch, pitch, n.release_velocity.min(127)] });
+            ev.push(WEvent::new(start, 4, vec![0x90 | ch, pitch, n.velocity.clamp(1, 127)]));
+            ev.push(WEvent::new(end, 1, vec![0x80 | ch, pitch, n.release_velocity.min(127)]));
         }
         for c in &track.sequence.ctrls {
             let ch = c.channel & 0x0F;
@@ -904,15 +934,9 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
                     vec![0xE0 | ch, (v & 0x7F) as u8, ((v >> 7) & 0x7F) as u8]
                 }
             };
-            ev.push(WEvent { tick: clamp_tick(c.tick), order: 3, bytes });
+            ev.push(WEvent::new(clamp_tick(c.tick), 3, bytes));
         }
-        for event in &track.sequence.sysex {
-            let mut bytes = vec![event.status];
-            push_vlq(&mut bytes, event.data.len() as u64)?;
-            bytes.extend_from_slice(&event.data);
-            // Reset/setup packets precede same-tick controllers and note-ons, after note-offs.
-            ev.push(WEvent { tick: clamp_tick(event.tick), order: 2, bytes });
-        }
+        append_sysex_events(&mut ev, track_index, &track.sequence.sysex)?;
         if single {
             merged.extend(ev);
         } else {
@@ -925,23 +949,42 @@ pub fn write_smf(smf: &Smf) -> Result<Vec<u8>, MidiError> {
     Ok(out)
 }
 
-// A format-0 file must keep each split message's continuation packets together.
-fn check_merged_sysex(tracks: &[SmfTrack]) -> Result<(), MidiError> {
-    let mut packets: Vec<_> =
-        tracks.iter().enumerate().flat_map(|(track, entry)| entry.sequence.sysex.iter().map(move |packet| (track, packet))).collect();
-    packets.sort_by_key(|&(track, packet)| (clamp_tick(packet.tick), track));
-    let mut open = None;
-    for (track, packet) in packets {
-        if open.is_some_and(|owner| owner != track || packet.status != 0xF7) {
-            return Err(MidiError::Write("format 0 would interleave split SysEx packets".into()));
+fn append_sysex_events(events: &mut Vec<WEvent>, track: usize, packets: &[SysExEvent]) -> Result<(), MidiError> {
+    let mut ordered: Vec<_> = packets.iter().collect();
+    ordered.sort_by_key(|packet| clamp_tick(packet.tick));
+    let mut packets = ordered.into_iter().peekable();
+    while let Some(packet) = packets.next() {
+        let tick = clamp_tick(packet.tick);
+        let starts_split = packet.status == 0xF0 && packet.data.last() != Some(&0xF7) && packets.peek().is_some_and(|next| next.status == 0xF7);
+        if !starts_split {
+            events.push(encode_sysex(packet, 2)?);
+            continue;
         }
-        if packet.data.last() == Some(&0xF7) {
-            open = None;
-        } else if packet.status == 0xF0 {
-            open = Some(track);
+
+        // Start after channel events. Subsequent ticks continue before channel events.
+        let mut start = encode_sysex(packet, 5)?;
+        start.split = Some(SplitPacket::Start(track));
+        events.push(start);
+        while let Some(packet) = packets.next_if(|next| next.status == 0xF7) {
+            let last = packet.data.last() == Some(&0xF7) || packets.peek().is_none_or(|next| next.status != 0xF7);
+            // Same-tick continuations stay after their own F0 in source order.
+            let order = if clamp_tick(packet.tick) == tick { 5 } else { 0 };
+            let mut continuation = encode_sysex(packet, order)?;
+            continuation.split = Some(SplitPacket::Continue { track, last });
+            events.push(continuation);
+            if last {
+                break;
+            }
         }
     }
     Ok(())
+}
+
+fn encode_sysex(packet: &SysExEvent, order: u8) -> Result<WEvent, MidiError> {
+    let mut bytes = vec![packet.status];
+    push_vlq(&mut bytes, packet.data.len() as u64)?;
+    bytes.extend_from_slice(&packet.data);
+    Ok(WEvent::new(clamp_tick(packet.tick), order, bytes))
 }
 
 #[cfg(test)]

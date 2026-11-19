@@ -138,10 +138,44 @@ fn rejects_a_format_zero_channel_event_inside_split_sysex() {
 }
 
 #[test]
-fn rejects_reordering_a_note_off_before_its_same_tick_sysex_continuation() {
+fn split_sysex_closes_before_a_same_tick_note_off() {
     let body = vec![0, 0x90, 60, 100, 5, 0xF0, 1, 0x43, 5, 0xF7, 2, 0x10, 0xF7, 0, 0x80, 60, 64, 0, 0xFF, 0x2F, 0];
     for format in [0, 1] {
         let smf = read_smf(&file(format, std::slice::from_ref(&body))).unwrap();
-        assert!(matches!(write_smf(&smf), Err(MidiError::Write(message)) if message.contains("interleave")));
+        let bytes = write_smf(&smf).unwrap();
+        assert!(bytes.windows(8).any(|w| w == [0xF7, 2, 0x10, 0xF7, 0, 0x80, 60, 64]));
+        assert_eq!(read_smf(&bytes).unwrap(), smf);
     }
+}
+
+#[test]
+fn split_sysex_opens_after_a_same_tick_program_change() {
+    for gap in [0, 10] {
+        let body = vec![0, 0xC0, 7, 0, 0xF0, 1, 0x43, gap, 0xF7, 2, 0x10, 0xF7, 0, 0xFF, 0x2F, 0];
+        for format in [0, 1] {
+            let smf = read_smf(&file(format, std::slice::from_ref(&body))).unwrap();
+            let bytes = write_smf(&smf).unwrap();
+            assert!(bytes.windows(10).any(|w| w == [0xC0, 7, 0, 0xF0, 1, 0x43, gap, 0xF7, 2, 0x10]));
+            assert_eq!(read_smf(&bytes).unwrap(), smf);
+        }
+    }
+}
+
+#[test]
+fn legacy_f0_packets_without_a_continuation_survive_export() {
+    let body = vec![0, 0xF0, 4, 0x7E, 0x7F, 0x09, 1, 5, 0x90, 60, 100, 5, 0x80, 60, 64, 0, 0xFF, 0x2F, 0];
+    for format in [0, 1] {
+        let smf = read_smf(&file(format, std::slice::from_ref(&body))).unwrap();
+        assert_eq!(read_smf(&write_smf(&smf).unwrap()).unwrap(), smf);
+    }
+
+    // A new F0 starts its own message even when the previous packet had no terminator.
+    let control_and_setup = vec![5, 0xB0, 7, 90, 5, 0xF0, 2, 0x41, 0xF7, 0, 0xFF, 0x2F, 0];
+    let mut smf = read_smf(&file(1, &[body, control_and_setup])).unwrap();
+    smf.format = 0;
+    let written = read_smf(&write_smf(&smf).unwrap()).unwrap();
+    let sequence = &written.tracks[0].sequence;
+    assert_eq!(sequence.sysex, [smf.tracks[0].sequence.sysex[0].clone(), smf.tracks[1].sequence.sysex[0].clone()]);
+    assert_eq!(sequence.notes, smf.tracks[0].sequence.notes);
+    assert_eq!(sequence.ctrls, smf.tracks[1].sequence.ctrls);
 }

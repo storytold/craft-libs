@@ -78,6 +78,13 @@ pitch that overlap are trimmed so that the file reads back with the same starts,
 start together the longer is written. An invalid tempo, a meter denominator that is not a power
 of two, more than 65535 tracks or a gap beyond the 28-bit delta limit is an error.
 
+Same-tick events normally write as note-offs, SysEx, controllers, then note-ons.
+A split SysEx message opens after same-tick channel events and continues before channel
+events on later ticks. Packets belonging to the message on its opening tick retain their
+source order. Interleaving a transmittable event within an actual split returns a write
+error, including when merging tracks. Meta events may appear between packets. A legacy
+F0 with no continuation is exported with its original payload and tick.
+
 ## Sources and clean room
 
 Written from the public Standard MIDI Files 1.0 specification (the MIDI Association). No other
@@ -97,10 +104,3 @@ These wire helpers are extracted from LoopCraft's `crates/midi/src/sync.rs` at
 The source history credits bflatastic. Transport state and scheduling remain app-owned.
 Tests cover known wire vectors, truncated/invalid input, all song-position input values and
 legacy conversion behavior. No application consumer cutover is claimed by this library addition.
-
-
-For `write_smf`, events on the same tick are ordered as note-offs, SysEx, controllers,
-then note-ons. Both export formats report a write error when that order would put a channel
-event between split SysEx packets, including a note-off at the tick of its closing continuation.
-Format 0 also rejects interleaving split packets from different tracks. Meta events can appear
-between packets because they are local to the file.
