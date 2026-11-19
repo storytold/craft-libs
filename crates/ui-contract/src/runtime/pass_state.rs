@@ -225,12 +225,8 @@ fn visit(ctx: &Context, f: &mut dyn FnMut(&PassState)) {
 /// Moves the context's state into this thread unless it holds it already: the begin hook. States of other contexts
 /// with no pass running here (a pass a panic left open) go back to their contexts first.
 pub(crate) fn hold(ctx: &Context) {
-    let stale: Vec<Held> = HELD.with(|held| {
-        let mut held = held.borrow_mut();
-        let (stale, kept) = std::mem::take(&mut held.entries).into_iter().partition(|held| held.ctx != *ctx && frame::running(&held.ctx).is_none());
-        held.entries = kept;
-        stale
-    });
+    let stale: Vec<Held> =
+        HELD.with(|held| held.borrow_mut().entries.extract_if(.., |entry| entry.ctx != *ctx && frame::running(&entry.ctx).is_none()).collect());
     for held in stale {
         park(held);
     }
