@@ -54,6 +54,39 @@ fn forget_missing_para_styles(styles: &craft_wordmodel::StyleSheet, blocks: &mut
     }
 }
 
+/// A `w:matchSrc` chunk's paragraphs, the last one aside, come in as Word brings them: Word gives
+/// each its style's look as direct formatting on Normal, but not the style's `w:cs` or `w:rtl`
+/// (measured in Word for Windows: bold and sizes come, the text is drawn neither complex script
+/// nor right to left, whether or not we have a style of that id). The paragraphs keep their
+/// styles here, so where a paragraph's style (or the chunk's run defaults) makes its text complex
+/// script or right to left and a run doesn't say so itself, the run is told it isn't.
+fn drop_style_script(styles: &craft_wordmodel::StyleSheet, blocks: &mut [Arc<Block>]) {
+    for b in blocks.iter_mut() {
+        match Arc::make_mut(b) {
+            Block::Para(p) => {
+                let (_, chr) = styles.para_style_props(p.props.style.as_deref().unwrap_or("Normal"));
+                let (cs, rtl) = (chr.cs == Some(true), chr.rtl == Some(true));
+                if !cs && !rtl {
+                    continue;
+                }
+                for c in p.runs.iter_mut().map(|r| &mut r.props).chain(std::iter::once(&mut p.mark)) {
+                    if cs {
+                        c.cs.get_or_insert(false);
+                    }
+                    if rtl {
+                        c.rtl.get_or_insert(false);
+                    }
+                }
+            }
+            Block::Table(t) => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    drop_style_script(styles, &mut cell.blocks);
+                }
+            }
+        }
+    }
+}
+
 /// Turns a chunk the docx reader can't read itself into a document whose body takes the chunk's
 /// place; `None` leaves the chunk out.
 pub type ChunkImporter<'a> = &'a dyn Fn(&AltChunk) -> Option<Document>;
@@ -126,6 +159,12 @@ impl Reader<'_> {
         self.doc.missing_pictures.add_unlisted(&part, unlisted);
         self.doc.missing_pictures.truncated |= nested.truncated;
         let last_style = if keep { self.keep_last_look(&mut doc) } else { None };
+        if keep {
+            // The last paragraph is Word's too: it keeps its style's (`keep_last_look`).
+            let end = doc.body.len() - usize::from(matches!(doc.body.last().map(|b| &**b), Some(Block::Para(_))));
+            let styles = Arc::clone(&doc.styles);
+            drop_style_script(&styles, &mut doc.body[..end]);
+        }
         let mut blocks = self.doc.adopt_blocks(doc, keep, &mut self.next_perm);
         if let Some(style) = last_style
             && let Some(Block::Para(p)) = blocks.last_mut()

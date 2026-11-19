@@ -642,3 +642,50 @@ fn words_own_way_of_taking_a_styles_shading_and_effects_off_draws_none() {
         assert_eq!(look(1), (true, Some((true, true, true, true))), "{when}: the style's own");
     }
 }
+
+/// A `w:matchSrc` chunk's paragraphs before the last come in without their style's `w:cs` and
+/// `w:rtl`, as Word brings them (measured in Word for Windows: it gives them their style's look as
+/// direct formatting on Normal, bold and sizes but neither of those), whether or not we have a
+/// style of that id. The last paragraph keeps its style's when we don't have one of that id.
+#[test]
+fn a_match_src_chunks_other_paragraphs_leave_their_styles_complex_script_and_direction() {
+    for flag in ["cs", "rtl"] {
+        let theirs = format!(
+            r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:{flag}/><w:sz w:val="22"/><w:szCs w:val="48"/></w:rPr></w:style>"#
+        );
+        let para = |t: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>{t}</w:t></w:r></w:p>"#);
+        let chunk = format!(r#"{}{}<w:tbl><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>{}"#, para("First"), para("Middle"), para("Cell"), para("Last"));
+        let inner = package_styled(&chunk, None, Some(&theirs));
+        for ours_too in [true, false] {
+            let mut ours = String::from(r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#);
+            if ours_too {
+                ours.push_str(r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:sz w:val="22"/><w:szCs w:val="48"/></w:rPr></w:style>"#);
+            }
+            let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+            let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(&ours))).unwrap();
+            for (when, d) in [("read", d.clone()), ("after a save", read(&craft_docx::write(&d).unwrap()).unwrap())] {
+                let mut seen = Vec::new();
+                for b in &d.body {
+                    craft_wordmodel::walk::each_para(b, 0, &mut |p| {
+                        let Some(r) = p.runs.first() else { return };
+                        let c = d.styles.resolve_char(p.props.style.as_deref(), &r.props);
+                        seen.push((p.text.clone(), c.cs || c.rtl, c.uses_complex('A'), c.uses_complex('\u{0E01}'), c.bold, c.size));
+                    });
+                }
+                let case = format!("{flag}, our Subtitle {ours_too}, {when}");
+                for name in ["First", "Middle", "Cell"] {
+                    let s = seen.iter().find(|s| s.0 == name).unwrap_or_else(|| panic!("{case}: no {name}: {seen:?}"));
+                    assert_eq!((s.1, s.2), (false, false), "{case}: {name} is neither complex script nor right to left");
+                    // Thai too, where the style said `w:cs` (left alone, WordCraft draws Thai
+                    // complex script by itself).
+                    assert!(flag != "cs" || !s.3, "{case}: {name}'s Thai");
+                    assert_eq!((s.4, s.5), (true, 11.0), "{case}: {name} keeps its style's bold and size");
+                }
+                if !ours_too {
+                    let last = seen.iter().find(|s| s.0 == "Last").unwrap_or_else(|| panic!("{case}: {seen:?}"));
+                    assert!(last.1 && last.2, "{case}: the last paragraph keeps its style's {flag}: {seen:?}");
+                }
+            }
+        }
+    }
+}
