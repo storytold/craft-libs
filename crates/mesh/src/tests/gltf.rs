@@ -982,7 +982,7 @@ fn strict_uri_decoding_preserves_exact_names_and_rejects_invalid_utf8() {
 
 #[test]
 fn clearcoat_and_sheen_round_trip_through_write_glb() {
-    let mut mesh = Mesh::new("card");
+    let mut mesh = Mesh { name: "card".into(), ..Mesh::default() };
     mesh.positions = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
     mesh.parts = vec![Part { material: Some(0), corners: [0, 1, 2].map(Corner::at).to_vec(), ..Part::default() }];
     let mat = Material {
