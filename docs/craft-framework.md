@@ -1123,7 +1123,7 @@ Control channel, screenshot queue, profiler and recorded actions for tests and s
 | `protocol` | JSON-lines wire format and parameter validators | exists |
 | `security` | Tokens, the authentication handshake (challenge or one-frame token) and transport limits | exists |
 | `server` | Loopback JSON-lines TCP transport (native): `listen`, `serve`, stopped by dropping its `Listening` | exists |
-| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file, the link host and the Agents page of Preferences | exists |
+| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file and the CLI's live client (re-exported from `craft-control`), the link host and the Agents page of Preferences | exists |
 | `client` | JSON-lines client for tests and command-line tools (native) | exists |
 | `synthetic` | Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.key`, `ui.type` | exists |
 | `dialogs` | `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` over a `DialogHost` | exists |

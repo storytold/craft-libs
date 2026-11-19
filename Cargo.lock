@@ -2047,10 +2047,8 @@ name = "craft-automation"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "craft-ai-agents",
- "craft-atomic",
  "craft-behavior",
- "craft-flags",
+ "craft-control",
  "craft-host",
  "craft-keymap",
  "craft-platform",

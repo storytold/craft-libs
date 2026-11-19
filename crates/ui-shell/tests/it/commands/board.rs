@@ -1,10 +1,11 @@
-use super::kit::{AppCommand, Dock, DockCommand, PaneCommand, Tap};
+use super::kit::{AppCommand, Dock, DockCommand, PaneCommand, Silent, Tap};
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::commands::{
-    CommandGate, CommandInput, CommandRef, CommandState, Commands as _, EditCommands, FireSource, Fired, fire, resolve,
+    CommandGate, CommandInput, CommandRef, CommandState, Commands as _, EditCommands, FireSource, Fired, chord_text_builds, fire, resolve,
 };
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::runtime::frame::take_output;
+use craft_ui::runtime::measure::chord_texts;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Frames, trial};
@@ -192,4 +193,60 @@ fn undo_in_a_dialog_reaches_the_dialog_and_not_the_application() {
     frames.idle(2, &mut show);
     assert_eq!(undone.get(), 1, "the dialog took the undo");
     assert!(take_output(&frames.ctx).fired.is_empty(), "the application's undo stays blocked");
+}
+
+/// Count relation: an access report reads a chord text for each command-bound node that exists, at any number of nodes,
+/// never for a component with no node, and writes none; the texts are written when the keymap is built.
+#[trial]
+fn access_reports_read_chord_texts_for_their_nodes_and_write_none() {
+    let mut frames = Frames::new();
+    let mut built = 0;
+    for count in [6, 12] {
+        let mut show = |ui: &mut Ui| {
+            for salt in 0..count {
+                Tap::new().id_salt(salt).command(AppCommand::Save).show(ui);
+            }
+            Tap::new().id_salt("go").command(AppCommand::Go).show(ui);
+            Silent::new().id_salt("silent").command(AppCommand::Save).show(ui);
+        };
+        frames.idle(3, &mut show);
+        if built == 0 {
+            built = chord_text_builds();
+        }
+        frames.idle(3, &mut show);
+        assert_eq!(chord_text_builds(), built, "passes write no chord text");
+        assert_eq!(chord_texts(&frames.ctx), count, "one read per node whose command has a chord, none for a component with no node");
+    }
+}
+
+/// An instance that stops registering and registers again goes last in registration order, which a non-component
+/// source's pick follows (the first live instance); lookups by id stay right throughout.
+#[trial]
+fn a_re_registered_instance_goes_last_in_the_pick() {
+    let a_shown = Cell::new(true);
+    let taker = Cell::new("");
+    let mut show = |ui: &mut Ui| {
+        for name in ["a", "b", "c"] {
+            if name == "a" && !a_shown.get() {
+                continue;
+            }
+            super::kit::Pane::new().id_salt(name).show(ui, |_, cx| {
+                if cx.take_command::<PaneCommand>().is_some() {
+                    taker.set(name);
+                }
+            });
+        }
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    assert!(fire(&frames.ctx, PaneCommand::ZoomIn, FireSource::Palette));
+    frames.idle(2, &mut show);
+    assert_eq!(taker.get(), "a", "registered first");
+    a_shown.set(false);
+    frames.idle(3, &mut show);
+    a_shown.set(true);
+    frames.idle(3, &mut show);
+    assert!(fire(&frames.ctx, PaneCommand::ZoomIn, FireSource::Palette));
+    frames.idle(2, &mut show);
+    assert_eq!(taker.get(), "b", "a registered again after b and c");
 }

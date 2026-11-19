@@ -285,6 +285,18 @@ pub fn row_measures(ctx: &Context) -> Vec<(Id, u32)> {
     store::with::<RowMeasures, _>(ctx, |log| if log.pass == last { log.rows.clone() } else { Vec::new() })
 }
 
+/// Counts a chord text an access report read for a node in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_chord_text(ctx: &Context) {
+    totals(ctx, |log| log.chord_texts += 1);
+}
+
+/// The chord texts the access reports of the last pass read: one per command-bound node that exists.
+#[cfg(feature = "testing")]
+pub fn chord_texts(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.chord_texts, 0)
+}
+
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_least(ctx: &Context, id: Id) {
@@ -347,13 +359,14 @@ pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
     pass_state::with::<SettleLog, _>(ctx, |log| if log.pass == last { log.decisions.clone() } else { Vec::new() })
 }
 
-/// Bytes fed into memo keys in one pass, and the layouts and measure asks of that pass.
+/// Bytes fed into memo keys in one pass, and the layouts, measure asks and chord texts of that pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
 pub(crate) struct PassTotals {
     pass: u64,
     key_bytes: usize,
     text_layouts: u32,
+    chord_texts: u32,
     asks: Vec<(&'static str, u32)>,
 }
 

@@ -219,11 +219,10 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
 
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let laid = self.resolve(cx);
-        let os = cx.env.shell().os;
         let face = cx.part(FACE, rect).priority(HitPriority::new(HitLevel::Body, 0));
         if let Some(resolved) = self.lead(&laid) {
-            face.tooltip(match &resolved.chord {
-                Some(chord) => Label::from(format!("{} ({})", resolved.label, chord.display(os))),
+            face.tooltip(match &resolved.chord_text {
+                Some(chord) => Label::from(format!("{} ({chord})", resolved.label)),
                 None => Label::Shared(resolved.label.clone()),
             });
         }
