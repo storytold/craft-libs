@@ -3,7 +3,7 @@
 use craft_behavior::{CancelReason, CanvasView, EditEvent};
 use craft_keymap::Mods;
 use craft_review::annotate::{Annotation, AnnotationEdit, AnnotationId, AnnotationKind, AnnotationTool, HandleRule, SLIP_MOVE};
-use craft_review::ui::annotate::{DrawOptions, EmptyPress, EraseMode, InkStrokes, MarkupPress, OpenOn, SelectOptions, ToggleMods};
+use craft_review::ui::annotate::{DrawOptions, EmptyPress, EraseMode, HandlesWhileDrawing, InkStrokes, MarkupPress, OpenOn, SelectOptions, ToggleMods};
 use craft_review::ui::{AnnotateTool, AnnotateWords};
 use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect as ScreenRect, vec2};
@@ -404,8 +404,50 @@ fn a_fixed_aspect_holds_on_every_corner_and_shift_takes_the_boxs_own() {
     assert_eq!(resized_ids, vec![square.id], "the handles are the last selected annotation's");
 }
 
-/// `AnnotateTool::click`, the host's part click: a plain click selects only the comment, the toggle modifiers toggle
-/// it (Command only under `ToggleMods::ShiftOrCommand`), a double click opens a note or text box (any comment under
+/// Under `HandlesWhileDrawing::Edit` a drawing tool's press on the selected box's corner resizes it, but a press on a
+/// selected line's end draws a new line from there: the drawing tools do not take end and corner points.
+#[trial]
+fn while_drawing_edit_takes_resize_handles_but_not_point_handles() {
+    let mut options = SelectOptions::default();
+    options.handles_while_drawing = HandlesWhileDrawing::Edit;
+    let commits = |rig: &ToolFixture<AnnotateTool>| -> Vec<AnnotationEdit> {
+        rig.tool_mut()
+            .take_edits()
+            .into_iter()
+            .filter_map(|edit| match edit {
+                EditEvent::Commit { after, .. } => Some(after),
+                EditEvent::Set { after, .. } => Some(after),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let boxed = annotation(1, AnnotationKind::Rectangle, Rect::new(100.0, 100.0, 200.0, 160.0));
+    let mut tool = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Rectangle), 0).select_options(options);
+    tool.annotations = vec![boxed.clone()];
+    tool.selected = vec![boxed.id];
+    let mut shapes = rig(tool);
+    drag_holding(&mut shapes, Point::new(200.0, 160.0), Point::new(240.0, 200.0), Modifiers::NONE);
+    let edits = commits(&shapes);
+    assert!(edits.iter().any(|edit| matches!(edit, AnnotationEdit::Resize { .. })), "the corner resizes the box: {edits:?}");
+
+    let mut line = annotation(2, AnnotationKind::Line, Rect::new(100.0, 100.0, 200.0, 100.0));
+    line.points = vec![Point::new(100.0, 100.0), Point::new(200.0, 100.0)];
+    let mut tool = AnnotateTool::new(AnnotationTool::Draw(AnnotationKind::Line), 0).select_options(options);
+    tool.annotations = vec![line.clone()];
+    tool.selected = vec![line.id];
+    let mut lines = rig(tool);
+    drag_holding(&mut lines, Point::new(200.0, 100.0), Point::new(260.0, 140.0), Modifiers::NONE);
+    let edits = commits(&lines);
+    assert!(!edits.iter().any(|edit| matches!(edit, AnnotationEdit::Reshape { .. })), "the line's end is not dragged: {edits:?}");
+    assert!(
+        edits.iter().any(|edit| matches!(edit, AnnotationEdit::Create(made) if made.kind == AnnotationKind::Line)),
+        "a new line is drawn from the end: {edits:?}"
+    );
+}
+
+/// `AnnotateTool::click`, the host's part click: a plain click selects only the comment (on one already selected it
+/// keeps the selection and makes that one the primary, whose handles show), the toggle modifiers toggle it (Command only under `ToggleMods::ShiftOrCommand`), a double click opens a note or text box (any comment under
 /// `OpenOn::Every`), and the edits carry the tool's undo labels. A double press on the page runs the same rule.
 #[trial]
 fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
@@ -438,6 +480,8 @@ fn a_click_on_a_hosts_part_selects_toggles_and_opens_by_the_tools_rules() {
         edits.len() == 2 && edits.iter().all(|(edit, label)| matches!(edit, AnnotationEdit::Selection(_)) && label == words.edit_select.as_str()),
         "each change is a selection step under its label: {edits:?}"
     );
+    tool.click(AnnotationId(2), Mods::NONE, 1, &words);
+    assert_eq!(tool.selected, vec![AnnotationId(1), AnnotationId(2)], "a plain click on a selected comment keeps the others and makes it the primary");
 
     let mut options = SelectOptions::default();
     options.toggle = ToggleMods::ShiftOrCommand;

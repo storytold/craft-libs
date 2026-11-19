@@ -119,6 +119,33 @@ fn a_corner_drag_resizes_within_the_limits_and_reports_on_release() {
     assert!((rect.size() - NOTE_POPUP_LIMITS.min).length() < SLACK, "the window stops at its least size: {rect:?}");
 }
 
+/// Each reply is a panel of its own, in thread order: an answer to a reply sits inside that reply's panel, inset on
+/// both sides, and the replies to the note line up.
+#[trial]
+fn a_pop_up_nests_each_answer_in_the_panel_of_the_reply_it_answers() {
+    let message = |id: u64, author: &'static str, text: &'static str, depth: usize| NotePopupMessage {
+        id,
+        title: "Sticky Note",
+        author,
+        text,
+        modified: None,
+        depth,
+        editable: depth == 0,
+    };
+    let thread = [message(1, "Ana", "First", 0), message(2, "Bo", "Second", 1), message(3, "Cy", "Second, first answer", 2), message(4, "Di", "Third", 1)];
+    let mut drafts = NoteDrafts::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NotePopup::new(1, "Note", Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 600.0)), &thread, &mut drafts).show(ui);
+    });
+    fixture.room(vec2(1000.0, 800.0)).settle();
+    let panel = |author: &str| fixture.by_label(&format!("Comment by {author}")).unwrap_or_else(|| panic!("{author}'s reply panel")).rect;
+    let (second, answer, third) = (panel("Bo"), panel("Cy"), panel("Di"));
+    assert!(second.bottom() <= third.top(), "thread order: {second:?} then {third:?}");
+    assert!(second.contains_rect(answer), "the answer sits inside its reply's panel: {second:?} holds {answer:?}");
+    assert!(answer.left() > second.left() && answer.right() < second.right(), "inset on both sides: {second:?} {answer:?}");
+    assert!((third.left() - second.left()).abs() < SLACK && (third.right() - second.right()).abs() < SLACK, "replies to the note line up");
+}
+
 /// The host of one composer: it shows the composer until it posts or cancels.
 struct ComposerHost {
     open: Cell<bool>,
@@ -129,6 +156,25 @@ struct ComposerHost {
 
 /// Where a press lands outside the composer's card.
 const OUTSIDE: egui::Pos2 = egui::Pos2::new(700.0, 550.0);
+
+/// A composer's hint names its field; without one the field is "Add a comment".
+#[trial]
+fn a_composer_hint_names_its_field() {
+    for hint in [Some("Text to insert"), None] {
+        let mut draft = String::new();
+        let mut fixture = Fixture::new(move |ui| {
+            let composer = CommentComposer::new(Some(pos2(200.0, 200.0)), &mut draft);
+            let _ = match hint {
+                Some(hint) => composer.hint(hint),
+                None => composer,
+            }
+            .show(ui);
+        });
+        fixture.room(vec2(800.0, 600.0)).settle();
+        let name = hint.unwrap_or("Add a comment");
+        assert!(fixture.by_label(name).is_some(), "the field is named {name}");
+    }
+}
 
 /// `ComposerClose::OnPostOrCancel` keeps the card open on a press outside and closes it on Post or Cancel; the default
 /// closes it on the press outside.

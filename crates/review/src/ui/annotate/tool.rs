@@ -375,7 +375,7 @@ pub enum HandlesWhileDrawing {
     /// The press continues the drawing.
     #[default]
     Draw,
-    /// The press edits through the handle.
+    /// A press on a resize handle edits through it; one on an end or corner point continues the drawing.
     Edit,
 }
 
@@ -624,8 +624,8 @@ impl AnnotateTool {
     }
 
     /// The selection rule of a press on an annotation's body and of a click on its part: a second click opens it (by
-    /// [`OpenOn`]), the toggle modifiers toggle it, and a plain press on an unselected one selects only it. Returns
-    /// whether it opened.
+    /// [`OpenOn`]), the toggle modifiers toggle it, a plain press on an unselected one selects only it and on a
+    /// selected one makes it the primary, keeping the others. Returns whether it opened.
     fn select_part(&mut self, target: AnnotationId, mods: Mods, clicks: u32, words: &AnnotateWords) -> bool {
         let selected = self.selected.contains(&target);
         if clicks >= 2 && self.opens(target) {
@@ -639,13 +639,19 @@ impl AnnotateTool {
             self.select(SelectionChange::Toggle(target), words);
         } else if !selected {
             self.select(SelectionChange::Set(vec![target]), words);
+        } else if self.primary() != [target] {
+            // A set's last key is its lead: the primary, whose handles show.
+            let mut ids: Vec<AnnotationId> = self.selected.iter().copied().filter(|id| *id != target).collect();
+            ids.push(target);
+            self.select(SelectionChange::Set(ids), words);
         }
         false
     }
 
     /// The handle of the primary selection under `at` that a press of the drawing tool of `kind` edits: only under
-    /// [`HandlesWhileDrawing::Edit`], for a shape or point kind, and never while a polygon is being clicked out, which
-    /// keeps its clicks.
+    /// [`HandlesWhileDrawing::Edit`], for a shape or point kind, never while a polygon is being clicked out, which
+    /// keeps its clicks, and only a resize handle: a drawing tool draws from where it is pressed, so a new line starts
+    /// at the end of the one just drawn rather than dragging it.
     fn handle_while_drawing(&self, kind: AnnotationKind, at: Point, tolerance: f64, icon_side: f64) -> Option<(AnnotationId, AnnotationHandle)> {
         use AnnotationKind as K;
         let edits = self.select_options.handles_while_drawing == HandlesWhileDrawing::Edit
@@ -656,7 +662,7 @@ impl AnnotateTool {
             return None;
         }
         match hit(&self.annotations, self.primary(), at, tolerance, icon_side) {
-            Some(AnnotationHit::Handle(target, handle)) => Some((target, handle)),
+            Some(AnnotationHit::Handle(target, handle @ AnnotationHandle::Box(..))) => Some((target, handle)),
             _ => None,
         }
     }

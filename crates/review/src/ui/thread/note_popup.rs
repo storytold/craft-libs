@@ -8,7 +8,7 @@ use craft_theme::variant::Variant;
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use craft_ui::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, MeasureCx, Mount, NoValue, Outcome, Overlay, Pad,
     PaintUi, Pattern, Props as _, Role, Show as _, ShowContainer as _, SizeLimits, clicked,
 };
 use craft_ui::display::{Shade, Text};
@@ -95,8 +95,8 @@ impl NoteDrafts {
     }
 }
 
-/// The pop-up's body: the messages, each indented by its depth, then the reply box. It reads and writes the host's
-/// drafts and gathers what the pass committed.
+/// The pop-up's body: the note's text and Reply, then each reply as a panel holding the panels of its answers. It reads
+/// and writes the host's drafts and gathers what the pass committed.
 struct NoteBody<'a, 'm> {
     id: u64,
     messages: &'a [NotePopupMessage<'m>],
@@ -110,21 +110,43 @@ struct NoteBody<'a, 'm> {
 impl NoteBody<'_, '_> {
     fn show(&mut self, ui: &mut Ui, words: &ThreadWords, view: &EnvView<'_>) {
         let messages = self.messages;
+        let (answers, replies) = nest(messages);
         Stack::new().fill_width().show(ui, |ui, _| {
-            for (index, message) in messages.iter().enumerate() {
-                let depth = u8::try_from(message.depth.min(MAX_NESTING)).unwrap_or(u8::MAX);
-                // The indent steps are the theme's, from the start edge.
-                Stack::new().fill_width().indent(depth).show(ui, |ui, _| {
-                    if index > 0 {
-                        byline(ui, message, view, self.now);
-                    }
-                    if index == 0 && self.allowed && message.editable {
-                        self.note_text(ui, message, words);
-                    } else {
-                        Text::new(message.text.to_owned()).show(ui);
-                    }
-                    if self.allowed {
-                        self.reply_box(ui, words, message.id);
+            if let Some(note) = messages.first() {
+                if self.allowed && note.editable {
+                    self.note_text(ui, note, words);
+                } else {
+                    Text::new(note.text.to_owned()).show(ui);
+                }
+                if self.allowed {
+                    self.reply_box(ui, words, note.id);
+                }
+            }
+            for &at in &replies {
+                self.reply_panel(ui, words, view, &answers, at);
+            }
+        });
+    }
+
+    /// The panel of reply `at`: its author line, text and Reply, then the panels of its answers (`answers[at]`), one
+    /// indent step in. A reply's answers sit deeper than it and no deeper than [`MAX_NESTING`], so this recurses no
+    /// deeper than that.
+    fn reply_panel(&mut self, ui: &mut Ui, words: &ThreadWords, view: &EnvView<'_>, answers: &[Vec<usize>], at: usize) {
+        let messages = self.messages;
+        let Some(message) = messages.get(at) else { return };
+        let name = words.pin.fill(&[("author", message.author)]);
+        Stack::new().surface(SurfaceKind::Frame).pad(Pad::Control).fill_width().label(name).show(ui, |ui, _| {
+            byline(ui, message, view, self.now);
+            Text::new(message.text.to_owned()).show(ui);
+            if self.allowed {
+                self.reply_box(ui, words, message.id);
+            }
+            let own = answers.get(at).map_or(&[][..], Vec::as_slice);
+            if !own.is_empty() {
+                // The indent step is the theme's, from the start edge.
+                Stack::new().fill_width().indent(1).show(ui, |ui, _| {
+                    for &answer in own {
+                        self.reply_panel(ui, words, view, answers, answer);
                     }
                 });
             }
@@ -178,6 +200,26 @@ impl NoteBody<'_, '_> {
     }
 }
 
+/// The thread of `messages` (the note first, each reply after the message it answers, by depth): for each message the
+/// replies whose panels sit in its panel, and the replies to the note. A reply deeper than [`MAX_NESTING`] counts as at
+/// that depth, and one at depth 0 after the note as a reply to it.
+fn nest(messages: &[NotePopupMessage<'_>]) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut answers: Vec<Vec<usize>> = vec![Vec::new(); messages.len()];
+    let mut replies = Vec::new();
+    // The replies open at each depth above the one being placed.
+    let mut open: Vec<usize> = Vec::new();
+    for (at, message) in messages.iter().enumerate().skip(1) {
+        let depth = message.depth.clamp(1, MAX_NESTING);
+        open.truncate(depth - 1);
+        match open.last().and_then(|&parent| answers.get_mut(parent)) {
+            Some(own) => own.push(at),
+            None => replies.push(at),
+        }
+        open.push(at);
+    }
+    (answers, replies)
+}
+
 /// A reply's author line: avatar, name and age.
 fn byline(ui: &mut Ui, message: &NotePopupMessage<'_>, view: &EnvView<'_>, now: i64) {
     Row::new().fill_width().show(ui, |ui, _| {
@@ -218,8 +260,8 @@ pub struct NotePopupOutput {
 }
 
 /// A modeless note pop-up window over a note's messages: a title band in the note's colour with its kind, author and
-/// age, and Close; the note's text, typed in place while the note may be edited; its replies, each indented by its
-/// depth; and a Reply button under each message that opens a box to answer it (Post or Cmd/Ctrl+Enter posts, Cancel
+/// age, and Close; the note's text, typed in place while the note may be edited; its replies, each a bordered panel
+/// named for its author, an answer to a reply inside that reply's panel; and a Reply button under each message that opens a box to answer it (Post or Cmd/Ctrl+Enter posts, Cancel
 /// or Escape drops it).
 ///
 /// - Place: at the host's `rect`, its size kept within [`NOTE_POPUP_LIMITS`] on screen at every zoom, so it takes no
