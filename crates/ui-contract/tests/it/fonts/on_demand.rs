@@ -457,3 +457,34 @@ fn registered_path_index_pair_is_excluded_even_when_covers_repeats_it() {
     assert!(draws(&frames, 'ع'));
     assert_eq!(registered(&frames), [(col, 0), (fallback, 0)]);
 }
+
+#[trial]
+fn on_demand_coverage_matches_active_renderer_for_bitmap_color_and_outline_glyphs() {
+    let bitmap = super::synthetic_bitmap_ttf("BitmapCJK", '日');
+    let colr = super::synthetic_ttf("ColrCJK", &[('日', false)], true);
+    let svg_only = super::synthetic_svg_ttf("SvgCJK", '日', 14, 6, b"<svg/>");
+    let ghost = super::synthetic_ttf("GhostCJK", &[('日', false)], false);
+    let expected_color_or_bitmap = cfg!(feature = "color_fonts").then_some(0);
+
+    assert_eq!(SystemCandidates.covers(&bitmap, '日'), expected_color_or_bitmap);
+    assert_eq!(SystemCandidates.covers(&colr, '日'), expected_color_or_bitmap);
+    assert_eq!(SystemCandidates.covers(&svg_only, '日'), None, "SVG-only glyphs are unsupported by the active renderer");
+    assert_eq!(SystemCandidates.covers(&ghost, '日'), None, "cmap-only ghost glyphs never cover");
+
+    // Collection and regional override respect the active renderer's bitmap support as well.
+    let outline_sc = super::synthetic_ttf("Noto Sans CJK SC", &[('日', true)], false);
+    let bitmap_jp = super::synthetic_bitmap_ttf("Noto Sans CJK JP", '日');
+    let ttc = write("renderer-regional.ttc", &collection(&[&outline_sc, &bitmap_jp]));
+    let files = Files::new(vec![("Hani", vec![ttc.clone()])]);
+    let mut frames = Frames::new();
+    UiFonts::new(&I18nScripts)
+        .app_face("ui", egui_face("Ubuntu-Light"), &[FontRef::proportional()])
+        .system_fonts(SystemFonts::Off)
+        .ui_language("ja")
+        .on_demand(Arc::clone(&files) as Arc<dyn FontCandidates>)
+        .install(&frames.ctx);
+
+    show(&mut frames, "日");
+    let expected_index = u32::from(cfg!(feature = "color_fonts"));
+    assert_eq!(registered(&frames), [(ttc, expected_index)]);
+}
