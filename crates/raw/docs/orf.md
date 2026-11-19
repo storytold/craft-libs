@@ -45,5 +45,18 @@ CRAFT_RAW_ORF_CORPUS=/path/to/lightcraft/corpus cargo test -p craft-raw --test o
 cargo test -p craft-raw --test it vendor_robust::
 ```
 
-The original LightCraft corpus manifest and independent reference checker remain
+The optional [reference checker](verify_orf_reference.py) reads the same 23-case
+manifest in `tests/orf_corpus.rs`. It requires Python 3.11+ and an explicitly
+selected, installed `unprocessed_raw` executable; it does not fetch or build one.
+It verifies the input hashes, then compares every unscaled sensor sample with the
+pinned hashes. PGM output is streamed in bounded blocks from a temporary directory
+and removed even on failure. Inputs and expected hashes are never rewritten.
+
+```sh
+python3 -m unittest discover -s crates/raw/docs -p 'test_verify_orf_reference.py' -v
+python3 crates/raw/docs/verify_orf_reference.py --corpus /path/to/lightcraft/corpus --oracle /path/to/unprocessed_raw
+```
+
+The reference check records output agreement, not independent derivation or
+provenance acceptance. The original LightCraft corpus acquisition manifest remains
 in [LightCraft](https://github.com/storytold/lightcraft/tree/225282d856868c4cb9063c72dd331c5bbcdadd1e/docs/raw).
