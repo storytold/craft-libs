@@ -29,8 +29,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_under, measured_extent, member_prepare, member_show, paint_face, show_container,
-    show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, measure_container, measure_face, measure_under, measured_extent, member_prepare, member_show, paint_face,
+    show_container, show_container_taking, show_items, show_leaf,
 };
 
 /// Where a component is placed.
@@ -1822,10 +1822,28 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
     }
 }
 
+/// What a measure outside the component's own show is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeasureFor {
+    /// A component its caller shows, or sizes a rect by: a leaf of the transcript of the body it is measured in.
+    Component,
+    /// A composite's face (`MeasureCx::face`), measured inside the composite's own run (measure, parts or header
+    /// parts). Only the composite's measure call sizes the composite, and its answer and inputs are the transcript's
+    /// record, so the face keeps no leaf of its own.
+    Face,
+}
+
 /// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> Vec2 {
+pub(super) fn measure_shape(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&super::cx::Under>,
+    purpose: MeasureFor,
+) -> Vec2 {
     let facts = t.facts();
     let env = match under {
         Some(under) => super::cx::child_env(&Env::of(ui), under),
@@ -1855,7 +1873,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
     };
     let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);
     let (took, inputs) = ask(&mut *t, proposal);
-    if leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
+    if leaf && purpose == MeasureFor::Component && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
         let calls = &mut [Call { proposal, room: None, inputs, took }];
         crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(&mut *t, proposal).0);
     }
