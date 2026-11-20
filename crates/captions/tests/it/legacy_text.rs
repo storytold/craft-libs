@@ -172,6 +172,10 @@ fn detection_finds_each_format() {
     // Cue text containing literal SubViewer markers must not hijack SRT detection
     assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\nHere is a [SUBTITLE] tag\n", None), Some(Format::Srt));
     assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\n[INFORMATION] about movie\n", None), Some(Format::Srt));
+    assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\n00:00:01.00,00:00:02.00\n", None), Some(Format::Srt));
+    assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\n00:00:01.00,00:00:02.00\n", Some("srt")), Some(Format::Srt));
+    // TTML with namespaced sami element is not SAMI
+    assert_ne!(detect(b"<sami:tt xmlns:sami=\"http://www.w3.org/ns/ttml\"><head></head><body></body></sami:tt>", None), Some(Format::Sami));
     // Genuine SubViewer with only [SUBTITLE] header
     assert_eq!(detect(b"[SUBTITLE]\n00:00:01.00,00:00:02.00\nText\n", None), Some(Format::SubViewer));
     // Genuine SubViewer with long/truncated [TITLE] line

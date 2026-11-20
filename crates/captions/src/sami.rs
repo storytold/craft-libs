@@ -217,14 +217,20 @@ pub fn write(doc: &Document) -> String {
     let mut out = String::from(
         "<SAMI>\n<HEAD>\n<TITLE></TITLE>\n<STYLE TYPE=\"text/css\">\n<!--\nP { margin-left: 8pt; margin-right: 8pt; text-align: center; font-size: 20pt; color: white; }\n.ENCC { Name: English; lang: en-US; SAMIType: CC; }\n-->\n</STYLE>\n</HEAD>\n<BODY>\n",
     );
-    for (i, c) in cues.iter().enumerate() {
-        let lines: Vec<&str> = c.text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-        if lines.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("<SYNC Start={}><P Class=ENCC>{}\n", tick_to_ms(c.start), lines.join("<br>")));
-        if cues.get(i + 1).map(|n| tick_to_ms(n.start)) != Some(tick_to_ms(c.end)) {
-            out.push_str(&format!("<SYNC Start={}><P Class=ENCC>&nbsp;\n", tick_to_ms(c.end)));
+    let active_cues: Vec<(&Cue, Vec<&str>)> = cues
+        .iter()
+        .filter_map(|c| {
+            let lines: Vec<&str> = c.text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            if lines.is_empty() { None } else { Some((c, lines)) }
+        })
+        .collect();
+    for (i, (c, lines)) in active_cues.iter().enumerate() {
+        let start_ms = tick_to_ms(c.start);
+        let end_ms = tick_to_ms(c.end).max(start_ms + 1);
+        out.push_str(&format!("<SYNC Start={start_ms}><P Class=ENCC>{}\n", lines.join("<br>")));
+        let next_start = active_cues.get(i + 1).map(|(n, _)| tick_to_ms(n.start));
+        if next_start != Some(end_ms) {
+            out.push_str(&format!("<SYNC Start={end_ms}><P Class=ENCC>&nbsp;\n"));
         }
     }
     out.push_str("</BODY>\n</SAMI>\n");
@@ -265,5 +271,24 @@ mod tests {
     #[test]
     fn rejects_other_text() {
         assert!(parse("hello").is_err());
+    }
+
+    #[test]
+    fn short_duration_and_empty_cues() {
+        let doc = Document {
+            cues: vec![
+                Cue { start: ms_to_tick(100), end: Tick(ms_to_tick(100).0 + 1), text: "Brief".into(), ..Default::default() },
+                Cue { start: ms_to_tick(101), end: ms_to_tick(200), text: "   ".into(), ..Default::default() },
+                Cue { start: ms_to_tick(500), end: ms_to_tick(600), text: "After gap".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let written = write(&doc);
+        assert!(written.contains("<SYNC Start=100><P Class=ENCC>Brief\n<SYNC Start=101><P Class=ENCC>&nbsp;\n"));
+        let parsed = parse(&written).unwrap();
+        assert_eq!(parsed.cues.len(), 2);
+        assert_eq!(parsed.cues[0].start, ms_to_tick(100));
+        assert_eq!(parsed.cues[0].end, ms_to_tick(101));
+        assert_eq!(parsed.cues[1].start, ms_to_tick(500));
     }
 }

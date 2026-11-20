@@ -328,7 +328,9 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.starts_with("[Script Info]") {
         return Some(Format::Ass);
     }
-    if head.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("<sami")) {
+    if head.get(..5).is_some_and(|h| h.eq_ignore_ascii_case("<sami"))
+        && head.as_bytes().get(5).is_some_and(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/')
+    {
         return Some(Format::Sami);
     }
     if subviewer::is_header(head) {
@@ -337,6 +339,8 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if realtext::is_realtext(head) {
         return Some(Format::RealText);
     }
+    let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
+    let has_arrow_timing = head.lines().take(40).any(|l| srt::parse_timing_line(l).is_some());
     let first_lines: Vec<&str> = head.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect();
     if first_lines.first().is_some_and(|l| microdvd::is_cue(l)) {
         return Some(Format::MicroDvd);
@@ -344,7 +348,7 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if first_lines.first().is_some_and(|l| mpl2::split_cue(l).is_some()) {
         return Some(Format::Mpl2);
     }
-    if first_lines.iter().any(|l| subviewer::parse_timing(l).is_some()) {
+    if ext.as_deref() != Some("srt") && !has_arrow_timing && first_lines.iter().any(|l| subviewer::parse_timing(l).is_some()) {
         return Some(Format::SubViewer);
     }
     if !first_lines.is_empty() && first_lines.iter().all(|l| vplayer::split_line(l).is_some()) {
@@ -356,14 +360,12 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if first_lines.iter().any(|l| jacosub::is_timed_line(l)) || (head.starts_with('#') && (head.contains("TimeRes") || head.contains("#T"))) {
         return Some(Format::JacoSub);
     }
-    let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
     if (head.starts_with('<') && (head.contains("<tt ") || head.contains("<tt>") || head.contains(":tt ")))
         && (head.contains("ns/ttml") || head.contains("ttaf1"))
     {
         let legacy = head.contains("ttaf1") || head.contains("dfxp");
         return Some(if ext.as_deref() == Some("dfxp") || (legacy && ext.as_deref() != Some("ttml")) { Format::Dfxp } else { Format::Ttml });
     }
-    let has_arrow_timing = head.lines().take(40).any(|l| srt::parse_timing_line(l).is_some());
     match ext.as_deref() {
         Some("srt") if has_arrow_timing || head.is_empty() => Some(Format::Srt),
         Some("vtt") if has_arrow_timing => Some(Format::WebVtt),

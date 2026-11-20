@@ -13,11 +13,14 @@
 //! Reading skips the bracketed header lines and takes every `start,end` time line as a cue whose
 //! text runs to the next blank line; `[br]` starts a new line. Fractions of one to three digits
 //! are accepted. Writing adds a minimal header, rounds times to a hundredth of a second, drops
-//! tags and writes `[br]` inside text as `［br］`.
+//! tags, writes `[br]` inside text as `［br］`, and writes `,` in lines that match the timing
+//! syntax as `，`.
 
-use crate::text::{escape_markup, plain_lines, tick_to_ms};
-use crate::time::Tick;
+use crate::text::{escape_markup, plain_lines};
+use crate::time::{TICKS_PER_SECOND, Tick};
 use crate::{Cue, Document, Error, Result, parse_clock};
+
+const TICKS_PER_CS: i64 = TICKS_PER_SECOND / 100;
 
 /// Returns true if `head` begins with a genuine SubViewer header structure.
 pub(crate) fn is_header(head: &str) -> bool {
@@ -80,7 +83,14 @@ pub fn parse(text: &str) -> Result<Document> {
             if parse_timing(l).is_some() {
                 break;
             }
-            out.extend(split_br(l).into_iter().map(str::trim).filter(|p| !p.is_empty()).map(escape_markup));
+            out.extend(split_br(l).into_iter().map(str::trim).filter(|p| !p.is_empty()).map(|p| {
+                let p = if p.contains('\u{ff0c}') && parse_timing(&p.replacen('\u{ff0c}', ",", 1)).is_some() {
+                    p.replacen('\u{ff0c}', ",", 1)
+                } else {
+                    p.to_string()
+                };
+                escape_markup(&p)
+            }));
             i += 1;
         }
         if end <= start || out.is_empty() {
@@ -96,8 +106,11 @@ pub fn parse(text: &str) -> Result<Document> {
     Ok(doc)
 }
 
-fn clock(t: Tick) -> String {
-    let cs = (tick_to_ms(t) + 5) / 10;
+fn cs(t: Tick) -> u64 {
+    ((i128::from(t.0.max(0)) + i128::from(TICKS_PER_CS) / 2) / i128::from(TICKS_PER_CS)) as u64
+}
+
+fn clock(cs: u64) -> String {
     format!("{:02}:{:02}:{:02}.{:02}", cs / 360_000, (cs / 6000) % 60, (cs / 100) % 60, cs % 100)
 }
 
@@ -110,11 +123,15 @@ pub fn write(doc: &Document) -> String {
         if lines.is_empty() {
             continue;
         }
-        let end = if clock(c.end) == clock(c.start) { Tick(c.end.0.saturating_add(crate::TICKS_PER_MS * 10)) } else { c.end };
-        out.push_str(&format!("{},{}\n", clock(c.start), clock(end)));
+        let start_cs = cs(c.start);
+        let end_cs = cs(c.end).max(start_cs + 1);
+        out.push_str(&format!("{},{}\n", clock(start_cs), clock(end_cs)));
         let lines: Vec<String> = lines
-            .iter()
-            .map(|l| {
+            .into_iter()
+            .map(|mut l| {
+                if parse_timing(&l).is_some() {
+                    l = l.replacen(',', "\u{ff0c}", 1);
+                }
                 l.replace("[br]", "\u{ff3b}br\u{ff3d}")
                     .replace("[BR]", "\u{ff3b}BR\u{ff3d}")
                     .replace("[Br]", "\u{ff3b}Br\u{ff3d}")
@@ -151,5 +168,31 @@ mod tests {
     #[test]
     fn rejects_other_text() {
         assert!(parse("1\n00:00:01,000 --> 00:00:02,000\nx\n").is_err());
+    }
+
+    #[test]
+    fn centisecond_rounding_without_double_rounding_error() {
+        // 1.0046s is 255_184_473_600 ticks (at 254_016_000_000 ticks/sec).
+        // Direct rounding to hundredths gives 100cs (00:00:01.00).
+        // Double-rounding through ms gives 1005ms -> 101cs (00:00:01.01).
+        let t = Tick(255_184_473_600);
+        assert_eq!(clock(cs(t)), "00:00:01.00");
+    }
+
+    #[test]
+    fn timing_shaped_text_escaped_and_roundtripped() {
+        let doc = Document {
+            cues: vec![
+                Cue { start: Tick(TICKS_PER_SECOND), end: Tick(3 * TICKS_PER_SECOND), text: "00:00:01.00,00:00:02.00".into(), ..Default::default() },
+                Cue { start: Tick(4 * TICKS_PER_SECOND), end: Tick(5 * TICKS_PER_SECOND), text: "Second cue".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let written = write(&doc);
+        assert!(written.contains("00:00:01.00，00:00:02.00"));
+        let parsed = parse(&written).unwrap();
+        assert_eq!(parsed.cues.len(), 2);
+        assert_eq!(parsed.cues[0].text, "00:00:01.00,00:00:02.00");
+        assert_eq!(parsed.cues[1].text, "Second cue");
     }
 }

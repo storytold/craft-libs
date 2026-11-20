@@ -11,9 +11,11 @@
 //! Writing puts a clearing line where a caption ends before the next one starts, drops tags,
 //! rounds to a hundredth of a second and writes `|` in text as `｜`.
 
-use crate::text::{escape_markup, last_cue_end, ms_to_tick, number, plain_lines, sequential, tick_to_ms};
-use crate::time::Tick;
+use crate::text::{escape_markup, last_cue_end, ms_to_tick, number, plain_lines, sequential};
+use crate::time::{TICKS_PER_SECOND, Tick};
 use crate::{Cue, Document, Error, Result};
+
+const TICKS_PER_CS: i64 = TICKS_PER_SECOND / 100;
 
 /// `HH:MM:SS[.cc]` then a separator and text: the time and the text.
 pub(crate) fn split_line(line: &str) -> Option<(Tick, &str)> {
@@ -72,27 +74,39 @@ pub fn parse(text: &str) -> Result<Document> {
     Ok(doc)
 }
 
-fn clock(t: Tick) -> String {
-    let cs = (tick_to_ms(t) + 5) / 10;
+fn cs(t: Tick) -> i64 {
+    ((i128::from(t.0.max(0)) + i128::from(TICKS_PER_CS) / 2) / i128::from(TICKS_PER_CS)) as i64
+}
+
+fn clock(cs: i64) -> String {
     format!("{:02}:{:02}:{:02}.{:02}", cs / 360_000, (cs / 6000) % 60, (cs / 100) % 60, cs % 100)
 }
 
 pub fn write(doc: &Document) -> String {
     let cues = sequential(doc);
     let mut out = String::new();
-    for (i, c) in cues.iter().enumerate() {
-        let lines = plain_lines(&c.text);
-        if lines.is_empty() {
-            continue;
-        }
-        let lines: Vec<String> = lines.iter().map(|l| l.replace('|', "\u{ff5c}")).collect();
-        out.push_str(&format!("{}={}\n", clock(c.start), lines.join("|")));
-        let end = if clock(c.end) == clock(c.start) { Tick(c.end.0.saturating_add(crate::TICKS_PER_MS * 10)) } else { c.end };
-        let next = cues.get(i + 1).map(|n| clock(n.start));
-        if next.as_deref() != Some(clock(end).as_str()) {
-            let next_too_early = cues.get(i + 1).is_some_and(|n| clock(n.start) <= clock(c.start));
+    let active_cues: Vec<(&Cue, Vec<String>)> = cues
+        .iter()
+        .filter_map(|c| {
+            let lines = plain_lines(&c.text);
+            if lines.is_empty() {
+                None
+            } else {
+                let lines = lines.into_iter().map(|l| l.replace('|', "\u{ff5c}")).collect();
+                Some((c, lines))
+            }
+        })
+        .collect();
+
+    for (i, (c, lines)) in active_cues.iter().enumerate() {
+        let start_cs = cs(c.start);
+        let end_cs = cs(c.end).max(start_cs + 1);
+        out.push_str(&format!("{}={}\n", clock(start_cs), lines.join("|")));
+        let next_start_cs = active_cues.get(i + 1).map(|(n, _)| cs(n.start));
+        if next_start_cs != Some(end_cs) {
+            let next_too_early = next_start_cs.is_some_and(|next| next <= start_cs);
             if !next_too_early {
-                out.push_str(&format!("{}=\n", clock(end)));
+                out.push_str(&format!("{}=\n", clock(end_cs)));
             }
         }
     }
@@ -130,5 +144,38 @@ mod tests {
     fn rejects_other_text() {
         assert!(parse("hello\n").is_err());
         assert!(parse("00:00:01,000 --> 00:00:02,000\n").is_err());
+    }
+
+    #[test]
+    fn empty_cue_skipped_and_numerical_timestamp_order() {
+        let doc = Document {
+            cues: vec![
+                Cue {
+                    start: Tick(99 * 3600 * TICKS_PER_SECOND),
+                    end: Tick(99 * 3600 * TICKS_PER_SECOND + 2 * TICKS_PER_SECOND),
+                    text: "At 99h".into(),
+                    ..Default::default()
+                },
+                Cue {
+                    start: Tick(99 * 3600 * TICKS_PER_SECOND + 3 * TICKS_PER_SECOND),
+                    end: Tick(99 * 3600 * TICKS_PER_SECOND + 4 * TICKS_PER_SECOND),
+                    text: "  ".into(),
+                    ..Default::default()
+                },
+                Cue {
+                    start: Tick(100 * 3600 * TICKS_PER_SECOND),
+                    end: Tick(100 * 3600 * TICKS_PER_SECOND + 2 * TICKS_PER_SECOND),
+                    text: "At 100h".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let written = write(&doc);
+        assert_eq!(written, "99:00:00.00=At 99h\n99:00:02.00=\n100:00:00.00=At 100h\n100:00:02.00=\n");
+        let parsed = parse(&written).unwrap();
+        assert_eq!(parsed.cues.len(), 2);
+        assert_eq!(parsed.cues[0].text, "At 99h");
+        assert_eq!(parsed.cues[1].text, "At 100h");
     }
 }
