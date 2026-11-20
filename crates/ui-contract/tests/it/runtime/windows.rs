@@ -279,6 +279,41 @@ fn a_palette_drops_its_level_while_the_app_is_inactive() {
     assert_eq!(frame(true, false), on_top, "the frame after the main window took focus again");
 }
 
+/// A palette stands as an ordinary window while the main window holds a modal, so a modal is never drawn behind a
+/// palette that it blocks: the frame after the modal opens builds the palette's window at the ordinary level, the
+/// frame after that brings the main window in front of it, once, and the palette goes back above the app's windows
+/// when the modal closes.
+#[trial]
+fn a_palette_stands_behind_the_window_that_holds_a_modal() {
+    let windows = Windows::new();
+    windows.root_info(ViewportInfo { focused: Some(true), ..ViewportInfo::default() });
+    let frame = |modal: bool| {
+        let out = windows.frame(vec![], vec![], |ui| {
+            windows.child_info(ViewportInfo { focused: Some(false), ..ViewportInfo::default() });
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+            if modal {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                Modal { common: Common::new(), props }.id_salt("save prompt").show(ui, |_, _| {});
+            }
+        });
+        let raised = out.commands.iter().filter(|(id, command)| *id == ViewportId::ROOT && *command == ViewportCommand::Focus).count();
+        (builder_titled(&out, "tool").1.window_level, raised)
+    };
+    let (on_top, normal) = (Some(egui::WindowLevel::AlwaysOnTop), Some(egui::WindowLevel::Normal));
+    assert_eq!(frame(false), (on_top, 0), "no modal: the palette stands above the main window");
+    let mut raises = 0;
+    let mut levels = Vec::new();
+    for _ in 0..4 {
+        let (level, raised) = frame(true);
+        levels.push(level);
+        raises += raised;
+    }
+    assert_eq!(levels.last().copied().flatten(), normal, "the modal open: the palette is an ordinary window");
+    assert_eq!(raises, 1, "the main window comes in front of the lowered palette once");
+    frame(false);
+    assert_eq!(frame(false).0, on_top, "the modal closed: the palette stands above again");
+}
+
 /// A full-window container mounted in its own window opens a resizable OS window titled as the container where
 /// viewports are available, and covers the main window's content where they are not.
 #[trial]

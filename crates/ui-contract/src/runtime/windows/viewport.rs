@@ -3,7 +3,7 @@
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
 use super::shell::{app_id, os_of, refresh};
-use super::spec::{WindowSpec, frame_of_spec};
+use super::spec::{WindowLevel, WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
@@ -76,6 +76,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         }
         record.level.get_or_insert(spec.level).for_egui(active, os)
     });
+    let level = lowered_under_modal(ctx, viewport, level);
     let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
@@ -188,5 +189,38 @@ pub(super) fn at_known(ctx: &Context, viewport: ViewportId, facts: viewports::Fa
         inner: Some(Rect::from_min_size(inner.min + shift, known.size())),
         outer: facts.outer.map(|outer| Rect::from_min_size(outer.min + shift, outer.size() + grow)),
         ..facts
+    }
+}
+
+/// The egui level of `viewport`'s window while another window holds an app-modal layer: a palette, which stands above
+/// the app's other windows, stands as an ordinary window instead, and the window holding the modal is brought in front
+/// of it once, in the pass after the palette was lowered so the raise lands on an ordinary window. A palette left above
+/// would cover the modal's buttons while the modal blocks the palette's own input (#H5). The palette's level comes
+/// back when the modal closes. `level` is the window's level otherwise.
+fn lowered_under_modal(ctx: &Context, viewport: ViewportId, level: egui::WindowLevel) -> egui::WindowLevel {
+    let modal = crate::runtime::overlay::modal_viewport(ctx, viewport);
+    let palette = PerViewport::<Record>::with(ctx, viewport, |record| record.level == Some(WindowLevel::Palette));
+    let raise = PerViewport::<Record>::with(ctx, viewport, |record| match (modal.filter(|_| palette), record.lowered_for) {
+        (Some(holder), Some((lowered, false))) if lowered == holder => {
+            record.lowered_for = Some((holder, true));
+            Some(holder)
+        }
+        (Some(holder), Some((lowered, _))) if lowered == holder => None,
+        (Some(holder), _) => {
+            record.lowered_for = Some((holder, false));
+            ctx.request_repaint_of(viewport);
+            None
+        }
+        (None, _) => {
+            record.lowered_for = None;
+            None
+        }
+    });
+    if let Some(holder) = raise {
+        viewports::raise(ctx, holder);
+    }
+    match (modal, palette) {
+        (Some(_), true) => egui::WindowLevel::Normal,
+        _ => level,
     }
 }

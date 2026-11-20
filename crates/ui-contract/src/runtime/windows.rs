@@ -107,6 +107,9 @@ pub(crate) struct Record {
     captions: Option<Captions>,
     /// The level the window was opened with or last set to; a palette's egui level follows the app's activity.
     level: Option<WindowLevel>,
+    /// While another window holds an app-modal layer, the palette stands as an ordinary window: the window holding the
+    /// modal, and whether it has been brought in front of the lowered palette yet.
+    lowered_for: Option<(ViewportId, bool)>,
     /// H4: whether the primary button is down as the viewport's events left the input hook.
     primary_down: bool,
     /// Whether the user can resize the window; unknown for a window not opened by `show_viewport`.
