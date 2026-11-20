@@ -104,6 +104,26 @@ impl DisplayOrder<usize> for Rows {
 
 impl ItemSource<usize> for Rows {}
 
+/// A short options list fills its opener's width without padding making the popup wider than the opener.
+#[trial]
+fn a_popup_list_with_short_rows_fits_its_wide_opener() {
+    let mut open = true;
+    let anchor = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(240.0, 30.0));
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Open").show_at(ui, anchor).response;
+        PopupList::new("Popup", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
+            List::<usize>::options("Choices").show_items(ui, &Rows, &mut |at, _| ListRow::new(row(*at)).option());
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    let opener = fixture.by_label("Open").expect("the opener").rect;
+    let popup = fixture.by_label("Popup").expect("the popup").rect;
+    let row = fixture.by_label(&row(0)).expect("a row").rect;
+    assert!(popup.width() >= opener.width() - 1.0, "the popup is at least as wide as its opener: {popup:?} {opener:?}");
+    assert!(popup.width() <= opener.width() + 1.0, "padding does not widen the popup: {popup:?} {opener:?}");
+    assert!(row.left() >= popup.left() && row.right() <= popup.right(), "the row stays inside the popup: {row:?} {popup:?}");
+}
+
 /// A scrolling page taller than the window: an "Open" button that opens a popup list of `ROWS` rows while `open`, then
 /// `PAGE` buttons. The rows the list activates go to `activated`.
 fn page(open: Rc<Cell<bool>>, activated: Rc<RefCell<Vec<usize>>>) -> Fixture {
