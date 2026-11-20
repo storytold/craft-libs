@@ -380,8 +380,15 @@ impl AccessTree {
     }
 
     /// The node AccessKit reports as focused.
-    pub(crate) fn focused_key(&self) -> NodeKey {
+    pub fn focused_key(&self) -> NodeKey {
         NodeKey(self.update.focus.0)
+    }
+
+    /// [`AccessTree::text_selection`] for a node by key.
+    pub fn text_selection_of(&self, key: NodeKey) -> Option<((NodeKey, usize), (NodeKey, usize))> {
+        let selection = self.lookup(NodeId(key.0))?.text_selection()?;
+        let end = |position: accesskit::TextPosition| (NodeKey(position.node.0), position.character_index);
+        Some((end(selection.anchor), end(selection.focus)))
     }
 
     /// The AccessKit data of a node by key.

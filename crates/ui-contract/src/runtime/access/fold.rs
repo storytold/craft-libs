@@ -18,6 +18,9 @@ pub(crate) struct Folded {
     pub inner: Id,
     /// The inner component's value text.
     pub value: Option<String>,
+    /// The inner component's text selection, between its sub-nodes (node and character): its runs hang under the
+    /// owner's node, so the owner's node carries it.
+    pub selection: Option<((Id, usize), (Id, usize))>,
 }
 
 fn owner_slot(inner: Id) -> Id {
@@ -57,6 +60,11 @@ pub(crate) fn owner_of(ctx: &Context, inner: Id) -> Option<Id> {
 /// The inner component's facts for `owner`'s report this pass.
 pub(crate) fn offer(ctx: &Context, owner: Id, folded: Folded) {
     store::put(ctx, folded_slot(owner), folded);
+}
+
+/// Writes the text selection an inner component offered onto the node of `owner`.
+pub(crate) fn write_selection(ctx: &Context, owner: Id, (anchor, focus): ((Id, usize), (Id, usize))) {
+    crate::runtime::egui::access::write_selection(ctx, owner, anchor, focus);
 }
 
 /// The facts the inner component offered `owner` this pass.

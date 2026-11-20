@@ -196,7 +196,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         // Shown as the owner's control: the owner's node is the one node, and stands for this root's key focus.
         access::hide(ctx, id);
         scope::leave(ctx, id);
-        access::fold::offer(ctx, owner, access::fold::Folded { inner: id, value: access.value.clone() });
+        let end = |end: &access::TextEnd| (access::sub_node_id(id, end.part), end.character);
+        let selection = access.text_selection.as_ref().map(|(anchor, focus)| (end(anchor), end(focus)));
+        access::fold::offer(ctx, owner, access::fold::Folded { inner: id, value: access.value.clone(), selection });
         if flags.contains(Flags::FOCUSED) {
             access::set_focus(ctx, owner);
         }
@@ -204,6 +206,12 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         access::report(ctx, &own);
         if let Some(group) = group_place {
             focus::takes_group_position(ctx, id, group);
+        }
+        // An inner component's selection is the owner's, whose node holds its runs.
+        if access.text_selection.is_none()
+            && let Some(selection) = folded.as_ref().and_then(|folded| folded.selection)
+        {
+            access::fold::write_selection(ctx, id, selection);
         }
     }
     if let Some(folded) = &folded {

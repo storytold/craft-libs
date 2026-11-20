@@ -23,7 +23,7 @@ pub(crate) mod pictures;
 pub(crate) mod stories;
 
 use self::pictures::{PageMetrics, PagePictures};
-use super::access::AccessDescriber;
+use super::access::{AccessBuilder, AccessDescriber, AccessPosition};
 use crate::layout::{
     Fit, LayoutOptions, PageDisplay, PageSpacing, PagedLayout, SCREEN_POINTS_PER_POINT, ViewDefaults, ZOOM_RANGE, fit_scale, place_pages, shown_row,
 };
@@ -34,14 +34,14 @@ use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, Rulers, Snap, ToolPass,
     ToolRegion, canvas_space, pixel_aligned, tool_pass,
 };
-use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::primitives::EditorPurpose;
 use craft_ui::primitives::textures::ThumbSource;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::memory::Remember as _;
 use craft_ui::style::DataColor;
 use egui::{Rect, Ui, Vec2, pos2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -484,6 +484,11 @@ impl<'a> PageView<'a> {
         if let Some(purpose) = editor {
             canvas = canvas.editor(purpose);
         }
+        // Described, the pages are a document: the canvas's node is the Document, with the text and the caret, and
+        // holds the key focus while the page has the keyboard.
+        if describer.is_some() {
+            canvas = canvas.role(Role::DOCUMENT);
+        }
         if let Some(snap) = &snap {
             canvas = canvas.snap(placed_snap(snap, &geo, &frame));
         }
@@ -492,8 +497,10 @@ impl<'a> PageView<'a> {
         }
         let mut held = Held::new(Bind::bound(state));
         let mut seen: Option<Seen> = None;
+        let noted = describer.map(Noted::new);
+        let described: Option<&dyn AccessDescriber> = noted.as_ref().map(|noted| noted as &dyn AccessDescriber);
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
-            let next = run_pass(ui, cx, &mut held, &Inputs { source, describer, build: &build, rect, given, paper, reach })?;
+            let next = run_pass(ui, cx, &mut held, &Inputs { source, describer: described, build: &build, rect, given, paper, reach })?;
             let pass = tool_pass(&cx.env);
             let body_rect = match strips_clip {
                 Some(clip) => {
@@ -503,6 +510,13 @@ impl<'a> PageView<'a> {
                 None => cx.rect,
             };
             body(ui, &PageBody { rect: body_rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
+            // The text was described before the app's body applied this pass's editor input. The caret the input moved
+            // would reach the tree a pass late, and a screen reader that reads at the key's first caret or text event
+            // (NVDA) would read the line the caret left: the pass runs again, without input, so the tree this frame
+            // gives describes the caret where the input put it. Only when the pass described the text: AccessKit on.
+            if noted.as_ref().is_some_and(Noted::described) && pass.as_ref().is_some_and(|pass| !pass.editor_input.is_empty()) {
+                craft_ui::runtime::frame::discard_pass(ui.ctx(), "the page text was described before the editor input");
+            }
             let decided = next.next.clone();
             seen = Some(next);
             decided
@@ -537,6 +551,33 @@ impl<'a> PageView<'a> {
             frame: seen.frame,
             resident: seen.resident,
         }
+    }
+}
+
+/// The app's describer, noting whether a pass described the text: the bridge describes it only for AccessKit.
+struct Noted<'a> {
+    describer: &'a dyn AccessDescriber,
+    described: Cell<bool>,
+}
+
+impl<'a> Noted<'a> {
+    fn new(describer: &'a dyn AccessDescriber) -> Self {
+        Noted { describer, described: Cell::new(false) }
+    }
+
+    fn described(&self) -> bool {
+        self.described.get()
+    }
+}
+
+impl AccessDescriber for Noted<'_> {
+    fn describe(&self, placed: &[PlacedPage], out: &mut AccessBuilder) {
+        self.described.set(true);
+        self.describer.describe(placed, out);
+    }
+
+    fn selection(&self) -> Option<(AccessPosition, AccessPosition)> {
+        self.describer.selection()
     }
 }
 
@@ -862,8 +903,9 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     keep.sort_unstable();
     keep.dedup();
     let pictures = PagePictures::new(source, &pages, &near, &keep, paper).label(words.text.clone()).hold(zooming || ratio != 1.0);
+    // The described text is the canvas's own content: its nodes and its selection are the Document's.
     let resident = match describer {
-        Some(describer) => pictures.describer(describer).show_at(ui, cx.rect),
+        Some(describer) => cx.inner(ui, "pictures", cx.rect, pictures.describer(describer)),
         None => pictures.show_at(ui, cx.rect),
     }
     .resident;
