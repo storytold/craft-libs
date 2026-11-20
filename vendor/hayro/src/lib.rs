@@ -62,6 +62,8 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 mod renderer;
 #[cfg(test)]
 mod no_zoom_tests;
+#[cfg(test)]
+mod tiling_cell_backdrop_tests;
 /// PdfCraft patch: exported for its regression test.
 pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
 /// PdfCraft patch: exported for its regression test.
@@ -258,6 +260,8 @@ pub fn render_into<'a>(
         render_mode: RenderMode::OptimizeSpeed,
     };
 
+    // PdfCraft patch (32): each page starts with its full allowance of backdrop tiles.
+    renderer::reset_backdrop_tiles();
     let mut device = Renderer::new(
         pix_width,
         pix_height,
