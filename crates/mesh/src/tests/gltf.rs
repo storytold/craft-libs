@@ -1,7 +1,9 @@
 use serde_json::{Value, json};
 
 use super::hammer;
-use crate::gltf::{MAX_ZERO_COMPONENTS, glb_container, read, split_glb, uri_decode, write_glb};
+use crate::gltf::{
+    GlbWriteOptions, MAX_ZERO_COMPONENTS, MagFilter, MinFilter, glb_container, read, split_glb, uri_decode, write_glb, write_glb_with_options,
+};
 use crate::{
     AlphaMode, ChannelPath, Corner, Error, IDENTITY, Image, Interpolation, LightKind, Limits, Material, Mesh, NONE, Node, Part, Projection, Scene,
     TextureRef, UvTransform, Wrap, face_normal, no_external, transform_point,
@@ -952,6 +954,30 @@ fn strict_uri_decoding_preserves_exact_names_and_rejects_invalid_utf8() {
     let decoded = uri_decode_strict(&input).unwrap();
     assert_eq!(decoded, "A%GG+é".repeat(100_000));
     assert!(decoded.len() <= input.len());
+}
+
+#[test]
+fn glb_writer_preserves_requested_sampler_filtering() {
+    let mut scene = texture_info(json!({ "index": 0 }));
+    scene.materials[0].base_color_texture.as_mut().unwrap().wrap = [Wrap::Clamp, Wrap::Mirror];
+    let limits = Limits::default();
+    let sampler = |bytes: Vec<u8>| {
+        let (json, _) = split_glb(&bytes).unwrap();
+        let doc: Value = serde_json::from_slice(json).unwrap();
+        let texture = doc["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64().unwrap() as usize;
+        let sampler = doc["textures"][texture]["sampler"].as_u64().unwrap() as usize;
+        doc["samplers"][sampler].clone()
+    };
+    assert_eq!(sampler(write_glb(&scene, &limits).unwrap()), json!({ "wrapS": 33071, "wrapT": 33648 }));
+
+    let options = GlbWriteOptions { mag_filter: Some(MagFilter::Linear), min_filter: Some(MinFilter::LinearMipmapLinear) };
+    assert_eq!(
+        sampler(write_glb_with_options(&scene, &limits, &options).unwrap()),
+        json!({ "wrapS": 33071, "wrapT": 33648, "magFilter": 9729, "minFilter": 9987 }),
+    );
+
+    let options = GlbWriteOptions { mag_filter: Some(MagFilter::Nearest), ..GlbWriteOptions::default() };
+    assert_eq!(sampler(write_glb_with_options(&scene, &limits, &options).unwrap()), json!({ "wrapS": 33071, "wrapT": 33648, "magFilter": 9728 }),);
 }
 
 #[test]
