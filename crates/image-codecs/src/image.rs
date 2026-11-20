@@ -214,6 +214,9 @@ pub enum DecodeWarning {
     /// The file has `count` extra samples past the first [`MAX_EXTRA_SAMPLES`], which are all a
     /// decoder keeps; those past the cap were not imported.
     ExtraSamplesOverLimit { format: Format, count: u32 },
+    /// The file's `count` drawing operations (vector shapes, text, compressed images) were not
+    /// drawn: only its pixel images were imported.
+    DrawingSkipped { format: Format, count: u32 },
 }
 
 /// The SMPTE 268M name of a transfer characteristic or colorimetric code.
@@ -274,6 +277,13 @@ impl fmt::Display for DecodeWarning {
             DecodeWarning::ExtraSamplesOverLimit { format, count } => write!(
                 f,
                 "{count} extra {} file channel{} (spot or alpha) past the first {MAX_EXTRA_SAMPLES} {} not imported",
+                format.name(),
+                if *count == 1 { "" } else { "s" },
+                if *count == 1 { "was" } else { "were" }
+            ),
+            DecodeWarning::DrawingSkipped { format, count } => write!(
+                f,
+                "{count} {} drawing operation{} (vector shapes, text or compressed images) {} not drawn; only the pixel image was imported",
                 format.name(),
                 if *count == 1 { "" } else { "s" },
                 if *count == 1 { "was" } else { "were" }

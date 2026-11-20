@@ -23,6 +23,7 @@ mod malformed;
 mod metadata;
 mod orientation;
 mod pcx;
+mod pict;
 mod png_jpeg;
 mod pnm_headers;
 #[cfg(target_os = "linux")]
