@@ -35,6 +35,10 @@ pub trait DockPanels<P> {
     /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
+    /// Shows the fixed trailing controls of the rail containing `panel`, in top-to-bottom order. The dock calls this
+    /// only when the area names a panel with `DockArea::rail_footer`; the controls remain in view while icons scroll.
+    fn rail_footer(&mut self, _panel: &P, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
+
     /// Shows `panel`'s footer in `ui`: a footer bar pinned under the body, across the group, that stays in view while
     /// the body scrolls (a panel's actions on everything its body lists). The dock calls it only for a panel whose
     /// spec has `PanelSpec::footer` (the default shows nothing).

@@ -6,7 +6,7 @@ use craft_ui::contract::{Bind, BodyCx, Role, Show as _, SizeLimits};
 use craft_ui::display::Text;
 use craft_ui::docking::{DockConfig, DockGrid, DockHeights, DockPanels, GroupSize, IconicMode, PanelSpec, group_heights};
 use craft_ui::patterns::dock::DockArea;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -263,6 +263,72 @@ impl DockPanels<u32> for Sides {
             11 => Text::new("Beta body").show(ui),
             _ => return,
         };
+    }
+}
+
+struct RailWithFooter;
+
+impl DockPanels<u32> for RailWithFooter {
+    fn spec(&self, panel: &u32) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+
+    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
+
+    fn rail_footer(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        Text::new("Rail controls").show(ui);
+        Text::new("More controls").show(ui);
+    }
+}
+
+/// A rail's host controls stay below its overflowing icons and travel with the dock side.
+#[trial]
+fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
+    for edge in [DockEdge::Start, DockEdge::End] {
+        let side = Column::new(vec![Group::new((10..30).collect(), 0)]).with_iconic(true);
+        let dock = Node::dock(edge, vec![side]);
+        let root = if edge == DockEdge::Start {
+            Node::split(Axis::X, SplitSize::Ratio(0.4), dock, Node::tabs(vec![1], 0))
+        } else {
+            Node::split(Axis::X, SplitSize::Ratio(0.6), Node::tabs(vec![1], 0), dock)
+        };
+        let workspace = Rc::new(RefCell::new(Workspace::new(Layout::new(Some(root), Vec::new()))));
+        let held = Rc::clone(&workspace);
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&actions);
+        let mut fixture = Fixture::new(move |ui| {
+            let mut workspace = held.borrow().clone();
+            let out = DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithFooter, DockConfig::default().iconic_mode(IconicMode::Rail))
+                .rail_footer(10)
+                .show(ui);
+            for action in out.actions {
+                drop(workspace.apply(action.clone(), false, |_| Permissions::ALL));
+                seen.borrow_mut().push(action);
+            }
+            *held.borrow_mut() = workspace;
+        });
+        fixture.room(Vec2::new(900.0, 300.0)).settle();
+        let footer = fixture.by_label("Rail controls").expect("the rail shows its host controls").rect;
+        let more = fixture.by_label("More controls").expect("the rail shows the remaining controls").rect;
+        let first = fixture.by_label("Panel 10").expect("the first rail icon shows").rect;
+        assert!(first.bottom() <= footer.top(), "icons stay above the fixed controls");
+        assert!(footer.bottom() <= more.top(), "the host controls form a column");
+        assert!((first.center().x - footer.center().x).abs() < footer.width(), "controls share the rail's side");
+        assert!(footer.bottom() <= 300.0, "the controls stay inside the window");
+        fixture.frame(vec![pointer::moved(first.center())]);
+        for _ in 0..12 {
+            fixture.frame(vec![pointer::wheel(-200.0)]);
+        }
+        fixture.settle();
+        let after = fixture.by_label("Rail controls").expect("the controls remain visible").rect;
+        let last = fixture.by_label("Panel 29").expect("the last rail icon shows").rect;
+        assert!((after.top() - footer.top()).abs() < 1.0, "the controls stay fixed while the icons scroll");
+        assert!(last.bottom() <= after.top() && last.top() >= 0.0, "scrolling brings the last icon above the controls: {last:?}, {after:?}");
+        let last = fixture.by_label("Panel 29").expect("the last icon can be clicked");
+        fixture.click(&last).settle();
+        assert!(actions.borrow().iter().any(|action| matches!(action, Action::Activate { panel: 29, .. })), "the scrolled icon still activates its panel");
+        let expanded = fixture.by_label("Rail controls").expect("the controls remain on the expanded rail").rect;
+        assert!((expanded.center().x - footer.center().x).abs() < footer.width(), "the controls stay at the same dock edge when expanded");
     }
 }
 

@@ -1,15 +1,16 @@
 //! Stories of the dock area.
 
 use super::DockArea;
+use crate::buttons::IconButton;
 use crate::contract::SizeLimits;
-use crate::contract::{Bind, BodyCx, Show as _};
+use crate::contract::{Bind, BodyCx, Props as _, Show as _};
 use crate::display::Text;
-use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, PanelSpec};
+use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, IconicMode, PanelSpec};
 use crate::menu::PanelRow;
 use crate::patterns::presets::{PresetPanelMenu, PresetView};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
-use craft_behavior::{Axis, Proposal};
+use craft_behavior::{Axis, IconId, Proposal};
 use egui::{Pos2, Rect, Ui};
 
 const LAYERS: usize = 0;
@@ -69,6 +70,11 @@ impl DockPanels<usize> for Demo {
         Text::new(name(*panel)).show(ui);
     }
 
+    fn rail_footer(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        IconButton::new(IconId::new("chevron-up")).label("Previous").show(ui);
+        IconButton::new(IconId::new("chevron-down")).label("Next").show(ui);
+    }
+
     fn panel_rows(&mut self, panel: &usize) -> Vec<PanelRow> {
         if self.host_rows && *panel == SWATCHES { PresetPanelMenu::<usize>::new(PresetView::Grid).new_group(true).rows() } else { Vec::new() }
     }
@@ -121,4 +127,18 @@ fn a_canvas_group_the_host_draws(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn host_rows_above_the_dock_rows_in_a_panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     dock(ui, data, &mut Demo { canvas_view: false, host_rows: true })
+}
+
+#[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never, title = "Rail with fixed controls")]
+fn rail_with_fixed_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let workspace = data.value("rail workspace", {
+        let side = Column::new(vec![Group::new(vec![LAYERS, CHANNELS, PROPERTIES, HISTORY, SWATCHES, NAVIGATOR], 0)]).with_iconic(true);
+        let root = Node::split(Axis::X, SplitSize::Ratio(0.8), Node::tabs(vec![CANVAS], 0), Node::dock(DockEdge::End, vec![side]));
+        Workspace::new(Layout::new(Some(root), Vec::new()))
+    });
+    let mut demo = Demo { canvas_view: false, host_rows: false };
+    DockArea::new("Rail dock", Bind::bound(&mut *workspace), &mut demo, DockConfig::default().iconic_mode(IconicMode::Rail))
+        .rail_footer(LAYERS)
+        .show(ui)
+        .into()
 }

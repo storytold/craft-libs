@@ -16,13 +16,14 @@ use crate::docking::{
     IconicColumn, IconicMode, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelTitle, SplitArea, WindowColumn, actions, dock_states, fit_widths,
     frame, move_actions, stepped,
 };
+use crate::layout_components::Stack;
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, Commands as _, focus_within};
 use crate::runtime::drag;
 use crate::runtime::env::{Env, Label, RevealEdge, ShellCx, ShellEntry, in_room};
 use crate::runtime::memory::Remember as _;
 use crate::runtime::windows::{ResizeEdge, WindowHost};
-use crate::sections::HeaderAction;
+use crate::sections::{HeaderAction, Panel};
 use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
 };
@@ -136,6 +137,7 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     /// binding: the panel shows in its flyout, and the layout does not change.
     #[prop]
     flyout: Option<Bind<'a, Option<P>>>,
+    rail_footer: Option<P>,
 }
 
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
@@ -153,6 +155,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             auto_collapse: false,
             locked: false,
             flyout: None,
+            rail_footer: None,
         }
     }
 
@@ -160,6 +163,15 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// moves, floats or closes.
     pub fn read_only(label: impl Into<Label>, layout: &Layout<P>, panels: &'a mut dyn DockPanels<P>, config: DockConfig) -> Self {
         DockArea { locked: true, ..Self::new(label, Bind::given(Workspace::new(layout.clone())), panels, config) }
+    }
+
+    /// Adds the host's fixed trailing controls to the docked rail containing `panel`. The panel identifies the
+    /// column as it moves between dock sides. The host draws the controls through [`DockPanels::rail_footer`]; its
+    /// icons scroll above them when the rail is short. Has no effect in flyout mode or on floating columns.
+    #[must_use]
+    pub fn rail_footer(mut self, panel: P) -> Self {
+        self.rail_footer = Some(panel);
+        self
     }
 }
 
@@ -240,6 +252,7 @@ struct Scene<'s, P> {
     rtl: bool,
     /// The docked places floating panels left, for Dock Panel.
     floated: &'s [(P, Location<P>)],
+    rail_footer: Option<&'s P>,
 }
 
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
@@ -352,7 +365,7 @@ struct Pass<'s, P> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// Shows the area across the room offered.
     pub fn show(self, ui: &mut Ui) -> DockAreaOutput<P> {
-        let DockArea { label, mut workspace, panels, config, hide, maximized, auto_collapse, locked, mut flyout } = self;
+        let DockArea { label, mut workspace, panels, config, hide, maximized, auto_collapse, locked, mut flyout, rail_footer } = self;
         let ctx = ui.ctx().clone();
         let (rtl, window) = {
             let env = Env::of(ui);
@@ -405,6 +418,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 auto_collapse,
                 sizes,
                 rtl,
+                rail_footer: rail_footer.as_ref(),
             };
             let mut result = show_area(ui, body, &input, &rights, &mut *panels, flyout.as_mut());
             for edit in &result.edit {
@@ -503,6 +517,7 @@ struct Input<'i, P> {
     auto_collapse: bool,
     sizes: DockSizes,
     rtl: bool,
+    rail_footer: Option<&'i P>,
 }
 
 fn open_of<P: Clone + Send + Sync + 'static + PartialEq + Debug>(
@@ -527,7 +542,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, hide, maximized, auto_collapse, sizes, rtl, rail_footer } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let keys: HashMap<PanelKey, P> = current.layout.panels().into_iter().map(|panel| (PanelKey::of(panel), panel.clone())).collect();
@@ -549,6 +564,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
         auto_collapse,
         rtl,
         floated: &current.floated,
+        rail_footer,
     };
     let open = open_of(&mut flyout, body, &memory);
     let mut pass = Pass {
@@ -1020,17 +1036,37 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         // Only a docked column's icons are a rail; a floating window's open flyouts.
         let mode = if in_window { IconicMode::Flyouts } else { scene.config.iconic_mode };
         let mut icons = |cell: Rect, open: Option<P>| {
-            IconicColumn::new(name.clone(), dock, column, Bind::given(open), &spec)
-                .edge(edge)
-                .opens(opens)
-                .bar(bar)
-                .within(within)
-                .auto_collapse(scene.auto_collapse)
-                .mode(mode)
-                .show_flyouts_at(ui, cell, |group, at, ui, body| self.group_of(ui, body, group, at, in_window))
+            let footer = scene.rail_footer.filter(|panel| mode == IconicMode::Rail && column.panels().any(|item| item == *panel));
+            let pass = RefCell::new(&mut *self);
+            let draw = |ui: &mut Ui, rect: Rect, open: Option<P>| {
+                IconicColumn::new(name.clone(), dock, column, Bind::given(open), &spec)
+                    .edge(edge)
+                    .opens(opens)
+                    .bar(bar)
+                    .within(within)
+                    .auto_collapse(scene.auto_collapse)
+                    .mode(mode)
+                    .show_flyouts_at(ui, rect, |group, at, ui, body| pass.borrow_mut().group_of(ui, body, group, at, in_window))
+            };
+            if let Some(panel) = footer {
+                let height = IconicSizes::of(ui.ctx()).icons_height(column) + scene.sizes.bar;
+                Panel::new(name.clone())
+                    .id(dock.with(("rail footer", panel)))
+                    .pad(Pad::None)
+                    .footer(|ui, _| {
+                        Stack::new().fill_width().show(ui, |ui, body| pass.borrow_mut().panels.rail_footer(panel, ui, body));
+                    })
+                    .show_at(ui, cell, |ui, _| {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
+                        draw(ui, rect, open.clone())
+                    })
+                    .inner
+            } else {
+                Some(draw(ui, cell, open))
+            }
         };
         let work = if column.iconic {
-            let output = icons(cell, open);
+            let Some(output) = icons(cell, open) else { return };
             self.report.flyout.extend(output.edit.events);
             self.rail_work(output.front);
             ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: output.width, flyout: output.flyout }
@@ -1045,7 +1081,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     (cell.with_min_x(cell.right() - rail), cell.with_max_x(cell.right() - rail))
                 };
                 cell = rest;
-                let output = icons(rail_cell, None);
+                let Some(output) = icons(rail_cell, None) else { return };
                 self.rail_work(output.front);
                 // The rail's inner edge sets its own width, not the expanded column's.
                 self.column_work(column, ColumnWork { iconic: output.iconic, picked: output.picked, resized: Vec::new(), width: None, flyout: None });
