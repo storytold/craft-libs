@@ -132,6 +132,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The field writes exactly this many decimals, zeros included ("1.00"), when it has no codec of its own.
     #[prop]
     fixed_decimals: Option<usize>,
+    /// The most decimals shown without trailing zeroes when the field has no codec or fixed precision, capped at 12.
+    #[prop]
+    max_decimals: Option<usize>,
     /// The lengths a length field keeps and shows (`NumberField::length`).
     lengths: Option<LengthUnits>,
     /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
@@ -191,6 +194,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             automatic: false,
             commit_decimals: None,
             fixed_decimals: None,
+            max_decimals: None,
             lengths: None,
             scale: 1.0,
             options: TextOptions::default(),
@@ -279,13 +283,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         })
     }
 
-    /// The decimals the field shows: its codec's, else its fixed decimals, else its unit kind's.
+    /// The decimals the field shows: its codec's, fixed or maximum precision, else its unit kind's.
     fn shown_decimals(&self) -> RangeInclusive<usize> {
-        match (&self.codec, self.fixed_decimals, self.unit_kind) {
-            (Some(codec), _, _) => 0..=codec.decimals(),
-            (None, Some(fixed), _) => fixed..=fixed,
-            (None, None, Some(kind)) => kind.decimals(),
-            (None, None, None) => 0..=DEFAULT_DECIMALS,
+        match (&self.codec, self.fixed_decimals, self.max_decimals, self.unit_kind) {
+            (Some(codec), _, _, _) => 0..=codec.decimals(),
+            (None, Some(fixed), _, _) => fixed..=fixed,
+            (None, None, Some(max), _) => 0..=max.min(12),
+            (None, None, None, Some(kind)) => kind.decimals(),
+            (None, None, None, None) => 0..=DEFAULT_DECIMALS,
         }
     }
 

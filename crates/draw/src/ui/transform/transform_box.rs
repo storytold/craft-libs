@@ -272,6 +272,7 @@ pub enum ApplyBy {
 #[derive(Clone, Debug, Default)]
 struct Report {
     apply: Option<ApplyBy>,
+    clicked: Option<Point>,
     discard: bool,
     hovered: Option<BoxPart>,
     picked: Option<BoxPart>,
@@ -735,6 +736,9 @@ impl<'a> TransformBox<'a> {
                         self.report.apply = Some(ApplyBy::DoubleClick);
                     }
                     let Some(grip) = held.take() else { continue };
+                    if click && grip.part == BoxPart::Inside && !grip.moves_pivot && self.move_only().is_none() {
+                        self.report.clicked = Some(grip.from);
+                    }
                     if grip.began && click && grip.last == grip.pressed {
                         // A click that ended where it began moved nothing: no step.
                         cx.cancel(CancelReason::Unchanged);
@@ -1172,8 +1176,8 @@ impl Component for TransformBox<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TransformBoxOutput {
-        let Report { apply, discard, hovered, picked, held, snapped } = self.report;
-        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped }
+        let Report { apply, clicked, discard, hovered, picked, held, snapped } = self.report;
+        TransformBoxOutput { edit: cx.edit_response(), apply, discard, picked, hovered, held, snapped, clicked }
     }
 }
 
@@ -1181,6 +1185,8 @@ impl Component for TransformBox<'_> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct TransformBoxOutput {
+    /// The press point in document units of a primary click inside the box, including a release within click slop.
+    pub clicked: Option<Point>,
     /// A drag (`Begin` on the first move, `Update`, `Commit` on the release; Escape cancels it) or an arrow key's
     /// `Set`.
     pub edit: EditResponse<BoxState>,

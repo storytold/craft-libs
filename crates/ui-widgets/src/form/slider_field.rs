@@ -50,9 +50,10 @@ pub struct SliderFieldStyle {
 /// A caption and number field over a full-width slider, on one value. A drag on the slider, a step key, typing in the field or a
 /// scrub by the enclosing `Field`'s label is one edit stream (begin, updates, commit) of the one binding.
 ///
-/// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it. Without
-/// a step the field steps by a hundredth on a range 10 wide or less and by 1 on a longer one, and rounds typed values
-/// to the places that step needs. The field and then the slider are Tab stops. A log or power scale curves the
+/// The step moves the slider's keys and wheel and the field's keys, wheel and scrub; typed values snap to it unless
+/// `typed_decimals` sets their independent precision. Without a step the field steps by a hundredth on a range 10 wide
+/// or less and by 1 on a longer one, and by default rounds typed values to the places that step needs. The field and
+/// then the slider are Tab stops. A log or power scale curves the
 /// slider's track only: the field, typing and steps stay linear.
 #[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SliderField<'a> {
@@ -67,9 +68,12 @@ pub struct SliderField<'a> {
     /// How positions along the slider's track map to values.
     #[prop]
     scale: SliderScale,
-    /// The change of one arrow press, wheel notch or label scrub point, and the grid typed values snap to.
+    /// The change of one arrow press, wheel notch or label scrub point, and by default the grid typed values snap to.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// The decimal places retained and shown for typed values (at most 12), independently of the step; typing no longer snaps to it.
+    #[prop]
+    typed_decimals: Option<usize>,
     /// The change of one wheel notch over the slider where it is coarser than the step.
     #[prop(quantity = "step")]
     wheel_step: Option<f64>,
@@ -139,6 +143,7 @@ impl<'a> SliderField<'a> {
             layout: SliderFieldLayout::Stacked,
             scale: SliderScale::Linear,
             step: None,
+            typed_decimals: None,
             wheel_step: None,
             unit_kind: None,
             unit: None,
@@ -158,6 +163,7 @@ impl<'a> SliderField<'a> {
             range: self.range.clone(),
             scale: self.scale,
             step: self.step,
+            typed_decimals: self.typed_decimals,
             wheel_step: self.wheel_step,
             unit_kind: self.unit_kind,
             unit: self.unit.clone(),
@@ -174,6 +180,7 @@ struct Look {
     range: RangeInclusive<f64>,
     scale: SliderScale,
     step: Option<f64>,
+    typed_decimals: Option<usize>,
     wheel_step: Option<f64>,
     unit_kind: Option<UnitKind>,
     unit: Option<Label>,
@@ -236,12 +243,17 @@ impl Look {
             bind = bind.check(check);
         }
         let step = self.field_step();
+        let typed_decimals = self.typed_decimals.map(|places| places.min(12));
         let field = NumberField::new(name.clone(), bind)
             .range(self.range.clone())
             .step(step)
-            .snap_typed(self.set_step().is_some())
-            .commit_decimals(decimals_for_step(step))
+            .snap_typed(typed_decimals.is_none() && self.set_step().is_some())
+            .commit_decimals(typed_decimals.unwrap_or_else(|| decimals_for_step(step)))
             .scrub_by_label();
+        let field = match typed_decimals {
+            Some(decimals) => field.max_decimals(decimals),
+            None => field,
+        };
         let field = match self.unit_kind {
             Some(kind) => field.unit_kind(kind),
             None => field,

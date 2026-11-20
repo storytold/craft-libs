@@ -66,6 +66,7 @@ struct Host {
     discarded: usize,
     picked: Option<BoxPart>,
     hovered: Option<BoxPart>,
+    clicks: Vec<Point>,
     id: egui::Id,
     view: CanvasView,
     guide_events: usize,
@@ -121,6 +122,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         discarded: 0,
         picked: None,
         hovered: None,
+        clicks: Vec::new(),
         id: egui::Id::NULL,
         view: CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0),
         guide_events: 0,
@@ -190,6 +192,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             host.id = output.edit.response.id;
             host.applied += usize::from(output.apply.is_some());
             host.discarded += usize::from(output.discard);
+            host.clicks.extend(output.clicked);
             (host.picked, host.hovered) = (output.picked, output.hovered);
             for event in &output.edit.events {
                 match event {
@@ -878,6 +881,29 @@ fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_
     assert!(h.host.borrow().events.is_empty(), "a jittery click outside turns nothing: {:?}", h.host.borrow().events);
     assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
     assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
+}
+
+#[trial]
+fn inside_click_reports_press_point_but_drag_does_not() {
+    let mut h = upright();
+    let point = Point::new(150.0, 120.0);
+    let inside = h.screen(point);
+    frame(&mut h, vec![pointer::moved(inside)]);
+    frame(&mut h, vec![pointer::press(inside)]);
+    frame(&mut h, vec![pointer::release(inside)]);
+    assert_eq!(h.host.borrow().clicks, vec![point]);
+    frame(&mut h, vec![pointer::press(inside)]);
+    frame(&mut h, vec![pointer::moved(inside + by(40.0, 0.0))]);
+    frame(&mut h, vec![pointer::release(inside + by(40.0, 0.0))]);
+    assert_eq!(h.host.borrow().clicks, vec![point], "a drag reports no click");
+    let mut jitter = upright();
+    let at = jitter.screen(point);
+    let slop = craft_ui::testing::input::slop(jitter.fixture.ctx());
+    frame(&mut jitter, vec![pointer::moved(at)]);
+    frame(&mut jitter, vec![pointer::press(at)]);
+    frame(&mut jitter, vec![pointer::moved(at + by(slop / 3.0, 0.0))]);
+    frame(&mut jitter, vec![pointer::release(at + by(slop / 3.0, 0.0))]);
+    assert_eq!(jitter.host.borrow().clicks, vec![point], "a release within slop reports the press point");
 }
 
 // A double click inside whose presses wobble within the slop and come back applies the box as it was: the wobble the

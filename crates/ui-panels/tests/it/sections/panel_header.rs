@@ -26,3 +26,33 @@ fn a_panel_paints_its_title_only_when_titled_and_is_named_by_it_either_way() {
     let titled = panel(true);
     assert!(titled.texts().iter().any(|run| run.text == "Brush settings"), "a titled panel paints its title in a header");
 }
+
+#[trial]
+fn panel_routes_unused_arrow_from_button_to_its_collection() {
+    use craft_behavior::keyed;
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::{CollectionEvent, Props as _, Show as _, ShowCollection as _};
+    use craft_ui::list::{List, ListRow};
+    use craft_ui::runtime::focus::{FocusTarget, request};
+    use egui::{Id, Key, Modifiers};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&events);
+    let list_id = Id::unique("panel fallback list");
+    let button_id = Id::unique("panel button");
+    let mut fixture = Fixture::new(move |ui| {
+        Panel::new("Region").fallback_collection(list_id).show(ui, |ui, _| {
+            Button::new("Action").id(button_id).show(ui);
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key);
+            let out = List::new("Items").id(list_id).natural_height(true).show_items(ui, &source, &mut |key, _| ListRow::new(format!("Item {key}")));
+            seen.borrow_mut().extend(out.events);
+        });
+    });
+    fixture.settle();
+    request(fixture.ctx(), FocusTarget::Id(button_id));
+    fixture.settle();
+    fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
+    assert!(events.borrow().iter().any(|event| matches!(event, CollectionEvent::LeadMoved { .. })), "the list receives the move");
+}
