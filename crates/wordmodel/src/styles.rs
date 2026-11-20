@@ -69,6 +69,10 @@ pub struct TableStyleParts {
     pub fill: Option<Rgb>,
     /// Cell margins, points: [top, left, bottom, right] (`w:tblCellMar`).
     pub cell_margins: Option<[f32; 4]>,
+    /// Indent of the table from the leading margin, points (`w:tblInd`). Kept even when 0:
+    /// Word places a table whose style chain sets no indent differently from one set to 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indent: Option<f32>,
     pub header_fill: Option<Rgb>,
     pub header_chr: CharProps,
     /// Cell borders of the header row (`firstRow` region's `w:tcBorders`): `between` is the
@@ -326,6 +330,7 @@ impl TableStyleParts {
         self.band_chr.overlay(&patch.band_chr);
         self.fill = patch.fill.or(self.fill);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
+        self.indent = patch.indent.or(self.indent);
         self.header_fill = patch.header_fill.or(self.header_fill);
         self.header_chr.overlay(&patch.header_chr);
         self.band_fill = patch.band_fill.or(self.band_fill);
@@ -841,11 +846,25 @@ impl StyleSheet {
     /// right to left.
     pub fn mark_runs_as_word_draws_them(&self, para: &mut crate::para::Paragraph, table: Option<&CharProps>) {
         use crate::bidi::{is_complex_script, is_rtl_script};
-        let style = para.props.style.as_deref();
-        let mut at = 0;
-        for run in &mut para.runs {
-            let text = para.text.get(at..at + run.len).unwrap_or("");
+        use crate::para::{InlineObject, OBJ};
+        // What each run draws: its text, a field kept as one object standing for its result
+        // (drawn in the run's formatting, and measured in Word to follow the same rule).
+        let mut drawn = Vec::with_capacity(para.runs.len());
+        let (mut at, mut objects) = (0, para.objects.iter());
+        for run in &para.runs {
+            let mut text = String::new();
+            for c in para.text.get(at..at + run.len).unwrap_or("").chars() {
+                if c != OBJ {
+                    text.push(c);
+                } else if let Some(InlineObject::Field { result, code: false, .. }) = objects.next() {
+                    text.push_str(result);
+                }
+            }
             at += run.len;
+            drawn.push(text);
+        }
+        let style = para.props.style.as_deref();
+        for (run, text) in para.runs.iter_mut().zip(&drawn) {
             if text.is_empty() || text.chars().any(is_rtl_script) {
                 continue;
             }

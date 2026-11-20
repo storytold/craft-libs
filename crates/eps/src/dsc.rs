@@ -2,6 +2,8 @@
 
 /// Bytes of a file's start read for its header comments.
 pub const MAX_HEADER: usize = 64 << 10;
+/// Largest header scan available for readers preserving a wider historical bound.
+pub const MAX_EXTENDED_HEADER: usize = 256 << 10;
 /// Bytes of a file's end read for comments its header defers there with `(atend)`.
 pub const MAX_TRAILER: usize = 64 << 10;
 
@@ -34,7 +36,17 @@ impl Comments {
     /// A bounding box the header defers with `(atend)` is the last one of the trailer, outside
     /// any document the file embeds.
     pub fn read(ps: &[u8]) -> Self {
-        let head = String::from_utf8_lossy(ps.get(..MAX_HEADER).unwrap_or(ps));
+        Self::read_with_header_limit(ps, MAX_HEADER)
+    }
+
+    /// Read comments with a caller-selected scan limit for the header.
+    ///
+    /// The limit is capped at [`MAX_EXTENDED_HEADER`], and the trailer remains capped at
+    /// [`MAX_TRAILER`]. This lets readers preserve a previously supported wider scan without
+    /// making header or trailer work unbounded.
+    pub fn read_with_header_limit(ps: &[u8], header_limit: usize) -> Self {
+        let header_limit = header_limit.min(MAX_EXTENDED_HEADER).min(ps.len());
+        let head = String::from_utf8_lossy(&ps[..header_limit]);
         let mut c = Comments::default();
         let (mut box_atend, mut hires_atend) = (false, false);
         // Lines may end in `\r` alone (classic Mac files).

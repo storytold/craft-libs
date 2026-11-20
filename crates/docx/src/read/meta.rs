@@ -6,10 +6,20 @@ use super::{
 impl Reader<'_> {
     pub(super) fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
-        if let Some(b) = self.pkg.get(path).filter(|b| crate::write::settings_has_unowned(b)) {
+        let mail_merge = root.child("w:mailMerge").is_some();
+        if let Some(b) = self.pkg.get(path).filter(|b| mail_merge || crate::write::settings_has_unowned(b)) {
             self.doc.passthrough.insert(crate::package::SETTINGS_ORIG.into(), Arc::new(b.to_vec()));
         }
         let rels = self.pkg.rels(path);
+        if mail_merge {
+            // Relationship limits must not stop import of the owned settings below.
+            match crate::write::mail_merge_rels(&rels) {
+                Ok(kept) => {
+                    self.doc.passthrough.insert(crate::package::MAIL_MERGE_RELS.into(), Arc::new(kept));
+                }
+                Err(e) => log::warn!("docx: not keeping mail merge relationships: {e}"),
+            }
+        }
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
@@ -56,6 +66,7 @@ impl Reader<'_> {
                 }
                 "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
+                "w:gutterAtTop" => s.gutter_at_top = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
                 "w:hyphenationZone" => {
@@ -344,7 +355,10 @@ pub(crate) const PROTECTION_HASH_ATTRS: [&str; 16] = [
 /// kept; a hostile attribute value can't be longer than a hash needs.
 fn read_protection(k: &El, s: &mut craft_wordmodel::Settings) {
     let on = |v: &str| !matches!(v, "0" | "false" | "off");
-    if !k.attr("w:enforcement").is_some_and(on) {
+    // Word enforces protection when `w:enforcement` is missing ([MS-OI29500] §2.1.402 (c)), the
+    // opposite of the standard's literal reading, so only an explicit off value unlocks the
+    // document; a file whose generator omits the attribute keeps its restriction and its hash.
+    if k.attr("w:enforcement").is_some_and(|v| !on(v)) {
         return;
     }
     let edit = k.attr("w:edit").filter(|e| matches!(*e, "readOnly" | "comments" | "trackedChanges" | "forms"));

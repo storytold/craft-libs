@@ -290,3 +290,40 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
         assert_eq!(drawn, [("Angsana New".to_string(), 22.0), ("Tahoma".to_string(), 11.0), ("Angsana New".to_string(), 22.0)], "{when}");
     }
 }
+
+/// Measured in Word for Windows: Thai text as a field's result follows the same rule as ordinary
+/// text, also when the reader keeps the field as one object with its result.
+#[test]
+fn a_fields_thai_result_takes_the_complex_script_formatting_only_in_a_complex_script_run() {
+    let styles = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Angsana New" w:hAnsi="Angsana New" w:cs="Tahoma"/><w:sz w:val="20"/><w:szCs w:val="40"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>"#;
+    let field = |rpr: &str| {
+        let r = |inner: &str| format!("<w:r><w:rPr>{rpr}</w:rPr>{inner}</w:r>");
+        format!(
+            "<w:p>{}{}{}{}{}</w:p>",
+            r(r#"<w:fldChar w:fldCharType="begin"/>"#),
+            r(r#"<w:instrText xml:space="preserve"> QUOTE "x" </w:instrText>"#),
+            r(r#"<w:fldChar w:fldCharType="separate"/>"#),
+            r("<w:t>ทดสอบ</w:t>"),
+            r(r#"<w:fldChar w:fldCharType="end"/>"#)
+        )
+    };
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let at = p.text.find(craft_wordmodel::para::OBJ).expect("the field is one object");
+        let run = p.runs.iter().scan(0, |end, r| {
+            let start = *end;
+            *end += r.len;
+            Some((start, r))
+        });
+        let (_, run) = run.into_iter().find(|(start, r)| *start <= at && at < start + r.len).unwrap();
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &run.props);
+        if rc.uses_complex('ท') { (rc.font_cs.clone(), rc.size_cs) } else { (rc.font.clone(), rc.size) }
+    };
+    for (what, rpr, want) in [("nothing", "", ("Angsana New", 10.0)), ("w:cs", "<w:cs/>", ("Tahoma", 20.0))] {
+        let d = craft_docx::read(&docx_with_styles(&field(rpr), styles)).unwrap();
+        assert_eq!(drawn(&d), (want.0.to_string(), want.1), "a run with {what}: read");
+        let again = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(drawn(&again), (want.0.to_string(), want.1), "a run with {what}: after a save");
+    }
+}
