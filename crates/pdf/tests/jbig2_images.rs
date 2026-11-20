@@ -62,9 +62,11 @@ fn dictionary_counting(exported: u32, new: u32) -> Vec<u8> {
 /// order.
 fn draw(stream: &[u8], (width, height): (u32, u32), kind: &str) -> (bool, Vec<String>) {
     let content = "q 20 0 0 20 5 5 cm /Im Do Q";
-    let mut image =
-        format!("<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {kind} /Filter /JBIG2Decode /Length {} >>\nstream\n", stream.len())
-            .into_bytes();
+    let mut image = format!(
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {kind} /Filter /JBIG2Decode /Length {} >>\nstream\n",
+        stream.len()
+    )
+    .into_bytes();
     image.extend_from_slice(stream);
     image.extend_from_slice(b"\nendstream");
     let bytes = assemble(&[
@@ -118,7 +120,8 @@ fn a_jbig2_image_drawn_on_its_own_that_a_decoder_limit_refuses_is_content_left_o
 /// A 100 × 100 pt page drawing image XObject 5 (`width` × `height`, `entries`, stream `data`) as
 /// `/Im`, as `content` says, with objects from 6 up in `more`.
 fn image_page(width: u32, height: u32, entries: &str, data: &[u8], content: &str, more: &[Vec<u8>]) -> Arc<Vec<u8>> {
-    let mut image = format!("<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
+    let mut image =
+        format!("<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
     image.extend_from_slice(data);
     image.extend_from_slice(b"\nendstream");
     let mut objects = vec![
@@ -287,8 +290,13 @@ mod decodes {
         let pdf = craft_pdf::syntax::Pdf::new(bytes).expect("parses");
         let page = &pdf.pages()[0];
         let cache = InterpreterCache::new();
-        let mut ctx =
-            Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 100.0, 100.0), &cache, page.xref(), InterpreterSettings::default());
+        let mut ctx = Context::new(
+            page.initial_transform(true).to_kurbo(),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            &cache,
+            page.xref(),
+            InterpreterSettings::default(),
+        );
         let mut device = Draws::default();
         interpret_page(page, &mut ctx, &mut device);
         (device.0, cache.decoded_image_decodes())
