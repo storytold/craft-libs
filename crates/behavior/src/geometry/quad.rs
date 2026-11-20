@@ -520,6 +520,12 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
     {
         return Some(kept);
     }
+    if !mods.shift
+        && mods.alt
+        && let Some(centred) = centred_side_scale(g, p, min_side)
+    {
+        return Some(centred);
+    }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -676,6 +682,79 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
             level_snap(&mut quad, &g.quad0, [(o0, d0), (o1, d1)]);
         }
     }
+    quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+}
+
+/// An ⌥ edge drag (both sides move, about the reference point) on a box whose top and bottom are parallel, as the
+/// reference does it; `None` for any other box, which the frame scaling takes. In the frame of the top edge (`uh`
+/// along it, `nh` across):
+/// - a left or right edge, its side and the opposite one parallel: the side-run rule ([`side_run_scale`]) about the
+///   reference point, with `k = 1 + 2 d·uh / |top|`;
+/// - a left or right edge, the sides meeting (a box in perspective): the opposite side scales evenly about the
+///   reference point by `k = 1 + 2 d·uh / w`, `w` the box's width between its sides' middles; the dragged corners
+///   keep the place along `uh` a plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite
+///   side's rows;
+/// - a top or bottom edge: a rectangle in that frame, `k h` high (`k = 1 + 2 d·nh / h`, `h` the left side's part
+///   along `nh`) and `k (|top| ± r)` wide, `r` the sides' mean run along `uh`, added for the bottom edge and taken
+///   off for the top one.
+fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let q = g.quad0;
+    let [tl, tr, br, bl] = q;
+    let u = tr - tl;
+    let len = u.hypot();
+    if !(len.is_finite() && len > 1e-9) {
+        return None;
+    }
+    let uh = u / len;
+    let mut nh = Vec2::new(-uh.y, uh.x);
+    let (left, right, bottom) = (bl - tl, br - tr, br - bl);
+    if left.dot(nh) < 0.0 {
+        nh = -nh;
+    }
+    let (al, ar, h) = (left.dot(uh), right.dot(uh), left.dot(nh));
+    if !(h.is_finite() && h > 1e-9) || uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
+        return None;
+    }
+    let c = g.pivot0;
+    let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
+    let d = p - g.start;
+    let floor = scale_floor(&q, 0, min_side).max(scale_floor(&q, 1, min_side));
+    let factor = |k: f64| (k.is_finite() && k > 0.0).then_some(k.max(floor));
+    let at = |du: f64, dv: f64, from: Point| from + uh * du + nh * dv;
+    let quad = match edge {
+        1 | 3 => {
+            let sign = if edge == 1 { 1.0 } else { -1.0 };
+            if crossing(tl, left, tr, right).is_none() {
+                let k = factor(1.0 + 2.0 * sign * d.dot(uh) / len)?;
+                let (u2, left2) = (u * k, uh * al + nh * (h * k));
+                let right2 = left2 + (right - left);
+                let shape = [Point::ZERO, Point::ZERO + u2, Point::ZERO + u2 + right2, Point::ZERO + left2];
+                let centre = c + (mean - c) * k;
+                let shift = centre - Point::new(shape.iter().map(|p| p.x).sum::<f64>() / 4.0, shape.iter().map(|p| p.y).sum::<f64>() / 4.0);
+                shape.map(|s| s + shift)
+            } else {
+                let w = (tr.midpoint(br) - tl.midpoint(bl)).dot(uh);
+                if !(w.is_finite() && w.abs() > 1e-9) {
+                    return None;
+                }
+                let k = factor(1.0 + 2.0 * sign * d.dot(uh) / w)?;
+                let mut out = q.map(|p| c + (p - c) * k);
+                let plain = side_run_scale(g, p, min_side)?.quad;
+                for i in if edge == 1 { [1, 2] } else { [0, 3] } {
+                    out[i] = at((plain[i] - c).dot(uh), (out[i] - c).dot(nh), c);
+                }
+                out
+            }
+        }
+        _ => {
+            let sign = if edge == 2 { 1.0 } else { -1.0 };
+            let k = factor(1.0 + 2.0 * sign * d.dot(nh) / h)?;
+            let (w, hh) = (k * (len + sign * (al + ar) / 2.0), k * h);
+            let centre = c + (mean - c) * k;
+            [at(-w / 2.0, -hh / 2.0, centre), at(w / 2.0, -hh / 2.0, centre), at(w / 2.0, hh / 2.0, centre), at(-w / 2.0, hh / 2.0, centre)]
+        }
+    };
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
 }
 

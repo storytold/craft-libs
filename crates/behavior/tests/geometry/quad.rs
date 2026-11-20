@@ -329,3 +329,36 @@ fn a_long_edge_drag_in_perspective_slides_the_corners_along_the_vanishing_line()
         assert!(within(&got, want, tol), "edge {edge} of {quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ edge drags (about the reference point, here the box's centre) on boxes whose top and bottom are parallel,
+/// measured on the reference: a skewed box keeps its skew offset along a side drag and turns into a rectangle along a
+/// top or bottom drag; a box in perspective keeps its narrowing along a side drag and turns into a rectangle along a
+/// top or bottom one.
+#[test]
+fn an_alt_edge_drag_scales_about_the_reference_point_as_the_reference_does() {
+    let skewed = [(190.0, 125.0), (492.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let skewed_down = [(150.0, 125.0), (452.0, 165.0), (452.0, 367.0), (150.0, 327.0)];
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_bottom = [(150.0, 125.0), (452.0, 125.0), (412.0, 327.0), (190.0, 327.0)];
+    let cases = [
+        (skewed, 1, (472.0, 226.0), (522.0, 226.0), [(140.0, 91.56), (542.0, 91.56), (502.0, 360.44), (100.0, 360.44)]),
+        (skewed, 3, (170.0, 226.0), (130.0, 226.0), [(150.0, 98.25), (532.0, 98.25), (492.0, 353.75), (110.0, 353.75)]),
+        (skewed, 2, (301.0, 327.0), (301.0, 367.0), [(138.12, 85.0), (503.88, 85.0), (503.88, 367.0), (138.12, 367.0)]),
+        (skewed, 0, (341.0, 125.0), (341.0, 95.0), [(99.21, 95.0), (542.79, 95.0), (542.79, 357.0), (99.21, 357.0)]),
+        (skewed_down, 1, (452.0, 266.0), (502.0, 266.0), [(105.14, 86.19), (505.42, 139.21), (496.86, 405.81), (96.58, 352.79)]),
+        (skewed_down, 2, (301.0, 347.0), (301.0, 387.0), [(90.2, 77.08), (548.51, 137.78), (511.8, 414.92), (53.49, 354.22)]),
+        (narrow_top, 1, (422.0, 226.0), (472.0, 226.0), [(172.4, 83.26), (419.11, 83.26), (526.87, 368.74), (87.6, 368.74)]),
+        (narrow_top, 3, (180.0, 226.0), (140.0, 226.0), [(187.98, 91.61), (422.08, 91.61), (501.92, 360.39), (90.82, 360.39)]),
+        (narrow_top, 0, (301.0, 125.0), (301.0, 95.0), [(182.97, 95.0), (419.03, 95.0), (419.03, 357.0), (182.97, 357.0)]),
+        (narrow_bottom, 1, (432.0, 226.0), (482.0, 226.0), [(92.37, 86.45), (514.37, 86.45), (449.99, 365.55), (147.63, 365.55)]),
+        (narrow_bottom, 2, (301.0, 327.0), (301.0, 367.0), [(90.2, 85.0), (511.8, 85.0), (511.8, 367.0), (90.2, 367.0)]),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let centre = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, centre);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, 0.1), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}
