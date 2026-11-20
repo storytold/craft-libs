@@ -1627,6 +1627,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ber"
 version = "0.1.0"
 
