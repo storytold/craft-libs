@@ -1,6 +1,6 @@
 //! The in-memory store: load once, read every frame, save while the application runs.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,9 @@ use crate::recovery;
 
 /// The settings file name.
 pub const CONFIG_FILE: &str = "config.toml";
+
+/// Largest `config.toml` the store reads. A larger file is left untouched and the store is read-only.
+pub const MAX_CONFIG_BYTES: u64 = 16 << 20;
 
 /// How long after the last change a save is attempted.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -156,7 +159,7 @@ impl<T: Settings> SettingsStore<T> {
             return (store, report);
         }
 
-        match std::fs::read_to_string(&path) {
+        match read_config(&path) {
             Ok(text) => store.load_text(&path, &text, &mut report),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 if let Some((value, from)) = migrate::import_legacy(&options.legacy) {
@@ -291,7 +294,7 @@ impl<T: Settings> SettingsStore<T> {
     /// user's values instead of defaults.
     fn load_best_effort(&mut self, report: &mut LoadReport) {
         if let Some(path) = &self.path
-            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(text) = read_config(path)
             && let Ok(mut doc) = document::parse(&text)
         {
             // A failed migration leaves the document half-upgraded; show defaults instead.
@@ -349,12 +352,19 @@ impl<T: Settings> SettingsStore<T> {
             self.dirty = false;
             return Ok(());
         };
-        if let Some(on_disk) = self.check_disk(&path)? {
-            recovery::write_backup(&path, &on_disk)?;
-        }
+        let on_disk = self.check_disk(&path)?;
         merge_into(&mut self.doc, &self.value).map_err(|e| SettingsError::Serialize(e.to_string()))?;
         set_schema_version(&mut self.doc, T::SCHEMA_VERSION);
         let text = document::render(&self.doc);
+        // A file over the limit would not be read back at the next start; keep the old file.
+        if text.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(too_large().into());
+        }
+        match on_disk {
+            OnDisk::Keep => {}
+            OnDisk::Backup(old) => recovery::write_backup(&path, &old)?,
+            OnDisk::MoveAside => self.moved_aside.push(recovery::move_aside(&path)?),
+        }
         craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private).atomic_write_with(
             &path,
             |file| {
@@ -370,8 +380,8 @@ impl<T: Settings> SettingsStore<T> {
         Ok(())
     }
 
-    /// Looks at the file on disk just before a save, and returns its text when it is a good
-    /// backup (it parses and is not blank).
+    /// Looks at the file on disk just before a save, and returns what the save does with it once
+    /// the new text is ready: back it up (it parses and is not blank), move it aside, or keep it.
     ///
     /// The contract is best effort, not multi-process locking: if another instance or a hand
     /// edit changed the file since this store last read or wrote it, the new document is adopted
@@ -379,10 +389,16 @@ impl<T: Settings> SettingsStore<T> {
     /// A file that no longer parses is moved aside (the edit is kept, the previous backup stays),
     /// and a file from a newer build, or one whose migration fails, makes the store read-only
     /// instead of overwriting it, the same as at startup.
-    fn check_disk(&mut self, path: &Path) -> Result<Option<String>, SettingsError> {
-        let text = match std::fs::read_to_string(path) {
+    fn check_disk(&mut self, path: &Path) -> Result<OnDisk, SettingsError> {
+        let text = match read_config(path) {
             Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(OnDisk::Keep),
+            // Same as at startup: leave the oversized file untouched and stop saving.
+            Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
+                let why = ReadOnlyReason::Unreadable(e).to_string();
+                self.read_only = Some(why.clone());
+                return Err(SettingsError::ReadOnly(why));
+            }
             Err(e) => return Err(e.into()),
         };
         // A blank file still parses, so adopting it below would replace this store's document --
@@ -390,11 +406,10 @@ impl<T: Settings> SettingsStore<T> {
         // blank text is never written as a backup either, so the content would be lost. A blank
         // file is not an edit to adopt: keep what this store loaded and leave the file alone.
         if text.trim().is_empty() {
-            return Ok(None);
+            return Ok(OnDisk::Keep);
         }
         let Ok(mut doc) = document::parse(&text) else {
-            self.moved_aside.push(recovery::move_aside(path)?);
-            return Ok(None);
+            return Ok(OnDisk::MoveAside);
         };
         if self.seen_text.as_deref() != Some(text.as_str()) {
             match migrate::upgrade::<T>(&mut doc) {
@@ -403,7 +418,12 @@ impl<T: Settings> SettingsStore<T> {
                     self.read_only = Some(why.clone());
                     return Err(SettingsError::ReadOnly(why));
                 }
-                Ok(_) => self.doc = doc,
+                // The adopted text is the new baseline, so a save that fails after this point
+                // still compares the next disk read against the document the store now holds.
+                Ok(_) => {
+                    self.doc = doc;
+                    self.seen_text = Some(text.clone());
+                }
                 // Same as at startup: leave the outside file untouched and stop saving.
                 Err(e) => {
                     let why = ReadOnlyReason::Migration(e).to_string();
@@ -412,8 +432,40 @@ impl<T: Settings> SettingsStore<T> {
                 }
             }
         }
-        Ok((!text.trim().is_empty()).then_some(text))
+        Ok(OnDisk::Backup(text))
     }
+}
+
+/// What a save does with the file on disk before writing; see [`SettingsStore::check_disk`].
+enum OnDisk {
+    /// Missing or blank: leave it, and leave the previous backup alone.
+    Keep,
+    /// Parses: copy it to the backup.
+    Backup(String),
+    /// Does not parse: move it aside so the edit is kept.
+    MoveAside,
+}
+
+/// Reads `config.toml` as text. A file larger than [`MAX_CONFIG_BYTES`] fails with
+/// `ErrorKind::FileTooLarge` without being read into memory; text that is not UTF-8 fails with
+/// `ErrorKind::InvalidData`, as `std::fs::read_to_string` does.
+fn read_config(path: &Path) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_CONFIG_BYTES {
+        return Err(too_large());
+    }
+    // The length can change after the check, or be unknown (a pipe), so the read is capped too.
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(too_large());
+    }
+    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+/// The `ErrorKind::FileTooLarge` error for a file larger than [`MAX_CONFIG_BYTES`].
+fn too_large() -> io::Error {
+    io::Error::new(io::ErrorKind::FileTooLarge, format!("file is larger than {MAX_CONFIG_BYTES} bytes"))
 }
 
 /// Exponential backoff: 1 s, 2 s, 4 s, … capped at [`MAX_RETRY_DELAY`].
