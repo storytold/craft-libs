@@ -10,7 +10,9 @@
 //! PowerPoint 95 files (a different record framing, learned from files PowerPoint 95 wrote) read
 //! as far as their slide size, masters with their colour schemes and backgrounds, and slides with
 //! their order, master, layout type and background; their shapes, text, pictures and notes are
-//! not read yet, so the slides are empty. PowerPoint 4.0 and earlier are refused as too old.
+//! not read yet, so the slides are empty. Older formats aren't read: a compound file in neither
+//! framing is refused as too old when its current user record has neither of [MS-PPT]'s tokens
+//! and it has no edit record, and a file that isn't a compound file is not a presentation.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -39,7 +41,7 @@ pub enum PptError {
     NotPpt,
     #[error("the presentation is password-protected")]
     Encrypted,
-    #[error("the presentation was made by PowerPoint 4.0 or earlier")]
+    #[error("the presentation is in a PowerPoint format older than PowerPoint 95")]
     TooOld,
     #[error("the presentation is damaged: {0}")]
     Damaged(String),
@@ -58,7 +60,8 @@ pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Ppt
 }
 
 /// [`import`], plus the slides the file lists but whose objects couldn't be found, so they are not
-/// in the presentation.
+/// in the presentation; for a PowerPoint 95 file, the slides its DocumentAtom counts past those it
+/// holds, by position.
 pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), PptError> {
     let file = CompoundFile::open(bytes).map_err(|e| match e {
         CfbError::NotCfb => PptError::NotPpt,
@@ -74,7 +77,9 @@ pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presenta
     // PowerPoint 95 writes one tree of 16-byte-header records; anything else takes the
     // PowerPoint 97 path, which refuses older formats as too old.
     if let Some(document) = ppt95::document(&stream) {
-        return Ok((ppt95::convert(&document, defaults), vec![]));
+        let p = ppt95::convert(&document, defaults);
+        let lost = ppt95::lost(&document, &p);
+        return Ok((p, lost));
     }
     let current_user = file.read_path_capped("Current User", cap).unwrap_or_default();
     // A damaged or missing picture stream costs the pictures, not the presentation.
