@@ -1027,6 +1027,11 @@ impl FTable {
                             }
                             x += cc.colspan.clamp(1, 63) as usize;
                         }
+                        if x > g {
+                            // The vertical span reaches into a cell already spanning across its
+                            // column; inserting a placeholder here shifts the represented grid.
+                            dropped(Dropped::TableLayout);
+                        }
                         if at < row.len() && x == g && row[at].covered && (vmerge_restart || row[at].synthetic_covered) {
                             // Row already has a matching explicit continuation (when this cell had
                             // `mso-yfti-vmerge:restart`) or a synthetic placeholder from an earlier

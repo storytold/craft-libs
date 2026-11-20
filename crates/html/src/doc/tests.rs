@@ -2177,3 +2177,25 @@ fn reports_table_rows_past_the_limit() {
     let _ = parse(&beyond);
     assert!(craft_flow::Dropped::TableLayout.reported());
 }
+
+#[test]
+fn reports_overlapping_spans_and_spans_crossing_explicit_row_groups() {
+    for html in [
+        "<table><thead><tr><th rowspan='2'>H</th><th>H2</th></tr></thead><tbody><tr><td>A</td><td>B</td></tr></tbody></table>",
+        "<table><tr><td rowspan='2'>A</td><td>B</td><td rowspan='2'>C</td></tr><tr><td colspan='2'>D</td></tr></table>",
+        "<table><tbody><tr><td rowspan='2'>A</td></tr></table>",
+    ] {
+        craft_flow::begin_import();
+        let _ = parse(html);
+        assert!(craft_flow::Dropped::TableLayout.reported(), "{html}");
+    }
+    for valid in [
+        "<table><thead><tr><th>H</th></tr></thead><tbody><tr><td rowspan='2'>A</td><td>B</td></tr><tr><td>C</td></tr></tbody></table>",
+        "<table><tbody><tr><td rowspan='0'>A</td><td>B</td></tr><tr><td>C</td></tr></tbody><tbody><tr><td>D</td></tr></tbody></table>",
+        "<table><tr><td rowspan='2'>A</td><td rowspan='2' style='mso-yfti-vmerge:restart'>B</td><td>D</td></tr><tr><td style='mso-yfti-vmerge:continue'>B_cont</td><td>D1</td></tr></table>",
+    ] {
+        craft_flow::begin_import();
+        let _ = parse(valid);
+        assert!(!craft_flow::Dropped::TableLayout.reported(), "{valid}");
+    }
+}
