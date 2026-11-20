@@ -439,6 +439,20 @@ impl Fixture {
         self.frame_shapes_with(Vec::new())
     }
 
+    /// One frame with no events; returns the shapes it painted, nested shapes flattened, each with the clip it paints under.
+    pub fn frame_clipped_shapes(&mut self) -> Vec<(Rect, egui::Shape)> {
+        self.frames.record_paint();
+        self.frame(Vec::new());
+        let mut out = Vec::new();
+        let Some(paint) = self.frames.take_paint() else { return out };
+        for clipped in paint.shapes {
+            let mut shapes = Vec::new();
+            fixture::flatten(clipped.shape, &mut shapes);
+            out.extend(shapes.into_iter().map(|shape| (clipped.clip_rect, shape)));
+        }
+        out
+    }
+
     /// One frame with `events`; returns the shapes it painted, nested shapes flattened. What the frame that took the
     /// input paints, not the one after it.
     pub fn frame_shapes_with(&mut self, events: Vec<Event>) -> Vec<egui::Shape> {
