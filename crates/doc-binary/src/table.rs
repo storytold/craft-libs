@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use craft_wordmodel::Rgb;
 use craft_wordmodel::para::Paragraph;
-use craft_wordmodel::props::{Align, Borders, CellProps, HeightRule, RowProps, TableProps, VAlign, VMerge};
+use craft_wordmodel::props::{Align, Borders, CellProps, HeightRule, RowProps, TableFloat, TableProps, VAlign, VMerge};
 use craft_wordmodel::table::{Cell, Row, Table};
 use craft_wordmodel::{Block, Blocks, para_block};
 
@@ -44,6 +44,15 @@ const T_VERT_ALIGN: u16 = 0xD62C;
 const T_SET_SHD: u16 = 0xD62D;
 const T_CANT_SPLIT: u16 = 0x3466;
 const T_CELL_WIDTH: u16 = 0xD635;
+// A positioned (floating) table's placement ([MS-DOC] §2.6.3).
+const T_PC: u16 = 0x360D;
+const T_DXA_ABS: u16 = 0x940E;
+const T_DYA_ABS: u16 = 0x940F;
+const T_DXA_FROM_TEXT: u16 = 0x9410;
+const T_DYA_FROM_TEXT: u16 = 0x9411;
+const T_DXA_FROM_TEXT_RIGHT: u16 = 0x941E;
+const T_DYA_FROM_TEXT_BOTTOM: u16 = 0x941F;
+const T_F_NO_ALLOW_OVERLAP: u16 = 0x3465;
 
 /// Most grid columns we build from a `sprmTDefTable` (the model's own cap is 63; one more
 /// edge is fine but merged rows can sum spans slightly over, so clamp when assembling).
@@ -79,6 +88,8 @@ pub(crate) struct RowInfo {
     widths: Vec<(u8, f32)>,
     width_pcts: Vec<(u8, f32)>,
     valign: Vec<(u8, VAlign)>,
+    /// The table's position, when the row's position sprms place it.
+    pub(crate) float: Option<TableFloat>,
 }
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
@@ -128,10 +139,81 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
     }
 }
 
+/// The position sprms of one row, as stored ([MS-DOC] §2.6.3).
+#[derive(Default)]
+struct Position {
+    /// `sprmTPc`'s PositionCodeOperand (§2.9.208).
+    pc: Option<u8>,
+    /// `sprmTDxaAbs` (XAS_plusOne, §2.9.351) and `sprmTDyaAbs` (YAS_plusOne, §2.9.357).
+    x: Option<i16>,
+    y: Option<i16>,
+    /// The distances from text, twips (XAS_nonNeg §2.9.350, YAS_nonNeg §2.9.356): left
+    /// (`sprmTDxaFromText`), top (`sprmTDyaFromText`), right (`sprmTDxaFromTextRight`),
+    /// bottom (`sprmTDyaFromTextBottom`), the model's order.
+    dist: [Option<u16>; 4],
+    /// `sprmTFNoAllowOverlap`.
+    no_overlap: bool,
+}
+
+impl Position {
+    /// The table's placement, or `None` for a table in the text flow.
+    ///
+    /// `sprmTPc` positions the table unless both its anchors are 3 ("not absolutely
+    /// positioned"). Without it, a `sprmTDxaAbs` or `sprmTDyaAbs` other than its default (0)
+    /// positions the table from the defaults §2.6.3 gives a positioned table: the top margin and
+    /// the current column. An anchor of 3 on one axis only falls back to that same default.
+    /// The distances from text and the overlap flag alone position nothing.
+    fn float(&self) -> Option<TableFloat> {
+        use craft_wordmodel::para::{Anchor, FloatAlign};
+        let (v, h) = match self.pc {
+            Some(pc) => ((pc >> 4) & 3, (pc >> 6) & 3),
+            None if self.x.unwrap_or(0) != 0 || self.y.unwrap_or(0) != 0 => (3, 3),
+            None => return None,
+        };
+        if self.pc.is_some() && v == 3 && h == 3 {
+            return None;
+        }
+        let v_rel = match v {
+            1 => Anchor::Page,
+            2 => Anchor::Paragraph,
+            _ => Anchor::Margin,
+        };
+        let h_rel = match h {
+            1 => Anchor::Margin,
+            2 => Anchor::Page,
+            _ => Anchor::Column,
+        };
+        // Any value that is not special is twips plus one.
+        let offset = |v: i16| ((i32::from(v) - 1) as f32 / 20.0).clamp(-1584.0, 1584.0);
+        // The special values differ by axis: XAS_plusOne has left at 0, YAS_plusOne has
+        // "inline" (no alignment) there, and the rest shift by one place.
+        let (h_align, x) = match self.x.unwrap_or(0) {
+            0 => (Some(FloatAlign::Start), 0.0),
+            -4 => (Some(FloatAlign::Center), 0.0),
+            -8 => (Some(FloatAlign::End), 0.0),
+            -12 => (Some(FloatAlign::Inside), 0.0),
+            -16 => (Some(FloatAlign::Outside), 0.0),
+            v => (None, offset(v)),
+        };
+        let (v_align, y) = match self.y.unwrap_or(0) {
+            0 => (None, 0.0),
+            -4 => (Some(FloatAlign::Start), 0.0),
+            -8 => (Some(FloatAlign::Center), 0.0),
+            -12 => (Some(FloatAlign::End), 0.0),
+            -16 => (Some(FloatAlign::Inside), 0.0),
+            -20 => (Some(FloatAlign::Outside), 0.0),
+            v => (None, offset(v)),
+        };
+        let dist = self.dist.map(|d| (f32::from(d.unwrap_or(0)) / 20.0).clamp(0.0, 1584.0));
+        Some(TableFloat { h_rel, v_rel, x, y, h_align, v_align, dist, overlap: !self.no_overlap })
+    }
+}
+
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let mut pos = Position::default();
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -252,9 +334,26 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     }
                 }
             }
+            T_PC => {
+                if let Some(pc) = prl.operand.first() {
+                    pos.pc = Some(*pc);
+                }
+            }
+            T_DXA_ABS => pos.x = s16(&prl).or(pos.x),
+            T_DYA_ABS => pos.y = s16(&prl).or(pos.y),
+            T_DXA_FROM_TEXT => pos.dist[0] = u16_of(&prl).or(pos.dist[0]),
+            T_DYA_FROM_TEXT => pos.dist[1] = u16_of(&prl).or(pos.dist[1]),
+            T_DXA_FROM_TEXT_RIGHT => pos.dist[2] = u16_of(&prl).or(pos.dist[2]),
+            T_DYA_FROM_TEXT_BOTTOM => pos.dist[3] = u16_of(&prl).or(pos.dist[3]),
+            T_F_NO_ALLOW_OVERLAP => {
+                if let Some(b) = prl.operand.first() {
+                    pos.no_overlap = *b != 0;
+                }
+            }
             _ => {}
         }
     }
+    r.float = pos.float();
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
         let gap = gap_half.unwrap_or(0) as f32 / 20.0;
@@ -406,6 +505,9 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
         if props.indent.is_none() {
             props.indent = info.indent;
+        }
+        if props.float.is_none() {
+            props.float = info.float;
         }
         if info.cell_mark {
             // A row-end (TTP) mark terminates the row. Word writes rows as N content
