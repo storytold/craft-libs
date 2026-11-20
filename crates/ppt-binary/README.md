@@ -27,8 +27,27 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.
-- Password-protected files are refused (`PptError::Encrypted`), as are PowerPoint 95 and earlier
-  files (`PptError::TooOld`).
+- Password-protected files are refused (`PptError::Encrypted`). Formats older than PowerPoint 95
+  aren't read: a compound file whose current user record has neither of [MS-PPT]'s tokens and
+  that has no edit record is refused as too old (`PptError::TooOld`), and a file that isn't a
+  compound file is `PptError::NotPpt`. No file from an earlier PowerPoint was tried.
+
+## PowerPoint 95
+
+PowerPoint 95 (7.0) files use the same compound file and many of the same record numbers, but a
+16-byte record header and a single record tree with no edit chain. A file whose `PowerPoint
+Document` stream starts with that tree is read on its own path; anything else takes the
+PowerPoint 97 path. The tree's Document must hold its DocumentAtom, which counts the slides;
+`import_checked` names the slides that count says a cut-short file is missing ("slide 3"). What
+was learned of the format came from files PowerPoint 95 itself wrote,
+one feature per file, and the public [MS-PPT] numbering where the records keep it.
+
+So far a PowerPoint 95 file imports with its slide size, its masters (each the caller's default
+master wearing the file's colour scheme, and its background when that isn't the scheme's), and
+its slides in order with their master, layout type and, when a slide doesn't follow the master's,
+its own background: a solid colour, or none when the slide's background has no fill. A slide also
+says whether it shows the master's objects and whether it uses the master's colour scheme or its
+own. The slides are empty: shapes, placeholders and their text, pictures and notes come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
@@ -37,4 +56,5 @@ with their own boxes.
 
 The reader was written for DeckCraft (storytold/deckcraft#1137); the history of
 `crates/ppt-binary` names its authors. Its tests build `.ppt` files from records; no file made
-by PowerPoint is used.
+by PowerPoint is used. One optional test reads real PowerPoint 95 files from the directory
+`CRAFT_PPT95_SAMPLES` names, and does nothing when it is unset; no such file is in the repository.

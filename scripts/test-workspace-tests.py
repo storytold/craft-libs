@@ -33,17 +33,25 @@ fi
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 """
-TEST_SOURCE = """
-cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
-cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
-cargo test --workspace --doc --all-features --locked
-cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+# The `platforms` job's selection: no tests when no crate changed, otherwise a nextest filter.
+SELECT_GUARD = """
+if [ "$CRAFT_TESTS" = none ]; then
+  echo "No crate changed: no tests to run."
+  exit 0
+fi
 """
+TEST_RUN = """
+cargo nextest run --workspace --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --example stubicc --example h264_h264enc_bench
+cargo test --workspace --doc --all-features --locked
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci -E "$CRAFT_TEST_FILTER" --no-tests=warn --lib --bins --tests
+"""
+TEST_SOURCE = SELECT_GUARD + TEST_RUN
 WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'"""
 EXPECTED_SOURCE = {
     "lint-command": LINT_SOURCE,
     "command": TEST_SOURCE,
-    "windows-command": WINDOWS_SETUP + "\n" + TEST_SOURCE,
+    "windows-command": SELECT_GUARD + WINDOWS_SETUP + "\n" + TEST_RUN,
 }
 
 
@@ -78,11 +86,12 @@ esac
 """
 
 
-def commands(os_name, fail="", name="command", source=None):
+def commands(os_name, fail="", name="command", source=None, tests="all", test_filter="all()"):
     validate_source(WORKFLOW.read_text() if source is None else source, name)
     return subprocess.run(
         ["bash", "-euo", "pipefail", "-c", HARNESS],
-        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name},
+        env={**os.environ, "RUNNER_OS": os_name, "FAIL": fail, "BLOCK": name,
+             "CRAFT_TESTS": tests, "CRAFT_TEST_FILTER": test_filter},
         text=True, capture_output=True, check=False,
     )
 
@@ -92,12 +101,12 @@ COMMON = [
     "clippy --workspace --all-targets --locked -- -D warnings",
     "clippy --workspace --all-targets --all-features --locked -- -D warnings",
 ]
-TESTS = [
-    "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests",
-    "nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench",
-    "test --workspace --doc --all-features --locked",
-    "nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests",
-]
+def test_commands(test_filter="all()"):
+    return [line.strip()[len("cargo "):].replace('"$CRAFT_TEST_FILTER"', test_filter)
+            for line in TEST_RUN.splitlines() if line.strip()]
+
+
+TESTS = test_commands()
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -118,6 +127,20 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), TESTS)
 
+    def test_a_selection_filters_every_nextest_run_and_none_runs_nothing(self):
+        selected = "package(=craft-geom) | package(=craft-svg)"
+        result = commands("Linux", tests="some", test_filter=selected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), test_commands(selected))
+        # The doctests stay whole-workspace; every nextest run carries the filter.
+        self.assertIn("test --workspace --doc --all-features --locked", result.stdout.splitlines())
+        for line in result.stdout.splitlines():
+            if line.startswith("nextest"):
+                self.assertIn(f"-E {selected} --no-tests=warn", line)
+        result = commands("Linux", tests="none", test_filter="none()")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["No crate changed: no tests to run."])
+
     def test_each_stage_failure_remains_fatal(self):
         for name, stages in (("lint-command", COMMON), ("command", TESTS)):
             for index, command in enumerate(stages):
@@ -130,7 +153,7 @@ class WorkspaceTests(unittest.TestCase):
         validate_source(WORKFLOW.read_text(), "windows-command")
         source = block(WORKFLOW.read_text(), "windows-command")
         cargo = [line.strip() for line in source.splitlines() if line.strip().startswith("cargo ")]
-        self.assertEqual(cargo, ["cargo " + command for command in TESTS])
+        self.assertEqual(cargo, [line.strip() for line in TEST_RUN.splitlines() if line.strip()])
 
     def test_workflow_source_is_rejected_before_starting_any_process(self):
         source = WORKFLOW.read_text()
@@ -179,6 +202,12 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('os: \'["ubuntu-latest"]\'', source)
         self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
         self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # Every leg reads the test selection of the platforms job.
+        self.assertIn("  native:\n    name: Workspace\n    needs: platforms\n", source)
+        self.assertIn("          select-tests: true\n", source)
+        self.assertIn("        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}\n"
+                      "        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}\n", source)
+        self.assertIn("      env: *env\n", source)
         # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
         self.assertIn("      lint-command: &lint |\n", source)
         self.assertIn("      command: &command |\n", source)
