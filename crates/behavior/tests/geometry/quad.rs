@@ -362,3 +362,23 @@ fn an_alt_edge_drag_scales_about_the_reference_point_as_the_reference_does() {
         assert!(within(&got, want, 0.1), "edge {edge} of {quad:?}: {:?}", got.quad);
     }
 }
+
+/// An ⌥ corner drag on a box in perspective (measured on the reference): the box scales evenly about the reference point
+/// (its centre here), by the pointer's projection on the line from the centre to the corner.
+#[test]
+fn an_alt_corner_drag_scales_a_box_in_perspective_evenly_about_the_reference_point() {
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        (narrow_top, 2, (452.0, 327.0), (482.0, 357.0), [(189.15, 101.86), (412.85, 101.86), (486.59, 350.14), (115.41, 350.14)]),
+        (narrow_top, 0, (210.0, 125.0), (180.0, 95.0), [(181.64, 93.52), (420.36, 93.52), (499.06, 358.48), (102.94, 358.48)]),
+        (parallel_sides, 2, (452.0, 287.0), (482.0, 317.0), [(113.79, 100.78), (488.21, 150.37), (488.21, 301.63), (113.79, 351.22)]),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, corner, from, to, want) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let start = BoxState::new(quad, p(301.0, 226.0));
+        let got = drag(&start, &start, BoxPart::Corner(corner), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, 0.01), "corner {corner} of {quad:?}: {:?}", got.quad);
+    }
+}

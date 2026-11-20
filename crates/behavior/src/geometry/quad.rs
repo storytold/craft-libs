@@ -526,6 +526,24 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
     {
         return Some(centred);
     }
+    // An ⌥ corner keeping the proportions scales the box evenly about the reference point in document space, by the
+    // pointer's projection on the line from the reference point to the corner (measured on the reference, also on a box
+    // in perspective; on a parallelogram this is the frame scaling below).
+    if !mods.shift
+        && mods.alt
+        && let BoxPart::Corner(i) = g.part
+        && let Some(&corner) = g.quad0.get(usize::from(i))
+    {
+        let r = corner - g.pivot0;
+        let len2 = r.hypot2();
+        if len2 > 1e-12 {
+            let k = ((corner + (p - g.start)) - g.pivot0).dot(r) / len2;
+            let k = if k.is_finite() { k } else { 1.0 };
+            let k = k.max(scale_floor(&g.quad0, 0, min_side).max(scale_floor(&g.quad0, 1, min_side)));
+            let quad = g.quad0.map(|q| g.pivot0 + (q - g.pivot0) * k);
+            return quad.iter().all(|q| q.is_finite()).then_some(BoxState { quad, pivot: g.pivot0 });
+        }
+    }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
