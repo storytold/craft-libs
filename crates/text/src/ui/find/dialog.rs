@@ -504,8 +504,8 @@ impl StackDialog for FindReplaceDialog {
                                 }
                                 field.show(ui, |ui, _| {
                                     let edit = TextField::new(Label::from(kind.label.clone()), Bind::given(target.clone())).show(ui);
-                                    if std::mem::take(&mut focus_input) {
-                                        focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                                    if focus_input {
+                                        focus_input = !focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
                                     }
                                     if let Some(value) = edit.events.value() {
                                         target.clone_from(value);
@@ -527,8 +527,8 @@ impl StackDialog for FindReplaceDialog {
                                     let entries: Vec<Entry<usize>> =
                                         names.iter().enumerate().map(|(at, name)| Entry::new(at, name.clone())).collect();
                                     let edit = Select::new(Label::from(kind.label.clone()), Bind::given(at), &entries).show(ui);
-                                    if std::mem::take(&mut focus_input) {
-                                        focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                                    if focus_input {
+                                        focus_input = !focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
                                     }
                                     if let Some(&picked) = edit.events.value()
                                         && let Some(name) = names.get(picked)
@@ -551,8 +551,8 @@ impl StackDialog for FindReplaceDialog {
                     field = field.replace_selection(code.clone());
                 }
                 let edit = field.show(ui);
-                if std::mem::take(&mut focus_input) {
-                    focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                if focus_input {
+                    focus_input = !focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
                 }
                 if edit.response.has_focus() {
                     last_field = Field::Find;
