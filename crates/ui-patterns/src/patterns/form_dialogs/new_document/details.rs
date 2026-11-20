@@ -19,7 +19,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::words::CommonWords;
 use crate::style::TypeRole;
 use crate::text::TextField;
-use craft_behavior::{ColumnWidth, EditEvent, EditEvents, PixelSize};
+use craft_behavior::{ColumnWidth, EditEvent, EditEvents, IconId, PixelSize};
 use craft_theme::Srgba;
 use egui::Ui;
 
