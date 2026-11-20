@@ -2,13 +2,12 @@
 
 use super::{GUIDE, Guides, GuidesOutput};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with, story_view};
-use crate::canvas::{Canvas, Guide, GuideDrag, GuideKey, GuideLine, RasterSource};
+use crate::canvas::{Canvas, Guide, GuideKey, GuideLine, RasterSource};
 use crate::contract::{Bind, Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{Axis, GesturePhase, Mixed};
-use craft_keymap::Mods;
+use craft_behavior::{Axis, Mixed};
 use egui::{Id, Rect, Ui, Vec2};
 
 /// The most guides the invalid story accepts.
@@ -70,13 +69,6 @@ fn too_many_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn guides_that_only_draw(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let guides = data.value("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides)).show_at(ui, at))
-}
-
-#[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
-fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
-    let drag = GuideDrag::new_guide(Axis::Y, GesturePhase::Update, Some(200.0), Mods::NONE);
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).pending(drag).show_at(ui, at))
 }
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]

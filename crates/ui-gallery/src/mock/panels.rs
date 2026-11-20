@@ -214,32 +214,21 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     // What the host reported; none in a measuring run, where it does not run.
     let mut reported = None;
     let mut scrolled = None;
-    let _ = Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, document.zero).show(
+    let mut zero = document.zero;
+    let strips = show_rulers.then(|| Rulers::new("Rulers", Bind::bound(&mut zero)).units(&UNITS));
+    let shown = Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units, document.zero).show(
         ui,
         |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-            let mut content = body.rect;
-            let mut pending = None;
-            let Document { guides, guide, zero, units: unit, .. } = &mut *document;
-            if show_rulers {
-                let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
-                content = rulers.content_rect();
-                pending = rulers.guide;
-                if let Some(picked) = rulers.unit_picked {
-                    *unit = picked;
-                }
-            }
+            let Document { guides, guide, .. } = &mut *document;
             let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
             if let Some(selected) = *guide {
                 controls = controls.selected_guide(selected);
             }
-            if let Some(drag) = pending {
-                controls = controls.pending(drag);
-            }
             if let Some(select) = controls.show_at(ui, body.rect).select {
                 *guide = select;
             }
-            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
+            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, body.rect);
             scrolled = bars.view.value().copied();
             // The tool runs after the controls, which take a press first, and before the picture and the selection,
             // which show what it did with this pass's input. The tool leaves the press alone over a scroll bar.
@@ -259,6 +248,10 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
             }
         },
     );
+    if let Some(picked) = shown.output.rulers.and_then(|rulers| rulers.unit_picked) {
+        document.units = picked;
+    }
+    document.zero = zero;
     let reported: craft_ui::canvas::ToolHostResponse = reported.unwrap_or_default();
     if let Some(next) = scrolled.or(reported.view) {
         document.view = next;
