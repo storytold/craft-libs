@@ -366,3 +366,49 @@ fn typing_in_a_freshly_opened_parameter_dialog_replaces_its_first_field() {
     fixture.type_text("7").key(Key::Tab, Modifiers::NONE).settle();
     assert_eq!(values.borrow().number("radius"), Some(7.0), "typing replaced the radius");
 }
+
+#[trial]
+fn parameter_dialogs_15539_show_declared_units_and_keep_parsing() {
+    let opacity = || Param::new("opacity", "Opacity", ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)).unit(UnitKind::Percent);
+    let new_layer = vec![Param::new("name", "Name", ParamKind::text("Layer 1")), opacity()];
+    let stroke = vec![
+        Param::new("copies", "Copies", ParamKind::int(Some(1), Some(5), 1)),
+        Param::new("width", "Width", ParamKind::number(Some(1.0), Some(250.0), 1.0, 1.0, 0)).unit(UnitKind::Pixels),
+        opacity(),
+        Param::new("angle", "Angle", ParamKind::int(Some(0), Some(90), 4)).unit(UnitKind::Degrees),
+        Param::new("offset", "Offset", ParamKind::optional_number(0.0, 10.0, Some(2.5), 2.5, 2)).unit(UnitKind::Points),
+    ];
+    for (title, params, units) in [
+        ("New Layer", new_layer, vec![("Opacity", "%", "42%")]),
+        ("Stroke", stroke, vec![("Width", "px", "12 px"), ("Opacity", "%", "42%"), ("Angle", "°", "15°"), ("Offset", "pt", "3.25 pt")]),
+    ] {
+        let values = Rc::new(RefCell::new(DialogFields::new()));
+        let shown = values.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let _ = ParamDialog::new(title, title, params.clone()).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+        });
+        fixture.room(Vec2::new(1280.0, 800.0)).settle();
+        for (label, suffix, _) in &units {
+            let field = fixture.by_label(label).expect("the number field");
+            let painted = fixture
+                .texts()
+                .iter()
+                .filter(|text| text.text == *suffix && !text.elided && text.clip.contains_rect(text.rect) && field.rect.contains_rect(text.rect))
+                .count();
+            assert_eq!(painted, 1, "{title}: one visible {suffix} on {label}");
+        }
+        for (label, _, text) in units {
+            let field = fixture.by_label(label).expect("the number field");
+            fixture.click(&field).settle();
+            fixture.key(Key::A, Modifiers::COMMAND).type_text(text).key(Key::Tab, Modifiers::NONE).settle();
+        }
+        let held = values.borrow();
+        assert_eq!(held.number("opacity"), Some(42.0));
+        if title == "Stroke" {
+            assert_eq!(held.number("width"), Some(12.0));
+            assert_eq!(held.int("angle"), Some(15));
+            assert_eq!(held.number("offset"), Some(3.25));
+            assert_eq!(held.int("copies"), Some(1));
+        }
+    }
+}
