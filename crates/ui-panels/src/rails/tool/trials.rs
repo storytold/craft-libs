@@ -1,6 +1,7 @@
 //! Trials of `ToolRail`: its columns for a width, its measure, a short room and its glyph role.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
+use super::super::FlyoutButton;
 use super::stories::tools;
 use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
@@ -10,9 +11,10 @@ use crate::contract::ShowContainer as _;
 use crate::docking::{DockGrid, DockSizes};
 use crate::layout_components::Stack;
 use crate::runtime::env::ThemeScope;
+use crate::testing::pointer::secondary;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
-use crate::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
+use crate::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, trial};
 use egui::{Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -263,4 +265,23 @@ fn a_rail_in_another_density_counts_its_columns_in_that_density() {
     let tall = 800.0;
     fixture.density(craft_theme::Size::Comfortable).room(Vec2::new(width, tall)).settle();
     assert_eq!(columns_of(&fixture), 2, "two rail steps of the scope's style show two columns");
+}
+
+/// A flyout resolves its rows through the command board, so an open flyout builds no derived value in any frame.
+#[trial]
+fn an_open_flyout_builds_no_derived_values() {
+    let tools = tools(&[1, 2]);
+    let shown = 1_u8;
+    let mut fixture = Fixture::new(move |ui| {
+        FlyoutButton::new(&tools, &shown).show(ui);
+    });
+    fixture.room(Vec2::new(200.0, 200.0)).settle();
+    let button = rect(&fixture, "Brush").center();
+    fixture.frame(vec![secondary(button, true), secondary(button, false)]);
+    fixture.settle();
+    assert!(fixture.by_label("Pencil").is_some(), "the right click opened the flyout");
+    for _ in 0..3 {
+        fixture.frame(vec![]);
+        assert!(last_frame_derived_builds(fixture.ctx()).iter().all(|(_, builds)| *builds == 0), "no derived value is built per pass");
+    }
 }
