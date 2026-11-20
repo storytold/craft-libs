@@ -1,17 +1,17 @@
 //! The label step: scrub across a pointer warp and the label beside or above a fill-width control.
 
-mod align;
-mod baseline;
-mod caption;
+pub(crate) mod align;
+pub(crate) mod baseline;
+pub(crate) mod caption;
 pub mod group;
-mod hit;
-mod inside;
+pub(crate) mod hit;
+pub(crate) mod inside;
 pub mod kit;
-mod reach;
-mod reset;
-mod scheme;
-mod short;
-mod tooltip;
+pub(crate) mod reach;
+pub(crate) mod reset;
+pub(crate) mod scheme;
+pub(crate) mod short;
+pub(crate) mod tooltip;
 
 use self::kit::{Dial, Field, Seen, Wide};
 use craft_host::target::ShellInfo;

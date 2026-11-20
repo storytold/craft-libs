@@ -90,6 +90,11 @@ impl UiTokens {
         &self.tokens
     }
 
+    /// Whether the resolved source tokens used by text layout are equal.
+    pub(crate) fn same_source_tokens(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.tokens, &other.tokens) || self.tokens == other.tokens
+    }
+
     /// The theme's token-group values.
     pub fn groups(&self) -> &GroupValues {
         &self.groups

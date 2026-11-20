@@ -154,7 +154,7 @@ pub fn parse_hyphenated(s: &str) -> (String, u64) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 

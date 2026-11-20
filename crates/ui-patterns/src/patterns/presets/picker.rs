@@ -5,8 +5,8 @@
 //! (`keep_open`), give the browser a footer, set how far the thumbnails zoom, open the popover at a point without the
 //! field (`open_at`) and let the user resize it (`resizable`).
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

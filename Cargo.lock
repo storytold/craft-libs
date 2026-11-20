@@ -1746,6 +1746,7 @@ dependencies = [
  "craft-assuan",
  "craft-atomic",
  "craft-audio",
+ "craft-audio-dsp",
  "craft-automation",
  "craft-behavior",
  "craft-ber",
@@ -1891,6 +1892,7 @@ dependencies = [
  "craft-raw",
  "craft-review",
  "craft-rtf",
+ "craft-sbs",
  "craft-score",
  "craft-scraft-format",
  "craft-settings",
@@ -2048,6 +2050,10 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
 
 [[package]]
 name = "craft-automation"
@@ -2226,6 +2232,7 @@ dependencies = [
  "craft-ai-agents",
  "craft-atomic",
  "craft-flags",
+ "dirs",
  "getrandom 0.3.4",
  "log",
  "proptest",
@@ -3200,6 +3207,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
 ]
@@ -3866,6 +3874,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sbs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-mime",
+ "craft-xml",
+ "flate2",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
@@ -4361,6 +4381,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
+ "toml",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -13451,8 +13472,6 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3361bff7f7d82c0c496b92048db83846691f0e844cc28dee92b1c824291b55ee"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -13501,8 +13520,6 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo 0.1.1",

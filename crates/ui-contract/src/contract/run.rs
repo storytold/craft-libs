@@ -29,8 +29,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_face, measure_under, measured_extent, member_prepare, member_show, paint_face,
-    show_container, show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, PreparedLeaf, measure_container, measure_face, measure_under, measure_under_prepared, measured_extent,
+    member_prepare, member_show, paint_face, show_container, show_container_taking, show_items, show_leaf, show_leaf_prepared,
 };
 
 /// Where a component is placed.
@@ -439,6 +439,7 @@ pub(crate) struct TypeFacts {
     pub canvas_control: bool,
     pub labelled_after: bool,
     pub binds_view: bool,
+    pub paired_measure: bool,
     /// `DISABLED` is `Faded`.
     pub faded: bool,
     /// `RULE`.
@@ -460,6 +461,7 @@ impl TypeFacts {
             canvas_control: C::CANVAS_CONTROL,
             labelled_after: C::LABELLED_AFTER,
             binds_view: C::BINDS_VIEW,
+            paired_measure: C::PAIRED_MEASURE,
             faded: C::DISABLED == super::DisabledLook::Faded,
             rule: C::RULE,
             style_key: TypeId::of::<C::StyleKey>(),
@@ -498,6 +500,7 @@ pub(crate) trait Erased {
     fn cut_first(&self) -> bool;
     /// What `C::measure` gives for the shown value.
     fn measure_content(&mut self, input: &MeasureIn<'_>, resolved: &Resolved<'_>) -> (Vec2, Inputs);
+    fn measure_content_pair(&mut self, ideal: &MeasureIn<'_>, least: &MeasureIn<'_>, resolved: &Resolved<'_>) -> Option<((Vec2, Vec2), Inputs)>;
     fn measured_extent(&mut self, at: &Measuring<'_, '_>, stage: &mut MemoryStage) -> Vec2;
     fn pass_extent(&mut self, at: &Measuring<'_, '_>) -> Vec2;
     /// Builds the component's `Cx` over `core` and `style` (what `style` gave), runs `rest` with it, then `finish`.
@@ -1407,30 +1410,39 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
-pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    if crate::runtime::pass_state::in_component_tree() {
-        return run_in_context(t, ui, at, tip);
-    }
-    let ctx = ui.ctx().clone();
-    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip));
+pub(super) struct PreparedStep {
+    step1: steps::EnvStep,
+    style: Arc<dyn StyleView>,
 }
 
-fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    run_with(t, ui, at, tip, None);
+}
+
+fn run_with(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
+    if crate::runtime::pass_state::in_component_tree() {
+        return run_in_context(t, ui, at, tip, prepared);
+    }
+    let ctx = ui.ctx().clone();
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip, prepared));
+}
+
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {
             let ctx = ui.ctx().clone();
-            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip));
+            crate::layout::ColumnGroup::cell(&ctx, grid, column, sized, || run_steps(t, ui, at, tip, prepared));
         }
-        None => run_steps(t, ui, at, tip),
+        None => run_steps(t, ui, at, tip, prepared),
     }
 }
 
 /// Steps 1 to 17 of `run`. A component's children run inside step 5 (a body's measuring run) and inside the passes
 /// of steps 6 to 16, so the frames on that path keep only what the run reads after them: each step runs in its own
 /// function, and `run_steps` holds what steps 1 to 5 found.
-fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
-    let begun = begin(t, ui);
+fn run_steps(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>, prepared: Option<PreparedStep>) {
+    let begun = begin(t, ui, prepared);
     let mut stage = begun.open_stage(t);
     let mixed = value_step(t, &begun, &mut stage);
     let resolved = begun.resolved(t);
@@ -1495,7 +1507,7 @@ impl Begun {
 /// Steps 1 to 3: env, style and id.
 // Kept out of the recursive frame above it: opt-level 2 inlines it there, so its locals stay on the stack while children run.
 #[inline(never)]
-fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
+fn begin(t: &mut dyn Erased, ui: &Ui, prepared: Option<PreparedStep>) -> Begun {
     let ctx = ui.ctx().clone();
     let facts = t.facts();
     crate::runtime::measure::count_run(&ctx, facts.name);
@@ -1512,9 +1524,14 @@ fn begin(t: &mut dyn Erased, ui: &Ui) -> Begun {
     // scope, and everything it shows inherits it.
     let env = scoped_env(&ctx, Env::of(ui), t.theme_scope());
     let common: Common = t.take_common();
-    let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
-    // 2 style
-    let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+    let (step1, style) = match prepared {
+        Some(prepared) => (prepared.step1, prepared.style),
+        None => {
+            let step1 = steps::env(&ctx, &env, &common, t.variants(common.variant));
+            let style = t.style(&ctx, &steps::style_cx(&ctx, &env, &step1));
+            (step1, style)
+        }
+    };
     // 3 id
     let id = steps::id(ui, &common.id, !sizing, true, facts.style_key, facts.name);
     if recording {
@@ -1640,8 +1657,8 @@ fn measure_step(
     let ask = |t: &mut dyn Erased, proposal: Proposal, room: Option<f32>, extent: Vec2| {
         measured(t, &MeasureIn { ui: &*ui, env, proposal, room }, style, resolved, extent)
     };
-    let (size, inputs) = ask(&mut *t, Proposal::Ideal, room, extent);
-    let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+    // Legacy components keep their original ordering: measure before asking whether they fill.
+    let initial = (!facts.paired_measure).then(|| ask(&mut *t, Proposal::Ideal, room, extent));
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
     let in_label = shape == ShapeKind::Leaf && scope::in_label(ctx);
@@ -1652,10 +1669,36 @@ fn measure_step(
     let tells_least = shape == ShapeKind::Leaf
         && matches!(at, ShowAt::Flow)
         && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
-    let min = (in_label || tells_least).then(|| {
-        let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
-        Call { proposal: Proposal::Min, room: None, inputs, took }
-    });
+    let pair = if facts.paired_measure
+        && (in_label || tells_least || (shape == ShapeKind::Leaf && matches!(shrink, Some(crate::layout::Shrink::Count(_)))))
+    {
+        let ideal_input = MeasureIn { ui, env, proposal: Proposal::Ideal, room };
+        let least_input = MeasureIn { ui, env, proposal: Proposal::Min, room: None };
+        t.measure_content_pair(&ideal_input, &least_input, resolved).map(|((ideal, least), inputs)| {
+            let size = steps::measure(style, &ideal_input, ideal, extent, resolved);
+            let least = steps::measure(style, &least_input, least, Vec2::ZERO, resolved);
+            (size, inputs, least, ideal)
+        })
+    } else {
+        None
+    };
+    let paired = pair.as_ref().map(|(_, _, least, content)| (*least, *content));
+    let (size, ideal, min) = match pair {
+        Some((size, inputs, least, _)) => {
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs: inputs.clone(), took: size };
+            let min = Call { proposal: Proposal::Min, room: None, inputs, took: least };
+            (size, ideal, Some(min))
+        }
+        None => {
+            let (size, inputs) = initial.unwrap_or_else(|| ask(&mut *t, Proposal::Ideal, room, extent));
+            let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
+            let min = (in_label || tells_least).then(|| {
+                let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
+                Call { proposal: Proposal::Min, room: None, inputs, took }
+            });
+            (size, ideal, min)
+        }
+    };
     let min_took = min.as_ref().filter(|_| in_label).map(|min| min.took);
     // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
     // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
@@ -1715,10 +1758,13 @@ fn measure_step(
         Some(crate::layout::Shrink::Count(row)) if shape == ShapeKind::Leaf => {
             // The `Ideal` size in no room, and the least width at which its content shows whole.
             let input = MeasureIn { ui, env, proposal: Proposal::Ideal, room: None };
-            let (content, _) = t.measure_content(&input, resolved);
+            let content = match paired.filter(|_| room.is_none()) {
+                Some((_, content)) => content,
+                None => t.measure_content(&input, resolved).0,
+            };
             let ideal = steps::measure(style, &input, content, Vec2::ZERO, resolved).x;
             let whole = steps::whole(style, content, Vec2::ZERO, resolved);
-            let least = ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x;
+            let least = paired.map_or_else(|| ask(&mut *t, Proposal::Min, None, Vec2::ZERO).0.x, |(least, _)| least.x);
             crate::layout::report_shrink(ctx, row, id, size.x, ideal, Some((whole, least)), t.cut_first());
         }
         Some(crate::layout::Shrink::Count(row)) => crate::layout::report_shrink(ctx, row, id, size.x, size.x, None, false),
@@ -1860,6 +1906,17 @@ pub(super) fn measure_shape(
     under: Option<&super::cx::Under>,
     purpose: MeasureFor,
 ) -> Vec2 {
+    measure_shape_with(t, ui, id, proposal, under, purpose).0
+}
+
+fn measure_shape_with(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&super::cx::Under>,
+    purpose: MeasureFor,
+) -> (Vec2, steps::EnvStep) {
     let facts = t.facts();
     let env = match under {
         Some(under) => super::cx::child_env(&Env::of(ui), under),
@@ -1896,7 +1953,7 @@ pub(super) fn measure_shape(
     if let Some(key) = t.bind_key(id) {
         reads::note(ui.ctx(), key, id, true, &[Sample { proposal, room: None, took }]);
     }
-    took
+    (took, step1)
 }
 
 /// The flags a host passes to its faces: the validity of its value. The rest (focus, selection, open) belong to the

@@ -1,10 +1,10 @@
 //! The ribbon: a tab strip over a scrolling row of command groups.
 
-mod gallery;
+pub(crate) mod gallery;
 mod group;
 mod plan;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::borrow::Cow;
 use std::fmt::Debug;

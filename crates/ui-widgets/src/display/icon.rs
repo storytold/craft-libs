@@ -8,8 +8,8 @@ use craft_theme::variant::Tone;
 use craft_theme::{Stateful, States};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of an icon.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]

@@ -28,8 +28,8 @@ mod geometry;
 mod items;
 mod paint;
 mod run;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The ruler's number writing and snap step, which the page rulers share so every ruler counts one unit alike.
 pub use run::{nudge_size, ruler_text, snap_step};

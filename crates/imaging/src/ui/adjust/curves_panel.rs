@@ -3,8 +3,8 @@
 //! and the hint line; and the ⌘/Ctrl-click-on-the-image helper
 //! ([`CurvesPanel::add_point_from_sample`]).
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

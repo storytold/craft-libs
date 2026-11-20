@@ -15,8 +15,8 @@
 //! The display takes no pointer and no keys and declares no parts: a press on it reaches the canvas's tool.
 
 mod detail;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use detail::{DetailPlan, snap_to_texels};
 

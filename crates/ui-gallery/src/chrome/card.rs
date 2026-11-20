@@ -60,21 +60,29 @@ pub struct Look {
 }
 
 /// One story a card shows.
-#[derive(MemoProps)]
 #[non_exhaustive]
 pub struct CardStory<'a> {
     /// The index of the story in the catalog: the key of its state.
     pub index: usize,
     /// The story.
-    #[memo_props(address = "registrations are static items")]
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The story's caption.
     pub caption: &'a str,
 }
 
+// The card reads only the story's name and show function; registry values are owned copies.
+impl MemoProps for CardStory<'_> {
+    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
+        self.index.key(key);
+        self.caption.key(key);
+        self.story.story.name.key(key);
+        key.feed_hash(&self.story.story.show);
+    }
+}
+
 impl<'a> CardStory<'a> {
     /// The story at catalog index `index`, under `caption`.
-    pub fn new(index: usize, story: &'static StoryRegistration, caption: &'a str) -> Self {
+    pub fn new(index: usize, story: StoryRegistration, caption: &'a str) -> Self {
         CardStory { index, story, caption }
     }
 }
@@ -287,7 +295,7 @@ pub struct StoryBody {
     /// The id scope of the story: unique among the stories of a pass.
     pub key: String,
     /// The story.
-    pub story: &'static StoryRegistration,
+    pub story: StoryRegistration,
     /// The surface the story sits on.
     pub surface: Surface,
     /// The most a story that fills takes.
@@ -317,7 +325,7 @@ pub struct BodyShown {
 
 impl StoryBody {
     /// The body of `story` on `surface`, in the window's look, with ungated wheel takers.
-    pub fn new(key: impl Into<String>, story: &'static StoryRegistration, surface: Surface, room: f32, panel_pad: Pad) -> Self {
+    pub fn new(key: impl Into<String>, story: StoryRegistration, surface: Surface, room: f32, panel_pad: Pad) -> Self {
         StoryBody { key: key.into(), story, surface, room, look: Look::default(), gated: false, panel_pad, caption: None, inspect: None }
     }
 

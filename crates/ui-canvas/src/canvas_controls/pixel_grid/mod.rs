@@ -7,8 +7,8 @@
 //! display and keeps the merged line segments per revision and padded region in the control's memory, so panning
 //! within the padding costs nothing and the work is bounded by the viewport.
 
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::canvas::{PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

@@ -741,7 +741,7 @@ impl Files for FileService {
 }
 
 #[cfg(test)]
-mod service_tests {
+pub(crate) mod service_tests {
     //! Behaviour tests with `Dialogs::set_override` standing in for the panels.
 
     use craft_ui::testing::trial;

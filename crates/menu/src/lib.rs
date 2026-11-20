@@ -101,7 +101,7 @@ mod documents;
 mod driver;
 mod help;
 mod keymap;
-mod keytips;
+pub(crate) mod keytips;
 mod language;
 mod layout;
 mod modal;
@@ -138,5 +138,7 @@ pub use theme::{THEME_COMMAND, ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
 #[cfg(feature = "screen-testing")]
 /// The stories and words this crate registers, for the story tests.
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }

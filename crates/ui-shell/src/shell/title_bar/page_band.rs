@@ -1,7 +1,7 @@
 //! `PageBand`: the move band the shell's page shows over the window.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::bar::{Window, act_on_double_click, show_end, window, window_acting};
 use super::measure::End;
