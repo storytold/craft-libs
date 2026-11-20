@@ -583,13 +583,22 @@ mod nested {
     let local = "extern crate muda as menu;\nfn f() { ::menu::PredefinedMenuItem::quit(None); }\n";
     assert!(predefined_quit([("src/tests/mod.rs", "mod child;\n"), ("src/tests/child.rs", local)]).is_empty());
     assert_eq!(lines(&predefined_quit([("tests/child.rs", local)])), vec![2]);
-    // A test that another test also loads by path stays a root, and its alias reaches its modules.
+    // A test that another test also loads by path stays a root, and its alias reaches its modules, which
+    // are in the root's own folder.
     let found = predefined_quit([
         ("tests/foo.rs", "extern crate muda as menu;\nmod part;\n"),
+        ("tests/part.rs", call),
         ("tests/foo/part.rs", call),
         ("tests/bar.rs", "#[path = \"foo.rs\"]\nmod foo;\n"),
     ]);
-    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/foo/part.rs", 1)]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/part.rs", 1)]);
+    // A binary's root in `src/bin` declares its modules beside it, not in a folder named after it.
+    let found = predefined_quit([
+        ("src/bin/tool.rs", "extern crate muda as menu;\nmod child;\n"),
+        ("src/bin/child/mod.rs", call),
+        ("src/bin/tool/child.rs", call),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/bin/child/mod.rs", 1)]);
 }
 
 #[test]

@@ -1462,8 +1462,8 @@ fn extern_crates(toks: &[Token]) -> Vec<(bool, &str, usize)> {
 /// plainly or through a `#[path]` attribute; and each file directly in a `bin`, `examples`, `tests` or
 /// `benches` folder other than `mod.rs` when no declaration without a `#[path]` attribute names it. A root's
 /// names reach every file that a chain of declarations
-/// from it names, where a file loaded through a `#[path]` attribute has its modules in its own folder, as
-/// [`module_files`] reads them.
+/// from it names, where a crate root and a file loaded through a `#[path]` attribute have their modules in their
+/// own folder, as [`module_files`] reads them.
 fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<String>> {
     let mut index: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (i, path) in paths.iter().enumerate() {
@@ -1513,9 +1513,11 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
     };
     let mut prelude = vec![BTreeSet::new(); paths.len()];
     for start in (0..paths.len()).filter(|&file| !aliases[file].is_empty() && root(file)) {
+        // A crate root declares its modules in its own folder, as a file loaded through `#[path]` does, so
+        // `mod child;` in `src/bin/tool.rs` names `src/bin/child.rs`.
         let mut seen = vec![false; paths.len() * 2];
-        let mut queue = vec![2 * start];
-        seen[2 * start] = true;
+        let mut queue = vec![2 * start + 1];
+        seen[2 * start + 1] = true;
         while let Some(node) = queue.pop() {
             prelude[node / 2].extend(aliases[start].iter().cloned());
             for &next in &edges[node] {
