@@ -46,7 +46,7 @@ pub enum CursorIcon {
 }
 
 /// An icon's egui-free key (5.2), so plain data such as [`PaintedCursor::Tool`] names icons without egui.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui_macros::PlainData)]
 pub struct IconId(Cow<'static, str>);
 
 impl IconId {

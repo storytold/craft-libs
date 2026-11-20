@@ -58,6 +58,9 @@ struct BodyRuns {
 pub(crate) struct DerivedBuilds {
     pass: u64,
     builds: Vec<(Id, u32)>,
+    /// The frame `frame_builds` counts, and the builds of every pass of it.
+    frame: u64,
+    frame_builds: Vec<(Id, u32)>,
 }
 
 /// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
@@ -555,15 +558,30 @@ pub(crate) fn count_derived(ctx: &Context, id: Id) {
         return;
     }
     let pass = ctx.cumulative_pass_nr();
+    let frame = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx));
     pass_state::with::<DerivedBuilds, _>(ctx, |log| {
-        if log.pass != pass {
-            *log = DerivedBuilds { pass, builds: Vec::new() };
+        if log.frame != frame {
+            log.frame = frame;
+            log.frame_builds.clear();
         }
-        match log.builds.iter_mut().find(|(of, _)| *of == id) {
-            Some((_, count)) => *count += 1,
-            None => log.builds.push((id, 1)),
+        if log.pass != pass {
+            log.pass = pass;
+            log.builds.clear();
+        }
+        for builds in [&mut log.builds, &mut log.frame_builds] {
+            match builds.iter_mut().find(|(of, _)| *of == id) {
+                Some((_, count)) => *count += 1,
+                None => builds.push((id, 1)),
+            }
         }
     });
+}
+
+/// The components that built a derived value in any pass of the last frame, and how many builds each.
+#[cfg(feature = "testing")]
+pub fn last_frame_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = super::egui::pass::frame_nr(ctx, super::egui::pass::current_viewport(ctx)).saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.frame == last { log.frame_builds.clone() } else { Vec::new() })
 }
 
 /// The components that built a derived value in the last pass, and how many builds each; empty when that pass built

@@ -1,7 +1,7 @@
 //! Derived values: built once per key, kept while the key is unchanged, and dropped by the memo rule once absent.
 
 use craft_ui::runtime::derived::derived;
-use craft_ui::testing::{Fixture, last_pass_derived_builds, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, trial};
 use egui::Id;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -59,4 +59,33 @@ fn an_absent_derived_value_is_dropped_by_the_memo_rule() {
     *ids.borrow_mut() = vec![1];
     fixture.frame(Vec::new());
     assert_eq!(builds(&fixture), 1, "with none shown, every absent value was dropped");
+}
+
+/// A memoized view that replays asks for no derived value, and its values stay kept: when the pointer then runs the
+/// view, it finds them.
+#[trial]
+fn a_replayed_view_keeps_the_values_it_derived() {
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::pointer;
+    let at: Rc<Cell<egui::Pos2>> = Rc::default();
+    let shown = Rc::clone(&at);
+    let mut fixture = Fixture::new(move |ui| {
+        let out = MemoView::new("deriving", 1u32, |key: &mut u32, ui: &mut egui::Ui| {
+            let value = derived(ui.ctx(), Id::NULL.with("derived"), key, || key.to_string());
+            ui.label(value.as_str()).rect.center()
+        })
+        .show(ui);
+        if let Some(out) = out {
+            shown.set(out);
+        }
+    });
+    fixture.room(egui::Vec2::new(200.0, 100.0));
+    fixture.settle().idle(3);
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        assert_eq!(builds(&fixture), 0, "an idle frame builds nothing");
+    }
+    fixture.frame(vec![pointer::moved(at.get())]);
+    assert_eq!(last_frame_memo_runs(fixture.ctx()).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count(), 1, "the pointer runs the view");
+    assert_eq!(builds(&fixture), 0, "the view runs for the pointer and finds its value kept");
 }

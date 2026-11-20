@@ -54,6 +54,7 @@ pub fn derived<K: MemoProps, V: Send + Sync + 'static>(ctx: &Context, id: Id, ke
     crate::runtime::measure::count_memo_key_bytes(ctx, memo.bytes());
     let key = memo.finish();
     let slot = id.with(TypeId::of::<V>());
+    crate::runtime::replay::note_derived_keep(ctx, slot);
     let viewport = pass::current_viewport(ctx);
     let frame = pass::frame_nr(ctx, viewport);
     let kept = PerViewport::<Store>::with(ctx, viewport, |store| {
@@ -72,4 +73,21 @@ pub fn derived<K: MemoProps, V: Send + Sync + 'static>(ctx: &Context, id: Id, ke
     let entry = Entry { key, value: Arc::clone(&value) as Arc<dyn Any + Send + Sync>, touched: frame };
     PerViewport::<Store>::with(ctx, viewport, |store| store.entries.insert(slot, entry));
     value
+}
+
+/// Keeps the values under `slots` through this frame, for a replayed run that asked for them: the replay asks for
+/// nothing, and an entry no pass asked for in a frame is dropped by the memo rule.
+pub(crate) fn keep(ctx: &Context, slots: &[Id]) {
+    if slots.is_empty() {
+        return;
+    }
+    let viewport = pass::current_viewport(ctx);
+    let frame = pass::frame_nr(ctx, viewport);
+    PerViewport::<Store>::with(ctx, viewport, |store| {
+        for slot in slots {
+            if let Some(entry) = store.entries.get_mut(slot) {
+                entry.touched = frame;
+            }
+        }
+    });
 }
