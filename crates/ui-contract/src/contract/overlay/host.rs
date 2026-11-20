@@ -132,14 +132,14 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     let anchor = anchor_rect(ctx, layer, bounds, &mut memory);
     let area = area_id(layer.id);
     let min_width = overlay.least_width(anchor.width());
-    // A container's layer is placed by the size its container measured for this pass, at least its least width; a
-    // toast or a tooltip by the size it took last pass. For a layer that owns its memory, the layout memory entry
-    // under `size_id` marks that read, so a change of the shown size asks for the discard pass that places the layer
-    // by it, under the rule every measured size follows: no ask when the size also changed in the previous frame. A
-    // popup's layer, whose memory its opener owns, asks none: it opens from its opener's queued request, which a
-    // discard pass would replay.
+    // A container's layer is placed by the size its container measured for this pass, at least its least width, so
+    // its shown size is already the one it is placed by. A toast or a tooltip is placed by the size it took last pass:
+    // for such a layer that owns its memory, the layout memory entry under `size_id` marks that read, so a change of
+    // the shown size asks for the discard pass that places the layer by it, under the rule every measured size
+    // follows: no ask when the size also changed in the previous frame. A popup's layer, whose memory its opener owns,
+    // asks none: it opens from its opener's queued request, which a discard pass would replay.
     let size_id = sub(layer.id, "layer_size");
-    let sized = layer.owner == layer.id;
+    let sized = layer.owner == layer.id && layer.size.is_none();
     if sized {
         let _ = layout_memory::read(ctx, size_id);
     }

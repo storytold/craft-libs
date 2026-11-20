@@ -66,6 +66,11 @@ impl Art {
         self.marks.push(mark);
     }
 
+    /// The rect the marks cover, around the hotspot at the origin; `None` for art with no marks.
+    pub(crate) fn bounds(&self) -> Option<Rect> {
+        self.marks.iter().map(Mark::bounds).reduce(|a, b| a.union(b))
+    }
+
     /// Paints the art with its hotspot at `at`.
     pub(crate) fn paint(&self, painter: &Painter, at: Pos2) {
         let path = |points: &[Vec2]| points.iter().map(|p| at + *p).collect::<Vec<_>>();
@@ -115,7 +120,7 @@ impl Art {
         if !scale.is_finite() || scale <= 0.0 {
             return None;
         }
-        let bounds = self.marks.iter().map(Mark::bounds).reduce(|a, b| a.union(b))?;
+        let bounds = self.bounds()?;
         let reach = [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y].into_iter().map(f32::abs).fold(0.0, f32::max);
         let half = (reach * scale + FRINGE_PX).ceil();
         if !half.is_finite() || half > f32::from(max_side.saturating_sub(1) / 2) {

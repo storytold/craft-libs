@@ -523,20 +523,27 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.scroll_input(props, cx);
         }
         // A reveal queued for the body moves its offset against the view this pass shows, on top of a move
-        // `scroll_input` queued; the next pass takes the offset at step 4, as it takes the scroll bar's, clamps it to the
-        // extent it knows and places by it. The part of the rect the view shows goes on to the scroll owner around.
+        // `scroll_input` queued, within the offsets the content allows; the next pass takes the offset at step 4, as it
+        // takes the scroll bar's, and places by it. A reveal that moves nothing queues no jump, so it costs no pass. The
+        // part of the rect the moved view shows goes on to the scroll owner around.
         if let Some((scroll, view)) = scroll.zip(self.view)
             && let Some(rect) = crate::contract::take_reveal(&cx.core.ctx, cx.core.id)
         {
             let view = self.shown_view(scroll, view);
-            let (by, shown) = crate::contract::steps::reveal_move(rect, view);
+            let (by, _) = crate::contract::steps::reveal_move(rect, view);
             let rtl = cx.core.env.direction().is_rtl();
             let id = cx.core.id;
-            let mut offset = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let from = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let mut offset = from;
             offset.y += f64::from(by.y);
             offset.x += f64::from(if rtl { -by.x } else { by.x });
-            super::scroll::queue_jump(&cx.core.ctx, id, offset);
-            crate::contract::Focus::reveal(cx, shown);
+            let offset = self.clamped(scroll, view.size(), offset);
+            if offset != from {
+                super::scroll::queue_jump(&cx.core.ctx, id, offset);
+            }
+            let moved = Vec2::new((offset.x - from.x) as f32, (offset.y - from.y) as f32);
+            let moved = Vec2::new(if rtl { -moved.x } else { moved.x }, moved.y);
+            crate::contract::Focus::reveal(cx, rect.translate(-moved).intersect(view));
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {

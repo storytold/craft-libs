@@ -3,15 +3,16 @@
 
 use crate::primitives::pointer_art::{self as pointers, Art};
 use crate::primitives::{Mirror, SvgIcon};
+use crate::runtime::egui::areas::LayerKey;
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::env::Env;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
 use crate::style::Ink;
-use craft_behavior::cursor::pick;
+use craft_behavior::cursor::pick_index;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority, PaintedCursor};
 use craft_host::target::Os;
-use egui::{Context, ViewportId};
+use egui::{Context, Rect, ViewportId};
 use std::any::Any;
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -43,10 +44,32 @@ pub(crate) struct ImageTarget {
     pub max_side: u16,
 }
 
+/// Where a cursor's footprint may show: a layer and a clip in screen space. A brush tip outline is a mark on its
+/// canvas, not a pointer, so it shows only inside the canvas's view and under every layer above the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CursorRegion {
+    /// The layer the requester paints on.
+    pub layer: LayerKey,
+    /// The part of the screen the footprint may cover.
+    pub clip: Rect,
+}
+
+impl CursorRegion {
+    /// The region of `clip` on `layer`.
+    pub fn new(layer: LayerKey, clip: Rect) -> Self {
+        CursorRegion { layer, clip }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     requests: Vec<(Cursor, CursorPriority)>,
+    /// The region of each request, in the order of `requests`.
+    regions: Vec<Option<CursorRegion>>,
     record: Option<Cursor>,
+    /// The region of the recorded winner.
+    region: Option<CursorRegion>,
     /// The last image handed to the window with the art and scale it was drawn from. egui-winit uploads an image to
     /// the OS whenever its `Arc` changes, so an unchanged pointer hands over the same one.
     image: Option<(Box<dyn Any + Send + Sync>, f32, CursorBitmap)>,
@@ -117,7 +140,22 @@ pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks
 /// Requests `cursor` for the running pass of this viewport.
 #[doc(hidden)]
 pub fn request(ctx: &Context, cursor: Cursor, priority: CursorPriority) {
-    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.requests.push((cursor, priority)));
+    push(ctx, cursor, priority, None);
+}
+
+/// Requests `cursor` for the running pass of this viewport, its footprint (a brush tip outline) shown only in
+/// `region`: the overlay host paints a tip outline that leaves the region, or that a layer above the region's covers,
+/// on the region's layer clipped to it, and gives the window only its marks.
+#[doc(hidden)]
+pub fn request_within(ctx: &Context, cursor: Cursor, priority: CursorPriority, region: CursorRegion) {
+    push(ctx, cursor, priority, Some(region));
+}
+
+fn push(ctx: &Context, cursor: Cursor, priority: CursorPriority, region: Option<CursorRegion>) {
+    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
+        state.requests.push((cursor, priority));
+        state.regions.push(region);
+    });
 }
 
 /// The end hook: records the pass's winner, which in a window an app-modal layer in another window blocks is the
@@ -128,8 +166,14 @@ pub fn request(ctx: &Context, cursor: Cursor, priority: CursorPriority) {
 pub(crate) fn end_pass(ctx: &Context) {
     let blocked = windows::blocking_modal(ctx).is_some();
     let won = PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
-        let won = if blocked { Some(Cursor::System(CursorIcon::NotAllowed)) } else { pick(&state.requests).cloned() };
+        let (won, region) = match pick_index(&state.requests) {
+            _ if blocked => (Some(Cursor::System(CursorIcon::NotAllowed)), None),
+            Some(at) => (state.requests.get(at).map(|(cursor, _)| cursor.clone()), state.regions.get(at).copied().flatten()),
+            None => (None, None),
+        };
         state.requests.clear();
+        state.regions.clear();
+        state.region = region;
         if !matches!(won, Some(Cursor::Painted(_))) {
             state.image = None;
         }
@@ -148,6 +192,11 @@ pub(crate) fn end_pass(ctx: &Context) {
 /// The cursor the last pass of the running viewport settled on; `None` is the default arrow.
 pub fn current(ctx: &Context) -> Option<Cursor> {
     PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.record.clone())
+}
+
+/// The region of the cursor the last pass settled on, when its requester gave one ([`request_within`]).
+pub(crate) fn current_region(ctx: &Context) -> Option<CursorRegion> {
+    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.region)
 }
 
 /// How the running viewport's window takes a cursor image, or `None` where it takes none: only the root viewport (the

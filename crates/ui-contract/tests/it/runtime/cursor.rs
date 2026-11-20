@@ -6,7 +6,7 @@ use craft_host::target::{Backend, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{Frames, install_spec, trial};
-use egui::{CustomCursorImage, Pos2, Vec2, ViewportId};
+use egui::{CustomCursorImage, Pos2, Rect, Vec2, ViewportId};
 use std::sync::Arc;
 
 const AT: Pos2 = Pos2::new(300.0, 300.0);
@@ -311,4 +311,74 @@ fn a_turned_arrow_points_along_its_direction_about_the_hotspot() {
         assert!(seen.iter().all(|other| other.rgba != image.rgba), "{dir:?}: the art differs from the other directions");
         seen.push(image);
     }
+}
+
+/// A brush tip outline requested within a region (a canvas's view on the canvas's layer) is a mark on that canvas:
+/// the window takes it whole only while it lies inside the region with no layer over it. At the region's edge, or
+/// under a layer above the region's, its ring paints on the region's layer clipped to the region, under that layer,
+/// and the window takes only its marks.
+#[trial]
+fn a_tip_outline_shows_only_inside_its_region() {
+    const RADIUS: f32 = 40.0;
+    let canvas = egui::LayerId::background();
+    let cover = egui::Id::unique("cover");
+    // One frame with the pointer at `AT`, the tip requested within `clip`, and an area over `over` when given: the
+    // cursor image, and each painted shape's clip with whether it is the ring or the area's fill, in paint order.
+    let run = |frames: &mut Frames, clip: Rect, over: Option<Rect>| {
+        frames.frame_in_viewport(ViewportId::ROOT, vec![moved(AT)], |ui| {
+            let region = cursor::CursorRegion::new(canvas, clip);
+            cursor::request_within(ui.ctx(), Cursor::Painted(PaintedCursor::circle(RADIUS).marked(true, None)), CursorPriority::Tool, region);
+            if let Some(over) = over {
+                egui::Area::new(cover).fixed_pos(over.min).show(ui.ctx(), |ui| {
+                    ui.allocate_space(over.size());
+                    ui.painter().rect_filled(over, 0.0, egui::Color32::RED);
+                });
+            }
+        });
+        let mut paint = frames.take_paint().expect("the frames record their paint");
+        paint.textures_delta.clear();
+        let shapes: Vec<(Rect, Option<bool>)> = paint
+            .shapes
+            .iter()
+            .map(|clipped| {
+                let kind = match &clipped.shape {
+                    egui::Shape::Circle(circle) if circle.radius > RADIUS / 2.0 => Some(true),
+                    // The area fades in, so its red fill is scaled down.
+                    egui::Shape::Rect(rect) if rect.fill.r() > 0 && rect.fill.g() == 0 && rect.fill.b() == 0 => Some(false),
+                    _ => None,
+                };
+                (clipped.clip_rect, kind)
+            })
+            .collect();
+        (frames.cursor_image().cloned(), shapes)
+    };
+    let rings = |shapes: &[(Rect, Option<bool>)]| shapes.iter().filter(|(_, kind)| *kind == Some(true)).map(|(clip, _)| *clip).collect::<Vec<_>>();
+    let mut frames = frames(linux(), 1.0);
+
+    // Inside the region with nothing over it: the whole outline moves with the hardware pointer.
+    let room = Rect::from_center_size(AT, Vec2::splat(400.0));
+    let (image, shapes) = run(&mut frames, room, None);
+    let whole = image.expect("the whole outline is the window's image").size[0];
+    assert!(rings(&shapes).is_empty(), "the image is not painted as well");
+
+    // The region's edge runs under the ring: the ring paints clipped to the region; the window takes the marks.
+    let edge = Rect::from_min_max(Pos2::new(AT.x - RADIUS / 2.0, AT.y - 200.0), Pos2::new(AT.x + 200.0, AT.y + 200.0));
+    let (image, shapes) = run(&mut frames, edge, None);
+    assert!(image.expect("the marks still move with the hardware pointer").size[0] < whole, "the image holds only the marks");
+    let clips = rings(&shapes);
+    assert!(!clips.is_empty() && clips.iter().all(|clip| edge.contains_rect(*clip)), "the ring is cut off at the region's edge: {clips:?}");
+
+    // A layer over part of the ring: the ring paints under it.
+    let over = Rect::from_min_size(Pos2::new(AT.x + RADIUS / 2.0, AT.y - 100.0), Vec2::new(100.0, 200.0));
+    // egui shows a new area from its second frame.
+    run(&mut frames, room, Some(over));
+    let (image, shapes) = run(&mut frames, room, Some(over));
+    assert!(image.expect("the marks").size[0] < whole, "a covered outline is not the window's image");
+    let ring_at = shapes.iter().position(|(_, kind)| *kind == Some(true)).expect("the ring is painted");
+    let cover_at = shapes.iter().position(|(_, kind)| *kind == Some(false)).expect("the area is painted");
+    assert!(ring_at < cover_at, "the ring lies under the layer above the canvas");
+
+    // A request with no region keeps the pointer's own path at any position.
+    let seen = painted(&mut frames, PaintedCursor::circle(RADIUS));
+    assert!(seen.image.is_some() && seen.shapes == 0, "an outline with no region is the window's image");
 }

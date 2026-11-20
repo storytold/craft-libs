@@ -355,5 +355,10 @@ pub enum CursorPriority {
 
 /// The winning request: the highest priority, the later request on a tie.
 pub fn pick(requests: &[(Cursor, CursorPriority)]) -> Option<&Cursor> {
-    requests.iter().enumerate().max_by_key(|(order, (_, priority))| (*priority, *order)).map(|(_, (cursor, _))| cursor)
+    pick_index(requests).map(|at| &requests[at].0)
+}
+
+/// The index of the winning request ([`pick`]).
+pub fn pick_index(requests: &[(Cursor, CursorPriority)]) -> Option<usize> {
+    requests.iter().enumerate().max_by_key(|(order, (_, priority))| (*priority, *order)).map(|(at, _)| at)
 }
