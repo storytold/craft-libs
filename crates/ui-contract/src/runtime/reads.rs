@@ -96,7 +96,9 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
     } else {
         let read = Read { key, reader, measuring, runs, samples };
         crate::runtime::replay::note_read(ctx, key);
-        crate::runtime::replay::journal(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        // The reads are a set to what reads them: a run that measures a component again (a kept transcript's check)
+        // reads nothing new.
+        crate::runtime::replay::journal_distinct(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
         with(ctx, |reads| reads.reads.push(read));
     }
 }

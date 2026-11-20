@@ -356,6 +356,25 @@ where
     }
 }
 
+/// `journal` for a registration that a second equal one adds nothing to: the innermost open record keeps it once, so
+/// its journal does not depend on how many times its run made it.
+pub(crate) fn journal_distinct<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
+where
+    A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
+    F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
+{
+    const { assert!(std::mem::size_of::<F>() == 0, "`journal_distinct`'s `again` captures nothing: pass its state in `args`") };
+    if recording(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying) {
+        let entry = Entry(Arc::new(Note { args: args(), again }));
+        pass_state::with::<Recorder, _>(ctx, |recorder| {
+            let from = recorder.open.last().map_or(0, |open| open.from);
+            if !recorder.journal[from..].contains(&entry) {
+                recorder.journal.push(entry);
+            }
+        });
+    }
+}
+
 /// Notes that the running code read the value `key`.
 pub(crate) fn note_read(ctx: &Context, key: BindKey) {
     with_open(ctx, |facts| {
