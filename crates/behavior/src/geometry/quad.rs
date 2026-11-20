@@ -841,8 +841,9 @@ fn centred_stretch(g: &Gesture, p: Point) -> Option<BoxState> {
 /// - a left or right edge, its side and the opposite one parallel: the side-run rule ([`side_run_scale`]) about the
 ///   reference point, which keeps its place in the parallelogram;
 /// - a left or right edge, the sides meeting (a box in perspective): the opposite side scales evenly about the
-///   reference point, `r` measured to the dragged side's middle; the dragged corners keep the place along `uh` a
-///   plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite side's rows;
+///   reference point, `r` measured to the dragged side's middle, and on an asymmetric box turns about its middle
+///   (its run along `uh` grows by `(k - 1)` times half the two sides' difference of runs); the dragged corners keep the
+///   place along `uh` a plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite side's rows;
 /// - a top or bottom edge: a rectangle in that frame, `k h` high (`h` the left side's part along `nh`) and
 ///   `k (|top| ± m)` wide, `m` the sides' mean run along `uh`, added for the bottom edge and taken off for the top
 ///   one, its centre the corners' mean scaled by `k` about the reference point.
@@ -899,6 +900,12 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
                 let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
                 let k = factor(sign * d.dot(uh), reach)?;
                 let mut out = q.map(|p| c + (p - c) * k);
+                // The opposite side turns about its middle to a run of `r + (k - 1)(r - r') / 2` along the top edge,
+                // `r` its own run and `r'` the dragged side's: on a symmetric box that is the even scale's `k r`.
+                let ([a0, a1], (run, other)) = if edge == 1 { ([0, 3], (al, ar)) } else { ([1, 2], (ar, al)) };
+                let (middle, across) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(nh));
+                let half = (uh * (run + (k - 1.0) * (run - other) / 2.0) + nh * across) / 2.0;
+                (out[a0], out[a1]) = (middle - half, middle + half);
                 let plain = side_run_scale(g, p, min_side)?.quad;
                 for i in if edge == 1 { [1, 2] } else { [0, 3] } {
                     out[i] = at((plain[i] - c).dot(uh), (out[i] - c).dot(nh), c);

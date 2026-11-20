@@ -537,3 +537,26 @@ fn an_alt_top_drag_on_converging_top_and_bottom_turns_the_sides_across() {
         assert!(worst < tol, "edge {edge}: {worst} px off: {:?}", got.quad);
     }
 }
+
+/// ⌥ side drags on asymmetric boxes in perspective (measured on the reference): the opposite side turns about its
+/// middle as well as scaling, by the difference of the two sides' runs.
+#[test]
+fn an_alt_side_drag_on_an_asymmetric_box_turns_the_opposite_side() {
+    let one_side_in = [(190.0, 125.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let both_lean = [(200.0, 125.0), (472.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        (one_side_in, 1, (452.0, 226.0), (502.0, 226.0), [(143.55, 89.18), (497.79, 89.18), (506.23, 362.82), (96.45, 362.82)]),
+        (one_side_in, 3, (170.0, 226.0), (130.0, 226.0), [(156.25, 96.35), (489.16, 96.35), (494.84, 355.65), (103.61, 355.65)]),
+        (one_side_in, 1, (452.0, 226.0), (552.0, 226.0), [(97.09, 53.37), (542.27, 53.37), (561.87, 398.63), (42.91, 398.63)]),
+        (both_lean, 1, (462.0, 226.0), (512.0, 226.0), [(152.61, 89.81), (520.74, 89.81), (503.25, 362.19), (97.39, 362.19)]),
+        (both_lean, 3, (175.0, 226.0), (135.0, 226.0), [(166.0, 96.85), (509.91, 96.85), (494.09, 355.15), (103.85, 355.15)]),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let centre = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, centre);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, 0.1), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}
