@@ -32,8 +32,62 @@ fn open<'a>(bytes: &'a [u8], limits: &Limits) -> Result<(Decoder<'a>, u32, u32, 
     Ok((dec, w, h, layout))
 }
 
+const INCONSISTENT_FRAME: &str = "an animation frame's picture is not the size its frame header gives";
+
+/// The chunks of a RIFF body as (FourCC, payload); a truncated last chunk keeps what is there.
+fn chunks(mut body: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    std::iter::from_fn(move || {
+        let id = body.get(..4)?;
+        let size = usize::try_from(u32::from_le_bytes(body.get(4..8)?.try_into().ok()?)).ok()?;
+        let end = size.checked_add(8)?;
+        let payload = body.get(8..end.min(body.len()))?;
+        body = body.get(end.checked_add(size % 2)?..).unwrap_or_default();
+        Some((id, payload))
+    })
+}
+
+/// The 24-bit little-endian value at `at`, plus one (how `ANMF` stores a frame's size).
+fn size24(b: &[u8], at: usize) -> Option<u32> {
+    let &[x, y, z] = b.get(at..at.checked_add(3)?)? else { return None };
+    Some(u32::from_le_bytes([x, y, z, 0]) + 1)
+}
+
+/// The width and height in a VP8 key frame's header (RFC 6386 §9.1), or `None` for anything else.
+fn vp8_size(frame: &[u8]) -> Option<(u32, u32)> {
+    let &[tag, _, _, 0x9D, 0x01, 0x2A, w0, w1, h0, h1] = frame.get(..10)? else { return None };
+    (tag & 1 == 0).then(|| (u32::from(u16::from_le_bytes([w0, w1]) & 0x3FFF), u32::from(u16::from_le_bytes([h0, h1]) & 0x3FFF)))
+}
+
+/// The index of the first animation frame with alpha whose picture is not a VP8 key frame of the
+/// size its `ANMF` header gives. For a frame that starts with an `ALPH` chunk, `image-webp` 0.2.4
+/// decodes the next chunk as VP8 whatever its FourCC, skips the size check it makes for frames
+/// without alpha, and indexes the frame's buffers by the picture's own size (0x0 for a non-key
+/// frame): it panics (found by the `decode_webp` fuzz target), so the frame is refused first.
+/// An odd-sized `ANMF` chunk is refused too: a well-formed one is always even (a 16-byte header
+/// and padded chunks), and `image-webp` steps to the next frame without the padding byte, so the
+/// frames after it would not be the ones checked here.
+fn first_inconsistent_frame(bytes: &[u8]) -> Option<u32> {
+    let frames = chunks(bytes.get(12..)?).filter(|(id, _)| *id == b"ANMF");
+    frames.zip(0u32..).find_map(|((_, frame), i)| {
+        if frame.len() % 2 == 1 {
+            return Some(i);
+        }
+        let header = (size24(frame, 6)?, size24(frame, 9)?);
+        let mut inner = chunks(frame.get(16..)?);
+        if inner.next()?.0 != b"ALPH" {
+            return None;
+        }
+        let picture = inner.next().map_or(&[][..], |(_, p)| p);
+        (vp8_size(picture) != Some(header)).then_some(i)
+    })
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (mut dec, w, h, layout) = open(bytes, limits)?;
+    // An animation decodes as its first frame.
+    if dec.is_animated() && first_inconsistent_frame(bytes) == Some(0) {
+        return Err(err(INCONSISTENT_FRAME));
+    }
     let size = dec.output_buffer_size().ok_or_else(|| err("image too large"))?;
     let mut buf = alloc_zeroed::<u8>(size)?;
     dec.read_image(&mut buf).map_err(err)?;
@@ -81,7 +135,8 @@ pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<
     let mut buf = alloc_zeroed::<u8>(size)?;
     let mut out: Vec<AnimationFrame> = Vec::new();
     let mut damaged = false;
-    for _ in 0..dec.num_frames() {
+    let inconsistent = first_inconsistent_frame(bytes);
+    for i in 0..dec.num_frames() {
         if out.len() >= MAX_GIF_FRAMES {
             return Err(CodecError::LimitExceeded(format!("more than {MAX_GIF_FRAMES} frames")));
         }
@@ -90,9 +145,10 @@ pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<
         if frame_bytes.saturating_mul(out.len() as u64 + 1) > limits.max_alloc {
             return Err(CodecError::LimitExceeded(format!("{} frames of {w}x{h} exceed max_alloc {}", out.len() + 1, limits.max_alloc)));
         }
-        let delay_ms = match dec.read_frame(&mut buf) {
+        let read = if inconsistent == Some(i) { Err(err(INCONSISTENT_FRAME)) } else { dec.read_frame(&mut buf).map_err(err) };
+        let delay_ms = match read {
             Ok(d) => d,
-            Err(e) if out.is_empty() => return Err(err(e)),
+            Err(e) if out.is_empty() => return Err(e),
             Err(_) => {
                 damaged = true;
                 break;

@@ -72,3 +72,42 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod dex_corpus_compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn noise_keeps_zero_wrapping_seed_and_draw_order() {
+        assert_eq!(noise(0, 8), [65, 65, 41, 37, 101, 1, 113, 13]);
+        assert_eq!(noise(1, 8), [173, 118, 54, 116, 236, 121, 207, 234]);
+        assert_eq!(noise(u64::MAX, 8), [44, 200, 255, 170, 173, 156, 79, 209]);
+        assert!(noise(1, 0).is_empty());
+    }
+
+    #[test]
+    fn mutation_order_and_empty_sample_are_stable() {
+        assert!(mutations(&[]).is_empty());
+        assert_eq!(mutations(&[1, 2]), vec![vec![], vec![1], vec![173, 118], vec![255, 2], vec![1, 27], vec![1, 255]]);
+    }
+
+    #[test]
+    fn stride_transition_preserves_every_original_case() {
+        for len in [1, 63, 64, 65, 127, 128, 129, 1024] {
+            let seed = vec![7; len];
+            let step = (len / 64).max(1);
+            let cases = mutations(&seed);
+            let positions: Vec<usize> = (0..len).step_by(step).collect();
+            assert_eq!(cases.len(), positions.len() * 3);
+            for (case, &end) in cases.iter().zip(&positions) {
+                assert_eq!(case.as_slice(), &seed[..end]);
+            }
+            for (pair, &offset) in cases[positions.len()..].as_chunks::<2>().0.iter().zip(&positions) {
+                assert_eq!(pair[0].len(), len);
+                let mut expected = seed.clone();
+                expected[offset] = 255;
+                assert_eq!(pair[1], expected);
+            }
+        }
+    }
+}
