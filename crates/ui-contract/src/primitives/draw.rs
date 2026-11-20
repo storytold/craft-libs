@@ -399,7 +399,15 @@ impl<'a> Draw<'a> {
                 self.initial(rect, letter, StyleColor(color));
                 return;
             }
-            _ => super::icon::paint(self.painter, self.env.tokens, self.env.direction, rect, icon, self.data != DataMode::Full),
+            _ => super::icon::paint(
+                self.painter,
+                self.env.tokens,
+                self.env.direction,
+                rect,
+                icon,
+                self.data != DataMode::Full,
+                self.env.ink == Ink::OnDark,
+            ),
         }
         match icon.badge {
             Some(super::IconMark::Dot(badge)) => {
