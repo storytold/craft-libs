@@ -13,6 +13,7 @@ pub(crate) mod gif_frames;
 pub(crate) mod gif_palette;
 pub(crate) mod heif;
 pub(crate) mod iff;
+#[cfg(feature = "jp2")]
 pub(crate) mod jp2;
 pub(crate) mod jpeg;
 pub(crate) mod jpegls;
