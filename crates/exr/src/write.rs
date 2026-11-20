@@ -5,7 +5,7 @@
 //! metadata and one offset per chunk.
 
 use std::collections::HashSet;
-use std::io::{Seek, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -24,6 +24,8 @@ const MAX_CHANNELS: usize = 16_384;
 const MAX_CHUNKS: usize = 1 << 20;
 const MAX_BLOCK_BYTES: usize = 64 << 20;
 const MAX_NAME_BYTES: usize = 255;
+const SHORT_NAME_BYTES: usize = 31;
+const VERSION_WORD_OFFSET: u64 = 4;
 const MAX_HEADER_BYTES: usize = 8 << 20;
 const MAX_TEXT_ATTRIBUTES: usize = 16_384;
 
@@ -280,16 +282,24 @@ fn tile_window(index: BlockIndex, header: &Header) -> Result<Window> {
 }
 
 fn write_blocks<W: Write + Seek + ?Sized>(
-    out: &mut W,
+    mut out: &mut W,
     headers: Headers,
     mut read_block: impl FnMut(BlockIndex, &Header) -> Result<Vec<u8>>,
 ) -> Result<()> {
     if out.stream_position().map_err(encode)? != 0 {
         return Err(encode("output must start at byte zero"));
     }
+    let has_long_names = headers.iter().any(|header| {
+        header.own_attributes.layer_name.as_ref().is_some_and(|name| name.bytes().len() > SHORT_NAME_BYTES)
+            || header.channels.list.iter().any(|channel| channel.name.bytes().len() > SHORT_NAME_BYTES)
+    });
+    let mut version_update = None;
     let mut block_error = None;
     let written = catch_unwind(AssertUnwindSafe(|| {
         exr::block::write(&mut *out, headers, true, |meta, writer| {
+            if has_long_names && !meta.requirements.has_long_names {
+                version_update = Some(exr::meta::Requirements { has_long_names: true, ..meta.requirements });
+            }
             for (chunk_index, index) in enumerate_ordered_header_block_indices(&meta.headers) {
                 let data =
                     meta.headers.get(index.layer).ok_or_else(|| encode("invalid block part")).and_then(|header| read_block(index, header)).map_err(
@@ -308,6 +318,14 @@ fn write_blocks<W: Write + Seek + ?Sized>(
         return Err(error);
     }
     written.map_err(|_| encode("block writer panicked"))?.map_err(encode)?;
+    // The codec can omit bit 10 when inferring requirements from channel names. Update the
+    // OpenEXR v2 version word in place, preserving the codec's other flags and all chunk offsets.
+    if let Some(requirements) = version_update {
+        let position = out.stream_position().map_err(encode)?;
+        out.seek(SeekFrom::Start(VERSION_WORD_OFFSET)).map_err(encode)?;
+        requirements.write(&mut out).map_err(encode)?;
+        out.seek(SeekFrom::Start(position)).map_err(encode)?;
+    }
     out.flush().map_err(encode)
 }
 

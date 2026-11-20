@@ -12,7 +12,7 @@ pub const ATTRIBUTE_NAME: &str = "craftLayerStack";
 pub const MAX_ATTRIBUTE_BYTES: usize = 1 << 20;
 const VERSION: u64 = 1;
 const MAX_LAYERS: usize = 4096;
-const MAX_ANCESTORS: usize = 64;
+const MAX_GROUP_DEPTH: usize = 100;
 
 #[derive(Debug)]
 pub enum Error {
@@ -39,6 +39,16 @@ pub struct LayerStack {
     /// The producer's original RGB compositing encoding. A portable profile ID or
     /// `icc:<base64>` describing an ICC profile. EXR chromaticities describe the stored pixels.
     pub original_blend_profile: Option<String>,
+    /// The producer's document sample depth before conversion to EXR channels.
+    pub original_sample_depth: Option<SampleDepth>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SampleDepth {
+    U8,
+    U16,
+    F32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +80,7 @@ pub enum PixelRef {
     /// A named, flat EXR part. Use part names that are unique within the file.
     Part { name: String },
     /// The exact prefix of the RGB(A) channels in the zero-based flat EXR part.
+    /// An empty prefix selects unprefixed channels such as `R`, `G` and `B`.
     ChannelGroup { part: u32, prefix: String },
 }
 
@@ -94,6 +105,7 @@ struct Input {
     version: u64,
     layers: Vec<Layer>,
     original_blend_profile: Option<String>,
+    original_sample_depth: Option<SampleDepth>,
 }
 
 #[derive(Serialize)]
@@ -103,6 +115,8 @@ struct Output<'a> {
     layers: &'a [Layer],
     #[serde(skip_serializing_if = "Option::is_none")]
     original_blend_profile: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_sample_depth: Option<SampleDepth>,
 }
 
 impl LayerStack {
@@ -119,11 +133,11 @@ impl LayerStack {
         if version != VERSION {
             return Ok(None);
         }
-        let Input { version, layers, original_blend_profile } = serde_json::from_str(text).map_err(Error::Json)?;
+        let Input { version, layers, original_blend_profile, original_sample_depth } = serde_json::from_str(text).map_err(Error::Json)?;
         if version != VERSION {
             return Ok(None);
         }
-        let stack = Self { layers, original_blend_profile };
+        let stack = Self { layers, original_blend_profile, original_sample_depth };
         stack.validate()?;
         Ok(Some(stack))
     }
@@ -132,9 +146,13 @@ impl LayerStack {
     /// header ASCII-safe.
     pub fn to_attribute(&self) -> Result<String, Error> {
         self.validate()?;
-        let json =
-            serde_json::to_string(&Output { version: VERSION, layers: &self.layers, original_blend_profile: self.original_blend_profile.as_deref() })
-                .map_err(Error::Json)?;
+        let json = serde_json::to_string(&Output {
+            version: VERSION,
+            layers: &self.layers,
+            original_blend_profile: self.original_blend_profile.as_deref(),
+            original_sample_depth: self.original_sample_depth,
+        })
+        .map_err(Error::Json)?;
         if json.len() > MAX_ATTRIBUTE_BYTES {
             return Err(Error::Limit("attribute is too large"));
         }
@@ -180,11 +198,11 @@ impl LayerStack {
             }
             text_bytes = text_bytes.saturating_add(layer.name.len()).saturating_add(layer.blend.len());
             if let LayerContent::Raster { pixels, .. } = &layer.content {
-                let (name, max) = match pixels {
-                    PixelRef::Part { name } => (name, 255),
-                    PixelRef::ChannelGroup { prefix, .. } => (prefix, 253),
+                let (name, min, max) = match pixels {
+                    PixelRef::Part { name } => (name, 1, 255),
+                    PixelRef::ChannelGroup { prefix, .. } => (prefix, 0, 253),
                 };
-                if name.is_empty() || name.chars().count() > max || name.chars().any(|c| c.is_control() || u32::from(c) > 255) {
+                if !(min..=max).contains(&name.chars().count()) || name.chars().any(|c| c.is_control() || u32::from(c) > 255) {
                     return Err(Error::Malformed("invalid EXR part or channel group name"));
                 }
                 text_bytes = text_bytes.saturating_add(name.len());
@@ -205,7 +223,7 @@ impl LayerStack {
                     return Err(Error::Malformed("cyclic layer hierarchy"));
                 }
                 depth += 1;
-                if depth > MAX_ANCESTORS {
+                if depth > MAX_GROUP_DEPTH {
                     return Err(Error::Limit("layer hierarchy is too deep"));
                 }
                 at = ancestor;
@@ -262,6 +280,7 @@ mod tests {
                 },
             ],
             original_blend_profile: Some("icc:AAE=".into()),
+            original_sample_depth: None,
         }
     }
 
@@ -271,6 +290,51 @@ mod tests {
         let encoded = stack.to_attribute().unwrap();
         assert!(encoded.is_ascii());
         assert_eq!(LayerStack::parse(&encoded).unwrap(), Some(stack));
+    }
+
+    #[test]
+    fn original_sample_depth_is_optional_in_version_one() {
+        let old = r#"{"version":1,"layers":[]}"#;
+        let stack = LayerStack::parse(old).unwrap().unwrap();
+        assert_eq!(stack.original_sample_depth, None);
+        assert_eq!(stack.to_attribute().unwrap(), old);
+
+        for (depth, wire) in [(SampleDepth::U8, "u8"), (SampleDepth::U16, "u16"), (SampleDepth::F32, "f32")] {
+            let stack = LayerStack { original_sample_depth: Some(depth), ..stack.clone() };
+            let text = format!(r#"{{"version":1,"layers":[],"originalSampleDepth":"{wire}"}}"#);
+            assert_eq!(stack.to_attribute().unwrap(), text);
+            assert_eq!(LayerStack::parse(&text).unwrap(), Some(stack));
+        }
+        assert!(LayerStack::parse(r#"{"version":1,"layers":[],"originalSampleDepth":"f16"}"#).is_err());
+    }
+
+    #[test]
+    fn empty_channel_group_prefix_round_trips_but_empty_part_name_is_invalid() {
+        let mut stack = stack();
+        stack.layers[0].content =
+            LayerContent::Raster { pixels: PixelRef::ChannelGroup { part: 0, prefix: String::new() }, sampling: PixelSampling::Raw };
+        let text = stack.to_attribute().unwrap();
+        assert_eq!(LayerStack::parse(&text).unwrap(), Some(stack.clone()));
+
+        stack.layers[0].content = LayerContent::Raster { pixels: PixelRef::Part { name: String::new() }, sampling: PixelSampling::Raw };
+        assert!(matches!(stack.to_attribute(), Err(Error::Malformed(_))));
+    }
+
+    #[test]
+    fn supports_a_raster_inside_one_hundred_groups() {
+        let mut stack = stack();
+        let group = stack.layers[1].clone();
+        stack.layers.truncate(1);
+        stack.layers[0].parent = Some(100);
+        for id in 1..=100 {
+            stack.layers.push(Layer { id, parent: (id > 1).then_some(id - 1), ..group.clone() });
+        }
+        let text = stack.to_attribute().unwrap();
+        assert_eq!(LayerStack::parse(&text).unwrap(), Some(stack.clone()));
+
+        stack.layers.push(Layer { id: 101, parent: Some(100), ..group });
+        stack.layers[0].parent = Some(101);
+        assert!(matches!(stack.to_attribute(), Err(Error::Limit(_))));
     }
 
     #[test]

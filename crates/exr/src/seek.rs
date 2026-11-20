@@ -293,9 +293,10 @@ impl Index {
         self.display
     }
 
-    /// Stored RGB primaries and white point (red, green, blue, white in CIE xy).
+    /// Stored RGB primaries and white point (red, green, blue, white in CIE xy), from the first
+    /// part that supplies the shared chromaticities attribute.
     pub fn chromaticities(&self) -> Option<[[f32; 2]; 4]> {
-        let c = self.meta.headers.first()?.shared_attributes.chromaticities.as_ref()?;
+        let c = self.meta.headers.iter().find_map(|header| header.shared_attributes.chromaticities.as_ref())?;
         Some([c.red, c.green, c.blue, c.white].map(|v| [v.0, v.1]))
     }
 

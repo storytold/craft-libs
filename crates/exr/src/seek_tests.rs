@@ -14,7 +14,7 @@ use exr::prelude::{
     WritableImage,
 };
 
-use super::decode::{Limits, decode_display_part};
+use super::decode::{Limits, Window, decode_display_part};
 use super::seek::*;
 
 fn value(i: usize, k: usize) -> f32 {
@@ -50,6 +50,29 @@ fn never() -> bool {
 
 fn indexed(bytes: &[u8]) -> Index {
     Index::build(&mut Cursor::new(bytes), &Limits::default(), &never).unwrap()
+}
+
+#[test]
+fn index_finds_chromaticities_in_a_later_part_header() {
+    let window = Window { x: 0, y: 0, width: 1, height: 1 };
+    let channels = [crate::write::Channel { name: "Y", sample: crate::decode::SampleType::F32 }];
+    let first = crate::write::Part { name: Some("First"), data_window: window, channels: &channels, compression: crate::decode::Compression::None };
+    let second = crate::write::Part { name: Some("Second"), ..first };
+    let chromaticities = [[0.64, 0.33], [0.3, 0.6], [0.15, 0.06], [0.3127, 0.329]];
+    let metadata = crate::write::Metadata { chromaticities: Some(chromaticities), ..Default::default() };
+    let mut out = Cursor::new(Vec::new());
+    crate::write::write_scanlines_with_metadata(&mut out, window, &[first, second], &metadata, |_, _, _, row| Ok(row.len())).unwrap();
+    let mut bytes = out.into_inner();
+
+    // Rename the first header's attribute without shifting the second header or any offsets.
+    let attr = b"chromaticities\0chromaticities\0";
+    let positions: Vec<_> = bytes.windows(attr.len()).enumerate().filter_map(|(offset, bytes)| (bytes == attr).then_some(offset)).collect();
+    assert_eq!(positions.len(), 2);
+    bytes[positions[0]] = b'x';
+    let headers = exr::meta::MetaData::read_from_buffered(Cursor::new(&bytes), false).unwrap().headers;
+    assert!(headers[0].shared_attributes.chromaticities.is_none());
+    assert!(headers[1].shared_attributes.chromaticities.is_some());
+    assert_eq!(indexed(&bytes).chromaticities(), Some(chromaticities));
 }
 
 /// What the whole-part decoder places in the display window for each channel of part `part`.

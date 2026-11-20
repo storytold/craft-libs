@@ -142,6 +142,39 @@ fn scanline_metadata_round_trips_a_custom_string() {
 }
 
 #[test]
+fn channel_names_set_the_long_name_flag_at_the_openexr_byte_boundary() {
+    let window = Window { width: 1, height: 1, ..WINDOW };
+    for len in [31, 32, 255] {
+        let name = "Z".repeat(len);
+        let part = Part { name: None, data_window: window, channels: &[Channel { name: &name, ..FLOAT }], compression: Compression::None };
+        let mut out = Cursor::new(Vec::new());
+        write_scanlines(&mut out, window, &[part], sample_row).unwrap();
+        assert_eq!(u32::from_le_bytes(out.get_ref()[4..8].try_into().unwrap()), 2 | if len > 31 { 0x400 } else { 0 });
+        assert_eq!(decode::parts(out.get_ref(), &Limits::default()).unwrap()[0].channels[0].name, name);
+
+        let tiled = TilePart { part, tile_width: 1, tile_height: 1 };
+        let mut out = Cursor::new(Vec::new());
+        write_tiles(&mut out, window, &[tiled], &Metadata::default(), |_, window, tile| fill_tile(tiled, window, tile)).unwrap();
+        assert_eq!(u32::from_le_bytes(out.get_ref()[4..8].try_into().unwrap()), 0x202 | if len > 31 { 0x400 } else { 0 });
+        let decoded = decode::decode_part(out.get_ref(), 0, &|_| true, &Limits::default()).unwrap();
+        assert_eq!(decoded.channel(&name).unwrap().samples, Samples::F32(vec![depth_value(0, 0)]));
+    }
+}
+
+#[test]
+fn long_part_names_set_the_flag_in_multipart_files() {
+    let window = Window { width: 1, height: 1, ..WINDOW };
+    let part = Part { name: Some("Beauty"), data_window: window, channels: &[FLOAT], compression: Compression::None };
+    for len in [31, 32, 255] {
+        let name = "P".repeat(len);
+        let mut out = Cursor::new(Vec::new());
+        write_scanlines(&mut out, window, &[part, Part { name: Some(&name), ..part }], sample_row).unwrap();
+        assert_eq!(u32::from_le_bytes(out.get_ref()[4..8].try_into().unwrap()), 0x1002 | if len > 31 { 0x400 } else { 0 });
+        assert_eq!(decode::parts(out.get_ref(), &Limits::default()).unwrap()[1].name.as_deref(), Some(name.as_str()));
+    }
+}
+
+#[test]
 fn invalid_tile_dimensions_and_metadata_fail_before_output() {
     let part = Part { name: None, data_window: WINDOW, channels: &[FLOAT], compression: Compression::Zip16 };
     let tiled = TilePart { part, tile_width: 16, tile_height: 16 };
