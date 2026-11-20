@@ -2978,6 +2978,7 @@ name = "craft-ppt-binary"
 version = "0.1.0"
 dependencies = [
  "craft-cfb",
+ "craft-codepage",
  "craft-drawingml",
  "craft-pptx",
  "image",

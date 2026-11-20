@@ -8,9 +8,10 @@
 //! place and style. There is no `.ppt` writer.
 //!
 //! PowerPoint 95 files (a different record framing, learned from files PowerPoint 95 wrote) read
-//! as far as their slide size, masters with their colour schemes and backgrounds, and slides with
-//! their order, master, layout type and background; their shapes, text, pictures and notes are
-//! not read yet, so the slides are empty. PowerPoint 4.0 and earlier are refused as too old.
+//! as far as their slide size, masters with their colour schemes, backgrounds and placeholder
+//! boxes, and slides with their order, master, layout type, background, and placeholders and text
+//! boxes with formatted text; their other shapes, pictures and notes are not read yet.
+//! PowerPoint 4.0 and earlier are refused as too old.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 

@@ -2,7 +2,8 @@
 //! by PowerPoint), and an optional check over real ones named by `CRAFT_PPT95_SAMPLES`.
 #![allow(clippy::unwrap_used)]
 
-use craft_pptx::{Background, ColorRef, Fill, LayoutType, Presentation, Rgba, SchemeSlot};
+use craft_pptx::text::{Align, Bullet};
+use craft_pptx::{Background, ColorRef, Fill, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
 
 use super::rt;
 use crate::tests::{AppDefaults, build};
@@ -63,11 +64,13 @@ struct SlideSpec {
     fill: [u8; 4],
     filled: bool,
     scheme: [u32; 8],
+    /// The slide's object list.
+    objects: Vec<Vec<u8>>,
 }
 
 impl SlideSpec {
     fn new(id: u32, layout: u32) -> SlideSpec {
-        SlideSpec { id, master: MASTER, layout, follow_background: true, fill: [0, 0, 0, 0], filled: true, scheme: DEFAULT }
+        SlideSpec { id, master: MASTER, layout, follow_background: true, fill: [0, 0, 0, 0], filled: true, scheme: DEFAULT, objects: vec![] }
     }
 }
 
@@ -81,12 +84,16 @@ fn slide(s: &SlideSpec) -> Vec<u8> {
             rec(rt::LAYOUT, 1, 0, &le32(&[s.layout, 0, 0])),
             container(rt::SCHEME, 0x78, &[scheme_atom(0, s.scheme)]),
             background_shape(s.fill, s.filled),
-            container(rt::OBJECTS, 0x14, &[]),
+            container(rt::OBJECTS, 0x14, &s.objects),
         ],
     )
 }
 
 fn master(id: u32, scheme: [u32; 8], fill: [u8; 4]) -> Vec<u8> {
+    master_with(id, scheme, fill, &[])
+}
+
+fn master_with(id: u32, scheme: [u32; 8], fill: [u8; 4], objects: &[Vec<u8>]) -> Vec<u8> {
     container(
         rt::MAIN_MASTER,
         0x10,
@@ -98,9 +105,153 @@ fn master(id: u32, scheme: [u32; 8], fill: [u8; 4]) -> Vec<u8> {
             rec(rt::LAYOUT, 1, 0, &[1, 0, 0, 0, 1, 2, 6, 8, 7, 0, 0, 0]),
             container(rt::SCHEME, 0x78, &[scheme_atom(0, scheme)]),
             background_shape(fill, true),
-            container(rt::OBJECTS, 0x14, &[]),
+            container(rt::OBJECTS, 0x14, objects),
         ],
     )
+}
+
+/// A slot list's terminator: what comes before it is slot `n`.
+fn slot_end(n: u32) -> Vec<u8> {
+    rec(2017, 0, n, &[])
+}
+
+/// A `FontEntityAtom` (a LOGFONT) naming `face`, in Windows-1252 bytes.
+fn font(face: &[u8]) -> Vec<u8> {
+    let mut b = vec![0u8; 60];
+    b[16..20].copy_from_slice(&400u32.to_le_bytes());
+    b[28..28 + face.len()].copy_from_slice(face);
+    container(4022, 9, &[rec(4023, 0, 0, &b)])
+}
+
+/// A ruler: each level's left margin and first-line indent in master units.
+fn ruler(levels: [(i32, i32); 5]) -> Vec<u8> {
+    let mut b: Vec<u8> = levels.iter().flat_map(|(l, f)| [l.to_le_bytes(), f.to_le_bytes()].concat()).collect();
+    b.extend_from_slice(&le32(&[3, 576, 0]));
+    container(4069, 9, &[rec(4019, 0, 0, &b), rec(4070, 0, 0, &[])])
+}
+
+/// The body ruler (slot 0) and a wide one (slot 3, after an empty slot 2).
+const BODY_RULER: [(i32, i32); 5] = [(216, 0), (468, 288), (720, 576), (1008, 864), (1296, 1152)];
+const WIDE_RULER: [(i32, i32); 5] = [(576, 288), (828, 648), (1044, 900), (1260, 1116), (1476, 1332)];
+
+/// The Environment: fonts Times New Roman, Arial, Courier New and "Café" by slot, and the rulers:
+/// the body's, a plain one, an empty slot and a wide one.
+fn environment() -> Vec<u8> {
+    let fonts = container(
+        2005,
+        0x19,
+        &[font(b"Times New Roman"), slot_end(0), font(b"Arial"), slot_end(1), font(b"Courier New"), slot_end(2), font(b"Caf\xE9"), slot_end(3)],
+    );
+    let plain = [(0, 0), (288, 288), (576, 576), (864, 864), (1152, 1152)];
+    let rulers = container(
+        4016,
+        0x18,
+        &[ruler(BODY_RULER), slot_end(0), ruler(plain), slot_end(1), rec(2018, 0, 0, &[]), slot_end(2), ruler(WIDE_RULER), slot_end(3)],
+    );
+    container(1010, 0x15, &[rulers, fonts, container(2005, 0x1A, &[])])
+}
+
+/// A character run: length, font slot, size in points, style bits (1 bold, 2 italic,
+/// 4 underline) and colour (R, G, B, then 0xFE or a scheme slot).
+fn char_run(len: u32, font: u16, size: u16, style: u16, color: [u8; 4]) -> Vec<u8> {
+    let mut b = vec![0u8; 44];
+    b[0..4].copy_from_slice(&len.to_le_bytes());
+    b[4..8].copy_from_slice(&0x0FE2u32.to_le_bytes());
+    b[20..22].copy_from_slice(&font.to_le_bytes());
+    b[24..26].copy_from_slice(&size.to_le_bytes());
+    b[28..30].copy_from_slice(&style.to_le_bytes());
+    b[30..34].copy_from_slice(&color);
+    b
+}
+
+/// A plain character run: Times New Roman 24 pt in the scheme's text colour.
+fn plain(len: u32) -> Vec<u8> {
+    char_run(len, 0, 24, 0, [0, 0, 0, 1])
+}
+
+/// A paragraph run: length, bullet on, bullet character, alignment (0 left, 1 centre, 2 right)
+/// and level (0-based).
+fn para_run(len: u32, bullet: bool, bullet_char: u8, align: u8, level: u8) -> Vec<u8> {
+    let mut b = vec![0u8; 72];
+    b[0..4].copy_from_slice(&len.to_le_bytes());
+    b[4..8].copy_from_slice(&0x0FE3u32.to_le_bytes());
+    b[20] = u8::from(bullet);
+    b[26] = bullet_char;
+    b[32] = 100;
+    b[44] = level;
+    b[48] = align;
+    b
+}
+
+/// The text body on slides, and on the master's placeholders.
+const BODY: u32 = 4002;
+const MASTER_BODY: u32 = 4068;
+
+/// A text container: header, then the body with its text atom (the text rectangle `rect`), ruler
+/// slot and runs. The run tables are 2028 containers each holding one 2030 atom of entries.
+fn text(chars: &[u8], char_runs: &[Vec<u8>], para_runs: &[Vec<u8>], ruler: u32, rect: [i32; 4], body: u32) -> Vec<u8> {
+    let mut atom = le32(&[4, 5, 3, 0xFFFF_8000, 0]);
+    atom.extend(rect.iter().flat_map(|v| v.to_le_bytes()));
+    let table = |tag: u32, entries: &[u8]| container(2028, tag, &[rec(2030, 0, tag, entries)]);
+    let runs = container(
+        4064,
+        0,
+        &[rec(2030, 0, 0x35, chars), table(0x2F, &char_runs.concat()), table(0x30, &para_runs.concat()), table(0x31, &[0; 24]), rec(4013, 0, 0, &[])],
+    );
+    container(4001, 0x1E, &[rec(4000, 0, 0, &[0; 16]), container(body, 0, &[rec(4003, 0, 0, &atom), rec(4021, 0, 0, &le32(&[ruler])), runs])])
+}
+
+/// Text in one paragraph run and one plain character run, inset 58 × 29 units in `bx`.
+fn simple_text(chars: &[u8], bx: [i32; 4], body: u32) -> Vec<u8> {
+    let n = chars.len() as u32 + 1;
+    text(chars, &[plain(n)], &[para_run(n, false, 0x95, 0, 0)], 1, [bx[0] + 58, bx[1] + 29, bx[2] - 58, bx[3] - 29], body)
+}
+
+/// A shape's geometry: a rectangle at `bx` (left, top, right, bottom about the slide's centre),
+/// turned `rot` sixteenths of a degree.
+fn geometry(bx: [i32; 4], rot: i32) -> Vec<u8> {
+    let mut b = le32(&[(-3i32) as u32, 0, 0]);
+    b.extend(bx.iter().chain(&[rot]).flat_map(|v| v.to_le_bytes()));
+    b.extend_from_slice(&le32(&[(-3i32) as u32, 1]));
+    rec(3009, 0, 0, &b)
+}
+
+/// A shape (3008), with text when `text` is given.
+fn shape_95(bx: [i32; 4], text: Option<Vec<u8>>) -> Vec<u8> {
+    let mut kids = vec![geometry(bx, 0)];
+    kids.extend(text);
+    container(rt::SHAPE, 0x13, &kids)
+}
+
+/// A placeholder (3010) of PowerPoint 95 type `kind`, size (0 full, 1 half, 2 quarter) and index.
+fn placeholder_95(kind: u8, size: u8, index: u32, bx: [i32; 4], text: Option<Vec<u8>>) -> Vec<u8> {
+    let mut atom = vec![kind, size, 0, 0];
+    atom.extend_from_slice(&index.to_le_bytes());
+    let mut kids = vec![rec(3011, 0, 0, &atom), geometry(bx, 0)];
+    kids.extend(text);
+    container(3010, 0x13, &kids)
+}
+
+/// One slide holding `objects` (its scheme's title colour 0x112233), on a master holding
+/// `master_objects`.
+fn deck_of(objects: Vec<Vec<u8>>, master_objects: &[Vec<u8>]) -> Presentation {
+    let mut s = SlideSpec::new(0x100, 16);
+    s.scheme[3] = 0x112233;
+    s.objects = objects;
+    import(&stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], master_objects)])).unwrap()
+}
+
+fn body_of(s: &Shape) -> &TextBody {
+    s.text.as_ref().unwrap()
+}
+
+fn texts(p: &Presentation) -> Vec<String> {
+    p.slides[0].shapes.iter().map(|s| body_of(s).text()).collect()
+}
+
+fn boxed(s: &Shape) -> (f64, f64, f64, f64) {
+    let x = s.xfrm.unwrap();
+    (x.x, x.y, x.w, x.h)
 }
 
 fn document_atom(w: u32, h: u32, slides: u32) -> Vec<u8> {
@@ -119,7 +270,7 @@ fn stream_of(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>]) -> Vec<u8> 
     let document = container(
         rt::DOCUMENT,
         0,
-        &[atom, container(1010, 0x15, &[]), list(0xA, slides), list(0xB, masters), list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])],
+        &[atom, environment(), list(0xA, slides), list(0xB, masters), list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])],
     );
     container(rt::ROOT, 0, &[document, rec(10, 0, 0, &le32(&[1, 0x100]))])
 }
@@ -311,6 +462,314 @@ fn hostile_powerpoint_95_streams_never_panic() {
     assert_eq!(p.masters.len(), super::MAX_MASTERS);
 }
 
+/// A title slide: the centred title and subtitle placeholders with their text, index, size and
+/// box (from master units about the centre to points from the top left), and the text rectangle
+/// as insets.
+#[test]
+fn title_and_subtitle_placeholders_keep_their_text() {
+    let title = placeholder_95(0x0F, 0, 0, [-2448, -720, 2448, 0], Some(simple_text(b"Title text", [-2448, -720, 2448, 0], BODY)));
+    let sub = placeholder_95(0x10, 1, 1, [-2016, 288, 2016, 1392], Some(simple_text(b"Sub text", [-2016, 288, 2016, 1392], BODY)));
+    let p = deck_of(vec![title, sub], &[]);
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(texts(&p), ["Title text", "Sub text"]);
+    let ph: Vec<_> = shapes.iter().map(|s| s.ph.clone().unwrap()).collect();
+    assert_eq!((ph[0].kind, ph[0].idx, ph[0].size.as_deref()), (PhType::CtrTitle, 0, None));
+    assert_eq!((ph[1].kind, ph[1].idx, ph[1].size.as_deref()), (PhType::SubTitle, 1, Some("half")));
+    assert_eq!(boxed(&shapes[0]), (54.0, 180.0, 612.0, 90.0));
+    assert_eq!(boxed(&shapes[1]), (108.0, 306.0, 504.0, 138.0));
+    let b = &body_of(&shapes[0]).body;
+    assert_eq!((b.inset_l, b.inset_t, b.inset_r, b.inset_b), (Some(7.25), Some(3.625), Some(7.25), Some(3.625)));
+    assert!(!shapes[0].text_box);
+
+    // The other types, each an empty placeholder (no text container), which draws nothing.
+    let kinds = [
+        (0x0C, PhType::Title),
+        (0x0D, PhType::Body),
+        (1, PhType::Title),
+        (2, PhType::Body),
+        (6, PhType::Date),
+        (7, PhType::SlideNum),
+        (8, PhType::Footer),
+    ];
+    let p = deck_of(kinds.iter().map(|(k, _)| placeholder_95(*k, 0, 0, [0, 0, 100, 100], None)).collect(), &[]);
+    let got: Vec<_> = p.slides[0].shapes.iter().map(|s| s.ph_type().unwrap()).collect();
+    assert_eq!(got, kinds.map(|(_, t)| t));
+    assert!(p.slides[0].shapes.iter().all(|s| body_of(s).paragraphs.is_empty()));
+}
+
+/// A bulleted body: paragraphs split at `\r`, each with its level, bullet character and the
+/// margins its level has in the text's ruler.
+#[test]
+fn a_bulleted_body_keeps_levels_bullets_and_margins() {
+    let chars = b"One\rTwo\rThree\rFour";
+    let runs = [para_run(4, true, 0x95, 0, 0), para_run(4, true, 0x96, 0, 1), para_run(6, true, b'*', 0, 2), para_run(5, false, 0x95, 0, 0)];
+    let body = text(chars, &[plain(19)], &runs, 0, [0; 4], BODY);
+    let p = deck_of(vec![placeholder_95(0x0D, 0, 1, [-2448, -912, 2448, 1680], Some(body))], &[]);
+    let paras = &body_of(&p.slides[0].shapes[0]).paragraphs;
+    assert_eq!(paras.iter().map(Paragraph::text).collect::<Vec<_>>(), ["One", "Two", "Three", "Four"]);
+    assert_eq!(paras.iter().map(|p| p.level).collect::<Vec<_>>(), [0, 1, 2, 0]);
+    let bullet = |c: &str| Some(Bullet::Char { char: c.into() });
+    assert_eq!(paras.iter().map(|p| p.props.bullet.clone()).collect::<Vec<_>>(), [bullet("•"), bullet("–"), bullet("*"), Some(Bullet::None)]);
+    // Ruler slot 0: level 1 at 216 units with its first line at 0, level 2 at 468 and 288.
+    assert_eq!((paras[0].props.margin_left, paras[0].props.indent), (Some(27.0), Some(-27.0)));
+    assert_eq!((paras[1].props.margin_left, paras[1].props.indent), (Some(58.5), Some(-22.5)));
+
+    // Slot 3 follows an empty slot (2018): slots are counted by their ends, not by the rulers.
+    let wide = text(b"One", &[plain(4)], &[para_run(4, true, 0x95, 0, 0)], 3, [0; 4], BODY);
+    let p = deck_of(vec![placeholder_95(0x0D, 0, 1, [0, 0, 100, 100], Some(wide))], &[]);
+    let para = &body_of(&p.slides[0].shapes[0]).paragraphs[0];
+    assert_eq!((para.props.margin_left, para.props.indent), (Some(72.0), Some(-36.0)));
+    // The empty slot, or one past the table, gives no margins.
+    for slot in [2, 99] {
+        let t = text(b"One", &[plain(4)], &[para_run(4, true, 0x95, 0, 0)], slot, [0; 4], BODY);
+        let p = deck_of(vec![placeholder_95(0x0D, 0, 1, [0, 0, 100, 100], Some(t))], &[]);
+        assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].props.margin_left, None);
+    }
+}
+
+/// Character runs: bold, italic and underline bits, the font by slot, the size, and an RGB or a
+/// scheme slot of the slide's scheme as the colour.
+#[test]
+fn character_runs_keep_their_formatting() {
+    let runs = [
+        char_run(4, 0, 24, 1, [0, 0, 0, 1]),
+        char_run(4, 1, 24, 2, [0, 0, 0, 1]),
+        char_run(4, 2, 40, 4, [0xFF, 0, 0, 0xFE]),
+        char_run(5, 99, 0, 7, [0, 0, 0, 3]),
+    ];
+    let body = text(b"BoldItalUndrLast", &runs, &[para_run(17, false, 0, 0, 0)], 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([-2362, -1613, -518, -1325], Some(body))], &[]);
+    let runs = &body_of(&p.slides[0].shapes[0]).paragraphs[0].runs;
+    assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["Bold", "Ital", "Undr", "Last"]);
+    let r: Vec<_> = runs.iter().map(|r| &r.props).collect();
+    assert_eq!([r[0].bold, r[1].bold, r[2].bold, r[3].bold], [Some(true), Some(false), Some(false), Some(true)]);
+    assert_eq!([r[0].italic, r[1].italic, r[3].italic], [Some(false), Some(true), Some(true)]);
+    assert_eq!([r[1].underline.as_deref(), r[2].underline.as_deref()], [Some("none"), Some("sng")]);
+    assert_eq!(
+        r.iter().map(|r| r.font.as_deref()).collect::<Vec<_>>(),
+        [Some("Times New Roman"), Some("Arial"), Some("Courier New"), None],
+        "an unknown font slot leaves the font to the master"
+    );
+    assert_eq!(r.iter().map(|r| r.size).collect::<Vec<_>>(), [Some(24.0), Some(24.0), Some(40.0), None]);
+    let solid = |c: Rgba| Some(Fill::solid(ColorRef::rgb(c)));
+    assert_eq!(r[0].fill, solid(Rgba::rgb(0, 0, 0)));
+    assert_eq!(r[2].fill, solid(Rgba::rgb(0xFF, 0, 0)));
+    assert_eq!(r[3].fill, solid(Rgba::rgb(0x11, 0x22, 0x33)), "slot 3 of the slide's own scheme");
+}
+
+#[test]
+fn paragraphs_keep_their_alignment() {
+    let runs = [para_run(2, false, 0, 0, 0), para_run(2, false, 0, 1, 0), para_run(2, false, 0, 2, 0), para_run(2, false, 0, 9, 0)];
+    let body = text(b"L\rC\rR\rX", &[plain(8)], &runs, 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([0, 0, 1000, 1000], Some(body))], &[]);
+    let aligns: Vec<_> = body_of(&p.slides[0].shapes[0]).paragraphs.iter().map(|p| p.props.align).collect();
+    assert_eq!(aligns, [Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+}
+
+/// A shape with text is a text box with no fill or line of its own; a shape without text isn't
+/// read yet; a placeholder of a type PowerPoint 95 isn't known to write keeps its text as a text
+/// box.
+#[test]
+fn a_shape_with_text_is_a_text_box() {
+    let bx = [-2362, -1613, -518, -1325];
+    let p = deck_of(
+        vec![
+            shape_95(bx, Some(simple_text(b"Box", bx, BODY))),
+            shape_95([0, 0, 100, 100], None),
+            placeholder_95(0x42, 0, 3, bx, Some(simple_text(b"Odd", bx, BODY))),
+        ],
+        &[],
+    );
+    assert_eq!(texts(&p), ["Box", "Odd"]);
+    let s = &p.slides[0].shapes[0];
+    assert!(s.text_box && s.ph.is_none());
+    assert_eq!((s.fill.clone(), s.line.clone()), (Some(Fill::None), Some(craft_pptx::Line::none())));
+    assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
+    assert!(p.slides[0].shapes[1].text_box && p.slides[0].shapes[1].ph.is_none());
+
+    // The box is the unturned one; the angle is in sixteenths of a degree.
+    let turned = container(rt::SHAPE, 0x13, &[geometry(bx, 480), simple_text(b"Box", bx, BODY)]);
+    let p = deck_of(vec![turned], &[]);
+    let x = p.slides[0].shapes[0].xfrm.unwrap();
+    assert_eq!((x.x, x.w, x.rot), (64.75, 230.5, 30.0));
+}
+
+/// The master's placeholders place the default master's (title and body), and the footer row
+/// places every layout's too, with the master's alignment and size. The first of each family
+/// counts; the master's other objects are its own shapes.
+#[test]
+fn master_placeholders_move_the_layout_boxes() {
+    let date_text = text(b"*", &[char_run(2, 0, 14, 0, [0, 0, 0, 1])], &[para_run(2, false, 0, 1, 0)], 1, [0; 4], MASTER_BODY);
+    let title_box = [-2448, -1776, 2448, -1056];
+    let objects = [
+        placeholder_95(1, 0, 0, title_box, Some(simple_text(b"Click to edit Master title style", title_box, MASTER_BODY))),
+        placeholder_95(2, 0, 1, [-2448, -912, 2448, 1680], None),
+        placeholder_95(6, 1, 2, [-2448, 1776, -1248, 2064], Some(date_text)),
+        // A second title, and a placeholder of an unknown type: neither places anything.
+        placeholder_95(1, 0, 5, [0, 0, 8, 8], None),
+        placeholder_95(0x42, 0, 6, [0, 0, 8, 8], Some(simple_text(b"Odd", [0, 0, 8, 8], MASTER_BODY))),
+        shape_95([-200, -200, 200, 200], Some(simple_text(b"Logo", [-200, -200, 200, 200], BODY))),
+    ];
+    let p = deck_of(vec![], &objects);
+    let m = &p.masters[0];
+    let on = |shapes: &[Shape], kind: PhType| shapes.iter().find(|s| s.ph_type() == Some(kind)).map(boxed);
+    assert_eq!(on(&m.shapes, PhType::Title), Some((54.0, 48.0, 612.0, 90.0)));
+    assert_eq!(on(&m.shapes, PhType::Body), Some((54.0, 156.0, 612.0, 324.0)));
+    assert_eq!(on(&m.shapes, PhType::Date), Some((54.0, 492.0, 150.0, 36.0)));
+    // The defaults' footer, which the file doesn't place, stays where it was.
+    assert_eq!(on(&m.shapes, PhType::Footer), Some((0.33 * 720.0, 0.92 * 540.0, 0.34 * 720.0, 0.05 * 540.0)));
+    for l in &m.layouts {
+        assert_eq!(on(&l.shapes, PhType::Date), Some((54.0, 492.0, 150.0, 36.0)), "{}", l.name);
+        let date = l.shapes.iter().find(|s| s.ph_type() == Some(PhType::Date)).unwrap();
+        let level = body_of(date).list_style.level(0).unwrap();
+        assert_eq!((level.para.align, level.run.size), (Some(Align::Center), Some(14.0)));
+    }
+    let own: Vec<_> = m.shapes.iter().filter(|s| s.ph.is_none()).map(|s| body_of(s).text()).collect();
+    assert_eq!(own, ["Logo"]);
+}
+
+/// The characters, a font's face and a bullet character are Windows-1252, 0x80–0x9F included.
+#[test]
+fn text_is_windows_1252() {
+    let chars = b"caf\xE9 \x80 \x93q\x94 \x85";
+    let n = chars.len() as u32 + 1;
+    let body = text(chars, &[char_run(n, 3, 24, 0, [0, 0, 0, 1])], &[para_run(n, true, 0xA7, 0, 0)], 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([0, 0, 1000, 1000], Some(body))], &[]);
+    let para = &body_of(&p.slides[0].shapes[0]).paragraphs[0];
+    assert_eq!(para.text(), "café € \u{201C}q\u{201D} \u{2026}");
+    assert_eq!(para.runs[0].props.font.as_deref(), Some("Café"));
+    assert_eq!(para.props.bullet, Some(Bullet::Char { char: "§".into() }));
+}
+
+/// Damaged text never panics and stays bounded: runs past the text, huge run lengths and counts,
+/// truncated entries, control characters, empty text, and a character atom past the cap.
+#[test]
+fn hostile_text_never_panics() {
+    let bx = [0, 0, 1000, 1000];
+    let one = |body: Vec<u8>| {
+        let p = deck_of(vec![shape_95(bx, Some(body))], &[]);
+        p.slides[0].shapes.first().and_then(|s| s.text.clone())
+    };
+    // Runs past the text: the text is all there, in one paragraph.
+    let t = one(text(b"Hi", &[plain(1000)], &[para_run(u32::MAX, true, 0, 7, 200)], 1, [0; 4], BODY)).unwrap();
+    assert_eq!(t.text(), "Hi");
+    assert_eq!(t.paragraphs[0].level, 4, "the level is capped at PowerPoint 95's fifth");
+    // Many zero-length runs: no more are read than the text has characters (plus its end).
+    let many = vec![plain(0); 100_000];
+    let t = one(text(b"abc", &many, &vec![para_run(0, false, 0, 0, 0); 50_000], 1, [0; 4], BODY)).unwrap();
+    assert_eq!(t.text(), "abc");
+    // A truncated entry is not read; the text keeps no formatting from it.
+    let mut cut = plain(4);
+    cut.truncate(43);
+    let t = one(text(b"abc", &[cut], &[], 1, [0; 4], BODY)).unwrap();
+    assert_eq!((t.text(), t.paragraphs[0].runs[0].props.size), ("abc".into(), None));
+    // Control characters are dropped; a vertical tab is a line break.
+    let t = one(text(b"a\x01\x0Bb\t", &[], &[], 1, [0; 4], BODY)).unwrap();
+    assert_eq!(t.text(), "a\u{b}b\t");
+    // Empty text: an empty text box is not a shape, and a placeholder keeps its empty paragraphs.
+    assert_eq!(one(text(b"", &[], &[], 1, [0; 4], BODY)), None);
+    assert_eq!(one(text(b"\r\r", &[], &[], 1, [0; 4], BODY)), None);
+    let p = deck_of(vec![placeholder_95(0x0D, 0, 1, bx, Some(text(b"\r\r", &[], &[], 1, [0; 4], BODY)))], &[]);
+    assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs.len(), 3);
+    // A text container with no body, and one whose text rectangle is outside the box.
+    assert!(one(container(4001, 0x1E, &[rec(4000, 0, 0, &[0; 16])])).is_none());
+    let t = one(text(b"x", &[], &[], u32::MAX, [i32::MIN, i32::MAX, i32::MIN, i32::MAX], BODY)).unwrap();
+    assert_eq!((t.body.inset_l, t.body.inset_t), (None, None));
+    // Characters past the cap are not read.
+    let big = vec![b'x'; super::text::MAX_CHARS + 10];
+    let t = one(text(&big, &[], &[], 1, [0; 4], BODY)).unwrap();
+    assert_eq!(t.text().len(), super::text::MAX_CHARS);
+
+    // Every word of a slide with text and placeholders set to hostile values, and cuts.
+    let mut s = SlideSpec::new(0x100, 0);
+    let two = text(
+        b"One\rTwo",
+        &[plain(4), char_run(4, 2, 40, 7, [1, 2, 3, 0xFE])],
+        &[para_run(4, true, 0x95, 1, 1), para_run(4, false, 0, 2, 0)],
+        0,
+        [10, 10, 990, 990],
+        BODY,
+    );
+    s.objects = vec![shape_95(bx, Some(two)), placeholder_95(0x0C, 0, 0, bx, Some(simple_text(b"T", bx, BODY)))];
+    let objects = [placeholder_95(6, 0, 2, bx, Some(simple_text(b"*", bx, MASTER_BODY)))];
+    let stream = stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)]);
+    for at in (0..stream.len() - 4).step_by(4) {
+        for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            let _ = import(&d);
+        }
+    }
+    for cut in (0..stream.len()).step_by(3) {
+        let _ = import(&stream[..cut]);
+    }
+}
+
+/// What one PowerPoint 95 sample shows, by its case name ([`powerpoint_95_samples`]).
+fn check_sample(name: &str, p: &Presentation) {
+    // Every master places the defaults' title and body, and the footer row on every layout.
+    let m = &p.masters[0];
+    let on = |shapes: &[Shape], kind: PhType| shapes.iter().find(|s| s.ph_type() == Some(kind)).map(boxed);
+    assert_eq!(on(&m.shapes, PhType::Title), Some((54.0, 48.0, 612.0, 90.0)), "{name}");
+    assert_eq!(on(&m.layouts[0].shapes, PhType::SlideNum), on(&m.shapes, PhType::SlideNum), "{name}");
+    // The text cases' slide text: the first slide's text box, or the second slide's placeholders.
+    let shapes = |i: usize| &p.slides[i].shapes;
+    let paras = |i: usize, j: usize| &body_of(&shapes(i)[j]).paragraphs;
+    let first_run = |i: usize, j: usize| &paras(i, j)[0].runs[0];
+    match name {
+        "twoslides" => assert_eq!(p.slides.len(), 2),
+        "title" => {
+            assert_eq!(layout_kind(p, 1), LayoutType::Title);
+            assert_eq!(
+                shapes(1).iter().map(|s| (s.ph_type(), body_of(s).text())).collect::<Vec<_>>(),
+                [(Some(PhType::CtrTitle), "Title text".into()), (Some(PhType::SubTitle), "Sub text".into())]
+            );
+        }
+        "layout3" => assert_eq!(layout_kind(p, 1), LayoutType::TwoContent),
+        "background" => assert_eq!(p.slides[0].background, solid(0xFF, 0, 0)),
+        "bullets" | "indent3" => {
+            assert_eq!(body_of(&shapes(1)[0]).text(), "Head");
+            assert_eq!(paras(1, 1).iter().map(|p| p.level).collect::<Vec<_>>(), [0, 1, 0], "{name}");
+            assert_eq!(paras(1, 1)[1].props.bullet, Some(Bullet::Char { char: "–".into() }), "{name}");
+        }
+        "flat3" => assert!(paras(1, 1).iter().all(|p| (p.level, &p.props.bullet) == (0, &Some(Bullet::Char { char: "•".into() })))),
+        "bulletchar" => assert!(paras(1, 1).iter().all(|p| p.props.bullet == Some(Bullet::Char { char: "*".into() }))),
+        "nobullet" => assert!(paras(1, 1).iter().all(|p| p.props.bullet == Some(Bullet::None))),
+        "margins" => {
+            let p = &paras(1, 1)[0].props;
+            assert_eq!((p.margin_left, p.indent), (Some(72.0), Some(-36.0)));
+        }
+        "bold" | "italic" | "underline" => {
+            let runs = &paras(0, 0)[0].runs;
+            assert_eq!(runs.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), [&body_of(&shapes(0)[0]).text()[..4], " plain"]);
+            let flags = |r: &craft_pptx::Run| (r.props.bold, r.props.italic, r.props.underline.as_deref() == Some("sng"));
+            let on = match name {
+                "bold" => (Some(true), Some(false), false),
+                "italic" => (Some(false), Some(true), false),
+                _ => (Some(false), Some(false), true),
+            };
+            assert_eq!((flags(&runs[0]), flags(&runs[1])), (on, (Some(false), Some(false), false)), "{name}");
+        }
+        "points40" => assert_eq!(first_run(0, 0).props.size, Some(40.0)),
+        "fontname" => assert_eq!(first_run(0, 0).props.font.as_deref(), Some("Courier New")),
+        "fontcolor" => assert_eq!(first_run(0, 0).props.fill, Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))))),
+        "center" | "left" | "right" => {
+            let align =
+                [("left", Align::Left), ("center", Align::Center), ("right", Align::Right)].into_iter().find(|(n, _)| *n == name).map(|(_, a)| a);
+            assert_eq!(paras(0, 0)[0].props.align, align, "{name}");
+        }
+        "align" => assert_eq!(paras(0, 0).iter().map(|p| p.props.align).collect::<Vec<_>>(), [Some(Align::Left), Some(Align::Right)]),
+        "twopara" => assert_eq!(body_of(&shapes(0)[0]).text(), "One\nTwo"),
+        "textbox" => {
+            let s = &shapes(0)[0];
+            assert_eq!((body_of(s).text(), s.text_box, s.ph.is_none()), ("Box".into(), true, true));
+            // The automation reported 1295, 1367.5, 4610 × 720 twips.
+            assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
+        }
+        _ => {}
+    }
+}
+
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
 /// the repository). Each imports with the slide count its DocumentAtom gives, at 10 × 7.5 in.
 #[test]
@@ -330,13 +789,7 @@ fn powerpoint_95_samples() {
         let count = super::document(&stream).and_then(|d| d.child(rt::DOCUMENT_ATOM)).and_then(|a| a.u32(32)).unwrap();
         assert_eq!(p.slides.len(), count as usize, "{name}");
         assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "{name}");
-        match name.as_str() {
-            "twoslides" => assert_eq!(p.slides.len(), 2),
-            "title" => assert_eq!(layout_kind(&p, 1), LayoutType::Title),
-            "layout3" => assert_eq!(layout_kind(&p, 1), LayoutType::TwoContent),
-            "background" => assert_eq!(p.slides[0].background, solid(0xFF, 0, 0)),
-            _ => {}
-        }
+        check_sample(&name, &p);
         seen += 1;
     }
     eprintln!("read {seen} PowerPoint 95 samples");

@@ -41,8 +41,14 @@ one feature per file, and the public [MS-PPT] numbering where the records keep i
 So far a PowerPoint 95 file imports with its slide size, its masters (each the caller's default
 master wearing the file's colour scheme, and its background when that isn't the scheme's), and
 its slides in order with their master, layout type and, when a slide doesn't follow the master's,
-its own background: a solid colour, or none when the slide's background has no fill. The slides are empty: shapes, placeholders and their text, pictures and
-notes come later.
+its own background: a solid colour, or none when the slide's background has no fill. Slides hold
+their placeholders (title, body, centred title, subtitle, and the date, footer and slide number)
+and text boxes, each with its box and its text: paragraphs with their level, alignment, bullet
+character and the indents of the text's ruler, and runs with their font, size, bold, italic,
+underline and colour (an RGB or a colour scheme slot). The text is Windows-1252. The master's
+placeholders set where the default master's placeholders go, and its date, footer and slide number
+those of every layout. Shapes without text, the shapes' own fill and line, pictures, notes and the
+master's text styles come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
