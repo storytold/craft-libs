@@ -99,6 +99,11 @@ impl Chooser {
     }
 }
 
+/// The folder field's text for `child` in `dir`, joined with the platform's separator (a backslash on Windows).
+fn shown(dir: &str, child: &str) -> String {
+    Path::new(dir).join(child).display().to_string()
+}
+
 fn picked(path: impl AsRef<Path>) -> Option<DialogResult<Answer>> {
     Some(DialogResult::Ok(Answer::Paths(vec![path.as_ref().to_path_buf()])))
 }
@@ -112,7 +117,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     let mut save = Chooser::open(PickRequest::save("document").directory("/d"));
     save.type_name("drafts");
     save.click("Save");
-    assert_eq!((save.field("folder"), save.field("name")), (Value::from("/d/drafts"), Value::from("")), "the typed folder opens");
+    assert_eq!((save.field("folder"), save.field("name")), (Value::from(shown("/d", "drafts")), Value::from("")), "the typed folder opens");
     save.type_name("chapter");
     save.click("Save");
     assert_eq!(save.answer(), picked("/d/drafts/chapter"), "a new name is saved to as typed");
@@ -151,7 +156,7 @@ fn the_chooser_lists_and_accepts_like_a_file_panel() {
     folder.click("Chapters");
     assert_eq!(folder.field("name"), Value::from("chapter.docx"), "a folder leaves the name alone");
     folder.click("Save");
-    assert_eq!((folder.field("folder"), folder.field("name")), (Value::from("/d/Chapters"), Value::from("chapter.docx")));
+    assert_eq!((folder.field("folder"), folder.field("name")), (Value::from(shown("/d", "Chapters")), Value::from("chapter.docx")));
     let mut gone = Chooser::open(PickRequest::save("document").file_name("chapter.docx").directory("/d"));
     gone.click("Chapters");
     gone.fake.remove_folder("/d/Chapters");
