@@ -97,7 +97,7 @@ pub struct Info {
     pub blocks: usize,
 }
 
-/// Interleaved little-endian F32, GrayA or RGBA, at source resolution.
+/// Interleaved little-endian F32, GrayA or RGBA, at staged output coordinates.
 pub struct Band {
     pub x: u32,
     pub y: u32,
@@ -118,6 +118,9 @@ pub struct Decoder<R> {
     chunks_start: u64,
     raw_limit: usize,
     rows: usize,
+    source_width: usize,
+    origin: (i32, i32),
+    staged: bool,
 }
 
 impl<R: Read + Seek> Decoder<R> {
@@ -133,7 +136,18 @@ impl<R: Read + Seek> Decoder<R> {
         if meta.headers.len() != 1 || header.deep || !matches!(header.blocks, BlockDescription::ScanLines) {
             return Err(unsupported("streaming requires a single flat scanline part"));
         }
-        let (w, h) = (header.layer_size.0, header.layer_size.1);
+        let (source_w, source_h) = (header.layer_size.0, header.layer_size.1);
+        let dw = header.own_attributes.layer_position;
+        let display = header.shared_attributes.display_window;
+        let (w, h, origin, staged) = if dw.0 >= display.position.0
+            && dw.1 >= display.position.1
+            && i64::from(dw.0) + source_w as i64 <= i64::from(display.position.0) + display.size.0 as i64
+            && i64::from(dw.1) + source_h as i64 <= i64::from(display.position.1) + display.size.1 as i64
+        {
+            (display.size.0, display.size.1, (dw.0 - display.position.0, dw.1 - display.position.1), true)
+        } else {
+            (source_w, source_h, (0, 0), false)
+        };
         if w == 0 || h == 0 || w > 1 << 18 || h > 1 << 18 {
             return Err(limit("EXR dimensions exceed the streaming limit of 262144"));
         }
@@ -162,16 +176,21 @@ impl<R: Read + Seek> Decoder<R> {
         let has_alpha = selected.last().copied().flatten().is_some();
         let channels = (0..list.len()).map(|i| selected.iter().position(|s| *s == Some(i))).collect();
         let rows = header.max_block_pixel_size().1;
-        let expected = h.div_ceil(rows.max(1));
+        let expected = source_h.div_ceil(rows.max(1));
         if rows == 0 || header.chunk_count != expected || expected > MAX_CHUNKS {
             return Err(limit("EXR block count exceeds the streaming budget"));
         }
-        let raw_limit = w
+        let raw_limit = source_w
             .checked_mul(rows)
             .and_then(|n| n.checked_mul(header.channels.bytes_per_pixel))
             .filter(|n| *n <= BLOCK_BYTES)
             .ok_or_else(|| limit("EXR compression block exceeds 64 MiB"))?;
-        let output = (w as u64).saturating_mul(rows as u64).saturating_mul(selected.len() as u64 * 4);
+        if staged {
+            crate::Limits::default().check_bytes(w as u32, h as u32, 16)?;
+        }
+        let band_rows = rows.min(source_h);
+        let source_output = (source_w as u64).saturating_mul(band_rows as u64).saturating_mul(selected.len() as u64 * 4);
+        let staged_output = (w as u64).saturating_mul(band_rows as u64).saturating_mul(selected.len() as u64 * 4);
         let info = Info {
             width: w as u32,
             height: h as u32,
@@ -179,7 +198,7 @@ impl<R: Read + Seek> Decoder<R> {
             has_alpha,
             all_half,
             blocks: expected,
-            working_bytes: (raw_limit as u64).saturating_mul(8).saturating_add(output.saturating_mul(2)).saturating_add(1 << 20),
+            working_bytes: (raw_limit as u64).saturating_mul(8).saturating_add(source_output).saturating_add(staged_output).saturating_add(1 << 20),
         };
         let chunks_start = source
             .stream_position()
@@ -202,10 +221,25 @@ impl<R: Read + Seek> Decoder<R> {
         // Check the bounded offset table before rejecting a large declared image.
         // A truncated file with an oversized data window is malformed; a complete
         // file above the streaming area limit is rejected before any pixel decode.
-        if (w as u64).saturating_mul(h as u64) > 1 << 30 {
+        if (source_w as u64).saturating_mul(source_h as u64) > 1 << 30 {
             return Err(limit("EXR pixel count exceeds the streaming limit of 1073741824"));
         }
-        Ok(Self { source, meta, info, offsets, seen: vec![false; expected], channels, next: 0, file_len, chunks_start, raw_limit, rows })
+        Ok(Self {
+            source,
+            meta,
+            info,
+            offsets,
+            seen: vec![false; expected],
+            channels,
+            next: 0,
+            file_len,
+            chunks_start,
+            raw_limit,
+            rows,
+            source_width: source_w,
+            origin,
+            staged,
+        })
     }
 
     pub fn info(&self) -> Info {
@@ -230,11 +264,11 @@ impl<R: Read + Seek> Decoder<R> {
             return Err(invalid("EXR compressed block length"));
         }
         let header = self.meta.headers.first().ok_or_else(|| invalid("missing header"))?;
-        let row = i64::from(y) - i64::from(header.own_attributes.layer_position.1);
-        if row < 0 || row as u64 >= u64::from(self.info.height) || !(row as usize).is_multiple_of(self.rows) {
+        let source_row = i64::from(y) - i64::from(header.own_attributes.layer_position.1);
+        if source_row < 0 || source_row as usize >= header.layer_size.1 || !(source_row as usize).is_multiple_of(self.rows) {
             return Err(invalid("EXR block coordinate"));
         }
-        let seen = self.seen.get_mut(row as usize / self.rows).ok_or_else(|| invalid("EXR block coordinate"))?;
+        let seen = self.seen.get_mut(source_row as usize / self.rows).ok_or_else(|| invalid("EXR block coordinate"))?;
         if *seen {
             return Err(invalid("duplicate EXR block"));
         }
@@ -256,10 +290,10 @@ impl<R: Read + Seek> Decoder<R> {
             .map_err(|_| invalid("invalid EXR compression block"))?
             .map_err(invalid)?;
         let (w, h) = (block.index.pixel_size.0, block.index.pixel_size.1);
-        if w != self.info.width as usize
+        if w != self.source_width
             || block.index.pixel_position.0 != 0
-            || block.index.pixel_position.1 != row as usize
-            || h != self.rows.min(self.info.height as usize - row as usize)
+            || block.index.pixel_position.1 != source_row as usize
+            || h != self.rows.min(header.layer_size.1 - source_row as usize)
         {
             return Err(invalid("EXR block shape"));
         }
@@ -272,7 +306,9 @@ impl<R: Read + Seek> Decoder<R> {
         let mut data = Vec::new();
         data.try_reserve_exact(count).map_err(|_| limit("EXR output allocation"))?;
         data.resize(count, 0);
-        if !self.info.has_alpha {
+        if self.info.has_alpha {
+            // Transparent black stage padding is already zeroed.
+        } else {
             for pixel in data.chunks_exact_mut(nc * 4) {
                 pixel.get_mut((nc - 1) * 4..).ok_or_else(|| invalid("alpha sample"))?.copy_from_slice(&1_f32.to_le_bytes());
             }
@@ -297,7 +333,26 @@ impl<R: Read + Seek> Decoder<R> {
                 pixel.get_mut(channel * 4..channel * 4 + 4).ok_or_else(|| invalid("EXR channel"))?.copy_from_slice(&value.to_le_bytes());
             }
         }
+        let stage_y = if self.staged { source_row as i32 + self.origin.1 } else { source_row as i32 };
+        let mut staged = Vec::new();
+        let staged_len = self.info.width as usize * h * nc * 4;
+        staged.try_reserve_exact(staged_len).map_err(|_| limit("EXR stage allocation"))?;
+        staged.resize(staged_len, 0);
+        if !self.info.has_alpha {
+            for pixel in staged.chunks_exact_mut(nc * 4) {
+                pixel.get_mut((nc - 1) * 4..).ok_or_else(|| invalid("alpha sample"))?.copy_from_slice(&1_f32.to_le_bytes());
+            }
+        }
+        let x = if self.staged { usize::try_from(self.origin.0).map_err(invalid)? } else { 0 };
+        for y in 0..h {
+            let src = y * self.source_width * nc * 4;
+            let dst = (y * self.info.width as usize + x) * nc * 4;
+            staged
+                .get_mut(dst..dst + self.source_width * nc * 4)
+                .ok_or_else(|| invalid("EXR stage row"))?
+                .copy_from_slice(data.get(src..src + self.source_width * nc * 4).ok_or_else(|| invalid("EXR source row"))?);
+        }
         self.next += 1;
-        Ok(Some(Band { x: 0, y: row as u32, width: w as u32, height: h as u32, data }))
+        Ok(Some(Band { x: 0, y: u32::try_from(stage_y).map_err(invalid)?, width: self.info.width, height: h as u32, data: staged }))
     }
 }

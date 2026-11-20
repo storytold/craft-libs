@@ -12,15 +12,15 @@ permissions:
   contents: read
 
 concurrency:
-  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
-  # run (main, manual) gets its own group: it is never cancelled or replaced while queued, so it
-  # always gets to save the cache.
-  group: shared-jpeg-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request and per branch: a newer push cancels the run it supersedes, on main
+  # too, since the newest run checks everything before it.
+  group: shared-jpeg-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    timeout-minutes: 10
+    # Uncached: the wasm check builds its dependencies on every run (about 10 minutes with setup).
+    timeout-minutes: 20
     # fmt, clippy and the tests run in the Workspace gate on every OS.
     name: JPEG WASM
     runs-on: ubuntu-latest
