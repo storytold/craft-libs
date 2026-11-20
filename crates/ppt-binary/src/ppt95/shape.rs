@@ -238,7 +238,9 @@ const BALLOON_BODY: f64 = 5.0 / 6.0;
 /// is its body only, as DrawingML's callout's is, its tail reaching out below ([`balloon`]).
 pub(super) fn geometry(code: i8, adjust: Option<i32>, xfrm: &mut Xfrm) -> Geom {
     let kind = u16::try_from(i16::from(code) + 4).ok().filter(|_| (-3..=14).contains(&code));
-    let Some(name) = kind.and_then(geom::preset_name) else {
+    // PowerPoint 95's trapezoid unmirrored is DrawingML's preset, wide at the bottom; the PowerPoint
+    // 97 path's table has no preset for it, OfficeArt's being wide at the top.
+    let Some(name) = kind.and_then(|k| if k == 8 { Some("trapezoid") } else { geom::preset_name(k) }) else {
         log::warn!("ppt: PowerPoint 95 shape code {code} is not known; read as a rectangle");
         return Geom::Preset { name: "rect".into(), adj: vec![] };
     };
