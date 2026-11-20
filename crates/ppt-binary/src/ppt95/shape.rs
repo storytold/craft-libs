@@ -24,7 +24,7 @@
 //! rectangle, rounded rectangle and ellipse (codes −3 to −1, whose byte above is the sign) and
 //! placeholders take their angle from the format, and the quarter-turns from the difference
 //! ([`orient`]); flips don't change their outlines. A line's 3007 atom holds its arrowheads
-//! ([`arrowheads`]).
+//! ([`arrowheads`]). A freeform's points become a custom path in its box ([`freeform_path`]).
 
 use craft_pptx::style::{Dash, LineEnd, Shadow};
 use craft_pptx::{ColorRef, ColorTransform, CustomPath, Fill, Geom, Line, Rgba, Xfrm};
@@ -191,6 +191,24 @@ fn trapezoid_top(adjust: Option<i32>) -> Geom {
     let a = adjust.unwrap_or(5400).clamp(0, 10800);
     let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
     Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
+}
+
+/// A freeform's points as a path in its box `sides` (left, top, right and bottom, either way
+/// round), all in master units from the slide's centre: a move to the first point, lines to the
+/// rest, and a close when `closed`. The path's size is the box's (at least one unit each way, so a
+/// flat freeform still has a coordinate space), its points measured from the box's top left.
+pub(super) fn freeform_path(points: &[(i32, i32)], [l, t, r, b]: [i32; 4], closed: bool) -> Geom {
+    let (left, top) = (f64::from(l.min(r)), f64::from(t.min(b)));
+    let (w, h) = ((f64::from(r) - f64::from(l)).abs().max(1.0), (f64::from(b) - f64::from(t)).abs().max(1.0));
+    let mut d = String::new();
+    for (i, &(x, y)) in points.iter().enumerate() {
+        let cmd = if i == 0 { "M" } else { " L" };
+        d.push_str(&format!("{cmd} {} {}", f64::from(x) - left, f64::from(y) - top));
+    }
+    if closed {
+        d.push_str(" Z");
+    }
+    Geom::Custom { paths: vec![CustomPath { w, h, d, ..Default::default() }] }
 }
 
 /// The share of its square a balloon's body takes, from the top; the tail reaches the bottom.

@@ -1270,6 +1270,227 @@ fn hostile_angles_never_panic() {
     }
 }
 
+/// A freeform's 3017 atom: its box twice, the point count, and the closed flag in the low byte
+/// of the last word, with something else above it.
+fn freeform_atom(bx: [i32; 4], count: u32, closed: bool) -> Vec<u8> {
+    let mut b: Vec<u8> = bx.iter().chain(&bx).flat_map(|v| v.to_le_bytes()).collect();
+    b.extend_from_slice(&count.to_le_bytes());
+    b.extend_from_slice(&[u8::from(closed), 0xAD, 0xB3, 0x02]);
+    rec(rt::FREEFORM_ATOM, 0, 0, &b)
+}
+
+/// A 3035 atom: `count`, then the points.
+fn points_atom(count: u16, points: &[(i32, i32)]) -> Vec<u8> {
+    let mut b = count.to_le_bytes().to_vec();
+    b.extend(points.iter().flat_map(|(x, y)| x.to_le_bytes().into_iter().chain(y.to_le_bytes())));
+    rec(rt::POINTS, NONE, 0x1D, &b)
+}
+
+/// A freeform (3016) in `bx` through `points`, closed or open, with its arrowheads and format.
+fn freeform_95(bx: [i32; 4], points: &[(i32, i32)], closed: bool, heads: [u8; 2], f: Option<Format>) -> Vec<u8> {
+    let mut kids = vec![freeform_atom(bx, points.len() as u32, closed), rec(rt::ARROWHEADS, 0, 0, &heads)];
+    kids.extend(f.map(format));
+    kids.push(points_atom(points.len() as u16, points));
+    container(rt::FREEFORM, 0x13, &kids)
+}
+
+/// A group (3001) of `members`.
+fn group_95(members: &[Vec<u8>]) -> Vec<u8> {
+    let mut list = vec![rec(2001, 0, 0, &(members.len() as u32).to_le_bytes())];
+    list.extend_from_slice(members);
+    container(rt::GROUP, 0x13, &[rec(3002, 0, 0, &[0xD9, 0x8A, 0x06, 0x00]), container(rt::LIST, 0xF, &list)])
+}
+
+fn path_of(s: &Shape) -> (f64, f64, &str) {
+    let Geom::Custom { paths } = &s.geom else { panic!("{} is not a path", s.name) };
+    (paths[0].w, paths[0].h, &paths[0].d)
+}
+
+fn group_members(s: &Shape) -> &[Shape] {
+    let craft_pptx::ShapeKind::Group { children, child } = &s.kind else { panic!("{} is not a group", s.name) };
+    assert_eq!(Some(*child), s.xfrm, "a group's child space is its own box");
+    children
+}
+
+/// The probes' open triangle and closed square, in master units from the slide's centre.
+const TRIANGLE_BOX: [i32; 4] = [-2304, -1584, -1152, -432];
+const TRIANGLE: [(i32, i32); 3] = [(-2304, -1584), (-1152, -1584), (-1728, -432)];
+const SQUARE: [(i32, i32); 4] = [(-2304, -1584), (-1152, -1584), (-1152, -432), (-2304, -432)];
+
+/// A freeform is a path through its points in its box: open, unfilled and with its arrowheads;
+/// closed, filled and without them.
+#[test]
+fn freeforms_are_paths() {
+    let open = Format { fill: None, ..PLAIN };
+    let p = deck_of(
+        vec![
+            freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [0, 4], Some(open)),
+            freeform_95(TRIANGLE_BOX, &SQUARE, true, [0, 4], Some(PLAIN)),
+            freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [1, 0], None),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 3);
+    for f in s {
+        assert!(f.name.starts_with("Freeform"), "{}", f.name);
+        assert_eq!(boxed(f), (72.0, 72.0, 144.0, 144.0));
+    }
+    assert_eq!(path_of(&s[0]), (1152.0, 1152.0, "M 0 0 L 1152 0 L 576 1152"));
+    assert_eq!(s[0].fill, Some(Fill::None));
+    let line = s[0].line.clone().unwrap();
+    assert_eq!((line.fill, line.head, line.tail.map(|t| t.kind)), (Some(Fill::solid(rgb(0, 0, 0))), None, Some("stealth".into())));
+
+    assert_eq!(path_of(&s[1]), (1152.0, 1152.0, "M 0 0 L 1152 0 L 1152 1152 L 0 1152 Z"));
+    assert_eq!(s[1].fill, Some(Fill::solid(rgb(0x00, 0xCC, 0x99))));
+    let line = s[1].line.clone().unwrap();
+    assert_eq!((line.head, line.tail), (None, None), "a closed freeform has no ends");
+
+    // Without a format: 1 pt in the scheme's text and lines colour, unfilled.
+    assert_eq!(s[2].fill, Some(Fill::None));
+    let line = s[2].line.clone().unwrap();
+    assert_eq!((line.width, line.head.map(|h| h.kind)), (Some(1.0), Some("triangle".into())));
+}
+
+/// A freeform reads no more points than [`super::MAX_POINTS`], nor than its record holds whatever
+/// its count says; one of fewer than two points draws nothing, a closed flag on two points draws
+/// it open, and a flat box still has a path space.
+#[test]
+fn freeform_points_are_bounded() {
+    let many: Vec<(i32, i32)> = (0..10_000).map(|i| (i % 100, i / 100)).collect();
+    let bx = [0, 0, 100, 100];
+    let with_count = |count: u16, points: &[(i32, i32)]| {
+        container(rt::FREEFORM, 0x13, &[freeform_atom(bx, u32::from(count), true), format(PLAIN), points_atom(count, points)])
+    };
+    let p = deck_of(
+        vec![
+            freeform_95(bx, &many, false, [0, 0], Some(PLAIN)),
+            with_count(9, &TRIANGLE),
+            with_count(2, &SQUARE),
+            with_count(0, &SQUARE),
+            freeform_95(bx, &[(5, 5)], true, [0, 0], Some(PLAIN)),
+            freeform_95(bx, &[], true, [0, 0], Some(PLAIN)),
+            container(rt::FREEFORM, 0x13, &[freeform_atom(bx, 3, true), format(PLAIN)]),
+            freeform_95([0, 0, 0, 576], &[(0, 0), (0, 576)], false, [0, 0], Some(PLAIN)),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 4, "freeforms of fewer than two points are left out");
+    let d = path_of(&s[0]).2;
+    assert_eq!(d.matches('M').count() + d.matches('L').count(), super::MAX_POINTS);
+    assert_eq!(path_of(&s[1]).2, "M -2304 -1584 L -1152 -1584 L -1728 -432 Z", "the count is cut to the points held");
+    assert_eq!(path_of(&s[2]).2, "M -2304 -1584 L -1152 -1584", "two points are drawn open");
+    assert_eq!(path_of(&s[3]), (1.0, 576.0, "M 0 0 L 0 576"));
+    assert_eq!(boxed(&s[3]), (360.0, 270.0, 0.0, 72.0));
+}
+
+/// A group is one shape spanning its members, whose child space is its own box, so its members,
+/// shapes, lines and freeforms alike, stay where they would be ungrouped.
+#[test]
+fn groups_span_their_members() {
+    let red = Format { fill: Some([0xFF, 0, 0, 0xFE]), ..PLAIN };
+    let members = [
+        autoshape(-3, 0, [-2304, -1584, -1728, -1008], 0, red),
+        line_95([-1440, -1296, -864, -1008], Some(PLAIN)),
+        freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [0, 0], Some(PLAIN)),
+    ];
+    let ungrouped = deck_of(members.to_vec(), &[]);
+    let p = deck_of(vec![group_95(&members)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 1);
+    assert!(s[0].name.starts_with("Group"));
+    let m = group_members(&s[0]);
+    assert_eq!(m.iter().map(boxed).collect::<Vec<_>>(), ungrouped.slides[0].shapes.iter().map(boxed).collect::<Vec<_>>());
+    assert_eq!(boxed(&m[0]), (72.0, 72.0, 72.0, 72.0));
+    assert_eq!(boxed(&m[1]), (180.0, 108.0, 72.0, 36.0));
+    assert_eq!(boxed(&s[0]), (72.0, 72.0, 180.0, 144.0));
+    assert_eq!((preset_of(&m[0]).0, preset_of(&m[1]).0, preset_of(&m[2]).0), ("rect", "line", "custom"));
+    assert_eq!(m[0].fill, Some(Fill::solid(rgb(0xFF, 0, 0))));
+
+    // A group of nothing drawn is left out, and one in a master is the master's shape.
+    let p = deck_of(vec![group_95(&[]), group_95(&[autoshape(-3, 0, [0, 0, 8, 8], 0, Format { line: None, fill: None, ..PLAIN })])], &[]);
+    assert!(p.slides[0].shapes.is_empty());
+    let p = deck_of(vec![], &[group_95(&members)]);
+    assert_eq!(p.masters[0].shapes.iter().filter(|s| matches!(s.kind, craft_pptx::ShapeKind::Group { .. })).count(), 1);
+}
+
+/// A group in a group: the probe's rectangle and ellipse, grouped with a triangle.
+#[test]
+fn groups_nest() {
+    let inner = group_95(&[autoshape(-3, 0, [-2304, -1584, -1728, -1008], 0, PLAIN), autoshape(-1, 0, [-1440, -1296, -864, -1008], 0, PLAIN)]);
+    let p = deck_of(vec![group_95(&[inner, autoshape(1, 10800, [-576, -1584, 0, -1008], 0, PLAIN)])], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 1);
+    let outer = group_members(&s[0]);
+    assert_eq!(boxed(&s[0]), (72.0, 72.0, 288.0, 72.0));
+    assert_eq!(outer.len(), 2);
+    let inner = group_members(&outer[0]);
+    assert_eq!(boxed(&outer[0]), (72.0, 72.0, 180.0, 72.0));
+    assert_eq!(inner.iter().map(|s| preset_of(s).0).collect::<Vec<_>>(), ["rect", "ellipse"]);
+    assert_eq!((preset_of(&outer[1]).0, boxed(&outer[1])), ("triangle", (288.0, 72.0, 72.0, 72.0)));
+}
+
+/// Groups nested 1000 deep read [`super::MAX_DEPTH`] of them and leave the rest out, without
+/// recursing further, on a stack of 1 MiB (a Windows main thread's); members count towards the
+/// page's object cap.
+#[test]
+fn groups_are_bounded() {
+    let rect = autoshape(-3, 0, [0, 0, 576, 576], 0, PLAIN);
+    let mut g = group_95(std::slice::from_ref(&rect));
+    for _ in 1..1000 {
+        g = group_95(&[rect.clone(), g]);
+    }
+    let p = std::thread::Builder::new().stack_size(1 << 20).spawn(move || deck_of(vec![g], &[])).unwrap().join().unwrap();
+    let (mut depth, mut s) = (0, &p.slides[0].shapes[0]);
+    loop {
+        depth += 1;
+        let m = group_members(s);
+        match m.iter().find(|c| matches!(c.kind, craft_pptx::ShapeKind::Group { .. })) {
+            Some(inner) => s = inner,
+            None => break,
+        }
+    }
+    assert_eq!(depth, super::MAX_DEPTH);
+
+    let line = line_95([0, 0, 8, 8], None);
+    let many = vec![line; super::MAX_OBJECTS + 10];
+    let p = deck_of(vec![group_95(&many), line_95([0, 0, 8, 8], None)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!((s.len(), group_members(&s[0]).len()), (1, super::MAX_OBJECTS - 1));
+}
+
+/// Damaged freeforms and groups never panic: every word of a page of them set to hostile values,
+/// or the page cut anywhere.
+#[test]
+fn hostile_freeforms_and_groups_never_panic() {
+    let huge = [i32::MIN, i32::MAX, i32::MAX, i32::MIN];
+    let p = deck_of(vec![freeform_95(huge, &[(i32::MIN, i32::MAX), (i32::MAX, i32::MIN), (0, 0)], true, [0xFF, 0xFF], Some(PLAIN))], &[]);
+    let (w, h, d) = path_of(&p.slides[0].shapes[0]);
+    assert!(w.is_finite() && h.is_finite() && !d.contains("inf") && !d.contains("NaN"));
+
+    let mut s = SlideSpec::new(0x100, 0);
+    s.objects = vec![group_95(&[
+        freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [4, 1], Some(PLAIN)),
+        group_95(&[line_95([0, 0, 576, 288], Some(PLAIN)), autoshape(-1, 0, [0, 0, 576, 576], 0, PLAIN)]),
+    ])];
+    let stream = stream_of(
+        document_atom(5760, 4320, 1),
+        &[slide(&s)],
+        &[master_with(MASTER, DEFAULT, [0; 4], &[group_95(&[freeform_95(TRIANGLE_BOX, &SQUARE, true, [0, 0], None)])])],
+    );
+    for at in (0..stream.len() - 4).step_by(4) {
+        for v in [0u32, 1, 2, 0xBB8, 0xBC8, 0x7D0, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            let _ = import(&d);
+        }
+    }
+    for cut in 0..stream.len() {
+        let _ = import(&stream[..cut]);
+    }
+}
+
 /// The presets of the object model's shape types 1 to 12, as PowerPoint 95 rendered them ("custom" for
 /// the trapezoid, which has its own outline).
 const SHAPE_PRESETS: [&str; 12] =
@@ -1517,6 +1738,42 @@ fn check_drawn_sample(name: &str, shapes: &[Shape]) {
             let line = s.line.clone().unwrap();
             assert_eq!((line.head, line.tail), want, "{name}");
             assert_eq!((line.width, line.fill), (Some(1.0), Some(Fill::solid(black))), "{name}");
+        }
+        _ => check_object_sample(name, shapes),
+    }
+}
+
+/// What one PowerPoint 95 sample of a freeform or group shows, by its case name.
+fn check_object_sample(name: &str, shapes: &[Shape]) {
+    // AddShape(1, 1440, 1440, 1440, 1440) and AddShape(3, 3600, 2160, 1440, 720) in twips, and the
+    // third, AddShape(5, 5760, 1440, 1440, 1440): where they were before they were grouped.
+    let (rect, ellipse, triangle) = ((72.0, 72.0, 72.0, 72.0), (180.0, 108.0, 72.0, 36.0), (288.0, 72.0, 72.0, 72.0));
+    match name {
+        "freeform" | "freeform-closed" | "freeform-filled" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), boxed(s)), (1, (72.0, 72.0, 144.0, 144.0)), "{name}");
+            let (fill, d) = if name == "freeform" {
+                (Fill::None, "M 0 0 L 1152 0 L 576 1152")
+            } else {
+                (Fill::solid(rgb(0x00, 0xCC, 0x99)), "M 0 0 L 1152 0 L 1152 1152 L 0 1152 Z")
+            };
+            assert_eq!((path_of(s), s.fill.clone()), ((1152.0, 1152.0, d), Some(fill)), "{name}");
+            assert_eq!(s.line.as_ref().and_then(|l| l.fill.clone()), Some(Fill::solid(rgb(0, 0, 0))), "{name}");
+        }
+        "group" | "group-rot" => {
+            assert_eq!(shapes.len(), 1, "{name}");
+            let m = group_members(&shapes[0]);
+            assert_eq!(m.iter().map(|s| (preset_of(s).0, boxed(s))).collect::<Vec<_>>(), [("rect", rect), ("ellipse", ellipse)], "{name}");
+            assert_eq!(m[0].fill, Some(Fill::solid(rgb(0xFF, 0, 0))), "{name}");
+            assert_eq!((boxed(&shapes[0]), shapes[0].xfrm.unwrap().rot), ((72.0, 72.0, 180.0, 72.0), 0.0), "{name}");
+        }
+        "group-nested" => {
+            assert_eq!(shapes.len(), 1);
+            let outer = group_members(&shapes[0]);
+            assert_eq!((outer.len(), boxed(&shapes[0])), (2, (72.0, 72.0, 288.0, 72.0)));
+            let inner = group_members(&outer[0]);
+            assert_eq!(inner.iter().map(boxed).collect::<Vec<_>>(), [rect, ellipse]);
+            assert_eq!((preset_of(&outer[1]).0, boxed(&outer[1])), ("triangle", triangle));
         }
         _ => {}
     }

@@ -59,7 +59,10 @@ rectangle. PowerPoint 95 measures angles counter-clockwise, DrawingML clockwise,
 negated. A shape's geometry holds its outline as drawn, quarter-turns and mirror included, so its
 angle and flips come from there (a box turned by an odd number of quarter-turns is turned back);
 the rectangle, rounded rectangle and ellipse take the angle the user set. A shape that draws
-nothing but text is a text box. Groups and freeforms are skipped. Pictures, notes and the master's text styles come later.
+nothing but text is a text box. Freeforms read as custom paths through their points, in their
+box, with their format's fill, line and shadow, and open ones with their arrowheads. Groups read as
+groups of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip
+a group), nested up to 32 deep. Pictures, notes and the master's text styles come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
