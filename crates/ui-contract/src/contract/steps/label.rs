@@ -1,5 +1,6 @@
 //! Step 9's scrub: a drag on the side label, the body or a part changes the value.
 
+use crate::contract::cx::CxCore;
 use crate::contract::{Component, Cx};
 use crate::runtime::access::scope;
 use crate::runtime::memory::sub;
@@ -16,17 +17,17 @@ pub(super) fn scrub_press<C: Component>(comp: &C, cx: &Cx<'_, C>) -> Option<(cra
         let press = cx.core.results.get(&(part.key, part.index)).map(|result| result.press)?;
         pressed(&press).then(|| (press, drag.clone()))
     });
-    let label = || scrub.by_label.then(|| side_label(cx)).flatten().map(|(press, _)| press).filter(pressed);
+    let label = || scrub.by_label.then(|| side_label(cx.core)).flatten().map(|(press, _)| press).filter(pressed);
     let field = || (scrub.on_field && !cx.core.text_takes_pointer).then_some(cx.core.press).filter(pressed);
     part.or_else(|| label().or_else(field).map(|press| (press, scrub.drag.clone())))
 }
 
 /// The press and hover of the side label a `by_label` scrub reads: the inside label's part when the control declared
 /// one (`PartsCx::label_part`), else the label scope's label.
-fn side_label<C: Component>(cx: &Cx<'_, C>) -> Option<(craft_behavior::PressState, bool)> {
-    match cx.core.results.get(&(crate::contract::InsideLabel::PART, None)) {
+fn side_label(core: &CxCore<'_>) -> Option<(craft_behavior::PressState, bool)> {
+    match core.results.get(&(crate::contract::InsideLabel::PART, None)) {
         Some(part) => Some((part.press, part.hovered)),
-        None => scope::field_label(&cx.core.ctx).map(|label| (label.press, label.hovered)),
+        None => scope::field_label(&core.ctx).map(|label| (label.press, label.hovered)),
     }
 }
 
@@ -41,13 +42,13 @@ struct ScrubWarp(DragWarp);
 /// The total warp of the running scrub. A scrub that warps moves the pointer to the other side of the window when
 /// it reaches an edge, once the pointer from the last warp has shown up at its new place; a platform that cannot
 /// warp leaves the drag as it is.
-fn scrub_warp<C: Component>(cx: &mut Cx<'_, C>, drag: &ValueDrag, pos: Pos2) -> Vec2 {
+fn scrub_warp(core: &mut CxCore<'_>, drag: &ValueDrag, pos: Pos2) -> Vec2 {
     if !drag.warps() {
         return Vec2::ZERO;
     }
-    let id = sub(cx.core.id, "scrub_warp");
-    let ctx = cx.core.ctx.clone();
-    let warp = &mut cx.core.memory.shown::<ScrubWarp>(id).0;
+    let id = sub(core.id, "scrub_warp");
+    let ctx = core.ctx.clone();
+    let warp = &mut core.memory.shown::<ScrubWarp>(id).0;
     let shift = warp.shift(pos);
     if warp.pending() {
         return shift;
@@ -79,7 +80,7 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
     if scrub.by_label && scope::field_label(&cx.core.ctx).is_some() {
         scope::register_scrub(&cx.core.ctx);
     }
-    let label = scrub.by_label.then(|| side_label(cx)).flatten();
+    let label = scrub.by_label.then(|| side_label(cx.core)).flatten();
     // A scrub's source shows the horizontal resize cursor under the pointer.
     let part_hovered = scrub.parts.iter().any(|(part, _)| cx.core.results.get(&(part.key, part.index)).is_some_and(|result| result.hovered));
     let field_hovered = scrub.on_field && !cx.core.text_takes_pointer && cx.core.response.hovered();
@@ -93,13 +94,13 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
         PressPhase::DragStart { .. } => {
             cx.core.memory.shown::<ScrubStart>(start_id).0 = cx.value().map_or(0.0, |value| (scrub.read)(value));
             *cx.core.memory.shown::<ScrubWarp>(sub(cx.core.id, "scrub_warp")) = ScrubWarp::default();
-            hide_scrub_cursor(cx, &drag);
+            hide_scrub_cursor(cx.core, &drag);
             cx.begin();
         }
         PressPhase::Drag { pos, .. } => {
-            hide_scrub_cursor(cx, &drag);
+            hide_scrub_cursor(cx.core, &drag);
             let start = cx.core.memory.shown::<ScrubStart>(start_id).0;
-            let shift = scrub_warp(cx, &drag, pos);
+            let shift = scrub_warp(cx.core, &drag, pos);
             if let Some(next) = drag.value_shifted(start, &press, rtl, shift) {
                 cx.propose((scrub.write)(next));
             }
@@ -115,8 +116,8 @@ pub(crate) fn scrub_by_label<C: Component>(comp: &C, cx: &mut Cx<'_, C>) {
 }
 
 /// A scrub that hides the pointer asks for no cursor while it runs.
-fn hide_scrub_cursor<C: Component>(cx: &Cx<'_, C>, drag: &ValueDrag) {
+fn hide_scrub_cursor(core: &CxCore<'_>, drag: &ValueDrag) {
     if drag.hides_cursor() {
-        crate::runtime::cursor::request(&cx.core.ctx, Cursor::Painted(PaintedCursor::Hidden), CursorPriority::Drag);
+        crate::runtime::cursor::request(&core.ctx, Cursor::Painted(PaintedCursor::Hidden), CursorPriority::Drag);
     }
 }

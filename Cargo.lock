@@ -4286,6 +4286,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "proc-macro2",
+ "scoped-tls",
  "serde",
  "serde_json",
  "siphasher",

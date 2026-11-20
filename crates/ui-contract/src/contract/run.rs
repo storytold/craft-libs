@@ -678,6 +678,7 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
 fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
+        let decl = &decl.part;
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
         (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
@@ -1402,6 +1403,14 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    if crate::runtime::pass_state::in_component_tree() {
+        return run_in_context(t, ui, at, tip);
+    }
+    let ctx = ui.ctx().clone();
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip));
+}
+
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {

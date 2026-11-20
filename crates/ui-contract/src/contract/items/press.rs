@@ -351,33 +351,37 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.events.push(CollectionEvent::ContextMenu(request));
     }
 
-    /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`): the part's click this pass
-    /// and its rect, the rect the press was hit-tested against.
+    /// The response of each part an item asked to open a menu from (`ItemCx::part_opener`).
     pub(super) fn item_openers(&self, ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<ItemOpener>) -> Vec<(ItemOpener, egui::Response)> {
-        if openers.is_empty() {
-            return Vec::new();
-        }
-        let outcome = crate::primitives::sensing::read_outcome(ctx, ArenaId::new(id));
-        openers
-            .into_iter()
-            .filter_map(|opener| {
-                let rect = crate::runtime::pointer::part_bounds(ctx, opener.item, opener.part)?;
-                let on_part =
-                    |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
-                let view = response::MemberView {
-                    hovered: outcome.hover.find(|hit| on_part(Some(*hit))).is_some(),
-                    press: response::PressView {
-                        pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
-                        clicked: on_part(outcome.activated),
-                        ..response::PressView::default()
-                    },
-                    pointer: ctx.pointer_latest_pos(),
-                };
-                let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
-                Some((opener, response))
-            })
-            .collect()
+        item_openers(ui, ctx, id, enabled, openers)
     }
+}
+
+/// Resolves the item opener responses without duplicating the sensing and response code per collection type.
+fn item_openers(ui: &Ui, ctx: &Context, id: Id, enabled: bool, openers: Vec<ItemOpener>) -> Vec<(ItemOpener, egui::Response)> {
+    if openers.is_empty() {
+        return Vec::new();
+    }
+    let outcome = crate::primitives::sensing::read_outcome(ctx, ArenaId::new(id));
+    openers
+        .into_iter()
+        .filter_map(|opener| {
+            let rect = crate::runtime::pointer::part_bounds(ctx, opener.item, opener.part)?;
+            let on_part =
+                |hit: Option<crate::primitives::sensing::Hit>| hit.is_some_and(|hit| hit.owner == opener.item && hit.part == Some(opener.part));
+            let view = response::MemberView {
+                hovered: outcome.hover.find(|hit| on_part(Some(*hit))).is_some(),
+                press: response::PressView {
+                    pressed: on_part(outcome.target) && outcome.phase.is_some_and(|phase| phase.button_down()),
+                    clicked: on_part(outcome.activated),
+                    ..response::PressView::default()
+                },
+                pointer: ctx.pointer_latest_pos(),
+            };
+            let response = response::member(ui, opener_id(opener.item, opener.part), rect, enabled, view);
+            Some((opener, response))
+        })
+        .collect()
 }
 
 /// The id of the response `CollectionResponse::opener` gives for the part `part` of the item `item`.

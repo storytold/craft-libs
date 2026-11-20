@@ -23,6 +23,90 @@ use craft_behavior::{
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
 
+/// Maps a point to layout coordinates once for every collection type.
+fn logical_point(layout: &dyn ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
+    let at = at - rect.min.to_vec2();
+    if layout.mirrors() && rtl {
+        Flow::new(Rect::from_min_size(Pos2::ZERO, rect.size()), true).to_physical(Rect::from_min_size(at, Vec2::ZERO)).min
+    } else {
+        at
+    }
+}
+
+/// Resolves a row's cells and sub-row indentation independently of the collection type.
+fn row_cells(
+    layout: &dyn ItemLayout,
+    at: usize,
+    offset: ScrollPos,
+    sub_row: &dyn Fn() -> Option<usize>,
+    header: &super::header::Header,
+    indent_step: f32,
+) -> Vec<(ColumnKey, Rect)> {
+    let mut cells = Vec::new();
+    layout.cells(at, offset, &mut cells);
+    if let Some(steps) = sub_row() {
+        let toggles: Vec<ColumnKey> = header.toggle_columns().map(|(key, _)| key).collect();
+        craft_behavior::sub_row_cells(&mut cells, |key| toggles.contains(key), steps as f32 * indent_step, false);
+    }
+    cells
+}
+
+/// Finds the toggle and its geometry under a point in the row.
+fn toggle_cell_at(props: &CollectionProps, cells: Vec<(ColumnKey, Rect)>, point: Pos2) -> Option<(ColumnKey, ToggleColumn, Rect)> {
+    let (key, cell) = cells.into_iter().find(|(_, cell)| cell.contains(point))?;
+    props.columns.iter().find(|spec| spec.key == key).and_then(|spec| match spec.kind {
+        ColumnKind::Toggle(toggle) => Some((key.clone(), toggle, cell)),
+        _ => None,
+    })
+}
+
+/// The screen rect of a row in the layout's view.
+fn screen_row(layout: &dyn ItemLayout, view: Rect, at: usize, offset: ScrollPos, rtl: bool) -> Rect {
+    let local = layout.rect(at, offset);
+    let local = if rtl && layout.mirrors() { Flow::new(Rect::from_min_size(Pos2::ZERO, view.size()), true).to_physical(local) } else { local };
+    local.translate(view.min.to_vec2())
+}
+
+/// Resolves a row drop's geometry independently of the collection and its key type.
+fn drop_spot(
+    layout: &dyn ItemLayout,
+    outline: &dyn craft_behavior::NavOutline,
+    len: &dyn Fn() -> usize,
+    xf: Option<crate::runtime::egui::areas::LayerMap>,
+    (rect, offset, rtl): (Rect, ScrollPos, bool),
+    groups: Option<f32>,
+    at: Pos2,
+) -> Option<Spot> {
+    let to_screen = |point: Pos2| xf.map_or(point, |map| map.to_screen(point));
+    let nav = layout.nav();
+    let hit = layout.hit(logical_point(layout, rect, rtl, at), offset);
+    let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
+    // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
+    // row-wise layout that is beyond the last item's end edge on its row, or below its row.
+    let past = hit.is_none() && {
+        let last = screen_row(layout, rect, len() - 1, offset, rtl);
+        let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
+        !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
+    };
+    let over = hit.or_else(|| past.then(|| len() - 1))?;
+    let row = screen_row(layout, rect, over, offset, rtl);
+    if matches!(nav, NavShape::Spatial) {
+        let (low, high) = (to_screen(row.min), to_screen(row.max));
+        return Some(Spot { over, insert: over, parent: None, mark: DropMark::Into(Rect::from_min_max(low, high)) });
+    }
+    if let Some(step) = groups {
+        let gap = reorder::tree_gap_at(outline, over, row, rtl, step, at);
+        let parent = gap.parent;
+        return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(to_screen) });
+    }
+    // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
+    // right-to-left the physical end is the earlier place in reading order.
+    let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
+    let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
+    let after = (gap.insert == 1) != (across && rtl);
+    Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(to_screen) })
+}
+
 /// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
 pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
 
@@ -316,24 +400,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
 
     /// `at` in the layout's logical coordinates, relative to the rows' rect.
     pub(super) fn logical(layout: &C::ItemLayout, rect: Rect, rtl: bool, at: Pos2) -> Pos2 {
-        let at = at - rect.min.to_vec2();
-        if layout.mirrors() && rtl {
-            Flow::new(Rect::from_min_size(Pos2::ZERO, rect.size()), true).to_physical(Rect::from_min_size(at, Vec2::ZERO)).min
-        } else {
-            at
-        }
+        logical_point(layout, rect, rtl, at)
     }
 
     /// The cells of row `at` (logical): the layout's, with a sub-row's toggle cells at its indent in its content
     /// (`sub_row_cells`), where the row draws them. A press acts on the cell it lands in.
     pub(super) fn row_cells(&self, layout: &C::ItemLayout, at: usize, offset: ScrollPos) -> Vec<(ColumnKey, Rect)> {
-        let mut cells = Vec::new();
-        layout.cells(at, offset, &mut cells);
-        if let Some(steps) = self.source.sub_row(at) {
-            let toggles: Vec<ColumnKey> = self.header.toggle_columns().map(|(key, _)| key).collect();
-            craft_behavior::sub_row_cells(&mut cells, |key| toggles.contains(key), steps as f32 * self.indent_step, false);
-        }
-        cells
+        row_cells(layout, at, offset, &|| self.source.sub_row(at), &self.header, self.indent_step)
     }
 
     /// The toggle cell under `point` (logical) in row `at`: its column, how it toggles and its rect.
@@ -345,11 +418,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         offset: ScrollPos,
         point: Pos2,
     ) -> Option<(ColumnKey, ToggleColumn, Rect)> {
-        let (key, cell) = self.row_cells(layout, at, offset).into_iter().find(|(_, cell)| cell.contains(point))?;
-        props.columns.iter().find(|spec| spec.key == key).and_then(|spec| match spec.kind {
-            ColumnKind::Toggle(toggle) => Some((key.clone(), toggle, cell)),
-            _ => None,
-        })
+        toggle_cell_at(props, self.row_cells(layout, at, offset), point)
     }
 
     fn emit_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, column: &ColumnKey, on: bool, mods: craft_keymap::Mods) {
@@ -473,33 +542,8 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if at.y < rect.min.y || self.source.is_empty() {
             return None;
         }
-        let nav = layout.nav();
-        let hit = layout.hit(Self::logical(layout, rect, rtl, at), offset);
-        let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
-        // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
-        // row-wise layout that is beyond the last item's end edge on its row, or below its row.
-        let past = hit.is_none() && {
-            let last = self.screen(layout, rect, self.source.len() - 1, offset, rtl);
-            let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
-            !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
-        };
-        let over = hit.or_else(|| past.then(|| self.source.len() - 1))?;
-        let row = self.screen(layout, rect, over, offset, rtl);
-        if matches!(nav, NavShape::Spatial) {
-            let (low, high) = (self.on_screen(row.min), self.on_screen(row.max));
-            return Some(Spot { over, insert: over, parent: None, mark: DropMark::Into(Rect::from_min_max(low, high)) });
-        }
-        if let Some(step) = groups {
-            let gap = reorder::tree_gap_at(&Outline::new(self.source), over, row, rtl, step, at);
-            let parent = gap.parent;
-            return Some(Spot { over, insert: gap.insert, parent, mark: gap.mark.mapped(|point| self.on_screen(point)) });
-        }
-        // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
-        // right-to-left the physical end is the earlier place in reading order.
-        let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
-        let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
-        let after = (gap.insert == 1) != (across && rtl);
-        Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(|point| self.on_screen(point)) })
+        let outline = Outline::new(self.source);
+        drop_spot(layout, &outline, &|| self.source.len(), self.xf, (rect, offset, rtl), groups, at)
     }
 
     /// Whether a drop inside the group row `parent` would put a dragged item inside itself.
