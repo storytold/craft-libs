@@ -120,6 +120,12 @@ fn tile_grid_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     grid(ui, data, TileGrid::new("Library").empty("No photos"), 60, 1.0).into()
 }
 
+#[story(TileGrid<'static, usize>, covers = [], drive = Drive::Never)]
+fn tile_grid_delete_under_pointer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let tiles = TileGrid::new("Library").deletable(true).delete_target(crate::contract::DeleteTarget::FocusOrHover);
+    grid(ui, data, tiles, 20, 1.0).into()
+}
+
 #[story(TileGrid<'static, usize>, covers = [One], drive = Drive::Never)]
 fn tile_grid_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     grid(ui, data, TileGrid::new("Library").empty("No photos"), 1, 1.0).into()

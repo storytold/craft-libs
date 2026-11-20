@@ -120,7 +120,8 @@ pub enum ThumbnailEvent {
     /// A drag of pages as one edit gesture, or a stacking key (Cmd/Ctrl+] and [) as a `Set`, as craft-ui's tables
     /// report reorders. Only when [`editable`](PageThumbnails::editable).
     Reorder(EditEvent<ReorderMove<usize>>),
-    /// Delete or Backspace with the panel focused: the picked pages, or the current page when none are; never when
+    /// Delete or Backspace with the panel focused or under the pointer: the picked pages, or the current page when
+    /// none are; never when
     /// every page is picked (a document keeps one page), never read-only.
     Delete(Vec<usize>),
     /// A double-click or Enter on a thumbnail (PowerPoint starts the slide show from it).
@@ -485,7 +486,8 @@ impl<'a> PageThumbnails<'a> {
                 .accepts(move |_, _, insert| insert <= new_page)
                 .drag_count(words.count.counted())
                 .takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true))
-                .deletable(true);
+                .deletable(true)
+                .delete_target(craft_ui::contract::DeleteTarget::FocusOrHover);
             if organize && let Some(insert_label) = insert_label {
                 grid = grid.insert_gaps(insert_label);
             }

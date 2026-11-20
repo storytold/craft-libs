@@ -4,7 +4,7 @@
 use craft_behavior::{Selection, SelectionChange};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{PageThumbnails, ThumbnailArrangement, ThumbnailEvent, moved_page};
-use craft_ui::contract::{ReorderMove, Role};
+use craft_ui::contract::{ReorderMove, Role, Show as _};
 use craft_ui::testing::{Fixture, trial};
 use egui::vec2;
 use std::cell::RefCell;
@@ -64,6 +64,69 @@ fn organize_rig(count: usize, id: egui::Id, current: usize) -> (Fixture, Rc<RefC
 /// The middle of page `n`'s tile (counted from 1).
 fn tile(fixture: &Fixture, n: usize) -> egui::Pos2 {
     fixture.by_label(&format!("Page {n}")).expect("a tile per page").center()
+}
+
+#[trial]
+fn escape_clears_the_focused_thumbnail_selection() {
+    let (mut fixture, _, picked) = organize_rig(4, egui::Id::unique("organize"), 0);
+    fixture.click_at(tile(&fixture, 2)).settle();
+    assert!(picked.borrow().contains(&1));
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).settle();
+    assert!(!picked.borrow().contains(&1), "Escape clears the pick");
+}
+
+#[trial]
+fn delete_over_unfocused_thumbnails_acts_on_the_pick() {
+    let events: Rc<RefCell<Vec<ThumbnailEvent>>> = Rc::default();
+    let seen = Rc::clone(&events);
+    let pages = DemoPages::new(4);
+    let mut picked = Selection::default();
+    let mut text = String::from("draft");
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::buttons::Button::new("Other").show(ui);
+        craft_ui::text::TextField::new("Draft", craft_ui::contract::Bind::bound(&mut text)).show(ui);
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).show(ui);
+        seen.borrow_mut().extend(out.events);
+    });
+    fixture.room(vec2(600.0, 600.0)).settle();
+    fixture.click_at(tile(&fixture, 2)).settle();
+    let other = fixture.by_label("Other").expect("other control");
+    for _ in 0..3 {
+        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node { break; }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    }
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), other.node, "the other control owns focus");
+    let at = tile(&fixture, 2);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Delete, egui::Modifiers::NONE).settle();
+    assert!(events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])), "Delete reaches the picked page");
+    let deletes = events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Delete(_))).count();
+    let field = fixture.by_label("Draft").expect("text field");
+    fixture.click(&field).settle();
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Backspace, egui::Modifiers::NONE).settle();
+    assert_eq!(events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Delete(_))).count(), deletes, "the text field keeps its editing key");
+}
+
+#[trial]
+fn delete_over_unfocused_thumbnails_uses_the_current_page_when_unpicked() {
+    let events: Rc<RefCell<Vec<ThumbnailEvent>>> = Rc::default();
+    let seen = Rc::clone(&events);
+    let pages = DemoPages::new(4);
+    let mut picked = Selection::default();
+    let mut fixture = Fixture::new(move |ui| {
+        craft_ui::buttons::Button::new("Other").show(ui);
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, 1, PAPER).show(ui);
+        seen.borrow_mut().extend(out.events);
+    });
+    fixture.room(vec2(600.0, 600.0)).settle();
+    let other = fixture.by_label("Other").expect("other control");
+    for _ in 0..3 {
+        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node { break; }
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    }
+    assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), other.node);
+    let at = tile(&fixture, 2);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Delete, egui::Modifiers::NONE).settle();
+    assert!(events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])), "Delete reaches the current page");
 }
 
 /// A drag the host ends with `cancel_press` (its pages changed under it) lands nothing on its release, and the next

@@ -184,7 +184,22 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         let forward = cx.core.intents.take_exact(&Intent::delete(true, Granularity::Unit));
         let back = cx.core.intents.take_exact(&Intent::delete(false, Granularity::Unit));
-        let Some(row) = lead_at.filter(|_| forward || back) else { return };
+        if !(forward || back) {
+            return;
+        }
+        if props.delete_target == crate::contract::DeleteTarget::FocusOrHover {
+            let picked = self.placed().rows();
+            if !picked.is_empty() {
+                self.events.push(CollectionEvent::Delete(self.keys_at(&picked)));
+                return;
+            }
+            let current = props.current.as_deref().and_then(|key| key.downcast_ref::<C::Key>()).and_then(|key| self.index_of(key));
+            if let Some(row) = current.or(lead_at) {
+                self.events.push(CollectionEvent::Delete(self.keys_at(&[row])));
+            }
+            return;
+        }
+        let Some(row) = lead_at else { return };
         self.events.push(CollectionEvent::Delete(self.keys_at(&self.acted_on(row))));
     }
 

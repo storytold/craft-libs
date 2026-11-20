@@ -106,6 +106,8 @@ enum Taken {
     /// With nothing focused, the window's document canvas took the press (a nudge it declares, `KeyUse::nudge_mods`,
     /// or a page move): it is the canvas's alone, as while the canvas has the focus, and no app shortcut runs with it.
     Canvas,
+    /// A collection under the pointer took the key.
+    Hover,
 }
 
 /// The key events the owner leaves to the app this pass, with the facts the matching needs.
@@ -223,6 +225,8 @@ pub(crate) struct Stage {
     routed: HashMap<Option<Id>, Routed>,
     claimed: Vec<(Id, Chord)>,
     claims: Vec<(Id, Chord)>,
+    /// Collections that accept Delete under the pointer in the next pass.
+    hover_deletes: Vec<Id>,
     /// The state-dependent claims the running pass holds: those registered in the pass before.
     last_claims: Vec<(Id, Chord)>,
     /// The claimed chords fired commands stand for (`fire_claimed`), for their owners in the next pass.
@@ -272,4 +276,13 @@ fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut Stage) -> R)
 
 fn current<R>(ctx: &Context, f: impl FnOnce(&mut Stage) -> R) -> R {
     with(ctx, crate::runtime::egui::pass::current_viewport(ctx), f)
+}
+
+pub(crate) fn register_hover_delete(ctx: &Context, id: Id) {
+    crate::runtime::replay::journal(ctx, || move |ctx: &Context| register_hover_delete(ctx, id));
+    current(ctx, |stage| {
+        if !stage.hover_deletes.contains(&id) {
+            stage.hover_deletes.push(id);
+        }
+    });
 }

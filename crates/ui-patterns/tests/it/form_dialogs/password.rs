@@ -53,6 +53,23 @@ fn enter_in_the_field_answers_while_the_entries_are_valid() {
     }
 }
 
+#[trial]
+fn retry_starts_with_an_empty_password() {
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&answers);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut open = true;
+        let shown = PasswordDialog::new(PasswordPurpose::permissions("poster.pdf"))
+            .opened(craft_ui::contract::Bind::bound(&mut open)).show(ui);
+        if let Some(answer) = shown.answer {
+            seen.borrow_mut().push(answer.secret.expose().to_owned());
+        }
+    });
+    fixture.idle(30).type_text("wrong").key(egui::Key::Enter, Modifiers::NONE).idle(30);
+    fixture.type_text("right").key(egui::Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(*answers.borrow(), vec!["wrong", "right"]);
+}
+
 /// The strength meter's fill and the top of its range: the fill grows with the rating and Strong reaches the top.
 fn meter(fixture: &Fixture) -> (f64, f64) {
     let meter = fixture.by_label("Password strength").expect("the strength meter shows once something is typed");

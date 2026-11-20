@@ -448,7 +448,19 @@ impl<'a> PasswordDialog<'a> {
         let mut dialog = Dialog::new(title)
             .buttons([FooterButton::new(ok, DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .close_on_enter(true)
-            .close_guard(move |_, cx| cx.memory::<Entries>().valid.unwrap_or(!setting))
+            .close_guard(move |_, cx| {
+                let entries = cx.memory::<Entries>();
+                let valid = entries.valid.unwrap_or(!setting);
+                if valid {
+                    *entries = Entries::default();
+                }
+                valid
+            })
+            .on_pick(|button, cx| {
+                if button.role() == DialogRole::Cancel {
+                    *cx.memory::<Entries>() = Entries::default();
+                }
+            })
             .settle_buttons(move |cx, buttons| {
                 let valid = cx.memory::<Entries>().valid.unwrap_or(!setting);
                 if let Some(accept) = buttons.first_mut() {

@@ -25,6 +25,18 @@ pub enum SelectMode {
     Cells,
 }
 
+/// Where Delete and Backspace can target a deletable collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeleteTarget {
+    /// Only while the collection has keyboard focus.
+    #[default]
+    Focus,
+    /// Also while the pointer is over the collection and no text editor or modal owns the keys. Delete acts on the
+    /// picked rows, or on the current row when none are picked, falling back to the lead.
+    FocusOrHover,
+}
+
 /// How the user may reorder items.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -215,6 +227,8 @@ pub struct CollectionProps {
     pub marquee: bool,
     /// Delete and Backspace at the lead report `CollectionEvent::Delete`.
     pub deletable: bool,
+    /// Where a deletable collection takes Delete and Backspace.
+    pub delete_target: DeleteTarget,
     /// Maps a row drag to the payload that other drop targets take (8.4). A map starts row drags by itself, with or
     /// without a reorder rule.
     pub drag_payload: Option<DragPayload>,
@@ -333,6 +347,7 @@ impl CollectionProps {
             item_keys: ItemKeys::Own,
             marquee: false,
             deletable: false,
+            delete_target: DeleteTarget::Focus,
             drag_payload: None,
             drag_count: None,
             natural_height: false,
@@ -547,6 +562,13 @@ impl CollectionProps {
     #[must_use]
     pub const fn deletable(mut self, on: bool) -> Self {
         self.deletable = on;
+        self
+    }
+
+    /// Sets where a deletable collection takes Delete and Backspace.
+    #[must_use]
+    pub const fn delete_target(mut self, target: DeleteTarget) -> Self {
+        self.delete_target = target;
         self
     }
 

@@ -246,6 +246,7 @@ struct Plan {
     actions: Vec<Vec2>,
     /// The action index range and height of each wrapped row in a row layout; empty for the centred layout.
     action_rows: Vec<(std::ops::Range<usize>, f32)>,
+    inline_actions: bool,
     dismiss: Option<Vec2>,
     /// The height of the head line in a row layout, where the icon, the first line of the text and the dismiss button
     /// share one centre line; and how far the text sits below the head's top to put its first line there.
@@ -399,7 +400,11 @@ impl<'a> Notice<'a> {
         let actions = self.action_sizes(cx);
         let icon_width = if row { icon.map_or(0.0, |side| side + gap) } else { 0.0 };
         let dismiss_width = dismiss.map_or(0.0, |size| size.x + gap);
-        let column = if width.is_finite() { (width - icon_width - dismiss_width).max(0.0) } else { f32::INFINITY };
+        let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
+        let remaining = width - icon_width - dismiss_width - actions_width - gap;
+        let inline_actions = self.layout == NoticeLayout::Inline && !actions.is_empty() && (!width.is_finite() || remaining >= actions_width);
+        let action_width = if inline_actions { actions_width + gap } else { 0.0 };
+        let column = if width.is_finite() { (width - icon_width - dismiss_width - action_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
         let title_role = self.title_look(cx.style).role;
         let mut title = texts.title.as_deref().map(|title| run(title, title_role));
@@ -419,14 +424,13 @@ impl<'a> Notice<'a> {
         let line_sizes: Vec<Vec2> = texts.lines.iter().map(|line| cx.layout_at(&self.run(line, cx.style.line.role), line_column).size()).collect();
         let more = texts.more.as_deref().map(|more| cx.layout_at(&self.run(more, cx.style.more.role), width).size());
         let stack = cx.style.stack;
-        let actions_width = actions.iter().map(|size| size.x).sum::<f32>() + gap * actions.len().saturating_sub(1) as f32;
         let content_width = self.content_sizes.iter().map(|size| size.x).fold(0.0, f32::max);
         // In a row layout the lines, the hosted leaves and the actions run from the content's start edge, under the icon.
         let below_width = if row { actions_width.max(content_width) } else { 0.0 };
         let lines_width = line_sizes.iter().map(|size| size.x + bullet).fold(more.map_or(below_width, |size| size.x.max(below_width)), f32::max);
         let lines_height = line_sizes.iter().chain(more.iter()).map(|size| stack + size.y).sum::<f32>();
         let leaves_height = self.content_sizes.iter().map(|size| stack + size.y).sum::<f32>();
-        let action_rows = if row { wrap_actions(&actions, width, gap) } else { Vec::new() };
+        let action_rows = if row && !inline_actions { wrap_actions(&actions, width, gap) } else { Vec::new() };
         let stacked = !row && column.is_finite() && actions_width > column;
         let actions_height = if row {
             action_rows.iter().map(|(_, height)| *height).sum::<f32>() + gap * action_rows.len().saturating_sub(1) as f32
@@ -444,13 +448,14 @@ impl<'a> Notice<'a> {
             (None, true) => None,
         };
         let first = first_role.map_or(0.0, |role| cx.tokens.typography.get(role).line_height);
-        let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first);
+        let action_line = if inline_actions { actions.iter().map(|size| size.y).fold(0.0, f32::max) } else { 0.0 };
+        let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first).max(action_line);
         let text_offset = (line - first) / 2.0;
-        // Lines and actions start under the head line.
+        // The head includes the complete wrapped message; details and stacked actions follow it.
         let head = (text_offset + title.map_or(0.0, |size| size.y) + message.y).max(line);
-        let with_actions = head + lines_height + leaves_height + if actions.is_empty() { 0.0 } else { stack.max(gap) + actions_height };
+        let with_actions = head + lines_height + leaves_height + if actions.is_empty() || inline_actions { 0.0 } else { stack.max(gap) + actions_height };
         let (needs, height) = if row {
-            ((icon_width + text_width + dismiss_width).max(lines_width), with_actions)
+            ((icon_width + text_width + dismiss_width + action_width).max(lines_width), with_actions)
         } else {
             let parts = [icon, title.map(|size| size.y), Some(message.y), (!actions.is_empty()).then_some(actions_height)];
             let shown: Vec<f32> = parts.into_iter().flatten().chain(self.content_sizes.iter().map(|size| size.y)).collect();
@@ -467,6 +472,7 @@ impl<'a> Notice<'a> {
             more: more.map(|size| size.y),
             actions,
             action_rows,
+            inline_actions,
             dismiss,
             line,
             text_offset,
@@ -605,6 +611,14 @@ impl Component for Notice<'_> {
                 let (slot, rest) = flow.take_end(size.x);
                 placed.dismiss = Some(Rect::from_min_size(Pos2::new(slot.min.x, on_line(size.y)), size));
                 flow = rest.take_end(gap).1;
+            }
+            if plan.inline_actions {
+                for size in plan.actions.iter().rev() {
+                    let (slot, rest) = flow.take_end(size.x);
+                    placed.actions.push(Rect::from_min_size(Pos2::new(slot.min.x, on_line(size.y)), *size));
+                    flow = rest.take_end(gap).1;
+                }
+                placed.actions.reverse();
             }
             let column = flow.rect();
             let mut y = column.top() + plan.text_offset;

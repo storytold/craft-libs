@@ -193,6 +193,7 @@ const COLLECTION: &[Forwarded] = &[
     ("item_keys", "$ui::contract::ItemKeys", "Who takes the arrow keys: the collection (moves the lead) or the component around it."),
     ("marquee", "bool", "A drag on the background selects the rows it covers."),
     ("deletable", "bool", "Delete and Backspace at the lead report the items to delete."),
+    ("delete_target", "$ui::contract::DeleteTarget", "Where a deletable collection takes Delete and Backspace."),
     ("drag_count", "$ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the row height."),

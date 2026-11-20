@@ -22,7 +22,7 @@ use std::sync::Arc;
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
-    let (batch, nodes, captures, held_claims, fired_claims) = current(ctx, |stage| {
+    let (batch, nodes, captures, held_claims, fired_claims, hover_deletes) = current(ctx, |stage| {
         stage.routed.clear();
         stage.contexts.clear();
         stage.claimed.clear();
@@ -32,9 +32,17 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         stage.last_open_edits = std::mem::take(&mut stage.open_edits);
         stage.last_nodes = std::mem::take(&mut stage.nodes);
         let fired = std::mem::take(&mut stage.fired_claims);
-        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims, fired)
+        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims, fired, std::mem::take(&mut stage.hover_deletes))
     });
     let modal = overlay::any_open(ctx, overlay::OpenFilter::Modal);
+    let hover_delete = if !modal && !ctx.text_edit_focused() && target.as_ref().is_none_or(|rec| !rec.stop.text && !matches!(rec.stop.keys.owner, OwnerClass::Text | OwnerClass::Recorder)) {
+        crate::runtime::pointer::with_hover(ctx, crate::runtime::egui::pass::current_viewport(ctx), |under, captured| {
+            if captured { return None; }
+            let under = under?;
+            let owner = under.press.click.or(under.press.drag).or(under.hover_top).map(|(_, owner)| owner)?;
+            hover_deletes.contains(&owner).then_some(owner)
+        })
+    } else { None };
     let canvas = if target.is_some() { None } else { unfocused_canvas(ctx) };
     let stale_repeat = |stale: &mut bool, press: &Press| {
         if press.key != Key::Enter || !press.mods.is_none() {
@@ -60,7 +68,12 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut withdrawn_texts: Vec<usize> = batch.texts.iter().enumerate().filter(|(_, typed)| typed.claimed).map(|(at, _)| at).collect();
     if let Some(rec) = &target {
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
-            *taken = if stale_repeat(&mut stale, press) {
+            *taken = if let Some(id) = hover_delete.filter(|id| Some(*id) != target.as_ref().map(|rec| rec.stop.id))
+                && press.mods.is_none() && matches!(press.key, Key::Delete | Key::Backspace)
+            {
+                push(&mut routed, Some(id), Intent::delete(press.key == Key::Delete, craft_behavior::Granularity::Unit), false);
+                Taken::Hover
+            } else if stale_repeat(&mut stale, press) {
                 Taken::Yes
             } else {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
@@ -93,7 +106,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         // arrows with the modifiers it acts on (`KeyUse::nudge_mods`); the others are the app's.
         let declared = |mods: Mods| canvas.as_ref().is_none_or(|canvas| canvas.stop.keys.nudge_mods.contains(mods));
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
-            if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
+            if let Some(id) = hover_delete && press.mods.is_none() && matches!(press.key, Key::Delete | Key::Backspace) {
+                push(&mut routed, Some(id), Intent::delete(press.key == Key::Delete, craft_behavior::Granularity::Unit), false);
+                *taken = Taken::Hover;
+            } else if press.key == Key::Enter && press.mods.is_none() && !press.repeat {
                 push(&mut routed, None, Intent::Submit, false);
                 *taken = Taken::Yes;
             } else if !modal
@@ -236,7 +252,7 @@ fn owned_shortcuts(ctx: &Context, target: Option<&StopRec>, batch: &Batch, consu
         // The canvas's Space is never the focused stop's; a press the unfocused window's canvas took is the canvas's.
         .map(|(press, taken)| {
             !press.canvas
-                && (*taken == Taken::Canvas || holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
+                && (matches!(*taken, Taken::Canvas | Taken::Hover) || holds_press(owner, target, press, *taken == Taken::Yes, press.text.is_some_and(|at| taken_texts[at])))
         })
         .collect();
     // A shortcut without a press of its own (a release, or the clipboard event that stands for ⌘C) follows the owner by
