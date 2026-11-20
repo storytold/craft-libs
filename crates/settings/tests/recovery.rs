@@ -48,6 +48,19 @@ fn bad_value_only_resets_its_section() {
 }
 
 #[test]
+fn section_error_displays_its_section_and_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n[appearance]\ntheme = \"sepia\"\n");
+    let (_, report) = open_in(tmp.path());
+    let error = &report.section_errors[0];
+    let text = error.to_string();
+    assert!(text.starts_with("settings section [appearance] was reset to defaults: "), "{text}");
+    assert!(text.ends_with(&error.message), "{text}");
+    let source: &dyn std::error::Error = error;
+    assert!(source.source().is_none());
+}
+
+#[test]
 fn many_unknown_keys_load_in_linear_time() {
     // Each key was once tried against every key accepted before it.
     let tmp = tempfile::tempdir().unwrap();
