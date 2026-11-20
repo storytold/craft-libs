@@ -80,11 +80,6 @@ impl<R: Read + Seek> SeekableArchive<R> {
         Ok(Self { zip, budget: Budget::new("archive", limits.max_total_bytes), duplicates })
     }
 
-    /// Whether two entries carry the same name, as [`crate::Archive::has_duplicate_names`] reports it.
-    pub fn has_duplicate_names(&self) -> bool {
-        self.duplicates
-    }
-
     /// The number of distinct entry names.
     pub fn len(&self) -> usize {
         self.zip.len()
@@ -97,7 +92,7 @@ impl<R: Read + Seek> SeekableArchive<R> {
     /// Whether the central directory contains repeated raw names. The strict index keeps one
     /// entry per raw name, so `len` alone cannot distinguish these from unique records.
     pub fn has_duplicate_names(&self) -> bool {
-        self.zip.has_duplicate_names()
+        self.duplicates || self.zip.has_duplicate_names()
     }
 
     /// Locate a surviving entry by the absolute offset of its central directory record,
