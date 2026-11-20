@@ -77,7 +77,7 @@ impl<'input> PackageDocument<'input> {
 
         let text = std::str::from_utf8(bytes)?;
         let text = text.trim_start_matches('\u{feff}');
-        let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: max_xml_nodes };
+        let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: max_xml_nodes, ..roxmltree::ParsingOptions::default() };
         let document = roxmltree::Document::parse_with_options(text, options)?;
 
         if document.root_element().tag_name().name() != "package" {
@@ -162,7 +162,7 @@ pub fn write_package<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Error, FIRST_UID, PackageDocument, SELF_DEPENDENCY, is_sbs, write_package};
 
     #[test]
     fn sniffs_sbs_with_bom_declaration_and_comments() {

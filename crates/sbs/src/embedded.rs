@@ -100,7 +100,8 @@ pub fn encode(bytes: &[u8]) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{EmbeddedError, MAX_RESOURCE_BYTES, decode, decode_bounded, encode};
+    use std::cell::Cell;
 
     #[test]
     fn roundtrips_and_enforces_budgets() {

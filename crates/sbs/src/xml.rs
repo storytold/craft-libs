@@ -49,7 +49,7 @@ pub fn validate_preserved_element<'a>(xml: &'a str, expected_tag: &str, max_byte
     if xml.len() > max_bytes {
         return None;
     }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: max_nodes };
+    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: max_nodes, ..roxmltree::ParsingOptions::default() };
     let document = roxmltree::Document::parse_with_options(xml, options).ok()?;
     let root = document.root_element();
     if root.tag_name().name() != expected_tag {
@@ -60,7 +60,7 @@ pub fn validate_preserved_element<'a>(xml: &'a str, expected_tag: &str, max_byte
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::xml_escape;
 
     #[test]
     fn sbs_attribute_wire_spelling_is_preserved() {

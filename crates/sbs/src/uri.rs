@@ -49,7 +49,7 @@ pub fn resolve(owner: &str, reference: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{relative_path, resolve};
 
     #[test]
     fn resolves_relative_and_rejects_escapes() {
