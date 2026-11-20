@@ -249,10 +249,11 @@ impl Reader<'_> {
                     .unwrap_or_default();
                 para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
-            if para.props.numbering.is_some()
-                && let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange"))
-            {
-                let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+            if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
+                // Multi-level numbering caches (`w:original`) routinely exceed 256 chars while staying
+                // bounded against hostile attributes.
+                const MAX_CHANGE_ORIGINAL: usize = 4096;
+                let original = ch.attr("w:original").unwrap_or("").chars().take(MAX_CHANGE_ORIGINAL).collect();
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
             }
             if let Some(s) = ppr.child("w:sectPr") {
@@ -275,6 +276,10 @@ impl Reader<'_> {
         // The result paragraph still takes a line, even when its cached text is empty.
         if sc.fields.iter().any(|f| f.phase == Phase::Instr) && para.plain_text().is_empty() {
             para.mark.hidden = Some(true);
+        }
+        // A cell's paragraphs are marked once their table is read: its style counts.
+        if !sc.in_cell {
+            self.doc.styles.mark_runs_as_word_draws_them(&mut para, None);
         }
         para.normalize();
         para
@@ -314,15 +319,57 @@ impl Reader<'_> {
 
     // ---- tables ----
 
+    /// Word gives a table no cell margins when the file has no default table style and neither the
+    /// table nor its style sets them; saving may write a default Normal Table, so the zeros are
+    /// kept as the table's own. shortcut: they stay direct formatting (a table style applied later
+    /// keeps them), until the model knows the file's default table style. A `w:tblCellMar` that sets
+    /// only some sides keeps them: only the sides it omits become 0.
+    fn no_default_margins(&self, props: &mut craft_wordmodel::props::TableProps) {
+        if self.no_default_table_style
+            && props.cell_margins.is_none()
+            && props.style.as_deref().and_then(|id| self.doc.styles.table_style(id)).is_none_or(|s| s.parts.cell_margins.is_none())
+        {
+            props.cell_margins = Some([0.0; 4]);
+        }
+    }
+
+    /// Omitted table-margin sides inherit from that property set's style.
+    fn table_margin_base(&self, style: Option<&str>) -> [f32; 4] {
+        style.and_then(|id| self.doc.styles.table_style(id)).and_then(|st| st.parts.cell_margins).unwrap_or(if self.no_default_table_style {
+            [0.0; 4]
+        } else {
+            crate::read::props::WORD_CELL_MARGINS
+        })
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
+            // Sides `w:tblCellMar` leaves out keep the style's margins; without a style, Word's
+            // 0.08" left and right, or none in a file with no default table style.
+            if let Some(m) = p.child("w:tblCellMar") {
+                let base = self.table_margin_base(table.props.style.as_deref());
+                table.props.cell_margins = Some(crate::read::props::margins_over(m, base));
+            }
             if let Some(ch) = p.child("w:tblPrChange") {
-                let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                let mut old = ch
+                    .child("w:tblPr")
+                    .map(|o| {
+                        let mut props = self.pc.tblpr(o);
+                        if let Some(m) = o.child("w:tblCellMar") {
+                            let base = self.table_margin_base(props.style.as_deref());
+                            props.cell_margins = Some(crate::read::props::margins_over(m, base));
+                        }
+                        props
+                    })
+                    .unwrap_or_default();
+                // Rejecting the change brings back these properties: with the same margins.
+                self.no_default_margins(&mut old);
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        self.no_default_margins(&mut table.props);
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
                 .children("w:gridCol")
@@ -355,8 +402,10 @@ impl Reader<'_> {
                     continue;
                 }
                 let mut blocks = Blocks::new();
+                let outer = std::mem::replace(&mut sc.in_cell, true);
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
+                sc.in_cell = outer;
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
             if !row.cells.is_empty() {
@@ -367,9 +416,85 @@ impl Reader<'_> {
             return None;
         }
         if table.grid.is_empty() {
-            let cols = table.cols().clamp(1, MAX_COLS);
-            table.grid = vec![72.0; cols];
+            // A file with an empty `w:tblGrid` keeps the inch per column it always had.
+            table.grid = if t.child("w:tblGrid").is_none() { grid_from_cells(&table) } else { vec![72.0; table.cols().clamp(1, MAX_COLS)] };
+        }
+        // The cells' paragraphs, with the run formatting the table style gives each cell (a
+        // table inside has marked its own).
+        let chrs = self.doc.styles.table_cells_chr(&table);
+        for (ri, row) in table.rows.iter_mut().enumerate() {
+            for (ci, cell) in row.cells.iter_mut().enumerate() {
+                let chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci));
+                for b in &mut cell.blocks {
+                    if let Block::Para(p) = Arc::make_mut(b) {
+                        self.doc.styles.mark_runs_as_word_draws_them(p, chr);
+                        p.normalize();
+                    }
+                }
+            }
         }
         Some(table)
     }
+}
+
+/// The narrowest column Word rebuilds for a table without `w:tblGrid`: 26 twips, for a cell of
+/// 10 twips and for 10 twips left over by a spanning cell alike (measured: Word re-saves both as
+/// `w:gridCol w:w="26"`). Content still widens a column when laid out.
+const MIN_GRID_COL: f32 = 1.3;
+
+/// The column grid of a table without `w:tblGrid` (a file written by a template library), the
+/// way Word rebuilds it on opening: each column as wide as the widest preferred width
+/// (`w:tcW` in twips) among the cells that occupy it alone, a spanning cell's width shared out
+/// among its columns that no cell sets, what it still lacks going to its last column, and an inch
+/// for a column no cell sizes at all; never narrower than [`MIN_GRID_COL`]. Spanning cells are
+/// taken from the left, whatever row they are in (measured: Word gives the same grid in any row
+/// order, and never narrows a column for a spanning cell).
+fn grid_from_cells(table: &Table) -> Vec<f32> {
+    let cols = table.cols().clamp(1, MAX_COLS);
+    let mut grid: Vec<Option<f32>> = vec![None; cols];
+    let mut spanning = Vec::new();
+    for row in &table.rows {
+        // After `w:gridBefore` the row's first cell is not in the first column.
+        let mut g = row.first_grid();
+        for cell in &row.cells {
+            let span = cell.span();
+            if let Some(w) = cell.props.width.filter(|w| w.is_finite() && *w > 0.0) {
+                // The narrowest column counts before a span shares out what it lacks.
+                let w = w.max(MIN_GRID_COL);
+                if span == 1 {
+                    if let Some(slot) = grid.get_mut(g) {
+                        *slot = Some(slot.map_or(w, |cur| cur.max(w)));
+                    }
+                } else {
+                    spanning.push((g, span, w));
+                }
+            }
+            g += span;
+        }
+    }
+    spanning.sort_by(|a: &(usize, usize, f32), b| (a.0 + a.1, a.0).cmp(&(b.0 + b.1, b.0)).then(a.2.total_cmp(&b.2)));
+    for (g, span, w) in spanning {
+        let end = (g + span).min(cols);
+        let Some(cs) = grid.get_mut(g..end) else { continue };
+        // A span cut off at the last column the reader keeps sizes only its kept columns, by
+        // their share of it, and has no last column to give the rest to.
+        let clipped = end < g + span;
+        let w = if clipped { w * cs.len() as f32 / span as f32 } else { w };
+        let known: f32 = cs.iter().flatten().sum();
+        let unknown = cs.iter().filter(|c| c.is_none()).count();
+        if unknown > 0 {
+            let each = ((w - known) / unknown as f32).max(MIN_GRID_COL);
+            for c in cs.iter_mut().filter(|c| c.is_none()) {
+                *c = Some(each);
+            }
+        }
+        let lacking = w - cs.iter().flatten().sum::<f32>();
+        if lacking > 0.0
+            && !clipped
+            && let Some(Some(last)) = cs.last_mut()
+        {
+            *last += lacking;
+        }
+    }
+    grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(MIN_GRID_COL, crate::units::MAX_LEN_PT)).collect()
 }

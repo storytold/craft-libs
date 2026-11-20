@@ -22,6 +22,7 @@ use craft_wordmodel::wordart::TextWarp;
 mod blocks;
 mod drawing;
 mod fields;
+mod locked_canvas;
 mod runs;
 mod vml;
 
@@ -47,6 +48,7 @@ const MAX_FORM: usize = 64 * 1024;
 #[derive(Clone, Default)]
 pub struct RunCtx {
     link: Option<String>,
+    link_tooltip: Option<std::sync::Arc<str>>,
     ins: Option<u32>,
     del: Option<u32>,
 }
@@ -113,6 +115,8 @@ pub struct StoryCtx {
     pub story_depth: usize,
     /// Reading a header or footer (not a text box inside one): where Word keeps its watermark.
     pub in_hf: bool,
+    /// Reading a table cell's paragraphs (not a text box inside one).
+    in_cell: bool,
 }
 
 /// Paragraph content under construction.

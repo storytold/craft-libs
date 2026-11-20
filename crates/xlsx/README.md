@@ -8,7 +8,8 @@ This is the part layer. `Package::open` opens the container through `craft-opc` 
 
 | Call | Gives |
 |---|---|
-| `workbook()` | `Workbook`: sheets in tab order (name, id, visibility, kind, part), the 1904 date flag, defined names, the active tab, and the whole part as a tree |
+| `workbook()` | `Workbook`: sheets in tab order (name, id, visibility, kind, part), the 1904 date flag, defined names, the active tab, the external references, and the whole part as a tree |
+| `external_links(workbook)` | each `ExternalLink` in `externalReferences` order, so a formula's `[n]` is entry `n - 1` (a reference without an id keeps its place, empty); a binary workbook's are read once, with its workbook part: another workbook's target, sheet names, defined names (`refersTo`, `sheetId`) and cached cells; a DDE or OLE link as `Other` |
 | `shared_strings()` | `StringItem`s: text, formatted runs, phonetic readings |
 | `styles()` | `Styles`: number formats, fonts, fills, borders, cell and cell-style formats, named styles, differential formats, the indexed palette, as indexed tables |
 | `sheet(entry, each)` | each `Row` of `Cell`s to a callback, then a `SheetPart`: the rest of the worksheet as a tree, its relationships, columns and merged cells |
@@ -36,8 +37,9 @@ were. Part names and relationship ids are kept, so a file read and written witho
 where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
 rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
 Typed worksheet features (`SheetPart::features`), each mirroring its element with optional
-attributes and the unnamed ones kept: sheet views (panes, selections), print setup (options,
-margins, page setup, header and footer, page breaks), data validation (also read from the `x14`
+attributes and the unnamed ones kept: sheet views (panes, selections), the default sizes
+(`sheetFormatPr`), print setup (options, margins, page setup, header and footer, page breaks),
+data validation (also read from the `x14`
 extension), conditional formats (colour scales, data bars, icon sets, rule extensions kept),
 hyperlinks (with their URLs), the legacy drawing. Comments (`Comments`, from the comments part)
 and the note shapes of the VML drawing (`NoteShape`). A sheet that gains comments and has no VML
@@ -83,9 +85,56 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells, with saved values
-only: its formulas are token streams that are not decoded, and its styles are not read (each
-cell keeps its format index).
+A binary workbook gives the same `Workbook`, strings, rows (with their heights, outline levels,
+hidden flags and styles), columns, default sizes and merged cells, and the same `Styles`:
+number formats, fonts, fills, borders, cell and cell style formats, cell styles, differential
+formats and the indexed colours, as Excel writes them in `styles.xml` (default fill colours and
+empty settings left out, a cell style format's `apply*="0"`, a number format with a newer locale tag
+in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and recent colours are not
+read; a damaged styles part is a warning and no styles, while one past a cap (65,536 entries in a
+table, 1,024 gradient stops) or past `binary_text` is too large. The descent Excel records for rows
+and the sheet (`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its defined names are those of `definedNames` in the `.xlsx`
+Excel writes: built-in names as `_xlnm.Print_Area`, sheet-scoped names with their `localSheetId`,
+relative references as the cell they reach from A1, macro names with their `function`, `xlm` or
+`vbProcedure`, `functionGroupId`, `shortcutKey`, `description` and `help`. Excel's hidden names for
+newer functions and LET parameters are left out, as in `.xlsx`, and so is the formula-less
+workbook-level built-in Excel writes beside a sheet's (`Database`), which formulas still spell
+`_xlnm.Database`, and the formula-less name of a VBA function a cell calls (`.xlsm` lists none; the
+cell spells it); a name whose formula can't be read is left out with a warning, and so is every name
+whose formula uses a left-out name. A reference may name an XLM macro sheet (`Macro1!$A$1`, where
+macro names point), and a 3-D span is spelled by its ends whatever chart sheets lie between them.
+Its cell formulas are decoded from their tokens into the text an `.xlsx` file holds (`_xlfn.` and
+`_xlpm.` names as written, apart from the four ISO/IEC 29500 functions `.xlsx` names bare, no
+implicit `@`, the spaces and line breaks typed in the formula, numbers as Excel spells them), with
+`FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
+metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
+file keeps the tokens once. A formula whose decoding needs something the reader does not read keeps
+only its saved result, with a warning saying why: a defined name left out, a table whose part can't
+be read, an unavailable external link, Python code stored outside the cell, data tables.
+
+A binary workbook's tables (`tableN.bin`, listed by the sheet's `BrtListPart`s) read through
+`Package::tables` into the same `Table`, as Excel writes the table in `.xlsx`: the calculated and
+totals formulas decoded as cell formulas are, an XML map's column properties, and the AutoFilter and
+sort state built as the `autoFilter` and `sortState` elements, with numbers in a filter spelled as
+Excel writes them there (17 significant digits; Excel writes a few values shorter, such as `0.1`,
+which read back the same). A filter column the reader can't spell is left out with a warning (Excel
+keeps date-group filters in an extension the reader skips; a custom filter on a Boolean value has no
+`.xlsx` spelling Excel has shown), as is a sort by stroke or PinYin order. The revision ids Excel
+writes (`xr:uid`) are in alternate-content blocks, which are skipped. A structured reference in a
+formula (`PtgList`) is spelled as `.xlsx` has it (`Sales[Val]`, `Sales[[#Headers],[Key]]`,
+`Sales[[#This Row],[A]:[B]]`, with Excel's spacing flags), from the table's id, which is
+workbook-wide: the workbook's table parts are indexed when its workbook part is read. A reference to
+a table that can't be read, to a deleted table or into another workbook keeps the cell's saved
+result. The XLSB function table (`xlsb/ftab.rs`) and the expression printer are this crate's own,
+apart from `craft-xls`'s.
+
+A reference to another workbook is spelled as `.xlsx` has it (`[1]Data!$A$1`, `'[1]Other Sheet'!A1`,
+`'[1]A:C'!A1`, `[1]!ExtName`, a DDE item `[2]!'R1C1'`), numbered by its `BrtSupBookSrc`, from the
+sheet and name lists of its `externalLinkN.bin`, read when the workbook part is; Excel quotes such a
+sheet only for a leading digit or a character outside letters, digits, `_` and `.`. Excel's binary
+file may record a sheet-scoped name of the other workbook as workbook-level (`iSheet` 0); such a
+name reads as Excel itself reads it back, `[1]!Local`. A reference to a link that can't be read, a
+deleted sheet of it or a name it lacks keeps the cell's saved result.
 
 ## Hostile input
 
@@ -94,8 +143,12 @@ cell keeps its format index).
   string and what is left of a part, not a sheet's length.
 - `Limits.binary_records`, `binary_cells`, `binary_text`: a binary workbook, over all its parts
   (40 million records, 4 million cells and as many shared strings, 256 MiB of text, as
-  `craft-xls` allows). Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
-  extension blocks.
+  `craft-xls` allows). `binary_formula_text`: decoded formula text over the workbook (128 MiB);
+  past it, formulas keep their saved results. A formula's tokens are bounded at 16 KB, its
+  nesting at 256 levels and its array constants at 65,536 values in all, each charged before
+  it is held; once the formula text allowance is spent, no formula is decoded. Fixed caps: 1024
+  sheets, 100,000 merged ranges and 16,384 column records per sheet, 64 nested extension blocks. A
+  row taller than 8,192 twips keeps the default height.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
 SpreadsheetML is read leniently: a damaged optional part is a warning, a damaged worksheet keeps
