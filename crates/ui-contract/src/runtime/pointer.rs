@@ -149,6 +149,8 @@ pub(crate) struct Shapes {
     hover: Option<(Pos2, PressTargets, Under)>,
     /// A press was open when the pass began: only its target hovers.
     captured: bool,
+    /// Parts holding a press at the start of this pass, before enclosing arenas process its release.
+    pressed_parts: Vec<(Id, PartRef)>,
     /// What lies under another point a press asked for in the pass, with its targets: every root asks for the same
     /// press.
     winner: Option<(Pos2, PressTargets, Under)>,
@@ -241,9 +243,11 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     let hover_targets = PressTargets { click: hits.0, drag: hits.1 };
     let hover = hover_at.map(|at| (at, hover_targets, find_under(ctx, viewport, at, hover_targets, false)));
     let captured = press_captured(ctx);
+    let pressed_parts = crate::primitives::sensing::pressed_parts(ctx);
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.hover = hover;
         shapes.captured = captured;
+        shapes.pressed_parts = pressed_parts;
     });
 }
 
@@ -919,12 +923,18 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
 
 /// The part of `owner` holding the pointer's hover or an open press in this viewport.
 ///
-/// An open press keeps its part while the pointer moves away, so callers can keep declaring it until release.
+/// An open press keeps its part while the pointer moves away. A press open at the start of the pass keeps its part
+/// for that whole pass, so a child can still declare it after an enclosing arena has processed the release.
 pub fn active_part(ctx: &Context, owner: Id) -> Option<PartRef> {
     let viewport = pass::current_viewport(ctx);
+    let pressed =
+        PerViewport::<Shapes>::with(ctx, viewport, |record| record.pressed_parts.iter().find_map(|(id, part)| (*id == owner).then_some(*part)));
+    if pressed.is_some() {
+        return pressed;
+    }
     with_hover(ctx, viewport, |under, captured| {
         if captured {
-            return crate::primitives::sensing::pressed_part(ctx, owner);
+            return None;
         }
         let under = under?;
         [under.press.click, under.press.drag, under.hover_top]

@@ -46,6 +46,8 @@ struct Config {
     snap: bool,
     /// The box is `TransformBox::text_frame`; `rules`, `zone`, `inside_moves` and `reference_point` are then unused.
     text_frame: bool,
+    /// Show the frame only while hovered or while its part owns the pointer.
+    hover_frame: bool,
     overflow: bool,
     /// The canvas's rulers on both axes.
     rulers: Option<RulerText>,
@@ -95,6 +97,7 @@ fn defaults() -> Config {
         guides: false,
         snap: false,
         text_frame: false,
+        hover_frame: false,
         overflow: false,
         rulers: None,
         f32_host: false,
@@ -169,6 +172,12 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                 let output = Guides::new("Guides", canvas_id, Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect);
                 guide_edits = usize::from(!output.edit.events.is_empty());
             }
+            let frame_id = egui::Id::unique("hover frame");
+            let frame_rect = egui::Rect::from_two_pos(view.to_screen(RECT.origin()), view.to_screen(Point::new(RECT.x1, RECT.y1))).expand(8.0);
+            let hovered = ui.ctx().pointer_hover_pos().is_some_and(|pos| frame_rect.contains(pos));
+            if config.hover_frame && !hovered && craft_ui::runtime::pointer::active_part(ui.ctx(), frame_id).is_none() {
+                return None;
+            }
             let mut control = if config.text_frame {
                 TransformBox::text_frame("Free Transform", Bind::given(state), RECT).overflow(config.overflow)
             } else {
@@ -185,9 +194,12 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             if let Some(line) = config.line {
                 control = control.line(line);
             }
-            (control.show_at(ui, body.rect), guide_edits)
+            if config.hover_frame {
+                control = control.id(frame_id);
+            }
+            Some((control.show_at(ui, body.rect), guide_edits))
         });
-        if let Some((output, guide_edits)) = canvas.inner {
+        if let Some(Some((output, guide_edits))) = canvas.inner {
             let mut host = shown_host.borrow_mut();
             host.shown = output.edit.shown.as_ref().and_then(|value| value.same()).map(|value| **value);
             host.guide_events += guide_edits;
@@ -472,6 +484,24 @@ fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() 
     assert!(!events.contains(&Seen::Cancel), "the rounded write-back cancels nothing: {events:?}");
     assert!((first - 250.0).abs() < 0.01 && (second - 280.0).abs() < 0.01, "each move reaches the host: {first} {second}");
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
+}
+
+/// A hover-revealed frame remains declared through release after its drag leaves the original box.
+#[trial]
+fn a_hover_frame_commits_a_drag_released_outside() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.text_frame = true;
+        config.hover_frame = true;
+    });
+    let start = h.screen(Point::new(300.0, 150.0));
+    let end = start + by(120.0, 0.0);
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    frame(&mut h, vec![pointer::moved(end)]);
+    frame(&mut h, vec![pointer::release(end)]);
+    frame(&mut h, Vec::new());
+    let events = &h.host.borrow().events;
+    assert!(events.contains(&Seen::Commit), "the host receives the release: {events:?}");
 }
 
 #[trial]
