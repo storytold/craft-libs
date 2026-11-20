@@ -820,3 +820,25 @@ fn an_alt_side_drag_on_converging_edges_eases_the_opposite_side() {
         assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ drags about a moved reference point on a box whose top and bottom converge (measured on the reference): the factor
+/// is measured from the reference point along the sides to the dragged edge's line, and the rows (or, for a top or
+/// bottom drag, the columns) centre on where the scale takes the box's middle, not on the reference point.
+#[test]
+fn an_alt_drag_about_a_moved_reference_point_centres_on_the_scaled_middle() {
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let quad = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)].map(|(x, y)| p(x, y));
+    let cases = [
+        // Was 24 px off.
+        ((249.5, 199.5), 1, (452.0, 226.0), (502.0, 226.0), [(121.32, 156.03), (496.6, 205.73), (499.22, 307.98), (135.18, 259.76)], 1.1),
+        // Was 29 px off.
+        ((249.5, 199.5), 3, (150.0, 226.0), (110.0, 226.0), [(113.86, 95.84), (535.66, 151.71), (519.29, 375.93), (110.69, 321.81)], 1.6),
+        // Was 82 px off; the top corners are still up to 5.8 px off.
+        ((249.5, 199.5), 2, (301.0, 307.0), (301.0, 347.0), [(117.8, 99.12), (545.03, 164.26), (524.63, 318.29), (80.85, 378.05)], 5.8),
+    ];
+    for (pivot, edge, from, to, want, tol) in cases {
+        let start = BoxState::new(quad, p(pivot.0, pivot.1));
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "pivot {pivot:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}

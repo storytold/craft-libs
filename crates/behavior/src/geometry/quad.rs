@@ -752,7 +752,7 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     }
     let [tl, tr, br, bl] = g.quad0;
     let sign = if edge == 1 { 1.0 } else { -1.0 };
-    let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
+    let reach = if edge == 1 { reach_to(c, across(tl, tr, bl, br), uh, tr, br) } else { reach_to(c, -across(tl, tr, bl, br), -uh, tl, bl) };
     let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
     // The opposite side and the height follow a factor eased by the box's slant ([`alt_spread`], as for a top or
     // bottom drag); the dragged side stays where the plain drag puts it (measured on the reference, seven boxes).
@@ -763,8 +763,11 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
         return None;
     }
     let mut quad = turned_side_scale(g, p, min_side, uh, nh, k)?;
+    // The rows centre on where the scale about the reference point takes the box's middle (its corners' mean), not on
+    // the reference point's own row (the two agree for a centred reference point).
+    let centre = k * (mean_of(g.quad0) - c).dot(nh);
     for (i, row) in [(0, -height / 2.0), (1, -height / 2.0), (2, height / 2.0), (3, height / 2.0)] {
-        quad[i] = c + uh * (quad[i] - c).dot(uh) + nh * row;
+        quad[i] = c + uh * (quad[i] - c).dot(uh) + nh * (row + centre);
     }
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
@@ -783,7 +786,7 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     let f = g.quad0.map(|x| (x - c).dot(uh));
     let v = g.quad0.map(|x| (x - c).dot(nh));
     let sign = if edge == 2 { 1.0 } else { -1.0 };
-    let reach = if edge == 2 { (br.midpoint(bl) - c).dot(nh) } else { (c - tl.midpoint(tr)).dot(nh) };
+    let reach = if edge == 2 { reach_to(c, across(tl, bl, tr, br), nh, bl, br) } else { reach_to(c, -across(tl, bl, tr, br), -nh, tl, tr) };
     let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
     // The box grows by a factor eased from the pointer's `k`: a bottom drag by less, a top drag by slightly more as
     // the drag grows (measured on the reference, eleven boxes), by `spread`.
@@ -804,8 +807,10 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     for i in if edge == 2 { [2, 3] } else { [0, 1] } {
         out[i] = c + uh * (out[i] - c).dot(uh) + nh * (plain[i] - c).dot(nh);
     }
+    // The columns centre on where the scale takes the box's middle, as the rows do for a side drag.
+    let centre = k * (mean_of(g.quad0) - c).dot(uh);
     for (i, column) in [(0, -width / 2.0), (1, width / 2.0), (2, width / 2.0), (3, -width / 2.0)] {
-        out[i] = c + uh * column + nh * (out[i] - c).dot(nh);
+        out[i] = c + uh * (column + centre) + nh * (out[i] - c).dot(nh);
     }
     out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
 }
@@ -952,7 +957,8 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
                 let origin = c - left2 * tau - u2 * sigma;
                 [origin, origin + u2, origin + u2 + right2, origin + left2]
             } else {
-                let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
+                let reach =
+                    if edge == 1 { reach_to(c, across(tl, tr, bl, br), uh, tr, br) } else { reach_to(c, -across(tl, tr, bl, br), -uh, tl, bl) };
                 let k = factor(sign * d.dot(uh), reach)?;
                 turned_side_scale(g, p, min_side, uh, nh, k)?
             }
@@ -1088,6 +1094,34 @@ fn level_snap(quad: &mut [Point; 4], start: &[Point; 4], sides: [(usize, usize);
             (quad[a].x, quad[b].x) = (x, x);
         }
     }
+}
+
+/// How far an ⌥ drag's dragged edge is from the reference point `c`, measured along `axis`: the reference goes from
+/// `c` along `dir` (the mean direction of the two edges beside the dragged one) to the dragged edge's line through
+/// `a` and `b`. For a centred reference point on a box with straight edges beside it, that is the edge's middle; where
+/// `dir` runs along the edge, the edge's middle.
+fn reach_to(c: Point, dir: Vec2, axis: Vec2, a: Point, b: Point) -> f64 {
+    let along = b - a;
+    let den = dir.cross(along);
+    if den.abs() > 1e-9 * along.hypot() * dir.hypot() { (a - c).cross(along) / den * dir.dot(axis) } else { (a.midpoint(b) - c).dot(axis) }
+}
+
+/// The mean direction, as a unit vector, of the edges from `a0` to `a1` and from `b0` to `b1` (each normalised first);
+/// zero for a degenerate pair.
+fn across(a0: Point, a1: Point, b0: Point, b1: Point) -> Vec2 {
+    let (a, b) = (a1 - a0, b1 - b0);
+    let (la, lb) = (a.hypot(), b.hypot());
+    if !(la > 1e-12 && lb > 1e-12) {
+        return Vec2::ZERO;
+    }
+    let d = a / la + b / lb;
+    let l = d.hypot();
+    if l > 1e-12 { d / l } else { Vec2::ZERO }
+}
+
+/// The mean of a quad's corners.
+fn mean_of(q: [Point; 4]) -> Point {
+    Point::new((q[0].x + q[1].x + q[2].x + q[3].x) / 4.0, (q[0].y + q[1].y + q[2].y + q[3].y) / 4.0)
 }
 
 /// The cross product of two homogeneous points or lines: the line through two points, or where two lines meet.
