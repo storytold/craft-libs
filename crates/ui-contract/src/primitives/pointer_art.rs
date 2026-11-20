@@ -5,7 +5,11 @@
 
 mod art;
 
+use super::Mirror;
 use super::SvgIcon;
+use crate::runtime::cursor::{CursorArt, CursorBitmap, MAX_SIDE};
+use crate::runtime::env::Env;
+use crate::style::Ink;
 use crate::style::UiTokens;
 pub(crate) use art::Art;
 use art::Mark;
@@ -14,6 +18,68 @@ use craft_i18n::Direction;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use std::cell::RefCell;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
+/// The window image of the painted pointer `cursor` at `scale` device pixels per point, rasterised from the art the
+/// ghost paints; `None` when the art does not fit a cursor image.
+pub fn painted_image(env: &Env, cursor: &PaintedCursor, scale: f32) -> Option<CursorBitmap> {
+    pointer_art(env, cursor, false, false).rasterise(scale, MAX_SIDE)
+}
+
+/// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
+/// without its ring. The ghost paints it and the window's cursor image is rasterised from it, so both look the same.
+pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks_only: bool) -> Art {
+    use craft_behavior::PointerGlyph;
+    let overlay = &env.tokens.color.overlay;
+    let pen = Pen {
+        art: RefCell::new(Art::default()),
+        fill: crate::style::rgba_color(overlay.stroke),
+        halo: crate::style::rgba_color(overlay.halo),
+        thin: env.tokens.stroke.thin,
+        rtl: env.direction.is_rtl(),
+    };
+    let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
+    let edge = env.tokens.stroke.thin;
+    match cursor {
+        PaintedCursor::Outline { rings, centre, badge, .. } => {
+            if !marks_only {
+                outline(&pen, rings);
+            }
+            tip_marks(&pen, *centre || marks_only, *badge, pen.thin, pen.fill);
+        }
+        PaintedCursor::Circle { radius, centre, badge, .. } => {
+            if !marks_only {
+                circle(&pen, *radius, edge, ink);
+            }
+            tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
+        }
+        PaintedCursor::Crosshair => crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
+        PaintedCursor::Hand => hand(&pen, closed),
+        PaintedCursor::Zoom { out, .. } => zoom(&pen, *out),
+        PaintedCursor::Tool { icon, hotspot, badge, .. } => {
+            let side = env.tokens.size.icon.md;
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
+            tool(&pen, icon, *hotspot, *badge, side);
+        }
+        PaintedCursor::Badged { badge, .. } => badge_beside(&pen, *badge),
+        PaintedCursor::Turn { toward, .. } => turn(&pen, *toward),
+        PaintedCursor::Distort { dir, .. } => distort(&pen, *dir),
+        PaintedCursor::Skew { dir, .. } => skew(&pen, *dir),
+        PaintedCursor::TypeOn { path, .. } => type_on(&pen, *path),
+        PaintedCursor::IBeam => i_beam_pointer(&pen),
+        PaintedCursor::Locator => locator(&pen),
+        PaintedCursor::Arrow { hollow, toward, .. } => arrow(&pen, *hollow, *toward),
+        PaintedCursor::PathText { start, end, .. } => path_text(&pen, *start, *end),
+        PaintedCursor::PointerTool { pointer, icon, .. } => {
+            // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
+            let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
+            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
+            pointer_tool(&pen, *pointer, icon, side, edge, ink);
+        }
+        // `Hidden` has no marks.
+        _ => {}
+    }
+    pen.art.into_inner()
+}
 
 /// The icon sets draw on a box this many units on a side; a tool pointer's hotspot is in these.
 const ICON_UNITS: f32 = 24.0;

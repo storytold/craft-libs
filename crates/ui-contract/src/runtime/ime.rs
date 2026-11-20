@@ -2,7 +2,6 @@
 //! caret rect for the OS. While a framework editor owns the IME, the engine is the one reader of the IME events and
 //! the one writer of `PlatformOutput.ime`; otherwise both stay with egui and the app's own widgets.
 
-use crate::primitives::EditorSurrounding;
 use crate::runtime::egui::ime as os;
 use crate::runtime::egui::input::Arrived;
 use crate::runtime::egui::pass;
@@ -67,6 +66,40 @@ struct EditorFacts {
 
 /// An owner's surrounding report as the engine keeps it for one pass: an owned copy of at most
 /// `MAX_IME_SURROUNDING_TEXT_BYTES` around the selection, never the whole document, and the epoch of the target.
+/// The committed window around the caret that an editor reports to the input method, or why there is none.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum EditorSurrounding<'a> {
+    /// The text around the caret, with UTF-8 offsets of the cursor and the selection anchor into it.
+    #[non_exhaustive]
+    Text {
+        /// The committed text.
+        text: &'a str,
+        /// The cursor's byte offset into `text`.
+        cursor: usize,
+        /// The selection anchor's byte offset into `text`.
+        anchor: usize,
+    },
+    /// The editor has no text to report.
+    #[non_exhaustive]
+    Unavailable {
+        /// The revision the editor reports it at, if it keeps one.
+        revision: Option<u64>,
+    },
+}
+
+impl<'a> EditorSurrounding<'a> {
+    /// The text around the caret, with byte offsets of the cursor and the selection anchor into `text`.
+    pub const fn text(text: &'a str, cursor: usize, anchor: usize) -> Self {
+        EditorSurrounding::Text { text, cursor, anchor }
+    }
+
+    /// No text to report, at `revision` if the editor keeps one.
+    pub const fn unavailable(revision: Option<u64>) -> Self {
+        EditorSurrounding::Unavailable { revision }
+    }
+}
+
 #[derive(Clone)]
 struct Surrounding {
     epoch: u64,

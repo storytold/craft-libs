@@ -319,3 +319,14 @@ fn key_hash<K: std::hash::Hash>(key: &K) -> u64 {
     key.hash(&mut hasher);
     hasher.finish()
 }
+
+// `StyleCx::face` sits here, with the measuring it calls, not in `style`: `style` is below `contract`.
+impl crate::style::StyleCx<'_> {
+    /// The size `face` has, measured from the `Ui` the collection hook fills this context from, so a collection's
+    /// `item_layout` measures a button's label and icon in the pass it lays out in. Zero in a context no collection
+    /// filled, which has nothing to measure in.
+    pub fn face<S: crate::contract::Show>(&self, mut face: S) -> egui::Vec2 {
+        let Some(ui) = self.measuring else { return egui::Vec2::ZERO };
+        crate::contract::measure_under(&mut face, ui, None, craft_behavior::Proposal::Ideal, None)
+    }
+}

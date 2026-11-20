@@ -296,25 +296,7 @@ pub struct EditorState<'a> {
     pub surrounding: Option<(u64, EditorSurrounding<'a>)>,
 }
 
-/// The committed window around the caret that an editor reports to the input method, or why there is none.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub enum EditorSurrounding<'a> {
-    /// The text around the caret, with UTF-8 offsets of the cursor and the selection anchor into it.
-    Text {
-        /// The committed text.
-        text: &'a str,
-        /// The cursor's byte offset into `text`.
-        cursor: usize,
-        /// The selection anchor's byte offset into `text`.
-        anchor: usize,
-    },
-    /// The editor has no text to report.
-    Unavailable {
-        /// The revision the editor reports it at, if it keeps one.
-        revision: Option<u64>,
-    },
-}
+pub use crate::runtime::ime::EditorSurrounding;
 
 /// The input method's mutation stamp, which an editor compares to tell its own edits from the input method's.
 pub use egui::ime_context::ImeMutationStamp as ImeStamp;

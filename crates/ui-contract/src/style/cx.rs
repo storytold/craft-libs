@@ -74,7 +74,7 @@ pub struct StyleCx<'a> {
     /// hook for the layout it asks of the component.
     owner: Option<(Id, MotionPolicy)>,
     /// The `Ui` a collection's layout hook measures faces in; none elsewhere.
-    measuring: Option<&'a egui::Ui>,
+    pub(crate) measuring: Option<&'a egui::Ui>,
 }
 
 /// A variant's look as style parts.
@@ -195,14 +195,6 @@ impl<'a> StyleCx<'a> {
     pub fn with_root<R>(ctx: &Context, f: impl FnOnce(&StyleCx<'_>) -> R) -> R {
         let env = crate::runtime::env::Env::of_root(ctx);
         f(&StyleCx::of_env(ctx, &env))
-    }
-
-    /// The size `face` has, measured from the `Ui` the collection hook fills this context from, so a collection's
-    /// `item_layout` measures a button's label and icon in the pass it lays out in. Zero in a context no collection
-    /// filled, which has nothing to measure in.
-    pub fn face<S: crate::contract::Show>(&self, mut face: S) -> egui::Vec2 {
-        let Some(ui) = self.measuring else { return egui::Vec2::ZERO };
-        crate::contract::measure_under(&mut face, ui, None, craft_behavior::Proposal::Ideal, None)
     }
 
     /// The same context measuring faces in `ui`; the collection hook calls it before it asks for a layout.

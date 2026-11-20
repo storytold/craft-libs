@@ -1,27 +1,22 @@
 //! The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 //! painted winner reaches the window as its cursor image where the window shows one.
 
-use crate::primitives::pointer_art::{self as pointers, Art};
-use crate::primitives::{Mirror, SvgIcon};
 use crate::runtime::egui::areas::LayerKey;
 use crate::runtime::egui::{output, pass, viewports};
-use crate::runtime::env::Env;
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
-use crate::style::Ink;
 use craft_behavior::cursor::pick_index;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority, PaintedCursor};
 use craft_host::target::Os;
 use egui::{Context, Rect, ViewportId};
 use std::any::Any;
-use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The largest side of a cursor image in device pixels on Linux, where X servers and hardware cursor planes commonly
 /// cap cursors at 256 and fall back to slow software cursors, or reject them, past that.
 const MAX_SIDE_LINUX: u16 = 255;
 /// The largest side elsewhere: winit's limit; AppKit sets none on an `NSCursor` image.
-const MAX_SIDE: u16 = 2048;
+pub(crate) const MAX_SIDE: u16 = 2048;
 
 /// A cursor image in straight (not premultiplied) RGBA, row by row, its hotspot on the centre pixel.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,68 +68,6 @@ pub(crate) struct State {
     /// The last image handed to the window with the art and scale it was drawn from. egui-winit uploads an image to
     /// the OS whenever its `Arc` changes, so an unchanged pointer hands over the same one.
     image: Option<(Box<dyn Any + Send + Sync>, f32, CursorBitmap)>,
-}
-
-/// The window image of the painted pointer `cursor` at `scale` device pixels per point, rasterised from the art the
-/// ghost paints; `None` when the art does not fit a cursor image.
-pub fn painted_image(env: &Env, cursor: &PaintedCursor, scale: f32) -> Option<CursorBitmap> {
-    pointer_art(env, cursor, false, false).rasterise(scale, MAX_SIDE)
-}
-
-/// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge
-/// without its ring. The ghost paints it and the window's cursor image is rasterised from it, so both look the same.
-pub(crate) fn pointer_art(env: &Env, cursor: &PaintedCursor, closed: bool, marks_only: bool) -> Art {
-    use craft_behavior::PointerGlyph;
-    let overlay = &env.tokens.color.overlay;
-    let pen = pointers::Pen {
-        art: RefCell::new(Art::default()),
-        fill: crate::style::rgba_color(overlay.stroke),
-        halo: crate::style::rgba_color(overlay.halo),
-        thin: env.tokens.stroke.thin,
-        rtl: env.direction.is_rtl(),
-    };
-    let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
-    let edge = env.tokens.stroke.thin;
-    match cursor {
-        PaintedCursor::Outline { rings, centre, badge, .. } => {
-            if !marks_only {
-                pointers::outline(&pen, rings);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, pen.thin, pen.fill);
-        }
-        PaintedCursor::Circle { radius, centre, badge, .. } => {
-            if !marks_only {
-                pointers::circle(&pen, *radius, edge, ink);
-            }
-            pointers::tip_marks(&pen, *centre || marks_only, *badge, edge, ink);
-        }
-        PaintedCursor::Crosshair => pointers::crosshair(&pen, env.tokens.size.icon.sm, edge, ink),
-        PaintedCursor::Hand => pointers::hand(&pen, closed),
-        PaintedCursor::Zoom { out, .. } => pointers::zoom(&pen, *out),
-        PaintedCursor::Tool { icon, hotspot, badge, .. } => {
-            let side = env.tokens.size.icon.md;
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
-            pointers::tool(&pen, icon, *hotspot, *badge, side);
-        }
-        PaintedCursor::Badged { badge, .. } => pointers::badge_beside(&pen, *badge),
-        PaintedCursor::Turn { toward, .. } => pointers::turn(&pen, *toward),
-        PaintedCursor::Distort { dir, .. } => pointers::distort(&pen, *dir),
-        PaintedCursor::Skew { dir, .. } => pointers::skew(&pen, *dir),
-        PaintedCursor::TypeOn { path, .. } => pointers::type_on(&pen, *path),
-        PaintedCursor::IBeam => pointers::i_beam_pointer(&pen),
-        PaintedCursor::Locator => pointers::locator(&pen),
-        PaintedCursor::Arrow { hollow, toward, .. } => pointers::arrow(&pen, *hollow, *toward),
-        PaintedCursor::PathText { start, end, .. } => pointers::path_text(&pen, *start, *end),
-        PaintedCursor::PointerTool { pointer, icon, .. } => {
-            // The arrow's icon sits under its body, so it takes the larger size to show past the arrow.
-            let side = if *pointer == PointerGlyph::Arrow { env.tokens.size.icon.md } else { env.tokens.size.icon.sm };
-            let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, Mirror::Auto);
-            pointers::pointer_tool(&pen, *pointer, icon, side, edge, ink);
-        }
-        // `Hidden` has no marks.
-        _ => {}
-    }
-    pen.art.into_inner()
 }
 
 /// Requests `cursor` for the running pass of this viewport.

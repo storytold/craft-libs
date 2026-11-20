@@ -45,6 +45,7 @@ pub use kit::{
 };
 pub use marker::{Marker, MarkerSize};
 pub use paint_slot::PaintSlot;
+pub use pointer_art::painted_image;
 pub use reset_mark::ResetMark;
 pub use rule::{RectSide, Rule, RuleKind};
 pub use scroll_bar::{HiddenContent, ScrollBar};

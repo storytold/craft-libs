@@ -5,6 +5,7 @@
 //! the pointer during a gesture paint here too, for the pass that asks.
 
 use crate::primitives::pointer_art::Art;
+use crate::primitives::pointer_art::pointer_art;
 use crate::primitives::{Draw, DrawEnv, PaintRecord, PaintShape, RuleKind, Span, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
 use crate::runtime::egui::areas;
@@ -108,10 +109,10 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
     let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
     let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
-    let whole = cursor::pointer_art(env, &cursor, closed, false);
+    let whole = pointer_art(env, &cursor, closed, false);
     let confined = cursor::current_region(ctx).filter(|region| tip && !shows_whole(ctx, region, &whole, at));
     let ring = |painter: &egui::Painter| {
-        let art = cursor::pointer_art(env, &cursor.clone().marked(false, None), closed, false);
+        let art = pointer_art(env, &cursor.clone().marked(false, None), closed, false);
         match confined {
             Some(region) => paint_in_region(ctx, region, &art, at),
             None => art.paint(painter, at),
@@ -122,7 +123,7 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
         if confined.is_none() && cursor::show_image(ctx, &whole, target) {
             return;
         }
-        if tip && cursor::show_image(ctx, &cursor::pointer_art(env, &cursor, closed, true), target) {
+        if tip && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target) {
             ring(painter);
             return;
         }
@@ -130,7 +131,7 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     match confined {
         Some(_) => {
             ring(painter);
-            cursor::pointer_art(env, &cursor, closed, true).paint(painter, at);
+            pointer_art(env, &cursor, closed, true).paint(painter, at);
         }
         None => whole.paint(painter, at),
     }

@@ -105,7 +105,7 @@ impl Component for Probe<'_> {
             state.composing = doc.composing.get();
         }
         if let Some(epoch) = doc.epoch.get() {
-            state = state.surrounding(epoch, EditorSurrounding::Text { text: shown, cursor: shown.len(), anchor: shown.len() });
+            state = state.surrounding(epoch, EditorSurrounding::text(shown, shown.len(), shown.len()));
         }
         match cx.editor_handle().filter(|_| doc.body.get()) {
             Some(handle) => body(&handle, &cx.response.ctx, state),

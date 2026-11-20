@@ -4,7 +4,7 @@ use craft_behavior::PaintedCursor;
 use craft_ui::contract::{Gap, Pattern, Props, Show as _, ShowContainer as _};
 use craft_ui::display::{Picture, PictureSize, Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
-use craft_ui::runtime::cursor::painted_image;
+use craft_ui::primitives::painted_image;
 use craft_ui::runtime::env::Env;
 use craft_ui::style::TypeRole;
 use egui::{Color32, ColorImage, Ui};
