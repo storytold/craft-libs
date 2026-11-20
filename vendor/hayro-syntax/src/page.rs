@@ -1400,6 +1400,37 @@ mod page_tree_tests {
         );
     }
 
+    /// PdfCraft patch (48, storytold/pdfcraft#7608): a reference whose generation number does not
+    /// fit 32 bits still names its object (a generation is at most 65,535, ISO 32000-2 §7.5.4, so
+    /// the object number is what identifies it), so a page's content streams named that way are
+    /// part of its content, in a `/Contents` array or alone (§7.3.10).
+    #[test]
+    fn a_content_stream_named_by_a_generation_past_32_bits_is_read() {
+        for (header, contents) in [
+            ("4285904753", "[4 0 R 5 4285904753 R]"),
+            ("4285904753", "5 4285904753 R"),
+            ("0", "[4 0 R 5 4285904753 R]"),
+            ("18446744073709551616", "[4 0 R 5 18446744073709551616 R]"),
+        ] {
+            // No table, so the objects are found by scanning the file.
+            let pdf = format!(
+                "%PDF-1.4\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents {contents} >> endobj\n\
+                 4 0 obj << /Length 8 >> stream\n1 0 0 rg\nendstream endobj\n\
+                 5 {header} obj << /Length 25 >> stream\n0 0 0 rg 0 0 200 100 re f\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n\
+                 %%EOF\n"
+            );
+            let pdf = Pdf::new(pdf.into_bytes()).unwrap();
+            let content = pdf.pages()[0].page_stream().map(<[u8]>::to_vec).unwrap_or_default();
+            let content = String::from_utf8_lossy(&content);
+            assert!(content.contains("0 0 0 rg 0 0 200 100 re f"), "{header} / {contents}: {content:?}");
+            assert_eq!(content.contains("1 0 0 rg"), contents.starts_with('['), "{header} / {contents}: {content:?}");
+        }
+    }
+
     fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {
         let bounds = crop.map(|n| n.to_string()).join(" ");
         let objects = [
