@@ -173,9 +173,8 @@ mod tests {
         let program_bytes = b"dummy-sfnt-data-repeated-for-flate-compression-dummy-sfnt-data";
         let tt_prog = font_program_stream(&mut doc, program_bytes, false);
         let tt_obj = doc.resolve(&tt_prog);
-        let tt_stream = tt_obj.as_stream();
-        assert!(tt_stream.is_some());
-        if let Some(tt_stream) = tt_stream {
+        assert!(matches!(tt_obj.as_ref(), Object::Stream(_)));
+        if let Object::Stream(tt_stream) = tt_obj.as_ref() {
             assert_eq!(tt_stream.dict.name(b"Filter"), Some(b"FlateDecode".as_slice()));
             assert_eq!(tt_stream.dict.get(b"Subtype"), None);
             assert_eq!(tt_stream.decoded().ok().as_deref(), Some(program_bytes.as_slice()));
@@ -183,9 +182,8 @@ mod tests {
 
         let cff_prog = font_program_stream(&mut doc, program_bytes, true);
         let cff_obj = doc.resolve(&cff_prog);
-        let cff_stream = cff_obj.as_stream();
-        assert!(cff_stream.is_some());
-        if let Some(cff_stream) = cff_stream {
+        assert!(matches!(cff_obj.as_ref(), Object::Stream(_)));
+        if let Object::Stream(cff_stream) = cff_obj.as_ref() {
             assert_eq!(cff_stream.dict.name(b"Subtype"), Some(b"OpenType".as_slice()));
         }
 
