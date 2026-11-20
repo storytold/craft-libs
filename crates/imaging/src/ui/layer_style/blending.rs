@@ -9,7 +9,7 @@ use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::UnitKind;
-use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::env::{Env, Label, WheelScope, with_env};
 use craft_ui::sections::{HeaderStrength, Section};
 use egui::Ui;
 
@@ -116,7 +116,12 @@ pub(super) fn blending_page(ui: &mut Ui, input: &BlendingInput<'_>) -> BlendingO
             FieldGroup::new(words.general_blending.clone()).show(ui, |ui, _| {
                 Field::new(words.blend_mode.clone()).show(ui, |ui, _| {
                     let shown = with_current(input.blend_modes, &b.blend);
-                    let edit = Select::new(words.blend_mode.clone(), Bind::given(b.blend.clone()), &shown).show(ui);
+                    // The wheel over the dropdown steps the mode without a click first, as Photoshop's does.
+                    let edit = with_env(
+                        ui,
+                        |scope| scope.wheel = Some(WheelScope::Free),
+                        |ui| Select::new(words.blend_mode.clone(), Bind::given(b.blend.clone()), &shown).show(ui),
+                    );
                     push(style_edit(&edit, style, |v: &String| StyleOp::Blending(BlendingOp::Blend(v.clone()))));
                 });
                 Field::new(words.opacity.clone()).show(ui, |ui, _| {

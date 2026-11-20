@@ -14,7 +14,7 @@ use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::{PresetPicker, PresetRow, PresetState};
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Label, UnitKind, Units};
+use craft_ui::runtime::env::{Label, UnitKind, Units, WheelScope, with_env};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::text::NumberField;
 use craft_ui::value_drag::AngleDial;
@@ -256,7 +256,9 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
             if !entries.iter().any(|entry| entry.value().is_some_and(|value| value == current)) {
                 entries.push(Entry::new(current.to_owned(), current.to_owned()));
             }
-            if let Some(response) = pick(ui, key, &label, current, &entries) {
+            // The wheel over the dropdown steps the mode without a click first, as Photoshop's does.
+            let picked = with_env(ui, |scope| scope.wheel = Some(WheelScope::Free), |ui| pick(ui, key, &label, current, &entries));
+            if let Some(response) = picked {
                 push_edit(&mut out.edit, style_edit(&response, input.style, |v| param(StyleValue::Text(v.clone()))));
             }
         }
