@@ -34,17 +34,17 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `pcm-encode` | `encode`, `FileEncoder` for WAV and AIFF; `wav_float_header`; `pcm_wav_file`, `pcm_wav_header`, `pcm_aiff_file`, `pcm_aiff_header` (minimal files around integer PCM bytes, for essence embedded in AAF / OMF) | none |
 | `flac-decode` | `flac::decode` (whole `.flac` files) and `flac::Decoder` (single frames, for callers that demux FLAC themselves); native, CRC-checked, 4 to 32 bits. `decode` still uses symphonia for FLAC files | none |
 | `flac-encode` | `encode`, `FileEncoder` for FLAC; `flac::Encoder`, the packet encoder for callers that mux FLAC themselves | craft-media `bitstream` |
-| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder`; with `aac-decode`, `aac::latm_config` / `latm_split` for LOAS / LATM frames (AAC in MPEG transport streams); with `aac-encode`, `encode`, `FileEncoder` for AAC in M4A | craft-media `bitstream`; `aac-encode` also `isobmff` |
+| `aac-decode`, `aac-encode` | `aac::Decoder`, `aac::Encoder`; with `aac-decode`, `aac::latm_config` / `latm_split` for LOAS / LATM frames (AAC in MPEG transport streams); with `aac-encode`, `encode`, `FileEncoder` for AAC in M4A and `PacketEncoder` for AAC | craft-media `bitstream`; `aac-encode` also `isobmff` |
 | `alac-decode` | `alac::Decoder` | none |
-| `alac-encode` | `alac::Encoder`; `encode`, `FileEncoder` for ALAC in M4A | craft-media `isobmff` |
-| `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder` | none |
+| `alac-encode` | `alac::Encoder`; `encode`, `FileEncoder` for ALAC in M4A; `PacketEncoder` for ALAC | craft-media `isobmff` |
+| `opus-decode`, `opus-encode` | `opus::Decoder`/`StreamDecoder`, `opus::Encoder`; with `opus-encode`, `PacketEncoder` for Opus | none |
 | `vorbis-encode` | `vorbis::encoder::Encoder` (pure Rust); `encode_ogg_vorbis`, `encode_ogg` and `encode` for Ogg Vorbis files (whole buffer; not `FileEncoder`) | craft-media `ogg` |
 | `vorbis-decode` | `vorbis::decoder::Decoder` (packets), `vorbis::decoder::decode_ogg` (whole Ogg Vorbis files); native Vorbis I: floors 0 and 1, residues 0 to 2, channel coupling, both block sizes. `decode` still reads Vorbis files through symphonia | craft-media `ogg` |
 | `ac3-decode` | `ac3::Decoder`, `ac3::ProgrammeDecoder` | craft-media `bitstream` |
-| `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder`; `encode`, `FileEncoder` for AC-3 and E-AC-3 streams | craft-media `bitstream` |
+| `ac3-encode`, `eac3-encode` | `ac3::encoder::Encoder`; `encode`, `FileEncoder` for AC-3 and E-AC-3 streams; `PacketEncoder` for them | craft-media `bitstream` |
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `mp3-decode` | `mp3::Decoder`, `mp3::InfoTag` | `mpa-decode` |
-| `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3 | craft-media `bitstream` |
+| `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3; `PacketEncoder` for MP3 | craft-media `bitstream` |
 | `mpa-encode` | `mpa::encoder::Encoder` (Layer II / MP2 frames) | `mpa-decode`, `mp3-encode` |
 | `adpcm` | `adpcm::{ima, ms, yamaha, swf}`: decoders and encoders for IMA WAV, Microsoft, Yamaha and Flash ADPCM | craft-media `bitstream` |
 | `gsm-decode`, `gsm-encode` (`gsm`) | `gsm::Decoder`, `gsm::Encoder`, `gsm::decode`, `gsm::encode`: GSM 06.10 full-rate speech, bit-exact, raw `.gsm` and WAV (GSM 6.10) packings | none |
@@ -311,12 +311,76 @@ file needs that step before it is written again.
 
 An M4A's edit list skips the AAC encoder's priming (1024 frames) and ends at the last frame
 written, so the file decodes to the length that went in. An MP3, AC-3 or E-AC-3 stream has no
-place for that (see [Limits](#limits)). For a container of your own, use the codec modules below.
+place for that (see [Limits](#limits)). For a container of your own, use `PacketEncoder` below.
+
+### Encode packets for your own container
+
+`PacketEncoder` is the encode-side counterpart of `TrackDecoder`: one interface over the AAC-LC,
+ALAC, MP3, AC-3, E-AC-3 and Opus encoders for an app that muxes the audio itself (a video export
+to MP4, Matroska or MXF). It returns packets and writes no file; `FileEncoder` writes its coded
+formats through it.
+
+```rust
+use craft_audio::{CodecId, EncodeFormat, EncodeOptions, PacketEncoder};
+
+let opts = EncodeOptions::new(EncodeFormat::Aac).with_layout(info.layout).with_bitrate(384_000);
+let mut enc = PacketEncoder::new(CodecId::Aac, &opts, 48_000, 6)?;
+for block in blocks {                                    // planar f32 in WAV order, any length
+    for p in enc.encode(&block.channels, block.frames())? {
+        mux.write(p.pts, p.duration, &p.data)?;          // pts and duration in samples at the rate
+    }
+}
+for p in enc.finish()? {
+    mux.write(p.pts, p.duration, &p.data)?;
+}
+let params = enc.codec_params();  // codec, rate, channels, extradata: what TrackDecoder::new takes
+let priming = enc.priming();      // decoded samples before the first input frame
+let padding = enc.padding();      // decoded samples after the last one
+```
+
+It takes the `EncodeOptions` of `FileEncoder` and reads `rate_control`, `layout`, and for ALAC
+`bit_depth` and `dither`; `format` is ignored, so `EncodeOptions::default()` with a bit rate will
+do for any codec. Input is planar `f32` in WAV channel order. `layout` names the speakers, the
+channels are reordered into the codec's order, and ALAC's samples are quantized to the bit depth.
+`layout()` reports the speakers the stream carries, in WAV order: the codec's layout for the count
+(AAC's 5.1 has side surrounds, ALAC's back surrounds), or the AC-3 coding mode the layout chose.
+
+| `CodecId` | Feature | Frames per packet | `extradata()` | `priming()` |
+|---|---|---|---|---|
+| `Aac` (LC) | `aac-encode` | 1024 | `AudioSpecificConfig` | 1024 |
+| `Alac` | `alac-encode` | 4096, the last one shorter | `alac` box payload / CodecPrivate | 0 |
+| `Mp3` | `mp3-encode` | 1152 (576 below 32 kHz), one frame per packet | empty | 1057 |
+| `Ac3`, `Eac3` | `ac3-encode`, `eac3-encode` | 1536 | empty | 256 |
+| `Opus` | `opus-encode` | 960 (20 ms) | `OpusHead` | the pre-skip |
+
+The sample rates, channel counts and layouts are those of the `EncodeFormat` of the same name;
+Opus takes 48 kHz mono or stereo at a constant bit rate, 64 kbit/s per channel by default. A codec
+with no encoder here, and one whose feature is off, are `Unsupported`; settings a codec cannot take
+get the error `EncodeOptions::check` gives for the format.
+
+Timing: a packet's `pts` is where its decoded audio starts, counted from the first decoded sample,
+so input frame `n` is at `n + priming()`. `finish` pads the end with silence until a decoder
+returns every input frame, and the durations add up to `priming() + frames() + padding()`. With no
+input there are no packets: the durations add up to 0 and `padding()` is 0, while `priming()` still
+reports the codec's delay. A muxer
+skips the priming (MP4: `TrackConfig::media_start` or an edit list; Matroska: `CodecDelay`; Opus:
+the pre-skip, which `OpusHead` already holds) and trims the padding (the end of an MP4 edit,
+Matroska's `DiscardPadding`). ALAC's `extradata` records the largest packet and the average bit
+rate, so read it after `finish`. `bitrate()` is the constant rate used (`None` for ALAC and AAC by
+quality); `bit_depth()` is ALAC's.
+
+`encode` refuses a block without one slice per channel, or with a slice shorter than `frames`,
+and encodes nothing; the encoder stays usable, so the caller can correct the block and call again.
+After `finish`, or after encoding itself failed (the block's packets are lost), every call returns
+an error.
+E-AC-3 7.1 is encoded as 7.1, and this crate's `TrackDecoder` plays its 5.1 substream (see
+[Limits](#limits)).
 
 ### Encode AAC packets
 
-For an `.m4a` file, use `EncodeFormat::Aac` above. `aac::Encoder` is the packet encoder behind it,
-for muxing into a container of your own:
+For an `.m4a` file, use `EncodeFormat::Aac` above, and for packets in WAV channel order,
+`PacketEncoder`. `aac::Encoder` is the codec's own encoder behind both, with the settings
+`EncodeOptions` does not have (bandwidth, TNS, M/S stereo, window shape, ADTS):
 
 ```rust
 use craft_audio::AudioError;

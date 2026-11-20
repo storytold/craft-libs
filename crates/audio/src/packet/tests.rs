@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::Speaker;
+use crate::{CodecId, Speaker};
 
 fn map(mask: u32, order: Option<&[usize]>, layout: u32) -> Option<Vec<usize>> {
     channel_map(mask, order, &ChannelLayout::from_mask(layout))
@@ -164,4 +164,26 @@ fn the_listed_sample_rates_are_the_encoders() {
     };
     assert_eq!(EncodeFormat::Aac.sample_rates().unwrap(), sorted(&crate::aac::SAMPLE_RATES));
     assert_eq!(EncodeFormat::Mp3.sample_rates().unwrap(), sorted(&crate::mp3::SAMPLE_RATES));
+}
+
+/// A codec whose feature is not built is refused, as `EncodeOptions::check` refuses its format.
+#[test]
+fn unbuilt_codecs_are_unsupported() {
+    let built = [
+        (CodecId::Aac, cfg!(feature = "aac-encode")),
+        (CodecId::Alac, cfg!(feature = "alac-encode")),
+        (CodecId::Mp3, cfg!(feature = "mp3-encode")),
+        (CodecId::Ac3, cfg!(feature = "ac3-encode")),
+        (CodecId::Eac3, cfg!(feature = "eac3-encode")),
+        (CodecId::Opus, cfg!(feature = "opus-encode")),
+    ];
+    let opts = EncodeOptions::default().with_bit_depth(crate::BitDepth::Int16);
+    for (codec, built) in built {
+        let made = PacketEncoder::new(codec, &opts, 48_000, 2);
+        if built {
+            assert!(made.is_ok(), "{codec:?}: {made:?}");
+        } else {
+            assert!(matches!(&made, Err(AudioError::Unsupported(m)) if m.contains("feature")), "{codec:?}: {made:?}");
+        }
+    }
 }
