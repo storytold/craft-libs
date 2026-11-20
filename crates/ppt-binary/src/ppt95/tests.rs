@@ -1039,6 +1039,11 @@ fn hostile_text_never_panics() {
     let level = Level { spacing: [150, -36, 20], align: 3, ..LEVEL };
     let env = environment_with(&[], &[styles(&[style_atom([level; 5], 0x13), style_atom([level; 5], 0x21)])]);
     let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)], env, &[]);
+    // Whole, it reaches the text reader: else every hostile copy below could fail early and pass.
+    let p = import(&stream).unwrap();
+    assert_eq!(texts(&p), ["One\nTwo", "T"]);
+    let t = p.masters[0].title_style.level(0).unwrap();
+    assert_eq!((t.para.line_spacing, t.para.space_before), (Some(Spacing::Pct(1.5)), Some(Spacing::Pts(36.0))));
     for at in (0..stream.len() - 4).step_by(4) {
         for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF] {
             let mut d = stream.clone();
