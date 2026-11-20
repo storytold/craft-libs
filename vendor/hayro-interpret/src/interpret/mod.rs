@@ -576,7 +576,11 @@ fn interpret_window<'a>(
 ) {
     // PdfCraft patch (38): the resources' DefaultGray, DefaultRGB and DefaultCMYK replace the
     // device spaces that colour operators and images select (ISO 32000-2 §8.6.5.6).
-    let defaults = DefaultColorSpaces::new(resources, &context.interpreter_cache.object_cache);
+    let defaults = DefaultColorSpaces::new(
+        resources,
+        &context.interpreter_cache.object_cache,
+        context.settings.plate.is_some(),
+    );
     while let Some(op) = ops.next() {
         // PdfCraft patch: stop when the caller cancelled (see `InterpreterSettings::cancelled`).
         if context.settings.cancelled.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {

@@ -562,16 +562,21 @@ impl DeviceFamily {
 pub(crate) struct DefaultColorSpaces<'r, 'a> {
     resources: &'r Resources<'a>,
     cache: Cache,
+    /// On a plate (patch 35) device color keeps its device space: plates separate DeviceCMYK
+    /// by its components, with nonzero overprint mode, and a DefaultCMYK profile would route it
+    /// through the CMYK simulation (patch 36) instead.
+    on_plate: bool,
     gray: OnceCell<Option<(ColorSpace, u128)>>,
     rgb: OnceCell<Option<(ColorSpace, u128)>>,
     cmyk: OnceCell<Option<(ColorSpace, u128)>>,
 }
 
 impl<'r, 'a> DefaultColorSpaces<'r, 'a> {
-    pub(crate) fn new(resources: &'r Resources<'a>, cache: &Cache) -> Self {
+    pub(crate) fn new(resources: &'r Resources<'a>, cache: &Cache, on_plate: bool) -> Self {
         Self {
             resources,
             cache: cache.clone(),
+            on_plate,
             gray: OnceCell::new(),
             rgb: OnceCell::new(),
             cmyk: OnceCell::new(),
@@ -580,8 +585,11 @@ impl<'r, 'a> DefaultColorSpaces<'r, 'a> {
 
     /// The default for `family`, with the cache key of the object it was read from. `None`
     /// when the resources have none, or theirs is not a colour space that can stand in for
-    /// the device space: device colour is then drawn as it is.
+    /// the device space, or on a plate: device colour is then drawn as it is.
     pub(crate) fn get(&self, family: DeviceFamily) -> Option<(ColorSpace, u128)> {
+        if self.on_plate {
+            return None;
+        }
         let found = match family {
             DeviceFamily::Gray => &self.gray,
             DeviceFamily::Rgb => &self.rgb,
