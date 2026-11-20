@@ -22,7 +22,7 @@ use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
     Codec, ColumnKey, HitLevel, HitPriority, Metrics, NavMove, NumberCodec, PartKey, PressPhase, Sense, ValueDrag, decimals_for_step, wheel_step,
 };
-use craft_theme::{Rgba, Stateful, States, over};
+use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Rect, Vec2};
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
@@ -416,9 +416,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         if key.status_zoom {
             surface.kind = None;
             surface.radius = CornerRadius::ZERO;
-            // Recess it slightly into the current chrome. Its focused and invalid borders still take their usual colors.
-            let chrome = cx.tokens.color.surface.chrome;
-            surface.fill = Stateful::new(cx.color(over(Rgba::BLACK.with_alpha(16), chrome)));
+            // Use the theme's recessed field color; focus and invalid states still use the usual borders.
+            surface.fill = Stateful::new(cx.color(cx.tokens.color.surface.sunken));
             let clear = cx.color(Rgba::TRANSPARENT);
             if let Some(border) = &mut surface.border {
                 border.off = States::new(clear, clear, clear, clear);

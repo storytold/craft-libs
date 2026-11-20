@@ -11,8 +11,8 @@
 //! otherwise in the last folder chosen for the same purpose; a Save that names an existing file the
 //! OS panel did not ask about gets the Replace question (PhotoCraft `file_dialog.rs:193
 //! replaces_unasked`), a native message box from [`FilePanels::pump`] or, with the `ui` feature, a
-//! prompt on the app's `DialogHost` from `FilePanels::pump_with`; a typed name without an extension gets the suggested one and an uppercase
-//! extension is lowercased (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the two
+//! prompt on the app's `DialogHost` from `FilePanels::pump_with`; a typed name without an extension gets the suggested one and a new file's
+//! uppercase extension is lowercased, while an existing file keeps its spelling (`file_dialog.rs:210 lowercased_extension`, `:365 saved_path`); the two
 //! steps are separate settings of the [`ExtensionPolicy`].
 
 use std::collections::{HashMap, VecDeque};
@@ -114,7 +114,8 @@ fn same_entry(a: &Path, b: &Path) -> bool {
 /// PhotoCraft with Lowercase Extension off still adds the suggested extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ExtensionPolicy {
-    /// Lowercase an extension typed with capitals (`Photo.PNG` becomes `Photo.png`).
+    /// Lowercase an extension typed with capitals (`Photo.PNG` becomes `Photo.png`), unless the
+    /// typed name is a file that already exists.
     pub lowercase: bool,
     /// Add the request's suggested extension to a name that has none.
     pub add_suggested: bool,
@@ -425,11 +426,18 @@ impl FilePanels {
 
     /// The saved path after the extension policy: `"Photo"` becomes `"Photo.png"` with a
     /// suggested `png` (when `add_suggested`); `"Photo.PNG"` becomes `"Photo.png"` (when
-    /// `lowercase`); a path with another known extension is kept.
+    /// `lowercase`) unless a file named `"Photo.PNG"` already exists; a path with another known
+    /// extension is kept.
+    ///
+    /// An existing file keeps the spelling the panel answered: the panel has just asked whether to
+    /// replace that entry, and `"PHOTO.png"` next to `"PHOTO.PNG"` on a file system that tells
+    /// letter case apart is a second file, so the one the user picked would be left unchanged.
     // pc: crates/ui-egui/src/file_dialog.rs:210 lowercased_extension, :365 saved_path
     pub fn settled_save_path(policy: ExtensionPolicy, answered: &Path, suggested: Option<&str>) -> PathBuf {
         match answered.extension().and_then(|e| e.to_str()) {
-            Some(ext) if policy.lowercase && ext.bytes().any(|b| b.is_ascii_uppercase()) => answered.with_extension(ext.to_ascii_lowercase()),
+            Some(ext) if policy.lowercase && ext.bytes().any(|b| b.is_ascii_uppercase()) && !answered.exists() => {
+                answered.with_extension(ext.to_ascii_lowercase())
+            }
             Some(_) => answered.to_path_buf(),
             None => match suggested {
                 Some(ext) if policy.add_suggested => answered.with_extension(ext),
@@ -689,6 +697,24 @@ mod service_tests {
         panels.pump(NONE);
         assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
         assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Saving over an existing `PHOTO.PNG` with Lowercase Extension on writes `PHOTO.PNG`, the
+    // file the panel asked about, not a new `PHOTO.png` beside it (on a file system that tells
+    // letter case apart) or a renamed one (on one that does not). A new name is still lowercased.
+    #[trial]
+    fn an_existing_file_keeps_its_extension_spelling() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-existing-case-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        std::fs::write(dir.join("PHOTO.PNG"), b"old").expect("existing file");
+        let typed = |name: &str| Answer::Paths(vec![dir.join(name)]);
+        let (service, mut panels, log) = service_with(vec![typed("PHOTO.PNG"), typed("Other.PNG")]);
+        let lowercase = ExtensionPolicy::default();
+
+        assert_eq!(saved_as(&service, &mut panels, lowercase), Picked::Paths(vec![dir.join("PHOTO.PNG")]), "the existing file is replaced");
+        assert_eq!(log.borrow().len(), 1, "no second question: the panel asked about this file");
+        assert_eq!(saved_as(&service, &mut panels, lowercase), Picked::Paths(vec![dir.join("Other.png")]), "a new file is lowercased");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

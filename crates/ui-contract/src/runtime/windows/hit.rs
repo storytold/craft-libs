@@ -311,7 +311,7 @@ pub(super) fn with_exclusive<R>(ctx: &Context, viewport: ViewportId, f: impl FnO
 /// A part declared again in the same pass replaces its entry. A settled region that replays its last run declares
 /// its parts again, so a settled title bar keeps its caption regions.
 pub(crate) fn note_exclusive(ctx: &Context, owner: Id, part: PartRef, hit: WindowHit, rect: Rect) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| note_exclusive(ctx, owner, part, hit, rect));
+    crate::runtime::replay::journal(ctx, || (owner, part, hit, rect), |ctx, &(owner, part, hit, rect)| note_exclusive(ctx, owner, part, hit, rect));
     with_exclusive(ctx, pass::current_viewport(ctx), |exclusive| {
         let entry = ExclusivePart { owner, part, hit, rect };
         match exclusive.current.iter_mut().find(|held| held.owner == owner && held.part == part) {

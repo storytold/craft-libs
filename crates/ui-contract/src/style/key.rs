@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 pub trait StyleKey: Copy + Eq + Hash + Send + Sync + 'static {}
 
 /// The text and icon colour that reads on a surface, resolved at step 12.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Ink {
     /// On panels, raised and sunken surfaces: the normal text colour.

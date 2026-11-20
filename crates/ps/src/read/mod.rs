@@ -18,6 +18,7 @@ mod encodings;
 mod font;
 mod gstate;
 mod interp;
+pub mod lex;
 mod obj;
 mod ops;
 mod pdf;

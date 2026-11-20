@@ -383,7 +383,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
     }
 
     fn settle_values(&mut self) -> steps::ValueEdit {
-        steps::settle(self.comp, self.cx)
+        steps::settle(self.comp, self.cx, self.hooks.in_flow(self.comp))
     }
 
     fn access(&self) -> (Access, Option<String>) {
