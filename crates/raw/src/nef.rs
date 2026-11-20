@@ -348,7 +348,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         // fixed, so the header probe and the full decode agree
         _ if cygm => (coolpix::CYGM_WHITE, crate::LevelSource::Fallback),
         (Some(white), _) => (white, crate::LevelSource::Fallback),
-        (None, Mode::Full) => white_from_data_sourced(samples, bits),
+        (None, Mode::Full) => lowest_colour_white(samples, w, &cfa, bits).unwrap_or_else(|| white_from_data_sourced(samples, bits)),
         (None, Mode::Header) => (((1u32 << bits.clamp(1, 16)) - 1) as f32, crate::LevelSource::Fallback),
     };
     let crop = match body {
@@ -390,6 +390,56 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     img.validate_for(mode)?;
     Ok(img)
+}
+
+/// The white level of a NEF that states none: the lowest saturation plateau of the CFA colours that have one, or
+/// `None` when none has.
+///
+/// The colours of one file can saturate at different levels. On a NIKON D850 (461 uncompressed 14-bit NEFs from
+/// one body) red and blue run on to 16383 while green often stops near 16165, flat on most of the sensor but spread
+/// over 16040–16210 in a band about 250 columns wide at its centre. The plateau of all samples together is then
+/// the red and blue one (16320), above most clipped greens: highlight reconstruction takes those for unclipped and
+/// a blown wall turns pink in a stripe down the middle of the frame. Taking each colour's plateau and the lowest of
+/// them gives about 16100 there, so every saturated photosite reaches white, as the measured NIKON D4 white does.
+fn lowest_colour_white(samples: &[u16], w: usize, cfa: &Cfa, bits: u32) -> Option<(f32, crate::LevelSource)> {
+    use rayon::prelude::*;
+    let levels = 1usize << bits.clamp(1, 16);
+    if w == 0 || samples.len() < w || cfa.pattern.iter().any(|&c| c > 2) {
+        return None;
+    }
+    let (hist, counts) = samples
+        .par_chunks_exact(w)
+        .enumerate()
+        .fold(
+            || (vec![0usize; 3 * levels], [0usize; 3]),
+            |(mut hist, mut counts), (y, row)| {
+                for (x, &v) in row.iter().enumerate() {
+                    let c = cfa.color_at(x, y) as usize;
+                    counts[c] += 1;
+                    // samples above the nominal range are padding, not saturation (as in `white_from_data_sourced`)
+                    if let Some(bin) = hist.get_mut(c * levels + v as usize).filter(|_| (v as usize) < levels) {
+                        *bin += 1;
+                    }
+                }
+                (hist, counts)
+            },
+        )
+        .reduce(
+            || (vec![0usize; 3 * levels], [0usize; 3]),
+            |(mut a, mut ca), (b, cb)| {
+                a.iter_mut().zip(&b).for_each(|(x, y)| *x += y);
+                ca.iter_mut().zip(cb).for_each(|(x, y)| *x += y);
+                (a, ca)
+            },
+        );
+    (0..3)
+        .filter(|&c| counts[c] > 0)
+        .filter_map(|c| {
+            let (white, source) = crate::shared::plateau_in_hist(hist.get(c * levels..(c + 1) * levels)?, 1, counts[c], bits);
+            (source == crate::LevelSource::Inferred).then_some(white)
+        })
+        .min_by(f32::total_cmp)
+        .map(|white| (white, crate::LevelSource::Inferred))
 }
 
 /// Uncompressed strips: 16-bit words or 12-bit packed, told apart by the strip size. Packed 12-bit data is an MSB-first
@@ -959,6 +1009,46 @@ mod tests {
         let other = decode_as("NIKON D5", 14);
         assert_eq!(other.crop, Rect::new(0, 0, w, h));
         assert_ne!(other.white, vec![15520.0]);
+    }
+
+    /// A NEF that states no white level and whose green saturates below red and blue (NIKON D850: green near 16165,
+    /// spread over a band at the sensor's centre, red and blue at 16383) takes the white level of its green, so every
+    /// saturated green photosite counts as clipped (≥ 0.99 of white) and a blown area stays white. When green
+    /// saturates with red and blue the white level keeps the shared plateau.
+    #[test]
+    fn white_level_is_the_lowest_colour_plateau() {
+        let (w, h) = (64usize, 64usize);
+        // CFA [2, 1, 1, 0]: blue at even rows and columns, red at odd ones, green elsewhere
+        let file = |green_clip: u16| {
+            let px: Vec<u16> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| (x, y)))
+                .map(|(x, y)| {
+                    let green = (x + y) % 2 == 1;
+                    if y >= h / 2 {
+                        (1000 + 100 * x) as u16
+                    } else if !green {
+                        16383
+                    } else if (28..36).contains(&x) {
+                        // the noisy band: up to 40 levels either side of the clip
+                        green_clip.min(16163) - 40 + ((x * 7 + y * 13) % 81) as u16
+                    } else {
+                        green_clip
+                    }
+                })
+                .collect();
+            let strip = px.iter().flat_map(|v| v.to_be_bytes()).collect();
+            decode(&nef(1, 14, vec![strip], w as u32, h as u32, h as u32), Mode::Full, &Limits::default()).unwrap()
+        };
+        let low = file(16163);
+        let RawData::U16(d) = &low.data else { panic!("u16 data") };
+        let white = low.white[0];
+        let lowest_blown_green =
+            (0..h / 2).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|(x, y)| (x + y) % 2 == 1).map(|(x, y)| d[y * w + x]).min();
+        assert!(lowest_blown_green.is_some_and(|g| f32::from(g) >= 0.99 * white), "white {white}, lowest blown green {lowest_blown_green:?}");
+        assert_eq!(low.level_sources.white, crate::LevelSource::Inferred);
+        // green clipping with red and blue: the shared plateau, all of the headroom
+        let shared = file(16383);
+        assert!(shared.white[0] > white && shared.white[0] >= 16300.0, "{:?}", shared.white);
     }
 
     /// storytold/lightcraft#976: the D7000 and D5100 record no CropArea, and their 36 masked columns at ~600 were developed as a

@@ -75,7 +75,6 @@ pub(crate) fn white_from_data(data: &[u16], bits: u32) -> f32 {
 /// [`white_from_data`], saying whether it found a plateau ([`LevelSource::Inferred`]) or returned the full range.
 pub(crate) fn white_from_data_sourced(data: &[u16], bits: u32) -> (f32, LevelSource) {
     let full_level = (1u32 << bits.clamp(1, 16)) - 1;
-    let full = full_level as f32;
     let step = (data.len() / 2_000_000).max(1);
     // samples above the nominal range are padding / invalid (e.g. 0xFFFF fill), not saturation
     let mut hist = vec![0usize; full_level as usize + 1];
@@ -84,7 +83,15 @@ pub(crate) fn white_from_data_sourced(data: &[u16], bits: u32) -> (f32, LevelSou
             *h += 1;
         }
     }
-    let min_plateau = (data.len() / 20_000).max(16);
+    plateau_in_hist(&hist, step, data.len(), bits)
+}
+
+/// The saturation plateau of [`white_from_data_sourced`] in a histogram of every `step`-th of `len` samples (one bin
+/// per level of the `bits` range).
+pub(crate) fn plateau_in_hist(hist: &[usize], step: usize, len: usize, bits: u32) -> (f32, LevelSource) {
+    let full_level = (1u32 << bits.clamp(1, 16)) - 1;
+    let full = full_level as f32;
+    let min_plateau = (len / 20_000).max(16);
     // the top of the data, skipping up to half a plateau's worth of strays so a real plateau can't be skipped
     let strays = min_plateau / 2;
     let mut above = 0usize;
