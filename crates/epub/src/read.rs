@@ -63,11 +63,24 @@ pub struct SpineItem {
     pub path: Option<String>,
 }
 
+/// One Dublin Core value in package order, with its local property name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DublinCoreValue {
+    pub name: String,
+    pub value: String,
+}
+
 /// The package document (OPF).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Package {
     /// The `version` attribute (`2.0`, `3.0`).
     pub version: String,
+    /// Dublin Core values in document order, including repeated properties.
+    /// Values beyond `Limits::max_manifest` are omitted and reported by
+    /// `dc_metadata_truncated`.
+    pub dc_metadata: Vec<DublinCoreValue>,
+    /// At least one Dublin Core value was omitted by the metadata count limit.
+    pub dc_metadata_truncated: bool,
     /// The first `dc:title`.
     pub title: String,
     /// Every `dc:creator`, in order.
@@ -176,6 +189,32 @@ pub fn parse_package(xml: &[u8], opf_dir: &str, limits: &Limits) -> Result<Packa
     if let Some(meta) = root.child("metadata") {
         // EPUB 2 packages may wrap the Dublin Core elements in `dc-metadata`.
         let all = || meta.elements().flat_map(|e| if e.is("dc-metadata") { e.elements().collect::<Vec<_>>() } else { vec![e] });
+        const DC: &[&str] = &[
+            "title",
+            "creator",
+            "subject",
+            "description",
+            "publisher",
+            "contributor",
+            "date",
+            "type",
+            "format",
+            "identifier",
+            "source",
+            "language",
+            "relation",
+            "coverage",
+            "rights",
+        ];
+        for element in all() {
+            if let Some(name) = DC.iter().find(|name| element.is(**name)) {
+                if pkg.dc_metadata.len() == limits.max_manifest {
+                    pkg.dc_metadata_truncated = true;
+                    break;
+                }
+                pkg.dc_metadata.push(DublinCoreValue { name: (*name).to_string(), value: element.deep_text() });
+            }
+        }
         let texts = |name: &'static str| all().filter(move |e| e.is(name)).map(|e| e.deep_text().trim().to_string());
         pkg.title = texts("title").next().unwrap_or_default();
         pkg.creators = texts("creator").filter(|c| !c.is_empty()).take(limits.max_manifest).collect();

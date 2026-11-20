@@ -260,3 +260,31 @@ fn an_archive_declaring_too_many_entries_is_refused_before_it_is_indexed() {
     let bomb = craft_zip::zip64_entry_count_sample(100_001);
     assert_eq!(Epub::open(&bomb).err(), Some(Error::TooManyEntries { found: 100_001, limit: 100_000 }));
 }
+
+#[test]
+fn dublin_core_metadata_keeps_repeated_values_and_reports_the_limit() {
+    let xml = br#"<package xmlns:dc="http://purl.org/dc/elements/1.1/">
+<metadata><dc:title>A &amp; B</dc:title><dc:identifier>one</dc:identifier><dc:identifier>two</dc:identifier><dc:language>en</dc:language><dc:language>fr</dc:language><dc:publisher>Pub</dc:publisher><dc:rights>Rights</dc:rights><dc:description>Desc</dc:description><dc:contributor>Helper</dc:contributor></metadata><manifest/><spine/></package>"#;
+    let pkg = parse_package(xml, "", &Limits::DEFAULT).unwrap();
+    assert!(!pkg.dc_metadata_truncated);
+    let values = |name: &str| pkg.dc_metadata.iter().filter(|v| v.name == name).map(|v| v.value.as_str()).collect::<Vec<_>>();
+    assert_eq!(values("title"), ["A & B"]);
+    assert_eq!(values("identifier"), ["one", "two"]);
+    assert_eq!(values("language"), ["en", "fr"]);
+    assert_eq!(values("publisher"), ["Pub"]);
+    assert_eq!(values("rights"), ["Rights"]);
+    assert_eq!(values("description"), ["Desc"]);
+    assert_eq!(values("contributor"), ["Helper"]);
+    let capped = parse_package(xml, "", &Limits { max_manifest: 2, ..Limits::DEFAULT }).unwrap();
+    assert_eq!(capped.dc_metadata.len(), 2);
+    assert!(capped.dc_metadata_truncated);
+    let exact = parse_package(xml, "", &Limits { max_manifest: 9, ..Limits::DEFAULT }).unwrap();
+    assert_eq!(exact.dc_metadata.len(), 9);
+    assert!(!exact.dc_metadata_truncated);
+    let epub2 = br#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc-metadata><dc:title>Old &amp; text</dc:title><dc:creator>One</dc:creator><dc:creator>Two</dc:creator></dc-metadata></metadata><manifest/><spine/></package>"#;
+    let pkg = parse_package(epub2, "", &Limits::DEFAULT).unwrap();
+    assert_eq!(
+        pkg.dc_metadata.iter().map(|value| (value.name.as_str(), value.value.as_str())).collect::<Vec<_>>(),
+        [("title", "Old & text"), ("creator", "One"), ("creator", "Two")]
+    );
+}
