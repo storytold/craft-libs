@@ -432,8 +432,7 @@ mod tests {
         assert_eq!(paint_ref("currentColor"), Some(Some(PaintRef::Current)));
         assert_eq!(paint_ref("url(#grad) red"), Some(Some(PaintRef::Url("grad".into(), Some([1.0, 0.0, 0.0, 1.0])))));
 
-        let mut st = Style::default();
-        st.color = [0.0, 1.0, 0.0, 0.5];
+        let st = Style { color: [0.0, 1.0, 0.0, 0.5], ..Style::default() };
         assert_eq!(resolve_paint(&PaintRef::Current, &st, |_, _| UrlPaint::<()>::None), Some(ResolvedPaint::Color([0.0, 1.0, 0.0], 0.5)));
 
         let url = PaintRef::Url("g".into(), Some([1.0, 0.0, 0.0, 1.0]));
