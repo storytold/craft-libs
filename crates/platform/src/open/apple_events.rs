@@ -44,7 +44,7 @@ pub fn install(sender: IntakeSender) -> AppleEvents {
 fn forward(inbox: &Inbox, sender: &IntakeSender) {
     for event in inbox.drain() {
         match event {
-            Event::Open(paths) => sender.open(paths.into_iter().map(Into::into).collect()),
+            Event::Open(paths) => sender.open(paths.into_iter().collect()),
             Event::Quit => sender.quit(),
         }
     }
