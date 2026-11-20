@@ -467,6 +467,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
                 .field(PickerField::Chip)
                 .caption(env.units().number(values.diameter.round(), 0..=0))
+                .caption_range([1.0, max_diameter].map(|diameter| Label::from(env.units().number(diameter.round(), 0..=0))))
                 .cell_shape(CellShape::Square)
                 .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })
                 .browser(!compact)
