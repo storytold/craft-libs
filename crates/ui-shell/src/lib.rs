@@ -16,7 +16,7 @@ pub use craft_ui_panels::registry;
 #[doc(hidden)]
 pub use craft_ui_panels::story_kit;
 #[doc(hidden)]
-pub use craft_ui_panels::{__private, __register_command_set, __register_contract, __register_pattern};
+pub use craft_ui_panels::{__private, __register_command_set, __register_contract, __register_pattern, __suite_items};
 pub use craft_ui_panels::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
 pub use craft_ui_panels::{
     bars, buttons, choice, controls, display, edit, form, graph, layout_components, list, menu, notices, pickers, popover, table, tabs, text,
