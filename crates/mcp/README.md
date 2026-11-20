@@ -4,8 +4,10 @@ Transport-independent MCP 2025-03-26 server initialization and tool result helpe
 Use one `Session` per client connection with `craft-jsonrpc` for message parsing and
 batch dispatch. The caller owns transport, tool definitions and execution, response
 size limits, and shutdown. Pass the outer envelope's batch status to `Session::request`.
-Pass `jsonrpc_limits()` to `craft_jsonrpc::process`: it rejects the null and fractional
-request IDs that MCP forbids, and keeps the default size bounds.
+Parse each message with `craft_jsonrpc::parse_json(bytes, jsonrpc_limits())`, which
+rejects a message larger than `max_message_bytes`, and pass the parsed value to
+`craft_jsonrpc::process` with the same limits, which rejects the null and fractional
+request IDs that MCP forbids. `process` does not check the message size.
 
 `Policy::Compatible` retains existing permissive clients: tool calls can precede
 initialization, initialization can occur in a batch, and client information needs only
