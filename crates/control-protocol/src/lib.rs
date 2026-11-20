@@ -72,12 +72,14 @@ pub enum ReadFailure {
     Rejected(String),
 }
 
-/// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline stripped).
+/// Read one `\n`-terminated line of at most `max` bytes into `buf` (newline stripped, and a `\r`
+/// before it). The `\r\n` or `\n` does not count toward `max`.
 /// `Ok(false)` at end of stream; `Err` when the line is too long or the read fails.
 pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> Result<bool, ReadFailure> {
     buf.clear();
-    // `take` bounds the bytes buffered for one line: a peer can't make us allocate more than `max`.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    // `take` bounds the bytes buffered for one line: a peer can't make us allocate more than
+    // `max + 2`, the line and its `\r\n`.
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(2);
     let n = reader.take(limit).read_until(b'\n', buf).map_err(|e| match e.kind() {
         std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => ReadFailure::Timeout,
         _ => ReadFailure::Rejected(e.to_string()),
@@ -90,12 +92,11 @@ pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usiz
         if buf.last() == Some(&b'\r') {
             buf.pop();
         }
-        return Ok(true);
     }
     if buf.len() > max {
         return Err(ReadFailure::Rejected(format!("request line longer than {max} bytes; closing the connection")));
     }
-    // Last line without a newline, then end of stream.
+    // A complete line, or the last line without a newline, then end of stream.
     Ok(true)
 }
 
@@ -226,6 +227,11 @@ mod tests {
         assert_eq!(read_bounded_line(&mut &b"abc"[..], &mut buf, 3), Ok(true));
         assert_eq!(buf, b"abc");
         assert!(matches!(read_bounded_line(&mut &b"abcd"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
+        // The cap counts the line without its `\r\n` or `\n`.
+        assert_eq!(read_bounded_line(&mut &b"abc\r\n"[..], &mut buf, 3), Ok(true));
+        assert_eq!(buf, b"abc");
+        assert!(matches!(read_bounded_line(&mut &b"abcd\n"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
+        assert!(matches!(read_bounded_line(&mut &b"abcd\r\n"[..], &mut buf, 3), Err(ReadFailure::Rejected(_))));
         let mut out = Vec::new();
         serve_lines(&b"{broken}\n"[..], &mut out, "secret", 1024, |_, _| panic!("must not dispatch"));
         let reply: Value = serde_json::from_slice(&out).unwrap();

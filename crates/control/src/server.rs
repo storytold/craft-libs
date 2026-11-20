@@ -217,10 +217,11 @@ pub fn new_token() -> Option<String> {
 }
 
 /// One line without its newline (and a `\r` before it), or `None` at the end of the stream, read
-/// with [`craft_control_protocol::read_bounded_line`]. A line of more than `max` bytes is refused
-/// with `InvalidData`, and at most `max + 1` bytes of it are buffered, so a client that sends
-/// gigabytes with no newline cannot make this thread allocate until the process is killed. A read
-/// that times out (the token deadline) fails with `TimedOut`.
+/// with [`craft_control_protocol::read_bounded_line`]. A line of more than `max` bytes, not
+/// counting its `\r\n` or `\n`, is refused with `InvalidData`, and at most `max + 2` bytes of it
+/// are buffered, so a client that sends gigabytes with no newline cannot make this thread
+/// allocate until the process is killed. A read that times out (the token deadline) fails with
+/// `TimedOut`.
 fn read_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Option<Vec<u8>>> {
     let mut line = Vec::new();
     match craft_control_protocol::read_bounded_line(r, &mut line, max) {
@@ -1323,16 +1324,19 @@ mod tests {
     }
 
     /// The cap is exact: a line of `max` bytes is read, and one byte more is refused even when its
-    /// newline arrives in the same read as the rest of it.
+    /// newline arrives in the same read as the rest of it. The `\r\n` or `\n` after the line does
+    /// not count toward the cap.
     #[test]
     fn the_cap_holds_for_a_line_read_at_once() {
-        let mut fits = vec![b'A'; 1000];
-        fits.push(b'\n');
-        assert_eq!(read_line(&mut BufReader::new(fits.as_slice()), 1000).unwrap().unwrap().len(), 1000);
-        let mut over = vec![b'A'; 1001];
-        over.push(b'\n');
-        let e = read_line(&mut BufReader::new(over.as_slice()), 1000).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        for end in [&b"\n"[..], &b"\r\n"[..]] {
+            let mut fits = vec![b'A'; 1000];
+            fits.extend_from_slice(end);
+            assert_eq!(read_line(&mut BufReader::new(fits.as_slice()), 1000).unwrap().unwrap().len(), 1000);
+            let mut over = vec![b'A'; 1001];
+            over.extend_from_slice(end);
+            let e = read_line(&mut BufReader::new(over.as_slice()), 1000).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        }
     }
 
     /// A read interrupted by a signal is tried again instead of ending the connection, and a
