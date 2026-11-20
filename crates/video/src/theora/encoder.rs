@@ -72,6 +72,13 @@ fn alloc_plane_buffer(len: usize) -> Result<Vec<u8>> {
     Ok(v)
 }
 
+fn alloc_vec_exact<T: Clone>(val: T, n: usize) -> Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::OutOfMemory)?;
+    v.resize(n, val);
+    Ok(v)
+}
+
 impl Encoder {
     /// Create a new encoder with the given configuration.
     pub fn new(config: EncoderConfig) -> Result<Self> {
@@ -138,7 +145,7 @@ impl Encoder {
             CommentHeader { vendor: "craft-video pure-rust Theora encoder".to_string(), comments: vec!["ENCODER=craft-video".to_string()] };
 
         let setup_header = SetupHeader::default_vp3()?;
-        let geom = FrameGeometry::new(fmbw, fmbh, config.pixel_format);
+        let geom = FrameGeometry::new(fmbw, fmbh, config.pixel_format)?;
         let qmat_tables = setup_header.quant_params.precompute_all_qmat()?;
 
         let (y_pw, y_ph, _, _, _, _, _, _) = geom.planes[0];
@@ -200,11 +207,25 @@ impl Encoder {
     /// Currently produces intra keyframes for every frame, ensuring all packets are independent
     /// self-contained keyframes that decode reliably.
     pub fn encode_frame(&mut self, pic: &Picture, _force_keyframe: bool) -> Result<Vec<u8>> {
-        if pic.width != self.config.width || pic.height != self.config.height {
+        if pic.width != self.config.width
+            || pic.height != self.config.height
+            || pic.pic_width != self.config.pic_width
+            || pic.pic_height != self.config.pic_height
+            || pic.pic_x != self.config.pic_x
+            || pic.pic_y != self.config.pic_y
+            || pic.pixel_format != self.config.pixel_format
+        {
             return Err(Error::DimensionMismatch("picture dimensions do not match encoder configuration"));
         }
+        let src_uv_w = match self.config.pixel_format {
+            PixelFormat::Yuv420 | PixelFormat::Yuv422 => (self.config.width as usize).div_ceil(2),
+            PixelFormat::Yuv444 => self.config.width as usize,
+        };
         if pic.y_stride == 0 || pic.uv_stride == 0 {
             return Err(Error::DimensionMismatch("stride cannot be zero"));
+        }
+        if pic.y_stride < self.config.width as usize || pic.uv_stride < src_uv_w {
+            return Err(Error::DimensionMismatch("stride shorter than plane width"));
         }
 
         let mut w = BitWriter::new();
@@ -229,13 +250,13 @@ impl Encoder {
         let mut rec_cb = alloc_plane_buffer(c_pw * c_ph)?;
         let mut rec_cr = alloc_plane_buffer(c_pw * c_ph)?;
 
-        let bcoded = vec![true; nbs];
-        let mb_modes = vec![1u8; self.geom.nmbs]; // 1: INTRA
+        let bcoded = alloc_vec_exact(true, nbs)?;
+        let mb_modes = alloc_vec_exact(1u8, self.geom.nmbs)?; // 1: INTRA
 
         // For intra frames, all blocks are coded
         // Forward transform & quantize
-        let mut quant_coeffs = vec![[0i16; 64]; nbs];
-        let mut ncoeffs = vec![0usize; nbs];
+        let mut quant_coeffs = alloc_vec_exact([0i16; 64], nbs)?;
+        let mut ncoeffs = alloc_vec_exact(0usize, nbs)?;
 
         for bi in 0..nbs {
             let meta = &self.geom.blocks[bi];
@@ -248,18 +269,23 @@ impl Encoder {
             };
 
             let (active_w, active_h, active_x, active_y) = match pli {
-                0 => (pic.pic_width as usize, pic.pic_height as usize, pic.pic_x as usize, pic.pic_y as usize),
+                0 => (self.config.pic_width as usize, self.config.pic_height as usize, self.config.pic_x as usize, self.config.pic_y as usize),
                 _ => match self.config.pixel_format {
                     PixelFormat::Yuv420 => (
-                        (pic.pic_width as usize).div_ceil(2),
-                        (pic.pic_height as usize).div_ceil(2),
-                        (pic.pic_x as usize) / 2,
-                        (pic.pic_y as usize) / 2,
+                        (self.config.pic_width as usize).div_ceil(2),
+                        (self.config.pic_height as usize).div_ceil(2),
+                        (self.config.pic_x as usize) / 2,
+                        (self.config.pic_y as usize) / 2,
                     ),
-                    PixelFormat::Yuv422 => {
-                        ((pic.pic_width as usize).div_ceil(2), pic.pic_height as usize, (pic.pic_x as usize) / 2, pic.pic_y as usize)
+                    PixelFormat::Yuv422 => (
+                        (self.config.pic_width as usize).div_ceil(2),
+                        self.config.pic_height as usize,
+                        (self.config.pic_x as usize) / 2,
+                        self.config.pic_y as usize,
+                    ),
+                    PixelFormat::Yuv444 => {
+                        (self.config.pic_width as usize, self.config.pic_height as usize, self.config.pic_x as usize, self.config.pic_y as usize)
                     }
-                    PixelFormat::Yuv444 => (pic.pic_width as usize, pic.pic_height as usize, pic.pic_x as usize, pic.pic_y as usize),
                 },
             };
 

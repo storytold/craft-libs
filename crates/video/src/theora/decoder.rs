@@ -35,6 +35,20 @@ fn alloc_plane_buffer(len: usize) -> Result<Vec<u8>> {
     Ok(v)
 }
 
+fn clone_plane_buffer(src: &[u8]) -> Result<Vec<u8>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(src.len()).map_err(|_| Error::OutOfMemory)?;
+    v.extend_from_slice(src);
+    Ok(v)
+}
+
+fn alloc_vec_exact<T: Clone>(val: T, n: usize) -> Result<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::OutOfMemory)?;
+    v.resize(n, val);
+    Ok(v)
+}
+
 impl Decoder {
     /// Initialize decoder from the three mandatory header packets: Identification, Comment, Setup.
     pub fn from_headers(id_packet: &[u8], comment_packet: &[u8], setup_packet: &[u8]) -> Result<Self> {
@@ -77,7 +91,7 @@ impl Decoder {
 
         let fmbw = fmbw_u64 as usize;
         let fmbh = fmbh_u64 as usize;
-        let geom = FrameGeometry::new(fmbw, fmbh, id.info.pixel_format);
+        let geom = FrameGeometry::new(fmbw, fmbh, id.info.pixel_format)?;
         let qmat_tables = setup.quant_params.precompute_all_qmat()?;
 
         let (y_pw, y_ph, _, _, _, _, _, _) = geom.planes[0];
@@ -129,9 +143,9 @@ impl Decoder {
                 color_space: self.info.color_space,
                 keyframe: false,
                 pts: None,
-                y: self.ref_prev_y.clone(),
-                u: self.ref_prev_cb.clone(),
-                v: self.ref_prev_cr.clone(),
+                y: clone_plane_buffer(&self.ref_prev_y)?,
+                u: clone_plane_buffer(&self.ref_prev_cb)?,
+                v: clone_plane_buffer(&self.ref_prev_cr)?,
                 y_stride: y_pw,
                 uv_stride: c_pw,
             };
@@ -178,7 +192,7 @@ impl Decoder {
         // 2. Coded Block Flags (Section 7.3)
         let nbs = self.geom.nbs;
         let nsbs = self.geom.nsbs;
-        let mut bcoded = vec![false; nbs];
+        let mut bcoded = alloc_vec_exact(false, nbs)?;
 
         if is_keyframe {
             bcoded.fill(true);
@@ -193,7 +207,7 @@ impl Decoder {
 
             let sbf_bits = decode_long_run(&mut r, uncoded_sb_count)?;
             let mut sbf_iter = sbf_bits.into_iter();
-            let mut sbf_coded = vec![false; nsbs];
+            let mut sbf_coded = alloc_vec_exact(false, nsbs)?;
 
             for sbi in 0..nsbs {
                 if !sbp_bits[sbi] {
@@ -223,7 +237,7 @@ impl Decoder {
 
         // 3. Macro Block Coding Modes (Section 7.4)
         let nmbs = self.geom.nmbs;
-        let mut mb_modes = vec![0u8; nmbs];
+        let mut mb_modes = alloc_vec_exact(0u8, nmbs)?;
 
         if is_keyframe {
             mb_modes.fill(1); // INTRA
@@ -258,7 +272,7 @@ impl Decoder {
         }
 
         // 4. Motion Vectors (Section 7.5)
-        let mut mvects = vec![(0i8, 0i8); nbs];
+        let mut mvects = alloc_vec_exact((0i8, 0i8), nbs)?;
 
         if !is_keyframe {
             let mvmode = r.read_bits(1).map_err(|_| Error::Truncated("mvmode"))? as u8;
@@ -372,7 +386,7 @@ impl Decoder {
         }
 
         // 5. Block-Level qi Decode (Section 7.6)
-        let mut qiis = vec![0usize; nbs];
+        let mut qiis = alloc_vec_exact(0usize, nbs)?;
         if nqis > 1 {
             for qii in 0..(nqis - 1) {
                 let nbits_pass = (0..nbs).filter(|&bi| bcoded[bi] && qiis[bi] == qii).count();
@@ -389,9 +403,9 @@ impl Decoder {
         }
 
         // 6. DCT Coefficients Decode (Section 7.7)
-        let mut coeffs = vec![[0i16; 64]; nbs];
-        let mut ncoeffs = vec![0usize; nbs];
-        let mut tis = vec![0usize; nbs];
+        let mut coeffs = alloc_vec_exact([0i16; 64], nbs)?;
+        let mut ncoeffs = alloc_vec_exact(0usize, nbs)?;
+        let mut tis = alloc_vec_exact(0usize, nbs)?;
         let mut eobs = 0usize;
 
         let nlbs = nmbs * 4;

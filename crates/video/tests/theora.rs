@@ -185,11 +185,30 @@ fn test_theora_video_frame_conversion() {
     bad_stride.y_stride = 0;
     assert!(VideoFrame::try_from(bad_stride).is_err());
 
+    // Short non-zero stride shorter than source plane width fails with FrameError
+    let mut short_stride = pic.clone();
+    short_stride.y_stride = 16;
+    assert!(VideoFrame::try_from(short_stride).is_err());
+
+    let mut short_uv_stride = pic.clone();
+    short_uv_stride.uv_stride = 8;
+    assert!(VideoFrame::try_from(short_uv_stride).is_err());
+
     // Oversized dimensions fail with FrameError without panicking
     let mut bad_dims = pic.clone();
     bad_dims.pic_width = u32::MAX;
     bad_dims.pic_height = u32::MAX;
     assert!(VideoFrame::try_from(bad_dims).is_err());
+
+    // Matching frame and crop dimensions that exceed memory budget fail at budget check
+    let mut budget_pic = test_picture(32, 32);
+    budget_pic.width = 65536;
+    budget_pic.height = 65536;
+    budget_pic.pic_width = 65536;
+    budget_pic.pic_height = 65536;
+    budget_pic.y_stride = 65536;
+    budget_pic.uv_stride = 32768;
+    assert!(matches!(VideoFrame::try_from(budget_pic), Err(craft_video::frame::FrameError::Shape(_))));
 
     // Crop bounds exceeding frame dimensions fail with FrameError
     let mut bad_crop = pic.clone();
@@ -213,6 +232,18 @@ fn test_theora_video_frame_conversion() {
     let u_bottom = vf_odd.planes()[1].row_u8(1).expect("u row 1");
     assert_eq!(u_bottom[0], 50);
     assert_eq!(u_bottom[1], 150);
+
+    // Odd vertical crop with distinct chroma rows preserves vertical subsampling
+    let mut odd_y_pic = test_picture(32, 32);
+    odd_y_pic.pic_x = 0;
+    odd_y_pic.pic_y = 1;
+    odd_y_pic.pic_width = 4;
+    odd_y_pic.pic_height = 3;
+    odd_y_pic.u[0] = 77;
+    odd_y_pic.u[16] = 88;
+    let vf_odd_y = VideoFrame::try_from(odd_y_pic).expect("convert odd y crop");
+    assert_eq!(vf_odd_y.subsampling(), craft_video::frame::Subsampling::S444);
+    assert_eq!(vf_odd_y.height(), 3);
 }
 
 #[test]
@@ -542,6 +573,17 @@ fn test_theora_encoder_invalid_input_rejected() {
     // Dimension mismatch
     let mut pic = test_picture(32, 32);
     pic.width = 64;
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Mismatched picture bounds (e.g. pic_width = 0 with cleared plane) cannot bypass validation
+    let mut pic = test_picture(32, 32);
+    pic.pic_width = 0;
+    pic.y.clear();
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Short non-zero stride shorter than plane width
+    let mut pic = test_picture(32, 32);
+    pic.y_stride = 16;
     assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
 }
 

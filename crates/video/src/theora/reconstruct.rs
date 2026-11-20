@@ -1,9 +1,22 @@
 //! Frame geometry, DC prediction undoing, block reconstruction, and loop filtering (Sections 2, 7.8, 7.9, 7.10).
 
-use super::PixelFormat;
 use super::idct::idct_2d;
 use super::loopfilter::{filter_horizontal_edge, filter_vertical_edge};
 use super::tables::{DC_PRED_CONFIG, MB_HILBERT, SB_HILBERT, ZIGZAG};
+use super::{Error, PixelFormat};
+
+fn alloc_vec<T: Clone>(val: T, n: usize) -> Result<Vec<T>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::OutOfMemory)?;
+    v.resize(n, val);
+    Ok(v)
+}
+
+fn alloc_capacity<T>(n: usize) -> Result<Vec<T>, Error> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| Error::OutOfMemory)?;
+    Ok(v)
+}
 
 /// Information about a single 8x8 block in the coded frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +71,7 @@ pub struct FrameGeometry {
 }
 
 impl FrameGeometry {
-    pub fn new(fmbw: usize, fmbh: usize, pixel_format: PixelFormat) -> Self {
+    pub fn new(fmbw: usize, fmbh: usize, pixel_format: PixelFormat) -> Result<Self, Error> {
         let frame_width = fmbw * 16;
         let frame_height = fmbh * 16;
         let nmbs = fmbw * fmbh;
@@ -96,8 +109,12 @@ impl FrameGeometry {
 
         // Map macroblocks in Hilbert coded order within luma superblocks
         // `mb_grid[my][mx] = mbi`
-        let mut mb_grid = vec![vec![0usize; fmbw]; fmbh];
-        let mut mb_coords = Vec::with_capacity(nmbs);
+        let mut mb_grid = Vec::new();
+        mb_grid.try_reserve_exact(fmbh).map_err(|_| Error::OutOfMemory)?;
+        for _ in 0..fmbh {
+            mb_grid.push(alloc_vec(0usize, fmbw)?);
+        }
+        let mut mb_coords = alloc_capacity(nmbs)?;
         let mut cur_mbi = 0;
 
         let luma_sb_w = fmbw.div_ceil(2);
@@ -118,10 +135,35 @@ impl FrameGeometry {
         }
 
         // Build coded blocks for all 3 planes
-        let mut blocks = Vec::with_capacity(nbs);
-        let mut plane_block_grid = [vec![vec![0usize; y_wb]; y_hb], vec![vec![0usize; c_wb]; c_hb], vec![vec![0usize; c_wb]; c_hb]];
+        let mut blocks = alloc_capacity(nbs)?;
+        let mut plane_block_grid = [
+            {
+                let mut g = Vec::new();
+                g.try_reserve_exact(y_hb).map_err(|_| Error::OutOfMemory)?;
+                for _ in 0..y_hb {
+                    g.push(alloc_vec(0usize, y_wb)?);
+                }
+                g
+            },
+            {
+                let mut g = Vec::new();
+                g.try_reserve_exact(c_hb).map_err(|_| Error::OutOfMemory)?;
+                for _ in 0..c_hb {
+                    g.push(alloc_vec(0usize, c_wb)?);
+                }
+                g
+            },
+            {
+                let mut g = Vec::new();
+                g.try_reserve_exact(c_hb).map_err(|_| Error::OutOfMemory)?;
+                for _ in 0..c_hb {
+                    g.push(alloc_vec(0usize, c_wb)?);
+                }
+                g
+            },
+        ];
 
-        let mut sb_block_counts = vec![0usize; nsbs];
+        let mut sb_block_counts = alloc_vec(0usize, nsbs)?;
         let mut global_sbi = 0;
         let mut cur_bi = 0;
 
@@ -191,9 +233,17 @@ impl FrameGeometry {
         }
 
         // Build macroblock -> block mappings
-        let mut mb_luma_blocks = vec![[0usize; 4]; nmbs];
-        let mut mb_chroma_cb_blocks = vec![Vec::new(); nmbs];
-        let mut mb_chroma_cr_blocks = vec![Vec::new(); nmbs];
+        let mut mb_luma_blocks = alloc_vec([0usize; 4], nmbs)?;
+        let mut mb_chroma_cb_blocks = Vec::new();
+        mb_chroma_cb_blocks.try_reserve_exact(nmbs).map_err(|_| Error::OutOfMemory)?;
+        for _ in 0..nmbs {
+            mb_chroma_cb_blocks.push(Vec::new());
+        }
+        let mut mb_chroma_cr_blocks = Vec::new();
+        mb_chroma_cr_blocks.try_reserve_exact(nmbs).map_err(|_| Error::OutOfMemory)?;
+        for _ in 0..nmbs {
+            mb_chroma_cr_blocks.push(Vec::new());
+        }
 
         for mbi in 0..nmbs {
             let (mx, my) = mb_coords[mbi];
@@ -229,7 +279,7 @@ impl FrameGeometry {
             }
         }
 
-        Self {
+        Ok(Self {
             fmbw,
             fmbh,
             pixel_format,
@@ -245,7 +295,7 @@ impl FrameGeometry {
             mb_chroma_cb_blocks,
             mb_chroma_cr_blocks,
             sb_block_counts,
-        }
+        })
     }
 }
 

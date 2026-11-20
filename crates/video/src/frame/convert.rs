@@ -421,8 +421,15 @@ impl TryFrom<crate::theora::Picture> for VideoFrame {
         if p.pic_width == 0 || p.pic_height == 0 {
             return Err(FrameError::Shape("picture dimensions must be non-zero"));
         }
+        let src_uv_w = match p.pixel_format {
+            crate::theora::PixelFormat::Yuv420 | crate::theora::PixelFormat::Yuv422 => (p.width as usize).div_ceil(2),
+            crate::theora::PixelFormat::Yuv444 => p.width as usize,
+        };
         if p.y_stride == 0 || p.uv_stride == 0 {
             return Err(FrameError::Plane("stride cannot be zero"));
+        }
+        if p.y_stride < p.width as usize || p.uv_stride < src_uv_w {
+            return Err(FrameError::Plane("stride shorter than plane width"));
         }
         let crop_end_x = p.pic_x.checked_add(p.pic_width).ok_or(FrameError::Shape("crop width overflow"))?;
         let crop_end_y = p.pic_y.checked_add(p.pic_height).ok_or(FrameError::Shape("crop height overflow"))?;
