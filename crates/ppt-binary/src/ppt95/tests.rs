@@ -686,6 +686,23 @@ fn the_font_table_is_the_first_list_with_a_face() {
     assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].runs[0].props.font.as_deref(), Some("Arial"));
 }
 
+/// A paragraph's end mark keeps the formatting of the character run at its CR, which PowerPoint 95
+/// gives a run of its own when it differs (`endmark`, `endmark2`): not that of the paragraph's
+/// first character.
+#[test]
+fn a_paragraphs_end_mark_keeps_the_formatting_at_its_cr() {
+    let end_sizes = |runs: &[(u32, u16)]| {
+        let runs: Vec<_> = runs.iter().map(|&(n, size)| char_run(n, 0, size, 0, [0, 0, 0, 1])).collect();
+        let body = text(b"AB\rCD", &runs, &[para_run(5, false, 0, 0, 0)], 1, [0; 4], BODY);
+        let p = deck_of(vec![shape_95([-2362, -1613, -518, -1325], Some(body))], &[]);
+        body_of(&p.slides[0].shapes[0]).paragraphs.iter().map(|para| para.end_props.size).collect::<Vec<_>>()
+    };
+    // What PowerPoint 95 wrote for "AB\rCD" at 40 pt with A and C at 24, and at 24 with the first
+    // CR at 40.
+    assert_eq!(end_sizes(&[(1, 24), (2, 40), (1, 24), (1, 40)]), [Some(40.0), Some(40.0)]);
+    assert_eq!(end_sizes(&[(2, 24), (1, 40), (2, 24)]), [Some(40.0), Some(24.0)]);
+}
+
 #[test]
 fn character_runs_keep_their_formatting() {
     let runs = [
@@ -1886,6 +1903,12 @@ fn check_sample(name: &str, p: &Presentation) {
     let paras = |i: usize, j: usize| &body_of(&shapes(i)[j]).paragraphs;
     let first_run = |i: usize, j: usize| &paras(i, j)[0].runs[0];
     match name {
+        // "AB\rCD" at 40 pt with A and C at 24; at 24 with the first CR at 40 (Font.Points).
+        "endmark" | "endmark2" => {
+            let ends: Vec<_> = body_of(&p.slides[0].shapes[0]).paragraphs.iter().map(|q| q.end_props.size).collect();
+            let want = if name == "endmark" { [Some(40.0), Some(40.0)] } else { [Some(40.0), Some(24.0)] };
+            assert_eq!(ends, want, "{name}");
+        }
         "twoslides" => assert_eq!(p.slides.len(), 2),
         "title" => {
             assert_eq!(layout_kind(p, 1), LayoutType::Title);
