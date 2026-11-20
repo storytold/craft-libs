@@ -188,7 +188,7 @@ pub struct DocumentTabsOutput<D> {
     pub hovered: Option<D>,
 }
 
-type Area<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
+type Area<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
 
 /// The tab strip of one document group. Give the strips of all groups the same `accepts` rule (the default takes
 /// every group) and a tab dropped from one reaches the other as `DroppedInto`.
@@ -254,13 +254,13 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     }
 
     /// Host content before the tabs, at the reading start, as wide as it measures.
-    pub fn leading(mut self, area: impl FnOnce(&mut Ui) + 'a) -> Self {
+    pub fn leading(mut self, area: impl FnMut(&mut Ui) + 'a) -> Self {
         self.leading = Some(Box::new(area));
         self
     }
 
     /// Host content after the tabs, at the reading end, as wide as it measures.
-    pub fn trailing(mut self, area: impl FnOnce(&mut Ui) + 'a) -> Self {
+    pub fn trailing(mut self, area: impl FnMut(&mut Ui) + 'a) -> Self {
         self.trailing = Some(Box::new(area));
         self
     }
@@ -269,31 +269,34 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
         let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large, takes_files } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
-        let mut strip = TabStrip::new(label)
-            .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true))
-            .can_close(move |key: &D| tabs.iter().any(|tab| &tab.id == key && tab.closable));
-        if takes_files {
-            strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
-        }
-        if tear_off {
-            strip = strip.tear_off();
-        }
-        if large {
-            strip = strip.large();
-        }
-        if let Some(document) = selected {
-            strip = strip.shown(document);
-        }
-        if reorderable {
-            strip = strip
-                .reorder(ReorderRule::new())
-                .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
-                .accepts(move |drag: &ListDrag<D>, _, insert| {
-                    // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
-                    let passed = tabs.iter().take(insert).filter(|tab| drag.keys.contains(&tab.id)).count();
-                    keeps_fixed(tabs, &drag.keys, insert - passed)
-                });
-        }
+        let make_strip = || {
+            let mut strip = TabStrip::new(label.clone())
+                .takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true))
+                .can_close(move |key: &D| tabs.iter().any(|tab| &tab.id == key && tab.closable));
+            if takes_files {
+                strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
+            }
+            if tear_off {
+                strip = strip.tear_off();
+            }
+            if large {
+                strip = strip.large();
+            }
+            if let Some(document) = selected.clone() {
+                strip = strip.shown(document);
+            }
+            if reorderable {
+                strip = strip
+                    .reorder(ReorderRule::new())
+                    .can_drag(move |key: &D| tabs.iter().find(|tab| &tab.id == key).is_none_or(|tab| tab.movable))
+                    .accepts(move |drag: &ListDrag<D>, _, insert| {
+                        // `insert` counts every tab; `keeps_fixed` takes the place among the tabs left without the dragged ones.
+                        let passed = tabs.iter().take(insert).filter(|tab| drag.keys.contains(&tab.id)).count();
+                        keeps_fixed(tabs, &drag.keys, insert - passed)
+                    });
+            }
+            strip
+        };
         let hovered = std::cell::RefCell::new(None);
         let show_strip = |ui: &mut Ui, strip: TabStrip<'_, D>| {
             strip.show_items(ui, &source, &mut |key, cx| {
@@ -323,18 +326,18 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
             })
         };
         let shown = if leading.is_none() && trailing.is_none() {
-            Ok(show_strip(ui, strip))
+            Ok(show_strip(ui, make_strip()))
         } else {
-            let (mut strip, mut leading, mut trailing) = (Some(strip), leading, trailing);
+            let (mut leading, mut trailing) = (leading, trailing);
             let mut shown = None;
+            // The row measures more than once to reserve non-filling children before sharing the
+            // remaining width. Recreate the strip and show both areas on every sweep.
             let row = Row::new().show(ui, |ui, _| {
-                if let Some(area) = leading.take() {
+                if let Some(area) = leading.as_mut() {
                     area(ui);
                 }
-                if let Some(strip) = strip.take() {
-                    shown = Some(show_strip(ui, strip));
-                }
-                if let Some(area) = trailing.take() {
+                shown = Some(show_strip(ui, make_strip()));
+                if let Some(area) = trailing.as_mut() {
                     area(ui);
                 }
             });

@@ -21,6 +21,30 @@ fn document_tabs_shrink_before_overflow() {
     assert!(fit.shown.iter().all(|(_, width)| *width < 100.0));
 }
 
+#[trial]
+fn document_tabs_reserve_space_for_the_trailing_control() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let trailing_rect = Rc::new(Cell::new(Rect::NOTHING));
+    let seen = trailing_rect.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs: Vec<_> = (0..5).map(|i| DocumentTab::new(i, format!("Long document number {i}, scanned.pdf")).closable(true)).collect();
+        DocumentTabs::new("Documents", &tabs)
+            .selected(4)
+            .trailing(|ui| {
+                seen.set(Button::new("Open").show(ui).rect);
+            })
+            .show(ui);
+    });
+    fixture.room(egui::vec2(1000.0, 100.0)).settle();
+    let open = fixture.by_label("Open").unwrap_or_else(|| panic!("trailing button: {:?}", trailing_rect.get())).rect;
+    for i in 0..5 {
+        let tab = fixture.by_label(&format!("Long document number {i}, scanned.pdf")).expect("each tab is visible").rect;
+        assert!(tab.right() <= open.left() + 0.5, "tab {i} overlaps the trailing button: {tab:?}, {open:?}");
+    }
+}
+
 /// An arrow moves the focus to the next tab without showing it; Enter shows it.
 #[trial]
 fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {
