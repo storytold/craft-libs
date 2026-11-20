@@ -288,3 +288,15 @@ fn dublin_core_metadata_keeps_repeated_values_and_reports_the_limit() {
         [("title", "Old & text"), ("creator", "One"), ("creator", "Two")]
     );
 }
+
+#[test]
+fn dublin_core_metadata_uses_namespace_not_prefix_or_local_name() {
+    let xml = br#"<package xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:x="urn:foreign" xmlns:alternate="http://purl.org/dc/elements/1.1/"><metadata><x:title>Legacy</x:title><x:publisher>Foreign</x:publisher><alternate:publisher>Real</alternate:publisher></metadata><manifest/><spine/></package>"#;
+    let pkg = parse_package(xml, "", &Limits { max_manifest: 1, ..Limits::DEFAULT }).unwrap();
+    assert_eq!(pkg.title, "Legacy"); // Existing convenience fields remain local-name based.
+    assert_eq!(pkg.dc_metadata.iter().map(|v| (v.name.as_str(), v.value.as_str())).collect::<Vec<_>>(), [("publisher", "Real")]);
+    assert!(!pkg.dc_metadata_truncated);
+    let xml = br#"<package><metadata><dc-metadata><title xmlns="http://purl.org/dc/elements/1.1/">Default</title><title>Unqualified</title><dc:title xmlns:dc="urn:foreign">Wrong binding</dc:title></dc-metadata></metadata><manifest/><spine/></package>"#;
+    let pkg = parse_package(xml, "", &Limits::DEFAULT).unwrap();
+    assert_eq!(pkg.dc_metadata.iter().map(|v| (v.name.as_str(), v.value.as_str())).collect::<Vec<_>>(), [("title", "Default")]);
+}
