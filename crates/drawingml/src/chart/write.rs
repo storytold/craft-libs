@@ -645,9 +645,9 @@ fn plot_group(w: &mut Writer, c: &Chart, kind: ChartType, list: &[(usize, &Serie
                 w.close();
             }
         }
-        Group::Pie => w.tag("c:firstSliceAng").attr("val", 0).empty(),
+        Group::Pie => w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty(),
         Group::Doughnut => {
-            w.tag("c:firstSliceAng").attr("val", 0).empty();
+            w.tag("c:firstSliceAng").attr("val", c.first_slice_angle % 360).empty();
             w.tag("c:holeSize").attr("val", (c.hole_size.clamp(0.1, 0.9) * 100.0).round() as i64).empty();
         }
         _ => {}
@@ -733,6 +733,12 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     w.tag("c:date1904").attr("val", 0).empty();
     w.tag("c:roundedCorners").attr("val", 0).empty();
     w.tag("c:style").attr("val", c.style.clamp(1, 48)).empty();
+    if let Some(pivot) = c.pivot_source.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        w.open("c:pivotSource", &[]);
+        w.tag("c:name").text(pivot);
+        w.tag("c:fmtId").attr("val", 0).empty();
+        w.close();
+    }
     w.open("c:chart", &[]);
     match &c.title {
         Some(t) => {
@@ -801,6 +807,22 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
         if !matches!(g, Group::Pie | Group::Doughnut) {
             axes(&mut w, c, g);
         }
+    }
+    if let Some(dt) = &c.data_table {
+        w.open("c:dTable", &[]);
+        if dt.horizontal_border {
+            w.empty("c:showHorzBorder", &[]);
+        }
+        if dt.vertical_border {
+            w.empty("c:showVertBorder", &[]);
+        }
+        if dt.outline {
+            w.empty("c:showOutline", &[]);
+        }
+        if dt.show_keys {
+            w.empty("c:showKeys", &[]);
+        }
+        w.close();
     }
     if let Some(f) = &c.plot_fill {
         sp_pr(&mut w, Some(f), None);

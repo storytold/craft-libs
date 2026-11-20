@@ -236,7 +236,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         let seg = &b[i + 4..i + 2 + len];
         match marker {
-            0xE0 if seg.len() >= 12 && seg.starts_with(b"JFIF\0") => {
+            0xE0 if seg.len() >= 12 && seg.starts_with(b"JFIF\0") && jfif_dpi.is_none() => {
                 let unit = seg[7];
                 let x = u16::from_be_bytes([seg[8], seg[9]]) as f32;
                 let y = u16::from_be_bytes([seg[10], seg[11]]) as f32;
