@@ -3,7 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
-use crate::runtime::env::{Env, Scoped};
+use crate::runtime::env::Env;
 use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
@@ -103,8 +103,17 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
         let env = Env::of(ui);
         let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
-            // The content is a layout room of its own: the flow of the body around it does not reach in.
-            let installed = Env::install_for(ui, env.derive_local(Scoped::start_room));
+            // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps the
+            // axes that body sizes from its content, so the view takes what its content used there, as the same
+            // content shown without the view would: a child that fills takes its measured size, never the open room.
+            let installed = Env::install_for(
+                ui,
+                env.derive_local(|scoped| {
+                    let content = scoped.content;
+                    scoped.start_room();
+                    scoped.content = content;
+                }),
+            );
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));
