@@ -418,7 +418,12 @@ impl<T: Settings> SettingsStore<T> {
                     self.read_only = Some(why.clone());
                     return Err(SettingsError::ReadOnly(why));
                 }
-                Ok(_) => self.doc = doc,
+                // The adopted text is the new baseline, so a save that fails after this point
+                // still compares the next disk read against the document the store now holds.
+                Ok(_) => {
+                    self.doc = doc;
+                    self.seen_text = Some(text.clone());
+                }
                 // Same as at startup: leave the outside file untouched and stop saving.
                 Err(e) => {
                     let why = ReadOnlyReason::Migration(e).to_string();

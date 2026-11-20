@@ -101,6 +101,32 @@ fn settings_too_large_to_save_leave_a_broken_file_in_place() {
 }
 
 #[test]
+fn rejected_save_keeps_the_adopted_file_as_the_baseline() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n\n# note a\n[plugins]\nenabled = true\n");
+    let (mut store, _) = open_in(tmp.path());
+    store.flush().unwrap();
+    let first = read_config(tmp.path());
+
+    // Edited outside the app, then a save too large to write adopts the edit and fails.
+    write_config(tmp.path(), &format!("{first}\n# note b\n[extra]\nkept = true\n"));
+    let huge = "a".repeat(craft_settings::store::MAX_CONFIG_BYTES as usize);
+    store.update(|p| p.general.language = huge);
+    assert!(matches!(store.flush(), Err(SettingsError::Io(e)) if e.kind() == std::io::ErrorKind::FileTooLarge));
+
+    // The outside edit is undone before the next save.
+    write_config(tmp.path(), &first);
+    store.update(|p| p.general.language = "fr".into());
+    store.flush().unwrap();
+
+    let text = read_config(tmp.path());
+    assert!(text.contains("# note a"), "{text}");
+    assert!(!text.contains("# note b"), "{text}");
+    assert!(!text.contains("[extra]"), "{text}");
+    assert!(text.contains("language = \"fr\""), "{text}");
+}
+
+#[test]
 fn bad_value_only_resets_its_section() {
     let tmp = tempfile::tempdir().unwrap();
     write_config(tmp.path(), "schema_version = 2\n[general]\nlanguage = \"de\"\n\n[appearance]\ntheme = \"sepia\"\nui_scale = 2.0\n");
