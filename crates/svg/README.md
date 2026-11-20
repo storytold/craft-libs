@@ -17,6 +17,13 @@ The shared adapter adds an aggregate 64 MiB stylesheet-text limit and idempotent
 ### Transform compatibility
 `transform_compat::parse_transform` preserves EffectCraft transform-list recovery and exact composition. It retains six numeric arguments per operation; scanning is not time/byte capped and matrix overflow behavior is unchanged. The strict geometry reader is unchanged. Source: Brandon Thomas, EffectCraft94e1c86d89a866771f80ad1610afda9aa12e85d8; bounded safe argument matching by Altynzhan Karybai,4035d181329e847d7a57bf3d059502ea2c91b560.
 
+### Document and CSS style compatibility
+
+`doc_style` preserves EffectCraft's presentation-attribute + stylesheet + inline-`style`
+cascade, unit/percentage length resolution, `PaintRef`/`resolve_paint`, and
+`viewBox`/`preserveAspectRatio` transform helpers while leaving scene-graph mapping
+with the importer. Note that `doc_style::length()` treats unknown units as `px` (`_ => v`).
+
 
 ### Opt-in validated embedded images
 
