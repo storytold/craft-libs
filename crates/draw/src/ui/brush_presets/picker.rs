@@ -30,7 +30,7 @@ use crate::ui::brush_settings::{BrushSizeField, TipAngle, TipEllipse};
 const DEFAULT_MAX_DIAMETER: f64 = 5000.0;
 
 /// The brush values the picker's head edits, given by the app each pass.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct BrushPickerValues {
     /// The diameter in pixels: the Size field and its log slider.
@@ -117,7 +117,7 @@ impl<'a> GearRows<'a> {
 
 /// The picker's state, kept by the host while the app runs: the browser's view (search, open groups, scale), the
 /// parts the presets show and whether the search field shows. [`settings`](Self::settings) is what persists.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub struct BrushPickerState<K> {
     /// The browser's view settings; its zoom is the thumbnail scale.

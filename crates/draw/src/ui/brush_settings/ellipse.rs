@@ -34,7 +34,7 @@ const ROUND_STEP: f64 = 0.01;
 const ROUND_MIN: f64 = 0.01;
 
 /// A tip's angle and roundness.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct TipAngle {
     /// The major axis's angle in whole degrees, counter-clockwise from the right, −180 to 180.
