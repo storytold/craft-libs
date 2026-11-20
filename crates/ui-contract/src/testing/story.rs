@@ -3,7 +3,7 @@
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
 use crate::runtime::commands::CommandInput;
-use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
+use craft_behavior::{EditEvent, EditEvents, Mixed, PartKey, PartRef, Value};
 use craft_tracked::{Revision, Tracked};
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
@@ -371,6 +371,19 @@ impl StoryData {
         let (_, count, source) = written.__split_for_bind();
         match slot.any_mut().downcast_mut::<T>() {
             Some(value) => crate::contract::Bind::__tracked(value, count, source, slot_offset(name)),
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Like [`StoryData::bind`] for a value that may be mixed, as a multi-selection field shows it; an edit makes it
+    /// concrete.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn bind_mixed<T: Value>(&mut self, name: &'static str, init: Mixed<T>) -> crate::contract::Bind<'_, T> {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<Mixed<T>>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<Mixed<T>>() {
+            Some(value) => crate::contract::Bind::__tracked_mixed(value, count, source, slot_offset(name)),
             None => unreachable!("a slot's value has the type its key names"),
         }
     }
