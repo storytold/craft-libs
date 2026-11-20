@@ -116,11 +116,7 @@ fn a_row_notice_wraps_actions_onto_further_rows_inside_its_bounds() {
         let notice = bounds.get();
         let nodes: Vec<_> = labels.iter().map(|label| fixture.by_label(label).expect("the action node")).collect();
         for (at, node) in nodes.iter().enumerate() {
-            assert!(
-                notice.contains_rect(node.rect),
-                "{layout:?}: action {at} ({:?}) lies inside the notice ({notice:?})",
-                node.rect
-            );
+            assert!(notice.contains_rect(node.rect), "{layout:?}: action {at} ({:?}) lies inside the notice ({notice:?})", node.rect);
             for other in &nodes[at + 1..] {
                 assert!(!node.rect.intersects(other.rect), "{layout:?}: actions do not overlap ({:?} vs {:?})", node.rect, other.rect);
             }
