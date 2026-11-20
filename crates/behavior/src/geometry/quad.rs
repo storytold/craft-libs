@@ -737,7 +737,7 @@ fn turned_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, k
     out.iter().all(|x| x.is_finite()).then_some(out)
 }
 
-/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 1.3 px where its
+/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 0.45 px where its
 /// sides are parallel or meet gently (7.5 px on a box narrowing hard both ways; the frame scaling was hundreds off):
 /// [`turned_side_scale`], then the top and bottom turn parallel to the top edge, `k H0` apart about the reference
 /// point's row, `H0` the dragged side's height plus the top and bottom's mean run across the frame. `k = 1 + d / r`,
@@ -754,6 +754,9 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     let sign = if edge == 1 { 1.0 } else { -1.0 };
     let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
     let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
+    // The opposite side and the height follow a factor eased by the box's slant ([`alt_spread`], as for a top or
+    // bottom drag); the dragged side stays where the plain drag puts it (measured on the reference, seven boxes).
+    let k = if k.abs() > 1e-9 { k - 0.12 * alt_spread(g.quad0) * (k - 1.0) / k } else { k };
     let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
     let height = k * (dragged + ((v[1] - v[0]) + (v[2] - v[3])) / 2.0);
     if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {

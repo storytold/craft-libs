@@ -791,3 +791,32 @@ fn an_alt_bottom_drag_eases_by_the_slant_of_the_top() {
         assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ side drags on boxes whose top and bottom converge (measured on the reference): the opposite side and the height
+/// follow a factor eased by the box's slant; under a square top nothing is eased.
+#[test]
+fn an_alt_side_drag_on_converging_edges_eases_the_opposite_side() {
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let both = [(150.0, 125.0), (452.0, 185.0), (452.0, 267.0), (150.0, 327.0)];
+    let gentle = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let square_top = [(150.0, 125.0), (452.0, 125.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        // Was 4.3 px off.
+        (both, 1, (452.0, 226.0), (392.0, 226.0), [(193.59, 197.73), (382.03, 235.17), (395.06, 251.62), (225.31, 217.89)], 0.4),
+        // Was 2.2 px off.
+        (both, 1, (452.0, 226.0), (552.0, 226.0), [(42.06, 156.43), (538.1, 254.98), (546.84, 292.97), (81.17, 200.45)], 0.45),
+        // Was 1.5 px off.
+        (both, 3, (150.0, 226.0), (110.0, 226.0), [(114.99, 99.87), (494.12, 175.2), (472.77, 349.3), (119.51, 279.11)], 0.3),
+        // Was 1.2 px off.
+        (gentle, 1, (452.0, 226.0), (552.0, 226.0), [(49.42, 124.83), (548.56, 190.94), (546.78, 326.4), (61.46, 262.12)], 0.2),
+        // Exact before, kept.
+        (square_top, 1, (452.0, 206.0), (552.0, 206.0), [(50.0, 97.98), (552.0, 97.98), (552.0, 334.02), (50.0, 334.02)], 0.05),
+    ];
+    for (quad, edge, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
