@@ -716,13 +716,34 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
 }
 
-/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 3 px where its
-/// sides are parallel (a box in perspective along its sides comes out within 31 px; the frame scaling was hundreds
-/// off). In the top edge's frame about the reference point, the top and bottom turn parallel to the top edge, `k H0`
-/// apart about the reference point's row, `H0` the dragged side's height plus the top and bottom's mean run across
-/// the frame; the top keeps its middle and scales by `k = 1 + 2 d·uh / |top|`; the sides keep their runs along it.
-/// `None` for a box this leaves without height.
-fn converging_side_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
+/// The opposite side and the dragged corners of an ⌥ side drag on a box in perspective, by `k` about the reference
+/// point (in the top edge's frame, `uh` along it): the opposite side scales evenly and turns about its middle to a run
+/// of `r + (k - 1)(r - r') / 2` along the top edge (`r` its own run, `r'` the dragged side's; on a symmetric box that is
+/// the even scale's `k r`); the dragged corners keep the place along `uh` a plain drag gives them
+/// ([`side_run_scale`]) and move along `nh` to the opposite side's rows.
+fn turned_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, k: f64) -> Option<[Point; 4]> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let (q, c) = (g.quad0, g.pivot0);
+    let (al, ar) = ((q[3] - q[0]).dot(uh), (q[2] - q[1]).dot(uh));
+    let mut out = q.map(|x| c + (x - c) * k);
+    let ([a0, a1], (run, other)) = if edge == 1 { ([0, 3], (al, ar)) } else { ([1, 2], (ar, al)) };
+    let (middle, across) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(nh));
+    let half = (uh * (run + (k - 1.0) * (run - other) / 2.0) + nh * across) / 2.0;
+    (out[a0], out[a1]) = (middle - half, middle + half);
+    let plain = side_run_scale(g, p, min_side)?.quad;
+    for i in if edge == 1 { [1, 2] } else { [0, 3] } {
+        out[i] = c + uh * (plain[i] - c).dot(uh) + nh * (out[i] - c).dot(nh);
+    }
+    out.iter().all(|x| x.is_finite()).then_some(out)
+}
+
+/// An ⌥ side drag on a box whose top and bottom converge, fitted to the reference's results within 1.3 px where its
+/// sides are parallel or meet gently (7.5 px on a box narrowing hard both ways; the frame scaling was hundreds off):
+/// [`turned_side_scale`], then the top and bottom turn parallel to the top edge, `k H0` apart about the reference
+/// point's row, `H0` the dragged side's height plus the top and bottom's mean run across the frame. `k = 1 + d / r`,
+/// `r` the dragged side's middle's distance from the reference point along the top edge. `None` for a box this leaves
+/// without height.
+fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
     let c = g.pivot0;
     let f = g.quad0.map(|x| (x - c).dot(uh));
@@ -730,22 +751,19 @@ fn converging_side_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64) ->
     if edge % 2 == 0 {
         return converging_top_scale(g, p, uh, nh, len, f, v);
     }
+    let [tl, tr, br, bl] = g.quad0;
     let sign = if edge == 1 { 1.0 } else { -1.0 };
-    let k = 1.0 + 2.0 * sign * (p - g.start).dot(uh) / len;
+    let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
+    let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
     let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
     let height = k * (dragged + ((v[1] - v[0]) + (v[2] - v[3])) / 2.0);
-    if !(k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {
+    if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {
         return None;
     }
-    let (middle, half) = ((f[0] + f[1]) / 2.0, k * len / 2.0);
-    let (run_left, run_right) = (f[3] - f[0], f[2] - f[1]);
-    let at = |a: f64, b: f64| c + uh * a + nh * b;
-    let quad = [
-        at(middle - half, -height / 2.0),
-        at(middle + half, -height / 2.0),
-        at(middle + half + run_right, height / 2.0),
-        at(middle - half + run_left, height / 2.0),
-    ];
+    let mut quad = turned_side_scale(g, p, min_side, uh, nh, k)?;
+    for (i, row) in [(0, -height / 2.0), (1, -height / 2.0), (2, height / 2.0), (3, height / 2.0)] {
+        quad[i] = c + uh * (quad[i] - c).dot(uh) + nh * row;
+    }
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
@@ -867,7 +885,7 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
         return None;
     }
     if uh.cross(bottom).abs() > 1e-9 * bottom.hypot() {
-        return converging_side_scale(g, p, uh, nh, len);
+        return converging_side_scale(g, p, min_side, uh, nh, len);
     }
     let c = g.pivot0;
     let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
@@ -899,18 +917,7 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
             } else {
                 let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
                 let k = factor(sign * d.dot(uh), reach)?;
-                let mut out = q.map(|p| c + (p - c) * k);
-                // The opposite side turns about its middle to a run of `r + (k - 1)(r - r') / 2` along the top edge,
-                // `r` its own run and `r'` the dragged side's: on a symmetric box that is the even scale's `k r`.
-                let ([a0, a1], (run, other)) = if edge == 1 { ([0, 3], (al, ar)) } else { ([1, 2], (ar, al)) };
-                let (middle, across) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(nh));
-                let half = (uh * (run + (k - 1.0) * (run - other) / 2.0) + nh * across) / 2.0;
-                (out[a0], out[a1]) = (middle - half, middle + half);
-                let plain = side_run_scale(g, p, min_side)?.quad;
-                for i in if edge == 1 { [1, 2] } else { [0, 3] } {
-                    out[i] = at((plain[i] - c).dot(uh), (out[i] - c).dot(nh), c);
-                }
-                out
+                turned_side_scale(g, p, min_side, uh, nh, k)?
             }
         }
         _ => {

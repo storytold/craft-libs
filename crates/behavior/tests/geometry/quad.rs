@@ -501,7 +501,7 @@ fn an_alt_shift_drag_stretches_about_the_reference_point() {
 }
 
 /// ⌥ side drags on a box whose top and bottom converge and whose sides are parallel (measured on the reference): the
-/// top and bottom come out parallel, the box's height set by the dragged side; within 3 px of the reference.
+/// top and bottom come out parallel, the box's height set by the dragged side; within 1 px of the reference.
 #[test]
 fn an_alt_side_drag_on_converging_top_and_bottom_levels_them() {
     let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
@@ -514,7 +514,7 @@ fn an_alt_side_drag_on_converging_top_and_bottom_levels_them() {
         let quad = parallel_sides.map(|(x, y)| p(x, y));
         let start = BoxState::new(quad, p(301.0, 226.0));
         let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
-        assert!(within(&got, want, 3.0), "edge {edge}: {:?}", got.quad);
+        assert!(within(&got, want, 1.0), "edge {edge}: {:?}", got.quad);
     }
 }
 
@@ -558,5 +558,26 @@ fn an_alt_side_drag_on_an_asymmetric_box_turns_the_opposite_side() {
         let start = BoxState::new(quad, centre);
         let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
         assert!(within(&got, want, 0.1), "edge {edge} of {quad:?}: {:?}", got.quad);
+    }
+}
+
+/// ⌥ side drags on boxes whose top and bottom converge and whose sides meet as well (measured on the reference): the
+/// same levelling on top of the perspective side rule; a gently distorted box within 0.5 px, one narrowing hard both
+/// ways within 8 px.
+#[test]
+fn an_alt_side_drag_on_a_box_converging_both_ways_levels_top_and_bottom() {
+    let one_corner_in = [(180.0, 145.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_and_sloped = [(210.0, 125.0), (392.0, 165.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        (one_corner_in, (452.0, 226.0), (502.0, 226.0), [(128.94, 100.68), (496.04, 73.69), (506.6, 359.95), (102.57, 389.66)], 0.5),
+        (narrow_and_sloped, (422.0, 246.0), (472.0, 246.0), [(177.55, 129.85), (408.24, 180.55), (524.38, 364.12), (103.03, 271.51)], 8.0),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let centre = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, centre);
+        let got = drag(&start, &start, BoxPart::Edge(1), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?}: {:?}", got.quad);
     }
 }
