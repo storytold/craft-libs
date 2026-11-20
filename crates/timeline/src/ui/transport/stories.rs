@@ -1,7 +1,6 @@
 //! Stories of the transport bar and the media controls.
 
 use super::{MediaControls, TransportBar, TransportBarSettings, TransportButton};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

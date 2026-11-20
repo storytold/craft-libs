@@ -1,7 +1,6 @@
 //! Stories of `PresetFooter`.
 
 use super::{PresetFooter, PresetFooterOptions};
-use crate::contract::Bind;
 use crate::sections::FooterAction;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;

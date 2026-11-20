@@ -3,7 +3,7 @@
 use super::InspectOverlay;
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::runtime::inspect;
 use crate::testing::{Drive, StoryData, StoryOutput, story};

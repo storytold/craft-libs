@@ -4,7 +4,6 @@ use super::{
     ExportAsDialog, ExportOptions, ExportOptionsKind, ExportPreview, FormatOptions, FormatOptionsDialog, HostedExportAs, HostedFormatOptions,
     JpegOptions, OutputPathRow, SizeEstimate, TargaOptions,
 };
-use crate::contract::Bind;
 use crate::dialog::stories::{hosted, hosted_with};
 use crate::patterns::form_dialogs::PreviewState;
 use crate::patterns::presets::{GroupPath, PresetLibrary};

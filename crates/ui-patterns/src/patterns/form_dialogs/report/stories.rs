@@ -1,7 +1,6 @@
 //! Stories of `ReportDialog`.
 
 use super::{ReportDialog, ReportNote};
-use crate::contract::Bind;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_theme::variant::Tone;

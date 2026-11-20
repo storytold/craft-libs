@@ -2,7 +2,7 @@
 
 use super::{MenuBar, MenuHelp, MenuTitle};
 use crate::buttons::{IconButton, PopupMark};
-use crate::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::menu::{EditMenu, GroupItem, HelpEntry, Menu, MenuItem, PanelMenu, PanelRow};
 use crate::runtime::commands::EditCommands;

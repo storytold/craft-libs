@@ -1,7 +1,6 @@
 //! Stories of the point picker row: one picker armed, and the row in a colour mode without pickers.
 
 use super::{TonePicker, TonePickerRow};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

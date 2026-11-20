@@ -1,7 +1,6 @@
 //! Stories of `PasswordDialog`.
 
 use super::{PasswordDialog, PasswordPurpose};
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

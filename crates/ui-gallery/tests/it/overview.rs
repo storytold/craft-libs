@@ -203,6 +203,34 @@ fn a_storys_dialog_starts_closed_opens_over_the_view_and_closes_back_to_the_open
     assert_eq!(openers(&fixture), closed, "closing the story's dialog brings the opener back");
 }
 
+/// A dialog story closed by its own button opens again by the card's opener: the card finds the story's `open` value
+/// by name. Regression: the PDF export story kept `open` inside another value, so the opener showed an empty card.
+#[trial]
+fn a_storys_dialog_closed_by_its_own_button_opens_again_by_the_opener() {
+    let mut gallery = gallery_filtered(level_of("PdfExportDialog"), "PdfExportDialog");
+    let mut fixture = Fixture::new(move |ui| gallery.ui(ui));
+    fixture.room(Vec2::new(1400.0, 900.0)).settle();
+    let closed = painted_times(&fixture, "Save PDF");
+    let open_by_the_opener = |fixture: &mut Fixture| {
+        let opener = fixture
+            .by_role(Role::BUTTON)
+            .into_iter()
+            .filter(|button| fixture.tree().name_of(button.node) == Some("Show dialog"))
+            .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+            .expect("an opener");
+        fixture.click(&opener).settle();
+    };
+    open_by_the_opener(&mut fixture);
+    assert!(painted_times(&fixture, "Save PDF") > closed, "the opener opens the dialog");
+    let cancel = fixture.by_label("Cancel").expect("the dialog's Cancel button");
+    fixture.click(&cancel).settle();
+    // The exit fade runs on the fixture's clock.
+    fixture.advance(1.0).settle();
+    assert_eq!(painted_times(&fixture, "Save PDF"), closed, "Cancel closed the dialog");
+    open_by_the_opener(&mut fixture);
+    assert!(painted_times(&fixture, "Save PDF") > closed, "the opener opens the dialog again");
+}
+
 /// A story whose dialog is open runs in every frame: the dialog paints on a layer of its own, which a replay can't add,
 /// so the shell counts the dialog in every pass and the card keeps the story in place of its opener.
 #[trial]

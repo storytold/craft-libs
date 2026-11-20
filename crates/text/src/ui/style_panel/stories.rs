@@ -2,7 +2,6 @@
 
 use super::{NamedStyleRow, StylePreview, TextStyleKind, TextStyleRow, TextStylesPanel, style_rows};
 use craft_behavior::{IconId, Mixed, Selection};
-use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::{PresetKey, PresetPicker, PresetState};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

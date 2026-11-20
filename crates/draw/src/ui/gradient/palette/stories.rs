@@ -1,7 +1,6 @@
 //! Stories of the gradient palette.
 
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::{PresetState, PresetView};
 use craft_ui::testing::{StoryData, StoryOutput, story};
 use egui::Ui;

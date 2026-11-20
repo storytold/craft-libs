@@ -1,7 +1,6 @@
 //! Stories of the Brush Preset picker.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::Bind;
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::pictures::{SampleTip, paint_tip, paint_wave};

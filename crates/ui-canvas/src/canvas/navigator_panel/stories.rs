@@ -1,7 +1,6 @@
 //! Stories of the Navigator panel.
 
 use super::NavigatorPanel;
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Size};

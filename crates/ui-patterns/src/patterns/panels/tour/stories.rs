@@ -2,7 +2,7 @@
 
 use super::{Tour, TourStep};
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _};
+use crate::contract::Show as _;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

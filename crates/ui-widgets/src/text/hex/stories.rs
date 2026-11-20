@@ -2,7 +2,7 @@
 //! (a web colour) and the alpha.
 
 use super::HexField;
-use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowContainer as _};
 use crate::form::Field;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use crate::text::TextField;

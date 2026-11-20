@@ -2,7 +2,7 @@
 
 use super::Popover;
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::runtime::focus::Initial;
 use crate::testing::{Drive, StoryData, StoryOutput, story};

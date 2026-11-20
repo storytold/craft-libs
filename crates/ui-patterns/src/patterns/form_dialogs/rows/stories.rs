@@ -3,7 +3,6 @@
 use super::{DialogFields, ParamRows};
 use crate::runtime::requests::PathKind;
 
-use crate::contract::Bind;
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
 use crate::patterns::presets::PresetRow;

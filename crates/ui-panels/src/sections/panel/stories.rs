@@ -2,7 +2,7 @@
 
 use super::Panel;
 use crate::buttons::Button;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Props as _, Show as _, ShowContainer as _};
 use crate::menu::MenuItem;
 use crate::primitives::IconSpec;
 use crate::sections::sample::body;

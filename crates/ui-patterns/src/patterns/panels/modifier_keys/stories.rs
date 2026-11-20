@@ -1,7 +1,6 @@
 //! Stories of `ModifierKeysPanel`.
 
 use super::ModifierKeysPanel;
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_keymap::Mods;
 use egui::Ui;

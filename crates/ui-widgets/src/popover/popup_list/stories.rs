@@ -2,7 +2,7 @@
 
 use super::PopupList;
 use crate::buttons::Button;
-use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowCollection as _, ShowContainer as _};
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow};
 use crate::testing::{Drive, StoryData, StoryOutput, story};

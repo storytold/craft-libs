@@ -1,7 +1,6 @@
 //! Stories of Black & White, Channel Mixer and Selective Color: each editor's cases in one card.
 
 use super::{BlackWhite, BlackWhiteEditor, ChannelMixer, ChannelMixerEditor, SelectiveColor, SelectiveColorEditor, SelectiveMethod};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

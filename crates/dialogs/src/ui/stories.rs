@@ -2,7 +2,6 @@
 
 use super::PathField;
 use craft_host::PickRequest;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

@@ -1,7 +1,6 @@
 //! Stories of `SaveForWebDialog`.
 
 use super::{Animation, SaveForWebDialog, SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant};
-use crate::contract::Bind;
 use crate::primitives::TextureCache;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;

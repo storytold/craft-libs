@@ -1,7 +1,6 @@
 //! Stories of `Watermark`.
 
 use super::{Watermark, WatermarkSettings, WatermarkStyle};
-use crate::contract::Bind;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

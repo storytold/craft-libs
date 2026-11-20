@@ -6,7 +6,6 @@ use crate::ui::adjust::{ToneChannel, ToneChannels, TonePicker, ToneSpace};
 use crate::ui::curve::Curve;
 use crate::ui::curve::stories::story_bins;
 use crate::ui::histogram::ChannelColor;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

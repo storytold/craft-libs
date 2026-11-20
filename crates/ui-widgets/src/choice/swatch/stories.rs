@@ -2,7 +2,7 @@
 
 use super::Swatch;
 use crate::choice::RadioGroup;
-use crate::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Row, Stack};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::Mixed;

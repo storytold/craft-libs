@@ -1,7 +1,6 @@
 //! Stories of `ConditionBuilder`: a nested group, a date-range rule and a group problem.
 
 use super::{Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionValue, Match};
-use craft_ui::contract::Bind;
 use craft_ui::pickers::PickedDate;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

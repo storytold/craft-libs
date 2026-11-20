@@ -4,7 +4,7 @@ use super::{PagePicture, PagePreview, PagePreviewWords, PreviewLayer};
 use crate::ui::fixtures::{DemoPages, PAPER};
 use crate::ui::thumbnails::PageThumbnails;
 use craft_behavior::Selection;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer};
+use craft_ui::contract::{Props as _, Show as _, ShowContainer};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

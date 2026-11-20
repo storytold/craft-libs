@@ -1,7 +1,7 @@
 //! Stories of `Section`.
 
 use super::Section;
-use crate::contract::{Bind, Role, Show as _, ShowContainer as _};
+use crate::contract::{Role, Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::sections::sample::body;
 use crate::sections::{HeaderAction, HeaderStrength};

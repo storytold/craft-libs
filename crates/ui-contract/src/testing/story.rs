@@ -280,7 +280,12 @@ pub struct ValueAt<'a> {
     size: usize,
 }
 
-impl ValueAt<'_> {
+impl<'a> ValueAt<'a> {
+    /// Where `value`, the story value named `name`, lies in the data whose writes `count` counts under `source`.
+    fn of<T>(count: &'a std::cell::Cell<u64>, source: u64, name: &'static str, value: &T) -> Self {
+        ValueAt { count, source, key: slot_offset(name), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() }
+    }
+
     /// A binding of `part`, the value itself or a field inside it.
     ///
     /// # Panics
@@ -472,11 +477,35 @@ impl StoryData {
         let (_, count, source) = written.__split_for_bind();
         match slot.any_mut().downcast_mut::<T>() {
             Some(value) => {
-                let at = ValueAt { count, source, key: slot_offset(name), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() };
+                let at = ValueAt::of(count, source, name, value);
                 (value, at)
             }
             None => unreachable!("a slot's value has the type its key names"),
         }
+    }
+
+    /// Two values by name, each created from its init on first use and returned with where it lies, as
+    /// [`StoryData::value_at`] returns one: for a story that binds a value it must keep by its own name beside another,
+    /// such as a dialog's `open`, which the gallery closes and opens by that name, beside the value the dialog edits.
+    ///
+    /// # Panics
+    ///
+    /// When both name the same value (the same name and type).
+    #[allow(clippy::unreachable, reason = "both values exist and each slot key holds its type, so neither lookup can fail")]
+    pub fn pair_at<A: Value, B: Value>(&mut self, a: (&'static str, A), b: (&'static str, B)) -> ((&mut A, ValueAt<'_>), (&mut B, ValueAt<'_>)) {
+        let StoryData { values, written, .. } = self;
+        let (key_a, key_b) = ((a.0, TypeId::of::<A>()), (b.0, TypeId::of::<B>()));
+        values.entry(key_a).or_insert_with(|| Box::new(a.1));
+        values.entry(key_b).or_insert_with(|| Box::new(b.1));
+        let (_, count, source) = written.__split_for_bind();
+        let [Some(slot_a), Some(slot_b)] = values.get_disjoint_mut([&key_a, &key_b]) else {
+            unreachable!("both values were created above")
+        };
+        let (Some(value_a), Some(value_b)) = (slot_a.any_mut().downcast_mut::<A>(), slot_b.any_mut().downcast_mut::<B>()) else {
+            unreachable!("a slot's value has the type its key names")
+        };
+        let (at_a, at_b) = (ValueAt::of(count, source, a.0, value_a), ValueAt::of(count, source, b.0, value_b));
+        ((value_a, at_a), (value_b, at_b))
     }
 
     /// Like [`StoryData::value_at`] for a number the Properties editor keeps inside `range`.

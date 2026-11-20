@@ -1,7 +1,6 @@
 //! Stories of `SwatchesPanel`.
 
 use super::{SwatchLibrary, SwatchesPanel, SwatchesState};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

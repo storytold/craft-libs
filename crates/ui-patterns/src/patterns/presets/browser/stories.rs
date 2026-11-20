@@ -2,7 +2,6 @@
 
 use super::{PresetBrowser, PresetReorder};
 use crate::choice::SwatchFace;
-use crate::contract::Bind;
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PresetEvent, PresetFooterOptions, PresetRow, PresetState, PresetTiles};
 use crate::testing::{Drive, StoryData, StoryOutput, story};

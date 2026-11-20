@@ -1,7 +1,6 @@
 //! Stories of `NamedPresetRow`.
 
 use super::{NameCheck, NamedPresetRow, NamedPresetStyle, PresetError};
-use crate::contract::Bind;
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PickerField, PresetExport, PresetFiles, PresetPicker, PresetRow, PresetState};
 use crate::testing::pictures::paint_contour;

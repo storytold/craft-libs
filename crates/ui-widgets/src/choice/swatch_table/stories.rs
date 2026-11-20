@@ -1,7 +1,6 @@
 //! Stories of `SwatchTable`.
 
 use super::{SwatchTable, SwatchTableOutput};
-use crate::contract::Bind;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::Selection;

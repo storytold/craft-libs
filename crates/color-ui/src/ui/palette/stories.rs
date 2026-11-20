@@ -2,7 +2,6 @@
 
 use super::SwatchPalette;
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

@@ -12,7 +12,6 @@ use egui::{Color32, ColorImage, Ui};
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::Bind;
 use craft_ui::dialog::HostedWorkspace;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::primitives::Revision;

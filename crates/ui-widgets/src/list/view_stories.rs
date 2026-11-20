@@ -16,7 +16,7 @@ use crate::popover::Popover;
 use crate::primitives::{ContentPainterCx, IconSpec};
 use crate::runtime::env::{Env, Label};
 use crate::style::{Corners, SurfaceKind};
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, ValueAt, story};
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Rect, Ui};
@@ -573,9 +573,8 @@ fn event_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 /// An undo list of `count` actions, "Step 1" the oldest, starting with `mark`, and its footer as the readout: the
 /// actions a pick undoes, or Cancel while none is marked.
-fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) -> StoryOutput {
+fn undo_list(ui: &mut Ui, mark: &mut UndoMark, mark_at: ValueAt<'_>, count: usize) -> StoryOutput {
     let labels: Vec<String> = (1..=count).rev().map(|n| format!("Step {n}")).collect();
-    let (mark, mark_at) = data.value_at("mark", mark);
     let rows = UndoRows::new(&labels);
     let out = UndoList::new("Undo History").selection(mark_at.bind(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
     let env = Env::of(ui);
@@ -587,7 +586,8 @@ fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) ->
 /// WordCraft's undo list: 30 actions, the newest three marked.
 #[story(UndoList<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn undo_list_many(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 30, UndoMark::at(2))
+    let (mark, mark_at) = data.value_at("mark", UndoMark::at(2));
+    undo_list(ui, mark, mark_at, 30)
 }
 
 /// The drive of the popover story: a click on its button.
@@ -601,21 +601,22 @@ fn open_undo_history(fixture: &mut Fixture) {
 #[story(UndoList<'static>, covers = [], drive = Drive::Custom(open_undo_history))]
 fn undo_list_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let opener = Button::new("Undo History").show(ui);
-    let mut open = *data.value("open", false);
+    let ((open, open_at), (mark, mark_at)) = data.pair_at(("open", false), ("mark", UndoMark::at(2)));
     let mut shown = None;
-    let popover = Popover::new("Undo History", Bind::bound(&mut open)).opened_by(&opener).show(ui, |ui, _| {
-        shown = Some(undo_list(ui, data, 30, UndoMark::at(2)));
+    let popover = Popover::new("Undo History", open_at.bind(open)).opened_by(&opener).show(ui, |ui, _| {
+        shown = Some(undo_list(ui, mark, mark_at, 30));
     });
-    *data.value("open", false) = open;
     shown.unwrap_or_else(|| popover.output.into())
 }
 
 #[story(UndoList<'static>, covers = [One], drive = Drive::Never)]
 fn undo_list_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 1, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 1)
 }
 
 #[story(UndoList<'static>, covers = [Empty], drive = Drive::Never)]
 fn undo_list_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    undo_list(ui, data, 0, UndoMark::default())
+    let (mark, mark_at) = data.value_at("mark", UndoMark::default());
+    undo_list(ui, mark, mark_at, 0)
 }

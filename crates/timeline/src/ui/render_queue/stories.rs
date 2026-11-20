@@ -2,7 +2,6 @@
 
 use super::{RenderItemId, RenderQueueItem, RenderQueueList, RenderStatus};
 use craft_behavior::Selection;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::time::Duration;

@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use craft_ui::contract::Bind;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};

@@ -1,7 +1,6 @@
 //! Stories of `ReorderableSections`.
 
 use super::{ReorderableSections, SectionButton, SectionSpec};
-use crate::contract::Bind;
 use crate::sections::sample::body;
 use crate::sections::{SectionKey, SectionLayout};
 use crate::testing::{Drive, StoryData, StoryOutput, story};

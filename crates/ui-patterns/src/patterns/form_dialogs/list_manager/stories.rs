@@ -1,7 +1,6 @@
 //! Stories of `ListManager`.
 
 use super::{ListManager, ListManagerAction, ListManagerEntry, ListManagerWords};
-use crate::contract::Bind;
 use crate::runtime::env::Env;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

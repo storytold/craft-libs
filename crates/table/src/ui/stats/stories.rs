@@ -1,7 +1,7 @@
 //! Stories of the selection statistics readout.
 
 use super::{SelectionStats, SelectionStatsReadout, StatsShown, StatsWords, stats_parts};
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};

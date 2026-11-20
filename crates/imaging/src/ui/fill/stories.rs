@@ -12,7 +12,6 @@ use egui::Ui;
 
 use craft_behavior::kurbo::Rect;
 use craft_ui::canvas::RasterSource;
-use craft_ui::contract::Bind;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::{Job, Pending};

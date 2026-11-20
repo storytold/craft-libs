@@ -1,6 +1,5 @@
 //! Stories of `AxisSliders`: the Weight and Width axes of a variable face with three named instances.
 
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, ValueAt, story};
 use egui::Ui;
 

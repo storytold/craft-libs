@@ -3,7 +3,6 @@
 use super::{AppLayerEditor, Pick, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use craft_theme::report::ContrastReport;
 use craft_theme::{AppSizes, Appearance, Contrast, Explained, Mode, Size, TextSize, builtins};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;

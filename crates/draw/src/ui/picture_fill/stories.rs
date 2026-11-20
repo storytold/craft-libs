@@ -1,7 +1,6 @@
 //! Stories of the picture fill editor: Stretch and Tile.
 
 use super::{PictureFill, PictureFillEditor, PictureMode, TileAlignment, TileMirror};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

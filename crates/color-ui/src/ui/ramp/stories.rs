@@ -2,7 +2,7 @@
 
 use super::{ColorRamp, RampKind, RampPick};
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Props as _, Show as _, Validity};
+use craft_ui::contract::{Props as _, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
 use egui::Ui;

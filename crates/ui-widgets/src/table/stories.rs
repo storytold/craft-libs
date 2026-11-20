@@ -1,7 +1,7 @@
 //! Stories of `Table`: rows with a text in each cell, a sorted column, a toggle column and a tree.
 
 use super::{Table, sort_rows};
-use crate::contract::{Bind, CollectionEvent, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, ShowCollection as _, ToggleColumn};
+use crate::contract::{CollectionEvent, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, ShowCollection as _, ToggleColumn};
 use crate::list::{ListRow, ToggleCell};
 use crate::testing::pointer::{moved, secondary};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};

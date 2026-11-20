@@ -2,7 +2,7 @@
 
 use super::{Menu, MenuItem};
 use crate::buttons::Button;
-use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Trigger};
+use crate::contract::{Entry, Props as _, Show as _, ShowContainer as _, Trigger};
 use crate::display::Divider;
 use crate::layout_components::Stack;
 use crate::testing::{Drive, StoryData, StoryOutput, story};

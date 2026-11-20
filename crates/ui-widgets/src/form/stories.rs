@@ -3,7 +3,7 @@
 use super::Help;
 use super::{Field, FieldGroup};
 use crate::choice::Swatch;
-use crate::contract::{Bind, FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
+use crate::contract::{FieldLayout, GlyphLabel, LabelKind, LabelScheme, Show as _, ShowContainer as _, SideLabel, Validity};
 use crate::layout_components::Row;
 use crate::runtime::env::Message;
 use crate::testing::{Drive, StoryData, StoryOutput, story};

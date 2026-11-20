@@ -1,7 +1,7 @@
 //! Stories of the LUT picker.
 
 use super::{LutChoice, LutPicker};
-use craft_ui::contract::{Bind, Props as _, Role, Show as _, Validity};
+use craft_ui::contract::{Props as _, Role, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};

@@ -2,7 +2,6 @@
 //! tree; extra columns; effects and Smart Filters open; filtered by Artboard and by Group, which keep each group open or
 //! closed.
 
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

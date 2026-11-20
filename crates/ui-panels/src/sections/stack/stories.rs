@@ -1,7 +1,7 @@
 //! Stories of `SectionStack`.
 
 use super::SectionStack;
-use crate::contract::{Bind, Role, ShowContainer as _};
+use crate::contract::{Role, ShowContainer as _};
 use crate::sections::Section;
 use crate::sections::sample::body;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
