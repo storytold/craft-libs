@@ -1579,14 +1579,29 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
     prelude
 }
 
-/// The folders that hold a `src/lib.rs` or `src/main.rs` among `paths`, which are package folders. A relative
-/// `src/lib.rs` gives the empty folder.
+/// The package folders among `paths`: each folder that holds a `src/lib.rs` or `src/main.rs`, and each folder
+/// that holds a file directly in `src/bin` and is not inside the `src` folder of one of the first kind. A
+/// relative `src/lib.rs` gives the empty folder.
 fn package_folders(paths: &[String]) -> BTreeSet<&str> {
-    paths
+    fn folder(dir: &str) -> Option<&str> {
+        dir.strip_suffix('/').or_else(|| dir.is_empty().then_some(""))
+    }
+    let roots: BTreeSet<&str> =
+        paths.iter().filter_map(|path| path.strip_suffix("src/lib.rs").or_else(|| path.strip_suffix("src/main.rs"))).filter_map(folder).collect();
+    let in_src = |dir: &str| {
+        roots.iter().any(|root| {
+            let src = if root.is_empty() { "src".to_owned() } else { format!("{root}/src") };
+            dir == src || dir.starts_with(&format!("{src}/"))
+        })
+    };
+    let bins: Vec<&str> = paths
         .iter()
-        .filter_map(|path| path.strip_suffix("src/lib.rs").or_else(|| path.strip_suffix("src/main.rs")))
-        .filter_map(|dir| dir.strip_suffix('/').or_else(|| dir.is_empty().then_some("")))
-        .collect()
+        .filter_map(|path| path.rsplit_once('/').map(|(dir, _)| dir))
+        .filter_map(|dir| dir.strip_suffix("src/bin"))
+        .filter_map(folder)
+        .filter(|dir| !in_src(dir))
+        .collect();
+    roots.into_iter().chain(bins).collect()
 }
 
 /// Whether Cargo builds `path` as a crate root of its own, also when another file declares it as a module:
@@ -1596,7 +1611,8 @@ fn package_folders(paths: &[String]) -> BTreeSet<&str> {
 /// The package folder is the nearest folder above `path` in `packages` (see [`package_folders`]). Without
 /// one, a package folder is one that is not directly inside `src` and has no `bin`, `tests`, `examples` or
 /// `benches` folder above it, so a folder of that name inside `src` or inside one of those folders holds
-/// modules. With one, only the folders below it count.
+/// modules. With one, only those places directly below it count, so `src/foo/tests/helper.rs` and
+/// `src/foo/src/bin/helper.rs` hold modules.
 fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
     let inside = path.rmatch_indices('/').map(|(i, _)| i).find(|&i| i > 0 && packages.contains(&path[..i])).map(|i| &path[i + 1..]);
     let inside = inside.or_else(|| (packages.contains("") && !path.starts_with('/')).then_some(path));
@@ -1606,6 +1622,14 @@ fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
         return false;
     }
     let folders: Vec<&str> = segments.collect();
+    if inside.is_some() {
+        return match folders.as_slice() {
+            ["bin", "src"] | ["tests" | "examples" | "benches"] => true,
+            [_, "bin", "src"] | [_, "tests" | "examples" | "benches"] => name == "main.rs",
+            [] => name == "build.rs",
+            _ => false,
+        };
+    }
     let package = |rest: &[&str]| rest.first() != Some(&"src") && !rest.iter().any(|s| matches!(*s, "bin" | "tests" | "examples" | "benches"));
     match folders.as_slice() {
         ["bin", "src", ..] => true,

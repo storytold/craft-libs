@@ -693,6 +693,24 @@ fn predefined_quit_reads_target_folders_below_the_package_folder_only() {
     // Inside the package a `tests` folder in `src` still holds modules.
     let lib = "mod tests;\n";
     assert!(predefined_quit([("/work/tests/app/src/lib.rs", lib), ("/work/tests/app/src/tests/mod.rs", local)]).is_empty());
+    // So do target folder names deeper in the package's modules.
+    let found = predefined_quit([
+        ("src/lib.rs", "mod foo;\nmod src;\n"),
+        ("src/foo.rs", "mod tests;\nmod src;\n"),
+        ("src/foo/tests.rs", "mod helper;\n"),
+        ("src/foo/tests/helper.rs", local),
+        ("src/foo/src.rs", "mod bin;\n"),
+        ("src/foo/src/bin.rs", "mod helper;\n"),
+        ("src/foo/src/bin/helper.rs", local),
+        ("src/src.rs", "mod bin;\n"),
+        ("src/src/bin.rs", "mod helper;\n"),
+        ("src/src/bin/helper.rs", local),
+    ]);
+    assert!(found.is_empty(), "{found:?}");
+    // A package with only binaries, beside the one with a library, keeps its binaries as roots.
+    let found =
+        predefined_quit([("outer/src/lib.rs", ""), ("outer/tools/src/bin/tool.rs", "mod helper;\n"), ("outer/tools/src/bin/helper.rs", local)]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("outer/tools/src/bin/helper.rs", 2)]);
 }
 
 #[test]
