@@ -40,6 +40,8 @@ pub struct Metadata {
     pub subjects: Vec<String>,
     /// `dc:description`, left out when blank.
     pub description: Option<String>,
+    /// `dc:date`, left out when blank. This is distinct from the modification time.
+    pub publication_date: Option<String>,
     /// `dcterms:modified`: must be a date and time [`crate::w3cdtf`] accepts.
     pub modified: String,
     /// The writing application, as `<meta name="generator">`.
@@ -236,6 +238,7 @@ fn package_document(book: &Book, modified: &str) -> String {
     m.creators.iter().for_each(|c| dc("creator", c));
     m.subjects.iter().for_each(|s| dc("subject", s));
     dc("description", m.description.as_deref().unwrap_or(""));
+    dc("date", m.publication_date.as_deref().unwrap_or(""));
     let _ = writeln!(o, "<meta property=\"dcterms:modified\">{modified}</meta>");
     if let Layout::PrePaginated { width, height } = book.layout {
         let _ = writeln!(
