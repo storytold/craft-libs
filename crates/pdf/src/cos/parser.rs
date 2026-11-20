@@ -33,13 +33,15 @@ pub struct Lexer<'a> {
     pub pos: usize,
     /// Objects built by the current top-level [`Lexer::object`] call.
     nodes: usize,
+    /// Maximum objects one top-level [`Lexer::object`] call may build.
+    max_nodes: usize,
     /// Whether the current top-level [`Lexer::object`] call reached [`MAX_DEPTH`].
     too_deep: bool,
 }
 
 impl<'a> Lexer<'a> {
     pub fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos: pos.min(data.len()), nodes: 0, too_deep: false }
+        Self { data, pos: pos.min(data.len()), nodes: 0, max_nodes: MAX_NODES, too_deep: false }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -97,7 +99,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn over_budget(&self) -> bool {
-        self.nodes > MAX_NODES
+        self.nodes > self.max_nodes
     }
 
     /// Whether the last [`Lexer::object`] call failed because the object nests deeper than the
@@ -972,17 +974,25 @@ mod tests {
 
     #[test]
     fn one_object_has_a_node_budget() {
+        const N: usize = 1000;
+        fn capped(data: &[u8]) -> Lexer<'_> {
+            let mut lx = Lexer::new(data, 0);
+            lx.max_nodes = N;
+            lx
+        }
+
+        assert_eq!(MAX_NODES, 1 << 22);
         // A wide array (from a tiny compressed object stream) must not grow without bound.
         let wide = |n: usize| format!("[{}]", "0 ".repeat(n));
-        let at_cap = Lexer::new(wide(MAX_NODES - 1).as_bytes(), 0).object();
-        assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == MAX_NODES - 1));
-        assert!(Lexer::new(wide(MAX_NODES).as_bytes(), 0).object().is_err());
-        // The same inside a dictionary value and behind tolerated junk.
-        assert!(Lexer::new(format!("<< /A {} >>", wide(MAX_NODES)).as_bytes(), 0).object().is_err());
-        assert!(Lexer::new(format!("[[{}] ]", "0 ".repeat(MAX_NODES)).as_bytes(), 0).object().is_err());
+        let at_cap = capped(wide(N - 1).as_bytes()).object();
+        assert!(matches!(at_cap, Ok(Object::Array(ref items)) if items.len() == N - 1));
+        assert!(capped(wide(N).as_bytes()).object().is_err());
+        // The same inside a dictionary value and a nested array.
+        assert!(capped(format!("<< /A {} >>", wide(N)).as_bytes()).object().is_err());
+        assert!(capped(format!("[[{}] ]", "0 ".repeat(N)).as_bytes()).object().is_err());
         // The budget is per top-level object: a lexer reused for many operands keeps working.
-        let two = wide(MAX_NODES - 1).repeat(2);
-        let mut lx = Lexer::new(two.as_bytes(), 0);
+        let two = wide(N - 1).repeat(2);
+        let mut lx = capped(two.as_bytes());
         assert!(lx.object().is_ok() && lx.object().is_ok());
     }
 
