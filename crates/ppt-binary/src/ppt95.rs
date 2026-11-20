@@ -622,7 +622,7 @@ fn convert_within(document: &Rec, app: &dyn Defaults, budget: usize) -> Presenta
                 if let Some(kind) = o.ph.as_ref().map(|ph| ph.kind).filter(|k| !placed.iter().any(|d| same_family(*d, *k))) {
                     placed.push(kind);
                     match kind {
-                        PhType::Title => title_ruler = o.ruler,
+                        PhType::Title | PhType::CtrTitle => title_ruler = o.ruler,
                         PhType::Body => body_ruler = o.ruler,
                         _ => {}
                     }
