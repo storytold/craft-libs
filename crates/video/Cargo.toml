@@ -60,6 +60,10 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Theora video (Xiph.Org specification): decoder and encoder; `theora-decode` or `theora-encode` for one of them.
+theora = ["theora-decode", "theora-encode"]
+theora-decode = ["craft-media/bitstream"]
+theora-encode = ["craft-media/bitstream"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
@@ -81,8 +85,9 @@ rav1e = { version = "0.8", default-features = false, optional = true }
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 # The AVI muxer, for the MPEG-4 Part 2 encoder's end-to-end test; the MP4, MPEG-TS and AVI
-# demuxers, for the track decoder's tests; the VMD demuxer, for the VMD decoder's.
-craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "vmd"] }
+# demuxers, for the track decoder's tests; the Ogg page writer, for tests; the VMD demuxer,
+# for the VMD decoder's.
+craft-media = { workspace = true, features = ["avi", "isobmff", "mpegts", "ogg", "vmd"] }
 
 # Built with any decoder feature; each codec's tests need its own.
 [[test]]
@@ -188,3 +193,8 @@ required-features = ["hevc-encode"]
 [[test]]
 name = "av1"
 required-features = ["av1"]
+
+[[test]]
+name = "theora"
+required-features = ["theora"]
+
