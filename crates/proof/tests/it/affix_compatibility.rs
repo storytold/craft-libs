@@ -6,7 +6,7 @@
 use craft_proof::affix::{AffixDict, capitalize};
 use std::fmt::Write;
 
-#[path = "fixtures/affix_compatibility_cases.rs"]
+#[path = "../fixtures/affix_compatibility_cases.rs"]
 mod fixtures;
 
 fn snapshot(case: &fixtures::Case, dict: &AffixDict) -> String {
@@ -47,7 +47,7 @@ fn snapshot(case: &fixtures::Case, dict: &AffixDict) -> String {
 
 #[test]
 fn non_french_affix_outputs_match_pre_french_baseline() {
-    let expected = include_str!("fixtures/affix_compatibility.expected");
+    let expected = include_str!("../fixtures/affix_compatibility.expected");
     let mut actual = String::new();
     for case in fixtures::cases() {
         let dict = AffixDict::from_hunspell(&case.aff, &case.dic, &["original compatibility fixture"]).unwrap();
@@ -80,7 +80,7 @@ fn non_french_affix_outputs_match_pre_french_baseline() {
 
 #[test]
 fn legacy_compact_data_is_refused_without_reinterpreting_homonyms() {
-    let encoded = include_str!("fixtures/affix_compatibility.compact");
+    let encoded = include_str!("../fixtures/affix_compatibility.compact");
     let cases = fixtures::cases();
     let lines: Vec<_> = encoded.lines().collect();
     assert_eq!(lines.len(), cases.len());

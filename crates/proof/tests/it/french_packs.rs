@@ -1,11 +1,10 @@
 //! French uses ordinary Language packs and keeps each regional locale at the public API.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use craft_proof::affix;
 use craft_proof::{IssueKind, Options, ProofLang, check_text_with, is_correct_in_with, suggest_in};
 use std::path::{Path, PathBuf};
 
-#[path = "../src/fr/test_dict.rs"]
+#[path = "../../src/fr/test_dict.rs"]
 mod fixture;
 
 struct Tools(PathBuf);
