@@ -1,0 +1,25 @@
+//! Record types ([MS-ODRAW] §2.2, §2.3).
+
+pub const DGG_CONTAINER: u16 = 0xF000;
+pub const BSTORE_CONTAINER: u16 = 0xF001;
+pub const DG_CONTAINER: u16 = 0xF002;
+pub const SPGR_CONTAINER: u16 = 0xF003;
+pub const SP_CONTAINER: u16 = 0xF004;
+pub const FBSE: u16 = 0xF007;
+pub const FSPGR: u16 = 0xF009;
+pub const FSP: u16 = 0xF00A;
+pub const FOPT: u16 = 0xF00B;
+pub const CLIENT_TEXTBOX: u16 = 0xF00D;
+pub const CHILD_ANCHOR: u16 = 0xF00F;
+pub const CLIENT_ANCHOR: u16 = 0xF010;
+pub const CLIENT_DATA: u16 = 0xF011;
+pub const SECONDARY_FOPT: u16 = 0xF121;
+pub const TERTIARY_FOPT: u16 = 0xF122;
+pub const BLIP_EMF: u16 = 0xF01A;
+pub const BLIP_WMF: u16 = 0xF01B;
+pub const BLIP_PICT: u16 = 0xF01C;
+pub const BLIP_JPEG: u16 = 0xF01D;
+pub const BLIP_PNG: u16 = 0xF01E;
+pub const BLIP_DIB: u16 = 0xF01F;
+pub const BLIP_TIFF: u16 = 0xF029;
+pub const BLIP_JPEG_CMYK: u16 = 0xF02A;

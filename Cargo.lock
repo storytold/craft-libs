@@ -2760,6 +2760,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-officeart"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "craft-opc"
 version = "0.1.0"
 dependencies = [
@@ -2987,10 +2995,10 @@ dependencies = [
  "craft-cfb",
  "craft-codepage",
  "craft-drawingml",
+ "craft-officeart",
  "craft-pptx",
  "image",
  "log",
- "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
 
