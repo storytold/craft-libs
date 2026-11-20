@@ -54,6 +54,16 @@ pub fn to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// [`to_bmp`] within `limit` bytes and `work`: the whole BMP file (the DIB and its 14-byte header)
+/// is charged before it is made. `None` when it doesn't fit, or isn't a bitmap.
+pub fn to_bmp_within(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
+    let len = 14usize.checked_add(dib.len())?;
+    if len > limit || !work.charge(len, "bitmap") {
+        return None;
+    }
+    to_bmp(dib)
+}
+
 /// A DIB as a picture file.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dib {
@@ -65,11 +75,13 @@ pub enum Dib {
 }
 
 /// A DIB as a PNG: made a BMP file ([`to_bmp`]), decoded with size limits and re-encoded. When the
-/// bitmap can't be decoded, or its declared pixels (4 bytes each) don't fit in `work`, the BMP
-/// bytes are kept. `None` when not even the BMP fits in `limit` or `work`.
+/// bitmap can't be decoded, or its declared pixels (4 bytes each) or the PNG don't fit in `work`,
+/// the BMP bytes are kept. `None` when not even the BMP fits in `limit` or `work`. Each stage is
+/// charged to `work` before it is done: the BMP copy, the decoded pixels, and the PNG as it is
+/// written.
 pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
     let header = u32_at(dib, 0)? as usize;
-    if !(12..=124).contains(&header) || 14usize.checked_add(dib.len())? > limit {
+    if !(12..=124).contains(&header) {
         return None;
     }
     // The declared size is what decoding allocates, however small the (RLE) data is.
@@ -79,20 +91,16 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
         (u64::from(u32_at(dib, 4)?), u64::from((u32_at(dib, 8)? as i32).unsigned_abs()))
     };
     let cost = w.saturating_mul(h).saturating_mul(4).try_into().unwrap_or(usize::MAX);
-    // Copying the DIB into a BMP is work too, however few pixels it declares: it is charged
-    // before the copy is made. A bitmap whose pixels don't fit still keeps its BMP bytes as a
+    // The BMP copy first: a bitmap whose pixels don't fit still keeps its BMP bytes as a
     // placeholder, if the copy fits.
-    let decode = work.charge(cost.max(dib.len()), "bitmap");
-    if !decode && !work.charge(dib.len(), "bitmap") {
-        return None;
-    }
-    let bmp = to_bmp(dib)?;
-    if !decode {
+    let bmp = to_bmp_within(dib, limit, work)?;
+    if !work.charge(cost, "bitmap") {
         return Some(Dib::Bmp(bmp));
     }
-    match encode_png(&bmp, image::ImageFormat::Bmp, limit) {
-        Some(png) => Some(Dib::Png(png)),
-        None => Some(Dib::Bmp(bmp)),
+    // The PNG may be at most what is left of `work` (and `limit`); what it takes is charged.
+    match encode_png(&bmp, image::ImageFormat::Bmp, limit.min(work.left)) {
+        Some(png) if work.charge(png.len(), "bitmap") => Some(Dib::Png(png)),
+        _ => Some(Dib::Bmp(bmp)),
     }
 }
 

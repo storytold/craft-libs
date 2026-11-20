@@ -194,10 +194,28 @@ pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> 
                 dib::Dib::Bmp(data) => Some(Picture { ext, content_type, data }),
             };
         }
-        Format::Wmf => crate::wmf::with_placeable_header(blip.header?, blip.bytes(limit, work)?)?,
+        Format::Wmf => with_placeable_header(blip, limit, work)?,
         _ => blip.bytes(limit, work)?,
     };
     Some(Picture { ext, content_type, data })
+}
+
+/// A WMF BLIP's records with its placeable header put back, the header taking its place in
+/// `limit` and charged to `work` with the records: `None` when the whole file doesn't fit.
+pub fn with_placeable_header(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
+    let header = blip.header?;
+    let head = crate::wmf::PLACEABLE_HEADER;
+    if !work.charge(head, "metafile") {
+        return None;
+    }
+    match limit.checked_sub(head).and_then(|l| blip.bytes(l, work)) {
+        Some(records) => crate::wmf::with_placeable_header(header, records),
+        None => {
+            // Nothing was made: the header's share goes back.
+            work.left = work.left.saturating_add(head);
+            None
+        }
+    }
 }
 
 /// The BLIP record of an `OfficeArtFBSE` body: embedded after it, or in the delay stream, where

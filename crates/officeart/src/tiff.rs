@@ -4,8 +4,9 @@ use crate::blip::Decode;
 use crate::dib::{MAX_SIDE, encode_png};
 
 /// A TIFF file decoded and made a PNG of at most `limit` bytes. Its declared pixels (4 bytes each)
-/// are charged to `work` before it is decoded, whether that succeeds or not; a TIFF whose pixels
-/// don't fit, that is larger than [`MAX_SIDE`] a side, or that can't be decoded gives `None`.
+/// are charged to `work` before it is decoded, whether that succeeds or not, and the PNG as it is
+/// made; a TIFF whose pixels or PNG don't fit, that is larger than [`MAX_SIDE`] a side, or that
+/// can't be decoded gives `None`.
 pub fn to_png(tiff: &[u8], limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(tiff));
     reader.set_format(image::ImageFormat::Tiff);
@@ -17,7 +18,7 @@ pub fn to_png(tiff: &[u8], limit: usize, work: &mut Decode) -> Option<Vec<u8>> {
     if !work.charge(cost.max(tiff.len()), "TIFF") {
         return None;
     }
-    encode_png(tiff, image::ImageFormat::Tiff, limit)
+    encode_png(tiff, image::ImageFormat::Tiff, limit.min(work.left)).filter(|png| work.charge(png.len(), "TIFF"))
 }
 
 #[cfg(test)]
@@ -43,7 +44,7 @@ mod tests {
         let png = to_png(&file, 1 << 20, &mut work).unwrap();
         let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).unwrap().to_rgb8();
         assert_eq!((img.dimensions(), img.get_pixel(0, 0).0), ((3, 2), [255, 0, 0]));
-        assert_eq!(work.left, (1 << 20) - file.len().max(3 * 2 * 4));
+        assert!((1 << 20) - work.left >= file.len().max(3 * 2 * 4) + png.len(), "the pixels and the PNG are charged");
         assert!(to_png(&file, 1 << 20, &mut Decode::new(10)).is_none(), "its pixels don't fit");
         assert!(to_png(b"not a TIFF at all", 1 << 20, &mut Decode::new(1 << 20)).is_none());
     }
