@@ -26,10 +26,10 @@ COMMANDS = [
 SOURCE = r"""
 set -euo pipefail
 unset CRAFT_HOSTILE_DIVISOR PROPTEST_CASES
-if [ "${RUNNER_OS:-}" = Windows ]; then
+if [[ "${RUNNER_OS:-}" = Windows ]]; then
   powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
 fi
-if [ "${RUNNER_OS:-}" = Windows ]; then
+if [[ "${RUNNER_OS:-}" = Windows ]]; then
   python scripts/ci-format-workspace.py
 else
   cargo fmt --check

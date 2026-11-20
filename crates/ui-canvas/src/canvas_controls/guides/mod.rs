@@ -11,6 +11,7 @@ pub use reading::GuideReading;
 use super::words::CanvasControlWords;
 use crate::canvas::{
     CanvasSpace, Guide, GuideDrag, GuideKey, GuideLine, LABEL_STEP_MIN, NUDGE, NUDGE_FAR, Snap, canvas_snap, canvas_space, context_menu, readout,
+    ruler_guide,
 };
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Numeric, Outcome, PaintUi, PartsCx,
@@ -136,8 +137,8 @@ struct HeldGuide;
 ///   (one that reaches the canvas's tool) clears the selection, reported as `Some(None)`.
 /// - The units, the zero point and the ruler a guide is placed in come from the canvas
 ///   ([`Canvas::rulers`](crate::canvas::Canvas::rulers)).
-/// - [`pending`](Guides::pending) shows the guide a ruler drag is creating. Show the `Rulers` before the guides in
-///   the canvas body: the guides read the drag the rulers reported in the same pass.
+/// - The guide a ruler drag is creating shows and commits through [`ruler_guide`](crate::canvas::ruler_guide): the canvas
+///   shows its rulers before its body and publishes the drag they reported in the same pass.
 /// - While a drag moves or creates a guide, [`running`](reading::running) reads that guide's axis and position by the canvas id, from
 ///   the note the drag sets on its gesture.
 #[derive(crate::contract::Component, crate::contract::Props)]
@@ -165,9 +166,6 @@ pub struct Guides<'a> {
     /// The distance an arrow key moves a guide with Shift held, in document units.
     #[prop(quantity = "document units")]
     big_step: f64,
-    /// The guide a ruler is creating, as the rulers report it in this pass (`RulersOutput::guide`); not set, none shows.
-    #[prop]
-    pending: Option<GuideDrag>,
     report: Report,
 }
 
@@ -191,7 +189,6 @@ impl<'a> Guides<'a> {
             bounds: None,
             step: NUDGE,
             big_step: NUDGE_FAR,
-            pending: None,
             report: Report::default(),
         }
         .label(label)
@@ -507,7 +504,7 @@ impl Component for Guides<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let guides = cx.value().cloned().unwrap_or_default();
-        if let Some(drag) = self.pending {
+        if let Some(drag) = ruler_guide(&cx.env) {
             self.run_pending(cx, &space, &guides, drag);
         }
         // `parts` declares the guides only when the pointer may take them, and `run_pointer` reads declared parts only.

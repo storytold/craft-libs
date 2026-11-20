@@ -20,6 +20,7 @@ use craft_behavior::divider::{self as push, Segment};
 use craft_behavior::dock::{Column, DockEdge, Group};
 use craft_behavior::{Axis, DockSide, Flow, Metrics, PartKey, Sense, Value};
 use egui::{Context, Id, Pos2, Rect, Response, Ui};
+use std::fmt::Debug;
 use std::hash::Hash;
 
 #[cfg(feature = "testing")]
@@ -207,7 +208,7 @@ pub struct DockColumn<'a, P: Value + Hash + 'static> {
     collapse: bool,
 }
 
-impl<'a, P: Value + Hash + 'static> DockColumn<'a, P> {
+impl<'a, P: Value + Hash + Debug + 'static> DockColumn<'a, P> {
     /// A column named `label` of the dock `dock`, over `column`; `spec` reads each panel's limits and heights.
     pub fn new(label: impl Into<Label>, dock: Id, column: &'a Column<P>, spec: &'a dyn Fn(&P) -> PanelSpec) -> Self {
         let props = ContainerProps::new().sizing(Sizing::Fill).pad(Pad::None);
@@ -386,7 +387,7 @@ impl Plan {
     }
 }
 
-impl<P: Value + Hash + 'static> Component for DockColumn<'_, P> {
+impl<P: Value + Debug + Hash + 'static> Component for DockColumn<'_, P> {
     const ROLE: Role = Role::GROUP;
     const KEYS: KeyUse = KeyUse::SPLITTER;
     type Style = DockColumnStyle;
@@ -531,7 +532,14 @@ pub(super) fn column_grip<P: Value + Hash>(column: &Column<P>, spec: &dyn Fn(&P)
 
 /// Registers the drop bands of the two edges of the column in `rect` with the dock `dock`: a drop there makes a new
 /// column beside the one that holds `anchor`.
-pub(super) fn register_edges<P: Clone + Send + Sync + 'static>(ctx: &Context, dock: Id, anchor: &P, rect: Rect, rtl: bool, sizes: &DockSizes) {
+pub(super) fn register_edges<P: Clone + Send + Sync + PartialEq + Debug + 'static>(
+    ctx: &Context,
+    dock: Id,
+    anchor: &P,
+    rect: Rect,
+    rtl: bool,
+    sizes: &DockSizes,
+) {
     let flow = Flow::new(rect, rtl);
     // A narrow column keeps a third of its width between its two edge bands, so a drop inside it still reaches its
     // groups.
@@ -550,7 +558,7 @@ pub(super) fn register_edges<P: Clone + Send + Sync + 'static>(ctx: &Context, do
     }
 }
 
-impl<P: Value + Hash + 'static> DockColumn<'_, P> {
+impl<P: Value + Debug + Hash + 'static> DockColumn<'_, P> {
     /// Registers the drop bands of the column's two edges, for a dock column, and of the seams between its groups.
     fn register(&self, ctx: &Context, rect: Rect, rtl: bool, plan: &Plan, sizes: &DockSizes) {
         let Some(first) = self.anchor(0) else { return };
@@ -568,4 +576,4 @@ impl<P: Value + Hash + 'static> DockColumn<'_, P> {
     }
 }
 
-impl<P: Value + Hash + 'static> Container for DockColumn<'_, P> {}
+impl<P: Value + Hash + Debug + 'static> Container for DockColumn<'_, P> {}
