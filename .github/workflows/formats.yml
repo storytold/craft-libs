@@ -15,6 +15,7 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -32,6 +33,7 @@ on:
       - "crates/silhouette-studio/**"
       - "crates/tiff/**"
       - "crates/heif/**"
+      - "crates/pst/**"
       - "crates/cms/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -65,7 +67,8 @@ jobs:
           - { crate: craft-svg-paths, features: "" }
           - { crate: craft-silhouette-studio, features: "" }
           - { crate: craft-tiff, features: "" }
-          - { crate: craft-heif, features: "testdata" }
+          - { crate: craft-heif, features: "testdata test-support" }
+          - { crate: craft-pst, features: "test-writer test-support" }
           - { crate: craft-cms, features: "" }
     # fmt, clippy with default and with all features, and the tests run in the Workspace gate on
     # every OS; this lints each feature alone and checks the web build.
