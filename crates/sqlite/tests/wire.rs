@@ -1,4 +1,7 @@
-use craft_sqlite::{Error, PayloadKind, local_payload_len, read_varint, serial_type_len};
+use craft_sqlite::{
+    BtreePageHeader, Error, PayloadKind, btree_cell_offset, decode_signed_be_int, local_payload_len, page_size_from_raw, parse_btree_page_header,
+    read_varint, serial_type_len, usable_page_size,
+};
 
 #[test]
 fn local_payload_preserves_inline_and_overflow_boundaries() {
@@ -98,6 +101,53 @@ fn fixed_serial_types_have_exact_widths() {
 }
 
 #[test]
+fn page_size_and_usable_validation() {
+    assert_eq!(page_size_from_raw(512), Ok(512));
+    assert_eq!(page_size_from_raw(4096), Ok(4096));
+    assert_eq!(page_size_from_raw(1), Ok(65_536));
+    assert_eq!(page_size_from_raw(0), Err(Error::InvalidPageSize(0)));
+    assert_eq!(page_size_from_raw(256), Err(Error::InvalidPageSize(256)));
+    assert_eq!(page_size_from_raw(1000), Err(Error::InvalidPageSize(1000)));
+
+    assert_eq!(usable_page_size(512, 32), Ok(480));
+    assert_eq!(usable_page_size(512, 33), Err(Error::UsablePageSizeTooSmall(479)));
+    assert_eq!(usable_page_size(512, 0), Ok(512));
+}
+
+#[test]
+fn signed_be_integers_decode_with_sign_extension() {
+    assert_eq!(decode_signed_be_int(&[0x7f]), Ok(127));
+    assert_eq!(decode_signed_be_int(&[0x80]), Ok(-128));
+    assert_eq!(decode_signed_be_int(&[0x80, 0x00, 0x01]), Ok(-8_388_607));
+    assert_eq!(decode_signed_be_int(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]), Ok(-2));
+    assert_eq!(decode_signed_be_int(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), Ok(i64::MAX));
+    assert_eq!(decode_signed_be_int(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), Ok(i64::MIN));
+    assert_eq!(decode_signed_be_int(&[]), Err(Error::InvalidIntegerWidth(0)));
+    assert_eq!(decode_signed_be_int(&[0; 9]), Err(Error::InvalidIntegerWidth(9)));
+}
+
+#[test]
+fn btree_page_header_and_cell_pointer_bounds() {
+    let mut page = [0u8; 512];
+    page[100] = 0x0d;
+    page[103..105].copy_from_slice(&1u16.to_be_bytes());
+    page[108..110].copy_from_slice(&400u16.to_be_bytes());
+
+    let hdr = parse_btree_page_header(&page, true).unwrap();
+    assert_eq!(hdr, BtreePageHeader { kind: 0x0d, header_offset: 100, cells: 1, pointers_offset: 108, pointers_end: 110 });
+    assert_eq!(btree_cell_offset(&page, &hdr, 0), Ok(400));
+    assert_eq!(btree_cell_offset(&page, &hdr, 1), Err(Error::CellIndexOutOfBounds { index: 1, cells: 1 }));
+
+    // Pointer inside header/pointer array is rejected.
+    page[108..110].copy_from_slice(&109u16.to_be_bytes());
+    assert_eq!(btree_cell_offset(&page, &hdr, 0), Err(Error::InvalidCellPointer { offset: 109, min: 110, usable: 512 }));
+
+    // Unsupported page kind is rejected.
+    page[0] = 0x01;
+    assert_eq!(parse_btree_page_header(&page, false), Err(Error::UnsupportedBtreePageType(0x01)));
+}
+
+#[test]
 fn reserved_serial_types_are_refused() {
     for serial_type in [10, 11] {
         assert_eq!(serial_type_len(serial_type), Err(Error::ReservedSerialType(serial_type)));
@@ -118,4 +168,51 @@ fn variable_serial_type_widths_are_portable() {
     ] {
         assert_eq!(serial_type_len(serial_type), Ok(width), "code {serial_type}");
     }
+}
+
+#[test]
+fn page_size_and_usable_validation() {
+    assert_eq!(page_size_from_raw(512), Ok(512));
+    assert_eq!(page_size_from_raw(4096), Ok(4096));
+    assert_eq!(page_size_from_raw(1), Ok(65_536));
+    assert_eq!(page_size_from_raw(0), Err(Error::InvalidPageSize(0)));
+    assert_eq!(page_size_from_raw(256), Err(Error::InvalidPageSize(256)));
+    assert_eq!(page_size_from_raw(1000), Err(Error::InvalidPageSize(1000)));
+
+    assert_eq!(usable_page_size(512, 32), Ok(480));
+    assert_eq!(usable_page_size(512, 33), Err(Error::UsablePageSizeTooSmall(479)));
+    assert_eq!(usable_page_size(512, 0), Ok(512));
+}
+
+#[test]
+fn signed_be_integers_decode_with_sign_extension() {
+    assert_eq!(decode_signed_be_int(&[0x7f]), Ok(127));
+    assert_eq!(decode_signed_be_int(&[0x80]), Ok(-128));
+    assert_eq!(decode_signed_be_int(&[0x80, 0x00, 0x01]), Ok(-8_388_607));
+    assert_eq!(decode_signed_be_int(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xfe]), Ok(-2));
+    assert_eq!(decode_signed_be_int(&[0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), Ok(i64::MAX));
+    assert_eq!(decode_signed_be_int(&[0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), Ok(i64::MIN));
+    assert_eq!(decode_signed_be_int(&[]), Err(Error::InvalidIntegerWidth(0)));
+    assert_eq!(decode_signed_be_int(&[0; 9]), Err(Error::InvalidIntegerWidth(9)));
+}
+
+#[test]
+fn btree_page_header_and_cell_pointer_bounds() {
+    let mut page = [0u8; 512];
+    page[100] = 0x0d;
+    page[103..105].copy_from_slice(&1u16.to_be_bytes());
+    page[108..110].copy_from_slice(&400u16.to_be_bytes());
+
+    let hdr = parse_btree_page_header(&page, true).unwrap();
+    assert_eq!(hdr, BtreePageHeader { kind: 0x0d, header_offset: 100, cells: 1, pointers_offset: 108, pointers_end: 110 });
+    assert_eq!(btree_cell_offset(&page, &hdr, 0), Ok(400));
+    assert_eq!(btree_cell_offset(&page, &hdr, 1), Err(Error::CellIndexOutOfBounds { index: 1, cells: 1 }));
+
+    // Pointer inside header/pointer array is rejected.
+    page[108..110].copy_from_slice(&109u16.to_be_bytes());
+    assert_eq!(btree_cell_offset(&page, &hdr, 0), Err(Error::InvalidCellPointer { offset: 109, min: 110, usable: 512 }));
+
+    // Unsupported page kind is rejected.
+    page[0] = 0x01;
+    assert_eq!(parse_btree_page_header(&page, false), Err(Error::UnsupportedBtreePageType(0x01)));
 }
