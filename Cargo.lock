@@ -3424,6 +3424,9 @@ name = "craft-texture"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "craft-cms",
+ "craft-mesh",
+ "craft-psd",
  "dds",
  "half",
  "rayon",

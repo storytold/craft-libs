@@ -24,6 +24,9 @@ dds = { version = "0.2.0", default-features = false, optional = true }
 bytemuck = { workspace = true, optional = true }
 
 [dev-dependencies]
+craft-cms = { workspace = true }
+craft-mesh = { workspace = true }
+craft-psd = { workspace = true }
 half = "2"
 dds = { version = "0.2.0", default-features = false }
 bytemuck = { workspace = true }
