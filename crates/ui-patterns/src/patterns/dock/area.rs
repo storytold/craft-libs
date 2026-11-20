@@ -13,7 +13,7 @@ use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
     IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea, WindowColumn, actions,
-    column_cells, dock_states, frame, move_actions, stepped, with_area_rules,
+    column_cells, dock_states, frame, move_actions, with_area_rules,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
 use crate::runtime::commands::{CommandRef, CommandSet as _, CommandState, Commands as _, focus_within};
@@ -145,7 +145,8 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
 impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
     /// A dock area named `label` over `workspace`, with its panels' specs from `specs`, their views from `panels` and
     /// its behaviour from `config`. The root's id comes from the label under the parent's id, and inside an `AppShell`
-    /// from the window too, so two windows' docks never share state.
+    /// from the window too, so two windows' docks never share state. Keep one `Arc` across frames and clone the `Arc`,
+    /// not the workspace: a new workspace value each frame is a new revision, which reads every spec each frame.
     pub fn new<S: PanelSpecs<P> + 'a>(
         label: impl Into<Label>,
         workspace: Bind<'a, Arc<Workspace<P>>>,
@@ -187,6 +188,9 @@ struct AreaMemory<P> {
     open: Option<P>,
     /// The running move or resize of a floating window.
     moving: Option<Moving<P>>,
+    /// The least window id above every id the workspaces this area showed held: an undo that brings back an older
+    /// workspace keeps its new windows above it ([`Workspace::raise_window_floor`]).
+    window_floor: u64,
 }
 
 /// A floating window's move or resize as one workspace edit: its gesture and the workspace when it began.
@@ -198,7 +202,7 @@ struct Moving<P> {
 
 impl<P> Default for AreaMemory<P> {
     fn default() -> Self {
-        AreaMemory { open: None, moving: None }
+        AreaMemory { open: None, moving: None, window_floor: 0 }
     }
 }
 
@@ -223,7 +227,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let shell = cx.env.get::<ShellEntry>().0;
         let bounds = shell.as_ref().map_or(cx.rect, ShellCx::float_bounds);
         let space = float_space(bounds, &sizes, self.config, self.specs);
-        let spec = |panel: &P| spec_in(self.specs, &sizes, panel);
+        let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
         let (hide, _) = hide::resolved(self.hide, shell.as_ref());
         let mut target = DockDropTarget::new(&ctx, self.dock, self.layout, self.permissions);
@@ -267,11 +271,9 @@ struct Scene<'s, P> {
     floated: &'s [(P, Location<P>)],
 }
 
-/// The spec of `panel` in `specs`, or an unnamed one, with its grid in the dock's `sizes`.
-fn spec_in<P: Eq + Hash>(specs: &HashMap<P, PanelSpec>, sizes: &DockSizes, panel: &P) -> PanelSpec {
-    let mut spec = specs.get(panel).cloned().unwrap_or_else(|| PanelSpec::new(Label::default()));
-    spec.grid = spec.grid.map(|grid| grid.resolved(sizes));
-    spec
+/// The spec of `panel` in `specs`, or an unnamed one.
+fn spec_in<P: Eq + Hash>(specs: &HashMap<P, PanelSpec>, panel: &P) -> PanelSpec {
+    specs.get(panel).cloned().unwrap_or_else(|| PanelSpec::new(Label::default()))
 }
 
 /// What an area derives from its workspace, its panels' specs and its lock, kept while none of them changes: whether
@@ -306,7 +308,7 @@ impl<P: Clone + Eq + Hash> DockModel<P> {
 
 impl<P: Clone + Eq + Hash> Scene<'_, P> {
     fn spec(&self, panel: &P) -> PanelSpec {
-        spec_in(self.specs, &self.sizes, panel)
+        spec_in(self.specs, panel)
     }
 
     fn permissions(&self, panel: &P) -> Permissions {
@@ -437,6 +439,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
         open_requests::<P>(&ctx);
         let shown = root.show(ui, |ui, body| {
             let Some(sizes) = body.style::<DockRoot<'_, DockDropped<P>>>().map(|style| *style.sizes()) else { return };
+            let memory = body.memory::<AreaMemory<P>>();
+            memory.window_floor = memory.window_floor.max(current.layout().window_floor());
             let input = Input {
                 id,
                 ctx: &ctx,
@@ -506,7 +510,7 @@ struct Applied<P> {
 /// Applies `proposed` in order to the workspace the binding holds, with the panels' permissions from `specs` (narrowed
 /// when `locked`; an action may open a panel the layout does not hold). A refused action changes nothing and is left
 /// out of the result. The accepted ones are written as one edit, which a given workspace does not take. `current` is
-/// the workspace as the pass started.
+/// the workspace as the pass started. New windows take ids above every id the area has shown (`AreaMemory::window_floor`).
 fn apply_actions<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     body: &mut BodyCx<'_>,
     mut workspace: BindMut<'_, Arc<Workspace<P>>>,
@@ -522,6 +526,7 @@ fn apply_actions<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     };
     let permissions = |panel: &P| specs.permissions(panel);
     let mut next = Workspace::clone(&before);
+    next.raise_window_floor(body.memory::<AreaMemory<P>>().window_floor);
     let mut actions = Vec::new();
     for action in proposed {
         if next.apply(action.clone(), locked, permissions).is_ok() {
@@ -1070,7 +1075,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     ) -> Option<Rect> {
         let scene = self.scene;
         let spec_of = |panel: &P| scene.spec(panel);
-        let (grid, steps) = stepped(column, &spec_of)?;
+        let (grid, steps) = scene.sizes.stepped(column, &spec_of)?;
         let by_height = match change.kind {
             PlacementKind::Size(grip) => matches!(grip, ResizeEdge::Top | ResizeEdge::Bottom),
             _ => (change.rect.width() - fitted.x).abs() <= 0.5,
@@ -1101,7 +1106,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn stepped_height(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, column: &Column<P>, width: f32, in_window: bool) -> Option<f32> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
-        if column.iconic || stepped(column, &spec).is_none() {
+        if column.iconic || scene.sizes.stepped(column, &spec).is_none() {
             return None;
         }
         let mut height = 0.0;
@@ -1116,7 +1121,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     fn arrow_of(&self, column: &Column<P>) -> ColumnArrow {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
-        ColumnArrow::of(column, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
+        ColumnArrow::of(column, &scene.sizes, &spec, column.panels().all(|panel| scene.permissions(panel).collapses))
     }
 
     /// What a click on the double arrow of `column`, whose first panel is `first`, asks for when it reports
@@ -1186,7 +1191,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let spec = |panel: &P| scene.spec(panel);
         if let Some(width) = work.width {
-            match stepped(column, &spec) {
+            match scene.sizes.stepped(column, &spec) {
                 // The edge of a stepped column moves in whole steps: the most that fit where it is dragged.
                 Some((grid, steps)) if !column.iconic => {
                     let to = grid.steps_within(width);

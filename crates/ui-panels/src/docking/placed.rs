@@ -3,7 +3,7 @@
 
 use super::frame::maximize;
 use super::tree::{self, FrameRules};
-use super::{ColumnBar, DockSizes, HidePanels, PanelSpec, column_cells, group_rects, stepped};
+use super::{ColumnBar, DockSizes, HidePanels, PanelSpec, column_cells, group_rects};
 use craft_behavior::Flow;
 use craft_behavior::dock::{Column, Layout, Node};
 use egui::Rect;
@@ -109,7 +109,7 @@ fn column_rects<P: PartialEq>(
     if !column.panels().any(moves) {
         return Some(());
     }
-    if column.iconic || stepped(column, placing.spec).is_some() {
+    if column.iconic || placing.sizes.stepped(column, placing.spec).is_some() {
         return None;
     }
     if column.panels().all(moves) {

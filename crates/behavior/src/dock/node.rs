@@ -68,16 +68,17 @@ pub struct StackEntry<P> {
 ///
 /// Serde reads every saved shape (see `floating_serde`); a window that is one expanded column with one plain group
 /// and no native rect writes the v1 shape `{panels, active, rect}`, so older builds can read files that use no
-/// newer feature. Every window writes its `id`; a window read without one gets a fresh one.
+/// newer feature. Every window writes its `id`; a window read without one, or with one an earlier window took, gets an
+/// id above every saved one.
 ///
 /// Equality ignores `id`: two windows with the same contents and place are the same layout.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Floating<P> {
     /// Names the window across panel moves, and its OS window.
-    /// Unique within a layout: [`Self::new`] draws a fresh id, [`Self::with_id`] sets one,
-    /// loading keeps the saved id (or draws one when it is missing or taken), and merging
-    /// windows keeps the receiving window's.
+    /// Unique within a layout: [`Self::new`] and [`Self::with_id`] take one from the caller (a window a layout adds
+    /// takes [`Layout::fresh_window_id`](super::Layout::fresh_window_id)), loading keeps the saved id (or gives one
+    /// above every saved id when it is missing or taken), and merging windows keeps the receiving window's.
     pub id: u64,
     /// The window's groups, top to bottom, and its collapsed state. Its `width` is unused: the window's width is
     /// `rect`'s.
@@ -405,24 +406,35 @@ pub(super) mod floating_serde {
     }
 
     /// Floating windows as saved, each read into the windows it becomes. A window keeps its saved id unless an
-    /// earlier window took it; one without an id, or with a taken one, gets the next id above every saved one.
+    /// earlier window took it; one without an id, or with a taken one, gets the next id above every saved one, or,
+    /// should those run out (a saved `u64::MAX`), the least id no saved or given window holds.
     pub(in crate::dock) fn unique_ids<'de, D: Deserializer<'de>, P: Deserialize<'de>>(deserializer: D) -> Result<Vec<Floating<P>>, D::Error> {
         let mut windows = Vec::new();
         for saved in Vec::<Repr<P>>::deserialize(deserializer)? {
             windows.extend(saved.into_windows::<D::Error>()?);
         }
-        let mut next = windows.iter().filter_map(|(id, _)| *id).max().map_or(0, |id| id.saturating_add(1));
-        let mut seen = std::collections::HashSet::new();
-        Ok(windows
-            .into_iter()
-            .map(|(id, window)| {
-                let id = id.filter(|id| seen.insert(*id)).unwrap_or_else(|| {
-                    next += 1;
-                    next - 1
-                });
-                Floating { id, ..window }
-            })
-            .collect())
+        let saved: std::collections::HashSet<u64> = windows.iter().filter_map(|(id, _)| *id).collect();
+        let mut next = saved.iter().max().map_or(Some(0), |id| id.checked_add(1));
+        let mut given = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(windows.len());
+        for (id, window) in windows {
+            let id = match id.filter(|id| given.insert(*id)) {
+                Some(id) => id,
+                None => {
+                    let id = match next {
+                        Some(id) => {
+                            next = id.checked_add(1);
+                            id
+                        }
+                        None => (0..=u64::MAX).find(|id| !saved.contains(id) && !given.contains(id)).unwrap_or(0),
+                    };
+                    given.insert(id);
+                    id
+                }
+            };
+            out.push(Floating { id, ..window });
+        }
+        Ok(out)
     }
 }
 

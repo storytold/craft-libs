@@ -59,7 +59,7 @@ mod iconic;
 
 pub use dock_column::{
     ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, column_cells, fit_widths, group_heights,
-    group_rects, scale_widths, stacked, stepped, width_bounds,
+    group_rects, scale_widths, stacked, width_bounds,
 };
 pub use flyout::{Flyout, FlyoutOutput, FlyoutShown, FlyoutStyle, GroupAt};
 pub use iconic::{FlyoutResize, IconicColumn, IconicColumnOutput, IconicColumnStyle, IconicSizes};

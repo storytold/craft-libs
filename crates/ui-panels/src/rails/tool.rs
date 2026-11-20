@@ -9,7 +9,7 @@ use crate::contract::{
     ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::contract::{BodyCx, BodyLayout, MemoProps, MemoView, Outbox};
-use crate::docking::DockGrid;
+use crate::docking::{DockGrid, DockSizes};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
 use crate::runtime::access::Name;
@@ -92,7 +92,7 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// The rail of tool slots, laid out in a grid of columns: one `FlyoutButton` per visible slot showing the slot's shown
 /// tool, the slot with the current tool toggled on. A click selects the shown tool, a row of the flyout selects that
 /// tool. The rail takes as many columns as the width it gets holds, the most whole columns that fit
-/// ([`dock_grid`](ToolRail::dock_grid)): it is a button and the control padding wide at one column and a button and the tight gap wider for each further column,
+/// ([`DockGrid::rail`] in the scope's style): it is a button and the control padding wide at one column and a button and the tight gap wider for each further column,
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
 /// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
@@ -156,13 +156,6 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
         .label(label)
     }
 
-    /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) in the root style:
-    /// [`DockGrid::rail`] resolved there. A panel's spec gives the unresolved [`DockGrid::rail`], which its dock
-    /// resolves in its own style.
-    pub fn dock_grid(ctx: &egui::Context, cells: usize) -> DockGrid {
-        DockGrid::rail(cells).resolved(&crate::docking::DockSizes::of(ctx))
-    }
-
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
     fn cells(&self) -> usize {
         visible_slots(self.slots, self.hidden).len() + usize::from(self.edit_toolbar.is_some())
@@ -170,8 +163,10 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
 
     /// Sets up the pass for a rail `width` wide: its columns, its roving grid and its footer. Returns what the body
     /// draws from.
-    fn prepare(&mut self, ctx: &egui::Context, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
-        self.columns = usize::from(Self::dock_grid(ctx, self.cells()).steps_within(width));
+    fn prepare(&mut self, ui: &Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Draw<'a, T> {
+        // The grid in the scope's style, as the dock column around the rail sizes it.
+        let grid = DockGrid::rail(self.cells()).resolved(&DockSizes::of_scope(ui));
+        self.columns = usize::from(grid.steps_within(width));
         self.props = std::mem::take(&mut self.props).roving(Roving::new(NavShape::wrapped_grid(self.columns)));
         self.footer = Some(Box::new(footer));
         Draw {
@@ -307,13 +302,13 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
     /// tool strips): the width `ui` has left belongs to what follows it in the row.
     pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let one = Self::dock_grid(ui.ctx(), 1).width(1);
+        let one = DockGrid::rail(1).resolved(&DockSizes::of_scope(ui)).width(1);
         self.show_within(ui, one, footer)
     }
 
     /// Shows the rail laid out `width` wide.
     fn show_within(mut self, ui: &mut Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let draw = self.prepare(ui.ctx(), width, footer);
+        let draw = self.prepare(ui, width, footer);
         let last = remembered(draw.slots, draw.current, draw.last_used);
         let (mut events, mut edit_toolbar) = (Vec::new(), None);
         let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
@@ -340,7 +335,7 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     /// The size of the rail laid out `width` wide, with `footer` under its rows: as many columns as `width` holds,
     /// as tall as its rows and footer (at most the room along the axis it scrolls on).
     pub fn measure_rail(mut self, ui: &Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> Vec2 {
-        let draw = self.prepare(ui.ctx(), width, footer);
+        let draw = self.prepare(ui, width, footer);
         self.measure_in(ui, Proposal::Width(width), |ui, _| {
             draw.run(ui, &mut Vec::new());
         })

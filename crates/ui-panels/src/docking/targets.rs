@@ -4,7 +4,7 @@
 //! previous pass's registry, because a drop is decided against what was on screen when the pointer moved. Every
 //! zone is a rect. A spot names a group by an anchor panel, as the dock model does.
 
-use super::{DragUnit, PanelKey, PanelSpec, scale_widths, stepped, width_bounds};
+use super::{DragUnit, PanelKey, PanelSpec, scale_widths, width_bounds};
 use crate::contract::DropMark;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::style::StyleCx;
@@ -80,6 +80,12 @@ impl DockSizes {
         StyleCx::with_root(ctx, DockSizes::style)
     }
 
+    /// The sizes in the style of the scope `ui` is in: what a dock shown in `ui` sizes with.
+    pub fn of_scope(ui: &egui::Ui) -> Self {
+        let env = crate::runtime::env::Env::of(ui);
+        Self::style(&StyleCx::of_env(ui.ctx(), &env))
+    }
+
     /// The sizes of the style context `cx`.
     pub fn style(cx: &StyleCx<'_>) -> Self {
         let size = &cx.tokens.size;
@@ -119,7 +125,7 @@ impl DockSizes {
     /// floated iconic column use it): the stored width kept within the panels' limits, or a stepped column's width
     /// at its steps ([`stepped`]).
     pub fn expanded_width<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> f32 {
-        if let Some((grid, steps)) = stepped(column, spec) {
+        if let Some((grid, steps)) = self.stepped(column, spec) {
             return grid.width(steps);
         }
         let (lo, hi) = self.width_bounds(column, spec);
@@ -133,7 +139,7 @@ impl DockSizes {
         if column.iconic {
             // Widening an iconic column stops at the width it expands to.
             (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
-        } else if let Some((grid, _)) = stepped(column, spec) {
+        } else if let Some((grid, _)) = self.stepped(column, spec) {
             (grid.width(1), grid.width(grid.most))
         } else {
             self.width_bounds(column, spec)
@@ -167,7 +173,7 @@ impl DockSizes {
             Some(Node::Dock { columns, .. }) => columns,
             _ => return Vec::new(),
         };
-        let fixed = |column: &Column<P>| !column.iconic && stepped(column, spec).is_some();
+        let fixed = |column: &Column<P>| !column.iconic && self.stepped(column, spec).is_some();
         let current: Vec<(f32, (f32, f32))> = columns
             .iter()
             .map(|column| {
@@ -193,7 +199,7 @@ impl DockSizes {
         columns
             .iter()
             .map(|column| {
-                let keeps = column.iconic || stepped(column, spec).is_some();
+                let keeps = column.iconic || self.stepped(column, spec).is_some();
                 (self.width(column, spec), (!keeps).then(|| self.width_bounds(column, spec).0.max(1.0)))
             })
             .collect()

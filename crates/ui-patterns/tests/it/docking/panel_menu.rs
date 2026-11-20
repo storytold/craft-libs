@@ -115,3 +115,35 @@ fn the_window_menu_opens_and_closes_the_flyout_of_a_panel_in_a_collapsed_column(
     assert_eq!(*actions.borrow(), vec![Action::close(1)], "the row of a showing panel closes it");
     assert_eq!(*flyout.borrow(), None, "and leaves the flyout alone");
 }
+
+/// Floats panel 2 through the panel menu of the second group.
+fn float_second_group(fixture: &mut Fixture) {
+    let buttons: Vec<_> =
+        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Panel Menu")).collect();
+    fixture.click(&buttons[1]).idle(2);
+    let float = fixture.by_label("Float").expect("the menu's Float row");
+    fixture.click(&float).idle(2);
+}
+
+/// An undo that brings back the workspace from before a float keeps the area's next window off the id the undone
+/// window had: the area remembers the ids it has shown.
+#[trial]
+fn a_window_floated_after_an_undo_takes_a_new_id() {
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0, 1], 0), Node::tabs(vec![2, 3], 0));
+    let workspace = Rc::new(RefCell::new(Arc::new(Workspace::new(Layout::new(Some(root), Vec::new())))));
+    let (held, specs) = (Rc::clone(&workspace), Tracked::new(Specs));
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut *held.borrow_mut()), &specs, &mut Panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    let older = Arc::clone(&workspace.borrow());
+    float_second_group(&mut fixture);
+    let undone: Vec<u64> = workspace.borrow().layout().floating.iter().map(|window| window.id).collect();
+    assert_eq!(undone.len(), 1, "Float made a window");
+    *workspace.borrow_mut() = older;
+    fixture.settle();
+    float_second_group(&mut fixture);
+    let ids: Vec<u64> = workspace.borrow().layout().floating.iter().map(|window| window.id).collect();
+    assert_eq!(ids.len(), 1, "Float made a window again");
+    assert_ne!(ids, undone, "the window after the undo does not take the undone window's id");
+}

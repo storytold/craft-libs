@@ -457,6 +457,7 @@ fn every_workspace_mutator_moves_the_revision() {
     moves("apply_all", &|workspace| drop(workspace.apply_all([Action::close(5), Action::close(4)], false, allow).unwrap()));
     moves("set_visible", &|workspace| workspace.set_visible(5, false, None, false, allow).unwrap());
     moves("reconcile", &|workspace| workspace.reconcile(|panel| *panel != 5, allow, &Workspace::new(docked())));
+    moves("raise_window_floor", &|workspace| workspace.raise_window_floor(1000));
     moves("forget_hidden", &|workspace| {
         workspace.apply(Action::close(5), false, allow).unwrap();
         let revision = workspace.revision();
@@ -506,4 +507,33 @@ fn window_ids_stay_unique_within_each_layout_and_are_never_reused() {
     let saved = r#"{"layout":{"root":null,"floating":[{"id":7,"panels":[1],"active":0,"rect":[0,0,100,100]},{"id":7,"panels":[2],"active":0,"rect":[0,0,100,100]},{"panels":[3],"active":0,"rect":[0,0,100,100]}]}}"#;
     let loaded: Workspace<u32> = serde_json::from_str(saved).unwrap();
     assert_eq!(window_ids(&loaded), [7, 8, 9], "a load keeps the first of a duplicate id and numbers the rest above every saved id");
+
+    // A loaded layout draws above the ids it loaded with, not only the ones it drew: a closed window's id stays used.
+    let saved = r#"{"layout":{"root":{"Tabs":{"panels":[4,5],"active":0}},"floating":[{"id":7,"panels":[1],"active":0,"rect":[0,0,100,100]},{"id":9,"panels":[3],"active":0,"rect":[0,0,100,100]}]}}"#;
+    let mut loaded: Workspace<u32> = serde_json::from_str(saved).unwrap();
+    loaded.apply(Action::close(3), false, allow).unwrap();
+    loaded.apply(Action::float(4, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    assert_eq!(window_ids(&loaded), [7, 10], "the new window does not take the closed window's id 9");
+
+    // An undo brings back an older workspace whose counter is lower: raised to the floor the dock has shown, it draws
+    // no id a later window had.
+    let older = Workspace::new(docked());
+    let mut later = older.clone();
+    later.apply(Action::float(2, rect(10.0, 10.0, 200.0, 200.0)), false, allow).unwrap();
+    let drawn: Vec<u64> = window_ids(&later).into_iter().filter(|id| !window_ids(&older).contains(id)).collect();
+    let mut undone = older.clone();
+    undone.raise_window_floor(later.layout().window_floor());
+    undone.apply(Action::float(5, rect(30.0, 30.0, 200.0, 200.0)), false, allow).unwrap();
+    assert!(window_ids(&undone).iter().all(|id| !drawn.contains(id)), "the undone workspace draws past {drawn:?}: {:?}", window_ids(&undone));
+
+    // A saved id at the top of the range loads without overflow, and the windows still get unique ids.
+    let saved = format!(
+        r#"{{"layout":{{"root":null,"floating":[{{"id":{},"panels":[1],"active":0,"rect":[0,0,100,100]}},{{"panels":[2],"active":0,"rect":[0,0,100,100]}}]}}}}"#,
+        u64::MAX
+    );
+    let loaded: Workspace<u32> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(window_ids(&loaded), [u64::MAX, 0], "a window without an id takes the least free one once the range above is used");
+    let mut layout = loaded.layout().clone();
+    let fresh = layout.fresh_window_id();
+    assert!(!window_ids(&loaded).contains(&fresh), "a draw past the top of the range takes a free id: {fresh}");
 }

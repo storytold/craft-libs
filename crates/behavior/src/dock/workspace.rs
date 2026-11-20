@@ -127,6 +127,14 @@ impl<P> Workspace<P> {
         self
     }
 
+    /// Keeps the ids of new floating windows at or above `floor`. A dock that showed windows below `floor` raises a
+    /// workspace an undo brings back to it, so no id, and no OS window, goes to a second window.
+    pub fn raise_window_floor(&mut self, floor: u64) {
+        if self.layout.raise_window_floor(floor) {
+            self.touch();
+        }
+    }
+
     /// Drops the closed-panel records of the panels `forget` names, so reopening them does not restore their place.
     pub fn forget_hidden(&mut self, forget: impl Fn(&P) -> bool) {
         let before = self.hidden.len();

@@ -6,6 +6,10 @@ use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Props as _;
 use crate::contract::Show as _;
+use crate::contract::ShowContainer as _;
+use crate::docking::{DockGrid, DockSizes};
+use crate::layout_components::Stack;
+use crate::runtime::env::ThemeScope;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
 use crate::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
@@ -61,7 +65,7 @@ fn rail_in(width: f32, height: f32) -> (Fixture, Rc<Cell<Vec2>>) {
 /// of them one fewer, and a wider one no more columns than the rail has cells.
 #[trial]
 fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     for steps in 1..=3_u16 {
         let (fixture, _) = rail_in(grid.width(steps), 800.0);
         assert_eq!(columns_of(&fixture), usize::from(steps), "a width of {steps} steps shows {steps} columns");
@@ -80,7 +84,7 @@ fn a_tool_rail_lays_out_the_most_whole_columns_its_width_holds() {
 /// and fewer columns need more rows.
 #[trial]
 fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     let mut heights = Vec::new();
     for steps in [1_u16, 2] {
         let (fixture, measured) = rail_in(grid.width(steps), 800.0);
@@ -99,7 +103,7 @@ fn a_tool_rail_measures_its_rows_plus_its_footer_at_a_width() {
 /// above it, down to a room smaller than one scroll region's usual least height.
 #[trial]
 fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
-    let grid = ToolRail::<u8>::dock_grid(Fixture::new(|_| {}).ctx(), LABELS.len());
+    let grid = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(Fixture::new(|_| {}).ctx()));
     for height in [160.0, 100.0] {
         let (mut fixture, measured) = rail_in(grid.width(1), height);
         let foot = rect(&fixture, "Foot");
@@ -226,4 +230,37 @@ fn a_click_on_a_slot_selects_its_tool_once() {
 
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.0
+}
+
+/// A rail in a scope whose density differs from the root's counts its columns in that scope's style, the style its dock
+/// column is stepped in: under a comfortable root, a compact scope two rail steps wide shows two columns, where the
+/// root's rail would fit one.
+#[trial]
+fn a_rail_in_another_density_counts_its_columns_in_that_density() {
+    let scoped: Rc<Cell<Option<DockGrid>>> = Rc::default();
+    let seen = Rc::clone(&scoped);
+    let compact = || ThemeScope::new().density(craft_theme::Size::Compact);
+    let mut probe = Fixture::new(move |ui| {
+        Stack::new().theme(compact()).show(ui, |ui, _| {
+            seen.set(Some(DockGrid::rail(LABELS.len()).resolved(&DockSizes::of_scope(ui))));
+        });
+    });
+    probe.density(craft_theme::Size::Comfortable).settle();
+    let grid = scoped.get().expect("the scope ran");
+    let root = DockGrid::rail(LABELS.len()).resolved(&DockSizes::of(probe.ctx()));
+    let width = grid.width(2);
+    assert_eq!(root.steps_within(width), 1, "the root's rail fits one column in two compact steps: {grid:?}, root {root:?}");
+
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().theme(compact()).show(ui, |ui, _| {
+            let slots = slots();
+            let last = LastUsed::default();
+            ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {
+                Button::new("Foot").show(ui);
+            });
+        });
+    });
+    let tall = 800.0;
+    fixture.density(craft_theme::Size::Comfortable).room(Vec2::new(width, tall)).settle();
+    assert_eq!(columns_of(&fixture), 2, "two rail steps of the scope's style show two columns");
 }

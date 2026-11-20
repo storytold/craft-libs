@@ -144,6 +144,23 @@ fn a_stepped_column_keeps_its_width_while_the_others_scale() {
     assert_eq!(grid.steps_within(f32::MAX), grid.most, "no more steps than the grid has columns");
 }
 
+/// A tool rail's grid is sized by the dock's own style: a column of two rail steps is a rail button and its padding
+/// plus one more button and gap wide, and the side's width leaves it alone.
+#[trial]
+fn a_rail_column_steps_in_the_docks_rail_cells() {
+    let sizes = super::sizes(4.0, 100.0, STRIP);
+    let with_rail = |panel: &u32| if *panel == TOOLS { PanelSpec::new("Tools").grid(DockGrid::rail(6)) } else { spec(panel) };
+    let spec: &dyn Fn(&u32) -> PanelSpec = &with_rail;
+    let columns = vec![Column::new(vec![Group::new(vec![2], 0)]).with_width(250.0), Column::new(vec![Group::new(vec![TOOLS], 0)]).with_steps(2)];
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.7), Node::tabs(vec![1], 0), Node::dock(DockEdge::End, columns));
+    let live = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let rail = end_columns(live.layout())[1].clone();
+    assert_eq!(sizes.width(&rail, spec), sizes.rail_first + sizes.rail_step, "two rail steps in the dock's sizes");
+    let actions = sizes.resize_side(live.layout(), DockEdge::End, spec, sum(&[250.0, sizes.rail_first + sizes.rail_step]) + 80.0);
+    let touches_tools = |action: &Action<u32>| matches!(action, Action::ResizeColumn { panel: TOOLS, .. } | Action::SetColumnSteps { .. });
+    assert!(!actions.is_empty() && !actions.iter().any(touches_tools), "the side's width leaves the rail column alone: {actions:?}");
+}
+
 /// A toolbar: a panel whose two lines of content lay out in a grid and never collapse.
 #[derive(PlainData)]
 struct Tools;

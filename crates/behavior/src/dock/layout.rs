@@ -22,17 +22,32 @@ use super::{
 ///
 /// Equality compares the tree and the windows, not the window id counter.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(from = "Saved<P>", bound(deserialize = "P: serde::Deserialize<'de>"))]
 #[non_exhaustive]
 pub struct Layout<P> {
     /// The docked layout; `None` when nothing is docked.
     pub root: Option<Node<P>>,
     /// Floating windows, with unique ids.
-    #[serde(deserialize_with = "super::node::floating_serde::unique_ids")]
     pub floating: Vec<Floating<P>>,
-    /// The least id [`Self::fresh_window_id`] may draw: above every id this layout has drawn, and above every id
-    /// the layouts it replaced held. Not saved.
+    /// The least id [`Self::fresh_window_id`] may draw: above every id the layout held when it was built or loaded,
+    /// every id it has drawn since, and every id the layouts it replaced held. Not saved.
     #[serde(skip)]
     pub(super) next_window: u64,
+}
+
+/// A layout as saved: the tree and the windows, which load with unique ids.
+#[derive(serde::Deserialize)]
+#[serde(bound(deserialize = "P: serde::Deserialize<'de>"))]
+struct Saved<P> {
+    root: Option<Node<P>>,
+    #[serde(deserialize_with = "super::node::floating_serde::unique_ids")]
+    floating: Vec<Floating<P>>,
+}
+
+impl<P> From<Saved<P>> for Layout<P> {
+    fn from(saved: Saved<P>) -> Self {
+        Layout::new(saved.root, saved.floating)
+    }
 }
 
 impl<P: PartialEq> PartialEq for Layout<P> {
@@ -48,22 +63,35 @@ impl<P> Default for Layout<P> {
 }
 
 impl<P> Layout<P> {
-    /// A layout with the docked tree `root` and the floating windows `floating`.
+    /// A layout with the docked tree `root` and the floating windows `floating`. New windows take ids above every id
+    /// in `floating`.
     pub fn new(root: Option<Node<P>>, floating: Vec<Floating<P>>) -> Self {
-        Self { root, floating, next_window: 0 }
+        let mut layout = Self { root, floating, next_window: 0 };
+        layout.next_window = layout.window_floor();
+        layout
     }
 
-    /// An id for a new floating window: above every window id the layout holds or has drawn, so an id, and the OS
-    /// window it names, is never given to another window while the layout lives.
+    /// An id for a new floating window: above every window id the layout held when it was built or loaded and every
+    /// id it has drawn since, so an id, and the OS window it names, is never given to another window while the layout
+    /// lives. Should those ids run out (a window holds `u64::MAX`), the least id no window holds.
     pub fn fresh_window_id(&mut self) -> u64 {
-        let id = self.window_floor();
-        self.next_window = id.saturating_add(1);
+        let floor = self.window_floor();
+        let held = |id: u64| self.floating.iter().any(|window| window.id == id);
+        let id = if held(floor) { (0..=u64::MAX).find(|id| !held(*id)).unwrap_or(floor) } else { floor };
+        self.next_window = self.next_window.max(id.saturating_add(1));
         id
     }
 
-    /// The least id no window of the layout holds or has held.
-    fn window_floor(&self) -> u64 {
+    /// The least id above every id the layout holds or has held.
+    pub fn window_floor(&self) -> u64 {
         self.floating.iter().map(|window| window.id.saturating_add(1)).fold(self.next_window, u64::max)
+    }
+
+    /// Keeps new window ids at or above `floor`. Returns whether the counter moved.
+    pub(super) fn raise_window_floor(&mut self, floor: u64) -> bool {
+        let raised = floor > self.next_window;
+        self.next_window = self.next_window.max(floor);
+        raised
     }
 
     /// Takes the windows of `incoming`, which replaces this layout, onto ids this layout never gave out: a window
