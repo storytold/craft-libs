@@ -22,7 +22,7 @@ The fork maintains strict synchronization with official upstream (`storytold/cra
 6. **Content-Sized Container Inline Header Sizing (`craft-ui-contract`)**: Enforces finite positive inline header width reservation in `wanted_width`, preventing child body layout collapse in content-sized containers.
 7. **Localized Tool Rail Names (`craft-ui-panels`)**: Gives the tool rail a translator for the names it shows, so the flyout rows, tooltips and AccessKit names follow the language the host's window draws in instead of showing the commands' English labels in every language.
 
-All modifications conform to workspace layering rules and compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`. Every suite this fork touches passes, with one recorded exception: `craft-ui-panels` has two `Space` activation failures (Section 4) that reproduce without these changes, so they are pre-existing and are reported rather than counted as passing.
+All modifications conform to workspace layering rules and compile with zero warnings under `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]`. Every suite this fork touches passes: `craft-ui-contract`, `craft-ui-panels`, `craft-ui-widgets` and `python scripts/test-workspace-tests.py` all report 0 failures, and clippy `--all-targets -- -D warnings` is clean on them.
 
 ---
 
@@ -37,8 +37,8 @@ All modifications conform to workspace layering rules and compile with zero warn
 | **`craft-font-manager`** | `src/picker/rank.rs`<br>`src/picker.rs`<br>`src/picker/rows.rs`<br>`tests/it/picker.rs` | Missing CJK classification (Mincho, Gothic, Maru Gothic, Kaisho, Pop); non-parity Japanese font names; missing Kana sample; classifier collisions (`WindSong` classified as Serif, `Pop Script` as Handwritten). | Implements comprehensive CJK heuristics with strict precedence; foundry-prefixed Song checking; Photoshop Japanese name parity; Kana sample preview; zero-cost testing without private `FaceInfo` literals. | Fork baseline; 54 tests passing. |
 | **`craft-ui-shell`** | `src/shell/title_bar/bar.rs`<br>`tests/it/shell/menu_bar_room.rs` | Integrated title bar's leading region previously applied declared width to the caption header (`props.header`), creating an unwanted 380pt empty region before the menu bar on Windows. | Directs `leading_width` strictly to the leading content via `allocate_ui_with_layout`, keeping the caption header at its natural measured width (0pt on Windows) with zero leading offset. | Fork baseline; 94 tests passing. |
 | **`craft-ui-widgets`** & **`craft-menu`** | `craft-ui-widgets/src/menu/bar.rs`<br>`craft-menu/src/bar.rs` | Menu bar filled entire row by default, squeezing trailing titles into overflow menu when embedded beside a title strip. | Added `MenuBar::own_width` / `MenuBarUi::width` to lay out titles at declared width and report `titles_width`, allowing host to preserve full menu rows without overflow. | Fork baseline; 3 tests passing. |
-| **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | `wanted_width` did not count finite positive declared inline header widths, risking child body collapse in content-sized containers, and did not match `regions.rs` zero-width fallback. | Incorporates finite positive declared inline widths (`width.is_finite() && *width > 0.0`) in `wanted_width` while treating zero as no declaration (falling back to measured header). | Fork baseline; 269 tests passing. |
-| **`craft-ui-panels`** | `src/rails/flyout.rs`<br>`src/rails/tool.rs` | `FlyoutButton` built its flyout rows, tooltip and AccessKit name from `ResolvedCommand::label`, the command's own English label. Menus translate because the host passes a label function; the rail had no such hook, so a Japanese window showed an English tool flyout. | Adds `RailLabels` (`Arc<dyn Fn(&str) -> String>`) and `ToolRail::labels` / `FlyoutButton::labels`, mapping each command's label to the one to show in the rows, tooltip and accessible name; without a translator the command's label shows unchanged. | Fork baseline; 220 tests passing (2 pre-existing `Space` failures, see §4). |
+| **`craft-ui-contract`** | `src/contract/body/size.rs`<br>`src/contract/body/regions.rs` | `wanted_width` did not count finite positive declared inline header widths, risking child body collapse in content-sized containers, and did not match `regions.rs` zero-width fallback. | Incorporates finite positive declared inline widths (`width.is_finite() && *width > 0.0`) in `wanted_width` while treating zero as no declaration (falling back to measured header). | Fork baseline; 279 tests passing. |
+| **`craft-ui-panels`** | `src/rails/flyout.rs`<br>`src/rails/tool.rs` | `FlyoutButton` built its flyout rows, tooltip and AccessKit name from `ResolvedCommand::label`, the command's own English label. Menus translate because the host passes a label function; the rail had no such hook, so a Japanese window showed an English tool flyout. | Adds `RailLabels` (`Arc<dyn Fn(&str) -> String>`) and `ToolRail::labels` / `FlyoutButton::labels`, mapping each command's label to the one to show in the rows, tooltip and accessible name; without a translator the command's label shows unchanged. | Fork baseline; 222 tests passing. |
 
 ---
 
@@ -401,7 +401,7 @@ Publishing a translated command title from the host is not an option: the comman
 
 #### Verification & Tests
 - `cargo clippy -p craft-ui-panels --all-targets -- -D warnings`: clean (`RailLabels` keeps the closure out of every signature, so `clippy::type_complexity` stays quiet).
-- `cargo test -p craft-ui-panels`: **220 passed; 2 failed**. Both failures (`Space fires it`, `Space activates the focused member through the group`) reproduce with these changes stashed, so they are the pre-existing Space/activation divergence carried in this fork, not a regression of the rail.
+- `cargo test -p craft-ui-panels`: **222 passed; 0 failed**. The two Space failures once recorded here (`Space fires it`, `Space activates the focused member through the group`) were a defect of the key stage, measured and fixed in 66d135862: `press_route` asked `ActivateKeys::space()`, which the default pointer stop never declares, so no stop activated on Space. A stop now declares it with `KeyUse::space_activates` (`Stop::space`), and the key stage holds a tap's press for the pass that brings its release.
 - PhotoCraft, offscreen render with the pointer's right click on the marquee slot (`cargo run -p photocraft-ui-egui --example snapshot -- --right-click-at 28,147`): the flyout reads 長方形選択ツール / 楕円形選択ツール / 一行選択ツール / 一列選択ツール with their `M` chords, from the same English command labels.
 
 ---
@@ -429,7 +429,7 @@ cmd.exe /c 'call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Aux
 - `craft-ui-shell`: **94 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-menu`: **3 passed; 0 failed** (plus 1 doc-test ignored)
 - `craft-pages` (screen testing): **112 passed; 0 failed**
-- `craft-ui-panels`: **220 passed; 2 failed** (`Space fires it`, `Space activates the focused member through the group`). Both reproduce with the fork changes stashed, so they are pre-existing: Section 5 step 3 requires 0 failures for the suites this merge touches and asks that these two be reported as unchanged.
+- `craft-ui-panels`: **222 passed; 0 failed**. The two Space failures this table used to record as pre-existing were the key stage's defect, measured and fixed in 66d135862 (see Section 3), so the suites this merge touches all report 0 failures.
 - Clippy across all workspace crates: **0 warnings, exit code 0**
 
 ---
@@ -460,7 +460,7 @@ To merge upstream updates while preserving all fork-specific architectural featu
    ```
 3. **Execute Verification Gate**:
    Execute all six test commands listed in Section 4. Every suite that this merge touches must report 0 failures and 0 warnings.
-   The two `craft-ui-panels` failures recorded in Section 4 are a known pre-existing divergence (`Space` activation, measured failing without the fork changes): report them as unchanged by the merge and do not let a new failure hide behind them.
+   Section 4 records no known failure: every suite it lists reports 0 failures, so any failure a merge produces is the merge's.
 4. **Push to Fork Remote**:
    ```bash
    git push fork next
