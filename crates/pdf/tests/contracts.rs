@@ -362,7 +362,7 @@ fn failed_form_decode_reports_incomplete_content() {
     assert!(result.diagnostics.content_truncated);
 }
 
-fn doubling_forms_pdf(levels: usize, leaf: &str, after: &str) -> Vec<u8> {
+fn doubling_forms_pdf(levels: usize, leaf: &str, after: &str) -> Arc<Vec<u8>> {
     let content = format!("/F0 Do {after}");
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -381,7 +381,7 @@ fn doubling_forms_pdf(levels: usize, leaf: &str, after: &str) -> Vec<u8> {
     assemble(&objs)
 }
 
-fn render_with_coverage_budget(bytes: Vec<u8>, max_coverage: Option<usize>) -> (raster::Raster, usize) {
+fn render_with_coverage_budget(bytes: Arc<Vec<u8>>, max_coverage: Option<usize>) -> (raster::Raster, usize) {
     let doc = craft_pdf::open(bytes, None).unwrap();
     let warnings = Arc::new(AtomicUsize::new(0));
     let count = warnings.clone();
