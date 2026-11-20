@@ -25,7 +25,7 @@ impl Image {
     /// which callers treat as sRGB.
     ///
     /// CICP primaries or transfer 2 (unspecified) are read as BT.709 primaries and the sRGB
-    /// transfer. PQ and HLG (transfer 16 and 18) give the linear-light profile on the same
+    /// transfer; HLG's luma weights follow the same primaries. PQ and HLG (transfer 16 and 18) give the linear-light profile on the same
     /// primaries, which describes the samples once [`cicp::linearize`] has decoded them.
     ///
     /// Returns [`CodecError::InvalidImage`] when the ICC profile does not parse, describes a
@@ -103,7 +103,7 @@ impl Image {
             return Ok(out);
         }
 
-        let luma = hdr.map(|c| cicp::luma_weights(c.primaries));
+        let luma = hdr.map(|c| cicp::luma_weights(cicp::primaries_or_bt709(c.primaries)));
         let mut src = Vec::new();
         let mut dst = Vec::new();
         src.try_reserve_exact(band * channels).map_err(|e| CodecError::LimitExceeded(format!("cannot reserve a conversion band: {e}")))?;
@@ -142,9 +142,8 @@ fn matches_layout(cs: ColorSpace, layout: ChannelLayout) -> bool {
 
 /// The RGB profile for `c`, with unspecified code points read as BT.709 and sRGB.
 fn cicp_profile(c: Cicp) -> Result<Profile, CodecError> {
-    let primaries = if c.primaries == UNSPECIFIED { 1 } else { c.primaries };
     let transfer = if c.transfer == UNSPECIFIED { 13 } else { c.transfer };
-    builtin::cicp_rgb(primaries, transfer, c.is_hdr())
+    builtin::cicp_rgb(cicp::primaries_or_bt709(c.primaries), transfer, c.is_hdr())
         .ok_or_else(|| CodecError::InvalidImage(format!("no RGB profile for CICP primaries {} and transfer {}", c.primaries, c.transfer)))
 }
 
@@ -263,6 +262,25 @@ mod tests {
         let mut img = p3_red(SampleType::U8, ChannelLayout::Rgb);
         img.cicp = Some(Cicp { primaries: UNSPECIFIED, transfer: UNSPECIFIED, matrix: 2, full_range: true });
         assert!(close(&display(&img), &img.to_rgba8(), 1));
+    }
+
+    #[test]
+    fn unspecified_hlg_primaries_are_bt709() {
+        let hlg = |primaries| {
+            let mut img = Image::from_normalized(1, 1, ChannelLayout::Rgb, SampleType::U16, &[0.5, 0.25, 0.1]).unwrap_or_else(|e| panic!("{e}"));
+            img.cicp = Some(Cicp { primaries, transfer: Cicp::TRANSFER_HLG, matrix: 0, full_range: true });
+            display(&img)
+        };
+        let (unspecified, bt709, bt2020) = (hlg(UNSPECIFIED), hlg(1), hlg(9));
+        assert_eq!(unspecified, bt709);
+        assert_ne!(unspecified, bt2020);
+        // Decoding to linear light first, as the HEIF and AVIF readers do, gives the same colors.
+        let mut img = Image::from_normalized(1, 1, ChannelLayout::Rgb, SampleType::U16, &[0.5, 0.25, 0.1]).unwrap_or_else(|e| panic!("{e}"));
+        let c = Cicp { primaries: UNSPECIFIED, transfer: Cicp::TRANSFER_HLG, matrix: 0, full_range: true };
+        img.cicp = Some(c);
+        let linear = cicp::linearize(img, c).unwrap_or_else(|e| panic!("{e}"));
+        let decoded = display(&linear);
+        assert_eq!(decoded, bt709);
     }
 
     #[test]

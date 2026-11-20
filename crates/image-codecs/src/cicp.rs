@@ -97,6 +97,11 @@ pub fn linear_to_pq(linear: f32) -> f32 {
     ((C1 + C2 * y) / (1.0 + C3 * y)).powf(M2)
 }
 
+/// The primaries code point `code`, with 2 (unspecified) read as 1 (BT.709).
+pub(crate) fn primaries_or_bt709(code: u16) -> u16 {
+    if code == 2 { 1 } else { code }
+}
+
 /// Relative luminance weights of the RGB primaries `code` (BT.2020's for anything else, the
 /// space BT.2100 defines HLG in).
 pub(crate) fn luma_weights(code: u16) -> [f32; 3] {
@@ -109,7 +114,8 @@ pub(crate) fn luma_weights(code: u16) -> [f32; 3] {
 
 /// `img` (RGB or RGBA, decoded with `cicp`'s PQ or HLG transfer) as linear light in 32-bit float,
 /// alpha unchanged. Its ICC profile is dropped: whatever it said described the encoded samples,
-/// not linear light. Anything else comes back unchanged.
+/// not linear light. Anything else comes back unchanged. The HLG gain uses the luma weights of
+/// the primaries, with unspecified primaries read as BT.709.
 pub fn linearize(img: Image, cicp: Cicp) -> Result<Image, CodecError> {
     let layout = img.layout();
     if !cicp.is_hdr() || !layout.is_rgb() {
@@ -118,7 +124,7 @@ pub fn linearize(img: Image, cicp: Cicp) -> Result<Image, CodecError> {
     let (w, h) = img.dimensions();
     let ch = layout.channels();
     let mut v = img.to_normalized();
-    let luma = luma_weights(cicp.primaries);
+    let luma = luma_weights(primaries_or_bt709(cicp.primaries));
     for px in v.chunks_exact_mut(ch) {
         let [r, g, b, ..] = *px else { continue };
         let out = if cicp.transfer == Cicp::TRANSFER_HLG { hlg_to_linear([r, g, b], luma) } else { [r, g, b].map(pq_to_linear) };
