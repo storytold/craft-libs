@@ -81,7 +81,8 @@ pub trait DockPanels<P> {
     /// right click opens on `panel`'s tab in a docked group, or on its icon while its column is collapsed to icons,
     /// with [`DockConfig::tab_context_menu`](super::DockConfig::tab_context_menu) on. Command rows run by themselves
     /// in the group's scope; in the icon menu, where no group scope stands behind the rows, name the dock's rows
-    /// through [`GroupItem`](crate::menu::GroupItem) entries instead.
+    /// through [`GroupItem`](crate::menu::GroupItem) entries instead. The icon menu has no dock group scope at all,
+    /// so a host's own rows there are rows of app-scope commands, never of commands only the group publishes.
     fn tab_rows(&mut self, _panel: &P) -> Vec<PanelRow> {
         Vec::new()
     }

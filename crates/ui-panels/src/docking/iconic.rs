@@ -682,15 +682,16 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
 
 impl<P: Value + Debug + Hash + 'static> IconicColumn<'_, P> {
     /// The icon menu: a context request on a cell whose panel has rows opens that cell's menu at the pointer, and
-    /// what the user picks comes back by that panel. A request at another part, or no rows for the cell's panel,
-    /// opens nothing; the open popup carries the menu between passes.
+    /// what the user picks comes back by that panel. The request may come at the icon's square or, in a wide column,
+    /// at the name beside it: both parts carry the cell's flat index. A request at another part, or no rows for the
+    /// cell's panel, opens nothing; the open popup carries the menu between passes.
     fn icon_menu_show(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         if self.icon_menu.is_empty() {
             return;
         }
         let base = cx.popup("icon_menu");
         let cells = self.flat().len();
-        let asked = cx.context_part().filter(|part| part.key == CELL).and_then(|part| part.index).map(|at| at as usize);
+        let asked = cx.context_part().filter(|part| part.key == CELL || part.key == NAME).and_then(|part| part.index).map(|at| at as usize);
         if let Some(at) = asked.filter(|at| !self.icon_rows_at(*at).is_empty()) {
             for other in 0..cells {
                 if other != at {
