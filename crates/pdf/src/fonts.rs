@@ -50,6 +50,77 @@ pub fn fits_win_ansi(s: &str) -> bool {
     s.chars().all(win_ansi_encodable)
 }
 
+/// Latin letters outside WinAnsiEncoding that Romanian and Polish text uses, as (character, code,
+/// glyph name, base letter), for a standard-14 font whose `/Encoding` is WinAnsiEncoding with a
+/// `/Differences` array naming these glyphs at these codes.
+///
+/// The codes are control codes WinAnsiEncoding leaves undefined (0x01-0x08, 0x0B, 0x0E-0x1F), so
+/// no WinAnsi character is displaced. 0x09, 0x0A, 0x0C and 0x0D are not used: viewers treat tab
+/// and line feed as white space when drawing, a literal string turns an unescaped carriage return
+/// into a line feed, and form feed separates pages in extracted text. ț and Ț are named `uni021B`
+/// and `uni021A` because the glyph list maps `tcommaaccent` and `Tcommaaccent` to the cedilla
+/// letters U+0163 and U+0162. In the standard-14 metrics each glyph has its base letter's advance.
+///
+/// The standard-14 fonts are not embedded, so these letters are drawn only where the viewer's
+/// substitute font has the glyph; text extraction reads the names back without depending on it.
+/// ISO 19005 (PDF/A) requires embedded fonts, so output using this table cannot meet PDF/A.
+pub const LATIN_EXTRA: &[(char, u8, &str, char)] = &[
+    ('ă', 0x01, "abreve", 'a'),
+    ('Ă', 0x02, "Abreve", 'A'),
+    ('ș', 0x03, "scommaaccent", 's'),
+    ('Ș', 0x04, "Scommaaccent", 'S'),
+    ('ț', 0x05, "uni021B", 't'),
+    ('Ț', 0x06, "uni021A", 'T'),
+    ('ş', 0x07, "scedilla", 's'),
+    ('Ş', 0x08, "Scedilla", 'S'),
+    ('ţ', 0x0b, "tcedilla", 't'),
+    ('Ţ', 0x0e, "Tcedilla", 'T'),
+    ('ą', 0x0f, "aogonek", 'a'),
+    ('Ą', 0x10, "Aogonek", 'A'),
+    ('ę', 0x11, "eogonek", 'e'),
+    ('Ę', 0x12, "Eogonek", 'E'),
+    ('ł', 0x13, "lslash", 'l'),
+    ('Ł', 0x14, "Lslash", 'L'),
+    ('ś', 0x15, "sacute", 's'),
+    ('Ś', 0x16, "Sacute", 'S'),
+    ('ż', 0x17, "zdotaccent", 'z'),
+    ('Ż', 0x18, "Zdotaccent", 'Z'),
+    ('ź', 0x19, "zacute", 'z'),
+    ('Ź', 0x1a, "Zacute", 'Z'),
+    ('ć', 0x1b, "cacute", 'c'),
+    ('Ć', 0x1c, "Cacute", 'C'),
+    ('ń', 0x1d, "nacute", 'n'),
+    ('Ń', 0x1e, "Nacute", 'N'),
+];
+
+/// Encode text in WinAnsiEncoding plus [`LATIN_EXTRA`]: those letters become their codes and the
+/// rest is encoded as [`win_ansi`] encodes it (tabs become spaces, unmappable characters `?`).
+pub fn win_ansi_extra(s: &str) -> Vec<u8> {
+    s.chars()
+        .map(|c| match LATIN_EXTRA.iter().find(|e| e.0 == c) {
+            Some(e) => e.1,
+            None if c == '\t' => b' ',
+            None => win_ansi_byte(c).unwrap_or(b'?'),
+        })
+        .collect()
+}
+
+/// The base letter a [`LATIN_EXTRA`] character is measured as, if `c` is one.
+pub fn extra_base_letter(c: char) -> Option<char> {
+    LATIN_EXTRA.iter().find(|e| e.0 == c).map(|e| e.3)
+}
+
+/// The character a [`LATIN_EXTRA`] glyph name stands for, so a reader of a `/Differences` array
+/// written from that table decodes it (`abreve` is ă, `uni021B` is ț).
+pub fn latin_extra_glyph(name: &str) -> Option<char> {
+    LATIN_EXTRA.iter().find(|e| e.2 == name).map(|e| e.0)
+}
+
+/// The first character of `s` that [`win_ansi_extra`] can't encode and would write as `?`.
+pub fn first_non_win_ansi_extra(s: &str) -> Option<char> {
+    s.chars().find(|c| !win_ansi_encodable(*c) && extra_base_letter(*c).is_none())
+}
+
 /// The character encoding of a predefined Unicode CMap (`UniJIS-UTF16-H`, `UniGB-UCS2-H`, …;
 /// ISO 32000-2 §9.7.5.2), which maps Unicode text straight to codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +227,47 @@ mod tests {
         );
         assert_eq!(win_ansi("čć\u{81}\u{8d}\t"), b"???? ");
         assert_eq!(win_ansi_byte('\0'), None);
+    }
+
+    /// A reader that knows WinAnsiEncoding and the `/Differences` names gets back the text
+    /// written with [`win_ansi_extra`].
+    fn decode_extra(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|&b| match LATIN_EXTRA.iter().find(|e| e.1 == b) {
+                Some(e) => latin_extra_glyph(e.2).unwrap_or('?'),
+                None => encodings::WIN_ANSI.get(usize::from(b)).and_then(|&u| char::from_u32(u)).unwrap_or('?'),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn latin_extra_text_round_trips_through_its_differences_names() {
+        for text in ["Declarație de impozit pe venit, școală, ăĂșȘțȚşŞţŢ", "Zażółć gęślą jaźń, ŁÓDŹ, ĄĘŚŻĆŃ"] {
+            let bytes = win_ansi_extra(text);
+            assert!(!bytes.contains(&b'?'), "{text}");
+            assert_eq!(decode_extra(&bytes), text);
+            assert_eq!(first_non_win_ansi_extra(text), None);
+        }
+        // Plain WinAnsi text is written exactly as `win_ansi` writes it.
+        let plain = "Šta? žaba, œuvre — âîé€\t";
+        assert_eq!(win_ansi_extra(plain), win_ansi(plain));
+        // What neither table holds is still reported and written as `?`.
+        assert_eq!(first_non_win_ansi_extra("Obligații Ω"), Some('Ω'));
+        assert_eq!(win_ansi_extra("Ω"), b"?");
+    }
+
+    #[test]
+    fn latin_extra_codes_displace_nothing_and_are_never_white_space() {
+        let mut seen = std::collections::HashSet::new();
+        for &(c, code, name, base) in LATIN_EXTRA {
+            assert!(seen.insert(code), "{c:?}: code {code:#04x} used twice");
+            assert_eq!(encodings::WIN_ANSI.get(usize::from(code)), Some(&0), "{c:?}: code {code:#04x} is defined in WinAnsi");
+            assert!(!char::from(code).is_ascii_whitespace(), "{c:?}: code {code:#04x} is white space");
+            assert!(win_ansi_byte(c).is_none(), "{c:?} is already WinAnsi");
+            assert!(win_ansi_byte(base).is_some(), "{c:?}: base letter {base:?} must be WinAnsi");
+            assert_eq!(latin_extra_glyph(name), Some(c));
+        }
     }
 
     #[test]
