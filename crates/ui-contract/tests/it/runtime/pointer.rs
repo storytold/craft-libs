@@ -568,6 +568,28 @@ fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
 const LINK: PartKey = PartKey::new("link");
 const SURFACE: PartKey = PartKey::new("surface");
 
+#[trial]
+fn passed_drag_reaches_an_arena_roots_background_part() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let area = rect(150.0, 150.0, 60.0, 40.0);
+    let background = ProbePart::new(BACKGROUND, page, Sense::CLICK | Sense::DRAG).level(HitLevel::Background, 0);
+    let field = ProbePart::new(SURFACE, area, Sense::CLICK | Sense::DRAG);
+    let overlay = ProbePart::new(LINK, area, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0).drag_to_root();
+    let root = ProbeRoot::new("canvas", page, Sense::FOCUS | Sense::WHEEL)
+        .arena()
+        .part(background)
+        .member(ProbeMember::new("parts", page, Sense::empty()).part(field).part(overlay));
+    let (mut show_frame, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    drag(&mut frames, area.center(), Vec2::new(40.0, 30.0), &mut show_frame);
+    assert_eq!(drags(&log.borrow().root_phases(0, Some(BACKGROUND))), 1, "background part takes the drag");
+    assert_eq!(drags(&log.borrow().member_phases(0, "parts", Some(SURFACE))), 0, "field does not drag");
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, area.center(), &mut show_frame);
+    assert!(log.borrow().member_phases(0, "parts", Some(LINK)).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })));
+}
+
 /// A clickable overlay can send its drag to the canvas root past a draggable field.
 #[trial]
 fn passed_drag_can_target_the_arena_root_past_a_field() {

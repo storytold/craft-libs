@@ -96,7 +96,7 @@ pub(crate) struct PartExtras {
 }
 
 impl PartBuilder<'_> {
-    /// Send a passed drag to the enclosing arena root, retaining clicks on this part.
+    /// Send a passed drag to the enclosing arena root or one of its draggable parts, retaining clicks on this part.
     /// Declare `CLICK | PASSES_DRAG` as the part's sense.
     pub fn drag_to_root(self) -> Self {
         self.decl.drag_to_root = true;
