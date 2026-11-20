@@ -665,3 +665,32 @@ fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
     // Typing replaced the first field's text: the text field first, then the number field first.
     assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
 }
+
+/// A dialog around an icon picker takes its size from the picker, so the category picked does not resize or move it.
+#[trial]
+fn a_dialog_around_the_icon_picker_keeps_its_size_across_categories() {
+    use craft_behavior::IconId;
+    use craft_ui::pickers::{IconPicker, IconPickerGroup, IconPickerGroups, IconPickerItem};
+    let size = std::rc::Rc::new(std::cell::Cell::new(egui::Rect::NOTHING));
+    let seen = size.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let item = |key: u8, name: &str| IconPickerItem::new(key, name).icon(IconId::new("settings"));
+        let groups = vec![
+            IconPickerGroup::new("Selection", (0..40).map(|key| item(key, &format!("Tool {key}"))).collect()),
+            IconPickerGroup::new("Drawing", vec![item(100, "Brush")]),
+        ];
+        let mut value = None;
+        let mut open = true;
+        let shown = Dialog::new("Icons").collection_body().opened(Bind::bound(&mut open)).show(ui, |ui, _| {
+            IconPicker::new("Tool", Bind::bound(&mut value), &groups).group_display(IconPickerGroups::Filter).show(ui);
+        });
+        seen.set(shown.response.rect);
+    });
+    fixture.settle();
+    let all = size.get();
+    for name in ["Drawing", "All"] {
+        let tab = fixture.by_label(name).expect("the category's tab");
+        fixture.click(&tab).settle();
+        assert_eq!(size.get(), all, "the dialog moved or resized on {name}");
+    }
+}

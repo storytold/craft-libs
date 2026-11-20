@@ -75,3 +75,15 @@ fn icon_picker_filter_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 fn icon_picker_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     IconPicker::new("Tool", data.bind("none", None), &groups()).show(ui).into()
 }
+
+/// Large previews in a filter row, four cells to a row: the picker is as wide as its cells and keeps its height when
+/// a category holds fewer icons.
+#[story(IconPicker<'static, u8>, covers = [], drive = Drive::Never)]
+fn icon_picker_large_previews(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    IconPicker::new("Tool", data.bind("tool", Some(3u8)), &groups())
+        .group_display(IconPickerGroups::Filter)
+        .large_previews()
+        .columns(4)
+        .show(ui)
+        .into()
+}
