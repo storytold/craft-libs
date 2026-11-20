@@ -267,6 +267,54 @@ impl Slot<'_> {
     }
 }
 
+/// Where a story value lies ([`StoryData::value_at`]): its data's source, its name and its place in memory, so a binding
+/// of the value or of a field of it names that field by source and the field's offset in the value, as `bind_tracked!`
+/// names a field of a `Tracked`. A write through such a binding moves the story's revision.
+#[derive(Clone, Copy)]
+pub struct ValueAt<'a> {
+    count: &'a std::cell::Cell<u64>,
+    source: u64,
+    /// The value's key in the data's source (`slot_offset`): a part of it is keyed by this plus its offset.
+    key: usize,
+    base: usize,
+    size: usize,
+}
+
+impl ValueAt<'_> {
+    /// A binding of `part`, the value itself or a field inside it.
+    ///
+    /// # Panics
+    ///
+    /// When `part` does not lie inside the value (a field behind a pointer, or another value).
+    pub fn bind<'b, F: Value>(self, part: &'b mut F) -> crate::contract::Bind<'b, F>
+    where
+        Self: 'b,
+    {
+        let offset = self.offset_of(std::ptr::from_ref::<F>(part).addr(), size_of::<F>());
+        crate::contract::Bind::__tracked(part, self.count, self.source, offset)
+    }
+
+    /// Like [`ValueAt::bind`] for a field that may be mixed: an edit makes it concrete.
+    ///
+    /// # Panics
+    ///
+    /// When `part` does not lie inside the value.
+    pub fn bind_mixed<'b, F: Value>(self, part: &'b mut Mixed<F>) -> crate::contract::Bind<'b, F>
+    where
+        Self: 'b,
+    {
+        let offset = self.offset_of(std::ptr::from_ref::<Mixed<F>>(part).addr(), size_of::<Mixed<F>>());
+        crate::contract::Bind::__tracked_mixed(part, self.count, self.source, offset)
+    }
+
+    /// The key of the part at address `at`, `size` bytes long: the value's key plus the part's offset in it.
+    fn offset_of(self, at: usize, size: usize) -> usize {
+        let offset = at.wrapping_sub(self.base);
+        assert!(offset <= self.size && size <= self.size - offset, "a story value binding names a part inside the value");
+        self.key.wrapping_add(offset)
+    }
+}
+
 /// How the Properties editor edits a value, beyond what its type says.
 #[doc(hidden)]
 pub enum Edit {
@@ -412,6 +460,35 @@ impl StoryData {
         *self.written = ();
         let read = crate::runtime::reads::BindKey::Tracked(self.written.source(), slot_offset(key.0), key.1);
         crate::runtime::inspect::edited(ctx, read, Id::NULL);
+    }
+
+    /// The value named `name` of type `T`, created from `init` on first use, with where it lies ([`ValueAt`]): a
+    /// binding of the value or of a part of it (`at.bind(&mut value.0)`) names that part by this data's source, as
+    /// [`StoryData::bind`] does, while the story keeps the value to read and pass on.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn value_at<T: Value>(&mut self, name: &'static str, init: T) -> (&mut T, ValueAt<'_>) {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<T>() {
+            Some(value) => {
+                let at = ValueAt { count, source, key: slot_offset(name), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() };
+                (value, at)
+            }
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Like [`StoryData::value_at`] for a number the Properties editor keeps inside `range`.
+    pub fn ranged_at<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> (&mut T, ValueAt<'_>) {
+        self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
+        self.value_at(name, init)
+    }
+
+    /// Like [`StoryData::value_at`] for a value that is one of `options`, which the Properties editor offers by label.
+    pub fn choice_at<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> (&mut T, ValueAt<'_>) {
+        self.choice(name, init.clone(), options);
+        self.value_at(name, init)
     }
 
     /// Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.

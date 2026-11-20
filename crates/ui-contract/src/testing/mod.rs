@@ -52,7 +52,8 @@ pub use frames::Frames;
 pub use stage::{room_height, stage, stage_fitting, stage_width};
 #[doc(hidden)]
 pub use story::{
-    CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, show_as_only_item, stories,
+    CollectionKind, Drive, EditKind, Grip, Required, Story, StoryData, StoryOutput, StoryRegistration, StorySnapshot, ValueAt, show_as_only_item,
+    stories,
 };
 pub use windows::install_spec;
 
