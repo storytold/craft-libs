@@ -227,7 +227,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Drops<'_, P> {
         let sizes = *cx.style.sizes();
         let shell = cx.env.get::<ShellEntry>().0;
         let bounds = shell.as_ref().map_or(cx.rect, ShellCx::float_bounds);
-        let space = float_space(bounds, &sizes, self.config, self.specs);
+        let space = float_space(&ctx, bounds, &sizes, self.config, self.specs);
         let spec = |panel: &P| spec_in(self.specs, panel);
         let protected = |panel: &P| (self.permissions)(panel).is_protected();
         let (hide, _) = hide::resolved(self.hide, shell.as_ref());
@@ -601,7 +601,7 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     let view = derived(ctx, id.with("pruned"), &prune, || frame::maximize(current.layout(), maximized, hide, &protected).into_owned());
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
-    let space = float_space(bounds, &sizes, config, specs);
+    let space = float_space(ctx, bounds, &sizes, config, specs);
     let scene = Scene {
         dock: id,
         view: MemoKey::of(&prune),
@@ -765,9 +765,16 @@ fn register_bands<P: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
 }
 
 /// Where floats land in an area whose float bounds are `bounds`: each panel at its spec's float size, else the
-/// default float size of `sizes`.
-fn float_space<P: Clone + PartialEq>(bounds: Rect, sizes: &DockSizes, config: &DockConfig, specs: &HashMap<P, PanelSpec>) -> FloatSpace<P> {
-    let mut space = FloatSpace::new(bounds, sizes).with_side_edge_zones(config.side_edge_zones);
+/// default float size of `sizes`, under the chrome of the windows the dock opens floats in.
+fn float_space<P: Clone + PartialEq>(
+    ctx: &Context,
+    bounds: Rect,
+    sizes: &DockSizes,
+    config: &DockConfig,
+    specs: &HashMap<P, PanelSpec>,
+) -> FloatSpace<P> {
+    let mut space =
+        FloatSpace::new(bounds, sizes).in_os_windows(sizes, native::opens_os_windows(ctx, config)).with_side_edge_zones(config.side_edge_zones);
     for (panel, spec) in specs {
         if let Some(size) = spec.float_size {
             space = space.with_panel_size(panel.clone(), size);
@@ -1083,8 +1090,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     }
 
     /// The steps a resize `change` of the floating window of the stepped `column`, whose first panel is `first`, sets,
-    /// and the window's rect at them: as wide as its steps and as tall as its title row and its content at that width.
-    /// `fitted` is the content's size under the title row before the change. A grip on the top or bottom edge sets the
+    /// and the window's rect at them: as wide as its steps and as tall as its chrome and its content at that width.
+    /// `fitted` is the content's size under the chrome before the change, `chrome` the height above the window's body
+    /// (`DockSizes::window_chrome`). A grip on the top or bottom edge sets the
     /// steps by height (the fewest whose content fits), any other grip by width (the most that fit); keyboard Size
     /// mode, which names no grip, by the side it changed. The window keeps its place: a grip on the left keeps the
     /// right edge where it is and one on the top the bottom edge, so the window grows or shrinks that way. Reports
@@ -1096,7 +1104,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         column: &Column<P>,
         first: &P,
         change: &PlacementChange,
-        fitted: Vec2,
+        (fitted, chrome): (Vec2, f32),
     ) -> Option<Rect> {
         let scene = self.scene;
         let spec_of = |panel: &P| scene.spec(panel);
@@ -1106,7 +1114,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             _ => (change.rect.width() - fitted.x).abs() <= 0.5,
         };
         let to = if by_height {
-            let room = change.rect.height() - scene.sizes.title_row;
+            let room = change.rect.height() - chrome;
             grid.steps_for_height(room, |width| self.stepped_height(ui, body, column, width, true).unwrap_or(0.0))
         } else {
             grid.steps_within(change.rect.width())
@@ -1114,7 +1122,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         if to != steps {
             self.report.actions.push(Action::set_column_steps(first.clone(), to));
         }
-        let size = Vec2::new(grid.width(to), scene.sizes.title_row + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
+        let size = Vec2::new(grid.width(to), chrome + self.stepped_height(ui, body, column, grid.width(to), true).unwrap_or(0.0));
         let left = match change.kind {
             PlacementKind::Size(ResizeEdge::Left | ResizeEdge::TopLeft | ResizeEdge::BottomLeft) => change.rect.right() - size.x,
             _ => change.rect.left(),
@@ -1256,7 +1264,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
     /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
     /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
-    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. An OS window is measured
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. A collapsed window's sides
+    /// resize its column's width within [`DockSizes::iconic_bounds`] (`Action::ResizeIconic`, as a docked collapsed
+    /// column's inner edge does), and the window keeps its edge and its expanded rect's size. An OS window is measured
     /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
     /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
@@ -1317,7 +1327,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
-                WindowColumn::collapsed(edge, size)
+                WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
             } else {
@@ -1363,12 +1373,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 cross_window::accept_cross_window(&ctx);
                 self.report.actions.push(dropped.action);
             }
+            // The height above the window's body: the title row, and in the app window the band over it.
+            let chrome = scene.sizes.window_chrome(opening.spec.is_none());
             // A resize of a window whose column has steps: the steps it sets, and the window's rect at them.
             let resized = output
                 .placed
                 .filter(|change| !matches!(change.kind, PlacementKind::Move))
                 .zip(shape.fitted)
-                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, fitted));
+                .and_then(|(change, fitted)| self.stepped_resize(ui, body, &window.column, &anchor, &change, (fitted, chrome)));
             if opening.spec.is_some() {
                 if let Some(viewport) = WindowHost::of(&ctx).viewport_of(output.response.id) {
                     // The OS window takes the rect of its steps at once, so the place recorded below is that rect.
@@ -1385,18 +1397,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         && let Some(change) = output.placed.filter(|change| change.phase == GesturePhase::Commit)
                         && let Some(rect) = native::in_app(&ctx, change.rect)
                     {
-                        let (rect, keeps) = shape.dropped(rect, scene.bounds, scene.rtl);
+                        // A resize of a collapsed window keeps its edge; a move ends where its strip was dropped.
+                        let (rect, keeps) =
+                            if output.collapsed_width.is_some() { (rect, Some(edge)) } else { shape.dropped(rect, scene.bounds, scene.rtl) };
                         kept.edge = keeps.unwrap_or(kept.edge);
                         self.report.actions.push(Action::move_floating_with_edge(anchor.clone(), rect, keeps));
                     }
-                    let title_row = scene.sizes.title_row;
-                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, title_row, scene.rtl));
+                    let reported = native::reported(&ctx, window, viewport, |shown| kept.kept(shown, opening.rect, chrome, scene.rtl));
                     self.report.actions.extend(reported);
                 }
             } else if let Some(mut change) = output.placed {
                 // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
-                if change.phase == GesturePhase::Commit {
+                if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
                 // The window keeps the place of its steps; its size is the steps' own, whatever the rect keeps.
@@ -1408,6 +1421,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 }
                 moved = Some((anchor.clone(), change, keeps));
             }
+            // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
+            if let Some(width) = output.collapsed_width {
+                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                self.column_work(&window.column, work);
+            }
             // The OS close of a native window arrives here as well, also where the title row offers no Close.
             if output.action == Some(HeaderAction::Close) && rights.iter().all(|rights| rights.closable) {
                 self.report.actions.push(Action::close_window(anchor.clone()));
@@ -1416,7 +1434,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                 self.pick(&active, item);
             }
             // The window's commands run from its body, below the title row.
-            let body = opening.rect.size() - Vec2::new(0.0, scene.sizes.title_row);
+            let body = opening.rect.size() - Vec2::new(0.0, chrome);
             for command in commands {
                 self.run(&active, command, Some(body));
             }

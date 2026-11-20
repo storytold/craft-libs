@@ -666,6 +666,57 @@ fn a_native_palette_collapsed_moved_and_expanded_comes_back_at_its_size() {
     assert!(max.is_none_or(|max| max.x >= expanded.x && max.y >= expanded.y), "the OS lets it take that size: max {max:?}");
 }
 
+/// On macOS a native palette collapsed to icons is a window AppKit resizes, in its width only: it opens resizable with
+/// its height fixed to the strip's, the app stands no grips of its own at its sides, and a width the OS gives it is the
+/// column's iconic width while the model keeps the expanded size; the app sends no size back.
+#[trial]
+fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() {
+    let mut dock = NativeDock::on(Os::Mac, Arc::new(FakeSystem::new()));
+    let mut at = FLOAT_AT;
+    // The OS follows the window commands of each frame, and the window reports where it is.
+    let follow = |dock: &mut NativeDock, at: &mut Rect, events: Vec<Event>| {
+        let commands = dock.frame(events).1;
+        *at = placed_by(&commands, *at);
+        dock.windows.child_info(info(true, *at));
+        commands
+    };
+    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    for _ in 0..3 {
+        follow(&mut dock, &mut at, vec![]);
+    }
+    let strip = at;
+    let builder = dock.builder.clone().expect("the palette's window opened");
+    assert_eq!(builder.resizable, Some(true), "the collapsed window is resizable");
+    let (least, most) = (builder.min_inner_size.expect("a least size"), builder.max_inner_size.expect("a most size"));
+    assert!(least.y == most.y && (least.y - strip.height()).abs() <= 0.5, "the height is fixed to the strip's: {least:?}..{most:?}, {strip:?}");
+    assert!(least.x < most.x, "the width resizes: {least:?}..{most:?}");
+
+    // A press and drag at the strip's free side, in its title row, clear of the double arrow at the end it keeps to:
+    // no app grip stands there, so nothing asks the OS for a resize.
+    let end = strip.max.x >= FLOAT_AT.max.x - 1.0 && strip.min.x > FLOAT_AT.min.x + 1.0;
+    let side = Pos2::new(if end { 2.0 } else { strip.width() - 2.0 }, 4.0);
+    let mut sent = Vec::new();
+    for events in [vec![moved(side)], vec![press(side)], vec![moved(side + Vec2::new(0.0, 1.0))], vec![release(side)], vec![]] {
+        sent.extend(follow(&mut dock, &mut at, events));
+    }
+    assert!(!sent.iter().any(|command| matches!(command, ViewportCommand::BeginResize(_))), "the app stands no grip: {sent:?}");
+
+    // AppKit widens the window.
+    let width = strip.width() + 60.0;
+    at = Rect::from_min_size(at.min, Vec2::new(width, at.height()));
+    dock.windows.child_info(info(true, at));
+    let mut sent = Vec::new();
+    for _ in 0..3 {
+        sent.extend(follow(&mut dock, &mut at, vec![]));
+    }
+    let palette = &dock.workspace.layout.floating[0];
+    assert!(palette.column.iconic_width.is_some_and(|kept| (kept - width).abs() <= 0.5), "the column keeps the width: {:?}", palette.column);
+    let recorded = palette.native.clone().expect("the model records the window");
+    assert_eq!(Vec2::from(recorded.normal.size), FLOAT_AT.size(), "the model keeps the expanded size");
+    assert!(!sent.iter().any(|command| matches!(command, ViewportCommand::InnerSize(_))), "no size goes back: {sent:?}");
+    assert_eq!(at.width(), width, "the window keeps the width the OS gave it");
+}
+
 /// On a display at 125 % (Windows), a click on the double arrow of a native palette collapsed to icons expands its
 /// column, and the OS window takes its expanded size.
 #[trial]

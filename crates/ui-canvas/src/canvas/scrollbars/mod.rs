@@ -383,6 +383,20 @@ impl Component for CanvasScrollbars<'_> {
         Some(self.view.reborrow())
     }
 
+    /// The canvas settles a view it is given to whole device pixels and to its own rect, so a thumb drag's proposal
+    /// comes back with its centre moved by under a point (photocraft#16006): that is the drag's own value, not the app
+    /// changing the view under it, and the drag goes on. A different zoom, turn, mirroring or aspect, or a centre a
+    /// point or more away, is a change.
+    fn same_value(&self, proposed: &CanvasView, host: &CanvasView) -> bool {
+        let reach = 1.0 / proposed.zoom.max(f64::MIN_POSITIVE);
+        proposed.zoom == host.zoom
+            && proposed.rotation == host.rotation
+            && proposed.flip_x == host.flip_x
+            && proposed.aspect == host.aspect
+            && (proposed.center.x - host.center.x).abs() < reach
+            && (proposed.center.y - host.center.y).abs() < reach
+    }
+
     /// The bars: `PartsCx::scroll` runs the thumb drag and the page press in the pipeline.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(view) = cx.value().copied() else { return };
@@ -390,7 +404,10 @@ impl Component for CanvasScrollbars<'_> {
         for (key, axis, bar) in bars.each() {
             cx.scroll(key, bar.track, axis, bar.span.clone());
             for (part, rect, _) in bar.arrows(key, axis) {
-                cx.part(part, rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
+                // As in the reference application the step arrows take no keyboard focus: the canvas scrolls with its own
+                // keys (the arrows, Page Up/Down, Home and End), and a focused arrow would take the Escape that ends a
+                // tool's edit on the canvas.
+                cx.part(part, rect).sense(Sense::CLICK).pointer_only("the canvas scrolls with its own keys");
             }
         }
         if let Some(corner) = bars.corner {
