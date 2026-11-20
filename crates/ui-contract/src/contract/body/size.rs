@@ -28,8 +28,6 @@ pub(super) struct MeasureKey {
     width: Option<f32>,
     /// Whether the body shows, and how much of it an animated collapse shows.
     shows: (bool, f32),
-    /// The content extent the view keeps, which decides the scroll bars' inset.
-    extent: (f32, f32),
     env: EnvFacts,
 }
 
@@ -93,7 +91,6 @@ impl<'b> BodyHooks<'b> {
             wide: self.wide(),
             width,
             shows: (self.open, self.presence.t),
-            extent: self.last_extent,
             env: EnvFacts::of(env),
         }
     }

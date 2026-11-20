@@ -19,6 +19,7 @@ use crate::runtime::egui::{focus as focus_state, input as input_state, pass};
 use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::inputs::{self, Input};
+use crate::runtime::layout_memory;
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
 use crate::style::EnvKey;
@@ -342,13 +343,37 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
     })
 }
 
+/// Runs `f` on the store as `with` does, for a write to the entry of the child `id`: inside a draft
+/// (`layout_memory::draft`) the entry as it was goes to the draft, so a measuring run taken back leaves the entry, its
+/// extents and this pass's decisions included, as it found it.
+fn write<R>(ctx: &Context, id: Id, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
+    let drafting = layout_memory::drafting(ctx);
+    let (out, before) = with(ctx, |store, pass_nr, frame| {
+        let before = drafting.then(|| store.entries.get(&id).cloned());
+        (f(store, pass_nr, frame), before)
+    });
+    if let Some(before) = before {
+        let viewport = pass::current_viewport(ctx);
+        layout_memory::note_undo(
+            ctx,
+            Box::new(move |ctx: &Context| {
+                PerViewport::<Store>::with(ctx, viewport, |store| match before {
+                    Some(entry) => drop(store.entries.insert(id, entry)),
+                    None => drop(store.entries.remove(&id)),
+                });
+            }),
+        );
+    }
+    out
+}
+
 /// Decides whether the child `id`, whose content starts at `at` in this run, runs this pass. It runs when its extent
 /// placed at `at` meets the view, or when one of its stops holds focus or is the target of a focus request. Its
 /// extent is the one a run showed it at, else `estimate`. The first run of a pass decides; every later run of the
 /// pass gets the same answer, so a measuring run and the real run lay out the same children.
 pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -> Rect, sizing: bool, estimate: Vec2) -> Decision {
     let targets = crate::runtime::focus::targets(ctx);
-    with(ctx, |store, pass_nr, frame| {
+    write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(view.owner), id, frame);
         let kind = usize::from(!sizing);
         // A child the other kind of run showed last takes that run's extent.
@@ -369,7 +394,7 @@ pub(crate) fn decide(ctx: &Context, id: Id, view: &View, at: impl FnOnce(Vec2) -
 /// Records what a run that showed the child `id` found: what it measured in a run of this kind and, from a real run,
 /// what it registered with the focus service.
 pub(crate) fn shown(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, measured: Measured, registered: Option<Transcript>) {
-    with(ctx, |store, _, frame| {
+    write(ctx, id, |store, _, frame| {
         let entry = store.touch(owner, id, frame);
         entry.sizes[usize::from(!sizing)] = Some(measured);
         if let Some(registered) = registered {
@@ -428,7 +453,7 @@ pub(crate) fn settled(
     let now = frame::clock(ctx);
     let held = (input_state::dragged(ctx), focus_state::focused(ctx));
     let transformed = place.is_some_and(|place| ctx.layer_transform_to_global(place.layer).is_some());
-    let settled = with(ctx, |store, pass_nr, frame| {
+    let settled = write(ctx, id, |store, pass_nr, frame| {
         let changes = &store.changes;
         // Usually `None`: only the values written this frame.
         let edited = changes.edited_in(frame);
@@ -483,7 +508,7 @@ pub(crate) fn settled(
         || crate::runtime::memory::ended_since(ctx, &settled.record.facts.owners, settled.lives)
         || moved(ctx, &settled, view)
     {
-        with(ctx, |store, pass_nr, _| {
+        write(ctx, id, |store, pass_nr, _| {
             if let Some(entry) = store.entries.get_mut(&id) {
                 entry.replays = Some((pass_nr, false));
             }
@@ -591,7 +616,7 @@ pub(crate) fn measured(ctx: &Context, id: Id) -> Option<(Vec2, Vec<BindKey>)> {
 
 /// Keeps the measuring run of the measure-only child `id` in this pass: the values it read and the size it took.
 pub(crate) fn measured_run(ctx: &Context, id: Id, reads: Vec<BindKey>, size: Vec2) {
-    with(ctx, |store, pass_nr, frame| {
+    write(ctx, id, |store, pass_nr, frame| {
         store.touch(None, id, frame).measured = Some(MeasuredRun { reads, pass: pass_nr, size });
     });
 }
@@ -612,7 +637,7 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
 /// it does not build by it (its item layout answers for rows it never built), and every run of the pass that reaches
 /// the row takes it without measuring the row again.
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
-    with(ctx, |store, pass_nr, frame| {
+    write(ctx, id, |store, pass_nr, frame| {
         let entry = store.touch(Some(owner), id, frame);
         entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING });
         entry.measured_in = Some(pass_nr);

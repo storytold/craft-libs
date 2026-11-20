@@ -735,6 +735,42 @@ impl BodyHooks<'_> {
         let (layer, rect) = self.begin_measure_run(at, cx);
         let mut values = AppValues::default();
         comp.content_env(cx, &mut values);
+        // A scrolling body's view (a bar that takes room, the strips) follows from its content's overflow. The content is
+        // laid out as overflowing along every axis it scrolls, beside the bars; when its overflow leaves another view
+        // (content that fits), the sweep is taken back and the content runs once more at that view. Content that
+        // overflows, whose children are the costly ones to run twice, runs once.
+        let overflows = crate::contract::MAX_EXTENT;
+        (self.last_extent, self.view_moves) = ((overflows, overflows), None);
+        if scroll_of(&self.props).is_some() {
+            let ctx = at.ui.ctx().clone();
+            let (overflow, _) = crate::contract::draft(
+                &ctx,
+                || {
+                    self.sweeps(comp, at, cx, (layer, rect), &values);
+                    self.view_moves.take()
+                },
+                Option::is_none,
+            );
+            if let Some(extent) = overflow {
+                self.last_extent = extent;
+                self.sweeps(comp, at, cx, (layer, rect), &values);
+                self.view_moves = None;
+            }
+        } else {
+            self.sweeps(comp, at, cx, (layer, rect), &values);
+        }
+        self.end_measure_run(at, cx.core.id, key, content)
+    }
+
+    /// The measuring run's sweeps of the regions at the view it lays the content out for.
+    fn sweeps<C: Container>(
+        &mut self,
+        comp: &mut C,
+        at: &Measuring<'_, '_>,
+        cx: &mut Cx<'_, C>,
+        (layer, rect): (areas::LayerKey, Rect),
+        values: &AppValues,
+    ) {
         // A label group settles its columns before a measure inside stands: when a row of a body that shows at its
         // measured width read a column narrower than the group's widest, the sweep is taken back and the content runs
         // once more with the group opened at the widths the first sweep found.
@@ -743,20 +779,19 @@ impl BodyHooks<'_> {
             let (unsettled, _) = crate::contract::draft(
                 &ctx,
                 || {
-                    self.sweep(comp, at, cx, (layer, rect), &values);
+                    self.sweep(comp, at, cx, (layer, rect), values);
                     self.unsettled.take()
                 },
                 Option::is_none,
             );
             if let Some(widths) = unsettled {
                 (self.settle, self.reached) = (Some(widths), None);
-                self.sweep(comp, at, cx, (layer, rect), &values);
+                self.sweep(comp, at, cx, (layer, rect), values);
                 (self.settle, self.unsettled) = (None, None);
             }
         } else {
-            self.sweep(comp, at, cx, (layer, rect), &values);
+            self.sweep(comp, at, cx, (layer, rect), values);
         }
-        self.end_measure_run(at, cx.core.id, key, content)
     }
 
     /// Opens the measuring run of `cx`'s container: its rect at the room's start edge, which `cx` takes, and the layer
@@ -944,6 +979,8 @@ struct ScrollRegion {
     bar: f32,
     /// The run lays the content out for the view.
     lays_out: bool,
+    /// The bars' inset and the part of the body the content shows in, as the extent the run starts from gives them.
+    laid_for: (Vec2, Rect),
 }
 
 /// The `Ui` a measuring run lays a transformed body out in: on the body layer the real run shows it on.
@@ -1414,14 +1451,14 @@ impl BodyHooks<'_> {
         }
         let env = run.env.derive_local(|scoped| scoped.lazy = Some(view));
         let installed = Env::install_for(&region_ui, env.clone());
-        ScrollRegion { ui: region_ui, env, installed, seen, max, shown, bar, lays_out }
+        ScrollRegion { ui: region_ui, env, installed, seen, max, shown, bar, lays_out, laid_for: (inset, shows) }
     }
 
     /// After a scrolling body's content ran: the anchor and glide follow what it placed, and the body takes what the
     /// view shows of it.
     fn scrolled(&mut self, run: &BodyRun<'_>, scroll: Scroll, at: Rect, region: ScrollRegion, bars: &mut Vec2) -> Option<Vec2> {
         let (ctx, id) = (run.ctx, run.id);
-        let ScrollRegion { ui: region_ui, installed, seen, max, shown, bar, lays_out, .. } = region;
+        let ScrollRegion { ui: region_ui, installed, seen, max, shown, bar, lays_out, laid_for, .. } = region;
         Env::restore(ctx, installed);
         if lays_out {
             crate::contract::run::close_bar_line(ctx, id);
@@ -1440,6 +1477,11 @@ impl BodyHooks<'_> {
             crate::runtime::egui::widgets::note_scroll_region(ctx, region_ui.clip_rect(), region_ui.min_rect().intersect(max));
         }
         self.extent = Some(extent);
+        // A measuring run whose content leaves another view than the one it laid the content out for runs again there.
+        let leaves = (overflow_inset(scroll, extent, at.size(), bar), view_within(scroll, extent, at, self.strip));
+        if !run.real && leaves != laid_for {
+            self.view_moves = Some((extent.x, extent.y));
+        }
         // Along an axis it scrolls the body took what the view shows; along the other it took its content.
         *bars = overflow_inset(scroll, extent, at.size(), bar);
         // Strips take their height from the view: a body that overflows takes all of its room.

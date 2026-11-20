@@ -186,6 +186,8 @@ enum Undo {
     /// An input the entry open at the place read, before the draft read it.
     Input(usize, Id, Option<f32>),
     Contribution(TakeBack),
+    /// What restores a write the draft made to a store outside layout memory (`note_undo`).
+    Store(TakeBack),
 }
 
 impl Scope {
@@ -333,8 +335,9 @@ impl Entries {
     }
 
     /// Takes a draft that ended back: the records, kept transcripts and transcript entries are as before it. Returns
-    /// what takes its contributions back, in reverse order, to run outside the memory's lock.
-    fn take_back(&mut self, draft: Draft) -> Vec<TakeBack> {
+    /// what takes its contributions and its writes to other stores back, in reverse order, to run outside the memory's
+    /// lock, each with whether it takes a contribution back.
+    fn take_back(&mut self, draft: Draft) -> Vec<(TakeBack, bool)> {
         let mut later = Vec::new();
         for undo in draft.undo.into_iter().rev() {
             match undo {
@@ -373,7 +376,8 @@ impl Entries {
                         }
                     }
                 }
-                Undo::Contribution(undo) => later.push(undo),
+                Undo::Contribution(undo) => later.push((undo, true)),
+                Undo::Store(undo) => later.push((undo, false)),
             }
         }
         if let Some((at, len)) = draft.items
@@ -696,12 +700,32 @@ pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce
         }
         Some(memory.take_back(draft))
     });
-    for undo in undo.into_iter().flatten() {
+    for (undo, contribution) in undo.into_iter().flatten() {
         guard::emitting(|| undo(ctx));
         #[cfg(feature = "testing")]
-        crate::runtime::measure::count_contribution(ctx, -1);
+        if contribution {
+            crate::runtime::measure::count_contribution(ctx, -1);
+        }
+        let _ = contribution;
     }
     (out, kept)
+}
+
+/// Whether a draft is open (`draft`): a store outside layout memory that a measuring run writes hands what restores
+/// the write to `note_undo`.
+pub(crate) fn drafting(ctx: &Context) -> bool {
+    with(ctx, &Moment::of(ctx), |memory| !memory.drafts.is_empty())
+}
+
+/// Adds `undo`, which restores a write to a store outside layout memory (the lazy children's entries), to the innermost
+/// open draft: a draft taken back runs it, so the draft leaves nothing behind; one kept hands it to the draft around it.
+/// Nothing outside a draft.
+pub(crate) fn note_undo(ctx: &Context, undo: TakeBack) {
+    with(ctx, &Moment::of(ctx), |memory| {
+        if let Some(draft) = memory.drafts.last_mut() {
+            draft.undo.push(Undo::Store(undo));
+        }
+    });
 }
 
 /// Runs `f` as content whose emits no enclosing transcript takes, and whose real run no enclosing body checks: a
