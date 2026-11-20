@@ -429,8 +429,8 @@ fn slop_sense(part: BoxPart) -> Sense {
 /// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
 ///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
 ///   [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing snaps but the
-///   reference point, which snaps to the box's nine points only. A corner that keeps the box's proportions does not
-///   snap. In Distort only the corners snap, to guides. A pass
+///   reference point, which snaps to the box's nine points only. A corner or an edge that keeps the box's proportions
+///   does not snap. In Distort only the corners snap, to guides. A pass
 ///   reports the lines of its own drag events only.
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
@@ -599,7 +599,7 @@ impl<'a> TransformBox<'a> {
 
     /// The box the pointer at screen position `pos` gives a drag, snapped and rounded, with the lines it snapped to.
     ///
-    /// - A corner that keeps the box's proportions does not snap.
+    /// - A corner or an edge that keeps the box's proportions does not snap.
     /// - A corner or an edge snaps the grabbed handle through the canvas's `snap`, not the pointer: a press a few
     ///   pixels off the handle still lands the handle on the line. A distorting corner reports only the lines it
     ///   reaches once the box's folding rule has placed it: a corner stopped short of a line claims no alignment.
@@ -626,8 +626,9 @@ impl<'a> TransformBox<'a> {
                 // An ⌥ press keeps the point half a unit up and left of the pointer through its drag.
                 (if grip.moves_pivot { pulled } else { pulled + off }, Vec::new())
             }
-            // A corner that keeps the box's proportions does not snap: in the reference application it stops where
-            // the drag puts it, 2 px from the document's centre or 3 px from its edge.
+            // A corner or an edge that keeps the box's proportions does not snap: in the reference application it stops
+            // where the drag puts it, 2 px from the document's centre or 3 px from its edge (an edge 2 px from the
+            // centre column and 6 px from the right edge alike).
             (BoxPart::Corner(_), Some(snap), Some(grabbed)) | (BoxPart::Edge(_), Some(snap), Some(grabbed))
                 if (!distort_mode || matches!(grip.part, BoxPart::Corner(_))) && !self.rules.keeps_proportions(grip.part, mods) =>
             {

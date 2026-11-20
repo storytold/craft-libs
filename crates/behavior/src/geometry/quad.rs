@@ -304,10 +304,12 @@ impl BoxRules {
         self.allows(part).then(|| resolve_kind(self.effective_mode(), part, self.drag_modifiers(part, mods)))
     }
 
-    /// Whether a drag of `part` with `mods` held (as the host has them) scales a corner keeping the box's
+    /// Whether a drag of `part` with `mods` held (as the host has them) scales a corner or an edge keeping the box's
     /// proportions.
     pub fn keeps_proportions(&self, part: BoxPart, mods: Mods) -> bool {
-        matches!(part, BoxPart::Corner(_)) && self.drag_kind(part, mods) == Some(BoxDrag::Scale) && !self.drag_modifiers(part, mods).shift
+        matches!(part, BoxPart::Corner(_) | BoxPart::Edge(_))
+            && self.drag_kind(part, mods) == Some(BoxDrag::Scale)
+            && !self.drag_modifiers(part, mods).shift
     }
 }
 

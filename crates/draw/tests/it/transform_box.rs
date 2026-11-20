@@ -655,7 +655,8 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
-/// reports them while a snapped edge drag runs and none once it ends.
+/// reports them while a snapped edge drag runs and none once it ends. The edge stretches freely (the link off): one
+/// that keeps the box's proportions does not snap.
 #[trial]
 fn the_session_boxs_snap_lines_reach_the_tool_host() {
     use craft_draw::ui::transform::TransformTool;
@@ -669,7 +670,7 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
         targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
     }
     let snap = Snap::new(Arc::new(targets), SnapOptions::default());
-    let settings = TransformSettings::default();
+    let settings = TransformSettings { aspect_linked: false, ..TransformSettings::default() };
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
@@ -1363,5 +1364,27 @@ fn a_proportional_corner_does_not_snap_and_a_free_one_does() {
         // it snaps to the guide at 310.
         let expected = if linked { 100.0 + 200.0 * (1.0 + 7.0 * 200.0 / (200.0 * 200.0 + 140.0 * 140.0)) } else { 310.0 };
         assert!((x - expected).abs() < 1e-6, "linked {linked}: the corner at x {x}, not {expected}");
+    }
+}
+
+/// An edge that keeps the box's proportions stops where the drag puts it too, as in the reference application (an
+/// edge dragged to 2 px from the document's centre column, or 6 px from its edge, is not drawn to them); a free (⇧)
+/// one still snaps.
+#[trial]
+fn a_proportional_edge_does_not_snap_and_a_free_one_does() {
+    for free in [false, true] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.mods = free.then_some(Mods::SHIFT);
+        });
+        let from = h.screen(Point::new(300.0, 150.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+        let x = h.state().quad[1].x;
+        let expected = if free { 310.0 } else { 307.0 };
+        assert!((x - expected).abs() < 1e-6, "free {free}: the edge at x {x}, not {expected}");
     }
 }
