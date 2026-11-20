@@ -298,6 +298,7 @@ fn from_apple(identifier: &str, metric: bool, decimal: &str, grouping: &str, hou
 /// A grouping separator the system sets: none at all when empty (Windows' `sThousand` the user
 /// cleared), else one character.
 #[cfg(any(test, windows, target_vendor = "apple"))]
+#[expect(clippy::option_option, reason = "The public setting distinguishes following the locale, no grouping, and a custom separator")]
 fn grouping(s: &str) -> Option<Option<char>> {
     if s.is_empty() { Some(None) } else { single_char(s).map(Some) }
 }

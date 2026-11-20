@@ -57,13 +57,14 @@ fn round_trip() {
             CtrlEvent { tick: 50, channel: 2, kind: CtrlKind::ChannelPressure, value: 77 },
             CtrlEvent { tick: 60, channel: 2, kind: CtrlKind::PolyPressure(61), value: 12 },
         ],
+        ..Default::default()
     };
     seq.sort();
     let smf = Smf {
         format: 1,
         tracks: vec![
             SmfTrack { name: "Piano".into(), sequence: seq.clone() },
-            SmfTrack { name: "Bass ♪".into(), sequence: Sequence { notes: vec![note(36, 100, 50)], ctrls: vec![] } },
+            SmfTrack { name: "Bass ♪".into(), sequence: Sequence { notes: vec![note(36, 100, 50)], ..Default::default() } },
         ],
         tempos: vec![(0, 120.0), (3840, 90.0)],
         meters: vec![(0, 4, 4), (3840, 6, 8)],
@@ -118,7 +119,7 @@ fn write_rejects_bad_values() {
     let bad_meter = Smf { meters: vec![(0, 4, 3)], ..Default::default() };
     assert!(write_smf(&bad_meter).is_err());
     let huge_gap = Smf {
-        tracks: vec![SmfTrack { name: String::new(), sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ctrls: vec![] } }],
+        tracks: vec![SmfTrack { name: String::new(), sequence: Sequence { notes: vec![note(60, 0x1000_0000, 10)], ..Default::default() } }],
         ..Default::default()
     };
     assert!(write_smf(&huge_gap).is_err());
@@ -341,6 +342,7 @@ proptest! {
         let mut seq = Sequence {
             notes: notes.iter().map(|&(pitch, velocity, channel, start, length)| Note { pitch, velocity, release_velocity: 64, channel, start, length }).collect(),
             ctrls: vec![],
+            ..Default::default()
         };
         seq.remove_duplicates();
         let smf = Smf { format: 1, tracks: vec![SmfTrack { name: "t".into(), sequence: seq.clone() }], ..Default::default() };
