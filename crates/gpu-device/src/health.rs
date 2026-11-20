@@ -278,28 +278,51 @@ impl DeviceHealth {
         self.0.device_lost.store(true, Ordering::Release);
     }
 
-    /// Block until `index` (or all submitted work) finished, unless the device was lost or
-    /// reported an error other than out of memory. Returns whether the work finished with the
-    /// device still usable: `false` when it was lost or reported such an error, before or during
-    /// the wait, and when the poll itself failed, so the work may still be running. After an
-    /// out-of-memory error the wait still runs. A panic in `Device::poll` is caught and recorded
-    /// as a loss. Native only: the web has no blocking wait.
+    /// Block until the work up to `index` finished, unless the device was lost or reported an
+    /// error other than out of memory. To wait for everything submitted so far, pass the index of
+    /// an empty submission (`queue.submit([])`); work submitted after it does not extend the
+    /// wait. Returns whether the work finished with the device still usable: `false` when it was
+    /// lost or reported such an error, before or during the wait, and when the poll itself
+    /// failed, so the work may still be running. After an out-of-memory error the wait still
+    /// runs. The wait has no deadline, but it polls in slices of at most 100 ms, so a loss or an
+    /// error other than out of memory that another clone records while the work has not finished
+    /// ends it after the current slice. A panic in `Device::poll` is caught and recorded as a
+    /// loss. Native only: the web has no blocking wait.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn wait(&self, device: &wgpu::Device, index: Option<wgpu::SubmissionIndex>) -> bool {
-        if !self.pollable() {
-            return false;
-        }
-        let poll =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: index, timeout: None })));
-        match poll {
-            Ok(Ok(_)) => self.pollable(),
-            Ok(Err(e)) => {
-                log::warn!("wgpu poll: {e}");
-                false
+    pub fn wait(&self, device: &wgpu::Device, index: wgpu::SubmissionIndex) -> bool {
+        const SLICE: Duration = Duration::from_millis(100);
+        self.wait_unbounded(|| {
+            let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                device.poll(wgpu::PollType::Wait { submission_index: Some(index.clone()), timeout: Some(SLICE) })
+            }));
+            match poll {
+                Ok(Ok(_)) => SlicePoll::Done,
+                Ok(Err(wgpu::PollError::Timeout)) => SlicePoll::Pending,
+                Ok(Err(e)) => {
+                    log::warn!("wgpu poll: {e}");
+                    SlicePoll::Failed
+                }
+                Err(_) => {
+                    self.lost_by_poll();
+                    SlicePoll::Failed
+                }
             }
-            Err(_) => {
-                self.lost_by_poll();
-                false
+        })
+    }
+
+    /// [`Self::wait`]'s loop: `poll` runs one slice and reports what wgpu returned. The loop ends
+    /// when a slice finished or failed, and before the next slice once a clone of this flag
+    /// recorded a loss or an error other than out of memory.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_unbounded(&self, mut poll: impl FnMut() -> SlicePoll) -> bool {
+        loop {
+            if !self.pollable() {
+                return false;
+            }
+            match poll() {
+                SlicePoll::Done => return self.pollable(),
+                SlicePoll::Pending => {}
+                SlicePoll::Failed => return false,
             }
         }
     }
@@ -595,6 +618,34 @@ mod tests {
         let lost = DeviceHealth::new();
         lost.clone().mark(Fault::Lost("reset".into()));
         assert_eq!(lost.after_slice(false), SlicePoll::Failed);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_fault_recorded_during_an_unbounded_wait_ends_it() {
+        let h = DeviceHealth::new();
+        let other = h.clone();
+        let mut polls = 0;
+        let finished = h.wait_unbounded(|| {
+            polls += 1;
+            if polls == 2 {
+                other.mark(Fault::Error("Validation Error".into()));
+            }
+            assert!(polls <= 2, "a slice ran after the fault");
+            SlicePoll::Pending
+        });
+        assert!(!finished);
+        assert_eq!(polls, 2);
+        // out of memory alone keeps the wait going until the work finishes
+        let oom = DeviceHealth::new();
+        oom.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        let mut polls = 0;
+        assert!(oom.wait_unbounded(|| {
+            polls += 1;
+            if polls < 3 { SlicePoll::Pending } else { SlicePoll::Done }
+        }));
+        assert_eq!(polls, 3);
+        assert!(!DeviceHealth::new().wait_unbounded(|| SlicePoll::Failed));
     }
 
     #[test]
