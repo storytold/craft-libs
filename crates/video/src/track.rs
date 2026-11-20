@@ -92,16 +92,33 @@ enum Inner {
 /// }
 /// # Ok(()) }
 /// ```
+/// Options for [`TrackDecoder::with_options`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrackDecoderOptions {
+    /// Worker threads for codecs that decode in parallel (`None` uses the codec default;
+    /// `Some(1)` decodes on the calling thread). Values of `0` are clamped to `1`.
+    pub threads: Option<usize>,
+    /// Draft mode (approximate, for reduced-resolution playback only; never for export).
+    pub draft: bool,
+}
+
 pub struct TrackDecoder {
     inner: Inner,
     codec: CodecId,
+    threads: Option<usize>,
+    draft: bool,
     /// Frames finished by a call that then failed, which the next call returns first.
     held: Vec<VideoFrame>,
 }
 
 impl std::fmt::Debug for TrackDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrackDecoder").field("codec", &self.codec).field("held", &self.held.len()).finish_non_exhaustive()
+        f.debug_struct("TrackDecoder")
+            .field("codec", &self.codec)
+            .field("threads", &self.threads)
+            .field("draft", &self.draft)
+            .field("held", &self.held.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -114,12 +131,63 @@ impl TrackDecoder {
     /// allowed, is [`VideoError::Malformed`]. Unsupported codec features are
     /// [`VideoError::Unsupported`].
     pub fn new(params: &CodecParams) -> Result<TrackDecoder, VideoError> {
-        Ok(TrackDecoder { inner: Inner::new(params)?, codec: params.codec, held: Vec::new() })
+        Self::with_options(params, TrackDecoderOptions::default())
+    }
+
+    /// Like [`TrackDecoder::new`], capped at `threads` worker threads (`1` decodes on the calling
+    /// thread; `0` is clamped to `1`) for codecs that decode in parallel.
+    pub fn with_threads(params: &CodecParams, threads: usize) -> Result<TrackDecoder, VideoError> {
+        Self::with_options(params, TrackDecoderOptions { threads: Some(threads), draft: false })
+    }
+
+    /// Like [`TrackDecoder::new`], with explicit threading and draft options.
+    pub fn with_options(params: &CodecParams, options: TrackDecoderOptions) -> Result<TrackDecoder, VideoError> {
+        let threads = options.threads.map(|t| t.max(1));
+        let normalized = TrackDecoderOptions { threads, draft: options.draft };
+        Ok(TrackDecoder { inner: Inner::new(params, normalized)?, codec: params.codec, threads, draft: options.draft, held: Vec::new() })
     }
 
     /// The track's codec, as `params` gave it.
     pub fn codec(&self) -> CodecId {
         self.codec
+    }
+
+    /// The explicit worker-thread cap, or `None` when using the codec's default.
+    pub fn threads(&self) -> Option<usize> {
+        self.threads
+    }
+
+    /// Whether draft mode is enabled (for reduced-resolution playback only; never for export).
+    pub fn draft(&self) -> bool {
+        self.draft
+    }
+
+    /// Toggle draft mode (skipping non-reference loop/deblocking filters on codecs that support
+    /// it). Approximate, for reduced-resolution playback only; never use for export.
+    pub fn set_draft(&mut self, on: bool) {
+        self.draft = on;
+        match &mut self.inner {
+            #[cfg(feature = "h264-decode")]
+            Inner::H264 { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "hevc-decode")]
+            Inner::Hevc { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "vp9-decode")]
+            Inner::Vp9(dec) => dec.set_draft(on),
+            #[cfg(feature = "av1-decode")]
+            Inner::Av1 { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "mpeg2-decode")]
+            Inner::Mpeg2(_) => {}
+            #[cfg(feature = "prores")]
+            Inner::ProRes => {}
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => {}
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => {}
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => {}
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(_) => {}
+        }
     }
 
     /// Decode one packet (an access unit, a VP9 frame or superframe, an AV1 temporal unit) with
@@ -247,7 +315,8 @@ impl TrackDecoder {
             #[cfg(feature = "hevc-decode")]
             Inner::Hevc { dec, config } => {
                 // The HEVC decoder has no reset of its own: a new one starts from nothing.
-                let mut fresh = Box::new(hevc::decode::Decoder::new());
+                let mut fresh = Box::new(self.threads.map_or_else(hevc::decode::Decoder::new, hevc::decode::Decoder::with_threads));
+                fresh.set_draft(self.draft);
                 configure_hevc(&mut fresh, config)?;
                 *dec = fresh;
                 Ok(())
@@ -260,7 +329,8 @@ impl TrackDecoder {
             #[cfg(feature = "av1-decode")]
             Inner::Av1 { dec, config_obus } => {
                 // The AV1 decoder has no reset of its own: a new one starts from nothing.
-                let mut fresh = Box::new(av1::decode::Decoder::new());
+                let mut fresh = Box::new(self.threads.map_or_else(av1::decode::Decoder::new, av1::decode::Decoder::with_threads));
+                fresh.set_draft(self.draft);
                 configure_av1(&mut fresh, config_obus)?;
                 *dec = fresh;
                 Ok(())
@@ -335,35 +405,45 @@ impl TrackDecoder {
 }
 
 impl Inner {
-    fn new(params: &CodecParams) -> Result<Inner, VideoError> {
+    fn new(params: &CodecParams, options: TrackDecoderOptions) -> Result<Inner, VideoError> {
         let codec = params.codec;
         let extradata = &params.extradata;
-        let _ = extradata;
+        let _ = (extradata, options);
         match codec {
             #[cfg(feature = "h264-decode")]
             CodecId::H264 => {
-                let mut dec = Box::new(h264::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(h264::decode::Decoder::new, h264::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_h264(&mut dec, extradata)?;
                 Ok(Inner::H264 { dec, config: extradata.to_vec() })
             }
             #[cfg(feature = "hevc-decode")]
             CodecId::Hevc => {
-                let mut dec = Box::new(hevc::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(hevc::decode::Decoder::new, hevc::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_hevc(&mut dec, extradata)?;
                 Ok(Inner::Hevc { dec, config: extradata.to_vec() })
             }
             #[cfg(feature = "vp9-decode")]
-            CodecId::Vp9 => Ok(Inner::Vp9(Box::default())),
+            CodecId::Vp9 => {
+                let mut dec = Box::new(options.threads.map_or_else(vp9::decode::Decoder::new, vp9::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
+                Ok(Inner::Vp9(dec))
+            }
             #[cfg(feature = "av1-decode")]
             CodecId::Av1 => {
                 let config_obus = av1c_config_obus(extradata)?.to_vec();
-                let mut dec = Box::new(av1::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(av1::decode::Decoder::new, av1::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_av1(&mut dec, &config_obus)?;
                 Ok(Inner::Av1 { dec, config_obus })
             }
             #[cfg(feature = "mpeg2-decode")]
             CodecId::Mpeg2Video => {
                 let mut dec = Box::new(mpeg2::Decoder::new());
+                if let Some(threads) = options.threads {
+                    dec.set_threads(threads > 1);
+                }
                 if !extradata.is_empty() {
                     check_mpeg2_config(extradata)?;
                     dec.decode(extradata, 0)?;

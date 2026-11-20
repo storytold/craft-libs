@@ -1,6 +1,9 @@
-//! Bounded XFDF field values; PDF annotations and form application remain caller-owned.
+//! Bounded XFDF field values and annotation/FDF grammar; PDF annotations and form application remain caller-owned.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+
+pub mod grammar;
+pub use grammar::is_xfdf_comments;
 const MAX_NODES: u32 = 2_000_000;
 const MAX_DEPTH: usize = 64;
 const MAX_XML_DEPTH: usize = 1024;

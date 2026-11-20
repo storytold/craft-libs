@@ -9,10 +9,11 @@ use crate::viewer::{Browser, Catalog, GalleryCommands, GallerySettings, PanelId,
 use craft_behavior::dock::{PanelState, Workspace as Dock};
 use craft_theme::AppSizes;
 use craft_theme_editor::{ThemeSubject, parse_sizes};
-use craft_ui::contract::{Bind, BodyCx, CommandSet as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, CommandSet as _, ShowContainer as _, Tracked};
 use craft_ui::docking::DockConfig;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;
+use craft_ui::runtime::commands::{CommandInput, CommandStates};
 use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
@@ -34,6 +35,9 @@ pub struct Gallery {
     noted: HashSet<String>,
     /// A command changed the viewer since the settings were last compared.
     command_ran: bool,
+    /// The app-scope command states of the front component's stories, and that component: rebuilt only when another
+    /// component comes to the front, so an idle frame keeps one revision.
+    command_states: (Option<&'static str>, Tracked<CommandStates>),
 }
 
 impl Gallery {
@@ -45,7 +49,7 @@ impl Gallery {
     /// The viewer of `catalog` over `persisted`.
     pub fn new(catalog: Catalog, persisted: Persisted) -> Self {
         let viewer = Viewer::new(catalog, persisted.get());
-        Gallery { viewer, persisted, drop_note: None, noted: HashSet::new(), command_ran: false }
+        Gallery { viewer, persisted, drop_note: None, noted: HashSet::new(), command_ran: false, command_states: (None, Tracked::default()) }
     }
 
     /// Shows what the settings and a dropped file have to say, once each, as toasts.
@@ -143,10 +147,14 @@ impl ShellApp for Gallery {
         // App-scope command states are one input per frame, so only the stories of the component shown reach it; the
         // Overview, the Theme dock and a frame with no such tab give none.
         let browser = &self.viewer.browser;
-        let stories = front_component(&self.viewer)
-            .into_iter()
-            .flat_map(|type_name| browser.catalog.stories_of(type_name).iter().map(|&at| &browser.catalog.entries[at].registration.story));
-        FrameInput::new(self.viewer.env.clone()).commands(craft_ui::testing::Story::command_input(stories))
+        let front = front_component(&self.viewer);
+        if front != self.command_states.0 {
+            let stories = front
+                .into_iter()
+                .flat_map(|type_name| browser.catalog.stories_of(type_name).iter().map(|&at| &browser.catalog.entries[at].registration.story));
+            self.command_states = (front, Tracked::new(craft_ui::testing::Story::command_states(stories)));
+        }
+        FrameInput::new(self.viewer.env.clone()).commands(CommandInput::new().states(&self.command_states.1))
     }
 
     fn output(&mut self, output: FrameOutput) {

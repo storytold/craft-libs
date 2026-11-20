@@ -5,5 +5,7 @@
 
 pub mod color;
 pub mod curve;
+pub mod finish;
 pub mod inpaint;
 pub mod lut;
+pub mod tone;
