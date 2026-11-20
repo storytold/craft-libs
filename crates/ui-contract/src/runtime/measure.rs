@@ -52,6 +52,14 @@ struct BodyRuns {
     runs: Vec<(Id, u32)>,
 }
 
+/// The derived values built in a pass, by component id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+pub(crate) struct DerivedBuilds {
+    pass: u64,
+    builds: Vec<(Id, u32)>,
+}
+
 /// How many contributions the measuring runs of a pass made that stand, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -538,6 +546,32 @@ pub(crate) fn count_memo_key_bytes(ctx: &Context, bytes: usize) {
 #[cfg(feature = "testing")]
 pub fn last_pass_memo_key_bytes(ctx: &Context) -> usize {
     last_totals(ctx, |log| log.key_bytes, 0)
+}
+
+/// Counts a build of a derived value of the component `id` in this pass (`runtime::derived`).
+#[cfg(feature = "testing")]
+pub(crate) fn count_derived(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = DerivedBuilds { pass, builds: Vec::new() };
+        }
+        match log.builds.iter_mut().find(|(of, _)| *of == id) {
+            Some((_, count)) => *count += 1,
+            None => log.builds.push((id, 1)),
+        }
+    });
+}
+
+/// The components that built a derived value in the last pass, and how many builds each; empty when that pass built
+/// none.
+#[cfg(feature = "testing")]
+pub fn last_pass_derived_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    pass_state::with::<DerivedBuilds, _>(ctx, |log| if log.pass == last { log.builds.clone() } else { Vec::new() })
 }
 
 /// Counts a text layout handed to egui (`text_layout::layout`, `layout_with`) in this pass.
