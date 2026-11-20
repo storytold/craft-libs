@@ -133,3 +133,64 @@ fn marker_shaped_resource_data_survives() {
     let back = decode(&bytes).unwrap();
     assert_eq!(back.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
 }
+
+/// The split boundary pinned exactly at `PHOTOSHOP_APP13_CHUNK` (2048): a block of exactly
+/// 2048 resource bytes stays in one segment, one byte more splits into a full 2048-byte
+/// segment plus a 1-byte segment; both sizes decode back intact.
+#[test]
+fn app13_split_boundary_is_exactly_2048_resource_bytes() {
+    for (total, segments) in [(2048usize, 1usize), (2049, 2)] {
+        let mut img = synth(9, 7, ChannelLayout::Rgb, SampleType::U8, 5, 0.3);
+        let mut resources = resource(1073, &vec![0x5A; total - 12]);
+        if resources.len() != total {
+            resources.pop(); // `resource` pads an odd body to even; drop the pad for the odd total
+        }
+        assert_eq!(resources.len(), total);
+        img.meta.photoshop_resources = Some(resources.clone());
+        let bytes = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        let payloads = app13_payloads(&bytes);
+        assert_eq!(payloads.len(), segments, "{total} resource bytes");
+        for p in &payloads {
+            assert!(p.starts_with(b"Photoshop 3.0\0"), "{total} resource bytes");
+        }
+        assert_eq!(payloads[0].len(), 14 + total.min(2048), "{total} resource bytes");
+        if segments == 2 {
+            assert_eq!(payloads[1].len(), 14 + 1, "{total} resource bytes");
+        }
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.meta.photoshop_resources.as_deref(), Some(resources.as_slice()), "{total} resource bytes");
+    }
+}
+
+/// The decoder side without our encoder's APP13 code: one resource block spread by hand over
+/// two APP13 segments, each carrying its own identifier, split at an odd offset no chunk of
+/// our encoder would produce. The segments are spliced into an ordinary encoded JPEG whose
+/// image itself carries no resources; `scan_metadata` must still rejoin the block verbatim.
+#[test]
+fn hand_formed_split_app13_segments_decode_back_joined() {
+    let img = synth(9, 7, ChannelLayout::Rgb, SampleType::U8, 5, 0.3);
+    let base = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let resources = [samplers(&[(5, 6)]), resource(1039, &vec![0x21; 400])].concat();
+    let app13 = |part: &[u8]| -> Vec<u8> {
+        let payload = [b"Photoshop 3.0\0".as_slice(), part].concat();
+        let mut s = vec![0xFF, 0xED];
+        s.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        s.extend_from_slice(&payload);
+        s
+    };
+    let split = 137; // odd, and far from the encoder's 2048-byte chunk size
+    let mut i = 2;
+    while (0xE0..=0xEF).contains(&base[i + 1]) {
+        i += 2 + u16::from_be_bytes([base[i + 2], base[i + 3]]) as usize;
+    }
+    let mut bytes = base[..i].to_vec();
+    bytes.extend_from_slice(&app13(&resources[..split]));
+    bytes.extend_from_slice(&app13(&resources[split..]));
+    bytes.extend_from_slice(&base[i..]);
+    let payloads = app13_payloads(&bytes);
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0].len(), 14 + split);
+    assert_eq!(payloads[1].len(), 14 + (resources.len() - split));
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
+}
