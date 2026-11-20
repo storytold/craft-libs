@@ -447,6 +447,16 @@ fn scrolls(fixture: &mut Fixture, view: &Cell<CanvasView>) -> bool {
 }
 
 #[trial]
+fn middle_press_move_and_release_in_one_frame_latches_at_the_press() {
+    let (mut fixture, view, _) = latch_rig();
+    let at = view.get().rect.center();
+    let below = at + Vec2::new(0.0, 80.0);
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![pointer::moved(at), button(at, true), pointer::moved(below), button(below, false)]);
+    assert!(scrolls(&mut fixture, &view), "the pointer remains below the initial anchor");
+}
+
+#[trial]
 fn a_latched_middle_scroll_ends_on_escape_a_second_press_or_the_wheel_and_a_held_press_scrolls_until_its_release() {
     let (mut fixture, view, canvas) = latch_rig();
     let anchor = view.get().rect.center();

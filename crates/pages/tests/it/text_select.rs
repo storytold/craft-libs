@@ -20,6 +20,7 @@ const PAGES: usize = 3;
 /// Lines of fixed-width glyphs at the top of a page.
 struct Grid {
     lines: &'static [&'static str],
+    reverse_cells: bool,
 }
 
 impl Grid {
@@ -45,7 +46,12 @@ impl Grid {
 
     fn box_of(&self, glyph: usize) -> Option<Rect> {
         let (line, range) = self.line_of(glyph)?;
-        let column = (glyph - range.start) as f64;
+        let column = glyph - range.start;
+        let column = if self.reverse_cells && line == 0 {
+            if column < 3 { column + 4 } else if column >= 4 { column - 4 } else { column }
+        } else {
+            column
+        } as f64;
         Some(Rect::new(column * GLYPH_WIDTH, line as f64 * LINE_HEIGHT, (column + 1.0) * GLYPH_WIDTH, (line + 1) as f64 * LINE_HEIGHT))
     }
 
@@ -64,6 +70,9 @@ impl PageTextSource for Grid {
     }
 
     fn glyph_at(&self, p: Point) -> Option<usize> {
+        if self.reverse_cells {
+            return self.glyph_box_at(p);
+        }
         if p.y < 0.0 {
             return None;
         }
@@ -116,6 +125,10 @@ impl PageTextSource for Grid {
     fn column_text(&self, glyphs: &[usize]) -> String {
         self.rows(|glyph| glyphs.contains(&glyph))
     }
+
+    fn rows_between(&self, anchor: usize, head: usize, _: f64) -> Option<Vec<usize>> {
+        self.reverse_cells.then(|| (anchor.min(head)..=anchor.max(head)).collect())
+    }
 }
 
 /// The document's pages, `None` where the text is not read yet.
@@ -130,9 +143,9 @@ impl PageTexts for Doc {
 /// Three pages of text; the middle one unread unless `middle_read`.
 fn doc(middle_read: bool) -> Rc<Doc> {
     Rc::new(Doc(vec![
-        Some(Grid { lines: &["one two three", "four five six"] }),
-        middle_read.then_some(Grid { lines: &["seven eight", "nine ten"] }),
-        Some(Grid { lines: &["eleven twelve", "thirteen"] }),
+        Some(Grid { lines: &["one two three", "four five six"], reverse_cells: false }),
+        middle_read.then_some(Grid { lines: &["seven eight", "nine ten"], reverse_cells: false }),
+        Some(Grid { lines: &["eleven twelve", "thirteen"], reverse_cells: false }),
     ]))
 }
 
@@ -327,4 +340,36 @@ fn click_units_and_their_drags_and_shift_click_extend_a_run() {
     rig.fixture.hold(Modifiers::NONE);
     assert_eq!(rig.selection().pages(), 0..=0);
     assert_eq!(text(&rig), "ne two three\nfour f");
+}
+
+#[trial]
+fn same_page_drag_keeps_its_visual_endpoint() {
+    let doc = doc(true);
+    let mut rig = Rig::new(doc);
+    rig.drag(rig.at(0, 0, 1), rig.at(0, 0, 8));
+    assert!(matches!(rig.selection().span, TextSpan::Run { end_x: Some(_), .. }));
+}
+
+#[trial]
+fn same_page_word_drag_keeps_the_visual_endpoint_and_both_words() {
+    let mut rig = Rig::new(doc(true));
+    rig.click_drag(rig.at(0, 0, 1), 2, rig.at(0, 0, 9));
+    assert!(matches!(rig.selection().span, TextSpan::Run { anchor: 0, head: 12, end_x: Some(_), .. }));
+}
+
+#[trial]
+fn a_word_drag_follows_visual_cell_order_when_reading_order_is_reversed() {
+    let doc = Rc::new(Doc(vec![Some(Grid { lines: &["one two"], reverse_cells: true }), None, None]));
+    let mut rig = Rig::new(doc);
+    rig.click_drag(rig.at(0, 0, 1), 2, rig.at(0, 0, 5));
+    assert!(matches!(rig.selection().span, TextSpan::Run { anchor: 4, head: 2, end_x: Some(_), .. }));
+}
+
+#[trial]
+fn shift_click_after_a_column_clears_the_selection() {
+    let mut rig = Rig::new(doc(true));
+    rig.shown.borrow_mut().state.selection = Some(TextSelection::new(0, TextSpan::column(Point::new(0.0, 0.0), Point::new(30.0, 20.0))));
+    rig.fixture.hold(Modifiers::SHIFT);
+    rig.click(rig.at(0, 0, 5));
+    assert!(rig.shown.borrow().state.selection.is_none());
 }

@@ -67,7 +67,7 @@ struct Host {
     discarded: usize,
     picked: Option<BoxPart>,
     hovered: Option<BoxPart>,
-    clicks: Vec<Point>,
+    clicks: Vec<(BoxPart, Point)>,
     id: egui::Id,
     view: CanvasView,
     guide_events: usize,
@@ -910,11 +910,11 @@ fn inside_click_reports_press_point_but_drag_does_not() {
     frame(&mut h, vec![pointer::moved(inside)]);
     frame(&mut h, vec![pointer::press(inside)]);
     frame(&mut h, vec![pointer::release(inside)]);
-    assert_eq!(h.host.borrow().clicks, vec![point]);
+    assert_eq!(h.host.borrow().clicks, vec![(BoxPart::Inside, point)]);
     frame(&mut h, vec![pointer::press(inside)]);
     frame(&mut h, vec![pointer::moved(inside + by(40.0, 0.0))]);
     frame(&mut h, vec![pointer::release(inside + by(40.0, 0.0))]);
-    assert_eq!(h.host.borrow().clicks, vec![point], "a drag reports no click");
+    assert_eq!(h.host.borrow().clicks, vec![(BoxPart::Inside, point)], "a drag reports no click");
     let mut jitter = upright();
     let at = jitter.screen(point);
     let slop = craft_ui::testing::input::slop(jitter.fixture.ctx());
@@ -922,7 +922,24 @@ fn inside_click_reports_press_point_but_drag_does_not() {
     frame(&mut jitter, vec![pointer::press(at)]);
     frame(&mut jitter, vec![pointer::moved(at + by(slop / 3.0, 0.0))]);
     frame(&mut jitter, vec![pointer::release(at + by(slop / 3.0, 0.0))]);
-    assert_eq!(jitter.host.borrow().clicks, vec![point], "a release within slop reports the press point");
+    assert_eq!(jitter.host.borrow().clicks, vec![(BoxPart::Inside, point)], "a release within slop reports the press point");
+}
+
+#[trial]
+fn a_grip_click_reports_its_press_point() {
+    let mut h = upright();
+    let point = Point::new(RECT.x0, RECT.y0);
+    let at = h.screen(point);
+    frame(&mut h, vec![pointer::moved(at)]);
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, vec![pointer::release(at)]);
+    assert_eq!(h.host.borrow().clicks, vec![(BoxPart::Corner(0), point)]);
+    let edge = Point::new((RECT.x0 + RECT.x1) / 2.0, RECT.y0);
+    let at = h.screen(edge);
+    frame(&mut h, vec![pointer::moved(at)]);
+    frame(&mut h, vec![pointer::press(at)]);
+    frame(&mut h, vec![pointer::release(at)]);
+    assert_eq!(h.host.borrow().clicks, vec![(BoxPart::Corner(0), point), (BoxPart::Edge(0), edge)]);
 }
 
 // A double click inside whose presses wobble within the slop and come back applies the box as it was: the wobble the

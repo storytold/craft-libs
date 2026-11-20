@@ -5,7 +5,7 @@ use craft_behavior::{GESTURE_GAP, kurbo};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{GoTo, PageBody, PagePreview, PageRevision, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
-use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer, WheelScheme};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 
@@ -51,6 +51,112 @@ impl PageSource for RevisionPages {
     fn page_revision(&self, _: usize) -> Option<PageRevision> {
         Some(PageRevision { document: 0, page: self.revision.get() })
     }
+}
+
+struct UnequalPages(DemoPages);
+struct SmallPages(DemoPages);
+
+impl ThumbSource<usize> for UnequalPages {
+    fn revision(&self, key: &usize, request: &ThumbRequest) -> Revision {
+        self.0.revision(key, request)
+    }
+
+    fn render(&self, key: &usize, request: &ThumbRequest) -> ThumbRender {
+        self.0.render(key, request)
+    }
+}
+
+impl PageSource for UnequalPages {
+    fn page_count(&self) -> usize {
+        2
+    }
+
+    fn page_size(&self, page: usize) -> kurbo::Size {
+        if page == 0 { kurbo::Size::new(3000.0, 792.0) } else { kurbo::Size::new(300.0, 792.0) }
+    }
+}
+
+impl ThumbSource<usize> for SmallPages {
+    fn revision(&self, key: &usize, request: &ThumbRequest) -> Revision {
+        self.0.revision(key, request)
+    }
+    fn render(&self, key: &usize, request: &ThumbRequest) -> ThumbRender {
+        self.0.render(key, request)
+    }
+}
+
+impl PageSource for SmallPages {
+    fn page_count(&self) -> usize {
+        self.0.page_count()
+    }
+    fn page_size(&self, _: usize) -> kurbo::Size {
+        kurbo::Size::new(200.0, 300.0)
+    }
+}
+
+#[trial]
+fn go_to_a_narrow_page_brings_it_back_into_horizontal_view() {
+    let Rig { mut fixture, state, out, .. } = rig_over(
+        UnequalPages(DemoPages::new(2)),
+        state_with(|s| { s.fit = Fit::None; s.zoom = 1.0; }),
+        NavigationOptions::default(),
+        true,
+    );
+    state.borrow_mut().offset.0 = 0.0;
+    fixture.idle(3);
+    state.borrow_mut().go_to(1);
+    fixture.idle(3);
+    let out = out.borrow();
+    let page = out.rects[1];
+    assert!(page.x1 > out.offset.0 && page.x0 < out.offset.0 + f64::from(out.view.width()), "target page must be visible horizontally");
+}
+
+#[trial]
+fn wheel_zoom_keeps_a_point_on_a_wide_page_under_the_pointer() {
+    for zoom in [1.0, 2.0, 4.0] {
+        for fraction in [0.1, 0.5, 0.9] {
+            let mut navigation = NavigationOptions::default();
+            navigation.wheel = WheelScheme::Acrobat;
+            let start = state_with(|s| { s.fit = Fit::None; s.zoom = zoom; });
+            let Rig { mut fixture, state, out, .. } = rig_over(SmallPages(DemoPages::new(20)), start, navigation, true);
+            let pointer = {
+                let out = out.borrow();
+                let visible = out.pages[0].rect.intersect(out.view).shrink(15.0);
+                visible.min + visible.size() * fraction
+            };
+            let (before, wide) = {
+                let out = out.borrow();
+                (out.on_page(0, out.under(pointer)), out.pages[0].rect.width() > out.view.width())
+            };
+            let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+            fixture.frame(vec![egui::Event::ModifiersChanged(mods), egui::Event::PointerMoved(pointer), egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, 20.0),
+                modifiers: mods,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+            }]);
+            fixture.settle();
+            assert!(state.borrow().zoom > zoom, "the wheel zoomed");
+            let out = out.borrow();
+            let (now, under) = (out.point(0, before), out.under(pointer));
+            assert!((!wide || (now.x - under.x).abs() < 2.0) && (now.y - under.y).abs() < 2.0, "zoom {zoom} at {fraction} moved the point: {now:?} vs {under:?}");
+        }
+    }
+}
+
+#[trial]
+fn page_view_one_frame_middle_click_scrolls_from_the_press_position() {
+    let mut navigation = NavigationOptions::default();
+    navigation.middle_button = craft_behavior::MiddleButton::AutoScroll;
+    let Rig { mut fixture, state, out, .. } = rig_over(SmallPages(DemoPages::new(20)), PageViewState::default(), navigation, true);
+    let at = out.borrow().view.center();
+    let below = at + vec2(0.0, 60.0);
+    let before = state.borrow().offset.1;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Middle, pressed, modifiers: Modifiers::NONE };
+    fixture.frame(vec![egui::Event::PointerMoved(at), button(at, true), egui::Event::PointerMoved(below), button(below, false)]);
+    fixture.idle(8);
+    assert!(state.borrow().offset.1 > before, "the view scrolls from the original middle press");
 }
 
 #[trial]

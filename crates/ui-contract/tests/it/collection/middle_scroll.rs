@@ -80,6 +80,40 @@ fn middle_click(frames: &mut Frames, at: Pos2, show: &mut impl FnMut(&mut Ui)) {
     frames.frame(vec![pointer::middle(at, false)], &mut *show);
 }
 
+#[trial]
+fn one_frame_middle_click_latches_at_the_press_and_the_stopping_click_does_not_pick() {
+    let rig = Rig::new(MiddleButton::AutoScroll);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| rig.show(ui);
+    frames.idle(2, &mut show);
+    let at = rig.rect.get().center();
+    let below = at + Vec2::new(0.0, PULL);
+    frames.frame(vec![pointer::moved(at), pointer::middle(at, true), pointer::moved(below), pointer::middle(below, false)], &mut show);
+    let before = rig.offset();
+    frames.idle(10, &mut show);
+    assert!(rig.offset() > before + SAME, "the latch uses the press point");
+    let picks = rig.row_presses();
+    frames.frame(vec![pointer::press(below)], &mut show);
+    frames.frame(vec![pointer::release(below)], &mut show);
+    frames.idle(3, &mut show);
+    assert_eq!(rig.row_presses(), picks, "the click ending the latch does not select a row");
+}
+
+#[trial]
+fn a_latch_does_not_resume_when_the_pointer_leaves_and_returns() {
+    let rig = Rig::new(MiddleButton::AutoScroll);
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| rig.show(ui);
+    frames.idle(2, &mut show);
+    let at = rig.rect.get().center();
+    middle_click(&mut frames, at, &mut show);
+    frames.frame(vec![egui::Event::PointerGone], &mut show);
+    frames.frame(vec![pointer::moved(at + Vec2::new(0.0, PULL))], &mut show);
+    let before = rig.offset();
+    frames.idle(5, &mut show);
+    assert!((rig.offset() - before).abs() < SAME, "the latch stays ended after the pointer returns");
+}
+
 /// Under `AutoScroll` a middle click on the rows latches: the pointer held below the latch scrolls the rows toward the
 /// end, once per frame however many passes the frame runs, no row is picked, and a second middle click ends it. Under
 /// the default `Pan` the same events scroll nothing and the press picks its row as any press does. Guards the items

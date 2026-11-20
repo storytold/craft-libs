@@ -272,7 +272,7 @@ pub enum ApplyBy {
 #[derive(Clone, Debug, Default)]
 struct Report {
     apply: Option<ApplyBy>,
-    clicked: Option<Point>,
+    clicked: Option<(BoxPart, Point)>,
     discard: bool,
     hovered: Option<BoxPart>,
     picked: Option<BoxPart>,
@@ -736,8 +736,8 @@ impl<'a> TransformBox<'a> {
                         self.report.apply = Some(ApplyBy::DoubleClick);
                     }
                     let Some(grip) = held.take() else { continue };
-                    if click && grip.part == BoxPart::Inside && !grip.moves_pivot && self.move_only().is_none() {
-                        self.report.clicked = Some(grip.from);
+                    if click && start.button == PointerButton::Primary && grip.part != BoxPart::Outside && !grip.moves_pivot && self.move_only().is_none() {
+                        self.report.clicked = Some((grip.part, grip.from));
                     }
                     if grip.began && click && grip.last == grip.pressed {
                         // A click that ended where it began moved nothing: no step.
@@ -1185,8 +1185,8 @@ impl Component for TransformBox<'_> {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct TransformBoxOutput {
-    /// The press point in document units of a primary click inside the box, including a release within click slop.
-    pub clicked: Option<Point>,
+    /// The part and press point in document units of a primary click on the box or a grip, including a release within click slop.
+    pub clicked: Option<(BoxPart, Point)>,
     /// A drag (`Begin` on the first move, `Update`, `Commit` on the release; Escape cancels it) or an arrow key's
     /// `Set`.
     pub edit: EditResponse<BoxState>,

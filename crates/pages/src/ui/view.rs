@@ -1019,7 +1019,16 @@ fn go_to_offset(go_to: GoTo, geo: &Placed, continuous: bool, want: (f64, f64), (
         GoTo::Top { fraction, .. } => {
             let (top, bottom) = geo.layout.bands[page];
             let y = if continuous || fraction > 0.0 { r.y0 + top + fraction * (bottom - top) - spacing.margin } else { geo.doc.y0 };
-            or_want(want.0, y)
+            let x = if r.width() + 2.0 * spacing.side <= vw {
+                want.0.clamp(r.x1 - vw + spacing.side, r.x0 - spacing.side)
+            } else if r.x1 <= want.0 {
+                r.x1 - vw + spacing.side
+            } else if r.x0 >= want.0 + vw {
+                r.x0 - spacing.side
+            } else {
+                want.0
+            };
+            or_want(x, y)
         }
         GoTo::Point { at, view, .. } => {
             let p = on_page(at);

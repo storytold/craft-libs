@@ -548,6 +548,10 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
 /// the factor turns negative and the box flips. Each scaled side keeps at least `min_side`
 /// ([`scale_floor`]). `None` for a collapsed box.
 fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64, larger_axis: bool) -> Option<BoxState> {
+    let p = match g.part {
+        BoxPart::Corner(i) => g.quad0[usize::from(i) % 4] + (p - g.start),
+        _ => p,
+    };
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);

@@ -42,8 +42,8 @@ pub trait PageTextSource {
     fn text_of(&self, glyphs: Range<usize>) -> String;
     /// The text of a column selection, one line per row.
     fn column_text(&self, glyphs: &[usize]) -> String;
-    /// The rows of the page between glyphs `anchor` and `head`, when a drag released at `end_x` ends on a row past
-    /// its last glyph; `None` when the page does not say.
+    /// The rows of the page between glyphs `anchor` and `head`, for a drag released at `end_x`; `None` when the
+    /// page uses reading order or does not supply visual rows.
     fn rows_between(&self, anchor: usize, head: usize, end_x: f64) -> Option<Vec<usize>> {
         let _ = (anchor, head, end_x);
         None
@@ -63,7 +63,7 @@ pub enum TextSpan {
         head: usize,
         /// The page of the glyph the drag has reached; the selection's page is where it started.
         head_page: usize,
-        /// Where on its line the drag was released, in page points, when it ended past the line's last glyph.
+        /// Where on its line a same-page drag was released, in page points.
         end_x: Option<f64>,
     },
     /// The glyphs inside a rectangle (page points), drawn from the corner the drag started at.
@@ -152,7 +152,7 @@ impl TextSelection {
         }
     }
 
-    /// The glyphs a one-page run released past its row's last glyph selects by rows, when the page says so.
+    /// The glyphs a one-page run selects by rows, when the page says so.
     fn rows_on(&self, page: usize, text: &dyn PageTextSource) -> Option<Vec<usize>> {
         let TextSpan::Run { anchor, head, end_x: Some(end_x), .. } = self.span else { return None };
         let ((first, _), (last, _)) = self.reading_order()?;
@@ -256,6 +256,7 @@ pub struct TextSelectState {
     /// The press's click count, and the selection from before the gesture (Esc brings it back).
     clicks: u32,
     before: Option<TextSelection>,
+    dragged: bool,
 }
 
 /// The colours and radii of the selection and the find marks.
@@ -372,12 +373,13 @@ impl<'a> TextSelectTool<'a> {
         self.state.gesture = None;
         self.state.clicks = 0;
         self.state.before = None;
+        self.state.dragged = false;
     }
 
     /// The run a 2-, 3- or 4-click drag selects from the unit pressed (around glyph `origin` on `page`) to glyph `hit`
     /// on `head_page`: whole units both ways in `(page, glyph)` order; the four-click page unit stays on its page.
     /// `None` for a single-click drag, or when the pressed glyph has no unit.
-    fn unit_run(&self, page: usize, origin: usize, head_page: usize, hit: usize) -> Option<TextSpan> {
+    fn unit_run(&self, page: usize, origin: usize, head_page: usize, hit: usize, end_x: f64) -> Option<TextSpan> {
         let clicks = self.state.clicks;
         if clicks < 2 {
             return None;
@@ -392,18 +394,41 @@ impl<'a> TextSelectTool<'a> {
             .and_then(|text| click_unit(text, clicks, hit))
             .filter(|unit| !unit.is_empty())
             .unwrap_or(hit..hit.saturating_add(1));
-        Some(if (head_page, reached.start) < (page, unit.start) {
+        if head_page == page && end_x.is_finite() {
+            let text = self.texts.page(page)?;
+            let outer = |range: &Range<usize>| {
+                let first = range.start;
+                let last = range.end - 1;
+                let a = text.line_rects(first..first.saturating_add(1)).into_iter().next()?;
+                let b = text.line_rects(last..last.saturating_add(1)).into_iter().next()?;
+                Some(if a.center().x <= b.center().x { ((first, a), (last, b)) } else { ((last, b), (first, a)) })
+            };
+            if let (Some((left, right)), Some((to_left, to_right))) = (outer(&unit), outer(&reached)) {
+                let dy = to_left.1.center().y - left.1.center().y;
+                let later = if dy.abs() > left.1.height().min(to_left.1.height()) / 2.0 { dy > 0.0 } else { to_left.1.center().x >= left.1.center().x };
+                let (anchor, head) = if later { (left.0, to_right.0) } else { (right.0, to_left.0) };
+                if text.rows_between(anchor, head, end_x).is_some() {
+                    return Some(TextSpan::Run { anchor, head, head_page, end_x: Some(end_x) });
+                }
+            }
+        }
+        let span = if (head_page, reached.start) < (page, unit.start) {
             TextSpan::run(unit.end - 1, head_page, reached.start)
         } else if head_page == page {
             TextSpan::run(unit.start, page, (reached.end - 1).max(unit.end - 1))
         } else {
             TextSpan::run(unit.start, head_page, reached.end - 1)
+        };
+        Some(match span {
+            TextSpan::Run { anchor, head, head_page, .. } if head_page == page && end_x.is_finite() => {
+                TextSpan::Run { anchor, head, head_page, end_x: Some(end_x) }
+            }
+            _ => span,
         })
     }
 
-    /// Where a single-click drag that stayed on its page was released, in page points, when no glyph's box holds the
-    /// release point: the end [`PageTextSource::rows_between`] reads. `None` for a click (the head never left the
-    /// pressed glyph), a unit drag, a column and a run across pages.
+    /// Where a single-click drag that stayed on its page was released, in page points: the end
+    /// [`PageTextSource::rows_between`] reads. `None` for a click, a unit drag, a column and a run across pages.
     fn released_past_row(&self, pointer: &ToolPointer) -> Option<f64> {
         let (page, TextSpan::Run { head: pressed, head_page: pressed_page, .. }) = self.state.gesture? else { return None };
         let ((selected, _), head) = self.state.selection?.run_ends()?;
@@ -412,7 +437,7 @@ impl<'a> TextSelectTool<'a> {
         }
         let placed = self.page_at(pointer.pos).filter(|placed| placed.page == page)?;
         let at = placed.to_page(pointer.pos);
-        self.texts.page(page)?.glyph_box_at(at).is_none().then_some(at.x)
+        at.x.is_finite().then_some(at.x)
     }
 }
 
@@ -442,6 +467,7 @@ impl CanvasTool for TextSelectTool<'_> {
         };
         let (page, at) = (placed.page, placed.to_page(pointer.pos));
         let before = self.state.selection;
+        self.state.dragged = false;
         if self.column || pointer.mods.alt {
             self.state.gesture = Some((page, TextSpan::column(at, at)));
             self.state.clicks = 1;
@@ -483,6 +509,7 @@ impl CanvasTool for TextSelectTool<'_> {
     }
 
     fn drag(&mut self, pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {
+        self.state.dragged = true;
         let (pages, texts) = (self.pages, self.texts);
         let Some((page, start)) = self.state.gesture else { return };
         let Some(selection) = self.state.selection.filter(|selection| selection.page == page) else { return };
@@ -495,8 +522,9 @@ impl CanvasTool for TextSelectTool<'_> {
                 // The head follows the pointer onto whichever page it is over; off every page, or over a page whose
                 // text is not read yet, the selection keeps its last value.
                 let Some(placed) = self.page_at(pointer.pos) else { return };
-                let Some(hit) = texts.page(placed.page).and_then(|text| text.glyph_at(placed.to_page(pointer.pos))) else { return };
-                self.unit_run(page, origin, placed.page, hit).unwrap_or(TextSpan::run(anchor, placed.page, hit))
+                let at = placed.to_page(pointer.pos);
+                let Some(hit) = texts.page(placed.page).and_then(|text| text.glyph_at(at)) else { return };
+                self.unit_run(page, origin, placed.page, hit, at.x).unwrap_or(TextSpan::run(anchor, placed.page, hit))
             }
             _ => return,
         };
@@ -504,7 +532,19 @@ impl CanvasTool for TextSelectTool<'_> {
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        self.drag(pointer, cx);
+        let dragged = self.state.dragged;
+        if dragged {
+            self.drag(pointer, cx);
+        }
+        let column_click = pointer.mods.shift
+            && !dragged
+            && self.state.before.is_some_and(|selection| matches!(selection.span, TextSpan::Column { .. }))
+            && self.state.clicks == 1;
+        if column_click {
+            self.set(None);
+            self.end_gesture();
+            return;
+        }
         let end_x = self.released_past_row(pointer);
         let selection = self.state.selection;
         match selection {

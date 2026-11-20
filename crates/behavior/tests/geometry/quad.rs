@@ -13,6 +13,18 @@ fn session() -> BoxState {
     BoxState::from_rect(Rect::new(0.0, 0.0, 100.0, 50.0))
 }
 
+#[test]
+fn corner_drag_preserves_the_offset_of_the_press() {
+    let start = session();
+    let press = p(96.0, 47.0);
+    let rules = BoxRules::default();
+    let back = drag(&start, &start, BoxPart::Corner(2), press, press, Mods::default(), &rules);
+    assert_eq!(back, start, "returning to the press must restore the box");
+    let moved = drag(&start, &start, BoxPart::Corner(2), press, press + Vec2::new(20.0, 10.0), Mods::SHIFT, &rules);
+    assert!(near(moved.quad[2], start.quad[2] + Vec2::new(20.0, 10.0)), "the corner follows the movement, keeping the press offset");
+    assert!(near(moved.quad[0], start.quad[0]), "the opposite corner stays fixed");
+}
+
 fn dragged(from: Point, to: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     let start = session();
     drag(&start, &start, start.part_at(from, 8.0), from, to, mods, rules)

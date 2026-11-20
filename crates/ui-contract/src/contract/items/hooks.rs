@@ -383,9 +383,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 }
             }
         }
-        if self.scrolls {
-            self.middle_scroll(comp, cx);
-        }
+        let swallowed = self.scrolls && self.middle_scroll(comp, cx);
         self.offset = self.offset.clamp(0.0, self.max_offset(view));
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
@@ -411,16 +409,18 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let at = Placement { rect, offset, rtl };
         // A press lands on the rows the user saw: the offset of the last pass, before this pass's wheel share (8.3).
         let seen = Placement { offset: ScrollPos { x: self.offset_x_at_read, y: self.offset_at_read }, ..at };
-        self.edge_step(cx);
-        self.press_step(comp, cx, &props, &layout, seen);
+        if !swallowed {
+            self.edge_step(cx);
+            self.press_step(comp, cx, &props, &layout, seen);
+            if props.select_under_drag {
+                self.drag_select(comp, cx, &layout, seen);
+            }
+            self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
+            self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
+        }
         if props.lead_follows_hover {
             self.hover_lead(comp, cx, &layout, seen);
         }
-        if props.select_under_drag {
-            self.drag_select(comp, cx, &layout, seen);
-        }
-        self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
-        self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
         let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&cx.core.ctx);
         for (mv, mods) in crate::contract::steps::scroll_moves(&cx.core.ctx, cx.core.id, quiet) {
             cx.core.intents.push(craft_behavior::Intent::Move(mv, mods));
@@ -973,14 +973,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// presses, releases, keys or wheel (`runtime/pointer.rs`, `PointerFrame`) and its elapsed time is 0
     /// (`frame::facts`), so it steps no time and counts no held pass: the offset moves once per frame. The latch, the
     /// gesture state of one press, lives in the collection's session memory beside `Drags`.
-    fn middle_scroll(&mut self, comp: &C, cx: &mut Cx<'_, C>) {
+    fn middle_scroll(&mut self, comp: &C, cx: &mut Cx<'_, C>) -> bool {
         let props = comp.items();
         if props.middle_button != MiddleButton::AutoScroll {
-            return;
+            return false;
         }
         let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
         if cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx) {
-            return;
+            return false;
         }
         let frame = crate::runtime::pointer::frame(&ctx);
         let own_press = match cx.core.press.phase {
@@ -991,23 +991,26 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         // as a mode does (`keys::capture`), whichever component has focus.
         let escape = Chord::plain(craft_keymap::Key::Escape);
         let escaped = keys::take_claimed(&ctx, id, escape);
-        let blurred = crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost);
+        let blurred = crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| {
+            pointer.focus_lost || pointer.events.iter().any(|event| matches!(event, craft_behavior::PointerEvent::Gone))
+        });
         let wheeled = frame.scroll != Vec2::ZERO || frame.zoom != 1.0;
         let scroll = cx.core.memory.session::<MiddleScroll>(sub(id, "middle"));
+        let swallowed = scroll.swallows(cx.core.press.phase);
         if scroll.active() && (escaped || blurred || wheeled) {
             scroll.cancel();
-        } else if scroll.active() {
+        } else if scroll.active() && !swallowed {
             if let Some(press) = frame.press.filter(|press| press.button == PointerButton::Middle) {
                 scroll.press(press.origin, own_press.is_some());
             }
-        } else if let Some(at) = own_press {
+        } else if !swallowed && let Some(at) = own_press {
             scroll.press(at, true);
         }
         if scroll.active() && frame.release == Some(PointerButton::Middle) {
             scroll.release();
         }
         if !scroll.active() {
-            return;
+            return swallowed;
         }
         let dt = crate::runtime::frame::facts(&ctx).elapsed.clamp(0.0, 0.1);
         let held = frame.buttons.contains(Buttons::MIDDLE);
@@ -1016,6 +1019,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         self.offset -= f64::from(by.y);
         keys::capture(&ctx, id, escape);
         crate::runtime::egui::repaint::request(&ctx);
+        swallowed
     }
 }
 
