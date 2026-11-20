@@ -228,7 +228,7 @@ fn at_level(ui: &mut Ui, level: GroupLevel, show: fn(&mut Ui) -> Response) -> Re
         |overrides| {
             overrides.values.set(level);
         },
-        |ui| show(ui),
+        show,
     )
 }
 
@@ -268,7 +268,8 @@ fn shown(name: &str, show: fn(&mut Ui) -> Response, compact: bool) -> Shown {
 
 #[trial]
 fn an_inline_button_drops_its_label_under_a_compact_group_and_names_itself_by_tooltip() {
-    let cases: [(&str, fn(&mut Ui) -> Response); 2] = [("Save", save), ("Trace", trace)];
+    type Case<'a> = (&'a str, fn(&mut Ui) -> Response);
+    let cases: [Case; 2] = [("Save", save), ("Trace", trace)];
     for (name, show) in cases {
         let full = shown(name, show, false);
         let compact = shown(name, show, true);

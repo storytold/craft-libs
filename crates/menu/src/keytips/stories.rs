@@ -71,7 +71,7 @@ fn shown(ui: &mut Ui, size: ControlSize, letters: [Option<&'static str>; 5]) -> 
     let controls: Vec<KeytipControl<'static>> = CONTROLS
         .iter()
         .zip(letters)
-        .map(|((command, label), letters)| KeytipControl { command: CommandRef::from(*command), label: *label, letters })
+        .map(|((command, label), letters)| KeytipControl { command: CommandRef::from(*command), label, letters })
         .collect();
     let output = Keytips::new(true).tabs(&tabs).controls(&controls).places(&places).show(ui);
     output.response.into()

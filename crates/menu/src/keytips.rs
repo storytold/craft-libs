@@ -323,7 +323,7 @@ impl<'a> Keytips<'a> {
                 .elements
                 .iter()
                 .enumerate()
-                .find(|(index, element)| element.rect.is_positive() && !taken.contains(&(region, *index)) && matches(*element))
+                .find(|(index, element)| element.rect.is_positive() && !taken.contains(&(region, *index)) && matches(element))
                 .map(|(index, _)| (region, index))
         })
     }

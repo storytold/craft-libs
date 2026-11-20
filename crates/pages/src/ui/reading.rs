@@ -480,14 +480,12 @@ impl<'a> ReadingNav<'a> {
     }
 
     /// Shows the "n / m" position between the buttons.
-    #[must_use]
     pub fn position(mut self, shown: bool) -> Self {
         self.position = shown;
         self
     }
 
     /// Adds one trailing button named `label`, reported as [`ReadingNavOutput::action`].
-    #[must_use]
     pub fn action(mut self, label: impl Into<craft_ui::runtime::env::Label>) -> Self {
         self.action = Some(label.into());
         self

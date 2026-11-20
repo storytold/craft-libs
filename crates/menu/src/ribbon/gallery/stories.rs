@@ -16,6 +16,8 @@ use egui::Ui;
 use super::{Gallery, GalleryFace, GalleryItem, GalleryMore};
 use crate::ribbon::GroupLevel;
 
+type Paint = Box<dyn Fn(&craft_ui::primitives::ContentPainterCx, egui::Rect)>;
+
 /// How many tiles every story's gallery holds: more than a row at either level.
 const COUNT: usize = 10;
 
@@ -95,7 +97,7 @@ fn gallery_compact(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         |set| {
             set.values.set(GroupLevel::Compact);
         },
-        |ui| pictured(ui),
+        pictured,
     )
 }
 
@@ -128,12 +130,12 @@ fn gallery_more_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(Gallery<'static, usize>, covers = [], drive = Drive::Never)]
 fn gallery_painted(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     // Glyph tiles: a disc in the content painter's ink whose size grows with the tile's place.
-    let paints: Vec<Box<dyn Fn(&craft_ui::primitives::ContentPainterCx, egui::Rect)>> = (0..COUNT)
+    let paints: Vec<Paint> = (0..COUNT)
         .map(|at| {
             Box::new(move |cx: &craft_ui::primitives::ContentPainterCx, rect: egui::Rect| {
                 let radius = rect.size().min_elem() * (at as f32 + 3.0) / (2.0 * COUNT as f32);
                 cx.data_shapes([egui::Shape::circle_filled(rect.center(), radius, cx.ink())]);
-            }) as Box<dyn Fn(&craft_ui::primitives::ContentPainterCx, egui::Rect)>
+            }) as Paint
         })
         .collect();
     let items: Vec<GalleryItem<'_, usize>> =

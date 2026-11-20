@@ -46,21 +46,18 @@ impl<'a> RecentList<'a> {
     }
 
     /// At most this many recent files show.
-    #[must_use]
     pub fn max_recent(mut self, max_recent: usize) -> Self {
         self.max_recent = max_recent;
         self
     }
 
     /// The text shown when there are no recent files.
-    #[must_use]
     pub fn empty(mut self, empty: impl Into<Label>) -> Self {
         self.empty = Some(empty.into());
         self
     }
 
     /// The time the age lines count from, in seconds since the Unix epoch. Without it the rows show no age.
-    #[must_use]
     pub fn now(mut self, now: Option<i64>) -> Self {
         self.now = now;
         self

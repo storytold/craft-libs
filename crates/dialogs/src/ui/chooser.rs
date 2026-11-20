@@ -398,7 +398,7 @@ impl FileChooser {
             PickKind::Save => (words.save_title.clone(), words.save.clone()),
             PickKind::Folder => (words.folder_title.clone(), words.choose.clone()),
         };
-        let title = self.request.title.clone().map_or_else(|| title.into(), craft_ui::runtime::env::Label::from);
+        let title = self.request.title.clone().map_or_else(|| title, craft_ui::runtime::env::Label::from);
         let mut types: Vec<Choice<usize>> =
             self.request.filters.iter().enumerate().map(|(at, filter)| Choice::new(at, filter.name.clone())).collect();
         types.push(Choice::new(self.request.filters.len(), words.all_files.clone()));
@@ -517,7 +517,7 @@ impl FileChooser {
             return None;
         }
         if let Some(path) = seen.activated {
-            let Some(entry) = rows.iter().find(|entry| entry.path == path).cloned() else { return None };
+            let entry = rows.iter().find(|entry| entry.path == path).cloned()?;
             if entry.folder {
                 self.navigate(entry.path);
                 return None;

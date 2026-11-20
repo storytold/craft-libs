@@ -166,7 +166,7 @@ impl<'a> CommandPalette<'a> {
         let env = Env::of(ui);
         let words = env.words::<PanelWords>();
         let list_id = ui.scope_id().with("palette-rows");
-        let hint: Label = placeholder.unwrap_or_else(|| Label::from(words.palette_placeholder.clone()));
+        let hint: Label = placeholder.unwrap_or_else(|| words.palette_placeholder.clone());
         let mut chosen = Chosen::default();
         let shown = Popover::new(label.clone(), open)
             .collection_body()
@@ -218,7 +218,7 @@ impl<'a> CommandPalette<'a> {
         let scope = ui.scope_id();
         let list_id = scope.with("palette-rows");
         let field_id = scope.with("palette-field");
-        let face_hint: Label = placeholder.unwrap_or_else(|| Label::from(words.palette_placeholder.clone()));
+        let face_hint: Label = placeholder.unwrap_or_else(|| words.palette_placeholder.clone());
         let mut chosen = Chosen::default();
         let mut closed = None;
         let shown = Row::new().show(ui, |ui, cx| {

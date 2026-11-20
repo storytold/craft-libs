@@ -8,7 +8,6 @@ use crate::display::Text;
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
-use crate::runtime::overlay::CloseReason;
 use crate::sections::Section;
 use craft_behavior::PixelSize;
 use craft_theme::variant::Tone;

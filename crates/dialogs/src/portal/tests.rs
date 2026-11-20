@@ -12,10 +12,7 @@ fn a_portal_answer_falls_back_only_when_it_failed() {
     assert_eq!(classify(2, quick, false, false, &nothing), Decision::Retry, "a dialog that closed at once never showed");
     assert_eq!(classify(2, slow, false, false, &nothing), Decision::Cancelled, "Esc in GNOME's dialog is a cancel");
     assert_eq!(classify(1, quick, false, false, &nothing), Decision::Cancelled, "Cancel is never asked again");
-    assert!(
-        matches!(classify(0, slow, false, false, &file), Decision::Saved(saved) if saved.path == PathBuf::from("/s/a.txt")),
-        "a save names its file"
-    );
+    assert!(matches!(classify(0, slow, false, false, &file), Decision::Saved(saved) if saved.path == *"/s/a.txt"), "a save names its file");
     assert_eq!(classify(0, slow, true, false, &file), Decision::Cancelled, "an answer after a queued cancel is a cancel");
     assert!(matches!(classify(0, slow, false, true, &nothing), Decision::Unavailable(_)), "the portal left the bus");
     assert!(matches!(classify(3, slow, false, false, &file), Decision::Unavailable(_)), "another code is a failure");

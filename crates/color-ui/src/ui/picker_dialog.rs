@@ -16,7 +16,7 @@ use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
 use craft_ui::choice::{SwatchArrangement, SwatchTable};
-use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Props as _, Sampler as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Sampler as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
@@ -36,6 +36,8 @@ use std::sync::Arc;
 
 use super::{ColorPicker, ColorPickerLayout, ColorWarning, PickedColor, ScreenPickGesture};
 use crate::{AreaMode, CmykModel, not_web_safe, web_safe};
+
+type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
 
 craft_ui::words! {
     /// The Color Picker dialog's own words, English by default. The picker body's words are `ColorPickerWords`; OK and
@@ -170,7 +172,7 @@ pub struct ColorPickerDialog {
     open: bool,
     layout: ColorPickerDialogLayout,
     /// The Standard tab's honeycomb cells and grey row.
-    standard: Option<(Vec<(Label, Srgba)>, Vec<(Label, Srgba)>)>,
+    standard: Option<StandardColors>,
     /// The tab the app asked to open on; it wins over the remembered one, once.
     tab: Option<ColorPickerTab>,
 }
@@ -179,7 +181,7 @@ pub struct ColorPickerDialog {
 struct TabbedBody<'a> {
     title: &'a Label,
     words: &'a ColorPickerDialogWords,
-    standard: Option<&'a (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>)>,
+    standard: Option<&'a StandardColors>,
     compare: Option<Mixed<PickedColor>>,
 }
 

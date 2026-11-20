@@ -25,7 +25,7 @@ fn shown(width: f32) -> (usize, String) {
     let mut fixture = Fixture::new(move |ui| {
         Row::new().fill_width().show(ui, |ui, _| {
             Text::new(LINE).elide(Elide::End).show(ui);
-            levelled_unit(ui, Id::new("levelled"), LEVELS.len(), |ui, at| {
+            levelled_unit(ui, Id::unique("levelled"), LEVELS.len(), |ui, at| {
                 if !is_measuring(ui.ctx()) && !ui.is_sizing_pass() {
                     seen.set(at);
                 }

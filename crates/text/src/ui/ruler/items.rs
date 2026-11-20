@@ -35,7 +35,7 @@ pub(super) fn gap_part(index: usize, edge: GapEdge) -> u64 {
 
 /// The gap and edge a part index of [`GAP`] stands for.
 pub(super) fn gap_of_part(part: u64) -> (usize, GapEdge) {
-    ((part / 2) as usize, if part % 2 == 0 { GapEdge::End } else { GapEdge::Start })
+    ((part / 2) as usize, if part.is_multiple_of(2) { GapEdge::End } else { GapEdge::Start })
 }
 
 /// A marker or stop on the ruler.

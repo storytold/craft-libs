@@ -127,7 +127,7 @@ impl Rig {
             let tabs = [(Label::from("Home"), "H", tab_id("Home")), (Label::from("Insert"), "N", tab_id("Insert"))];
             let controls: Vec<KeytipControl<'_>> = CONTROLS
                 .iter()
-                .map(|(command, label, letters)| KeytipControl { command: CommandRef::from(*command), label: *label, letters: *letters })
+                .map(|(command, label, letters)| KeytipControl { command: CommandRef::from(*command), label, letters: *letters })
                 .collect();
             let sequences = [("VZ", CommandRef::from(Trial::Zoom)), ("TW", CommandRef::from(Trial::WordCount))];
             let output = Keytips::new(true).tabs(&tabs).controls(&controls).sequences(&sequences).places(&places).show(ui);

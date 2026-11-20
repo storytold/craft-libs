@@ -263,7 +263,6 @@ impl<'a> AboutDialog<'a> {
     }
 
     /// How the About tab lays out the info, and the footer button that goes with it.
-    #[must_use]
     pub fn layout(mut self, layout: AboutLayout) -> Self {
         self.layout = layout;
         self

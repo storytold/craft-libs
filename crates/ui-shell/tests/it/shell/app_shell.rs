@@ -5,7 +5,7 @@
 use craft_host::target::ShellInfo;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, Scroll, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};

@@ -178,7 +178,6 @@ pub trait SpoolBackend: Send + Sync {
 
     /// Whether the user chooses a printer for a job; false where the platform's own print dialog
     /// does (the browser). [`Spool::chooses_printer`] answers it.
-
     fn chooses_printer(&self) -> bool {
         true
     }

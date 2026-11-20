@@ -35,6 +35,8 @@ use group::BodyHeight;
 pub use group::RibbonGroup;
 pub use plan::{GroupWidths, plan};
 
+type ContextMenuBody<'a> = &'a mut dyn FnMut(&mut Ui, &RibbonMenuRequest, &mut BodyCx<'_>);
+
 craft_ui::words! {
     /// The words of the ribbon's own controls.
     struct RibbonWords {
@@ -66,7 +68,7 @@ pub struct Ribbon<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> {
     trailing: &'a [StripEnd<'a>],
     minimised: Option<Bind<'a, bool>>,
     /// The body of the context menu: the rows for the request that opened it.
-    context_menu: Option<&'a mut dyn FnMut(&mut Ui, &RibbonMenuRequest, &mut BodyCx<'_>)>,
+    context_menu: Option<ContextMenuBody<'a>>,
 }
 
 impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
@@ -111,7 +113,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     pub fn show(mut self, ui: &mut Ui, mut body: impl FnMut(&mut RibbonRow<'_>, &T)) -> RibbonOutput<T> {
         let current = self.current();
         let minimised = self.minimised.as_mut().and_then(|bind| bind.reborrow().get()).and_then(|value| value.same().copied()).unwrap_or(false);
-        let id = ui.id().with(self.label.as_str());
+        let id = ui.scope_id().with(self.label.as_str());
         let tabs = self.tabs;
         let trailing = self.trailing;
         let strip_label = self.label.clone();

@@ -120,8 +120,7 @@ fn press_menu_key(fixture: &mut Fixture) {
 #[story(Canvas, covers = [Default])]
 fn document_wheel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
-    let mut navigation = NavigationOptions::default();
-    navigation.wheel = WheelScheme::Document;
+    let navigation = NavigationOptions { wheel: WheelScheme::Document, ..NavigationOptions::default() };
     let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
     Canvas::new("Document")
         .navigation(navigation)
@@ -143,8 +142,7 @@ fn scrolled_view(room: Rect, pixels_per_point: f32) -> craft_behavior::CanvasVie
 #[story(Canvas, covers = [], drive = Drive::Custom(middle_click_centre))]
 fn middle_autoscroll(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let room = stage(ui);
-    let mut navigation = NavigationOptions::default();
-    navigation.middle_button = MiddleButton::Autoscroll;
+    let navigation = NavigationOptions { middle_button: MiddleButton::Autoscroll, ..NavigationOptions::default() };
     let view = data.value("view", scrolled_view(room, ui.pixels_per_point()));
     let shown = Canvas::new("Document")
         .navigation(navigation)

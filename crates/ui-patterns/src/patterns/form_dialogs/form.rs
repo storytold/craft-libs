@@ -443,7 +443,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             reset_with,
             on_reset,
             opening,
-            held: mut hold,
+            held: hold,
         } = self;
         // A measuring run files and closes nothing: the real run that follows does.
         let measuring_run = crate::runtime::measure::active(ui.ctx());
@@ -616,10 +616,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 let _ = held.reborrow().write(cx, &EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
                 *changed.borrow_mut() = Some(values.clone());
             }
-            if let Some((reason, refused)) = &refusal {
-                if *refused == values {
-                    reason_cell.set(Some(reason.clone()));
-                }
+            if let Some((reason, refused)) = &refusal
+                && *refused == values
+            {
+                reason_cell.set(Some(reason.clone()));
             }
             if finish && !accept_stays_open {
                 cx.request_close_as(CloseReason::Activated);
@@ -634,18 +634,18 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             Some(CloseReason::Enter | CloseReason::Activated) if accepts.get() && hold.is_none() && !no_ok => work.borrow().clone(),
             _ => None,
         };
-        if let Some(held) = hold.as_deref_mut() {
+        if let Some(held) = hold {
             let values = work.into_inner();
-            if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref()) {
-                if refused != values {
-                    held.clear_refusal();
-                }
+            if let (Some((_, refused)), Some(values)) = (held.refusal(), values.as_ref())
+                && refused != values
+            {
+                held.clear_refusal();
             }
             // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
-            if let (false, true, Some(0), Some(values)) = (measuring_run, accepts.get(), picked, values.as_ref()) {
-                if !held.is_waiting() {
-                    held.file(values.clone());
-                }
+            if let (false, true, Some(0), Some(values)) = (measuring_run, accepts.get(), picked, values.as_ref())
+                && !held.is_waiting()
+            {
+                held.file(values.clone());
             }
             if finish && (accept_stays_open || closed == Some(CloseReason::Activated)) {
                 accepted = held.finish();

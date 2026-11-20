@@ -36,7 +36,7 @@ fn picker(ui: &mut egui::Ui, picked: &Picked, say: fn(&str) -> String) {
         });
         Stack::new().show(ui, |ui, _| {
             let positions: Vec<usize> = (0..LAYOUTS.len()).collect();
-            TileGrid::<usize>::new("Layouts")
+            let _ = TileGrid::<usize>::new("Layouts")
                 .select(SelectMode::Single)
                 .card_columns(3)
                 .max_rows(3)

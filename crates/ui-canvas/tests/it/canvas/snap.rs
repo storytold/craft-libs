@@ -109,7 +109,12 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::NONE), 100.0);
     assert_eq!(snapped_with(&mut fixture, Modifiers::CTRL), NEAR, "Ctrl held suspends the tool's snap");
 
-    // With Alt as the suspend key, Alt suspends and Control no longer does, on either OS.
+    alt_suspends(options);
+    snap_off(options);
+}
+
+/// With Alt as the suspend key, Alt suspends and Control no longer does, on either OS.
+fn alt_suspends(options: SnapOptions) {
     let mut alt = options;
     alt.suspend = SnapSuspend::Alt;
     for os in [Platform::Mac, Platform::Windows] {
@@ -132,7 +137,10 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
         assert_eq!(snapped_with(&mut fixture, Modifiers::ALT), NEAR, "Alt held suspends the tool's snap on {os:?}");
         assert_eq!(snapped_with(&mut fixture, Modifiers::CTRL), Point::new(100.0, 200.0), "Control held snaps the tool on {os:?}");
     }
+}
 
+/// With View > Snap off nothing snaps.
+fn snap_off(options: SnapOptions) {
     let mut off = options;
     off.on = false;
     let (mut fixture, seen) = rig(Snap::new(targets(), off));

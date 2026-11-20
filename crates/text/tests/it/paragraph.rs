@@ -15,9 +15,7 @@ fn toggled(fixture: &Fixture, label: &str) -> Option<Mixed<bool>> {
 
 #[trial]
 fn word_paragraph_tabs_leave_mixed_boxes_unset_until_clicked() {
-    let mut format = ParagraphFormat::default();
-    format.breaks = Some(LineBreakOptions::default());
-    format.asian = Some(AsianTypography::default());
+    let format = ParagraphFormat { breaks: Some(LineBreakOptions::default()), asian: Some(AsianTypography::default()), ..ParagraphFormat::default() };
     let dialog = Rc::new(RefCell::new(ParagraphDialog::new(format).word(true).held_ok().tab(ParagraphTab::LineAndPageBreaks)));
     let shown = dialog.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -51,8 +49,7 @@ fn word_paragraph_tabs_leave_mixed_boxes_unset_until_clicked() {
 #[trial]
 fn a_mixed_contextual_spacing_box_clicked_is_on_in_the_answer() {
     const LABEL: &str = "Don't add space between paragraphs of the same style";
-    let mut format = ParagraphFormat::default();
-    format.contextual_spacing = Some(None);
+    let format = ParagraphFormat { contextual_spacing: Some(None), ..ParagraphFormat::default() };
     let dialog = Rc::new(RefCell::new(ParagraphDialog::new(format).word(true).held_ok()));
     let shown = dialog.clone();
     let mut fixture = Fixture::new(move |ui| {

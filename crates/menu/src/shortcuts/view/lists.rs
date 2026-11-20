@@ -150,7 +150,7 @@ fn detail(ui: &mut Ui, now: f64, env: &mut Env<'_>, state: &mut DialogState) {
         Text::new(line).shade(Shade::Muted).show(ui);
     }
     // A chord the command already holds is not assigned twice.
-    let assignable = state.field.as_ref().is_some_and(|field| !env.keymap.bindings(&command).iter().any(|binding| *binding == field.binding));
+    let assignable = state.field.as_ref().is_some_and(|field| !env.keymap.bindings(&command).contains(&field.binding));
     Row::new().show(ui, |ui, _| {
         if clicked(&Button::new(words.assign.clone()).id_salt("assign").enabled(assignable).show(ui)) {
             state.assign_field(env);

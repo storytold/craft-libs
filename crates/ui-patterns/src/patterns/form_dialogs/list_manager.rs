@@ -22,6 +22,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+type UnderList<'a> = Box<dyn FnMut(&mut Ui) + 'a>;
+
 #[cfg(feature = "testing")]
 mod stories;
 
@@ -311,12 +313,11 @@ pub struct ListManager<'a> {
     #[prop(into)]
     cancel_label: Option<Label>,
     /// Draws a section under the list.
-    under: Option<Box<dyn FnMut(&mut Ui) + 'a>>,
+    under: Option<UnderList<'a>>,
 }
 
 impl<'a> ListManager<'a> {
     /// Draws `content` under the list.
-    #[must_use]
     pub fn under_list(mut self, content: impl FnMut(&mut Ui) + 'a) -> Self {
         self.under = Some(Box::new(content));
         self
@@ -324,7 +325,6 @@ impl<'a> ListManager<'a> {
 
     /// Binds the name box's text to `bind`: the caller reads what the user typed and sets the text, which the box
     /// shows on the next pass. The `name` prop does not apply then.
-    #[must_use]
     pub fn name_box(mut self, bind: Bind<'a, String>) -> Self {
         self.name_box = Some(bind);
         self

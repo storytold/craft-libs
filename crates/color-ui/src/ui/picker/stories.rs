@@ -13,6 +13,8 @@ use super::screen_pick::ScreenPickButton;
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
 use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning};
 
+type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
+
 /// A colour of full brightness and saturation at `hue` (0 to 1).
 fn hue_color(hue: f32) -> Srgba {
     let channel = |n: f32| (((hue * 6.0 + n) % 6.0 - 3.0).abs() - 1.0).clamp(0.0, 1.0);
@@ -20,7 +22,7 @@ fn hue_color(hue: f32) -> Srgba {
 }
 
 /// The Standard tab's honeycomb of 19 hues and its row of greys.
-fn standard_colors() -> (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>) {
+fn standard_colors() -> StandardColors {
     let cells = (0..19).map(|i| (Label::from(format!("Color {}", i + 1)), hue_color(i as f32 / 19.0))).collect();
     let greys = (0..8)
         .map(|i| {

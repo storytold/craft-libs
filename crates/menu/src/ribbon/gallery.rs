@@ -227,7 +227,7 @@ impl<'a> GalleryFace<'a> {
     fn picture(&self, aspect: ThumbAspect, size: ThumbSize) -> Picture<'a> {
         let picture = match self {
             GalleryFace::Image { key, revision, image } => Picture::new(Label::default(), *key, *image).revision(*revision),
-            GalleryFace::Rendered { key, thumbnails, source } => Picture::rendered(Label::default(), *key, *thumbnails, *source),
+            GalleryFace::Rendered { key, thumbnails, source } => Picture::rendered(Label::default(), *key, thumbnails, *source),
             GalleryFace::Paint(paint) => {
                 let paint = *paint;
                 Picture::painter(Label::default(), aspect, move |cx: &ContentPainterCx<'_>, rect: Rect| paint(cx, rect))

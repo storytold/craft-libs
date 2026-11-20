@@ -475,7 +475,7 @@ fn end_view(room: f32) -> EndView {
         let keys: Vec<usize> = (0..RIBBON.len()).collect();
         let source = keyed(&keys, |key: &usize| *key);
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
-        strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
     };
     frames.idle(3, &mut show);
     let tree = frames.tree();
@@ -558,7 +558,7 @@ fn comments_width(menu: bool) -> f32 {
         let keys: Vec<usize> = (0..RIBBON.len()).collect();
         let source = keyed(&keys, |key: &usize| *key);
         let strip = TabStrip::new("Ribbon").kind(TabKind::Ribbon).shown(1).roles(ribbon_role).trailing(&items);
-        strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
+        let _ = strip.show_items(ui, &source, &mut |key, _| Tab::new(RIBBON[*key]).role(ribbon_role(key)));
     };
     frames.idle(3, &mut show);
     let tree = frames.tree();

@@ -272,10 +272,8 @@ fn a_header_field_edits_and_a_header_remove_reports_its_column() {
     let mut stops = vec![first];
     for _ in 0..4 {
         fixture.key(Key::ArrowRight, Modifiers::NONE).settle();
-        if let Some(stop) = fixture.focused_stop() {
-            if !stops.contains(&stop) {
-                stops.push(stop);
-            }
+        if let Some(stop) = fixture.focused_stop().filter(|stop| !stops.contains(stop)) {
+            stops.push(stop);
         }
     }
     assert!(stops.iter().any(|(_, part)| part.is_some()), "the header's group has a header part: {stops:?}");

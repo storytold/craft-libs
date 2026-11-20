@@ -16,7 +16,9 @@ fn focused<'a>(fixture: &Fixture, labels: &[&'a str]) -> Option<&'a str> {
 }
 
 /// A fixture showing `dialog`, and where the result of a closing OK lands.
-fn shown(dialog: TabStopsDialog) -> (Fixture, Rc<RefCell<TabStopsDialog>>, Rc<RefCell<Option<TabStopsResult>>>) {
+type Shown = (Fixture, Rc<RefCell<TabStopsDialog>>, Rc<RefCell<Option<TabStopsResult>>>);
+
+fn shown(dialog: TabStopsDialog) -> Shown {
     let dialog = Rc::new(RefCell::new(dialog));
     let result = Rc::new(RefCell::new(None));
     let (shown, landed) = (dialog.clone(), result.clone());
