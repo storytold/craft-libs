@@ -540,15 +540,26 @@ impl Board {
         self.views.get(&viewport).map_or_else(ViewGens::default, |view| view.gens)
     }
 
-    /// What `reader` of `viewport` was shown of `command`, judged from `vantage` (a layered reader's).
-    fn lookup(&mut self, viewport: ViewportId, reader: &Reader, command: &CommandRef, vantage: Option<&Option<Vantage>>) -> Lookup {
+    /// What `reader` of `viewport` was shown of `command`, judged from `vantage` (a layered reader's). `edits` is the
+    /// focused stop's edits now: a resolution that read them is stale once an end hook moved them, before the next
+    /// `begin` moves the edits generation (a read between passes).
+    fn lookup(
+        &mut self,
+        viewport: ViewportId,
+        reader: &Reader,
+        command: &CommandRef,
+        vantage: Option<&Option<Vantage>>,
+        edits: Option<(EditSet, EditSet)>,
+    ) -> Lookup {
         let Some(&number) = self.numbers.get(command.id.as_str()) else { return Lookup::Missing };
         let gate = self.gate_answer(command);
         let view = self.view_gens(viewport);
+        let edits_moved = self.views.get(&viewport).is_some_and(|kept| kept.edits != edits);
         let Some(shown) = self.shown.get_mut(&viewport) else { return Lookup::Missing };
         let Some(id) = shown.find(reader, number, command) else { return Lookup::Missing };
         let Some(entry) = shown.entries.get_mut(&id) else { return Lookup::Missing };
-        if holds(&mut entry.kept.key, self.gens, view, &self.revisions, gate, vantage) {
+        let edits_hold = !edits_moved || entry.kept.key.edits.is_none();
+        if holds(&mut entry.kept.key, self.gens, view, &self.revisions, gate, vantage) && edits_hold {
             Lookup::Fresh(Arc::clone(&entry.kept.resolved), entry.kept.key.bind())
         } else {
             Lookup::Stale
@@ -1337,7 +1348,8 @@ pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &Comma
 fn read(ctx: &Context, reader: Reader, command: &CommandRef) -> Arc<ResolvedCommand> {
     let viewport = pass::current_viewport(ctx);
     let vantage = vantage_of(ctx, &reader);
-    let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref()));
+    let edits = focused_edits(ctx, viewport);
+    let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref(), edits));
     let (resolved, bind) = match found {
         Lookup::Fresh(resolved, bind) => (resolved, bind),
         found => {
