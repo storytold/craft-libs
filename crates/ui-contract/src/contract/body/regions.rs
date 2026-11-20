@@ -383,8 +383,10 @@ impl<'b> BodyHooks<'b> {
             let end_line = if full { (end_h - across_h).max(0.0) } else { end_h };
             let line_bottom = top + line_h.max(end_line).min(body_room);
             // A scrolling body offered no bound (a content-sized container in a body that scrolls) shows all of its
-            // content: its view is the line this pass measured, never an unbounded band.
-            let bottom = if body_room.is_finite() || scroll_of(props).is_none() { top + body_room } else { line_bottom };
+            // content: once this pass measured it, its view is that line, never an unbounded band. Its measuring run
+            // keeps the unbounded band, in which the content takes its whole extent.
+            let unbounded_view = !body_room.is_finite() && scroll_of(props).is_some() && self.measured_body.is_some();
+            let bottom = if unbounded_view { line_bottom } else { top + body_room };
             (bottom, line_bottom)
         } else {
             // A fill-width body is offered the room the parent gives this pass, never the height its content took last
