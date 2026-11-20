@@ -124,6 +124,9 @@ pub struct TabStripStyle {
     /// How far in from each side of the shown tab the underline starts: the tab's padding less half the stroke, so
     /// it runs just past the label at both ends, as the old ribbon drew it.
     underline_side: f32,
+    /// The underline's height where a ribbon look sets one (`RibbonLook::tabs`), a bar at the row's bottom; the thick
+    /// stroke otherwise.
+    underline_height: Option<f32>,
 }
 
 /// Where the fit put one end item: its position in `TabStrip::trailing`, its distance from the start edge, its width
@@ -687,6 +690,11 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         let width = cx.anim("underline_width", width, spec::MOVE);
         let side = cx.style.underline_side.min(width / 2.0).max(0.0);
         let rect = Flow::new(cx.core.content_rect, cx.flow.is_rtl()).span(start + side, width - 2.0 * side);
+        if let Some(height) = cx.style.underline_height {
+            let bar = Rect::from_min_max(Pos2::new(rect.left(), rect.bottom() - height), rect.right_bottom());
+            ui.draw().fill(&PaintShape::Rect(bar, egui::CornerRadius::ZERO), cx.style.underline);
+            return;
+        }
         let y = rect.bottom() - cx.style.underline_inset;
         ui.draw().stroke(&PaintShape::Path(vec![Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)]), StrokeWidth::Thick, cx.style.underline);
     }
@@ -735,6 +743,10 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
             underline: cx.color(tokens.color.accent.solid),
             underline_inset: tokens.stroke.thick / 2.0,
             underline_side: side,
+            underline_height: {
+                let look = cx.env::<crate::buttons::RibbonLook>();
+                (ribbon && look.underline > 0).then_some(f32::from(look.underline))
+            },
         }
     }
 

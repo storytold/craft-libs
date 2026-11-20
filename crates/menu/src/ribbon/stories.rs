@@ -40,7 +40,7 @@ struct Setup {
     rtl: bool,
     /// The ribbon has a context menu.
     menu: bool,
-    /// The groups draw their icons at the sides an app sets (`Ribbon::icons`), with the app's launcher glyph.
+    /// The ribbon takes an app look (`Ribbon::look`): icon sides, menu arrows, row height, tab ink and underline.
     app_icons: bool,
 }
 
@@ -83,7 +83,7 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         ribbon = ribbon.context_menu(&mut rows);
     }
     if setup.app_icons {
-        ribbon = ribbon.look(RibbonLook::new(32, 17)).launcher_icon(IconId::new("chevron_down"));
+        ribbon = ribbon.look(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3)).launcher_icon(IconId::new("chevron_down"));
     }
     let direction = if setup.rtl { Direction::Rtl } else { Env::of(ui).direction };
     let out = with_env(

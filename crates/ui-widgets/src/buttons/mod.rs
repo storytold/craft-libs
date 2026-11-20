@@ -88,12 +88,24 @@ pub struct RibbonLook {
     /// The height of a non-stacked button, so three of them, a tight gap apart, fill the ribbon's body (the old
     /// ribbon's 22-point pitch); 0 keeps the control's height.
     pub row: u8,
+    /// Whether a ribbon strip's tabs rest in the normal text colour, as the old ribbon's did, not the muted one.
+    pub tab_ink: bool,
+    /// The height of a ribbon strip's underline under the shown tab; 0 keeps the thick stroke.
+    pub underline: u8,
 }
 
 impl RibbonLook {
     /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
     pub const fn new(large: u8, small: u8) -> Self {
-        RibbonLook { large, small, arrow: 0, row: 0 }
+        RibbonLook { large, small, arrow: 0, row: 0, tab_ink: false, underline: 0 }
+    }
+
+    /// The strip's tabs in the normal text colour at rest, and its underline `underline` points high (0 keeps the
+    /// thick stroke).
+    pub const fn tabs(mut self, underline: u8) -> Self {
+        self.tab_ink = true;
+        self.underline = underline;
+        self
     }
 
     /// Non-stacked buttons `row` points high; 0 keeps the control's height.

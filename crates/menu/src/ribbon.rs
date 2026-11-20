@@ -158,7 +158,14 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
                 if let Some(key) = current.clone() {
                     strip = strip.shown(key);
                 }
-                strip.show_items(ui, &source, &mut |key: &T, _| Tab::new(label_of(key)).role(role_of(key)))
+                // The look reaches the strip too: its tabs' ink and underline (`RibbonLook::tabs`).
+                craft_ui::runtime::env::with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(icons);
+                    },
+                    |ui| strip.show_items(ui, &source, &mut |key: &T, _| Tab::new(label_of(key)).role(role_of(key))),
+                )
             });
             let region = match (&current, minimised) {
                 (Some(key), false) => Some(show_row(ui, id, tabs, key, (icons, &launcher), &mut body)),

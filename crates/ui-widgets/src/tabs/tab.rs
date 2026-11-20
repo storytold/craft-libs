@@ -343,6 +343,8 @@ impl Component for Tab<'_> {
         };
         let label_ink = match (ribbon, key.role) {
             (true, TabRole::Contextual) => ink(colors.accent.text, colors.accent.text),
+            // A ribbon look may rest its tabs in the normal text colour (`RibbonLook::tabs`).
+            (true, _) if cx.env::<crate::buttons::RibbonLook>().tab_ink => ink(colors.text.normal, colors.accent.text),
             (true, _) => ink(colors.text.muted, colors.accent.text),
             _ => ink(colors.text.muted, colors.text.normal),
         };
