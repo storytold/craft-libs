@@ -56,42 +56,66 @@ pub struct Drawing<'a> {
 
 /// Read the drawing of a slide, master or notes container, reading at most `budget` records more
 /// (one budget for the whole presentation, [`craft_officeart::record::MAX_RECORDS`] to start with).
+/// A shape the budget cuts short is left out, and so is a background it leaves unread.
 pub fn drawing<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
     let mut out = Drawing { shapes: vec![], background: None };
     let Some(dg) = container.child(rt::DRAWING).and_then(|d| d.child(rt::DG_CONTAINER)) else { return out };
     // The background is the container's own shape (`OfficeArtDgContainer.shape`, [MS-ODRAW]
-    // 2.2.13), not one found by its fBackground flag.
-    if let Some(bg) = dg.child(rt::SP_CONTAINER) {
-        out.background = Some(shape(&bg, budget));
+    // 2.2.13), not one found by its fBackground flag. One pass finds it and the top group, each
+    // child looked at charged to the budget.
+    let (mut bg, mut top) = (None, None);
+    for r in dg.children() {
+        if bg.is_some() && top.is_some() || !take(budget) {
+            break;
+        }
+        match r.kind {
+            rt::SP_CONTAINER if bg.is_none() => bg = Some(r),
+            rt::SPGR_CONTAINER if top.is_none() => top = Some(r),
+            _ => {}
+        }
     }
-    if let Some(top) = dg.child(rt::SPGR_CONTAINER) {
+    if let Some(bg) = bg {
+        out.background = shape(&bg, budget);
+    }
+    if let Some(top) = top {
         // The first shape of the top group is the patriarch, standing for the drawing itself.
-        out.shapes = group_children(&top, 0, budget).into_iter().filter(|s| !s.patriarch).collect();
+        out.shapes = members(top.children(), 0, budget).into_iter().filter(|s| !s.patriarch).collect();
     }
     out
 }
 
-/// The shapes and groups of a group container, nested at most [`MAX_DEPTH`] deep, reading at most
-/// `budget` records more (shared by the whole drawing).
-fn group_children<'a>(gr: &Rec<'a>, depth: usize, budget: &mut usize) -> Vec<RawShape<'a>> {
-    if depth > MAX_DEPTH {
-        return vec![];
+/// Take one record off `budget`; `false` when none are left.
+fn take(budget: &mut usize) -> bool {
+    match budget.checked_sub(1) {
+        Some(left) => {
+            *budget = left;
+            true
+        }
+        None => false,
     }
+}
+
+/// The shapes and groups among a group container's records, nested at most [`MAX_DEPTH`] groups
+/// deep (a deeper group is left out, shapes beside it kept), reading at most `budget` records
+/// more (shared by the whole presentation).
+fn members<'a>(records: crate::record::Records<'a>, depth: usize, budget: &mut usize) -> Vec<RawShape<'a>> {
     let mut out = vec![];
-    for r in gr.children() {
-        if *budget == 0 {
+    for r in records {
+        if !take(budget) {
             break;
         }
-        *budget -= 1;
         match r.kind {
-            rt::SP_CONTAINER => out.push(shape(&r, budget)),
-            rt::SPGR_CONTAINER => {
+            rt::SP_CONTAINER => out.extend(shape(&r, budget)),
+            rt::SPGR_CONTAINER if depth < MAX_DEPTH => {
                 let mut kids = r.children();
-                // A group container's first shape describes the group itself.
+                // A group container's first shape describes the group itself; it is read once.
                 let Some(head) = kids.next().filter(|h| h.kind == rt::SP_CONTAINER) else { continue };
-                let mut g = shape(&head, budget);
+                if !take(budget) {
+                    break;
+                }
+                let Some(mut g) = shape(&head, budget) else { break };
                 g.is_group = true;
-                g.children = group_children(&r, depth + 1, budget).into_iter().skip(1).collect();
+                g.children = members(kids, depth + 1, budget);
                 out.push(g);
             }
             _ => {}
@@ -104,7 +128,8 @@ fn rect_i32(r: &Rec) -> Option<Anchor> {
     Some(Anchor { left: f64::from(r.i32(0)?), top: f64::from(r.i32(4)?), right: f64::from(r.i32(8)?), bottom: f64::from(r.i32(12)?) })
 }
 
-fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> RawShape<'a> {
+/// One shape container, or `None` when the budget runs out before all its records are read.
+fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> Option<RawShape<'a>> {
     let mut s = RawShape {
         shape_type: 0,
         spid: 0,
@@ -124,10 +149,9 @@ fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> RawShape<'a> {
     let mut primary: Vec<Rec> = vec![];
     let mut tables: Vec<Rec> = vec![];
     for r in sp.children() {
-        if *budget == 0 {
-            break;
+        if !take(budget) {
+            return None;
         }
-        *budget -= 1;
         match r.kind {
             rt::FSP => {
                 s.shape_type = r.instance;
@@ -166,8 +190,15 @@ fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> RawShape<'a> {
                 };
             }
             rt::CLIENT_DATA => {
-                if let Some(p) = r.child(rt::PLACEHOLDER_ATOM) {
-                    s.placeholder = Some(Placeholder { position: p.u32(0).unwrap_or(0), kind: p.u8(4).unwrap_or(0) });
+                // Each record looked at in the client data is charged too.
+                for c in r.children() {
+                    if !take(budget) {
+                        return None;
+                    }
+                    if c.kind == rt::PLACEHOLDER_ATOM {
+                        s.placeholder = Some(Placeholder { position: c.u32(0).unwrap_or(0), kind: c.u8(4).unwrap_or(0) });
+                        break;
+                    }
                 }
             }
             rt::CLIENT_TEXTBOX => s.text = Some(r),
@@ -177,7 +208,7 @@ fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> RawShape<'a> {
     for t in primary.iter().rev().chain(&tables) {
         s.props.add_table(t);
     }
-    s
+    Some(s)
 }
 
 /// The drawing-wide default properties (`OfficeArtDggContainer`'s `FOPT`).
@@ -220,7 +251,7 @@ mod tests {
         let fsp = atom(rt::FSP, 1, &[1025u32.to_le_bytes(), 0u32.to_le_bytes()].concat());
         let anchor = atom(rt::CHILD_ANCHOR, 0, &[1i32, 2, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
         let sp = container(rt::SP_CONTAINER, 0, &[fsp, fopt(&entries, &name), anchor]);
-        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone());
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone()).unwrap();
         assert_eq!(s.props.len(), MAX_PROPS);
         assert_eq!(s.props.string(prop::NAME).as_deref(), Some("Kept"));
         assert_eq!(s.props.get(0x1000), Some(0));
@@ -251,7 +282,7 @@ mod tests {
             0,
             &[fsp, secondary, fopt(&[(prop::FILL_COLOR, 1), (prop::LINE_WIDTH, 1)], &[]), fopt(&[(prop::FILL_COLOR, 2)], &[])],
         );
-        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone());
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone()).unwrap();
         assert_eq!((s.props.get(prop::FILL_COLOR), s.props.get(prop::LINE_WIDTH), s.props.get(prop::LINE_COLOR)), (Some(2), Some(1), Some(3)));
     }
 
@@ -262,7 +293,8 @@ mod tests {
         container(rt::SLIDE, 0, &[container(rt::DRAWING, 0, &[container(rt::DG_CONTAINER, 0, &[top])])])
     }
 
-    /// Groups nest at most [`MAX_DEPTH`] deep: a deeper group is left out, its parents kept.
+    /// Groups nest at most [`MAX_DEPTH`] deep: a deeper group is left out, its parents and the
+    /// shapes beside it kept.
     #[test]
     fn groups_nest_at_most_max_depth() {
         let leaf = || container(rt::SP_CONTAINER, 0, &[atom(rt::FSP, 1, &[0; 8])]);
@@ -281,8 +313,11 @@ mod tests {
             depth(&super::drawing(&Rec::at(&slide, 0).unwrap(), &mut MAX_RECORDS.clone()).shapes[0])
         };
         let limit = craft_officeart::record::MAX_DEPTH;
+        // `limit` groups, the innermost holding a shape: all read.
         assert_eq!(read(limit), limit);
-        assert_eq!(read(limit + 8), limit, "the groups past the limit are left out");
+        // A group at the next level is left out, not read as an empty group.
+        assert_eq!(read(limit + 1), limit - 1, "the group past the limit is left out");
+        assert_eq!(read(limit + 8), limit - 1, "the groups past the limit are left out");
     }
 
     /// A presentation's drawings read at most [`MAX_RECORDS`] records together, however many shapes
@@ -296,6 +331,43 @@ mod tests {
         let second = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.len();
         assert!(first > MAX_RECORDS / 2 && second < MAX_RECORDS / 2, "{first} then {second}");
         assert!(super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.is_empty());
+    }
+
+    /// A budget of exactly a drawing's records reads all of it: each record is charged once, a
+    /// group's first shape included. One record fewer leaves out the shape it cuts short, never
+    /// keeping it half read, and a background the budget doesn't reach is left out rather than
+    /// read as an empty (white) one.
+    #[test]
+    fn the_record_budget_reads_whole_shapes() {
+        let fsp = || atom(rt::FSP, 1, &[0; 8]);
+        let anchor = atom(rt::CLIENT_ANCHOR, 0, &[0; 8]);
+        let ph = container(rt::CLIENT_DATA, 0, &[atom(rt::PLACEHOLDER_ATOM, 0, &[0, 0, 0, 0, 0x0D, 0, 0, 0])]);
+        let text = container(rt::CLIENT_TEXTBOX, 0, &[]);
+        let title = container(rt::SP_CONTAINER, 0, &[fsp(), anchor, ph, text]);
+        let group = container(
+            rt::SPGR_CONTAINER,
+            0,
+            &[container(rt::SP_CONTAINER, 0, &[fsp(), atom(rt::FSPGR, 1, &[0; 16])]), container(rt::SP_CONTAINER, 0, &[fsp()])],
+        );
+        let background = container(rt::SP_CONTAINER, 0, &[fsp()]);
+        let patriarch = container(rt::SP_CONTAINER, 0, &[atom(rt::FSP, 0, &[0, 4, 0, 0, 5, 0, 0, 0])]);
+        let top = container(rt::SPGR_CONTAINER, 0, &[patriarch, group, title]);
+        let dg = container(rt::DG_CONTAINER, 0, &[background, top]);
+        let slide = container(rt::SLIDE, 0, &[container(rt::DRAWING, 0, std::slice::from_ref(&dg))]);
+        // Every record below the drawing container, nested ones included.
+        fn count(b: &[u8]) -> usize {
+            crate::record::Records::new(b).map(|r| 1 + if r.is_container() { count(r.data) } else { 0 }).sum()
+        }
+        let all = count(Rec::at(&dg, 0).unwrap().data);
+        let read = |mut budget: usize| super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget);
+        let d = read(all);
+        assert!(d.background.is_some());
+        assert_eq!(d.shapes.len(), 2, "the group and the title");
+        assert_eq!(d.shapes[0].children.len(), 1, "the group's one member");
+        assert!(d.shapes[1].placeholder.is_some() && d.shapes[1].text.is_some());
+        let short = read(all - 1);
+        assert_eq!(short.shapes.len(), 1, "the title, cut short, is left out");
+        assert!(read(2).background.is_none(), "the background is left out, not made empty");
     }
 
     #[test]

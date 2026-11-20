@@ -700,8 +700,9 @@ fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
-    let mut skipped_pictures = false;
-    for shape in drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records) {
+    // A drawing the workbook's record allowance cut short may have lost pictures.
+    let (shapes, mut skipped_pictures) = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
+    for shape in shapes {
         let blip = usize::try_from(shape.pib).ok().and_then(|i| i.checked_sub(1)).and_then(|i| st.g.blips.get(i)).cloned().flatten();
         match blip {
             Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor: shape.anchor, data, mime }),

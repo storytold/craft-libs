@@ -128,7 +128,9 @@ impl Props {
     /// tertiary ones; boolean words merged flag by flag).
     pub(crate) fn from_set(p: &craft_officeart::props::Props) -> Props {
         let fixed = |v: u32| (v as i32) as f32 / 65_536.0;
-        let mut out = Props { pib: p.get(0x0104), ..Props::default() };
+        // A complex `pib` holds its picture in its own bytes, and its operand is their length, not a
+        // store index.
+        let mut out = Props { pib: p.simple(0x0104), ..Props::default() };
         if let Some(v) = p.get(0x0004) {
             out.rot = fixed(v);
         }

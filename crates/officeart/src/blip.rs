@@ -186,10 +186,8 @@ pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> 
     if blip.format == Format::Pict {
         return None;
     }
-    let mut data = blip.bytes(limit, work)?;
-    if blip.format == Format::Dib {
-        data = dib::to_bmp(&data).filter(|b| b.len() <= limit)?;
-    }
+    // A DIB is copied once, into its BMP file, charged whole.
+    let data = if blip.format == Format::Dib { dib::to_bmp_within(blip.raw(), limit, work)? } else { blip.bytes(limit, work)? };
     let (ext, content_type) = blip.format.file();
     Some(Picture { ext, content_type, data })
 }

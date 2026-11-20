@@ -49,11 +49,18 @@ fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
         Format::Pict | Format::Tiff => return None,
         f => f.file().1,
     };
-    let bytes = blip.bytes(usize::MAX, work)?;
     let bytes = match blip.format {
-        Format::Wmf => wmf::with_placeable_header(blip.header?, bytes)?,
-        Format::Dib => dib::to_bmp(&bytes)?,
-        _ => bytes,
+        // The DIB is copied once, into its BMP file, charged whole.
+        Format::Dib => dib::to_bmp_within(blip.raw(), usize::MAX, work)?,
+        // The placeable header is charged with the records.
+        Format::Wmf => {
+            let records = blip.bytes(usize::MAX, work)?;
+            if !work.charge(wmf::PLACEABLE_HEADER, "metafile") {
+                return None;
+            }
+            wmf::with_placeable_header(blip.header?, records)?
+        }
+        _ => blip.bytes(usize::MAX, work)?,
     };
     Some((bytes, mime))
 }
@@ -66,47 +73,51 @@ pub(crate) struct PictureShape {
 }
 
 /// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
-/// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with).
-pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> Vec<PictureShape> {
+/// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with),
+/// and whether the budget ran out before the drawing's last record, so shapes may be missing.
+pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> (Vec<PictureShape>, bool) {
     let mut out = Vec::new();
-    walk(dg, 0, &mut out, budget);
-    out
+    let mut cut = false;
+    walk(dg, 0, &mut out, budget, &mut cut);
+    (out, cut)
 }
 
 /// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, reading at most `budget`
-/// records more (shared by the whole drawing).
-fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>, budget: &mut usize) {
+/// records more (shared by the whole workbook); `cut` is set when a record is left unread.
+fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>, budget: &mut usize, cut: &mut bool) {
     if depth > MAX_DEPTH {
         return;
     }
     for r in Records::new(b) {
         if *budget == 0 {
+            *cut = true;
             return;
         }
         *budget -= 1;
         if r.kind == rt::SP_CONTAINER {
-            if let Some(p) = shape(r.data, budget) {
+            if let Some(p) = shape(r.data, budget, cut) {
                 out.push(p);
             }
         } else if r.is_container() {
-            walk(r.data, depth + 1, out, budget);
+            walk(r.data, depth + 1, out, budget, cut);
         }
     }
 }
 
-/// A shape container's BLIP and anchor, when it has both.
-fn shape(sp: &[u8], budget: &mut usize) -> Option<PictureShape> {
+/// A shape container's BLIP and anchor, when it has both and the budget reads all its records.
+fn shape(sp: &[u8], budget: &mut usize, cut: &mut bool) -> Option<PictureShape> {
     let (mut pib, mut anchor) = (None, None);
     for r in Records::new(sp) {
         if *budget == 0 {
-            break;
+            *cut = true;
+            return None;
         }
         *budget -= 1;
         let body = r.data;
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
-                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB && !e.is_complex).last() {
                     pib = Some(e.op);
                 }
             }
@@ -167,7 +178,7 @@ mod tests {
         let sp = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &sp));
         let anchor = ClientAnchor { col1: 1, dx1: 512, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 4, dy2: 0 };
-        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), vec![PictureShape { pib: 1, anchor }]);
+        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), (vec![PictureShape { pib: 1, anchor }], false));
         // Truncated or nonsense drawings give nothing, never a panic.
         for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..], &fbse_of(&[0xFF; 60])[..]] {
             let _ = fbse_blip(bad, &mut Decode::new(usize::MAX));
@@ -232,11 +243,18 @@ mod tests {
         let count = MAX_RECORDS / 4;
         let many = rec(0x000F, 0xF003, &vec![picture.clone(); count].concat());
         let mut budget = MAX_RECORDS;
-        let first = picture_shapes(&many, &mut budget).len();
-        let second = picture_shapes(&many, &mut budget).len();
+        let (first, first_cut) = picture_shapes(&many, &mut budget);
+        let (second, second_cut) = picture_shapes(&many, &mut budget);
+        let (first, second) = (first.len(), second.len());
         assert!(first == count && second < count, "{first} then {second}: the second sheet gets what is left");
+        // The second sheet is told its drawing was cut short; the first, read whole, isn't.
+        assert!(!first_cut && second_cut);
+        // A budget used up exactly by the drawing's last record cuts nothing.
+        let one = rec(0x000F, 0xF003, &picture);
+        assert!(!picture_shapes(&one, &mut 4).1);
+        assert!(picture_shapes(&one, &mut 3).1);
         let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
-        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).len(), 1);
-        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).is_empty(), "past the depth limit");
+        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).0.len(), 1);
+        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).0.is_empty(), "past the depth limit");
     }
 }
