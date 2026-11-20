@@ -335,6 +335,19 @@ fn paragraph_direction_comes_from_the_nearest_block_cell_and_list_item() {
 }
 
 #[test]
+fn left_to_right_list_items_can_nest_inside_right_to_left_items() {
+    let input = r#"<ul><li dir="rtl">First<ul><li dir="ltr">Child</li><li>Other child</li></ul></li><li>Next</li></ul>"#;
+    let flags = |flow: &Flow| {
+        flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { p.list.map(|li| (li.level, p.rtl)) } else { None }).collect::<Vec<_>>()
+    };
+    let expected = [(0, true), (1, false), (1, true), (0, false)];
+    let flow = parse(input);
+    assert_eq!(flags(&flow), expected);
+    let exported = export_fragment(&craft_flow::to_doc(&flow));
+    assert_eq!(flags(&parse(&exported)), expected, "{exported}");
+}
+
+#[test]
 fn rtl_direction_survives_export_in_single_paragraph_cells_and_code() {
     // A cell with one RTL paragraph and a run of code paragraphs keep their direction.
     let flow = parse(

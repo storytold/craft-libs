@@ -1653,6 +1653,12 @@ impl Styles {
         {
             fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
         }
+        // A known kind maps to a built-in Word style. Keep the ODF parent's direction here
+        // because the built-in style doesn't carry it.
+        let rtl = s.rtl.or_else(|| match &parent {
+            Parent::Kind(_) => self.chain(odt).into_iter().skip(1).find_map(|(_, style)| style.rtl),
+            _ => None,
+        });
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
@@ -1662,7 +1668,7 @@ impl Styles {
             borders: s.para_borders.filter(|b| b.takes_room()),
             shading: s.para_shading.flatten(),
             contextual: s.contextual,
-            rtl: s.rtl,
+            rtl,
             ..Default::default()
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
@@ -1729,10 +1735,14 @@ impl Styles {
         let borders = own().find_map(|(_, s)| s.para_borders).filter(|b| b.takes_room());
         let shading = own().find_map(|(_, s)| s.para_shading).flatten();
         let contextual = own().find_map(|(_, s)| s.contextual);
-        // Left to right only over a style under it that reads right to left: elsewhere it is the
-        // default.
-        let under_rtl = chain.iter().skip(kind_at).find_map(|(_, s)| s.rtl).or(self.default_rtl) == Some(true);
-        let rtl = own().find_map(|(_, s)| s.rtl).filter(|r| *r || under_rtl);
+        let rtl = if named.is_some() {
+            // A named style keeps its direction. Emit an LTR override when the style under it is RTL.
+            let under_rtl = chain.iter().skip(kind_at).find_map(|(_, s)| s.rtl).or(self.default_rtl) == Some(true);
+            own().find_map(|(_, s)| s.rtl).filter(|r| *r || under_rtl)
+        } else {
+            // A kind maps to a built-in Word style, so the paragraph keeps the ODF style chain's direction.
+            chain.iter().find_map(|(_, s)| s.rtl).filter(|r| *r || self.default_rtl == Some(true))
+        };
         let drop_cap = own().find_map(|(_, s)| s.drop_cap);
         let keep_lines = own().find_map(|(_, s)| s.keep_lines);
         let widow_control = own().find_map(|(_, s)| s.widow_control);

@@ -54,6 +54,29 @@ fn left_to_right_over_a_right_to_left_style_stays_left_to_right() {
 }
 
 #[test]
+fn right_to_left_heading_style_survives_import_and_reexport() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles>
+        <style:style style:name="Heading_20_1" style:family="paragraph"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style>
+        <style:style style:name="Heading_20_2" style:family="paragraph" style:parent-style-name="Heading_20_1"/>
+        <style:style style:name="Custom" style:family="paragraph" style:parent-style-name="Heading_20_1"/>
+        </office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text>
+        <text:h text:outline-level="1" text:style-name="Heading_20_1">First heading</text:h>
+        <text:h text:outline-level="2" text:style-name="Heading_20_2">Second heading</text:h>
+        <text:p text:style-name="Custom">Named child</text:p>
+        <text:p>Body paragraph</text:p>
+        </office:text></office:body></office:document-content>"#
+    );
+    let mut doc = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(resolved_directions(&doc), [true, true, true, false]);
+    doc.kept.clear();
+    assert_eq!(resolved_directions(&import(&export(&doc).unwrap()).unwrap()), [true, true, true, false]);
+}
+
+#[test]
 fn right_to_left_default_style_preserves_inheritance_and_left_to_right_overrides() {
     let styles = format!(
         r#"<office:document-styles {NS_T}><office:styles>
