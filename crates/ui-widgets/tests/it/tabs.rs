@@ -364,3 +364,25 @@ fn panel_tabs_keep_the_shown_tab_whole_and_overflow_from_the_end() {
     }
     assert!(fewer < PANELS.len(), "the narrowest room overflows");
 }
+
+/// A strip places its tabs by their measure in its first frame: the frame runs once, measures each tab once, and the
+/// strip and every tab have the rects they have once the strip settles.
+#[trial]
+fn a_tab_strip_takes_its_measured_extents_in_its_first_frame() {
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let _ = TabStrip::new("Documents").shown(0).show_items(ui, &source, &mut |key, _| Tab::new(TITLES[*key]));
+    });
+    let rects = |fixture: &Fixture| {
+        let strip = fixture.by_label("Documents").expect("the strip's node").rect;
+        (strip, TITLES.map(|title| tab_rect(fixture.tree(), title)))
+    };
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == TITLES.len() && measures.iter().all(|(_, count)| *count == 1), "each tab is measured once: {measures:?}");
+    let first = rects(&fixture);
+    fixture.idle(3);
+    assert_eq!(first, rects(&fixture), "the first frame places the strip and its tabs as the settled strip does");
+}

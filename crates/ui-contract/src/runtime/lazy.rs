@@ -148,6 +148,8 @@ struct Entry {
     measured: Option<MeasuredRun>,
     /// Whether this pass replays the memoized view's last run, under the pass number that decided it.
     replays: Option<(u64, bool)>,
+    /// The pass a collection row's extent was last measured in (`remember`).
+    measured_in: Option<u64>,
     /// The last frame that read or wrote the entry.
     touched: u64,
 }
@@ -606,23 +608,29 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
     });
 }
 
-/// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it
-/// does not build by it (its item layout answers for rows it never built).
+/// Records the extent of a row of the collection `owner` that was measured this pass. The collection places the rows
+/// it does not build by it (its item layout answers for rows it never built), and every run of the pass that reaches
+/// the row takes it without measuring the row again.
 pub(crate) fn remember(ctx: &Context, owner: Id, id: Id, size: Vec2) {
-    shown(ctx, Some(owner), id, false, Measured { size, key: Key::None, room: Rect::NOTHING }, None);
+    with(ctx, |store, pass_nr, frame| {
+        let entry = store.touch(Some(owner), id, frame);
+        entry.sizes[1] = Some(Measured { size, key: Key::None, room: Rect::NOTHING });
+        entry.measured_in = Some(pass_nr);
+    });
 }
 
-/// Runs `f` with a reader of the extents the rows of the collection `owner` had in the last pass that built them, for
-/// a collection that reads many entries at once.
-pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
-    with(ctx, |store, _, frame| {
+/// Runs `f` with a reader of the extents the rows of the collection `owner` had in the last pass that measured them,
+/// each with whether that pass is this one, for a collection that reads many entries at once.
+pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<(Vec2, bool)>) -> R) -> R {
+    with(ctx, |store, pass_nr, frame| {
         store.reached.insert(owner, frame);
         let store = std::cell::RefCell::new(store);
         f(&|id| {
             let mut store = store.borrow_mut();
             let entry = store.entries.get_mut(&id)?;
             entry.touched = frame;
-            entry.sizes[1].or(entry.sizes[0]).map(|measured| measured.size)
+            let size = entry.sizes[1].or(entry.sizes[0]).map(|measured| measured.size)?;
+            Some((size, entry.measured_in == Some(pass_nr)))
         })
     })
 }

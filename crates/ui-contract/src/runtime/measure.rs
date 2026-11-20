@@ -84,6 +84,14 @@ struct RowMeasures {
     rows: Vec<(Id, u32)>,
 }
 
+/// The collection rows whose item was built, by item id, with the pass that counted them.
+#[cfg(feature = "testing")]
+#[derive(Default)]
+struct RowBuilds {
+    pass: u64,
+    rows: Vec<(Id, u32)>,
+}
+
 /// The rows that asked their body units for their least widths, with the pass that counted them.
 #[cfg(feature = "testing")]
 #[derive(Default)]
@@ -302,6 +310,31 @@ pub(crate) fn count_row_measure(ctx: &Context, id: Id) {
 pub fn row_measures(ctx: &Context) -> Vec<(Id, u32)> {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
     store::with::<RowMeasures, _>(ctx, |log| if log.pass == last { log.rows.clone() } else { Vec::new() })
+}
+
+/// Counts a build of the item `id` of a collection row in this pass: for a measure, or to show it.
+#[cfg(feature = "testing")]
+pub(crate) fn count_row_build(ctx: &Context, id: Id) {
+    if uncounted(ctx) {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    store::with::<RowBuilds, _>(ctx, |log| {
+        if log.pass != pass {
+            *log = RowBuilds { pass, rows: Vec::new() };
+        }
+        match log.rows.iter_mut().find(|(row, _)| *row == id) {
+            Some((_, count)) => *count += 1,
+            None => log.rows.push((id, 1)),
+        }
+    });
+}
+
+/// The collection rows whose item was built in the last pass, by item id, and how many times each.
+#[cfg(feature = "testing")]
+pub fn row_builds(ctx: &Context) -> Vec<(Id, u32)> {
+    let last = ctx.cumulative_pass_nr().saturating_sub(1);
+    store::with::<RowBuilds, _>(ctx, |log| if log.pass == last { log.rows.clone() } else { Vec::new() })
 }
 
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
