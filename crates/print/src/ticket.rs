@@ -365,7 +365,9 @@ fn integer(document: &roxmltree::Document<'_>, node: roxmltree::Node<'_, '_>, ta
 /// fail-closed: every refusal here is before anything reaches the spooler). A side the driver
 /// did report must agree with the sheet asked for, either way round (INV-3); both sides gone is
 /// refused whatever the request names (INV-5). The fallback is logged (INV-7).
-pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
+/// `scaling_offered`: whether the driver's capabilities have a PageScaling feature; only then is its
+/// answer about scaling checked.
+pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool, scaling_offered: bool) -> Result<(u32, u32), Error> {
     let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
@@ -396,7 +398,9 @@ pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: boo
     if !orientation.is_some_and(|n| named(n, if landscape { "Landscape" } else { "Portrait" })) {
         return Err(spool_error("the printer's driver changed the orientation; nothing was sent"));
     }
-    if let Some(scaling) = feature("PageScaling") {
+    // Only a driver that offers PageScaling can scale by it; one that doesn't (Zebra's ZDesigner)
+    // was not asked, and whatever the merge put there is not a choice of its own.
+    if let Some(scaling) = feature("PageScaling").filter(|_| scaling_offered) {
         // Microsoft's IPP class driver names its "None" in a namespace of its own.
         if !scaling.children().any(|n| n.has_tag_name((NS_PSF, "Option")) && n.attribute("name").and_then(|v| v.rsplit(':').next()) == Some("None")) {
             return Err(spool_error("the printer's driver would scale the sheets; nothing was sent"));
@@ -841,6 +845,81 @@ pub(crate) fn prefixes_unlike_the_drivers(ticket: &str, driver: &str) -> Option<
     )
 }
 
+/// Whether a sheet is turned on the paper: `sheet_landscape` says the sheet is wider than tall,
+/// `paper` is the driver's paper in micrometres as the driver feeds it. An upright paper (office
+/// sizes) turns a wide sheet; a paper that is itself wider than tall (a label stock defined across
+/// the feed) takes a wide sheet as it is and turns an upright one. Without a known paper the
+/// sheet's own shape decides, as for upright paper.
+pub(crate) fn turned(sheet_landscape: bool, paper: Option<(u32, u32)>) -> bool {
+    match paper {
+        Some((w, h)) if w > h => !sheet_landscape,
+        _ => sheet_landscape,
+    }
+}
+
+/// The paper a DEVMODE prints on, in micrometres, and whether it is landscape: what the driver
+/// settled on when the ticket was converted for printing (winprint's `PrintTicket::to_dev_mode`:
+/// the user's own settings as the base, then the driver's validation). `None` when the DEVMODE
+/// names no paper size (a roll, a driver that leaves the fields unset).
+pub(crate) fn devmode_paper(dev_mode: &[u8]) -> Option<((u32, u32), bool)> {
+    const DM_ORIENTATION: u32 = 0x1;
+    const DM_PAPERLENGTH: u32 = 0x4;
+    const DM_PAPERWIDTH: u32 = 0x8;
+    const DMORIENT_LANDSCAPE: i16 = 2;
+    let i16_at = |at: usize| dev_mode.get(at..at + 2).and_then(|b| <[u8; 2]>::try_from(b).ok()).map(i16::from_le_bytes);
+    let fields = dev_mode.get(72..76).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_le_bytes)?;
+    if fields & (DM_PAPERWIDTH | DM_PAPERLENGTH) != DM_PAPERWIDTH | DM_PAPERLENGTH {
+        return None;
+    }
+    let (width, length) = (i16_at(82)?, i16_at(80)?);
+    if width <= 0 || length <= 0 {
+        return None;
+    }
+    let landscape = fields & DM_ORIENTATION != 0 && i16_at(76)? == DMORIENT_LANDSCAPE;
+    // Tenths of a millimetre, as DEVMODE has them, to micrometres.
+    Some(((u32::from(width.unsigned_abs()) * 100, u32::from(length.unsigned_abs()) * 100), landscape))
+}
+
+/// The longest short side of a label printer's paper, in micrometres (4.5 in).
+pub(crate) const LABEL_MAX_SHORT_SIDE: u32 = 114_300;
+
+/// Whether a paper of `width` × `height` micrometres is label-sized: at most 4.5 in on its short side.
+fn label_sized((width, height): (u32, u32)) -> bool {
+    width > 0 && height > 0 && width.min(height) <= LABEL_MAX_SHORT_SIDE
+}
+
+/// Whether a driver offering `colours` (PageOutputColor option keywords) and the fixed papers
+/// `offered` (micrometres), set to `paper`, is a thermal label printer: monochrome only, set to a
+/// label-sized paper, and offering no larger paper. A monochrome office printer or a fax set to
+/// an envelope, an index card or A6 still offers Letter or A4; Zebra's ZDesigner GC420T driver
+/// offers only its one 4 × 6 in "User defined" stock. A label printer that also offers colour is
+/// left to its driver. Papers sized by parameters and papers with a zero side say nothing about
+/// what the printer holds and are not counted.
+pub(crate) fn label_shaped(colours: &[&str], paper: Option<(u32, u32)>, offered: &[(u32, u32)]) -> bool {
+    !colours.is_empty()
+        && colours.iter().all(|c| *c == "Monochrome")
+        && paper.is_some_and(label_sized)
+        && offered.iter().filter(|(w, h)| *w > 0 && *h > 0).all(|&size| label_sized(size))
+}
+
+/// A ticket's PageMediaSize, in micrometres; `None` without one or for a roll.
+pub(crate) fn media_size(xml: &str) -> Option<(u32, u32)> {
+    let document = crate::xml::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    integer(&document, media, "ScoredProperty", "MediaSizeWidth")
+        .zip(integer(&document, media, "ScoredProperty", "MediaSizeHeight"))
+        .filter(|(w, h)| *w > 0 && *h > 0)
+}
+
+/// The keyword of a ticket's PageMediaSize option, without its namespace prefix
+/// (`NorthAmericaLetter`, a vendor's `User0000000256`), as the driver's page media sizes are keyed.
+pub(crate) fn media_keyword(xml: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(xml).ok()?;
+    let media = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, "PageMediaSize"))?;
+    let option = media.children().find(|n| n.has_tag_name((NS_PSF, "Option")))?;
+    option.attribute("name").and_then(|v| v.rsplit(':').next()).filter(|k| !k.is_empty()).map(str::to_string)
+}
+
 /// The widest unprintable margin of the paper, in micrometres, from PrintCapabilities computed
 /// for the job's ticket (`PageImageableSize`). The largest of the four, so content centred inside
 /// it is clear of every edge whichever way the driver measures. `None` when the driver doesn't say.
@@ -1107,6 +1186,16 @@ mod tests {
         assert_eq!(schema_names(&dialog_xml(&Job::default()).unwrap()), ["psk:JobCopiesAllDocuments", "psk:DocumentCollate"]);
     }
 
+    #[test]
+    fn the_media_keyword_is_the_tickets_page_media_size_option() {
+        assert_eq!(media_keyword(&validated((215_900, 279_400), "psk:Portrait", None)).as_deref(), Some("NorthAmericaLetter"));
+        assert_eq!(
+            media_keyword(r#"<psf:PrintTicket version="1" xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework"/>"#),
+            None
+        );
+        assert_eq!(media_keyword("not xml"), None);
+    }
+
     /// A validated ticket as a driver returns it.
     fn validated(paper: (u32, u32), orientation: &str, scaling: Option<&str>) -> String {
         let scaling = scaling.map_or(String::new(), |s| format!(r#"<psf:Feature name="psk:PageScaling"><psf:Option name="{s}"/></psf:Feature>"#));
@@ -1127,16 +1216,23 @@ mod tests {
     fn a_driver_that_changes_the_sheet_is_refused() {
         let letter = (215_900, 279_400);
         let ticket = validated(letter, "Portrait", Some("psk:None"));
-        assert_eq!(verify_ticket(&ticket, Some(letter), false), Ok(letter));
-        assert_eq!(verify_ticket(&ticket, Some((279_400, 215_900)), false), Ok(letter), "either way round");
-        assert_eq!(verify_ticket(&ticket, None, false), Ok(letter), "shrink-to-fit takes the driver's paper");
-        assert!(verify_ticket(&ticket, Some((210_000, 297_000)), false).is_err(), "A4 asked, Letter returned");
-        assert!(verify_ticket(&ticket, Some(letter), true).is_err(), "landscape asked, portrait returned");
-        assert!(verify_ticket(&validated(letter, "Portrait", Some("psk:FitApplicationBleedSizeToPageImageableSize")), Some(letter), false).is_err());
-        assert!(verify_ticket(&validated(letter, "Portrait", Some("ns0000:None")), Some(letter), false).is_ok(), "the IPP class driver's None");
-        assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false).is_ok(), "a driver without scaling");
-        assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false).is_err(), "a roll has no length");
-        assert!(verify_ticket("<not xml", Some(letter), false).is_err());
+        assert_eq!(verify_ticket(&ticket, Some(letter), false, true), Ok(letter));
+        assert_eq!(verify_ticket(&ticket, Some((279_400, 215_900)), false, true), Ok(letter), "either way round");
+        assert_eq!(verify_ticket(&ticket, None, false, true), Ok(letter), "shrink-to-fit takes the driver's paper");
+        assert!(verify_ticket(&ticket, Some((210_000, 297_000)), false, true).is_err(), "A4 asked, Letter returned");
+        assert!(verify_ticket(&ticket, Some(letter), true, true).is_err(), "landscape asked, portrait returned");
+        assert!(
+            verify_ticket(&validated(letter, "Portrait", Some("psk:FitApplicationBleedSizeToPageImageableSize")), Some(letter), false, true).is_err()
+        );
+        assert!(verify_ticket(&validated(letter, "Portrait", Some("ns0000:None")), Some(letter), false, true).is_ok(), "the IPP class driver's None");
+        assert!(verify_ticket(&validated(letter, "Portrait", None), Some(letter), false, true).is_ok(), "a driver without scaling");
+        // A driver with no PageScaling feature (Zebra's ZDesigner) answers CustomSquare when asked
+        // for None: not asked, its answer is not checked; a driver that offers the feature is held to it.
+        let custom = validated(letter, "Portrait", Some("psk:CustomSquare"));
+        assert_eq!(verify_ticket(&custom, Some(letter), false, false), Ok(letter), "not offered: not refused");
+        assert!(verify_ticket(&custom, Some(letter), false, true).is_err(), "offered: it would scale");
+        assert!(verify_ticket(&validated((0, 279_400), "Portrait", None), None, false, true).is_err(), "a roll has no length");
+        assert!(verify_ticket("<not xml", Some(letter), false, true).is_err());
     }
 
     /// A validated ticket that keeps only the sides its DEVMODE extension could read, as a legacy
@@ -1165,24 +1261,24 @@ mod tests {
     #[test]
     fn a_legacy_v3_drivers_zero_side_falls_back_to_the_requested_paper() {
         let a4 = (210_000, 297_000);
-        assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false), Ok(a4));
-        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_000)), Some(a4), false), Ok(a4), "a zero side is a missing one");
-        assert_eq!(verify_ticket(&validated_partial(Some(297_000), None), Some(a4), false), Ok(a4), "either way round");
+        assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false, true), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_000)), Some(a4), false, true), Ok(a4), "a zero side is a missing one");
+        assert_eq!(verify_ticket(&validated_partial(Some(297_000), None), Some(a4), false, true), Ok(a4), "either way round");
         // 0.5 pt (176 µm) inside the tolerance still agrees.
-        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_176)), Some(a4), false), Ok(a4));
-        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_250)), Some(a4), false), Ok(a4), "exactly the tolerance");
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_176)), Some(a4), false, true), Ok(a4));
+        assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_250)), Some(a4), false, true), Ok(a4), "exactly the tolerance");
         // A side that disagrees means the driver changed the paper, not that it has a roll.
-        let changed = verify_ticket(&validated_partial(Some(0), Some(279_400)), Some(a4), false).unwrap_err();
+        let changed = verify_ticket(&validated_partial(Some(0), Some(279_400)), Some(a4), false, true).unwrap_err();
         assert!(changed.to_string().contains("changed the paper size"), "{changed}");
         assert!(!changed.to_string().contains("roll"), "{changed}");
-        assert!(verify_ticket(&validated_partial(Some(0), Some(297_251)), Some(a4), false).is_err(), "one µm past the tolerance");
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_251)), Some(a4), false, true).is_err(), "one µm past the tolerance");
         // Without a sheet named the zero side stays roll-like.
-        assert!(verify_ticket(&validated_partial(Some(0), Some(297_000)), None, false).is_err());
-        assert!(verify_ticket(&validated_partial(None, Some(297_000)), None, false).is_err());
+        assert!(verify_ticket(&validated_partial(Some(0), Some(297_000)), None, false, true).is_err());
+        assert!(verify_ticket(&validated_partial(None, Some(297_000)), None, false, true).is_err());
         // Both sides gone is refused whatever the request names.
         for wanted in [Some(a4), None] {
             for (width, height) in [(None, None), (Some(0), Some(0))] {
-                let refused = verify_ticket(&validated_partial(width, height), wanted, false).unwrap_err();
+                let refused = verify_ticket(&validated_partial(width, height), wanted, false, true).unwrap_err();
                 assert!(refused.to_string().contains("roll"), "{refused}");
             }
         }
@@ -1210,16 +1306,16 @@ mod tests {
     #[test]
     fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
         let a4 = (210_000, 297_000);
-        assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false), Ok(a4));
-        assert_eq!(verify_ticket(&validated_referenced(209_750, 297_000), Some(a4), false), Ok((209_750, 297_000)), "exactly the tolerance");
+        assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false, true), Ok(a4));
+        assert_eq!(verify_ticket(&validated_referenced(209_750, 297_000), Some(a4), false, true), Ok((209_750, 297_000)), "exactly the tolerance");
         // A referenced size that disagrees is refused, not rewritten from the request.
-        let changed = verify_ticket(&validated_referenced(400_000, 297_000), Some(a4), false).unwrap_err();
+        let changed = verify_ticket(&validated_referenced(400_000, 297_000), Some(a4), false, true).unwrap_err();
         assert!(changed.to_string().contains("changed the paper size"), "{changed}");
         // A reference to a parameter the ticket does not set is a missing side, which falls back
         // to the requested paper like any unreadable one.
         let unset =
             validated_referenced(400_000, 297_000).replace(r#"name="psk:PageMediaSizeWidth"><psf:Value"#, r#"name="psk:OtherParameter"><psf:Value"#);
-        assert_eq!(verify_ticket(&unset, Some(a4), false), Ok(a4), "a parameter the ticket does not set is a missing side");
+        assert_eq!(verify_ticket(&unset, Some(a4), false, true), Ok(a4), "a parameter the ticket does not set is a missing side");
     }
 
     /// The namespace of the Brother driver's own keywords.
@@ -1267,8 +1363,8 @@ mod tests {
         assert_eq!(respell(&brother("brpsk"), &merged), Some(merged.clone()), "whatever the driver calls it");
         // What the job's checks read is the same either way.
         let letter = (215_900, 279_400);
-        assert_eq!(verify_ticket(&merged, Some(letter), false), Ok(letter));
-        assert_eq!(verify_ticket(&respell(&merged, &brother("brpsk")).unwrap(), Some(letter), false), Ok(letter));
+        assert_eq!(verify_ticket(&merged, Some(letter), false, true), Ok(letter));
+        assert_eq!(verify_ticket(&respell(&merged, &brother("brpsk")).unwrap(), Some(letter), false, true), Ok(letter));
     }
 
     /// A second vendor namespace, next to [`BROTHER`].
@@ -1684,6 +1780,68 @@ mod tests {
         assert!(!repeats_collated(&Job { copies: 1, ..collated.clone() }, 3, caps(&[])));
         // One page or one copy has no collating order.
         assert!(verify_job_options(&dropped(&collated), &collated, 1, caps(&[])).is_ok());
+    }
+
+    #[test]
+    fn a_sheet_is_turned_only_when_its_shape_differs_from_the_papers() {
+        let letter = Some((215_900, 279_400));
+        let label = Some((69_850, 31_750)); // 2.75 × 1.25 in, wider than tall as the printer feeds it
+        assert!(turned(true, letter), "a wide sheet on upright paper is turned");
+        assert!(!turned(false, letter));
+        assert!(!turned(true, label), "a wide sheet on a wide label stock lies as it is");
+        assert!(turned(false, label), "an upright sheet on a wide label stock is turned");
+        assert!(turned(true, None) && !turned(false, None), "no paper known: the sheet's shape, as on upright paper");
+        assert!(!turned(false, Some((100_000, 100_000))) && turned(true, Some((100_000, 100_000))), "a square paper is upright");
+        // A MUNBYN ITPP941's native 60 × 40 mm form (storytold/pdfcraft#2673): a wide sheet is not
+        // turned a second time, and its upright 102.1 × 152.15 mm form turns a wide sheet as usual.
+        let munbyn = Some((60_000, 40_000));
+        assert!(!turned(true, munbyn) && turned(false, munbyn));
+        let upright_label = Some((102_100, 152_150));
+        assert!(turned(true, upright_label) && !turned(false, upright_label));
+    }
+
+    #[test]
+    fn a_label_printer_is_monochrome_only_on_label_sized_paper() {
+        let label = Some((38_100, 25_400)); // 1.5 × 1 in
+        let four_by_six = Some((101_600, 152_400));
+        let letter = Some((215_900, 279_400));
+        let mono = ["Monochrome"];
+        // ZDesigner GC420T (EPL) 4.6.77.3827: its only paper is "User defined" at 4 × 6 in.
+        assert!(label_shaped(&mono, label, &[(101_600, 152_400)]) && label_shaped(&mono, four_by_six, &[(101_600, 152_400)]));
+        assert!(label_shaped(&mono, label, &[]), "a driver that lists only a custom size");
+        assert!(label_shaped(&mono, label, &[(0, 152_400), (38_100, 25_400)]), "a zero side is not counted");
+        assert!(!label_shaped(&mono, letter, &[(215_900, 279_400)]), "a fax or a monochrome laser");
+        assert!(!label_shaped(&["Monochrome", "Color"], label, &[]), "a colour label printer keeps its driver's way");
+        assert!(!label_shaped(&[], label, &[]) && !label_shaped(&mono, None, &[]) && !label_shaped(&mono, Some((0, 25_400)), &[]));
+        // A monochrome office laser set to small paper still offers office paper.
+        let office = [(215_900, 279_400), (210_000, 297_000), (104_775, 241_300), (105_000, 148_000), (76_200, 127_000)];
+        for small in [(104_775, 241_300), (105_000, 148_000), (76_200, 127_000)] {
+            assert!(!label_shaped(&mono, Some(small), &office), "an office laser on {small:?} paper is not a label printer");
+        }
+        assert_eq!(media_size(&validated((38_100, 25_400), "psk:Portrait", None)), Some((38_100, 25_400)));
+        assert_eq!(media_size("not xml"), None);
+    }
+
+    #[test]
+    fn the_paper_a_devmode_prints_on_is_read_from_its_public_fields() {
+        // A DEVMODEW: dmFields at 72, dmOrientation at 76, dmPaperSize 78, dmPaperLength 80, dmPaperWidth 82 (tenths of mm).
+        let mut dm = vec![0u8; 220];
+        let put16 = |dm: &mut Vec<u8>, at: usize, v: i16| dm[at..at + 2].copy_from_slice(&v.to_le_bytes());
+        dm[72..76].copy_from_slice(&(0x1u32 | 0x2 | 0x4 | 0x8).to_le_bytes());
+        put16(&mut dm, 76, 1);
+        put16(&mut dm, 78, 256);
+        put16(&mut dm, 80, 318); // 1.25 in
+        put16(&mut dm, 82, 699); // 2.75 in
+        assert_eq!(devmode_paper(&dm), Some(((69_900, 31_800), false)));
+        put16(&mut dm, 76, 2);
+        assert_eq!(devmode_paper(&dm), Some(((69_900, 31_800), true)), "landscape");
+        dm[72..76].copy_from_slice(&(0x2u32).to_le_bytes());
+        assert_eq!(devmode_paper(&dm), None, "no width and length fields set");
+        dm[72..76].copy_from_slice(&(0x4u32 | 0x8).to_le_bytes());
+        put16(&mut dm, 80, 0);
+        assert_eq!(devmode_paper(&dm), None, "a roll has no length");
+        assert_eq!(devmode_paper(&dm[..60]), None, "too short");
+        assert_eq!(devmode_paper(&[]), None);
     }
 
     #[test]

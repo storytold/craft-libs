@@ -435,6 +435,25 @@ pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
     }
 }
 
+/// Whether `printer` is a thermal label printer: its driver offers only monochrome output, the
+/// paper in the user's settings is label-sized (at most 4.5 in on its short side), and the driver
+/// offers no larger fixed paper, as a monochrome office printer set to an envelope or A6 does
+/// (it still offers Letter or A4). A caller decides what to do with the answer and may offer its
+/// users a way to override it. Such drivers
+/// dither every grey they are given, so a caller sends them black-and-white pictures at the
+/// printer's resolution through [`rgb::print_pages`] instead of a PDF (Windows; false elsewhere).
+pub fn is_label_printer(printer: &str) -> bool {
+    #[cfg(windows)]
+    {
+        windows::is_label_printer(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        false
+    }
+}
+
 /// Whether [`open_printer_preferences`] can show the driver's own settings window (Windows).
 pub const HAS_PRINTER_PREFERENCES: bool = cfg!(windows);
 
