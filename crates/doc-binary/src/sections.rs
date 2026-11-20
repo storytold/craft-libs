@@ -82,6 +82,10 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
 /// carry 16-bit twip operands ([MS-DOC] §2.6.4).
 fn apply_section(s: &mut SectionProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(0.0, 1584.0);
+    // The top and bottom margins are signed: a negative one is Word's exact margin, where the
+    // header (footer) overlaps the text instead of pushing it. The model keeps the sign, as the
+    // DOC and DOCX writers do.
+    let signed_tw = |v: i32| (v as f32 / 20.0).clamp(-1584.0, 1584.0);
     let s16 = |prl: &Prl| -> Option<i16> {
         match prl.operand {
             [b0, b1, ..] => Some(i16::from_le_bytes([*b0, *b1])),
@@ -150,12 +154,12 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         }
         S_DYA_TOP => {
             if let Some(v) = s16(prl) {
-                s.margin_top = tw(v as i32);
+                s.margin_top = signed_tw(v as i32);
             }
         }
         S_DYA_BOTTOM => {
             if let Some(v) = s16(prl) {
-                s.margin_bottom = tw(v as i32);
+                s.margin_bottom = signed_tw(v as i32);
             }
         }
         S_DXA_GUTTER => {

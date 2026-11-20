@@ -765,6 +765,10 @@ pub struct SectionProps {
     pub page_w: f32,
     pub page_h: f32,
     pub landscape: bool,
+    /// Top and bottom margins, points. Negative is Word's exact margin (`w:pgMar` `w:top` /
+    /// `w:bottom` below zero, ECMA-376 §17.6.11; DOC `dyaTop` / `dyaBottom`): the text starts
+    /// (ends) at the absolute value from the page edge even when the header (footer) is taller,
+    /// and overlaps it.
     pub margin_top: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
@@ -904,8 +908,10 @@ impl SectionProps {
     pub fn text_width(&self) -> f32 {
         (self.page_w - self.margin_left - self.margin_right - self.gutter).max(18.0)
     }
+    /// Height of the text area between the margins, points (a negative, exact margin counts at
+    /// its size).
     pub fn text_height(&self) -> f32 {
-        (self.page_h - self.margin_top - self.margin_bottom).max(18.0)
+        (self.page_h - self.margin_top.abs() - self.margin_bottom.abs()).max(18.0)
     }
     /// Swap to landscape/portrait (keeps margins relative to the paper as Word does: rotates them).
     pub fn set_landscape(&mut self, on: bool) {

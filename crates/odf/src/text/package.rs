@@ -297,7 +297,7 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     let even = doc.settings.even_odd_headers;
     // A watermark is a shape in every header (one written for it alone when there is none).
     let wm = doc.settings.watermark.as_ref().filter(|w| !w.text.trim().is_empty());
-    let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top - sec.margin_bottom);
+    let area = (sec.page_w - sec.margin_left - sec.margin_right, sec.page_h - sec.margin_top.abs() - sec.margin_bottom.abs());
     for (set, name) in [(&sec.headers, "header"), (&sec.footers, "footer")] {
         let wanted =
             set.default.is_some() || (even && set.even.is_some()) || (sec.title_page && set.first.is_some()) || (name == "header" && wm.is_some());
@@ -437,8 +437,10 @@ fn styles_xml(
         // starts the header at the page margin and the text after the header's height. So with
         // a header the page margin is the header's distance, and the header is tall enough to
         // reach the text (it grows with its content, as Word's pushes the text down).
-        let (top, header_h) = if pp.header { (sec.header, (sec.margin_top - sec.header).max(0.0)) } else { (sec.margin_top, 0.0) };
-        let (bottom, footer_h) = if pp.footer { (sec.footer, (sec.margin_bottom - sec.footer).max(0.0)) } else { (sec.margin_bottom, 0.0) };
+        // ODF has no exact (negative) margin: its size is the nearest it can say.
+        let (margin_top, margin_bottom) = (sec.margin_top.abs(), sec.margin_bottom.abs());
+        let (top, header_h) = if pp.header { (sec.header, (margin_top - sec.header).max(0.0)) } else { (margin_top, 0.0) };
+        let (bottom, footer_h) = if pp.footer { (sec.footer, (margin_bottom - sec.footer).max(0.0)) } else { (margin_bottom, 0.0) };
         // A page border is at ODF's margin, the text (or header, footer) inside its padding.
         let (borders, [top, bottom, left, right]) = page_borders(sec.page_borders, [top, bottom, sec.margin_left, sec.margin_right]);
         // The band's height takes in its spacing (see the reader), which content taller than
