@@ -976,14 +976,15 @@ fn a_picture_held_in_the_fill_property_is_read() {
 }
 
 /// The fill of a shape with a linear shaded fill (`fillType` 7) from red to blue, focus `focus`, the properties
-/// `extra`, and `fillShadeColors` of `size`-byte elements `shade` when there is one, stating `count` elements.
-fn shaded_fill_with(focus: u32, extra: &[(u16, u32)], shade: Option<(u16, u16, &[u8])>) -> Option<Fill> {
+/// `extra`, and `fillShadeColors` of `size`-byte elements `shade` when there is one, stating `count` elements and
+/// room for `allocated`.
+fn shaded_fill_with(focus: u32, extra: &[(u16, u32)], shade: Option<(u16, u16, u16, &[u8])>) -> Option<Fill> {
     let mut props = vec![(prop::FILL_TYPE, 7u32), (prop::FILL_COLOR, 0x0000_00FF), (prop::FILL_BACK_COLOR, 0x00FF_0000), (prop::FILL_FOCUS, focus)];
     props.push((prop::FILL_BOOLS, 0x0010_0010));
     props.extend_from_slice(extra);
     let mut complex = vec![];
-    if let Some((count, size, elems)) = shade {
-        complex = [&count.to_le_bytes()[..], &count.to_le_bytes(), &size.to_le_bytes(), elems].concat();
+    if let Some((count, allocated, size, elems)) = shade {
+        complex = [&count.to_le_bytes()[..], &allocated.to_le_bytes(), &size.to_le_bytes(), elems].concat();
         props.push((0x8000 | prop::FILL_SHADE_COLORS, complex.len() as u32));
     }
     let mut entries = vec![];
@@ -997,7 +998,7 @@ fn shaded_fill_with(focus: u32, extra: &[(u16, u32)], shade: Option<(u16, u16, &
     open_streams(streams_of(0xE391_C05F, 1, slide, None)).slides[0].shapes[0].fill.clone()
 }
 
-fn shaded_fill(focus: u32, shade: Option<(u16, u16, &[u8])>) -> Option<Fill> {
+fn shaded_fill(focus: u32, shade: Option<(u16, u16, u16, &[u8])>) -> Option<Fill> {
     shaded_fill_with(focus, &[], shade)
 }
 
@@ -1023,17 +1024,20 @@ fn stops_of(fill: Option<Fill>) -> Vec<(f64, craft_pptx::ColorRef)> {
 fn a_shaded_fill_keeps_its_shade_colours() {
     let [red, green, blue] = [(255, 0, 0), (0, 255, 0), (0, 0, 255)].map(|(r, g, b)| craft_pptx::ColorRef::rgb(Rgba::rgb(r, g, b)));
     let shade = shade_entries(&[([255, 0, 0], 0.0), ([0, 255, 0], 0.5), ([0, 0, 255], 1.0)]);
-    assert_eq!(stops_of(shaded_fill(100, Some((3, 8, &shade)))), [(0.0, red.clone()), (0.5, green.clone()), (1.0, blue.clone())]);
-    assert_eq!(stops_of(shaded_fill(0, Some((3, 8, &shade)))), [(0.0, blue.clone()), (0.5, green.clone()), (1.0, red.clone())]);
+    assert_eq!(stops_of(shaded_fill(100, Some((3, 3, 8, &shade)))), [(0.0, red.clone()), (0.5, green.clone()), (1.0, blue.clone())]);
+    assert_eq!(stops_of(shaded_fill(0, Some((3, 3, 8, &shade)))), [(0.0, blue.clone()), (0.5, green.clone()), (1.0, red.clone())]);
     // The fill's opacity runs from `fillOpacity` at the first colour to `fillBackOpacity` at the last.
     let alpha = |c: &craft_pptx::ColorRef, a: i32| c.clone().with(craft_pptx::ColorTransform::Alpha(a));
     let half = [(prop::FILL_OPACITY, 0x8000), (prop::FILL_BACK_OPACITY, 0x1_0000)];
-    assert_eq!(stops_of(shaded_fill_with(100, &half, Some((3, 8, &shade)))), [(0.0, alpha(&red, 50_000)), (0.5, alpha(&green, 75_000)), (1.0, blue)]);
+    assert_eq!(
+        stops_of(shaded_fill_with(100, &half, Some((3, 3, 8, &shade)))),
+        [(0.0, alpha(&red, 50_000)), (0.5, alpha(&green, 75_000)), (1.0, blue)]
+    );
 }
 
 /// A `fillShadeColors` that is not whole and well formed is left out, and the fill and back colours make the shade
-/// as before: positions out of order, below 0 or past 1, a single colour, more than 256, elements of another size, or
-/// fewer elements than it states.
+/// as before: positions out of order, below 0 or past 1, a single colour, more than 256, elements of another size,
+/// fewer elements than it states, or room allocated for fewer than it states.
 #[test]
 fn a_malformed_shade_falls_back_to_the_fill_colours() {
     let [red, blue] = [(255, 0, 0), (0, 0, 255)].map(|(r, g, b)| craft_pptx::ColorRef::rgb(Rgba::rgb(r, g, b)));
@@ -1046,17 +1050,21 @@ fn a_malformed_shade_falls_back_to_the_fill_colours() {
     let many: Vec<([u8; 3], f64)> = (0..257).map(|i| ([0, 255, 0], f64::from(i) / 256.0)).collect();
     let many = shade_entries(&many);
     let clipped = shade_entries(&[([0, 255, 0], 0.0), ([0, 255, 0], 1.0)]);
-    for (name, count, size, elems) in [
-        ("descending", 3, 8, &descending[..]),
-        ("past one", 2, 8, &past_one[..]),
-        ("below zero", 2, 8, &negative[..]),
-        ("one colour", 1, 8, &one[..]),
-        ("257 colours", 257, 8, &many[..]),
-        ("16-byte elements", 2, 16, &clipped[..]),
-        ("clipped", 3, 8, &clipped[..]),
+    for (name, count, allocated, size, elems) in [
+        ("descending", 3, 3, 8, &descending[..]),
+        ("past one", 2, 2, 8, &past_one[..]),
+        ("below zero", 2, 2, 8, &negative[..]),
+        ("one colour", 1, 1, 8, &one[..]),
+        ("257 colours", 257, 257, 8, &many[..]),
+        ("16-byte elements", 2, 2, 16, &clipped[..]),
+        ("clipped", 3, 3, 8, &clipped[..]),
+        ("fewer allocated than stated", 2, 1, 8, &clipped[..]),
     ] {
-        assert_eq!(stops_of(shaded_fill(100, Some((count, size, elems)))), two, "{name}");
+        assert_eq!(stops_of(shaded_fill(100, Some((count, allocated, size, elems)))), two, "{name}");
     }
+    // More room allocated than used is well formed.
+    assert_eq!(stops_of(shaded_fill(100, Some((2, 4, 8, &clipped)))).len(), 2);
+    assert_ne!(stops_of(shaded_fill(100, Some((2, 4, 8, &clipped)))), two, "the shade's own colours");
 }
 
 /// The headers and footers the document sets for its slides (storytold/deckcraft#1137 review: the date, footer and

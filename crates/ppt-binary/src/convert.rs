@@ -679,7 +679,9 @@ impl<'a> Ctx<'a> {
         // `nElems`, `nElemsAlloc`, `cbElem`, then the elements.
         let bytes = props.complex(prop::FILL_SHADE_COLORS)?;
         let count = usize::from(crate::record::u16_at(bytes, 0)?);
-        if crate::record::u16_at(bytes, 4)? != 8 || !(2..=MAX_SHADE_COLORS).contains(&count) {
+        // [MS-ODRAW] `IMsoArray`: `nElemsAlloc` is at least `nElems`.
+        let allocated = usize::from(crate::record::u16_at(bytes, 2)?);
+        if crate::record::u16_at(bytes, 4)? != 8 || allocated < count || !(2..=MAX_SHADE_COLORS).contains(&count) {
             return None;
         }
         // Every element the array states: a clipped array would lose its last colours.
