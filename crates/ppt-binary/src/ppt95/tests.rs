@@ -2066,7 +2066,7 @@ fn a_dangling_picture_is_left_out() {
 }
 
 /// A metafile record holding more than its header's size is cut to it; one holding less is kept
-/// as it is.
+/// as it is; one whose header gives a size smaller than the header isn't a metafile.
 #[test]
 fn a_metafile_is_cut_to_its_size() {
     let mut long = wmf_n(2);
@@ -2074,7 +2074,10 @@ fn a_metafile_is_cut_to_its_size() {
     let mut short = wmf_n(3);
     short.truncate(short.len() - 6);
     let pic = |slot| picture_95(PICTURE_BOX, slot, [0; 4], PLAIN);
-    let p = picture_deck(vec![vec![pic(0), pic(1)]], &[Some(long), Some(short.clone())], usize::MAX);
+    // A header giving a size smaller than itself: not a metafile, so its picture is left out.
+    let mut tiny = wmf_n(4);
+    tiny[6..10].copy_from_slice(&4u32.to_le_bytes());
+    let p = picture_deck(vec![vec![pic(0), pic(1), pic(2)]], &[Some(long), Some(short.clone()), Some(tiny)], usize::MAX);
     assert_eq!(pictures_on(&p, 0).into_iter().map(|x| x.3).collect::<Vec<_>>(), [wmf_n(2), short]);
 }
 

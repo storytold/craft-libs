@@ -97,7 +97,11 @@ impl<'a> Pictures<'a> {
         let record = self.slots.get(usize::try_from(slot).ok()?).copied().flatten()?;
         let bytes = metafile(record.data)?;
         if bytes.len() > self.budget {
-            log::warn!("ppt: PowerPoint 95 pictures pass {} bytes; the rest are left out", crate::blip::MAX_TOTAL);
+            log::warn!(
+                "ppt: a {}-byte PowerPoint 95 picture passes the {} bytes left of the pictures' budget; it is left out",
+                bytes.len(),
+                self.budget
+            );
             return None;
         }
         self.budget -= bytes.len();
@@ -106,13 +110,17 @@ impl<'a> Pictures<'a> {
 }
 
 /// A metafile record's bytes as a WMF file: a standard header (a type of 1 or 2 and a header of 9
-/// words), cut to the size the header gives when the record holds more. `None` for anything else.
+/// words), cut to the size the header gives when the record holds more. `None` for anything else,
+/// a header giving a size smaller than itself included.
 fn metafile(data: &[u8]) -> Option<&[u8]> {
     let (kind, words) = (u16_at(data, 0)?, u16_at(data, 2)?);
     if !matches!(kind, 1 | 2) || words != 9 || data.len() < WMF_HEADER {
         return None;
     }
     // The file's size in words.
-    let size = crate::record::u32_at(data, 6).and_then(|w| usize::try_from(w).ok()).and_then(|w| w.checked_mul(2)).unwrap_or(0);
-    Some(data.get(..size).filter(|_| size >= WMF_HEADER).unwrap_or(data))
+    let size = crate::record::u32_at(data, 6).and_then(|w| usize::try_from(w).ok()).and_then(|w| w.checked_mul(2))?;
+    if size < WMF_HEADER {
+        return None;
+    }
+    Some(data.get(..size).unwrap_or(data))
 }
