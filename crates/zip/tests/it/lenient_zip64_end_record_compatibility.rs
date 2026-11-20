@@ -1,9 +1,8 @@
 #![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip64_end_record_compatibility.rs.
-use craft_zip::lenient::{self as zip, ZipArchive, ZipError};
-#[path = "lenient_common/mod.rs"]
-mod common;
+use super::common;
 use common::zip_stored;
+use craft_zip::lenient::{self as zip, ZipArchive, ZipError};
 
 fn warning_contains(archive: &ZipArchive, text: &str) -> bool {
     archive.warnings.iter().any(|warning| warning.contains(text))
