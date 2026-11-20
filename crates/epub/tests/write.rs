@@ -105,6 +105,28 @@ fn the_package_document_carries_the_metadata_manifest_and_spine() {
 }
 
 #[test]
+fn publication_date_is_distinct_from_modification_time_and_optional() {
+    let mut b = book();
+    b.metadata.publication_date = Some("2024 & 2025".into());
+    let opf = text(&write(&b).unwrap(), "OEBPS/content.opf");
+    assert!(opf.contains("<dc:date>2024 &amp; 2025</dc:date>"));
+    assert!(opf.contains("<meta property=\"dcterms:modified\">2026-10-13T09:30:00Z</meta>"));
+    for date in [None, Some("   ".into())] {
+        b.metadata.publication_date = date;
+        assert!(!text(&write(&b).unwrap(), "OEBPS/content.opf").contains("<dc:date>"));
+    }
+}
+
+#[test]
+fn publication_date_rejects_xml_forbidden_characters() {
+    for date in ["2024\0-01", "2024\u{ffff}-01"] {
+        let mut b = book();
+        b.metadata.publication_date = Some(date.into());
+        assert!(matches!(write(&b), Err(Error::Invalid(_))), "invalid date was silently changed");
+    }
+}
+
+#[test]
 fn what_is_written_reads_back() {
     let bytes = write(&book()).unwrap();
     let mut epub = Epub::open(&bytes).unwrap();
@@ -296,26 +318,4 @@ fn an_ncx_is_written_on_request_and_reads_back() {
     let mut taken = book();
     taken.resources[0].path = "TOC.ncx".into();
     assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
-}
-
-#[test]
-fn publication_date_is_distinct_from_modification_time_and_optional() {
-    let mut b = book();
-    b.metadata.publication_date = Some("2024 & 2025".into());
-    let opf = text(&write(&b).unwrap(), "OEBPS/content.opf");
-    assert!(opf.contains("<dc:date>2024 &amp; 2025</dc:date>"));
-    assert!(opf.contains("<meta property=\"dcterms:modified\">2026-10-13T09:30:00Z</meta>"));
-    for date in [None, Some("   ".into())] {
-        b.metadata.publication_date = date;
-        assert!(!text(&write(&b).unwrap(), "OEBPS/content.opf").contains("<dc:date>"));
-    }
-}
-
-#[test]
-fn publication_date_rejects_xml_forbidden_characters() {
-    for date in ["2024\0-01", "2024\u{ffff}-01"] {
-        let mut b = book();
-        b.metadata.publication_date = Some(date.into());
-        assert!(matches!(write(&b), Err(Error::Invalid(_))), "invalid date was silently changed");
-    }
 }
