@@ -56,7 +56,7 @@
       "path": "src/byte_reader.rs",
       "source_sha256": "aa8495ca920d5d1f27db8ec98557fd1dc6376a3b6823c1cf8bbd6ed9b9b0c8cf",
       "source_git_blob": "78b282c8f3df43ee43faee63c944b922539b2ec8",
-      "sha256": "41a68fcfb6e71d74257aa2f1821213cc1ea0beff1ea7031dff6b917e98386ceb"
+      "sha256": "e6303442238f84d722b70c8684c1e36517f5a2f6dbd1e3547aefd290bf977536"
     },
     {
       "path": "src/content/gen_ops.py",
@@ -230,7 +230,7 @@
       "path": "src/object/dict.rs",
       "source_sha256": "bcfefabe931614b79ea54940d02fce534eb2363f1b75a03d6428fd7a04c57981",
       "source_git_blob": "1e016b567e8ec17801fa8282c47f653092839cb5",
-      "sha256": "0ec184d3d5368ad67cac0af4c2f98914cc02d2ee7e169276e9ed929ffdb287f2"
+      "sha256": "44bf70d1c861d67835642d38c4529dee77ccdeef472f08604861c358e2a0efe7"
     },
     {
       "path": "src/object/indirect.rs",
