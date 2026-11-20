@@ -4250,6 +4250,19 @@ exit 0
         }
     }
 
+    /// Whether hdiutil's `stderr` says the disk-image helper turned the request away because it
+    /// was busy.
+    fn busy(stderr: &[u8]) -> bool {
+        String::from_utf8_lossy(stderr).contains("Resource temporarily unavailable")
+    }
+
+    #[test]
+    fn hdiutil_busy_replies_are_recognized() {
+        assert!(busy(b"hdiutil: attach failed - Resource temporarily unavailable\n"));
+        assert!(!busy(b"hdiutil: attach failed - image not recognized\n"));
+        assert!(!busy(b""));
+    }
+
     #[cfg(target_os = "macos")]
     mod macos_checks {
         use crate::process::HelperFailure;
@@ -4333,7 +4346,7 @@ exit 0
         fn hdiutil(args: &[&std::ffi::OsStr]) -> std::process::Output {
             let mut output = std::process::Command::new("hdiutil").args(args).output().unwrap();
             for wait_ms in [500, 1000, 2000, 4000] {
-                if output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("Resource temporarily unavailable") {
+                if output.status.success() || !busy(&output.stderr) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(wait_ms));
@@ -4740,7 +4753,9 @@ exit 0
             ended.wait().unwrap();
             let mount = paths.cache.join(format!("mount-photocraft-{pid}-1"));
             std::fs::create_dir_all(&mount).unwrap();
-            // One request at a time, as in `dmg`.
+            // One request at a time, as in `dmg`. A detach elsewhere can still keep the disk-image
+            // helper busy, and it turns the attach away; the attach is tried a few times, as
+            // `install_dmg` does.
             let output = {
                 let _one_at_a_time = macos::disk_image_turn();
                 hdiutil(&[
@@ -4755,6 +4770,10 @@ exit 0
                 ])
             };
             let _attached = Attached(mount.clone());
+            if !output.status.success() && busy(&output.stderr) {
+                eprintln!("skipped: the disk-image helper stayed busy: {}", String::from_utf8_lossy(&output.stderr).trim());
+                return;
+            }
             assert!(output.status.success(), "hdiutil attach failed: {}", String::from_utf8_lossy(&output.stderr).trim());
             let staging = apps.join(format!(".artcraft-launcher-staging-{pid}-Ab12Cd"));
             bundle(&staging, "0.6.0");
