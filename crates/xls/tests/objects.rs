@@ -217,6 +217,20 @@ fn reads_pictures() {
     assert!(report.warnings.iter().any(|w| w.contains("pictures were damaged")), "{:?}", report.warnings);
 }
 
+/// A TIFF picture is read as a PNG of the same picture: the picture model and its apps take PNG.
+#[test]
+fn reads_a_tiff_picture_as_a_png() {
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(2, 2, image::Rgb([0, 0, 255])).write_to(&mut tiff, image::ImageFormat::Tiff).unwrap();
+    let blip = od(0x6E40, 0xF029, &cat(&[&[0u8; 17], tiff.get_ref()]));
+    let (wb, report) = pictures(&[blip], &shape(1, [1, 0, 1, 0, 2, 0, 2, 0]));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    assert_eq!(p[0].mime, "image/png");
+    let img = image::load_from_memory_with_format(&p[0].data, image::ImageFormat::Png).unwrap().to_rgb8();
+    assert_eq!((img.dimensions(), img.get_pixel(1, 1).0), ((2, 2), [0, 0, 255]));
+}
+
 #[test]
 fn pictures_past_the_cap_are_skipped() {
     let png = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], b"png"]));

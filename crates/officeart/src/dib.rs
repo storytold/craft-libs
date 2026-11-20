@@ -8,8 +8,8 @@ use image::ImageEncoder;
 use crate::blip::Decode;
 use crate::record::{u16_at, u32_at};
 
-/// Largest DIB converted to PNG, per side (pixels).
-const MAX_DIB_SIDE: u32 = 16_384;
+/// Largest picture converted to PNG, per side (pixels).
+pub(crate) const MAX_SIDE: u32 = 16_384;
 
 /// A device-independent bitmap with the 14-byte file header a `.bmp` needs in front. `None` for a
 /// header size no Windows version writes (12 to 124 bytes), or pixels that would start past its
@@ -90,22 +90,26 @@ pub fn to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Dib> {
     if !decode {
         return Some(Dib::Bmp(bmp));
     }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bmp));
-    reader.set_format(image::ImageFormat::Bmp);
+    match encode_png(&bmp, image::ImageFormat::Bmp, limit) {
+        Some(png) => Some(Dib::Png(png)),
+        None => Some(Dib::Bmp(bmp)),
+    }
+}
+
+/// A picture file of `format` decoded (at most [`MAX_SIDE`] pixels a side, and `limit` and
+/// 256 MiB of memory) and encoded as a PNG of at most `limit` bytes. `None` when it can't be.
+pub(crate) fn encode_png(file: &[u8], format: image::ImageFormat, limit: usize) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(file));
+    reader.set_format(format);
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DIB_SIDE);
-    limits.max_image_height = Some(MAX_DIB_SIDE);
+    limits.max_image_width = Some(MAX_SIDE);
+    limits.max_image_height = Some(MAX_SIDE);
     limits.max_alloc = Some((256 << 20).min(limit as u64));
     reader.limits(limits);
+    let img = reader.decode().ok()?;
     let mut png = PictureWriter { bytes: Vec::new(), limit };
-    match reader.decode() {
-        Ok(img)
-            if image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).is_ok() =>
-        {
-            Some(Dib::Png(png.bytes))
-        }
-        _ => Some(Dib::Bmp(bmp)),
-    }
+    image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).ok()?;
+    Some(png.bytes)
 }
 
 /// Cap encoded bytes while the PNG encoder writes, before the buffer can grow.

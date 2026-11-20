@@ -3702,6 +3702,7 @@ dependencies = [
  "craft-officeart",
  "craft-sheet",
  "craft-xls",
+ "image",
  "md-5 0.10.6",
  "miniz_oxide 0.9.1",
  "sha1 0.10.7",

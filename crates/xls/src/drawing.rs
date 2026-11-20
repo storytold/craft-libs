@@ -41,12 +41,15 @@ type Bytes = Option<(Vec<u8>, &'static str)>;
 
 /// The picture of one FBSE (its BLIP record after its description and name), within `work`: a
 /// metafile inflated, a WMF with its placeable header put back so the picture keeps its size, a
-/// DIB decoded and made a PNG (or a BMP when it can't be decoded). PICT and TIFF are not read.
+/// DIB decoded and made a PNG (or a BMP when it can't be decoded), a TIFF decoded and made a PNG
+/// (the picture model and its apps take PNG, not TIFF). PICT is not read.
 fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
     let (rec, _) = fbse_record(fbse, &[])?;
     let blip = parse(&rec)?;
-    if matches!(blip.format, Format::Pict | Format::Tiff) {
-        return None;
+    match blip.format {
+        Format::Pict => return None,
+        Format::Tiff => return Some((craft_officeart::tiff::to_png(blip.raw(), usize::MAX, work)?, "image/png")),
+        _ => {}
     }
     let p = picture(&blip, usize::MAX, work)?;
     Some((p.data, p.content_type))

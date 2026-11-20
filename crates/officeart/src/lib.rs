@@ -8,6 +8,7 @@
 //! - [`props`]: shape property tables, their entries and a merged property set.
 //! - [`blip`]: the BLIP store and its pictures, and a decode budget.
 //! - [`dib`]: device-independent bitmaps as PNG files.
+//! - [`tiff`]: TIFF pictures as PNG files.
 //! - [`wmf`]: Windows metafiles with their placeable header put back.
 //!
 //! Everything here reads hostile bytes: a length past the end is clipped, every read is checked,
@@ -24,4 +25,5 @@ pub mod dib;
 pub mod props;
 pub mod record;
 pub mod rt;
+pub mod tiff;
 pub mod wmf;

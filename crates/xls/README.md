@@ -42,8 +42,8 @@ No third-party implementation was consulted.
   parts are `None`.
 - Pictures: the drawing group's BLIP store and each sheet's picture shapes with their client
   anchors (cells and fractions): PNG, JPEG, EMF and WMF (inflated, a WMF given its placeable
-  header back), and DIB decoded as PNG (kept as BMP when it can't be decoded). Shapes that show
-  one picture share its bytes.
+  header back), DIB decoded as PNG (kept as BMP when it can't be decoded), and TIFF decoded as
+  PNG. Shapes that show one picture share its bytes.
 - The AutoFilter range (AutoFilterInfo with the `_FilterDatabase` name); not its criteria.
 
 Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 200,000 drawing

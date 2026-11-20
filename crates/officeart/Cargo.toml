@@ -11,6 +11,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "tiff"] }
 log = { workspace = true }
 miniz_oxide = { workspace = true }

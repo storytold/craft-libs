@@ -27,4 +27,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 craft-xls = { path = ".", features = ["test-support"] }
+# Builds the TIFF a picture test reads.
+image = { version = "0.25", default-features = false, features = ["tiff", "png"] }
 miniz_oxide = "0.9"

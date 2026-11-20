@@ -38,9 +38,12 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 - `dib`: a DIB decoded within limits and re-encoded as a PNG, or kept as a BMP placeholder.
 - `wmf`: a WMF's placeable header, which the BLIP store leaves out, rebuilt from the BLIP's
   metafile header.
+- `tiff`: a TIFF decoded within limits and re-encoded as a PNG, for a reader whose apps draw PNG
+  but not TIFF.
 
 All three readers read BLIPs, property tables and drawings with these rules and limits, and make
 the same files of them: a DIB decoded as a PNG (a BMP when it can't be), a WMF with its placeable
 header back. Each sets its budget's total. `craft-doc-binary` also keeps a Macintosh PICT as a
 placeholder its document model can show; the `.ppt` and `.xls` models have no such placeholder, so
-those readers leave PICT out, and `craft-xls` leaves TIFF out too.
+those readers leave PICT out. `craft-xls` makes TIFF pictures PNG files, which its picture model
+and apps take.
