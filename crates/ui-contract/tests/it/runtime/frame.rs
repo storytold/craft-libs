@@ -94,9 +94,9 @@ enum Shown {
     Apply,
 }
 
-/// A gate that refuses `Shown::Apply` when `refuses`, else lets every command through. Each call makes a new closure.
+/// A gate that refuses `Shown::Apply` when `refuses`, else lets every command through. Each call makes a new gate.
 fn gate(refuses: bool) -> CommandInput {
-    CommandInput::new().gate(CommandGate::new(move |command: &CommandRef| !refuses || Shown::from_ref(command).is_none()))
+    CommandInput::new().gate(CommandGate::new(refuses, |refuses: &bool, command: &CommandRef| !*refuses || Shown::from_ref(command).is_none()))
 }
 
 /// A modal layer with an empty body.
