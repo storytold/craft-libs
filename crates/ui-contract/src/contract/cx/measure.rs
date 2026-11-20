@@ -1,7 +1,7 @@
 //! `MeasureCx`: step 5's read view of a component.
 
 use crate::contract::{Component, Resolved, Show, ValueOf};
-use crate::primitives::{TextEnv, TextLayout, TextRun};
+use crate::primitives::{LeastLayout, TextEnv, TextLayout, TextRun};
 use crate::runtime::commands::{self, CommandRef, ResolvedCommand};
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::layout_memory;
@@ -112,10 +112,10 @@ impl<C: Component> MeasureCx<'_, C> {
         run.layout(self.ui.ctx(), &self.text_env(), width)
     }
 
-    /// The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
-    /// width an elidable text reports at `Proposal::Min`.
-    pub fn least_width(&self, run: &TextRun<'_>) -> f32 {
-        run.least_width(self.ui.ctx(), &self.text_env())
+    /// `run`, a run that elides, laid out whole and its width at its readable least
+    /// ([`TextRun::READABLE_CHARACTERS`]): what an elidable text reports at `Proposal::Min`. Each is laid out once.
+    pub fn least(&self, run: &TextRun<'_>) -> LeastLayout {
+        run.least(self.ui.ctx(), &self.text_env())
     }
 
     fn text_env(&self) -> TextEnv<'_> {
