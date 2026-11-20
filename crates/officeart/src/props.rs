@@ -108,7 +108,10 @@ pub const MAX_PROPS: usize = 1024;
 /// One property value: the 32-bit operand and, for complex properties, the extra bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct PropVal<'a> {
+    /// For a complex property, the length of its extra bytes.
     pub op: u32,
+    pub is_complex: bool,
+    /// A complex property's extra bytes; `None` when they start past the table's end.
     pub complex: Option<&'a [u8]>,
 }
 
@@ -120,10 +123,27 @@ pub struct Props<'a> {
 
 impl<'a> Props<'a> {
     /// Read one `FOPT` body: `count` 6-byte entries then the complex data in entry order. Entries
-    /// already present are kept (the caller adds the most specific table first).
+    /// already present are kept (the caller adds the most specific table first). Within the table,
+    /// a property named twice takes its last entry ([MS-ODRAW], the overview of properties).
     pub fn add_table(&mut self, r: &Rec<'a>) {
+        let mut table: Vec<(u16, PropVal<'a>)> = Vec::new();
+        let mut at: HashMap<u16, usize> = HashMap::new();
         for e in entries(r.data, usize::from(r.instance)) {
-            self.fill_gap(e.pid, PropVal { op: e.op, complex: e.complex });
+            let v = PropVal { op: e.op, is_complex: e.is_complex, complex: e.complex };
+            match at.get(&e.pid) {
+                Some(&i) => {
+                    if let Some(slot) = table.get_mut(i) {
+                        slot.1 = v;
+                    }
+                }
+                None => {
+                    at.insert(e.pid, table.len());
+                    table.push((e.pid, v));
+                }
+            }
+        }
+        for (id, v) in table {
+            self.fill_gap(id, v);
         }
     }
 
@@ -164,13 +184,22 @@ impl<'a> Props<'a> {
         self.map.is_empty()
     }
 
-    /// Set a simple (non-complex) property.
+    /// Set a simple (non-complex) property. A new one isn't added to a set already holding
+    /// [`MAX_PROPS`].
     pub fn set(&mut self, id: u16, op: u32) {
-        self.map.insert(id, PropVal { op, complex: None });
+        if self.map.len() < MAX_PROPS || self.map.contains_key(&id) {
+            self.map.insert(id, PropVal { op, is_complex: false, complex: None });
+        }
     }
 
+    /// The operand: for a complex property, the length of its extra bytes.
     pub fn get(&self, id: u16) -> Option<u32> {
         self.map.get(&id).map(|v| v.op)
+    }
+
+    /// The operand of a simple property; `None` for a complex one, whose operand is a length.
+    pub fn simple(&self, id: u16) -> Option<u32> {
+        self.map.get(&id).filter(|v| !v.is_complex).map(|v| v.op)
     }
 
     pub fn complex(&self, id: u16) -> Option<&'a [u8]> {
@@ -291,6 +320,42 @@ mod tests {
         p.add_table(&Rec::at(&t, 0).unwrap());
         assert_eq!(p.string(prop::NAME).as_deref(), Some("A"));
         assert_eq!(p.complex(prop::DESCRIPTION), None);
+    }
+
+    /// Within one table a property named twice takes its last entry ([MS-ODRAW]); between tables
+    /// the first one added still wins.
+    #[test]
+    fn the_last_entry_in_a_table_wins() {
+        let t = fopt(&[(prop::FILL_COLOR, 1), (prop::LINE_COLOR, 5), (prop::FILL_COLOR, 2)], &[]);
+        let t2 = fopt(&[(prop::FILL_COLOR, 3), (prop::LINE_COLOR, 6)], &[]);
+        let mut p = Props::default();
+        p.add_table(&Rec::at(&t, 0).unwrap());
+        p.add_table(&Rec::at(&t2, 0).unwrap());
+        assert_eq!((p.get(prop::FILL_COLOR), p.get(prop::LINE_COLOR)), (Some(2), Some(5)));
+    }
+
+    /// A complex property's operand is the length of its bytes: `simple` doesn't give it as a
+    /// value (a complex `pib` is no store index).
+    #[test]
+    fn a_complex_operand_is_not_a_simple_value() {
+        let t = fopt(&[(0x8000 | prop::PIB, 2), (prop::FILL_BLIP, 7)], b"AB");
+        let mut p = Props::default();
+        p.add_table(&Rec::at(&t, 0).unwrap());
+        assert_eq!((p.get(prop::PIB), p.simple(prop::PIB)), (Some(2), None));
+        assert_eq!(p.simple(prop::FILL_BLIP), Some(7));
+    }
+
+    /// `set` keeps the set within [`MAX_PROPS`]: a new id is refused at the limit, an existing one
+    /// still changes.
+    #[test]
+    fn set_keeps_at_most_max_props() {
+        let mut p = Props::default();
+        for id in 0..MAX_PROPS as u16 {
+            p.set(id, 1);
+        }
+        p.set(MAX_PROPS as u16, 1);
+        p.set(0, 2);
+        assert_eq!((p.len(), p.get(MAX_PROPS as u16), p.get(0)), (MAX_PROPS, None, Some(2)));
     }
 
     /// A table declaring more entries than it holds ends at the last whole one, and its complex

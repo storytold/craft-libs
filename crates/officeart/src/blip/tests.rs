@@ -123,6 +123,49 @@ fn a_dib_becomes_a_png() {
     assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
 }
 
+/// Every copy a DIB makes is charged before it is made: its whole BMP file (14 bytes more than
+/// the DIB), then for a PNG the decoded pixels and the PNG itself.
+#[test]
+fn every_copy_of_a_dib_is_charged() {
+    // 1×1, 24-bit: 4 bytes of decoded pixels.
+    let mut dib = vec![0u8; 40];
+    dib[0] = 40;
+    dib[4] = 1;
+    dib[8] = 1;
+    dib[12] = 1;
+    dib[14] = 24;
+    dib.extend_from_slice(&[0, 0, 255, 0]);
+    let blip = atom(rt::BLIP_DIB, 0x7A8, &[&[0u8; 17][..], &dib].concat());
+    let bmp = 14 + dib.len();
+    let read = |left: usize| picture(&parse(&Rec::at(&blip, 0).unwrap()).unwrap(), usize::MAX, &mut Decode::new(left));
+    assert!(read(dib.len()).is_none(), "the DIB fits, its BMP doesn't");
+    assert!(read(bmp).is_some());
+    // The BMP and the pixels fit, the PNG doesn't: the BMP is kept.
+    let mut work = Decode::new(bmp + 4);
+    assert!(matches!(crate::dib::to_png(&dib, usize::MAX, &mut work), Some(crate::dib::Dib::Bmp(_))));
+    let mut work = Decode::new(1 << 20);
+    let Some(crate::dib::Dib::Png(png)) = crate::dib::to_png(&dib, usize::MAX, &mut work) else { panic!("not a PNG") };
+    assert!((1 << 20) - work.left >= bmp + 4 + png.len(), "{} charged", (1 << 20) - work.left);
+}
+
+/// A WMF whose bounds don't fit the 16-bit coordinates of its records keeps its records without a
+/// placeable header, rather than one whose clamped bounds have no width.
+#[test]
+fn a_wmf_with_bounds_past_16_bits_has_no_placeable_header() {
+    let records = b"WMF records".to_vec();
+    let header = |l: i32, r: i32| {
+        let mut h = Vec::new();
+        for v in [records.len() as i32, l, 0, r, 1000, 914_400, 914_400, records.len() as i32] {
+            h.extend_from_slice(&v.to_le_bytes());
+        }
+        h.extend_from_slice(&[0xFE, 0xFE]);
+        h
+    };
+    assert_eq!(crate::wmf::with_placeable_header(&header(40_000, 41_000), records.clone()), Some(records.clone()));
+    let with = crate::wmf::with_placeable_header(&header(0, 1000), records.clone()).unwrap();
+    assert_eq!((with.len(), &with[22..]), (records.len() + crate::wmf::PLACEABLE_HEADER, &records[..]));
+}
+
 /// The pixels start after the colour table: biClrUsed entries for more than 8 bits (none when it
 /// is 0), at most 2^bits for fewer, after the masks of BI_BITFIELDS (3) or BI_ALPHABITFIELDS (4);
 /// a table running past the DIB is no picture.
@@ -197,6 +240,23 @@ fn decodes_an_uncompressed_metafile() {
         let p = picture_of(&blip, usize::MAX).unwrap();
         assert_eq!((p.ext, &p.data), ("emf", &emf));
     }
+}
+
+/// A WMF's placeable header takes its place in the limit and the budget with the records: a
+/// stored WMF that fits only without its header is no picture, and costs nothing.
+#[test]
+fn a_wmf_header_fits_in_its_limit_and_budget() {
+    let wmf = vec![3u8; 24];
+    let blip = metafile(rt::BLIP_WMF, 0x216, wmf.len(), &wmf, false);
+    let b = parse(&Rec::at(&blip, 0).unwrap()).unwrap();
+    let whole = wmf.len() + crate::wmf::PLACEABLE_HEADER;
+    let mut work = Decode::new(wmf.len());
+    assert!(picture(&b, usize::MAX, &mut work).is_none(), "the budget holds the records only");
+    assert_eq!(work.left, wmf.len(), "nothing was charged");
+    assert!(picture(&b, wmf.len(), &mut Decode::new(usize::MAX)).is_none(), "the limit holds the records only");
+    let mut work = Decode::new(whole);
+    assert_eq!(picture(&b, whole, &mut work).map(|p| p.data.len()), Some(whole));
+    assert_eq!(work.left, 0);
 }
 
 /// A metafile whose inflated size (with its compressed bytes) would pass the remaining budget is

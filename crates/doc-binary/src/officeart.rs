@@ -85,9 +85,9 @@ pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
         // The format cannot be drawn: kept as a placeholder of the right size.
         Format::Pict => ("pict", true),
     };
-    let bytes = b.bytes(limit, work)?;
-    // A WMF gets back the placeable header the BLIP leaves out, so it keeps its size.
-    let bytes = if b.format == Format::Wmf { craft_officeart::wmf::with_placeable_header(b.header?, bytes)? } else { bytes };
+    // A WMF gets back the placeable header the BLIP leaves out, so it keeps its size; the header
+    // is part of the picture's share of `limit` and of `work`.
+    let bytes = if b.format == Format::Wmf { craft_officeart::blip::with_placeable_header(&b, limit, work)? } else { b.bytes(limit, work)? };
     Some(Blip { bytes, ext, placeholder })
 }
 
@@ -131,7 +131,9 @@ impl Props {
     /// tertiary ones; boolean words merged flag by flag).
     pub(crate) fn from_set(p: &craft_officeart::props::Props) -> Props {
         let fixed = |v: u32| (v as i32) as f32 / 65_536.0;
-        let mut out = Props { pib: p.get(0x0104), ..Props::default() };
+        // A complex `pib` holds its picture in its own bytes, and its operand is their length, not a
+        // store index.
+        let mut out = Props { pib: p.simple(0x0104), ..Props::default() };
         if let Some(v) = p.get(0x0004) {
             out.rot = fixed(v);
         }

@@ -706,8 +706,8 @@ fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
-    let mut skipped_pictures = false;
-    let shapes = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
+    // A drawing the workbook's record allowance cut short may have lost pictures.
+    let (shapes, mut skipped_pictures) = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
     // The sheet's grid, built only when a picture sits inside a group and must be made cells.
     let grid = shapes.iter().any(|s| matches!(s.place, drawing::Place::InGroup { .. })).then(|| {
         let default_row = f64::from(st.sheet.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT));

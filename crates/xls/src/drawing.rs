@@ -72,11 +72,19 @@ pub(crate) struct PictureShape {
 /// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
 /// `budget` records more (one budget for the whole workbook,
 /// [`craft_officeart::record::MAX_RECORDS`] to start with). A picture inside a shape group is
-/// placed through the group's coordinate spaces, nested groups included.
-pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> Vec<PictureShape> {
+/// placed through the group's coordinate spaces, nested groups included. Also whether the budget
+/// ran out before the drawing's last record, so shapes may be missing.
+pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> (Vec<PictureShape>, bool) {
     let mut out = Vec::new();
-    walk(dg, 0, None, &mut out, budget);
-    out
+    let mut allowance = Allowance { left: budget, cut: false };
+    walk(dg, 0, None, &mut out, &mut allowance);
+    (out, allowance.cut)
+}
+
+/// The records a drawing may still read, and whether it has had to leave one unread.
+struct Allowance<'b> {
+    left: &'b mut usize,
+    cut: bool,
 }
 
 /// A group's coordinate space mapped to its top-level group's: per axis, a coordinate `v` is
@@ -118,7 +126,7 @@ impl Frame {
 
 /// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, in `frame` (`None` outside
 /// any group), reading at most `budget` records more (shared by the whole workbook).
-fn walk(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut usize) {
+fn walk(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut Allowance<'_>) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -133,20 +141,21 @@ fn walk(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape
     }
 }
 
-/// The next record, if the budget has one left for it.
-fn take<'a>(recs: &mut Records<'a>, budget: &mut usize) -> Option<craft_officeart::record::Rec<'a>> {
-    if *budget == 0 {
+/// The next record, if the budget has one left for it; a record left unread is noted.
+fn take<'a>(recs: &mut Records<'a>, budget: &mut Allowance<'_>) -> Option<craft_officeart::record::Rec<'a>> {
+    if *budget.left == 0 {
+        budget.cut |= recs.clone().next().is_some();
         return None;
     }
     let r = recs.next()?;
-    *budget -= 1;
+    *budget.left -= 1;
     Some(r)
 }
 
 /// A group container: its first shape is the group itself (its coordinate space and its anchor),
 /// the rest its members. The drawing's top group (its patriarch) and a container whose first shape
 /// isn't a group's hold their shapes in the frame they are in.
-fn group(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut usize) {
+fn group(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut Allowance<'_>) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -211,7 +220,7 @@ fn rect(b: &[u8]) -> Option<[f64; 4]> {
 }
 
 /// A shape container's picture, anchors and group space.
-fn shape(sp: &[u8], budget: &mut usize) -> Sp {
+fn shape(sp: &[u8], budget: &mut Allowance<'_>) -> Sp {
     let mut s = Sp::default();
     let mut recs = Records::new(sp);
     while let Some(r) = take(&mut recs, budget) {
@@ -219,7 +228,7 @@ fn shape(sp: &[u8], budget: &mut usize) -> Sp {
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
-                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
+                if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB && !e.is_complex).last() {
                     s.pib = Some(e.op);
                 }
             }
@@ -235,6 +244,10 @@ fn shape(sp: &[u8], budget: &mut usize) -> Sp {
             }
             _ => {}
         }
+    }
+    // A shape the budget cut short is no shape: its anchor may be the part left unread.
+    if recs.next().is_some() {
+        return Sp::default();
     }
     s
 }
@@ -337,13 +350,13 @@ mod tests {
         let sp = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &sp));
         let anchor = ClientAnchor { col1: 1, dx1: 512, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 4, dy2: 0 };
-        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), vec![PictureShape { pib: 1, place: Place::Cells(anchor) }]);
+        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()).0, vec![PictureShape { pib: 1, place: Place::Cells(anchor) }]);
         // Truncated or nonsense drawings give nothing, never a panic.
         for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..], &fbse_of(&[0xFF; 60])[..]] {
             let _ = fbse_blip(bad, &mut Decode::new(usize::MAX));
         }
         for bad in [&dg[..dg.len() - 5], &[0xFF; 40][..], &[][..], &dgg[..20]] {
-            let _ = picture_shapes(bad, &mut MAX_RECORDS.clone());
+            let _ = picture_shapes(bad, &mut MAX_RECORDS.clone()).0;
             let _ = blip_store(bad);
         }
     }
@@ -399,12 +412,19 @@ mod tests {
         let count = MAX_RECORDS / 4;
         let many = rec(0x000F, 0xF003, &vec![picture.clone(); count].concat());
         let mut budget = MAX_RECORDS;
-        let first = picture_shapes(&many, &mut budget).len();
-        let second = picture_shapes(&many, &mut budget).len();
+        let (first, first_cut) = picture_shapes(&many, &mut budget);
+        let (second, second_cut) = picture_shapes(&many, &mut budget);
+        let (first, second) = (first.len(), second.len());
         assert!(first == count && second < count, "{first} then {second}: the second sheet gets what is left");
+        // The second sheet is told its drawing was cut short; the first, read whole, isn't.
+        assert!(!first_cut && second_cut);
+        // A budget used up exactly by the drawing's last record cuts nothing.
+        let one = rec(0x000F, 0xF003, &picture);
+        assert!(!picture_shapes(&one, &mut 4).1);
+        assert!(picture_shapes(&one, &mut 3).1);
         let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
-        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).len(), 1);
-        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).is_empty(), "past the depth limit");
+        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).0.len(), 1);
+        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).0.is_empty(), "past the depth limit");
     }
 
     fn rect_rec(ty: u16, r: [i32; 4]) -> Vec<u8> {
@@ -440,7 +460,7 @@ mod tests {
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &[patriarch, group, outside].concat()));
         let [col1, dx1, row1, dy1, col2, dx2, row2, dy2] = anchor;
         let group = ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 };
-        let got = picture_shapes(&dg, &mut MAX_RECORDS.clone());
+        let got = picture_shapes(&dg, &mut MAX_RECORDS.clone()).0;
         let outside = ClientAnchor { col1: 7, dx1: 0, row1: 7, dy1: 0, col2: 8, dx2: 0, row2: 8, dy2: 0 };
         assert_eq!(
             got,
