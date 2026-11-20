@@ -68,7 +68,7 @@ does), so the decoder doesn't need to know.
   rayon task directly into the output planes.
 - Robustness: every size field is validated before allocation, codewords longer than 56 bits are
   rejected, and arithmetic is overflow-safe. Mutated streams return `Err`, never panic (see
-  [`tests/prores/fuzz_hostile.rs`](../../tests/prores/fuzz_hostile.rs)).
+  [`tests/it/prores/fuzz_hostile.rs`](../../tests/it/prores/fuzz_hostile.rs)).
 
 ## Encoder
 

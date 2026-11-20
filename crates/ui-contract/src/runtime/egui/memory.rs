@@ -50,13 +50,12 @@ pub(crate) fn peek_copy<T: Any + Copy + Send + Sync>(ctx: &Context, id: Id) -> O
     ctx.data(|data| data.get_temp::<T>(id))
 }
 
-/// Stores `mark` under `id` unless a value of its type is there already; true when it stored it.
-pub(crate) fn mark_seen<T: Any + Clone + Send + Sync>(data: &mut Map, id: Id, mark: T) -> bool {
-    let absent = data.get_temp::<T>(id).is_none();
-    if absent {
-        data.insert_temp(id, mark);
-    }
-    absent
+/// Stores `mark(None)` under `id`, or `mark(Some(old))` over the value of its type there already; true when there
+/// was none. `T` is a plain mark: `Copy`, so no slot code runs under the data lock.
+pub(crate) fn mark_seen<T: Any + Copy + Send + Sync>(data: &mut Map, id: Id, mark: impl FnOnce(Option<T>) -> T) -> bool {
+    let old = data.get_temp::<T>(id);
+    data.insert_temp(id, mark(old));
+    old.is_none()
 }
 
 /// Puts a taken-out box back under `id`, in the allocation it left in. The value it replaced, if any, is returned

@@ -37,6 +37,13 @@ const BASE: &[&str] = &["color-ui"];
 /// and not a family itself.
 const COMPOSITION: &[&str] = &["menu"];
 
+/// Edges between families that are allowed, each with its reason (developer ruling, port S-L347).
+const ALLOWED: &[(&str, &str, &str)] = &[
+    ("dialogs", "browse", "the file chooser lists browse's places"),
+    ("pages", "text", "the page rulers are text's ruler over a page"),
+    ("review", "pages", "comment balloons sit beside placed pages"),
+];
+
 /// Family crates `m`'s `ui` depends on: through its `ui` feature, and through dependencies that turn `ui` on.
 fn ui_edges(m: &Member) -> Vec<String> {
     let mut edges: Vec<String> = m.features.get("ui").into_iter().flatten().filter_map(|e| common::crate_of(e)).map(str::to_owned).collect();
@@ -58,10 +65,18 @@ fn family_ui_depends_on_no_other_family() {
     let mut offenders = Vec::new();
     for m in members().iter().filter(|m| FAMILIES.contains(&m.dir.as_str()) && !COMPOSITION.contains(&m.dir.as_str())) {
         for dep in ui_edges(m) {
-            if dep != m.dir && FAMILIES.contains(&dep.as_str()) && !BASE.contains(&dep.as_str()) {
+            if dep != m.dir
+                && FAMILIES.contains(&dep.as_str())
+                && !BASE.contains(&dep.as_str())
+                && !ALLOWED.iter().any(|(from, to, _)| *from == m.dir && *to == dep)
+            {
                 offenders.push(format!("craft-{}'s ui depends on craft-{dep}", m.dir));
             }
         }
     }
-    assert!(offenders.is_empty(), "family ui crates may depend only on craft-color-ui's ui, not on each other:\n{}", offenders.join("\n"));
+    assert!(
+        offenders.is_empty(),
+        "family ui crates may depend only on craft-color-ui's ui, not on each other (beyond ALLOWED):\n{}",
+        offenders.join("\n")
+    );
 }

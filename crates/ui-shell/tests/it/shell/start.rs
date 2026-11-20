@@ -1,9 +1,10 @@
 //! `StartScreen`: which part of the page takes a double click, and what a recent file's menu offers.
 
-use craft_ui::contract::Bind;
-use craft_ui::shell::{RecentFile, RecentSort, RecentView, StartAction, StartLink, StartScreen};
+use craft_ui::contract::{Bind, Role};
+use craft_ui::shell::{RecentFile, RecentList, RecentSort, RecentView, StartAction, StartLink, StartScreen};
 use craft_ui::testing::pointer::{moved, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
+use egui::{Key, Modifiers};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -74,6 +75,77 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
     let link = fixture.by_label("Docs").expect("the rail link shows");
     double_click(&mut fixture, &link);
     assert_eq!(opens(&log), 0, "a double click on a rail link opens no file: {:?}", log.borrow());
+}
+
+/// The row of the recent file named `file`: a list row whose name starts with the file's name and carries its folder.
+fn recent_row(fixture: &Fixture, file: &str) -> Option<Target> {
+    [Role::LIST_ITEM, Role::LIST_BOX_OPTION]
+        .into_iter()
+        .flat_map(|role| fixture.by_role(role))
+        .find(|row| fixture.tree().name_of(row.node).is_some_and(|name| name.starts_with(file)))
+}
+
+/// A recent row opens its file on a click, shows its remove part on hover and reports that file's removal, and the
+/// row's menu clears the list.
+#[trial]
+fn a_recent_row_names_its_full_path_and_reveals_remove_on_hover_or_focus() {
+    let log: Log = Rc::default();
+    let seen = Rc::clone(&log);
+    let files = vec![RecentFile::new("/tmp/work/Poster.psd", "Poster.psd"), RecentFile::new("/tmp/work/Flyer.psd", "Flyer.psd")];
+    let mut fixture = Fixture::new(move |ui| {
+        let out = RecentList::new(&files).show(ui);
+        seen.borrow_mut().extend(out.actions);
+    });
+    fixture.room(egui::Vec2::new(700.0, 500.0));
+    fixture.settle();
+    log.borrow_mut().clear();
+
+    let poster = PathBuf::from("/tmp/work/Poster.psd");
+    let row = recent_row(&fixture, "Poster.psd").expect("the row shows");
+    let name = fixture.tree().name_of(row.node).map(str::to_owned);
+    assert!(name.is_some_and(|text| text.contains("/tmp/work")), "the row's name carries the file's folder");
+    fixture.click(&row).idle(2);
+    assert!(log.borrow().contains(&StartAction::OpenRecent(poster.clone())), "a click opens the row's file: {:?}", log.borrow());
+
+    // Focus stays on the Flyer row after its click; Enter opens it again, and the pointer far away leaves the remove
+    // part revealed by focus alone.
+    log.borrow_mut().clear();
+    let flyer = recent_row(&fixture, "Flyer.psd").expect("the second row shows");
+    fixture.click(&flyer).idle(2);
+    log.borrow_mut().clear();
+    fixture.frame(vec![moved(egui::pos2(1.0, 1.0))]);
+    fixture.idle(2);
+    let buttons_focused = fixture.by_role(Role::BUTTON).len();
+    fixture.key(Key::Enter, Modifiers::NONE).idle(2);
+    assert!(
+        log.borrow().contains(&StartAction::OpenRecent(PathBuf::from("/tmp/work/Flyer.psd"))),
+        "Enter on the focused row opens its file: {:?}",
+        log.borrow()
+    );
+
+    log.borrow_mut().clear();
+    let at = row.center();
+    fixture.frame(vec![moved(at)]);
+    fixture.idle(2);
+    let revealed = fixture.by_role(Role::BUTTON);
+    assert!(revealed.len() > buttons_focused - 1, "hovering a row keeps its remove part shown");
+    let remove = revealed
+        .into_iter()
+        .find(|button| row.rect.contains(button.center()) && button.center().x > row.center().x)
+        .expect("hovering the row reveals its remove part");
+    fixture.click(&remove).idle(2);
+    assert!(log.borrow().contains(&StartAction::RemoveRecent(poster)), "the remove part removes that row's file: {:?}", log.borrow());
+
+    log.borrow_mut().clear();
+    let at = recent_row(&fixture, "Flyer.psd").expect("the second row shows").center();
+    fixture.frame(vec![moved(at)]);
+    fixture.frame(vec![secondary(at, true)]);
+    fixture.frame(vec![secondary(at, false)]);
+    fixture.idle(3);
+    // The menu lists Open, Remove, Clear and Show in Folder, in that order.
+    let clear = fixture.by_role(Role::MENU_ITEM).into_iter().nth(2).expect("the row's menu offers Clear");
+    fixture.click(&clear).idle(2);
+    assert!(log.borrow().contains(&StartAction::ClearRecent), "Clear reports ClearRecent: {:?}", log.borrow());
 }
 
 /// A recent file's menu offers Show in Folder exactly where the platform can reveal a file.
@@ -308,4 +380,19 @@ fn the_home_drop_card_is_bounded_and_opens_by_keyboard_or_pointer() {
     assert!(focused(&fixture), "Tab reaches the drop target");
     fixture.key(Key::Enter, Modifiers::NONE).settle();
     assert_eq!(*log.borrow(), vec![StartAction::Open]);
+}
+
+/// An empty recent list on a page says so in a line at the reading start under its heading, where its rows would
+/// begin, not in the start screen's centred empty state (a File page's Open list).
+#[trial]
+fn an_empty_recent_list_says_so_at_the_reading_start() {
+    let files: Vec<RecentFile> = Vec::new();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = RecentList::new(&files).empty("Nothing opened yet").show(ui);
+    });
+    fixture.room(egui::Vec2::new(700.0, 500.0));
+    fixture.settle();
+    let line = fixture.by_label("Nothing opened yet").expect("the empty line shows");
+    assert!(line.rect.left() < 60.0, "the line starts at the list's start edge: {:?}", line.rect);
+    assert!(line.rect.width() < 300.0, "the line is as wide as its text: {:?}", line.rect);
 }

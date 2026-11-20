@@ -1,7 +1,8 @@
 //! Stories of the layout components `Row`, `Stack` and `Grid`.
 
 use super::{Grid, Row, Stack};
-use crate::contract::{Gap, Pad, ShowContainer as _};
+use crate::contract::{Gap, LeastWidth, Pad, Props as _, Show as _, ShowContainer as _, Sizing, WrapWidth};
+use crate::display::Text;
 use crate::layout::{CellAlign, GridFit, empty_cell};
 use crate::story_kit::sample::{outlined, words};
 use crate::testing::{StoryData, StoryOutput, story};
@@ -11,7 +12,11 @@ use egui::Ui;
 /// The gap and padding tier the Row and Stack stories edit.
 fn spacing(data: &mut StoryData, gap: Gap, gaps: &'static [(&'static str, Gap)]) -> (Gap, Pad) {
     let gap = *data.choice("gap", gap, gaps);
-    let pad = *data.choice("pad", Pad::Regular, &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy)]);
+    let pad = *data.choice(
+        "pad",
+        Pad::Regular,
+        &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy), ("Page", Pad::Page)],
+    );
     (gap, pad)
 }
 
@@ -30,6 +35,54 @@ fn stack(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Stack<'static>, covers = [])]
 fn stack_footer(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| Stack::new().gap(Gap::Stack).pad(Pad::Regular).footer(|ui, _| words(ui, 2..3)).show(ui, |ui, _| words(ui, 0..2)).into())
+}
+
+/// A side menu beside a page: the menu as wide as its widest item and as tall as the row, its footer at the bottom.
+#[story(Stack<'static>, covers = [])]
+fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    outlined(ui, |ui| {
+        // design: allow[contract/allocate, literal-size/vec2](the story gives the stack a fixed stage box to show fill-height sizing)
+        ui.allocate_ui(egui::vec2(360.0, 200.0), |ui| {
+            Row::new().fill().show(ui, |ui, _| {
+                Stack::new()
+                    .sizing(Sizing::FillHeight)
+                    .gap(Gap::Tight)
+                    .pad(Pad::Regular)
+                    .footer(|ui, _| words(ui, 2..3))
+                    .show(ui, |ui, _| words(ui, 0..2));
+                Stack::new().fill().pad(Pad::Regular).show(ui, |ui, _| words(ui, 3..4));
+            })
+        })
+        .inner
+        .into()
+    })
+}
+
+/// The two width roles of a content-sized stack: a side menu held at its least width with short items, and a column
+/// of settings whose paragraph breaks at the column's line length instead of widening it. The column also holds a
+/// dialog's least width, wider than its line length: where a paragraph's lines break moves with the text size, and the
+/// least width keeps the story as wide in every density and text size, so it only grows as the text does. The two stand
+/// one above the other: side by side they are wider than a trial's room, which then squeezes the column by as much as
+/// a denser side menu grows, and its paragraph breaks narrower.
+#[story(Stack<'static>, covers = [], title = "Width roles")]
+fn stack_width_roles(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    outlined(ui, |ui| {
+        Stack::new()
+            .gap(Gap::Section)
+            .show(ui, |ui, _| {
+                Stack::new().least_width(LeastWidth::SideMenu).gap(Gap::Tight).pad(Pad::Regular).show(ui, |ui, _| words(ui, 0..2));
+                let column = Stack::new().wrap_width(WrapWidth::Column).least_width(LeastWidth::Dialog);
+                column.gap(Gap::Stack).pad(Pad::Regular).show(ui, |ui, _| {
+                    let _ = Text::new(
+                        "Save a copy in another format. Printing goes through a PDF you can print from any viewer, and the pages \
+                         picked here are the ones that print.",
+                    )
+                    .show(ui);
+                    words(ui, 2..3);
+                });
+            })
+            .into()
+    })
 }
 
 const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Fixed(60.0)];

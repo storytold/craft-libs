@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
-use std::time::Instant;
+use web_time::Instant;
 
 /// Why a schema migration step failed.
 #[derive(Debug, Clone, PartialEq, Eq)]

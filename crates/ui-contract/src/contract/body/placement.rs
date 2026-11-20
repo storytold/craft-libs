@@ -119,7 +119,8 @@ pub(crate) fn shown_placement(
     let size = default.max(least).min(overlay.size_limits.max.unwrap_or(Vec2::INFINITY)).min(room);
     // The layer centres, and is kept, inside the screen cut to `bounds`; bounds that miss the screen leave it whole.
     let region = overlay.bounds.map(|bounds| screen.intersect(bounds)).filter(|region| region.is_positive()).unwrap_or(screen);
-    let pos = placement.pos.map(Pos2::from).or(float.pos).unwrap_or_else(|| region.center() - size / 2.0);
+    // The saved position is the layer's top left; the float's is where its corner sits.
+    let pos = placement.pos.map(Pos2::from).or_else(|| float.top_left(size)).unwrap_or_else(|| region.center() - size / 2.0);
     let pos = super::window::keep_inside(Rect::from_min_size(pos, size), region).min;
     placement.pos = Some(pos.into());
     placement.size = Some(size.into());

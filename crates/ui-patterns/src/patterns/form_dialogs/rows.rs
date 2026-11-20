@@ -734,25 +734,40 @@ impl<'p> Pass<'p> {
         };
     }
 
-    /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
+    /// A radio row is its own section: the title shows the row's name once, and the group it names follows. A row with
+    /// [`options_in_row`](Param::options_in_row) has no title and stands its options side by side.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
-        let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
+        if line.param.option().options_in_row() {
+            self.radio_group(ui, line, options, true);
+            return;
+        }
         Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| {
-            let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
-            if let Some(tip) = line.param.tooltip_text() {
-                group = group.tooltip(tip.clone());
+            self.radio_group(ui, line, options, false);
+        });
+    }
+
+    /// The radio group of `line`, its options in a column, or side by side when `in_row`.
+    fn radio_group(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)], in_row: bool) {
+        let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
+        let mut group = RadioGroup::new(line.name.clone(), Bind::given(value)).enabled(line.enabled);
+        if let Some(tip) = line.param.tooltip_text() {
+            group = group.tooltip(tip.clone());
+        }
+        let radios = |ui: &mut Ui| {
+            for (id, label) in options {
+                Radio::new(id.clone()).label(label.clone()).enabled(line.param.option_enabled(id) && line.enabled).show(ui);
             }
-            let group = group.show(ui, |ui, _| {
-                Stack::new().show(ui, |ui, _| {
-                    for (id, label) in options {
-                        Radio::new(id.clone()).label(label.clone()).enabled(line.param.option_enabled(id) && line.enabled).show(ui);
-                    }
-                });
-            });
-            if let Some(v) = group.output.value().cloned() {
-                self.work.set(line.key, FieldValue::Text(v));
+        };
+        let group = group.show(ui, |ui, _| {
+            if in_row {
+                Row::new().show(ui, |ui, _| radios(ui));
+            } else {
+                Stack::new().show(ui, |ui, _| radios(ui));
             }
         });
+        if let Some(v) = group.output.value().cloned() {
+            self.work.set(line.key, FieldValue::Text(v));
+        }
     }
 
     /// An angle row: the dial and the field over `range` at `decimals` digits. The field clamps a typed angle into
@@ -910,8 +925,18 @@ impl<'p> Pass<'p> {
                 }
                 None => {
                     let mut field = TextField::new(line.name.clone(), Bind::given(value.clone())).id_salt("text");
-                    if let Some(lines) = line.param.option().lines() {
+                    let options = line.param.option();
+                    if let Some(lines) = options.lines() {
                         field = field.lines(lines);
+                    }
+                    if let Some(max) = options.max_chars() {
+                        field = field.limit(Some(max));
+                    }
+                    if options.mono() {
+                        field = field.mono();
+                    }
+                    if let Some(chars) = options.field_chars() {
+                        field = field.width_chars(chars);
                     }
                     if let Some(hint) = line.param.hint_text() {
                         field = field.placeholder(hint.clone());

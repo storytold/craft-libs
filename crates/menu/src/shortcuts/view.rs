@@ -7,6 +7,7 @@
 mod bars;
 mod detail;
 mod header;
+mod lists;
 #[cfg(feature = "screen-testing")]
 mod stories;
 mod table;
@@ -29,7 +30,7 @@ use egui::Ui;
 use crate::shortcuts::rows::AreaId;
 use crate::shortcuts::state::{DialogState, Env};
 use crate::shortcuts::words::around_chord;
-use crate::shortcuts::{keyboard, review, sets};
+use crate::shortcuts::{Layout, keyboard, review, sets};
 
 /// The table's share of the width beside the detail pane.
 const TABLE_SHARE: f32 = 0.62;
@@ -54,6 +55,12 @@ pub(crate) fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, env: &mut Env<'_>, state: &
         if changed {
             state.app_tab_changed();
         }
+        return;
+    }
+    if env.options.layout == Layout::CommandLists {
+        lists::show(ui, cx, env, state);
+        // The Reset All prompt and the messages are the bars'.
+        bars::show(ui, cx, env, state);
         return;
     }
     sets::show(ui, env, state);

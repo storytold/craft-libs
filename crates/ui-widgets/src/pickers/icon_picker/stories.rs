@@ -1,6 +1,6 @@
 //! Stories of `IconPicker`.
 
-use super::{IconPicker, IconPickerGroup, IconPickerItem};
+use super::{IconPicker, IconPickerGroup, IconPickerGroups, IconPickerItem};
 use crate::buttons::Button;
 use crate::contract::{Bind, Show as _, ShowContainer as _};
 use crate::popover::Popover;
@@ -53,6 +53,22 @@ fn icon_picker_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(IconPicker<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn icon_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     IconPicker::new("Tool", Bind::bound(data.value("tool", Some(3u8))), &groups()).show(ui).into()
+}
+
+/// The groups as a filter row: All first, then each group.
+#[story(IconPicker<'static, u8>, covers = [], drive = Drive::Never)]
+fn icon_picker_filter(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    IconPicker::new("Tool", Bind::bound(data.value("tool", Some(3u8))), &groups()).group_display(IconPickerGroups::Filter).show(ui).into()
+}
+
+/// The filter row with a search that matches nothing, and the app's own empty text.
+#[story(IconPicker<'static, u8>, covers = [], drive = Drive::Type("zzz"))]
+fn icon_picker_filter_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    IconPicker::new("Tool", Bind::bound(data.value("none", None)), &groups())
+        .group_display(IconPickerGroups::Filter)
+        .empty("No icons in this category")
+        .show(ui)
+        .into()
 }
 
 #[story(IconPicker<'static, u8>, covers = [Empty], drive = Drive::Type("zzz"))]

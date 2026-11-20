@@ -177,14 +177,17 @@ use craft_ui::runtime::motion;
 // Logic phase.
 let Some(mut channel) = self.control.take() else { return };
 let document = self.document_identity(); // None when the app has no document identity
-channel.captures.note_geometry(CaptureGeometry::from_facts(WindowHost::of(ctx).screenshot_facts(), document));
-let observed = channel.captures.last_geometry();
-let finished = channel.captures.drain(motion::now(), observed, document);
+let host = WindowHost::of(ctx);
+let viewport = host.current();
+if let Some(facts) = host.screenshot_facts(viewport) {
+    channel.captures.note_geometry(viewport, CaptureGeometry::from_facts(facts, document));
+}
+let finished = channel.captures.drain(motion::now(), document);
 channel.finish_captures(finished, &mut |path, bytes| self.write_automation_file(path, bytes));
 let settle = settle_ms(ctx.global_style().animation_time);
 while let Some(req) = channel.next_request() {
     let reply = match req.method.as_str() {
-        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params)),
+        "ui.screenshot" => Reply::screenshot(self.next_capture_token(), path_param(&req.params), viewport),
         "ui.resize" => { /* send ViewportCommand::InnerSize */ Reply::from_result(Ok(json!(null))) }
         "ui.set" => Reply::from_result(self.ui_set(&req.params)),
         other => Reply::from_result(Err(format!("unknown method {other}"))),

@@ -10,7 +10,7 @@ mod bar;
 mod dialog;
 
 pub use bar::{FindBar, FindBarOutput, FindBarState, FindStep};
-pub use dialog::{FindReplaceDialog, FindRequest, FindTab};
+pub use dialog::{FindReplaceDialog, FindRequest, FindTab, GoToKind, GoToTarget};
 
 use crate::find::{FindError, MAX_COUNT, MAX_PATTERN, RegexError, WildcardError};
 
@@ -70,6 +70,19 @@ craft_ui::words! {
         line_break: "find.lineBreak" = "Manual Line Break";
         found_text: "find.foundText" = "Find What Text";
         clipboard_contents: "find.clipboardContents" = "Clipboard Contents";
+        column_break: "find.columnBreak" = "Column Break";
+        endnote_mark: "find.endnoteMark" = "Endnote Mark";
+        footnote_mark: "find.footnoteMark" = "Footnote Mark";
+        field_code: "find.fieldCode" = "Field";
+        graphic: "find.graphic" = "Graphic";
+        page_break: "find.pageBreak" = "Manual Page Break";
+        word_start: "find.wordStart" = "Beginning of Word";
+        word_end: "find.wordEnd" = "End of Word";
+        any_single_character: "find.anySingleCharacter" = "Any Single Character";
+        any_run: "find.anyRun" = "Any Number of Characters";
+        find_expression: "find.findExpression" = "Find What Expression";
+        next: "find.next" = "Next";
+        previous: "find.previous" = "Previous";
         special_item: template "find.specialItem" = "{name}  {code}";
         error_too_long: template "find.errorTooLong" = "The Find what text is longer than {max} characters";
         wildcard_unclosed_brace: "find.wildcardUnclosedBrace" = "An opening brace needs a closing brace";

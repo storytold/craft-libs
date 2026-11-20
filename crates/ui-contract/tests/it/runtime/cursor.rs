@@ -237,6 +237,82 @@ fn the_cursor_image_draws_the_pointer_around_its_centre_pixel() {
     }
 }
 
+/// The straight RGBA of the pixel at (`x`, `y`).
+fn pixel(image: &CustomCursorImage, x: i32, y: i32) -> [u8; 4] {
+    let at = (y as usize * usize::from(image.size[0]) + x as usize) * 4;
+    [image.rgba[at], image.rgba[at + 1], image.rgba[at + 2], image.rgba[at + 3]]
+}
+
+/// The I-beam is two colours, so it shows on light and dark grounds, and its stem and serifs lie on whole device pixels
+/// at every scale: a stroke is never split over two pixels, which would show as grey fringes of its own.
+#[trial]
+fn the_painted_i_beam_shows_on_light_and_dark_and_keeps_whole_pixel_strokes() {
+    for scale in [1.0, 1.25, 1.5] {
+        let mut frames = frames(linux(), scale);
+        let beam = painted(&mut frames, PaintedCursor::IBeam).image.expect("the I-beam is a window image");
+        let [hx, hy] = beam.hotspot.map(i32::from);
+        let side = i32::from(beam.size[0]);
+        // The stem, across the middle row: one run of pixels with the stroke between halo on both sides.
+        let row: Vec<[u8; 4]> = (0..side).map(|x| pixel(&beam, x, hy)).collect();
+        let first = row.iter().position(|p| p[3] > 0).expect("the stem is drawn") as i32;
+        let last = row.iter().rposition(|p| p[3] > 0).expect("the stem is drawn") as i32;
+        assert!(first < hx && hx < last, "{scale}: halo on both sides of the stem: {first}..{last} about {hx}");
+        assert!(row[first as usize..=last as usize].iter().all(|p| p[3] > 0), "{scale}: the stem is one run");
+        assert_eq!(hx - first, last - hx, "{scale}: the halo is as wide on the left as on the right");
+        assert_ne!(row[hx as usize][..3], row[first as usize][..3], "{scale}: the stroke and its halo differ in colour");
+        assert_eq!(row[first as usize], row[last as usize], "{scale}: the halo is the same on both sides");
+        let mut alphas: Vec<u8> = row.iter().map(|p| p[3]).filter(|a| *a > 0).collect();
+        alphas.sort_unstable();
+        alphas.dedup();
+        assert!(alphas.len() <= 2, "{scale}: no partly covered column across the stem: {alphas:?}");
+        // The serifs, down a column beside the stem: two runs, each of whole pixels.
+        let x = hx + (2.0 * scale).round() as i32;
+        let column: Vec<[u8; 4]> = (0..side).map(|y| pixel(&beam, x, y)).collect();
+        let runs = column.windows(2).filter(|w| w[0][3] == 0 && w[1][3] > 0).count() + usize::from(column[0][3] > 0);
+        assert_eq!(runs, 2, "{scale}: a serif at each end");
+        let mut alphas: Vec<u8> = column.iter().map(|p| p[3]).filter(|a| *a > 0).collect();
+        alphas.sort_unstable();
+        alphas.dedup();
+        assert!(alphas.len() <= 2, "{scale}: no partly covered row across a serif: {alphas:?}");
+        // The path-text pointer with no grabbable end is the beam alone, and the type pointer draws the same stem.
+        let bare = painted(&mut frames, PaintedCursor::path_text(false, false)).image.unwrap();
+        assert_eq!((bare.size, &bare.rgba), (beam.size, &beam.rgba), "{scale}: path text shares the beam");
+        let typed = painted(&mut frames, PaintedCursor::type_on(false)).image.unwrap();
+        let [tx, ty] = typed.hotspot.map(i32::from);
+        for dx in -2..=2 {
+            assert_eq!(pixel(&typed, tx + dx, ty), pixel(&beam, hx + dx, hy), "{scale}: the type pointer's stem at {dx}");
+        }
+    }
+}
+
+/// An arrow turned toward a direction keeps its tip on the hotspot and its body behind the tip, along the opposite
+/// direction, whichever way it points.
+#[trial]
+fn a_turned_arrow_points_along_its_direction_about_the_hotspot() {
+    let mut frames = frames(linux(), 1.0);
+    let mut seen: Vec<CustomCursorImage> = Vec::new();
+    for dir in [Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(-1.0, 0.0), Vec2::new(-1.0, -1.0)] {
+        let image = painted(&mut frames, PaintedCursor::arrow_toward(dir)).image.expect("the arrow is a window image");
+        let [hx, hy] = image.hotspot.map(i32::from);
+        let side = i32::from(image.size[0]);
+        assert!(pixel(&image, hx, hy)[3] > 0, "{dir:?}: the tip is on the hotspot");
+        // The centroid of what is drawn, from the hotspot.
+        let (mut sum, mut count) = (Vec2::ZERO, 0.0f32);
+        for y in 0..side {
+            for x in 0..side {
+                if pixel(&image, x, y)[3] > 0 {
+                    sum += Vec2::new((x - hx) as f32, (y - hy) as f32);
+                    count += 1.0;
+                }
+            }
+        }
+        let behind = (sum / count).normalized().dot(-dir.normalized());
+        assert!(behind > 0.9, "{dir:?}: the body lies behind the tip, cosine {behind}");
+        assert!(seen.iter().all(|other| other.rgba != image.rgba), "{dir:?}: the art differs from the other directions");
+        seen.push(image);
+    }
+}
+
 /// A brush tip outline requested within a region (a canvas's view on the canvas's layer) is a mark on that canvas:
 /// the window takes it whole only while it lies inside the region with no layer over it. At the region's edge, or
 /// under a layer above the region's, its ring paints on the region's layer clipped to the region, under that layer,

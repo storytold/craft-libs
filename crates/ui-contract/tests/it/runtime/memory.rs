@@ -112,6 +112,36 @@ fn set_saved_value_is_read_back_by_saved_value_and_stored_once() {
     assert_eq!(store.writes(), 2, "a changed value is stored once");
 }
 
+/// A component left unshown for a frame and shown again well inside the eviction grace (a backstage page left and
+/// reopened) appears again through every pass of the frame it comes back in, and only then; its shown entries stay.
+#[trial]
+fn a_component_shown_again_after_a_frame_without_it_appears_again() {
+    let mut frames = Frames::new();
+    let id = global("page", ());
+    let passes = RefCell::new(Vec::<bool>::new());
+    let mut show = |ui: &mut Ui| {
+        let mut stage = Stage::open(ui.ctx(), id);
+        passes.borrow_mut().push(stage.appeared());
+        *stage.memory::<u32>() += 1;
+        stage.finish();
+    };
+    frames.frame(vec![], &mut show);
+    frames.frame(vec![], &mut show);
+    assert_eq!(passes.borrow().last(), Some(&false), "a component shown every frame appears once");
+    frames.frame(vec![], |_| {});
+    passes.borrow_mut().clear();
+    frames.frame(vec![], &mut show);
+    let back = passes.take();
+    assert!(!back.is_empty() && back.iter().all(|&appeared| appeared), "every pass of the frame it is shown again in: {back:?}");
+    frames.frame(vec![], |ui| {
+        let mut stage = Stage::open(ui.ctx(), id);
+        passes.borrow_mut().push(stage.appeared());
+        assert!(*stage.memory::<u32>() >= 3, "the shown entry stayed inside the grace");
+        stage.finish();
+    });
+    assert_eq!(passes.take(), vec![false], "the next frame is no appearance");
+}
+
 /// The lifetimes of 7.2, through `Remember`: shown entries go with their owner; session and saved ones only
 /// through `forget` and `forget_saved`; a press entry goes when its press ends.
 #[trial]

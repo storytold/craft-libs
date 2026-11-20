@@ -243,3 +243,32 @@ fn the_end_region_shares_the_members_line() {
     let (member, end) = (member.borrow().rect, end.borrow().rect);
     assert!((end.center().y - member.center().y).abs() < SLACK, "the end region's probe {end:?} is off the members' line {member:?}");
 }
+
+/// A Row in right-to-left holding a vertically scrolling container (content-sized, then filling its height) beside a
+/// probe: the container, the probe inside it and the probe beside it are finite, and the container lies in the row.
+#[trial]
+fn a_scrolling_container_in_a_right_to_left_row_measures_and_shows_finite() {
+    use craft_ui::contract::Scroll;
+    use craft_ui_test_kit::body::Slab;
+    for (sizing, wide) in [(Sizing::Content, 40.0), (Sizing::FillHeight, 40.0), (Sizing::Content, 2000.0), (Sizing::FillHeight, 2000.0)] {
+        let (inside, beside) = (RefCell::new(Seen::default()), RefCell::new(Seen::default()));
+        let (region, rects) = lay_out(Some(Direction::Rtl), |ui| {
+            let row = Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("row").show(ui, |ui, _| {
+                let props = ContainerProps::new().scroll(Scroll::vertical()).sizing(sizing);
+                let panel = Slab::new(props).id_salt("settings").show(ui, |ui, _| {
+                    Probe::new(&inside).size(Vec2::new(120.0, 400.0)).id_salt("inside").show(ui);
+                });
+                Probe::new(&beside).size(Vec2::new(wide, 10.0)).sizing(Sizing::FillWidth).id_salt("beside").show(ui);
+                panel.output.rect
+            });
+            vec![row.output.rect, row.inner.unwrap_or(Rect::NOTHING)]
+        });
+        let (inside, beside) = (inside.into_inner().rect, beside.into_inner().rect);
+        let finite = |rect: Rect| rect.min.is_finite() && rect.max.is_finite();
+        let (row, panel) = (rects[0], rects[1]);
+        let dump = format!("{sizing:?}: region {region:?}, row {row:?}, panel {panel:?}, inside {inside:?}, beside {beside:?}");
+        assert!(finite(row) && finite(panel) && finite(inside) && finite(beside), "every rect is finite: {dump}");
+        assert!(panel.width() > 100.0 && panel.max.x <= region.max.x + SLACK, "the container shows in the row: {dump}");
+        assert!(panel.min.x > beside.max.x - SLACK, "under RTL the container is right of the probe after it: {dump}");
+    }
+}

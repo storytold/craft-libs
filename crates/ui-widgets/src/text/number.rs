@@ -184,11 +184,7 @@ impl<'a> NumberField<'a, Option<f64>> {
     /// and its edit events are in the stored unit. `range` is in the stored unit and `popup_slider` and presets
     /// numbers too; the step is in the shown unit and defaults to the shown unit's own.
     pub fn length(label: impl Into<Label>, value: Bind<'a, Option<f64>>, lengths: LengthUnits) -> Self {
-        let mut field = Self::of(label, value);
-        field.lengths = Some(lengths);
-        field.unit_kind = Some(lengths.shown);
-        field.step = Some(lengths.shown.step());
-        field
+        Self::of(label, value).lengths(lengths)
     }
 }
 
@@ -196,6 +192,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// A number field named `label` over a value of another type, such as [`NamedOr`].
     pub fn named(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
         Self::of(label, value)
+    }
+
+    /// The lengths the field keeps and shows, as [`NumberField::length`] gives them: a named-number field reads and
+    /// shows lengths through the one units path.
+    #[must_use]
+    pub fn lengths(mut self, lengths: LengthUnits) -> Self {
+        self.lengths = Some(lengths);
+        self.unit_kind = Some(lengths.shown);
+        self.step = Some(lengths.shown.step());
+        self
     }
 
     fn of(label: impl Into<Label>, value: Bind<'a, V>) -> Self {
@@ -241,7 +247,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
     #[must_use]
     pub(super) fn zoom_typing(mut self) -> Self {
-        self.options.tab_rewrites = true;
+        self.options.tab = crate::primitives::TabKey::Rewrites;
         self.options.holds_drafts = true;
         self
     }

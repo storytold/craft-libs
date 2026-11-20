@@ -94,13 +94,30 @@ impl Checker {
         self
     }
 
-    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
-    /// with its top-left corner at `origin`. A painter's clip cuts it.
-    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+    /// The texture of the two colours and the side of a cell.
+    fn texture(&self, ctx: &Context, tokens: &UiTokens) -> (TextureId, f32) {
         let side = self.size.unwrap_or(tokens.size.checker).max(f32::EPSILON);
         let light = self.light.map_or_else(|| rgba_color(tokens.color.overlay.checker_light), |color| color.0);
         let dark = self.dark.map_or_else(|| rgba_color(tokens.color.overlay.checker_dark), |color| color.0);
-        let texture = checker_texture(ctx, light, dark);
+        (checker_texture(ctx, light, dark), side)
+    }
+
+    /// The checkerboard over the convex polygon `corners` as one textured mesh, a light cell with its top-left corner at
+    /// `origin`: the cells follow the polygon's edge, which a rect's clip cannot.
+    pub fn polygon_shape(&self, ctx: &Context, tokens: &UiTokens, corners: &[Pos2], origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
+        let mut mesh = fill_polygon(corners, UNTINTED, 0.0);
+        mesh.texture_id = texture;
+        for vertex in &mut mesh.vertices {
+            vertex.uv = ((vertex.pos - origin) / (2.0 * side)).to_pos2();
+        }
+        Shape::mesh(mesh)
+    }
+
+    /// The checkerboard over `area` as one textured shape: square cells of the light and dark colours, a light cell
+    /// with its top-left corner at `origin`. A painter's clip cuts it.
+    pub fn shape(&self, ctx: &Context, tokens: &UiTokens, area: CheckerArea, origin: Pos2) -> Shape {
+        let (texture, side) = self.texture(ctx, tokens);
         // One texel per cell; the texture repeats every two cells.
         let uv = |p: Pos2| ((p - origin) / (2.0 * side)).to_pos2();
         match area {
@@ -291,6 +308,32 @@ pub fn ramp(rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: 
     vec![Shape::mesh(mesh)]
 }
 
+/// `mesh` with every vertex that lies outside a rounded corner of `rect` moved onto the arc, towards the corner's
+/// centre, keeping its colour. A square corner moves nothing.
+fn rounded_mesh(mut mesh: Mesh, rect: Rect, radius: CornerRadius) -> Vec<Shape> {
+    let most = rect.width().min(rect.height()) / 2.0;
+    let r = |corner: u8| f32::from(corner).min(most);
+    let corners = [
+        (r(radius.nw), rect.left_top(), egui::vec2(1.0, 1.0)),
+        (r(radius.ne), rect.right_top(), egui::vec2(-1.0, 1.0)),
+        (r(radius.sw), rect.left_bottom(), egui::vec2(1.0, -1.0)),
+        (r(radius.se), rect.right_bottom(), egui::vec2(-1.0, -1.0)),
+    ];
+    for vertex in &mut mesh.vertices {
+        for &(r, corner, toward) in &corners {
+            if r <= 0.0 {
+                continue;
+            }
+            let centre = corner + toward * r;
+            let d = vertex.pos - centre;
+            if d.x * toward.x < 0.0 && d.y * toward.y < 0.0 && d.length() > r {
+                vertex.pos = centre + d * (r / d.length());
+            }
+        }
+    }
+    vec![Shape::mesh(mesh)]
+}
+
 /// The columns of a rounded ramp: the places of `marks` (sorted) and of samples along each corner of `corners` (its
 /// radius, and whether it is at the start of the strip), each with its colour.
 fn rounded_columns(marks: &[(f32, Color32)], corners: &[(f32, bool)], length: f32) -> Vec<(f32, Color32)> {
@@ -341,8 +384,22 @@ const CROSSING_MIN: f64 = 8.0;
 /// Minor lines' share of the major colour's alpha.
 const MINOR_SHARE: f32 = 0.45;
 
+/// How many times a thinned grid doubles its step before it gives up.
+const MAX_DOUBLINGS: u32 = 32;
+
 /// The radius of a dot, in screen points.
 const DOT_RADIUS: f32 = 0.6;
+
+/// What a grid does when its lines come closer than the minimum step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridCrowding {
+    /// Draws nothing for an axis whose lines are too close.
+    #[default]
+    Hide,
+    /// Doubles the step, at most 32 times, until the lines fit.
+    Thin,
+}
 
 /// The lines of one axis: positions along it, in the grid's space.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -354,14 +411,33 @@ pub struct GridAxis {
     pub major: Vec<f64>,
 }
 
+/// The major step an axis draws at `zoom`: `step` when it is at least [`MIN_STEP`] screen points; else, for `Thin`, the
+/// step doubled (at most 32 times) until it is; `None` when the axis draws nothing. Lines and crossings both read it, so
+/// crossings follow what is drawn.
+fn fitted_step(step: f64, zoom: f64, crowding: GridCrowding) -> Option<f64> {
+    if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) {
+        return None;
+    }
+    let mut step = step;
+    if crowding == GridCrowding::Thin {
+        for _ in 0..MAX_DOUBLINGS {
+            if step * zoom >= MIN_STEP || !step.is_finite() {
+                break;
+            }
+            step *= 2.0;
+        }
+    }
+    (step.is_finite() && step * zoom >= MIN_STEP).then_some(step)
+}
+
 impl GridAxis {
     /// The lines of one axis between `lo` and `hi`: majors every `step` from `origin`, minors between them when the
     /// minor step is at least [`MIN_STEP`] screen points at `zoom`. An axis whose major step is under `MIN_STEP`
     /// draws nothing; at most [`MAX_LINES`] lines are given.
-    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64) -> GridAxis {
-        if !(step.is_finite() && step > 0.0 && zoom.is_finite() && zoom > 0.0) || step * zoom < MIN_STEP {
+    fn spaced(step: f64, subdivisions: u32, origin: f64, (lo, hi): (f64, f64), zoom: f64, crowding: GridCrowding) -> GridAxis {
+        let Some(step) = fitted_step(step, zoom, crowding) else {
             return GridAxis::default();
-        }
+        };
         let subdivided = subdivisions > 1 && step / f64::from(subdivisions) * zoom >= MIN_STEP;
         let pitch = if subdivided { step / f64::from(subdivisions) } else { step };
         let every = if subdivided { i64::from(subdivisions) } else { 1 };
@@ -398,11 +474,19 @@ pub struct GridLines {
 impl GridLines {
     /// The lines of a grid in document units: majors every `spacing` from `origin`, `subdivisions` steps to a major
     /// (1 or 0 is no minor lines), across `extent` as `view` shows it.
-    pub fn document(view: &CanvasView, extent: kurbo::Rect, spacing: kurbo::Vec2, origin: kurbo::Point, subdivisions: u32) -> Self {
+    pub fn document(
+        view: &CanvasView,
+        extent: kurbo::Rect,
+        spacing: kurbo::Vec2,
+        origin: kurbo::Point,
+        subdivisions: u32,
+        crowding: GridCrowding,
+    ) -> Self {
         let subdivisions = subdivisions.max(1);
-        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x());
-        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom);
-        let crossings = spacing.x * view.zoom_x() >= CROSSING_MIN && spacing.y * view.zoom >= CROSSING_MIN;
+        let x = GridAxis::spaced(spacing.x, subdivisions, origin.x, (extent.x0, extent.x1), view.zoom_x(), crowding);
+        let y = GridAxis::spaced(spacing.y, subdivisions, origin.y, (extent.y0, extent.y1), view.zoom, crowding);
+        let wide = |step: f64, zoom: f64| fitted_step(step, zoom, crowding).is_some_and(|fitted| fitted * zoom >= CROSSING_MIN);
+        let crossings = wide(spacing.x, view.zoom_x()) && wide(spacing.y, view.zoom);
         GridLines { x, y, extent: Some(extent), crossings, view: Some(*view) }
     }
 
@@ -797,6 +881,12 @@ impl ContentPainterCx<'_> {
     /// Paints a colour ramp over `rect` with corners of `radius` along `axis`, as data; see [`ramp`].
     pub fn ramp(&self, rect: Rect, radius: CornerRadius, stops: &[(f32, DataColor)], axis: Axis) {
         self.data_shapes(ramp(rect, radius, stops, axis));
+    }
+
+    /// Paints a colour `mesh` laid over `rect`, as data, with its vertices pulled inside the outline of corners of
+    /// `radius`, so a gradient keeps inside the rounded ring of the well it fills.
+    pub fn mesh_in(&self, rect: Rect, radius: CornerRadius, mesh: Mesh) {
+        self.data_shapes(rounded_mesh(mesh, rect, radius));
     }
 
     /// Paints the well of a plot over `rect` and returns the rect inside its edge, where the plot draws.

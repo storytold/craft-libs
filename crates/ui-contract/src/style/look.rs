@@ -67,13 +67,34 @@ pub enum SurfaceKind {
     Scrim,
     /// An outlined box without fill.
     Frame,
+    /// The app's colour as a surface: the strong accent, square corners, no edge.
+    Brand,
 }
 
 impl SurfaceKind {
+    /// Every kind, in the order the gallery shows them.
+    pub const ALL: [SurfaceKind; 15] = [
+        SurfaceKind::Background,
+        SurfaceKind::Canvas,
+        SurfaceKind::Chrome,
+        SurfaceKind::Panel,
+        SurfaceKind::Raised,
+        SurfaceKind::Pressed,
+        SurfaceKind::Sunken,
+        SurfaceKind::Well,
+        SurfaceKind::Knob,
+        SurfaceKind::Popup,
+        SurfaceKind::Dialog,
+        SurfaceKind::Floating,
+        SurfaceKind::Scrim,
+        SurfaceKind::Frame,
+        SurfaceKind::Brand,
+    ];
+
     /// The ink text and icons read on this surface.
     pub const fn ink(self) -> super::Ink {
         match self {
-            SurfaceKind::Scrim => super::Ink::OnDark,
+            SurfaceKind::Scrim | SurfaceKind::Brand => super::Ink::OnDark,
             _ => super::Ink::OnPanel,
         }
     }
