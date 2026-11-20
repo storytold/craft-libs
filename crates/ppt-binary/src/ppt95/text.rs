@@ -110,12 +110,12 @@ impl Env {
 
     pub(super) fn new(document: &Rec) -> Env {
         let Some(environment) = document.child(rt::ENVIRONMENT) else { return Env::default() };
-        // There may be more than one font list; the first that holds fonts is the table.
+        // There may be more than one font list; the first that holds a face is the table.
         let fonts = environment
             .children()
             .filter(|r| r.kind == rt::FONTS)
             .map(|list| slots(&list, rt::FONT, |f| f.child(rt::FONT_ATOM).map(|a| face(&a))))
-            .find(|f| f.iter().any(Option::is_some))
+            .find(|f| f.iter().flatten().any(|face| !face.is_empty()))
             .unwrap_or_default();
         let rulers =
             environment.child(rt::RULERS).map(|list| slots(&list, rt::RULER, |r| r.child(rt::RULER_ATOM).map(|a| ruler(&a)))).unwrap_or_default();
@@ -257,7 +257,12 @@ fn entries<'a>(runs: &Rec<'a>, kind: u32, size: usize, total: u32) -> Vec<&'a [u
             if covered >= total {
                 return out;
             }
-            covered = covered.saturating_add(u32_at(e, 0).max(1));
+            // A run of no characters formats nothing, so it is skipped rather than counted.
+            let len = u32_at(e, 0);
+            if len == 0 {
+                continue;
+            }
+            covered = covered.saturating_add(len);
             out.push(e);
         }
     }

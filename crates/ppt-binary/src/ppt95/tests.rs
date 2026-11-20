@@ -426,11 +426,20 @@ fn other_framings_keep_the_powerpoint_97_path() {
     let f = build(&[("PowerPoint Document", &not95), ("Current User", &unknown_token)]);
     let e = crate::import(&f, &AppDefaults).unwrap_err();
     assert!(matches!(e, crate::PptError::TooOld));
-    assert_eq!(e.to_string(), "the presentation was made by PowerPoint 4.0 or earlier");
+    assert_eq!(e.to_string(), "the presentation is in a PowerPoint format older than PowerPoint 95");
     // The Document must be the root's first child, with no instance.
     let mut wrong_instance = stream_of(document_atom(5760, 4320, 0), &[], &[]);
     wrong_instance[20..24].copy_from_slice(&0u32.to_le_bytes());
     assert!(super::document(&wrong_instance).is_none());
+    // ...and hold a DocumentAtom with its slide count: an empty Document is not this path's, and
+    // without the PowerPoint 97 records it is damaged.
+    let empty = container(rt::ROOT, 0, &[container(rt::DOCUMENT, 0, &[])]);
+    assert!(super::document(&empty).is_none());
+    assert!(matches!(import(&empty), Err(crate::PptError::Damaged(_))));
+    // An atom too short to hold the count.
+    assert!(super::document(&stream_of(rec(rt::DOCUMENT_ATOM, 4, 0, &[0; 32]), &[], &[])).is_none());
+    // A document with no slides is still one.
+    assert_eq!(import(&stream_of(document_atom(5760, 4320, 0), &[], &[])).unwrap().slides.len(), 0);
 
     let p = crate::import(&crate::tests::file(), &AppDefaults).unwrap();
     assert_eq!(p.slides.len(), 1);
@@ -651,6 +660,32 @@ fn a_bulleted_body_keeps_levels_bullets_and_margins() {
 
 /// Character runs: bold, italic and underline bits, the font by slot, the size, and an RGB or a
 /// scheme slot of the slide's scheme as the colour.
+/// A run of no characters is skipped: it neither formats the text nor uses up the runs read, so a
+/// run after it still formats the text.
+#[test]
+fn zero_length_runs_are_skipped() {
+    let runs = [plain(0), plain(0), plain(0), plain(0), char_run(4, 1, 40, 1, [0, 0, 0, 1])];
+    let body = text(b"abc", &runs, &[para_run(0, false, 0, 2, 0), para_run(4, false, 0, 1, 0)], 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([-2362, -1613, -518, -1325], Some(body))], &[]);
+    let para = &body_of(&p.slides[0].shapes[0]).paragraphs[0];
+    let r = &para.runs[0].props;
+    assert_eq!((para.runs[0].text.as_str(), r.font.as_deref(), r.size, r.bold), ("abc", Some("Arial"), Some(40.0), Some(true)));
+    assert_eq!(para.props.align, Some(Align::Center));
+}
+
+/// The font table is the first font list holding a face: a list whose only face is cut short
+/// gives way to a later one.
+#[test]
+fn the_font_table_is_the_first_list_with_a_face() {
+    let cut = container(4022, 9, &[rec(4023, 0, 0, &[0; 8])]);
+    let lists = [container(2005, 0x19, &[cut, slot_end(0)]), container(2005, 0x19, &[font(b"Arial"), slot_end(0)])];
+    let mut s = SlideSpec::new(0x100, 16);
+    s.objects = vec![shape_95([-2362, -1613, -518, -1325], Some(simple_text(b"Hi", [-2362, -1613, -518, -1325], BODY)))];
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])], container(1010, 0x15, &lists));
+    let p = import(&stream).unwrap();
+    assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].runs[0].props.font.as_deref(), Some("Arial"));
+}
+
 #[test]
 fn character_runs_keep_their_formatting() {
     let runs = [
@@ -922,7 +957,7 @@ fn hostile_text_never_panics() {
     let t = one(text(b"Hi", &[plain(1000)], &[para_run(u32::MAX, true, 0, 7, 200)], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "Hi");
     assert_eq!(t.paragraphs[0].level, 4, "the level is capped at PowerPoint 95's fifth");
-    // Many zero-length runs: no more are read than the text has characters (plus its end).
+    // Many zero-length runs: skipped, and the text is all there.
     let many = vec![plain(0); 100_000];
     let t = one(text(b"abc", &many, &vec![para_run(0, false, 0, 0, 0); 50_000], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "abc");
@@ -2227,9 +2262,23 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     checked
 }
 
+/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position;
+/// a whole file names none.
+#[test]
+fn slides_the_count_says_are_missing_are_named() {
+    let one = slide(&SlideSpec::new(0x100, 16));
+    let checked = |count: u32| {
+        crate::import_checked(&file_of(&stream_of(document_atom(5760, 4320, count), std::slice::from_ref(&one), &[])), &AppDefaults).unwrap()
+    };
+    assert_eq!(checked(3).1, ["slide 2", "slide 3"]);
+    assert!(checked(1).1.is_empty());
+    // A huge count names no more slides than the reader could have read.
+    assert_eq!(checked(u32::MAX).1.len(), super::MAX_SLIDES);
+}
+
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
-/// the repository). Each imports with the slide count its DocumentAtom gives, at 10 × 7.5 in, and
-/// its shapes' outlines match the rendering PowerPoint 95 saved beside it, if any.
+/// the repository). Each imports with the slide count and size its DocumentAtom gives and nothing
+/// lost, and its shapes' outlines match the rendering PowerPoint 95 saved beside it, if any.
 #[test]
 fn powerpoint_95_samples() {
     let Some(dir) = std::env::var_os("CRAFT_PPT95_SAMPLES") else { return };
@@ -2241,12 +2290,15 @@ fn powerpoint_95_samples() {
         }
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let bytes = std::fs::read(&path).unwrap();
-        let p = crate::import(&bytes, &AppDefaults).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (p, lost) = crate::import_checked(&bytes, &AppDefaults).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(lost.is_empty(), "{name}: {lost:?}");
         let file = craft_cfb::CompoundFile::open(&bytes).unwrap();
         let stream = file.read_path_capped("PowerPoint Document", bytes.len() as u64).unwrap();
-        let count = super::document(&stream).and_then(|d| d.child(rt::DOCUMENT_ATOM)).and_then(|a| a.u32(32)).unwrap();
-        assert_eq!(p.slides.len(), count as usize, "{name}");
-        assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "{name}");
+        let atom = super::document(&stream).and_then(|d| d.child(rt::DOCUMENT_ATOM)).unwrap();
+        assert_eq!(p.slides.len(), atom.u32(32).unwrap() as usize, "{name}");
+        // The size in master units, 8 to the point.
+        let side = |at: usize| f64::from(atom.u32(at).unwrap()) / 8.0;
+        assert_eq!((p.slide_size.width, p.slide_size.height), (side(0), side(4)), "{name}");
         check_sample(&name, &p);
         if let Ok(wmf) = std::fs::read(path.with_extension("wmf")) {
             outlines += check_outlines(&name, &p, &wmf);
