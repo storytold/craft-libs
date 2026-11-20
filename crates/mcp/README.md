@@ -14,4 +14,13 @@ a different version. An initialized notification moves the session to `Ready`.
 This crate does not enforce every MCP lifecycle or capability rule; applications
 must validate any additional requirements they depend on.
 
+`roots::Roots` confines the file paths in tool arguments to read and write roots.
+`Roots::check` resolves a path, following links, and returns it only when it lies
+inside a root of the requested kind. On Windows it also refuses device names,
+alternate data streams, names that end in a dot or a space, `\\.\` paths, and `\\?\`
+paths other than plain drive and UNC paths such as those `check` returns.
+`Roots::required` refuses to build roots without both kinds. A path is checked
+before it is opened, so another program that replaces a folder with a link between
+the two steps can still reach outside the roots.
+
 See the [MCP lifecycle specification](https://modelcontextprotocol.io/specification/2025-03-26/basic/lifecycle).
