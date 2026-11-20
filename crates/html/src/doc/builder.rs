@@ -54,6 +54,7 @@ struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Option<Vec<Cell>>,
     group_start: usize,
+    group_explicit: bool,
     /// The table or one of its cells asks for borders.
     bordered: bool,
     /// Explicit column widths from `<col>` and childless `<colgroup>`.
@@ -73,12 +74,16 @@ impl TableB {
             for row in rows.iter_mut().rev() {
                 // Covered cells are inserted using the original row indices, including empty rows.
                 remaining += 1;
+                if self.group_explicit && row.iter().any(|cell| cell.rowspan > remaining) {
+                    model::dropped(model::Dropped::TableLayout);
+                }
                 for cell in row.iter_mut().filter(|cell| cell.rowspan == 0) {
                     cell.rowspan = remaining.clamp(1, 1000);
                 }
             }
         }
         self.group_start = end;
+        self.group_explicit = false;
     }
 
     /// Commit pending colgroup widths: if childless, push span columns with group width.
@@ -948,6 +953,9 @@ impl<'r> Builder<'r> {
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
+                    if t.rows.len() > craft_wordmodel::table::MAX_ROWS {
+                        model::dropped(model::Dropped::TableLayout);
+                    }
                     let rows: Vec<_> = t.rows.into_iter().take(craft_wordmodel::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     let col_widths = &t.col_widths;
@@ -1172,8 +1180,12 @@ impl<'r> Builder<'r> {
                 let fmt = self.fmt();
                 match image {
                     Some(image) => self.start_para().inlines.push(Inline::Image(image)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
-                    None => {}
+                    None => {
+                        model::dropped(model::Dropped::HtmlImage);
+                        if !alt.is_empty() {
+                            self.start_para().push_text(&alt, &fmt);
+                        }
+                    }
                 }
             }
             _ => return false,
@@ -1266,6 +1278,12 @@ impl<'r> Builder<'r> {
         let is_table_part = matches!(name, "tr" | "td" | "th");
         let in_table = self.tables.len() < model::MAX_DEPTH;
         self.close_implicitly(name, is_table_part);
+        if is_row_group(name)
+            && self.stack.iter().rev().find(|e| e.name == "table").is_some_and(|e| e.kind == ElKind::Table)
+            && let Some(table) = self.tables.last_mut()
+        {
+            table.group_explicit = true;
+        }
         if name == "a"
             && !self.in_head()
             && let Some(id) = attr(attrs, "id").or_else(|| attr(attrs, "name")).filter(|s| !s.is_empty())
@@ -1283,6 +1301,7 @@ impl<'r> Builder<'r> {
         }
         let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
         if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+            model::dropped(model::Dropped::HtmlTableDepth);
             kind = ElKind::Block;
         }
         if matches!(kind, ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {
@@ -1298,6 +1317,7 @@ impl<'r> Builder<'r> {
                 rows: Vec::new(),
                 row: None,
                 group_start: 0,
+                group_explicit: false,
                 bordered: declares_border(attrs, &css, true),
                 col_widths: Vec::new(),
                 pending_colgroup: None,
