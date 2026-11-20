@@ -344,6 +344,26 @@ impl ErrorBars {
     }
 }
 
+/// A chart's data table (`c:dTable`), independent of the chart legend.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChartDataTable {
+    pub show_keys: bool,
+    pub horizontal_border: bool,
+    pub vertical_border: bool,
+    pub outline: bool,
+}
+
+impl Default for ChartDataTable {
+    fn default() -> Self {
+        Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
+    }
+}
+
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Chart {
@@ -423,6 +443,15 @@ pub struct Chart {
     /// A histogram's bin width (`cx:binSize`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bin_size: Option<f64>,
+    /// A chart's data table (`c:dTable`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_table: Option<ChartDataTable>,
+    /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
+    #[serde(skip_serializing_if = "is_zero_u16")]
+    pub first_slice_angle: u16,
+    /// A PivotChart's PivotTable reference (`c:pivotSource/c:name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_source: Option<String>,
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -537,6 +566,9 @@ impl Default for Chart {
             up_down_bars: false,
             bin_count: None,
             bin_size: None,
+            data_table: None,
+            first_slice_angle: 0,
+            pivot_source: None,
             raw: None,
             verbatim: false,
             kept: ChartKept::default(),
