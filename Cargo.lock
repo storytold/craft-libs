@@ -1902,6 +1902,7 @@ dependencies = [
  "craft-smime",
  "craft-sniff",
  "craft-sourcemap",
+ "craft-sqlite",
  "craft-ssip",
  "craft-stencilcraft-document",
  "craft-stencilcraft-format",
@@ -2320,11 +2321,13 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color-transform",
  "craft-develop-model",
  "craft-render-parity",
  "proptest",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2647,6 +2650,7 @@ dependencies = [
  "craft-dxf",
  "craft-eps",
  "craft-file-formats",
+ "craft-image-codecs",
  "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
@@ -3976,6 +3980,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sqlite"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ssip"
 version = "0.1.0"
 
@@ -4479,6 +4487,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]
