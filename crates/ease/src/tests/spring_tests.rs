@@ -192,6 +192,16 @@ fn a_spring_whose_damped_frequency_rounds_to_zero_still_steps() {
     assert!((v - 1.0).abs() < 1e-12 && (st.velocity - 1.0).abs() < 1e-12, "{st:?}");
 }
 
+/// A spring whose damped frequency is above 0 but whose phase over a short step rounds to 0
+/// still moves at its velocity over the step.
+#[test]
+fn a_step_whose_phase_rounds_to_zero_still_moves() {
+    let s = Spring::new(1e-320, 0.99995).unwrap();
+    let mut st = SpringState { value: 0.0, velocity: 1.0 };
+    let v = st.step(&s, 0.0, 0.001).unwrap();
+    assert!((v - 0.001).abs() < 1e-15 && (st.velocity - 1.0).abs() < 1e-12, "{st:?}");
+}
+
 /// A state that is not finite is refused at every step length and in every damping regime,
 /// and stays as it is.
 #[test]

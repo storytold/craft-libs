@@ -157,11 +157,18 @@ impl Spring {
             let e = (-z * w * t).exp();
             // A step so long that the phase overflows (a spring with little or no damping) is
             // reduced by whole periods first.
-            let phase = if (wd * t).is_finite() { wd * t } else { wd * (t % (std::f64::consts::TAU / wd)) };
+            let reduced = !(wd * t).is_finite();
+            let phase = if reduced { wd * (t % (std::f64::consts::TAU / wd)) } else { wd * t };
             let (s, c) = phase.sin_cos();
             // sin(phase) / ωd is at most t, so it stays finite for a spring of any low frequency,
-            // where q / ωd alone would overflow. When ωd rounds to 0 it is its limit, t.
-            let sw = if wd > 0.0 { s / wd } else { t };
+            // where q / ωd alone would overflow. A small unreduced phase uses t · sin(phase) / phase
+            // from its series, which is t when ωd or the phase rounds to 0.
+            let sw = if !reduced && phase < 1e-4 {
+                let p2 = phase * phase;
+                t * (1.0 - p2 / 6.0 * (1.0 - p2 / 20.0))
+            } else {
+                s / wd
+            };
             return (e * (y0 * c + q * sw), e * (v0 * c - (y0 * wd * s + z * w * q * sw)));
         }
         // ζ² − 1 as (ζ − 1)(ζ + 1), precise for ζ near 1.
