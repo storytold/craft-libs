@@ -234,6 +234,36 @@ struct RowOnly<'a> {
     landed: &'a RefCell<Landed>,
 }
 
+#[derive(Component)]
+struct WindowOnly<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+impl Component for WindowOnly<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: WindowOnlyStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        WINDOW.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(files) = cx.window_drop_target(&OnWindow) {
+            self.landed.borrow_mut().window.push(files);
+        }
+    }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
 impl Component for RowOnly<'_> {
     const ROLE: Role = Role::GROUP;
     type Style = PlainStyle;
@@ -256,6 +286,25 @@ impl Component for RowOnly<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> Response {
         cx.response.clone()
     }
+}
+
+#[trial]
+fn file_drop_uses_the_target_under_the_final_pointer() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        WindowOnly { common: Common::new(), landed: &landed }.id_salt("window").show_at(ui, WINDOW);
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("rows").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![moved(Pos2::new(400.0, 400.0))], &mut show);
+    frames.idle(1, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the positional target takes the drop");
+    assert!(landed.borrow().window.is_empty(), "the previous window target must not take it");
 }
 
 #[trial]

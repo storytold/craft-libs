@@ -103,6 +103,34 @@ fn a_new_right_click_moves_an_open_context_menu_to_the_pointer() {
     assert!(after.min.x > before.min.x + 40.0, "the menu moved to the second point: {before:?} then {after:?}");
 }
 
+/// A menu request retains its point until an image arrives from the clipboard in a later frame.
+#[trial]
+fn context_menu_paste_delivers_image_at_the_requested_point() {
+    let mut fixture = Fixture::new(|ui| {
+        let target = Button::new("Target").show(ui);
+        let mut paste = false;
+        Menu::context("Target menu", &target).show(ui, |ui, _| {
+            if MenuItem::new("Paste").show(ui).ran {
+                paste = true;
+            }
+        });
+        if paste {
+            commands::request_paste_at(ui.ctx(), egui::pos2(120.0, 180.0));
+        }
+    });
+    fixture.settle();
+    let at = fixture.by_label("Target").expect("target").center();
+    right_click(&mut fixture, at);
+    let paste = fixture.by_label("Paste").expect("paste menu item");
+    fixture.click(&paste);
+    fixture.frame(vec![egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)))]).settle();
+    let fired = take_output(fixture.ctx()).fired;
+    assert!(
+        fired.iter().any(|fired| fired.pasted.as_ref().is_some_and(|content| content.image.is_some()) && fired.paste_at == Some(egui::pos2(120.0, 180.0))),
+        "{fired:?}"
+    );
+}
+
 /// With a context menu open, a paste event (the platform's answer to ⌘V) behind it reaches nothing: no Paste runs
 /// and the menu stays. Edit ▸ Paste from a native menu, which no component of the window fires, closes the menu, as a
 /// key's command does, and runs.
