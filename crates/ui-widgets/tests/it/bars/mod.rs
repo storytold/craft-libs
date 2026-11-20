@@ -5,4 +5,5 @@ mod breadcrumb;
 mod constraint_fields;
 mod edit_focus;
 mod items;
+mod memo;
 mod overflow;

@@ -3,7 +3,6 @@
 use super::{DialogFields, ParamRows};
 use crate::runtime::requests::PathKind;
 
-use crate::contract::Bind;
 use crate::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use crate::patterns::form_dialogs::{NumberUnit, Param, ParamKind};
 use crate::patterns::presets::PresetRow;
@@ -72,14 +71,14 @@ fn params() -> Vec<Param> {
 fn param_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).show(ui).into()
 }
 
 #[story(ParamRows<'static>, covers = [], drive = Drive::Never)]
 fn param_rows_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let params = params();
     let patterns = patterns();
-    let fields = data.value("fields", DialogFields::new());
-    ParamRows::new("Filter", &params, Bind::bound(fields)).patterns(&patterns).read_only(true).show(ui).into()
+    let (fields, fields_at) = data.value_at("fields", DialogFields::new());
+    ParamRows::new("Filter", &params, fields_at.bind(fields)).patterns(&patterns).read_only(true).show(ui).into()
 }

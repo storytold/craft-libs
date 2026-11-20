@@ -107,7 +107,7 @@ fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
     let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
-    let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
+    let closed = pointer::frame_raw(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
     let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
     let whole = pointer_art(env, &cursor, closed, false);
     let confined = cursor::current_region(ctx).filter(|region| tip && !shows_whole(ctx, region, &whole, at));
@@ -160,7 +160,7 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, session: &drag:
     }
     let record = RefCell::new(PaintRecord::default());
     let draw = &Draw::new(painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: Ink::OnPanel });
-    let Some(at) = pointer::frame(ctx).pos else { return };
+    let Some(at) = pointer::frame_raw(ctx).pos else { return };
     match &session.preview {
         DragPreview::Badge(label) => {
             let label = env.view().resolve(label);

@@ -19,7 +19,7 @@ fn show_manager(ui: &mut Ui, data: &mut StoryData, rows: &[PresetRow<u32>], load
     // `data` hands out one value at a time, so the picked kind is copied out and written back.
     let mut kind = *data.value("kind", 0u32);
     let mut manager = PresetManager::new("Preset Manager", &kinds, Bind::bound(&mut kind), rows)
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .can_rename(|key: &u32| *key != 1)
         .can_delete(|key: &u32| *key != 1);
     if load {

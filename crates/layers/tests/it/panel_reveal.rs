@@ -106,14 +106,21 @@ impl Rig {
         self.fixture.by_label(name).expect("the row is drawn").rect
     }
 
-    /// One frame that reveals `id`, with what it reported; asserts that the frame ran once and measured no row twice.
+    /// One frame that reveals `id`, with what it reported; asserts that the frame ran once and measured no row twice but
+    /// the rows the lead moves between.
     fn reveal(&mut self, id: u32, groups: Groups) -> Vec<LayersEvent<u32>> {
         self.seen.borrow_mut().clear();
         self.reveal.set(Some((id, groups)));
         self.fixture.idle(1);
         assert_eq!(self.fixture.passes(), 1, "a reveal runs its frame once");
         let measures = craft_ui::runtime::measure::row_measures(self.fixture.ctx());
-        assert!(measures.iter().all(|(_, count)| *count == 1), "a reveal measures no row twice: {measures:?}");
+        // The lead moves to the revealed row: the row it leaves, measured before the move, is measured again with its
+        // new state, as is the revealed row when the pass measured it before the move.
+        let again = measures.iter().filter(|(_, count)| *count == 2).count();
+        assert!(
+            measures.iter().all(|(_, count)| *count <= 2) && again <= 2,
+            "a reveal measures again only the rows the lead moves between: {measures:?}"
+        );
         self.seen.borrow_mut().drain(..).collect()
     }
 

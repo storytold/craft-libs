@@ -318,7 +318,7 @@ fn card(spec: &Arc<Spec>, env: &RootEnv, options: &Options) -> (Fixture, Option<
     });
     settle(&mut fixture);
     let mut opened = false;
-    for state in cells.borrow_mut().values_mut().filter(|state| state.dialog.hidden) {
+    for state in cells.borrow_mut().states_mut().filter(|state| state.dialog.hidden) {
         state.show_dialog();
         opened = true;
     }

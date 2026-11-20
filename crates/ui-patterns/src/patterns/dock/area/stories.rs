@@ -2,7 +2,7 @@
 
 use super::DockArea;
 use crate::contract::SizeLimits;
-use crate::contract::{Bind, BodyCx, Show as _};
+use crate::contract::{BodyCx, Show as _};
 use crate::display::Text;
 use crate::docking::{DockConfig, DockGrid, DockPanels, GroupAt, PanelSpec};
 use crate::menu::PanelRow;
@@ -104,8 +104,8 @@ fn workspace() -> Workspace<usize> {
 }
 
 fn dock(ui: &mut Ui, data: &mut StoryData, demo: &mut Demo) -> StoryOutput {
-    let workspace = data.value("workspace", workspace());
-    DockArea::new("Dock", Bind::bound(&mut *workspace), demo, DockConfig::default()).show(ui).into()
+    let (workspace, workspace_at) = data.value_at("workspace", workspace());
+    DockArea::new("Dock", workspace_at.bind(&mut *workspace), demo, DockConfig::default()).show(ui).into()
 }
 
 #[story(DockArea<'static, usize>, covers = [Default], drive = Drive::Never)]

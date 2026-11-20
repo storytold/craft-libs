@@ -1,13 +1,12 @@
 //! Stories of Black & White, Channel Mixer and Selective Color: each editor's cases in one card.
 
 use super::{BlackWhite, BlackWhiteEditor, ChannelMixer, ChannelMixerEditor, SelectiveColor, SelectiveColorEditor, SelectiveMethod};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 fn black_white(ui: &mut Ui, data: &mut StoryData, start: BlackWhite) -> StoryOutput {
-    let value = data.value("value", start);
-    BlackWhiteEditor::new("Black & White", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("value", start);
+    BlackWhiteEditor::new("Black & White", value_at.bind(value)).show(ui).into()
 }
 
 #[story(BlackWhiteEditor<'static>, covers = [Default], drive = Drive::Never, group = "Tint", title = "Default")]
@@ -22,8 +21,8 @@ fn black_white_tinted(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 fn channel_mixer(ui: &mut Ui, data: &mut StoryData, start: ChannelMixer) -> StoryOutput {
-    let value = data.value("value", start);
-    ChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("value", start);
+    ChannelMixerEditor::new("Channel Mixer", value_at.bind(value)).show(ui).into()
 }
 
 #[story(ChannelMixerEditor<'static>, covers = [Default], drive = Drive::Never, group = "Outputs", title = "Color")]
@@ -44,8 +43,8 @@ fn channel_mixer_over(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 fn selective_color(ui: &mut Ui, data: &mut StoryData, start: SelectiveColor) -> StoryOutput {
-    let value = data.value("value", start);
-    SelectiveColorEditor::new("Selective Color", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("value", start);
+    SelectiveColorEditor::new("Selective Color", value_at.bind(value)).show(ui).into()
 }
 
 #[story(SelectiveColorEditor<'static>, covers = [Default], drive = Drive::Never, group = "Methods", title = "Relative")]

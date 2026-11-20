@@ -49,8 +49,8 @@ impl SlotSize {
     }
 }
 
-/// One bar or rail of the skeleton: its key, whether it shows, whether it shows in a reveal, its size, its AccessKit
-/// name and the version of the app data it shows. The shell paints the chrome surface over the whole slot and a divider
+/// One bar or rail of the skeleton: its key, whether it shows, whether it shows in a reveal, its size and its AccessKit
+/// name. The shell paints the chrome surface over the whole slot and a divider
 /// along its edge toward the body; the title slot's bar paints its own.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -60,7 +60,6 @@ pub struct Slot {
     visible: bool,
     reveal: bool,
     label: Option<Label>,
-    content: Option<u64>,
     screen_bar: bool,
     drops: bool,
 }
@@ -69,7 +68,7 @@ impl Slot {
     /// A slot with a key that is stable and unique in the window. It is visible and does not show in a reveal. Without a
     /// [`size`](Self::size) it takes the default of its edge: the title bar, options bar, status bar or rail width.
     pub fn new(key: SlotKey) -> Self {
-        Self { key, size: None, visible: true, reveal: false, label: None, content: None, screen_bar: false, drops: false }
+        Self { key, size: None, visible: true, reveal: false, label: None, screen_bar: false, drops: false }
     }
 
     /// The size along the slot's edge, in place of the default of the edge.
@@ -126,20 +125,6 @@ impl Slot {
     pub fn label(mut self, label: impl Into<Label>) -> Self {
         self.label = Some(label.into());
         self
-    }
-
-    /// The version of the app data the slot shows that the framework does not track (a document's revision, a job's
-    /// progress). A slot with one settles (`Lazy::settles` with `Lazy::content`): it runs only when its version, its
-    /// room or something the framework tracks in it changed, the pointer is over it or focus is in it, and otherwise
-    /// repaints its last run. A slot without one runs every pass.
-    pub fn content(mut self, version: u64) -> Self {
-        self.content = Some(version);
-        self
-    }
-
-    /// The version set by [`content`](Self::content), if any.
-    pub fn content_version(&self) -> Option<u64> {
-        self.content
     }
 
     /// The slot's key, as visibility flags and [`ShellCx::slot_visible`](crate::runtime::env::ShellCx::slot_visible) name it.

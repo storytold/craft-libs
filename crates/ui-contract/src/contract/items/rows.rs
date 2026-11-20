@@ -46,7 +46,14 @@ pub(super) fn measured_id<K: std::hash::Hash>(collection: Id, key: &K) -> Id {
 /// Runs `f` with a reader of the heights the auto rows of the collection `collection` had in the last pass that built
 /// them: the rows the pass does not build, out of view, are placed by them (`runtime::lazy`).
 pub(super) fn measured_heights<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<f32>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| size.y)))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| size.y)))
+}
+
+/// Runs `f` with a reader of what this pass measured of the rows of the collection `collection`, by the ids
+/// `measured_id` and `measured_width_id` give: the row's width and height, or its ideal and minimum widths; `None` for
+/// a row this pass has not measured. A row measured this pass is not measured again in it.
+pub(super) fn measured_this_pass<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<Vec2>) -> R) -> R {
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).and_then(|(size, now)| now.then_some(size))))
 }
 
 /// The id an auto-width item's measured widths (ideal, then minimum) are kept under.
@@ -57,11 +64,11 @@ pub(super) fn measured_width_id<K: std::hash::Hash>(collection: Id, key: &K) -> 
 /// Runs `f` with a reader of the `(ideal, min)` widths the auto-width items of the collection `collection` had in the
 /// last pass that built them.
 pub(super) fn measured_widths<R>(ctx: &Context, collection: Id, f: impl FnOnce(&dyn Fn(Id) -> Option<(f32, f32)>) -> R) -> R {
-    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|size| (size.x, size.y))))
+    lazy::reading(ctx, collection, |read| f(&|id| read(id).map(|(size, _)| (size.x, size.y))))
 }
 
-/// Records the size an auto row of the collection `collection` measured this pass; the row is placed by it in the same
-/// pass.
+/// Records the size an auto row of the collection `collection` measured this pass (its width and height, or its ideal
+/// and minimum widths); the row is placed by it in the same pass.
 pub(super) fn record_measure(ctx: &Context, collection: Id, id: Id, size: Vec2) {
     lazy::remember(ctx, collection, id, size);
 }
