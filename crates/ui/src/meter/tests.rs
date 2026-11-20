@@ -158,6 +158,15 @@ fn a_clock_that_goes_back_while_the_peak_falls_does_not_raise_it() {
 }
 
 #[test]
+fn a_louder_level_after_the_clock_goes_back_is_taken_at_once() {
+    let mut hold = PeakHold::new(0.5, 10.0).unwrap();
+    assert_eq!(hold.update(-12.0, 5.0), -12.0);
+    assert_eq!(hold.update(-3.0, 1.0), -3.0, "the peak is not left below the level");
+    assert_eq!(hold.update(-40.0, 1.4), -3.0, "the hold time runs from the louder level");
+    assert!(hold.update(-40.0, 2.0) < -3.0);
+}
+
+#[test]
 fn peak_hold_without_fall_keeps_the_peak_until_reset() {
     let mut hold = PeakHold::new(0.0, 0.0).unwrap();
     hold.update(-1.0, 0.0);
@@ -208,6 +217,18 @@ fn screen_readers_get_a_meter_with_its_range_and_level() {
     assert_eq!(node.max_numeric_value(), Some(0.0));
     assert_eq!(node.value(), Some("-12.3 dB"));
     assert_eq!(node.orientation(), Some(accesskit::Orientation::Horizontal));
+}
+
+#[test]
+fn the_rounded_level_stays_within_a_scale_that_is_not_whole_tenths() {
+    let style = LevelMeterStyle { scale: MeterScale::new(-59.96, -0.04).unwrap(), ..style() };
+    for (label, level) in [("Loud", 0.0), ("Silent", f32::NEG_INFINITY)] {
+        let (_, output) = run(|ui| LevelMeter::new(label, vec2(120.0, 6.0), &style).level_db(level).show(ui));
+        let tree = output.platform_output.accesskit_update.unwrap();
+        let (_, node) = tree.nodes.iter().find(|(_, n)| n.label() == Some(label)).unwrap();
+        let (value, min, max) = (node.numeric_value().unwrap(), node.min_numeric_value().unwrap(), node.max_numeric_value().unwrap());
+        assert!(value >= min && value <= max, "{label}: {value} outside {min}..={max}");
+    }
 }
 
 #[test]

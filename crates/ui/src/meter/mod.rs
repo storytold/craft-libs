@@ -181,7 +181,7 @@ impl<'a> LevelMeter<'a> {
         let scale = self.style.scale;
         response.widget_info(|| {
             let mut info = egui::WidgetInfo::labeled(accesskit::Role::Meter, ui.is_enabled(), self.label);
-            info.value = Some(accessible_value(scale.clamp(self.level_db)));
+            info.value = Some(accessible_value(&scale, self.level_db));
             info
         });
         ui.ctx().accesskit_node_builder(response.id, |node| {
@@ -218,9 +218,11 @@ impl<'a> LevelMeter<'a> {
     }
 }
 
-/// A level rounded to 0.1 dB, so a screen reader is not sent a new value for every small change.
-fn accessible_value(db: f32) -> f64 {
-    (f64::from(db) * 10.0).round() / 10.0
+/// A level rounded to 0.1 dB, so a screen reader is not sent a new value for every small change,
+/// and kept within the scale when the floor or ceiling is not a whole tenth.
+fn accessible_value(scale: &MeterScale, db: f32) -> f64 {
+    let rounded = (f64::from(scale.clamp(db)) * 10.0).round() / 10.0;
+    rounded.clamp(f64::from(scale.floor_db()), f64::from(scale.ceiling_db()))
 }
 
 /// The part of `rect` between bar positions `from` and `to` (0 to 1).
@@ -314,7 +316,8 @@ impl PeakHold {
     ///
     /// A NaN level counts as silence, and a level above [`PeakHold::MAX_LEVEL_DB`] counts as that
     /// value. A time that is not finite leaves the hold unchanged. A time earlier than the last
-    /// update's keeps the peak where it was and restarts the hold time from `now`.
+    /// update's keeps the peak from falling and restarts the hold time from `now`; a louder level
+    /// is still taken at once, so the peak is never below the level.
     pub fn update(&mut self, level_db: f32, now: f64) -> f32 {
         if !now.is_finite() {
             return self.held_db;
