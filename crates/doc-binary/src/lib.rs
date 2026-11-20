@@ -825,7 +825,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
-                if form_data(ctx, field.as_mut(), chpx) {
+                if form_data(ctx, field.as_mut(), chpx, ctx.pieces.piece_prm(cp)) {
                     cp = cp.saturating_add(units);
                     continue;
                 }
@@ -992,38 +992,76 @@ fn is_form_field(instr: &str) -> bool {
 }
 
 /// A 0x01 character in a field's instruction with `sprmCFData` on: its `sprmCPicLocation`
-/// points at a form field's FFData ([MS-DOC] §2.9.75), not at a picture. The outermost field
-/// keeps it as `w:ffData` XML, charged to the work budget; true when the character was one.
-fn form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8]) -> bool {
+/// points at a form field's FFData ([MS-DOC] §2.9.75), not at a picture. Both sprms come from
+/// the CHPX and then from the piece's Prm, which applies after it. The outermost field keeps the
+/// FFData as `w:ffData` XML ([`form_xml`]); true when the character was one.
+fn form_data(ctx: &WalkCtx<'_>, field: Option<&mut FieldBuild>, chpx: &[u8], prm: PrmRef<'_>) -> bool {
     let Some(f) = field.filter(|f| f.sep.is_none()) else { return false };
-    if !f_data(chpx) {
+    let (on, at) = form_sprms(chpx, prm, ctx.work);
+    if !on {
         return false;
     }
     if f.depth == 1
-        && let Some(xml) = pic_location(chpx).and_then(|at| form::ff_data_xml(ctx.data, at))
-        && ctx.work.charge(xml.len() as u64, Cost::FormField)
+        && let Some(xml) = at.and_then(|at| form_xml(ctx.data, at, ctx.work))
     {
         f.form = xml;
     }
     true
 }
 
-/// Whether a CHPX grpprl turns `sprmCFData` on.
-fn f_data(chpx: &[u8]) -> bool {
-    sprm::iter(chpx).filter(|p| p.op == C_F_DATA).last().is_some_and(|p| p.operand.first().is_some_and(|b| *b & 1 != 0))
+/// `sprmCFData` (on or off) and `sprmCPicLocation` of a character: those of its CHPX `grpprl`,
+/// then those of its piece's `prm`, which apply after the CHPX's; the last one of each wins, as
+/// in [`apply_prm`]. A Prm1 grpprl is charged to `work`, and skipped once that is spent.
+fn form_sprms(chpx: &[u8], prm: PrmRef<'_>, work: &Work) -> (bool, Option<u32>) {
+    let mut on = false;
+    let mut at = None;
+    let mut apply = |prl: &Prl<'_>| match prl.op {
+        C_F_DATA => on = prl.operand.first().is_some_and(|b| *b & 1 != 0),
+        C_PIC_LOCATION => at = location(prl.operand),
+        _ => {}
+    };
+    sprm::iter(chpx).for_each(|prl| apply(&prl));
+    match prm {
+        PrmRef::Sprm0 { isprm, val } => {
+            if let Some(op) = sprm::from_prm0(isprm) {
+                apply(&Prl { op, operand: &[val] });
+            }
+        }
+        PrmRef::Grpprl { grpprl: Some(g), .. } => {
+            if work.charge(g.len() as u64, Cost::FormField) {
+                sprm::iter(g).for_each(|prl| apply(&prl));
+            }
+        }
+        PrmRef::None | PrmRef::Grpprl { grpprl: None, .. } => {}
+    }
+    (on, at)
 }
 
-/// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
-fn pic_location(chpx: &[u8]) -> Option<u32> {
-    for prl in sprm::iter(chpx) {
-        if prl.op == C_PIC_LOCATION {
-            return match prl.operand {
-                [b0, b1, b2, b3, ..] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
-                _ => None,
-            };
-        }
+/// The `w:ffData` of the FFData at `at` in the Data stream, charged to `work` as
+/// [`Cost::FormField`]: first the bytes the decoder may read ([`form::decode_cost`]), spent
+/// even when the record turns out unreadable, so that markers repeating one large record stop
+/// decoding once the budget is spent; then the XML kept. `None` when either charge fails or the
+/// bytes aren't an FFData.
+fn form_xml(data: &[u8], at: u32, work: &Work) -> Option<String> {
+    if !work.charge(form::decode_cost(data, at), Cost::FormField) {
+        return None;
     }
-    None
+    let xml = form::ff_data_xml(data, at)?;
+    work.charge(xml.len() as u64, Cost::FormField).then_some(xml)
+}
+
+/// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream. The last
+/// one wins, as when the sprms are applied in order.
+fn pic_location(chpx: &[u8]) -> Option<u32> {
+    sprm::iter(chpx).filter(|p| p.op == C_PIC_LOCATION).last().and_then(|p| location(p.operand))
+}
+
+/// A `sprmCPicLocation` operand: a 4-byte fc.
+fn location(operand: &[u8]) -> Option<u32> {
+    match operand {
+        [b0, b1, b2, b3, ..] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+        _ => None,
+    }
 }
 
 /// `sprmCSymbol` from a CHPX grpprl: the font table index and the character code of a symbol

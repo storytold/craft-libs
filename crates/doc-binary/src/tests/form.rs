@@ -223,3 +223,62 @@ fn malformed_ff_data_leaves_the_field_without_settings() {
     let got = fields(&form_doc(&[("FORMDROPDOWN", "", past_the_stream)]));
     assert_eq!(form_of(&got[0].1).and_then(|f| f.shown_text().map(str::to_string)), Some("Alpha".into()), "lcb is clamped to the stream");
 }
+
+/// [MS-DOC] caps the number of drop-down entries, not their length: a long entry is kept.
+#[test]
+fn a_long_drop_down_entry_is_kept() {
+    let long: &'static str = "x".repeat(300).leak();
+    let bytes = form_doc(&[(
+        "FORMDROPDOWN",
+        "",
+        Ff { bits: DROP_DOWN | (1 << 2), name: "List", entries: vec!["Alpha", long], ..Default::default() }.record(),
+    )]);
+    let got = fields(&bytes);
+    let list = form_of(&got[0].1).expect("drop-down");
+    assert_eq!(list.shown_text(), Some(long));
+}
+
+/// `sprmCFData` and `sprmCPicLocation` come from the CHPX, then from the piece's Prm, which
+/// applies after it; the last of each wins.
+#[test]
+fn form_data_sprms_follow_the_chpx_then_the_piece_prm() {
+    use crate::piece::PrmRef;
+    let work = crate::Work::new(1 << 20);
+    let at = |v: u32| v.to_le_bytes();
+    let on = grpprl(&[(0x0806, &[1]), (0x6A03, &at(10))]);
+    let off = grpprl(&[(0x0806, &[0])]);
+    assert_eq!(crate::form_sprms(&on, PrmRef::None, &work), (true, Some(10)));
+    // The Prm turns it off, or on with its own location.
+    assert_eq!(crate::form_sprms(&on, PrmRef::Grpprl { index: 0, grpprl: Some(&off) }, &work), (false, Some(10)));
+    let prm = grpprl(&[(0x0806, &[1]), (0x6A03, &at(20))]);
+    assert_eq!(crate::form_sprms(&[], PrmRef::Grpprl { index: 0, grpprl: Some(&prm) }, &work), (true, Some(20)));
+    assert_eq!(crate::form_sprms(&off, PrmRef::Grpprl { index: 0, grpprl: Some(&prm) }, &work), (true, Some(20)));
+    // Within one grpprl the last location wins, for form data and pictures alike.
+    let twice = grpprl(&[(0x6A03, &at(10)), (0x0806, &[1]), (0x6A03, &at(30))]);
+    assert_eq!(crate::form_sprms(&twice, PrmRef::None, &work), (true, Some(30)));
+    assert_eq!(crate::pic_location(&twice), Some(30));
+    // Once the budget is spent, a Prm1 grpprl is skipped and the CHPX alone counts.
+    let spent = crate::Work::new(0);
+    assert_eq!(crate::form_sprms(&on, PrmRef::Grpprl { index: 0, grpprl: Some(&off) }, &spent), (true, Some(10)));
+}
+
+/// The bytes the decoder may read are charged before decoding, even when the record turns out
+/// unreadable, so markers repeating one record stop once the budget is spent.
+#[test]
+fn form_data_decoding_is_charged_before_it_is_done() {
+    let record = Ff { bits: CHECK_BOX | (1 << 2), hps: 20, name: "On", ..Default::default() }.record();
+    let mut bad = record.clone();
+    bad[0x44] = 0; // wrong version: read, then rejected
+    let work = crate::Work::new(10_000);
+    assert_eq!(crate::form_xml(&bad, 0, &work), None);
+    assert_eq!(work.left.get(), 10_000 - bad.len() as u64, "a failed decode still costs its bytes");
+    let xml = crate::form_xml(&record, 0, &work).expect("decoded");
+    assert_eq!(work.left.get(), 10_000 - 2 * record.len() as u64 - xml.len() as u64);
+    // Too little left for the record: nothing is decoded or kept.
+    let short = crate::Work::new(record.len() as u64 - 1);
+    assert_eq!(crate::form_xml(&record, 0, &short), None);
+    // A hostile `lcb` costs no more than the bytes there are.
+    let mut huge = record.clone();
+    huge[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert_eq!(crate::form::decode_cost(&huge, 0), huge.len() as u64);
+}

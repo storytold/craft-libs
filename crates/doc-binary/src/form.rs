@@ -12,11 +12,16 @@
 const CB_HEADER: usize = 0x44;
 /// `FFData.version`.
 const VERSION: u32 = 0xFFFF_FFFF;
-/// The longest string kept ([MS-DOC] caps every FFData string at 255 characters or fewer);
-/// a longer one makes the whole FFData unreadable, and the field is kept without settings.
+/// The longest Xstz kept ([MS-DOC] caps every FFData Xstz at 255 characters or fewer); a
+/// longer one makes the whole FFData unreadable, and the field is kept without settings. The
+/// drop-down entries have no such cap in [MS-DOC]: each is read in full, bounded by the record.
 const MAX_XSTZ: usize = 255;
 /// Most drop-down entries read ([MS-DOC]: at most 25).
 const MAX_ENTRIES: usize = 25;
+/// The most bytes [`ff_data_xml`] decodes after the header: version, bits, cch and hps, `wDef`,
+/// seven Xstz at [`MAX_XSTZ`], the STTB header, and [`MAX_ENTRIES`] entries of up to
+/// `u16::MAX` units (an entry's extra data is skipped, not decoded).
+const MAX_DECODED: usize = 10 + 2 + 7 * (2 + 2 * MAX_XSTZ + 2) + 6 + MAX_ENTRIES * (2 + 2 * u16::MAX as usize);
 /// `iRes` for "no state": a check box that follows its default, a drop-down with no selection.
 const RES_UNDEFINED: u16 = 25;
 
@@ -32,6 +37,17 @@ pub(crate) fn ff_data_xml(data: &[u8], at: u32) -> Option<String> {
     let end = at.checked_add(lcb)?.min(data.len());
     let ff = FfData::parse(data.get(at.checked_add(CB_HEADER)?..end)?)?;
     Some(ff.to_xml())
+}
+
+/// The bytes [`ff_data_xml`] may read for the record at `at`: the record (its `lcb`, when there
+/// is one to read) up to the Data stream's end, at most the header and [`MAX_DECODED`]. To be
+/// charged before decoding, so a hostile `lcb` costs no more than the decoding it allows.
+pub(crate) fn decode_cost(data: &[u8], at: u32) -> u64 {
+    let Ok(at) = usize::try_from(at) else { return 0 };
+    let left = data.len().saturating_sub(at);
+    let lcb = at.checked_add(4).and_then(|end| data.get(at..end)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    let span = lcb.and_then(|l| usize::try_from(l).ok()).map_or(left, |l| l.min(left));
+    span.min(CB_HEADER + MAX_DECODED) as u64
 }
 
 /// What an FFData says, decoded.
@@ -200,9 +216,9 @@ impl Reader<'_> {
     fn u32(&mut self) -> Option<u32> {
         self.take(4).and_then(|s| s.try_into().ok()).map(u32::from_le_bytes)
     }
-    /// `cch` UTF-16 code units, at most [`MAX_XSTZ`].
-    fn chars(&mut self, cch: usize) -> Option<String> {
-        if cch > MAX_XSTZ {
+    /// `cch` UTF-16 code units; `None` past `max` or past the end.
+    fn chars(&mut self, cch: usize, max: usize) -> Option<String> {
+        if cch > max {
             return None;
         }
         let units = self.take(cch.checked_mul(2)?)?.as_chunks::<2>().0.iter().map(|u| u16::from_le_bytes(*u));
@@ -211,12 +227,13 @@ impl Reader<'_> {
     /// An Xstz: a counted UTF-16 string and its 0 terminator.
     fn xstz(&mut self) -> Option<String> {
         let cch = usize::from(self.u16()?);
-        let s = self.chars(cch)?;
+        let s = self.chars(cch, MAX_XSTZ)?;
         self.u16()?;
         Some(s)
     }
     /// The drop-down's STTB: extended (UTF-16) strings without extra data; past
-    /// [`MAX_ENTRIES`] the rest are left out.
+    /// [`MAX_ENTRIES`] the rest are left out. An entry is read whatever its length, as long as
+    /// the record holds it.
     fn sttb(&mut self) -> Option<Vec<String>> {
         if self.u16()? != 0xFFFF {
             return None;
@@ -226,7 +243,7 @@ impl Reader<'_> {
         let mut entries = Vec::new();
         for _ in 0..count.min(MAX_ENTRIES) {
             let cch = usize::from(self.u16()?);
-            entries.push(self.chars(cch)?);
+            entries.push(self.chars(cch, usize::from(u16::MAX))?);
             self.take(extra)?;
         }
         Some(entries)
