@@ -38,7 +38,8 @@ PowerPoint 95 (7.0) files use the same compound file and many of the same record
 16-byte record header and a single record tree with no edit chain. A file whose `PowerPoint
 Document` stream starts with that tree is read on its own path; anything else takes the
 PowerPoint 97 path. The tree's Document must hold its DocumentAtom, which counts the slides;
-`import_checked` names the slides that count says a cut-short file is missing ("slide 3"). What
+`import_checked` names the slides a cut-short file is missing ("slide 3"): those the count says it
+should hold, and any cut off after its header, which is left out. What
 was learned of the format came from files PowerPoint 95 itself wrote,
 one feature per file, and the public [MS-PPT] numbering where the records keep it.
 
@@ -47,7 +48,16 @@ master wearing the file's colour scheme, and its background when that isn't the 
 its slides in order with their master, layout type and, when a slide doesn't follow the master's,
 its own background: a solid colour, or none when the slide's background has no fill. A slide also
 says whether it shows the master's objects and whether it uses the master's colour scheme or its
-own. The slides are empty: shapes, placeholders and their text, pictures and notes come later.
+own. Slides hold
+their placeholders (title, body, centred title, subtitle, and the date, footer and slide number)
+and text boxes, each with its box and its text: the text's anchoring (top, middle or bottom, and
+whether it's centred across) and word wrap, paragraphs with their level, alignment (justified
+included), line spacing, space before and after (in lines or points), bullet character and the
+indents of the text's ruler, and runs with their font, size, bold, italic, underline and colour
+(an RGB or a colour scheme slot). The text is Windows-1252. The master's placeholders set where the
+default master's placeholders go, and its date, footer and slide number those of every layout. The
+master's text styles become its title, body and other styles, level by level. Shapes without text,
+the shapes' own fill and line, pictures and notes come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that

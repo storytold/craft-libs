@@ -44,7 +44,7 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::affix_suggest::{fold, weighted_distance};
+    use crate::affix_suggest::{MapLookup, weighted_distance};
 
     fn has(word: &str, want: &str) {
         let s = suggest(word, 8);
@@ -107,7 +107,8 @@ mod tests {
     #[test]
     fn distance_weighs_diacritics_half() {
         let map = vec![vec!['a', 'ą'], vec!['o', 'ó', 'u']];
-        let related = |a: char, b: char| fold(a, &map) == fold(b, &map);
+        let map = MapLookup::new(&map);
+        let related = |a: char, b: char| map.fold(a) == map.fold(b);
         let c = |s: &str| s.chars().collect::<Vec<_>>();
         assert_eq!(weighted_distance(&c("ktury"), &c("który"), &related, 9), 1);
         assert_eq!(weighted_distance(&c("kot"), &c("kto"), &related, 9), 2);
