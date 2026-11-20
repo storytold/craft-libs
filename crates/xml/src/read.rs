@@ -140,6 +140,14 @@ pub struct Scope<'s> {
 }
 
 impl<'s> Scope<'s> {
+    /// Namespace declarations on the open element path, outermost first. A later declaration
+    /// for the same prefix shadows an earlier one; an empty URI undeclares it. The implicit
+    /// `xml` binding is available from [`Self::uri`] and is not included unless declared. Use
+    /// `uri` for the effective binding, including for the reserved `xml` prefix.
+    pub fn declarations(&self) -> impl DoubleEndedIterator<Item = (&str, &str)> + '_ {
+        self.bindings.iter().map(|(prefix, uri)| (prefix.as_str(), uri.as_str()))
+    }
+
     /// The namespace URI `prefix` is bound to; `""` is the default namespace.
     pub fn uri(&self, prefix: &str) -> Option<&'s str> {
         if prefix == "xml" {
@@ -294,7 +302,7 @@ impl<'a> Options<'a> {
             return (None, Some(Error::Doctype.into()));
         }
         let text = to_utf8(bytes);
-        let mut events = Events::new(*self, &text, false);
+        let mut events = Events::new(*self, &text, false, false);
         let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, elements: 0, attrs: 0, root: None, at: 0 };
         let mut err = tree.run(&mut events, &mut each).err();
         // What was open when the read stopped goes into its parent as it is.
@@ -320,7 +328,7 @@ impl<'a> Options<'a> {
         let text = to_utf8(bytes);
         // No tree is built, and markup that never closes its tags would otherwise look deep.
         let opts = Options { limits: Limits { max_depth: usize::MAX, ..self.limits }, ..*self };
-        let mut events = Events::new(opts, &text, false);
+        let mut events = Events::new(opts, &text, false, false);
         loop {
             match events.next().ok()?? {
                 Event::Start { name, attrs } if pat.matches(&name) => return Some(El { name, attrs, children: Vec::new() }),
@@ -333,7 +341,7 @@ impl<'a> Options<'a> {
     /// first. No tree is built, so [`Limits::max_nodes`] and [`Limits::max_input`] do not
     /// apply; depth and attribute limits do.
     pub fn events<'i>(&self, utf8: &'i [u8]) -> Events<'a, 'i> {
-        Events::new(*self, utf8, true)
+        Events::new(*self, utf8, true, true)
     }
 }
 
@@ -472,6 +480,8 @@ pub struct Events<'o, 'i> {
     opts: Options<'o>,
     /// Whether [`Event::End`] carries the name.
     end_names: bool,
+    /// Public event readers expose their namespace scope, including in lenient modes.
+    track_scope: bool,
     open: Vec<Open>,
     scope: Vec<(String, String)>,
     /// For each binding in `scope`, an id shared by every binding of an equal URI (the index of
@@ -499,7 +509,7 @@ fn is_ns_decl(key: &[u8]) -> bool {
 }
 
 impl<'o, 'i> Events<'o, 'i> {
-    fn new(opts: Options<'o>, utf8: &'i [u8], end_names: bool) -> Self {
+    fn new(opts: Options<'o>, utf8: &'i [u8], end_names: bool, track_scope: bool) -> Self {
         let mut reader = Reader::from_reader(utf8);
         let cfg = reader.config_mut();
         // The checks a strict read wants are made here, where the answer can be lenient.
@@ -509,13 +519,31 @@ impl<'o, 'i> Events<'o, 'i> {
         cfg.trim_text_start = false;
         cfg.trim_text_end = false;
         cfg.expand_empty_elements = false;
-        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), scope_ids: Vec::new(), pending: false, rooted: false, span: 0..0 }
+        Events {
+            reader,
+            opts,
+            end_names,
+            track_scope,
+            open: Vec::new(),
+            scope: Vec::new(),
+            scope_ids: Vec::new(),
+            pending: false,
+            rooted: false,
+            span: 0..0,
+        }
     }
 
     /// The bytes of the input the last event was read from. Both events of an empty element
     /// have the whole element.
     pub fn span(&self) -> Range<usize> {
         self.span.clone()
+    }
+
+    /// Namespace declarations in scope after the last event. A start event includes that
+    /// element's declarations; an end event has returned to its parent's scope. A reference to
+    /// this view cannot outlive the next mutable read of the event stream.
+    pub fn scope(&self) -> Scope<'_> {
+        Scope { bindings: &self.scope }
     }
 
     fn syntax<T>(&self, msg: impl Into<String>) -> Result<T, Error> {
@@ -724,7 +752,7 @@ impl<'o, 'i> Events<'o, 'i> {
             _ => None,
         };
         let scope = self.scope.len();
-        if canonical.is_some() || self.opts.strict {
+        if canonical.is_some() || self.opts.strict || self.track_scope {
             self.declare(e)?;
         }
         let raw = e.name();
