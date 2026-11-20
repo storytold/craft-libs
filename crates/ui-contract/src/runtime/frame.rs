@@ -234,12 +234,27 @@ impl<T: Stored> Stored for Stamped<T> {
 impl<T: Stored> PerViewport<T> {
     /// Runs `f` on the record of `viewport`, created on first use.
     pub(crate) fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        Self::visit(ctx, viewport, &mut |value| {
+            if let Some(f) = f.take() {
+                out = Some(f(value));
+            }
+        });
+        #[expect(clippy::expect_used, reason = "visit calls its visitor once on the viewport's record")]
+        out.expect("the viewport record was visited")
+    }
+
+    fn visit(ctx: &Context, viewport: ViewportId, f: &mut dyn FnMut(&mut T)) {
         // The prune registration runs outside the records' borrow: it reaches the context.
-        let (registered, out) = T::records(ctx, |records| (std::mem::replace(&mut records.pruning, true), f(records.record(viewport))));
+        let registered = T::records(ctx, |records| {
+            let registered = std::mem::replace(&mut records.pruning, true);
+            f(records.record(viewport));
+            registered
+        });
         if !registered {
             Self::register_prune(ctx);
         }
-        out
     }
 
     /// Runs `f` on the record of every viewport that has one.
@@ -259,13 +274,37 @@ impl<T: Stored> PerViewport<Stamped<T>> {
     /// Runs `f` on the record of `viewport` for its pass `pass_nr`; `reset` runs first when the pass changed.
     #[doc(hidden)]
     pub fn with_pass<R>(ctx: &Context, viewport: ViewportId, pass_nr: u64, reset: impl FnOnce(&mut T, PassStep), f: impl FnOnce(&mut T) -> R) -> R {
-        Self::with(ctx, viewport, |record| {
+        let mut reset = Some(reset);
+        let mut f = Some(f);
+        let mut out = None;
+        Self::visit_pass(
+            ctx,
+            viewport,
+            pass_nr,
+            &mut |value, step| {
+                if let Some(reset) = reset.take() {
+                    reset(value, step);
+                }
+            },
+            &mut |value| {
+                if let Some(f) = f.take() {
+                    out = Some(f(value));
+                }
+            },
+        );
+        #[expect(clippy::expect_used, reason = "visit_pass visits the current record exactly once")]
+        out.expect("the stamped viewport record was visited")
+    }
+
+    // Callers share stamp validation and reset ordering, including the parked-record lookup.
+    fn visit_pass(ctx: &Context, viewport: ViewportId, pass_nr: u64, reset: &mut dyn FnMut(&mut T, PassStep), f: &mut dyn FnMut(&mut T)) {
+        Self::visit(ctx, viewport, &mut |record| {
             if record.pass != pass_nr {
                 reset(&mut record.value, if record.pass + 1 == pass_nr { PassStep::Next } else { PassStep::Skipped });
                 record.pass = pass_nr;
             }
-            f(&mut record.value)
-        })
+            f(&mut record.value);
+        });
     }
 }
 

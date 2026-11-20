@@ -1,7 +1,8 @@
 //! The reorder band: a section header whose section the stacking keys move.
 
 use super::BodyHooks;
-use crate::contract::{Container, ContainerProps, Cx, DragBand};
+use crate::contract::cx::CxCore;
+use crate::contract::{ContainerProps, DragBand};
 use crate::runtime::commands;
 use crate::runtime::keys;
 use craft_behavior::{PartKey, keys as key_table};
@@ -17,11 +18,11 @@ impl BodyHooks<'_> {
     /// The stacking keys (`keys::REORDER_KEYS`) while focus is anywhere in a section whose header is a reorder band. A
     /// section has no stop of its own, so the keys would reach the stops in it: the container holds the chords for
     /// itself and turns them into `Intent::MoveItem` for its own update.
-    pub(super) fn reorder_keys<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn reorder_keys(&mut self, props: &ContainerProps, core: &mut CxCore<'_>) {
         if !props.header.is_some_and(|header| header.band == DragBand::Reorder) {
             return;
         }
-        let (id, ctx) = (cx.core.id, cx.core.ctx.clone());
+        let (id, ctx) = (core.id, core.ctx.clone());
         let within = commands::focus_within(&ctx, id);
         for chord in key_table::REORDER_KEYS {
             if within {
@@ -29,7 +30,7 @@ impl BodyHooks<'_> {
             }
             while keys::take_claimed(&ctx, id, chord) {
                 if let Some(intent) = key_table::reorder_intent(chord.key, chord.mods) {
-                    cx.core.intents.push(intent);
+                    core.intents.push(intent);
                 }
             }
         }
