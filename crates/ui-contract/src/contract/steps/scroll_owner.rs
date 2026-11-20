@@ -13,6 +13,15 @@ use egui::{Context, Id, Rect, Vec2};
 pub(super) fn route_to_scroll_owner(core: &mut CxCore<'_>) {
     let scrolls = |mv: NavMove, _| matches!(mv, NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End);
     let mut moves = Vec::new();
+    if let Some(collection) = core.env.fallback_collection().filter(|id| *id != core.id) {
+        while let Some(mv) = core.intents.take_move() {
+            moves.push(mv);
+        }
+        if !moves.is_empty() {
+            pass_state::with::<ScrollMoves, _>(&core.ctx, |queue| queue.0.extend(moves.drain(..).map(|(mv, mods)| (collection, mv, mods))));
+            repaint::request(&core.ctx);
+        }
+    }
     while let Some(mv) = core.intents.take_move_where(scrolls) {
         moves.push(mv);
     }
@@ -109,6 +118,11 @@ pub(crate) fn scroll_moves(ctx: &Context, owner: Id, quiet: bool) -> Vec<(NavMov
         }
         mine
     })
+}
+
+/// Targets with queued moves, to wake settled regions containing them.
+pub(crate) fn move_targets(ctx: &Context) -> Vec<Id> {
+    pass_state::with::<ScrollMoves, _>(ctx, |moves| moves.0.iter().map(|(id, ..)| *id).collect())
 }
 
 /// The smallest move of `view` that shows `rect`, per axis in screen points (positive: toward larger coordinates), and

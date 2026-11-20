@@ -10,6 +10,26 @@ use std::rc::Rc;
 
 const BACKGROUND: PartKey = PartKey::new("background");
 
+/// A hover-revealed part must remain identifiable when a drag leaves its shape.
+#[trial]
+fn active_part_survives_a_drag_outside_its_shape() {
+    let area = rect(100.0, 100.0, 80.0, 80.0);
+    let root = ProbeRoot::new("active-part", area, Sense::empty())
+        .part(ProbePart::new(BACKGROUND, area, Sense::DRAG));
+    let (mut show_frame, _) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    let point = area.center();
+    frames.frame(vec![pointer::moved(point)], &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), Some(BACKGROUND.into()));
+    frames.frame(vec![pointer::press(point)], &mut show_frame);
+    frames.frame(vec![pointer::moved(point + Vec2::new(150.0, 0.0))], &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), Some(BACKGROUND.into()));
+    frames.frame(vec![pointer::release(point + Vec2::new(150.0, 0.0))], &mut show_frame);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(craft_ui::runtime::pointer::active_part(&frames.ctx, ProbeRoot::id("active-part")), None);
+}
+
 fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
     Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h))
 }

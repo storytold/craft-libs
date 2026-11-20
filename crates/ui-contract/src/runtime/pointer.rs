@@ -905,6 +905,23 @@ pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
     })
 }
 
+/// The part of `owner` holding the pointer's hover or an open press in this viewport.
+///
+/// An open press keeps its part while the pointer moves away, so callers can keep declaring it until release.
+pub fn active_part(ctx: &Context, owner: Id) -> Option<PartRef> {
+    let viewport = pass::current_viewport(ctx);
+    with_hover(ctx, viewport, |under, captured| {
+        if captured {
+            return crate::primitives::sensing::pressed_part(ctx, owner);
+        }
+        let under = under?;
+        [under.press.click, under.press.drag, under.hover_top]
+            .into_iter()
+            .flatten()
+            .find_map(|(winner, _)| (winner.owner == owner).then_some(winner.part).flatten())
+    })
+}
+
 /// The clip the root of the arena `component` is in (its own, or that of the root it is a member of) was shown
 /// through, from its latest record in the running viewport: where its parts and members can be seen. `None` for a
 /// component no root recorded.

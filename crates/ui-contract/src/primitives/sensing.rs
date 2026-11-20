@@ -980,6 +980,12 @@ fn any_press_open(ctx: &Context) -> bool {
     PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| arenas.by_root.values().any(|state| state.machine.target().is_some()))
 }
 
+pub(crate) fn pressed_part(ctx: &Context, owner: Id) -> Option<PartRef> {
+    PerViewport::<Arenas>::with(ctx, pass::current_viewport(ctx), |arenas| {
+        arenas.by_root.values().find_map(|state| state.machine.target().filter(|hit| hit.owner == owner).and_then(|hit| hit.part))
+    })
+}
+
 /// The arena's outcome of the running pass, idle when the root has not run yet.
 pub(crate) fn read_outcome(ctx: &Context, arena: ArenaId) -> Outcome {
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));

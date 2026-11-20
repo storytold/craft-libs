@@ -703,7 +703,9 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
 /// The components the running pass's intents are routed to (keys, AccessKit requests, edits): a settling region that
 /// holds one runs, so the component takes them.
 pub(crate) fn routed_to(ctx: &Context) -> Vec<Id> {
-    current(ctx, |stage| stage.routed.keys().flatten().copied().collect())
+    let mut ids: Vec<Id> = current(ctx, |stage| stage.routed.keys().flatten().copied().collect());
+    ids.extend(crate::contract::steps::scroll_owner::move_targets(ctx));
+    ids
 }
 
 /// The member whose `Activate` the group `root` reads this pass.
