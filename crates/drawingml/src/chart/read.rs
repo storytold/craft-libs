@@ -518,7 +518,12 @@ fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
             matches!(axis.local(), "catAx" | "dateAx")
                 && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
         })
-        .or_else(|| pa.children(Local("valAx")).find(|axis| axis.child(Local("axId")).and_then(|id| id.attr_local("val")) == ids.first().copied()));
+        .or_else(|| {
+            pa.children(Local("valAx")).find(|axis| {
+                matches!(axis.child(Local("axPos")).and_then(|pos| pos.attr_local("val")), Some("b" | "t"))
+                    && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
+            })
+        });
     if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
         return None;
     }
@@ -1021,6 +1026,16 @@ mod tests {
             let c = read_chart_xml(xml.as_bytes()).unwrap();
             assert_eq!(c.category_label(0), expected);
         }
+    }
+
+    #[test]
+    fn scatter_category_format_uses_the_horizontal_axis_regardless_of_id_order() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:scatterChart><c:ser><c:idx val="0"/><c:xVal>{}</c:xVal></c:ser><c:axId val="4"/><c:axId val="3"/></c:scatterChart><c:valAx><c:axId val="4"/><c:axPos val="l"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:valAx><c:valAx><c:axId val="3"/><c:axPos val="b"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#,
+            num_cat("m/d/yyyy")
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.category_label(0), "Jan-24");
     }
 
     #[test]
