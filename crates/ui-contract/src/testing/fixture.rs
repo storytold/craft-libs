@@ -397,6 +397,12 @@ impl Fixture {
         self.frames.repaint_requested()
     }
 
+    /// The wait the latest frame asked for before the next pass: `Duration::ZERO` for an immediate repaint, `None` when
+    /// it asked for none.
+    pub fn repaint_delay(&self) -> Option<std::time::Duration> {
+        self.frames.repaint_delay()
+    }
+
     /// The IME output of the latest frame.
     pub fn ime(&self) -> Option<&fixture::ImeSeen> {
         self.frames.ime()
