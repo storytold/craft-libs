@@ -5,7 +5,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Politeness, Props as _, Show as _};
 use craft_ui::notices::{Notice, NoticeAction, NoticeLayout};
 use craft_ui::testing::{Fixture, trial};
-use egui::{Id, Vec2};
+use egui::{Id, Rect, Vec2};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -90,4 +90,49 @@ fn a_centred_notice_hosts_content_under_its_actions() {
     assert!((hosted.rect.center().x - action.rect.center().x).abs() < 1.0, "both are centred in the column");
     fixture.click(&hosted).settle();
     assert!(clicked.get(), "the click reaches the app");
+}
+
+/// When a row notice's actions exceed its width, they wrap onto further rows inside the notice's bounds so none is cut
+/// off, and clicking a wrapped action at its centre reports it.
+#[trial]
+fn a_row_notice_wraps_actions_onto_further_rows_inside_its_bounds() {
+    for layout in [NoticeLayout::Inline, NoticeLayout::Card] {
+        let taken = Rc::new(Cell::new(None));
+        let bounds = Rc::new(Cell::new(Rect::NOTHING));
+        let (seen, rect) = (taken.clone(), bounds.clone());
+        let labels = ["Show details", "Open preferences", "Restore defaults", "Don't show again"];
+        let mut fixture = Fixture::new(move |ui| {
+            let mut notice = Notice::new(Tone::Info, "Some changes are restricted by this document's settings.").layout(layout).dismiss();
+            for label in labels {
+                notice = notice.action(NoticeAction::new(label));
+            }
+            let out = notice.show(ui);
+            rect.set(out.response.rect);
+            if let Some(action) = out.action {
+                seen.set(Some(action));
+            }
+        });
+        fixture.room(Vec2::new(220.0, 240.0)).settle();
+        let notice = bounds.get();
+        let nodes: Vec<_> = labels.iter().map(|label| fixture.by_label(label).expect("the action node")).collect();
+        for (at, node) in nodes.iter().enumerate() {
+            assert!(
+                notice.contains_rect(node.rect),
+                "{layout:?}: action {at} ({:?}) lies inside the notice ({notice:?})",
+                node.rect
+            );
+            for other in &nodes[at + 1..] {
+                assert!(!node.rect.intersects(other.rect), "{layout:?}: actions do not overlap ({:?} vs {:?})", node.rect, other.rect);
+            }
+        }
+        assert!(
+            nodes[labels.len() - 1].rect.top() >= nodes[0].rect.bottom(),
+            "{layout:?}: later actions wrap onto a row below the first ({:?} vs {:?})",
+            nodes[labels.len() - 1].rect,
+            nodes[0].rect
+        );
+        let wrapped = labels.len() - 1;
+        fixture.click(&nodes[wrapped]).settle();
+        assert_eq!(taken.get(), Some(wrapped), "{layout:?}: clicking the wrapped action at its centre reports it");
+    }
 }
