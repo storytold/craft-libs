@@ -1,5 +1,5 @@
 use super::*;
-use crate::dae::{UpAxis, read, read_document};
+use crate::dae::{UpAxis, read, read_document, read_document_with_cameras};
 
 const DAE: &str = r##"<?xml version="1.0" encoding="utf-8"?>
 <COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
@@ -127,4 +127,49 @@ fn entities_and_limits_are_enforced() {
 #[test]
 fn hammer_never_panics() {
     hammer(DAE.as_bytes(), &|b| read(b, &Limits::default()));
+}
+
+// Synthetic COLLADA scene with two lenses on a node at the maximum allowed depth.
+const CAMERA_RIG: &str = r##"<COLLADA>
+  <library_cameras>
+    <camera id="wide"><optics><technique_common><perspective><yfov>60</yfov></perspective></technique_common></optics></camera>
+    <camera id="ortho"><optics><technique_common><orthographic><ymag>2</ymag></orthographic></technique_common></optics></camera>
+  </library_cameras>
+  <library_visual_scenes><visual_scene id="scene">
+    <node name="Parent"><translate>1 2 3</translate><node name="Rig"><translate>4 5 6</translate>
+      <instance_camera url="#wide"/><instance_camera url="#missing"/><instance_camera url="#ortho"/>
+    </node></node>
+    <node><instance_camera url="#wide"/></node>
+  </visual_scene></library_visual_scenes>
+</COLLADA>"##;
+
+#[test]
+fn additional_dae_cameras_share_their_node_without_spending_graph_budget() {
+    let limits = Limits { max_nodes: 3, max_depth: 1, ..Limits::default() };
+    let old = read_document(CAMERA_RIG.as_bytes(), &limits).unwrap();
+    let all = read_document_with_cameras(CAMERA_RIG.as_bytes(), &limits).unwrap();
+    // Additional cameras neither add nodes nor change any existing transform or primary index.
+    assert_eq!(all.document(), &old);
+    let parent = all.document().scene.roots[0];
+    let rig = all.document().scene.nodes[parent].children[0];
+    let cameras: Vec<_> = all.cameras_for_node(rig).collect();
+    let [first, second] = cameras.as_slice() else { panic!("expected both camera instances: {cameras:?}") };
+    assert_eq!((first.name.as_str(), second.name.as_str()), ("Rig", "Rig"));
+    assert!(matches!(first.projection, Projection::Perspective { .. }));
+    assert!(matches!(second.projection, Projection::Orthographic { .. }));
+    assert_eq!(all.cameras_for_node(all.document().scene.roots[1]).next().unwrap().name, "wide");
+}
+
+#[test]
+fn additional_dae_cameras_share_the_extras_limit_in_traversal_order() {
+    let limits = Limits { max_extras: 2, ..Limits::default() };
+    let all = read_document_with_cameras(CAMERA_RIG.as_bytes(), &limits).unwrap();
+    let scene = &all.document().scene;
+    let rig = scene.nodes[scene.roots[0]].children[0];
+    assert_eq!(all.cameras_for_node(rig).count(), 2);
+    assert!(all.cameras_for_node(scene.roots[1]).next().is_none());
+    // Compatibility: the original API's cap still counts only primary cameras.
+    let original = read(CAMERA_RIG.as_bytes(), &limits).unwrap();
+    assert_eq!(original.cameras.len(), 2);
+    assert!(original.nodes[original.roots[1]].camera.is_some());
 }

@@ -35,6 +35,9 @@ pub(crate) enum SheetSel {
     Named(String),
     /// 3-D span `Sheet1:Sheet3`.
     Span(String, String),
+    /// A sheet, or a span of sheets, of the external link numbered `[n]`: `[1]Data!`,
+    /// `'[1]Other Sheet'!`, `'[1]A:C'!` (Excel quotes an external span whatever its names).
+    External(usize, String, Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,6 +125,9 @@ pub(crate) enum Expr {
     Ref(Reference),
     /// A defined name.
     Name(String),
+    /// Text the decoder spelled itself, written as is (a name in another workbook,
+    /// `[1]!ExtName`).
+    Verbatim(String),
     /// Spaces and line breaks typed before and after an expression (`PtgAttrSpace`), which
     /// `.xlsx` formula text keeps.
     Spaced(String, Box<Expr>, String),
@@ -161,6 +167,10 @@ fn push_reference(s: &mut String, r: &Reference) {
                 let _ = write!(s, "{joined}!");
             }
         }
+        SheetSel::External(n, a, b) => {
+            s.push_str(&external_sheet(*n, a, b.as_deref()));
+            s.push('!');
+        }
     }
     let dollar = |abs: bool| if abs { "$" } else { "" };
     match &r.kind {
@@ -181,6 +191,19 @@ fn push_reference(s: &mut String, r: &Reference) {
             push_col(s, *c1);
         }
         RefKind::Deleted => s.push_str(CellError::Ref.as_str()),
+    }
+}
+
+/// `[n]` and a sheet or span of an external link, quoted as Excel quotes it, without the `!`.
+/// After `[n]`, a sheet that reads as a cell, an R1C1 reference or `TRUE` needs no quotes
+/// (`[1]A1!A1`, `[1]C!A1`); one starting with a digit or holding other characters does
+/// (`'[1]2023'!A1`, `'[1]a b'!A1`), and a span always does.
+pub(crate) fn external_sheet(n: usize, a: &str, b: Option<&str>) -> String {
+    let plain = |s: &str| s.chars().next().is_some_and(|c| !c.is_ascii_digit()) && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+    match b {
+        None if plain(a) => format!("[{n}]{a}"),
+        None => format!("'[{n}]{}'", a.replace('\'', "''")),
+        Some(b) => format!("'[{n}]{}:{}'", a.replace('\'', "''"), b.replace('\'', "''")),
     }
 }
 
@@ -320,6 +343,7 @@ fn write_expr(s: &mut String, e: &Expr) {
             s.push('}');
         }
         Expr::Ref(r) => push_reference(s, r),
+        Expr::Verbatim(t) => s.push_str(t),
         Expr::Name(n) => match sheet_split(n) {
             // A sheet-qualified name holds the bare sheet name (`My Sheet!Total`): quote it so it parses back.
             Some((sheet, name)) => {
