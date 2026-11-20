@@ -206,6 +206,28 @@ fn mismatched_closing_tag_is_an_error() {
 // ---------- limits ----------
 
 #[test]
+fn individual_reads_obey_the_tighter_limit_without_spending_budget_on_failure() {
+    let package = opf("");
+    let bytes = zip_of(&[("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", &package), ("image", &PNG)]);
+    let used = CONTAINER.len() + package.len();
+    let limits = Limits { max_total_bytes: (used + 12) as u64, max_entry_bytes: 1024, ..Limits::DEFAULT };
+    let mut epub = Epub::open_with(&bytes, limits).unwrap();
+    assert_eq!(epub.read_with_limit("image", 7), Err(Error::TooLarge { part: "image".into(), limit: 7 }));
+    assert_eq!(epub.budget_left(), 12);
+    assert_eq!(epub.read_with_limit("missing", 0).unwrap(), None);
+    assert_eq!(epub.read_with_limit("image", 8).unwrap(), Some(PNG.to_vec()));
+    assert_eq!(epub.budget_left(), 4);
+    assert_eq!(epub.read_with_limit("image", 100), Err(Error::TooLarge { part: "image".into(), limit: 4 }));
+    assert_eq!(epub.budget_left(), 4);
+    assert_eq!(epub.read_with_limit("OEBPS/", 0).unwrap(), None);
+    let big = vec![0; 1025];
+    let bytes = zip_of(&[("META-INF/container.xml", CONTAINER), ("OEBPS/content.opf", &package), ("big", &big), ("empty", b"")]);
+    let mut epub = Epub::open_with(&bytes, Limits { max_entry_bytes: 1024, ..Limits::DEFAULT }).unwrap();
+    assert_eq!(epub.read_with_limit("big", u64::MAX), Err(Error::TooLarge { part: "big".into(), limit: 1024 }));
+    assert_eq!(epub.read_with_limit("empty", 0).unwrap(), Some(Vec::new()));
+}
+
+#[test]
 fn an_entry_past_the_entry_limit_is_refused() {
     let bytes = sample_package();
     let limits = Limits { max_entry_bytes: 1024, ..Limits::DEFAULT };
