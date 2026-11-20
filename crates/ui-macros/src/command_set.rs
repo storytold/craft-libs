@@ -1,6 +1,8 @@
 //! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..", typing, story)]` on the enum and
-//! `#[command(label = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", holds = "..", default = "..", path = "..", alias = "..")]`
+//! `#[command(label = "..", description = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", holds = "..", default = "..", path = "..", alias = "..")]`
 //! on variants.
+//! `description = ".."` is a sentence on what the command does: a tool button's second tooltip line and the accessible
+//! description.
 //! `edit = ".."` links the command to the `EditCommand` a focused component takes it as.
 //! `holds = ".."` on a `kind = "momentary"` command names the scope whose keys work while the command's key is held.
 //! `typing` on the enum makes the set's scope a typing scope: a text component's own keys, which work while it types.
@@ -22,6 +24,7 @@ struct SetAttrs {
 #[derive(Default)]
 struct VariantAttrs {
     label: Option<LitStr>,
+    description: Option<LitStr>,
     icon: Option<LitStr>,
     kind: Option<LitStr>,
     group: Option<LitStr>,
@@ -147,6 +150,13 @@ fn variant(variant: &Variant) -> syn::Result<VariantAttrs> {
         let value = |meta: &syn::meta::ParseNestedMeta<'_>| meta.value()?.parse::<LitStr>();
         match () {
             () if meta.path.is_ident("label") => attrs.label = Some(value(meta)?),
+            () if meta.path.is_ident("description") => {
+                let description = value(meta)?;
+                if description.value().trim().is_empty() {
+                    return Err(syn::Error::new(description.span(), "a description is a sentence: leave the option out rather than empty"));
+                }
+                attrs.description = Some(description);
+            }
             () if meta.path.is_ident("icon") => attrs.icon = Some(value(meta)?),
             () if meta.path.is_ident("kind") => attrs.kind = Some(value(meta)?),
             () if meta.path.is_ident("group") => attrs.group = Some(value(meta)?),
@@ -174,9 +184,12 @@ fn variant(variant: &Variant) -> syn::Result<VariantAttrs> {
     Ok(attrs)
 }
 
-/// The builder calls that carry a variant's icon, kind, modal, paths and aliases.
+/// The builder calls that carry a variant's description, icon, kind, modal, paths and aliases.
 fn command_chain(k: &TokenStream, attrs: &VariantAttrs) -> syn::Result<TokenStream> {
     let mut chain = quote!();
+    if let Some(description) = &attrs.description {
+        chain.extend(quote!(.with_description(#description)));
+    }
     if let Some(icon) = &attrs.icon {
         chain.extend(quote!(.with_icon(#icon)));
     }

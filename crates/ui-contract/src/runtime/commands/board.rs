@@ -780,7 +780,10 @@ impl Board {
             enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
-            hint: state.and_then(|s| s.hint_ref().cloned()),
+            // A frame's hint, else the command's description.
+            hint: state
+                .and_then(|s| s.hint_ref().cloned())
+                .or_else(|| def.and_then(|def| def.description.as_deref()).filter(|text| !text.is_empty()).map(Arc::from)),
             kind: def.map_or(CommandKind::Command, |def| def.kind.clone()),
             command: command.clone(),
             instance,
