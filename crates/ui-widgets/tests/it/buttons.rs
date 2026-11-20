@@ -17,7 +17,7 @@ use craft_ui::runtime::env::with_env;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, forget_measurements, last_pass_measure_asks, last_pass_text_layouts, trial};
 use craft_ui_test_kit::contract::{Panel, PlainStyle};
 use egui::{Event, Id, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -101,6 +101,13 @@ fn face_in_row(case: PairedFaceCase, paired: bool, width: f32) -> Vec2 {
         );
     });
     fixture.room(Vec2::new(width, 160.0)).settle();
+    if paired {
+        forget_measurements(fixture.ctx());
+        fixture.frame(Vec::new());
+        let asks = last_pass_measure_asks(fixture.ctx());
+        assert!(asks.iter().any(|(name, count)| name.contains("Button") && *count > 0), "the face must be measured again: {asks:?}");
+        assert_eq!(last_pass_text_layouts(fixture.ctx()), 0, "a warmed face must reuse its text layouts");
+    }
     seen.get()
 }
 
