@@ -311,7 +311,8 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let revs = rmark::Revisions::new(&table, &fib);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
-    let style_rtl = style_directions(&raw_styles, &sheet);
+    let style_pos = style_positions(&raw_styles, &sheet);
+    let style_rtl = style_directions(&style_pos, &sheet);
     let ctx = WalkCtx {
         word: &word,
         data: &data,
@@ -322,6 +323,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         raw_styles: &raw_styles,
         sheet: &sheet,
         style_rtl: &style_rtl,
+        style_pos: &style_pos,
         notes: &[],
         marks: &[],
         drawn: &[],
@@ -470,7 +472,8 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let work = Work::new(MAX_WORK);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
     let mut pics = media::Pictures::for_input(word.len());
-    let style_rtl = style_directions(&content.styles, &sheet);
+    let style_pos = style_positions(&content.styles, &sheet);
+    let style_rtl = style_directions(&style_pos, &sheet);
     let revs = rmark::Revisions::none();
     let ctx = WalkCtx {
         word,
@@ -482,6 +485,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         raw_styles: &content.styles,
         sheet: &sheet,
         style_rtl: &style_rtl,
+        style_pos: &style_pos,
         notes: &[],
         marks: &[],
         drawn: &[],
@@ -561,11 +565,16 @@ fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
     Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
-/// Each style's resolved direction by istd, looked up once rather than per paragraph: a style
+/// Each style's position in the sheet by istd, looked up once rather than per paragraph: a style
 /// lookup by id scans the sheet, and both counts are only capped (WordCraft #6384).
-fn style_directions(raw: &[stsh::RawStyle], sheet: &StyleSheet) -> Vec<bool> {
-    let by_id: std::collections::HashMap<&str, bool> = sheet.styles.iter().map(|s| (s.id.as_str(), s.para.bidi == Some(true))).collect();
-    raw.iter().map(|st| !st.name.is_empty() && by_id.get(fmt::style_id(&st.name).as_str()).copied().unwrap_or(false)).collect()
+fn style_positions(raw: &[stsh::RawStyle], sheet: &StyleSheet) -> Vec<Option<usize>> {
+    let by_id: std::collections::HashMap<&str, usize> = sheet.styles.iter().enumerate().map(|(i, s)| (s.id.as_str(), i)).collect();
+    raw.iter().map(|st| if st.name.is_empty() { None } else { by_id.get(fmt::style_id(&st.name).as_str()).copied() }).collect()
+}
+
+/// Each style's resolved direction by istd, through its base chain.
+fn style_directions(positions: &[Option<usize>], sheet: &StyleSheet) -> Vec<bool> {
+    positions.iter().map(|p| p.and_then(|i| sheet.styles.get(i)).is_some_and(|s| s.para.bidi == Some(true))).collect()
 }
 
 /// Everything the walker needs besides its CP range.
@@ -580,6 +589,9 @@ struct WalkCtx<'a> {
     sheet: &'a StyleSheet,
     /// Whether each style (by istd) reads right to left, through its base chain.
     style_rtl: &'a [bool],
+    /// Each style's position in `sheet` (by istd), so a paragraph mark finds its style without
+    /// scanning the sheet.
+    style_pos: &'a [Option<usize>],
     /// (reference CP in the main document, kind, part id) for notes.
     notes: &'a [(u32, NoteKind, u32)],
     /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
@@ -778,7 +790,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 }
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let default = CharProps::default();
-                let base = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).map_or(&default, |s| &s.chr);
+                let style = ctx.style_pos.get(istd as usize).copied().flatten().and_then(|i| ctx.sheet.styles.get(i));
+                let base = style.map_or(&default, |s| &s.chr);
                 let chpx = ctx.chpx_bins.chpx(ctx.word, fc);
                 pb.mark = char_props(chpx, ctx.fonts, base);
                 // A tracked paragraph mark: an inserted or deleted paragraph break.
