@@ -174,6 +174,9 @@ pub(crate) struct Place {
     pub(crate) layer: Layer,
     pub(crate) layout: Layout,
     pub(crate) pixels_per_point: f32,
+    /// The font atlas the run's text points into (`Fonts::atlas_generation`): egui clears the atlas when it fills up
+    /// and rebuilds it for new text options, and a kept galley's glyphs then name other glyphs.
+    pub(crate) atlas: u64,
     /// The scope's environment (`Env::key`): its tokens (theme, density), scale, direction, language and whether the
     /// window is active.
     pub(crate) env: EnvKey,
@@ -188,9 +191,9 @@ struct Moved {
 
 impl Place {
     /// How a run at this place that took `rect` replays at `now`, or `None` when it cannot. The room may have moved; its
-    /// size, the layer, layout, scale and environment are the ones the run had. The record moves by the room's move
-    /// when that is a whole step of egui's UI rounding (a run rounds its rects to it, so a moved record is what a run
-    /// there gives) and, for a move, the record holds nothing a move cannot place (`movable`: no paint callback) on an
+    /// size, the layer, layout, scale, font atlas and environment are the ones the run had. The record moves by the
+    /// room's move when that is a whole step of egui's UI rounding (a run rounds its rects to it, so a moved record is
+    /// what a run there gives) and, for a move, the record holds nothing a move cannot place (`movable`: no paint callback) on an
     /// untransformed layer (`transformed`: egui's AccessKit bounds are layer space only there). Its clip rects follow
     /// the clip when either:
     /// - the clip moved with the room (`with_clip`): every rect and clip moves exactly, whatever the clip cut;
@@ -205,6 +208,7 @@ impl Place {
             && now.layer == self.layer
             && now.layout == self.layout
             && now.pixels_per_point == self.pixels_per_point
+            && now.atlas == self.atlas
             && now.env == self.env;
         let placeable = offset == Vec2::ZERO || (offset == offset.round_ui() && movable && !transformed);
         if !same || !placeable {

@@ -232,6 +232,31 @@ fn a_pass_egui_will_discard_keeps_no_record_and_replays_settled_views() {
     assert_eq!(frame(&mut frames, "B", false), (1, 0), "then it replays the shown pass's run");
 }
 
+/// A kept run's text points into egui's font atlas; when egui rebuilds the atlas (it filled up, or the text options
+/// changed) the kept glyphs name other glyphs, so a settled view runs in place of replaying, then settles again.
+#[trial]
+fn a_settled_view_runs_after_the_font_atlas_is_rebuilt() {
+    let mut frames = Frames::new();
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("title", Title { title: "Atlas".to_owned() }, title).show(ui));
+        });
+        title_runs()
+    };
+    for _ in 0..WARM {
+        frame(&mut frames);
+    }
+    assert_eq!(frame(&mut frames), 0, "a settled view replays");
+    let before = frames.ctx.fonts(|fonts| fonts.atlas_generation());
+    frames.ctx.all_styles_mut(|style| style.visuals.text_options.font_hinting = !style.visuals.text_options.font_hinting);
+    assert!(frame(&mut frames) > 0, "the view runs in the first frame on the rebuilt atlas");
+    assert_ne!(frames.ctx.fonts(|fonts| fonts.atlas_generation()), before, "the atlas was rebuilt");
+    for _ in 0..WARM {
+        frame(&mut frames);
+    }
+    assert_eq!(frame(&mut frames), 0, "then it replays again");
+}
+
 /// A view that writes its own `&mut Tracked` runs twice for the change that asked for the write, the writing run and
 /// one that reads the written value, then replays.
 #[trial]

@@ -112,6 +112,7 @@ impl Lazy {
             layer: ui.layer_id(),
             layout,
             pixels_per_point: ctx.pixels_per_point(),
+            atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
             env: Env::of(ui).key,
         };
         let memo = matches!(key, Key::Memo(_));
