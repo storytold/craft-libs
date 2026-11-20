@@ -551,6 +551,9 @@ mod tests {
         root.children.push(mesh);
         let mut mat = UsdPrim::new("Mat", "Material");
         mat.attrs.push(UsdAttr::connected("outputs:surface", "token", "/World/Mat/PBR.outputs:surface".into()));
+        let mut pbr = UsdPrim::new("PBR", "Shader");
+        pbr.attrs.push(UsdAttr::new("outputs:surface", "token", None));
+        mat.children.push(pbr);
         root.children.push(mat);
 
         let mut layer = UsdLayer::new(root);
