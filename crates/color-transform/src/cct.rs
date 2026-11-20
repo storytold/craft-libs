@@ -252,10 +252,10 @@ mod tests {
             let src = temp_tint_to_xy(t, tint);
             assert_eq!(crate::bradford(src, REC2020.white), Mat3::IDENTITY, "{t} K tint {tint}");
             let m = wb_matrix(&REC2020, src);
-            for i in 0..3 {
-                for j in 0..3 {
+            for (i, row) in m.0.iter().enumerate() {
+                for (j, &val) in row.iter().enumerate() {
                     let want = if i == j { 1.0 } else { 0.0 };
-                    assert!((m.0[i][j] - want).abs() < 1e-12, "{t} K tint {tint} [{i}][{j}] = {}", m.0[i][j]);
+                    assert!((val - want).abs() < 1e-12, "{t} K tint {tint} [{i}][{j}] = {val}");
                 }
             }
         }
