@@ -1648,6 +1648,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cdr"
+version = "0.1.0"
+dependencies = [
+ "craft-cdr",
+ "crc32fast",
+ "flate2",
+ "proptest",
+]
+
+[[package]]
 name = "craft-cfb"
 version = "0.1.0"
 dependencies = [
