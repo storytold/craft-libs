@@ -766,10 +766,11 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
-/// An ⌥ top or bottom drag on a box whose top and bottom converge, within 2 px of the reference for short drags and
-/// 10 px at the longest measured (the frame scaling was 40 to 240 off). The perspective side rule turned on its side,
-/// in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r` (`r` the dragged
-/// edge's middle's distance from the reference point across the frame), the opposite edge turns about its middle to
+/// An ⌥ top or bottom drag on a box whose top and bottom converge, a bottom drag within 0.3 px of the reference where
+/// the sides differ by up to 40 % (1.3 px at 60 %), a top one within 5 px. The perspective side rule turned on its
+/// side, in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r` (`r` the dragged
+/// edge's middle's distance from the reference point across the frame; for a bottom drag eased by how much the sides
+/// differ), the opposite edge turns about its middle to
 /// a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
 /// gives them ([`side_run_scale`]); then the sides turn across the frame, `k (|top| ± m)` apart (`m` the sides' mean
 /// run along the frame, added for the bottom edge and taken off for the top one).
@@ -782,6 +783,16 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     let sign = if edge == 2 { 1.0 } else { -1.0 };
     let reach = if edge == 2 { (br.midpoint(bl) - c).dot(nh) } else { (c - tl.midpoint(tr)).dot(nh) };
     let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
+    // A bottom drag grows the box by less than the pointer's `k`, the more so the more the sides differ (`r` the
+    // shorter side over the longer); a top drag by `k` itself (both measured on the reference).
+    let k = if edge == 2 {
+        let (left, right) = (bl.distance(tl), br.distance(tr));
+        let r = left.min(right) / left.max(right);
+        let spread = if r.is_finite() { (1.0 - r) * (1.0 - r) } else { 0.0 };
+        1.0 + (k - 1.0) * (1.0 - spread * (0.22 + 0.1 * (k - 1.0)))
+    } else {
+        k
+    };
     let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
     if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
         return None;
