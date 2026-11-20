@@ -1,0 +1,7 @@
+
+[[contributions]]
+kind = "panel"
+id = "counter"
+title = "Counter"
+dock = "right"
+handler = "open_panel"

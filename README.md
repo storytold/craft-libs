@@ -86,6 +86,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   checks, 3D LUTs and built-in profiles (sRGB, Display P3, synthetic coated CMYK and others).
 - [`craft-crs`](crates/crs/README.md): Adobe Camera Raw settings (the `crs:` namespace of an XMP packet or `.xmp` sidecar, read through craft-metadata): the settings by name, numbers, tone curve points, local corrections and the crop, read and written. From PhotoCraft.
 - [`craft-codepage`](crates/codepage/README.md): legacy 8-bit code pages, one table each: the single-byte Windows pages, Mac OS Roman and fifteen DOS pages, keyed by Windows code page number, with the RTF/Word font charsets. craft-rtf, craft-dxf and craft-mime decode through it.
+- [`craft-command`](crates/command/README.md): command registry for the Craft apps: commands added at run time, a gate on each call (`before` and `after` hooks with time budgets), a document change feed and a JSON Schema per command. Its `#[command]` macro is in [`craft-command-derive`](crates/command-derive/README.md). Builds for `wasm32`.
 - [`craft-crw`](crates/crw/README.md): clean-room Canon CRW (CIFF) raw decoder, from LightCraft:
   the heap container, the entropy coding derived by black-box analysis (frozen code tables), sensor
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
@@ -310,6 +311,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
+- [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
+- [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. The engine layer: an `Engine` trait, a wasmi engine (every target), an optional wasmtime engine (native) and browser engines (wasm32).
+- [`craft-plugin-host`](crates/plugin-host/README.md): runs craft-abi 1 plugins. Engines (wasmi on every target, optional wasmtime on native, browser engines on wasm32), the checks on each host call, install and reload, and the command, hook, panel and format contributions an app receives. Optional features `link` (Craft Link client) and `legacy-v1` (adapters for the v1 plugin ABIs of EffectCraft, PhotoCraft and VectorCraft).
+- [`craft-plugin-sdk`](crates/plugin-sdk/README.md) and [`craft-plugin-sdk-macros`](crates/plugin-sdk-macros/README.md): the guest SDK for "craft-abi 1" plugins. Host calls, handler types, panel trees, and `#[craft_plugin]`, which checks `craft.toml` at compile time and emits the wasm exports. Builds for `wasm32`. Sets `unsafe_code = "deny"` with two explicit allows.
+- [`craft-cli`](crates/cli/README.md): the `craft` developer CLI for plugins. `new` scaffolds a plugin, `build` compiles it for `wasm32` and runs the install gate, `check` and `inspect` report on a `.wasm`, `run --headless` calls one contribution in a plugin host with no app, `watch` and `dev` reload a plugin when its file changes. Native only.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.

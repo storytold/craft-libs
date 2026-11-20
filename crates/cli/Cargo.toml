@@ -1,0 +1,34 @@
+[package]
+name = "craft-cli"
+description = "The craft developer CLI for Craft plugins: new, build, check, inspect, run and dev folder watch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+name = "craft_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "craft"
+path = "src/main.rs"
+
+[dependencies]
+craft-command.workspace = true
+craft-plugin-abi.workspace = true
+craft-plugin-host.workspace = true
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.2.15"
+notify = "8"
+serde.workspace = true
+serde_json.workspace = true
+wasmparser = "0.262.0"
+
+[dev-dependencies]
+tempfile = "3"
+wat = "1.262.0"
+
+[lints]
+workspace = true

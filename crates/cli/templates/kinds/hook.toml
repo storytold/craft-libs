@@ -1,0 +1,7 @@
+
+[[contributions]]
+kind = "hook"
+id = "log-commands"
+label = "Log finished commands"
+phase = "after"
+handler = "log_commands"

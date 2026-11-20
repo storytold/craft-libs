@@ -1,0 +1,15 @@
+# The plugin manifest. `#[craft_plugin]` reads it at compile time, checks it with the same rules as
+# the install gate, and embeds it in the .wasm. It assigns each contribution's `entry` itself.
+# `handler` names the function in src/lib.rs that runs the contribution.
+id = "{{plugin_id}}"
+name = "{{name}}"
+version = "0.1.0"
+description = "A Craft plugin made with `craft new`."
+
+[requires]
+# Host calls this plugin may make. A call to an op not listed here returns E_DENIED.
+ops = [{{ops}}]
+{{permissions}}
+[limits]
+memory_mb = 64
+{{contributions}}
