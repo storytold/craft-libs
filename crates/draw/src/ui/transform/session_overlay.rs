@@ -68,6 +68,7 @@ pub struct TransformOverlay<'a, W> {
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
     rotate_zone: RotateZone,
+    reference_point_pointer: bool,
     id: IdSource,
 }
 
@@ -83,8 +84,19 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             menu_rows: &[],
             reach: TransformReach::Box,
             rotate_zone: RotateZone::Outside,
+            reference_point_pointer: false,
             id: IdSource::Auto,
         }
+    }
+
+    /// Free Transform's pointer for the reference point: on, before a drag, with Alt held inside the box and outside
+    /// it where the outside takes a press, and over the shown reference point, the pointer is the system arrow with
+    /// the target mark beside it, where a press places the reference point. Off (the default) keeps the pointers of
+    /// the drags there.
+    #[must_use]
+    pub fn reference_point_pointer(mut self, on: bool) -> Self {
+        self.reference_point_pointer = on;
+        self
     }
 
     /// Salts the box's id with `salt`, as [`Props::id_salt`](craft_ui::contract::Props::id_salt) does: a host that
@@ -159,6 +171,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .reference_point(session.reference_point())
             .reach(self.reach)
             .rotate_zone(self.rotate_zone)
+            .reference_point_pointer(self.reference_point_pointer)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
