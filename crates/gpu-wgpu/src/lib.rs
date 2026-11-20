@@ -302,17 +302,18 @@ impl WgpuContext {
         None
     }
 
-    /// `read_buffer`'s wait for the device between polls. `DeviceHealth::wait` does not wait once
-    /// the device reported an error other than out of memory, or when its poll fails. Then the
-    /// read of `request` is dropped and fails with that error, instead of polling in a loop
-    /// until a map that may never complete; a loss is left to the next `poll_reads`, which
-    /// fails every pending read with it.
+    /// `read_buffer`'s wait for the device between polls, for the work submitted so far.
+    /// `DeviceHealth::wait` does not wait once the device reported an error other than out of
+    /// memory, stops after its current 100 ms slice when another user of the device records
+    /// such an error, and fails when its poll fails. Then the read of `request` is dropped and
+    /// fails with that error, instead of polling in a loop until a map that may never complete;
+    /// a loss is left to the next `poll_reads`, which fails every pending read with it.
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(feature = "adapter-probe"), allow(unused_variables, clippy::unused_self))]
     fn wait_between_reads(&mut self, request: ReadRequest) -> Option<GpuFault> {
         #[cfg(feature = "adapter-probe")]
         if let Backing::Device(d) = &mut self.backing
-            && !d.health.wait(&d.device, None)
+            && !d.health.wait(&d.device, d.queue.submit([]))
         {
             d.health.probe(&d.device);
             if d.health.device_status().is_err() {
