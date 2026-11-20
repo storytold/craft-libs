@@ -44,6 +44,11 @@ impl<'a, C: Component> MeasureCx<'a, C> {
 }
 
 impl<C: Component> MeasureCx<'_, C> {
+    /// The enclosing container's reading-width cap, if it sets one.
+    pub fn wrap_limit(&self) -> Option<f32> {
+        self.env.measure()
+    }
+
     /// The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
     pub fn command(&self) -> Option<&ResolvedCommand> {
         self.resolved.command

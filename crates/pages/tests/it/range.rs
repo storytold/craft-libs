@@ -76,3 +76,23 @@ fn a_page_range_row_keeps_its_range_as_json_and_reads_it_back() {
     fixture.settle();
     assert_eq!(PageRangeOptions::value(&values.borrow(), "pages"), None, "a value that is not a range reads as none");
 }
+
+/// Editing the end of a range must not silently rewrite its start, even when the range is temporarily reversed.
+#[trial]
+fn editing_to_preserves_from() {
+    let values = Rc::new(RefCell::new(DialogFields::from_pairs([(
+        "pages",
+        PageRangeOptions::field_value(&PageRange { scope: PageScope::Range, from: 8, to: Some(12), subset: Subset::All }),
+    )])));
+    let shown = values.clone();
+    let rows = page_range_row();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = ParamRows::new("Form", &rows, Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    let to = fixture.by_label("to").expect("the To field");
+    fixture.click(&to).key(Key::A, Modifiers::COMMAND).type_text("5").key(Key::Enter, Modifiers::NONE).settle();
+    let range = PageRangeOptions::value(&values.borrow(), "pages").expect("the range");
+    assert_eq!(range.from, 8, "changing To must preserve From");
+    assert_eq!(range.to, Some(5));
+}

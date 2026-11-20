@@ -31,4 +31,4 @@ mod window;
 
 pub use path_setting::{PathSetting, PathSettingOutput};
 
-pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesState, PreferencesWindow};
+pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesMode, PreferencesState, PreferencesWindow};
