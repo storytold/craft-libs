@@ -9,10 +9,12 @@ use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
 use crate::error::{ParseError, RegionError, Result, TemplateError, bail};
 use crate::reader::Reader;
 
-/// Generic region decoding procedure (6.2).
+/// Generic region decoding procedure (6.2). Craft patch: the region has at most `max_pixels`
+/// pixels (see `Limits::max_pixels`).
 pub(crate) fn decode(
     header: &GenericRegionHeader<'_>,
     ctx: &mut ScratchBuffers,
+    max_pixels: u64,
 ) -> Result<RegionBitmap> {
     let mut bitmap = Bitmap::new_with(
         header.region_info.width,
@@ -20,6 +22,7 @@ pub(crate) fn decode(
         header.region_info.x_location,
         header.region_info.y_location,
         false,
+        max_pixels,
     )?;
 
     decode_into(header, &mut bitmap, ctx)?;

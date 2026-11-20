@@ -162,18 +162,26 @@ fn injected_font_resolver_is_used() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn decode_warnings_reach_caller_and_result() {
-    let doc = craft_pdf::open(pdf("q 10 0 0 10 0 0 cm BI /W 32769 /H 8192 /BPC 8 /CS /RGB ID x EI Q", ""), None).unwrap();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let count = calls.clone();
-    let settings = InterpreterSettings {
-        warning_sink: Arc::new(move |_| {
-            count.fetch_add(1, Ordering::Relaxed);
-        }),
-        ..Default::default()
-    };
-    let result = raster::render(&doc.pages()[0], &RenderCache::new(), &settings, &Options::default()).unwrap();
-    assert!(result.diagnostics.image_decode_failed);
-    assert!(calls.load(Ordering::Relaxed) > 0);
+    // An image whose data doesn't decode is a failed image. One past the pixel limit is content
+    // left out at a limit (PdfCraft patch 113, storytold/pdfcraft#7440).
+    for (content, failed, truncated) in [
+        ("q 10 0 0 10 0 0 cm BI /W 8 /H 8 /BPC 8 /CS /G /F /DCT ID x EI Q", true, false),
+        ("q 10 0 0 10 0 0 cm BI /W 32769 /H 8192 /BPC 8 /CS /RGB ID x EI Q", false, true),
+    ] {
+        let doc = craft_pdf::open(pdf(content, ""), None).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let settings = InterpreterSettings {
+            warning_sink: Arc::new(move |_| {
+                count.fetch_add(1, Ordering::Relaxed);
+            }),
+            ..Default::default()
+        };
+        let result = raster::render(&doc.pages()[0], &RenderCache::new(), &settings, &Options::default()).unwrap();
+        assert_eq!(result.diagnostics.image_decode_failed, failed, "{content}");
+        assert_eq!(result.diagnostics.content_truncated, truncated, "{content}");
+        assert!(calls.load(Ordering::Relaxed) > 0);
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

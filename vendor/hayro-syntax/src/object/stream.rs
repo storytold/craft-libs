@@ -63,6 +63,12 @@ pub struct ImageDecodeParams {
     pub width: u32,
     /// The height of the image as indicated by the image dictionary.
     pub height: u32,
+    /// PdfCraft patch (53): whether the caller takes an image past the document's pixel limit
+    /// ([`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels)) at a reduced
+    /// size, which `ImageData` then reports, as for a JPX image decoded at a lower resolution.
+    /// Only JBIG2 decodes so (up to [`crate::MAX_REDUCED_JBIG2_PIXELS`]), for a caller that draws
+    /// the image rather than keeping its samples.
+    pub reduce_past_full_size: bool,
 }
 
 impl<'a> Stream<'a> {
@@ -279,7 +285,8 @@ impl<'a> Stream<'a> {
                 continue;
             }
             // PdfCraft patch: see `filter::decode_limit`.
-            let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
+            let limits = self.dict.ctx().decode_limits();
+            let limit = crate::filter::decode_limit(image_params, i + 1 == count, limits).min(max);
             // PdfCraft patch: the last filter of an image produces its rows.
             let rows = (i + 1 == count && image_params.height > 0)
                 .then(|| usize::try_from(image_params.height).ok())
@@ -289,6 +296,7 @@ impl<'a> Stream<'a> {
                 params,
                 image_params,
                 limit,
+                limits.max_image_pixels(),
                 self.dict.ctx().control(),
                 rows,
             )?;
