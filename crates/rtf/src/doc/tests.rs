@@ -2283,3 +2283,29 @@ fn saving_keeps_prior_paragraph_borders() {
         assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
     }
 }
+
+#[test]
+fn metadata_text_survives_nested_formatting_without_reading_other_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\info{\title Before {\b bold {\i caf\u233?}}{\fonttbl{\f0 Wrong;}}{\*\bkmkstart hidden}{\pict\pngblip 00} After}{\author Author}}\f0 Body}").unwrap();
+    assert_eq!(flow.meta.title, "Before bold café After");
+    assert_eq!(flow.meta.author, "Author");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+    let FBlock::Para(body) = &flow.blocks[0] else { panic!("expected body text") };
+    assert!(matches!(&body.inlines[0], Inline::Text(_, fmt) if fmt.font.as_deref() == Some("Arial")));
+}
+
+#[test]
+fn metadata_creation_date_ignores_other_date_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\info{\creatim\yr2026{\revtim\yr1999}{\b\mo11}\dy19}}Body}").unwrap();
+    assert_eq!(flow.meta.created, "2026-11-19T00:00:00Z");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+}
+
+#[test]
+fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page() {
+    let flow =
+        parse(br"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}{\f1\fcharset204 Cyrillic;}}{\info{\title A\emdash {\f1 \'e0\plain \'e0}}}\f0 Body}")
+            .unwrap();
+    assert_eq!(flow.meta.title, "A—аà");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+}
