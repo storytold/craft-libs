@@ -3110,6 +3110,8 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-settings",
+ "craft-tracked",
+ "craft-ui-macros",
  "craft-xml",
  "egui",
  "serde",

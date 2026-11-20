@@ -1113,9 +1113,16 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
 }
 
-/// The generation of the window's keymap: it moves each time a new keymap is built.
-pub(crate) fn keymap_generation(ctx: &Context) -> u64 {
+/// The generation of the window's keymap without noting a read: it moves each time a new keymap is built.
+pub(crate) fn keymap_built(ctx: &Context) -> u64 {
     with(ctx, |board| board.keymaps)
+}
+
+/// The generation of the window's keymap, for a key that holds what is derived from its chords: it moves each time a
+/// new keymap is built. The caller's view reads the keymap, so a change of it runs the view.
+pub fn keymap_generation(ctx: &Context) -> u64 {
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
+    keymap_built(ctx)
 }
 
 /// Whether the queue holds a command for one of `instances`: only a run of the view they registered in takes it.
