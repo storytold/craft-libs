@@ -602,18 +602,19 @@ impl Walk<'_> {
                     Some((mat_name, _)) => Some(self.intern_material(mat_name)?),
                     None => None,
                 };
-                if !parts_by_mat.contains_key(&mat_idx) {
-                    self.parts += 1;
-                    if self.parts > self.limits.max_parts {
-                        return Err(too_large(KIND, format!("more than {} parts", self.limits.max_parts)));
+                let part = match parts_by_mat.entry(mat_idx) {
+                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        self.parts += 1;
+                        if self.parts > self.limits.max_parts {
+                            return Err(too_large(KIND, format!("more than {} parts", self.limits.max_parts)));
+                        }
+                        part_order.push(mat_idx);
+                        e.insert(Part { material: mat_idx, ..Part::default() })
                     }
-                    part_order.push(mat_idx);
-                    parts_by_mat.insert(mat_idx, Part { material: mat_idx, ..Part::default() });
-                }
-                if let Some(part) = parts_by_mat.get_mut(&mat_idx) {
-                    part.corners.extend_from_slice(&face_corners);
-                    part.face_sizes.push(face_corners.len() as u32);
-                }
+                };
+                part.corners.extend_from_slice(&face_corners);
+                part.face_sizes.push(face_corners.len() as u32);
             }
             k = end;
         }

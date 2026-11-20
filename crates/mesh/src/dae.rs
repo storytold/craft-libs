@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use craft_xml::{El, Options, UnknownEntity};
 
-use crate::{Camera, Corner, Error, IDENTITY, Limits, Mat4, Material, Mesh, Node, Part, Projection, Result, Scene, malformed, mat_mul, too_large};
+use crate::{Camera, Corner, IDENTITY, Limits, Mat4, Material, Mesh, Node, Part, Projection, Result, Scene, malformed, mat_mul, too_large};
 
 const KIND: &str = "COLLADA";
 const MAX_XML_DEPTH: usize = 256;
