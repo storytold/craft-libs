@@ -33,10 +33,8 @@ fn groups() -> Vec<MetadataGroup> {
 
 #[story(MetadataTable<'static>, covers = [Default], drive = Drive::Never)]
 fn metadata_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut filter = data.value("filter", String::new()).clone();
-    let out = MetadataTable::new("Metadata", &groups()).filter(Bind::bound(&mut filter)).show(ui);
-    *data.value("filter", String::new()) = filter;
-    out.into()
+    let (filter, filter_at) = data.value_at("filter", String::new());
+    MetadataTable::new("Metadata", &groups()).filter(filter_at.bind(filter)).show(ui).into()
 }
 
 #[story(MetadataTable<'static>, covers = [], drive = Drive::Never)]
@@ -51,8 +49,6 @@ fn metadata_table_chooser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(MetadataTable<'static>, covers = [Empty], drive = Drive::Never)]
 fn metadata_table_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut filter = data.value("filter", "zzz".to_owned()).clone();
-    let out = MetadataTable::new("Metadata", &groups()).filter(Bind::bound(&mut filter)).show(ui);
-    *data.value("filter", String::new()) = filter;
-    out.into()
+    let (filter, filter_at) = data.value_at("filter", "zzz".to_owned());
+    MetadataTable::new("Metadata", &groups()).filter(filter_at.bind(filter)).show(ui).into()
 }
