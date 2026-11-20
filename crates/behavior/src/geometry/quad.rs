@@ -766,12 +766,11 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
-/// An ⌥ top or bottom drag on a box whose top and bottom converge, a bottom drag within 0.3 px of the reference where
-/// the sides differ by up to 40 % (1.3 px at 60 %), a top one within 0.2 px. The perspective side rule turned on its
-/// side, in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r` (`r` the dragged
-/// edge's middle's distance from the reference point across the frame; eased by how much the sides differ), the
-/// opposite edge turns about its middle to
-/// a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
+/// An ⌥ top or bottom drag on a box whose top and bottom converge, within 0.35 px of the reference on boxes with
+/// parallel sides (1.3 px where they differ by 60 %, 5 px where the sides converge too). The perspective side rule
+/// turned on its side, in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r`
+/// (`r` the dragged edge's middle's distance from the reference point across the frame, eased by [`alt_spread`]), the
+/// opposite edge turns about its middle to a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
 /// gives them ([`side_run_scale`]); then the sides turn across the frame, `k (|top| ± m)` apart (`m` the sides' mean
 /// run along the frame, added for the bottom edge and taken off for the top one).
 fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min_side: f64) -> Option<BoxState> {
@@ -783,12 +782,9 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     let sign = if edge == 2 { 1.0 } else { -1.0 };
     let reach = if edge == 2 { (br.midpoint(bl) - c).dot(nh) } else { (c - tl.midpoint(tr)).dot(nh) };
     let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
-    // The box grows by a factor eased from the pointer's `k` by how much the sides differ (`r` the shorter side over
-    // the longer): a bottom drag by less, a top drag by slightly more as the drag grows (both measured on the
-    // reference, six boxes).
-    let (left, right) = (bl.distance(tl), br.distance(tr));
-    let r = left.min(right) / left.max(right);
-    let spread = if r.is_finite() { (1.0 - r) * (1.0 - r) } else { 0.0 };
+    // The box grows by a factor eased from the pointer's `k`: a bottom drag by less, a top drag by slightly more as
+    // the drag grows (measured on the reference, eleven boxes), by `spread`.
+    let spread = alt_spread(g.quad0);
     let k =
         if edge == 2 { 1.0 + (k - 1.0) * (1.0 - spread * (0.22 + 0.1 * (k - 1.0))) } else { 1.0 + (k - 1.0) * (1.0 + 0.111 * spread * (k - 1.0)) };
     let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
@@ -809,6 +805,33 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
         out[i] = c + uh * column + nh * (out[i] - c).dot(nh);
     }
     out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
+}
+
+/// How much an ⌥ top or bottom drag eases its factor: `2 (W / H)² s_t (s_t - s_b)`, `s_t` and `s_b` the top's and the
+/// bottom's slopes against the normal of the sides' mean direction, `W` the top's width along that normal and `H` the
+/// longer side. Zero where the top is square to the sides, whatever the bottom does (as on the reference); for a
+/// symmetric box `(1 - r)²`, `r` the shorter side over the longer. Zero for a degenerate box.
+fn alt_spread(q: [Point; 4]) -> f64 {
+    let [tl, tr, br, bl] = q;
+    let (left, right) = (bl - tl, br - tr);
+    let (ll, rl) = (left.hypot(), right.hypot());
+    if !(ll > 1e-9 && rl > 1e-9) {
+        return 0.0;
+    }
+    let d = left / ll + right / rl;
+    let d = d / d.hypot();
+    let mut n = Vec2::new(d.y, -d.x);
+    let (top, bottom) = (tr - tl, br - bl);
+    if top.dot(n) < 0.0 {
+        n = -n;
+    }
+    let (wt, wb) = (top.dot(n), bottom.dot(n));
+    if !(wt.abs() > 1e-9 && wb.abs() > 1e-9) {
+        return 0.0;
+    }
+    let (st, sb) = (top.dot(d) / wt, bottom.dot(d) / wb);
+    let x = 2.0 * (wt / ll.max(rl)) * (wt / ll.max(rl)) * st * (st - sb);
+    if x.is_finite() { x } else { 0.0 }
 }
 
 /// An ⌥⇧ drag (free stretch about the reference point) as the reference does it, also on a box in perspective:

@@ -751,3 +751,43 @@ fn an_alt_top_drag_on_converging_edges_grows_its_factor_like_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ bottom drags on boxes where only one of the top and bottom slants (measured on the reference): a slanted top eases
+/// the factor, a slanted bottom under a square top leaves it as the pointer's.
+#[test]
+fn an_alt_bottom_drag_eases_by_the_slant_of_the_top() {
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let cases = [
+        // Top slanted 60 px: was 10 px off.
+        (
+            [(150.0, 125.0), (452.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            (301.0, 327.0),
+            (301.0, 407.0),
+            [(19.74, 10.3), (644.05, 160.72), (595.16, 406.79), (-57.41, 398.59)],
+            0.3,
+        ),
+        // Bottom slanted 40 px under a square top: exact before, kept.
+        (
+            [(150.0, 125.0), (452.0, 125.0), (452.0, 287.0), (150.0, 327.0)],
+            (301.0, 307.0),
+            (301.0, 387.0),
+            [(17.25, 36.21), (584.75, 53.79), (584.75, 347.72), (17.25, 428.04)],
+            0.1,
+        ),
+        // Top slanted 40, bottom 20: was 2.8 px off.
+        (
+            [(150.0, 125.0), (452.0, 165.0), (452.0, 307.0), (150.0, 327.0)],
+            (301.0, 317.0),
+            (301.0, 357.0),
+            [(82.87, 70.62), (551.6, 146.22), (525.52, 343.15), (43.56, 367.45)],
+            0.1,
+        ),
+    ];
+    for (quad, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(2), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
+    }
+}
