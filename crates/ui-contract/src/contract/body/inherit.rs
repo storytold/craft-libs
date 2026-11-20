@@ -68,9 +68,13 @@ impl BodyHooks<'_> {
         if core.resolved.ltr_axis {
             scoped.direction = Direction::Ltr;
         }
-        // A container that paints a strong fill or scrim (the brand rail) reads in the ink of strong fills, so what it holds
-        // (an app icon's accent parts, text with no colour of its own) does too.
-        scoped.ink = if props.surface.is_some_and(|kind| kind.ink() == crate::style::Ink::OnDark) { crate::style::Ink::OnDark } else { core.ink };
+        // A container that paints a fill reads in that fill's ink, so what it holds (an app icon's accent parts, text with
+        // no colour of its own) does too: OnDark on a brand rail or scrim, OnPanel on a panel nested inside one. A frame
+        // paints no fill, and a container with no surface paints none either: both keep the ink they sit in.
+        scoped.ink = match props.surface {
+            None | Some(SurfaceKind::Frame) => core.ink,
+            Some(kind) => kind.ink(),
+        };
         scoped.start_room();
         // An inside label and a filling cell are their control's alone: a container shows neither to what it holds.
         scoped.inside_label = None;
