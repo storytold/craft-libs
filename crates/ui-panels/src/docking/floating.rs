@@ -213,6 +213,9 @@ pub struct FloatingGroup<'a> {
     /// Whether only the title row shows.
     #[prop]
     minimized: bool,
+    /// Whether the edges can be dragged to resize the window.
+    #[prop]
+    resizable: bool,
     /// The column the window holds, whose bar the title row is.
     #[prop]
     column: Option<WindowColumn>,
@@ -268,6 +271,7 @@ impl<'a> FloatingGroup<'a> {
             limits: SizeLimits::default(),
             opacity: 1.0,
             minimized: false,
+            resizable: true,
             column: None,
             sized: Sizing::Content,
             native: None,
@@ -345,8 +349,11 @@ impl<'a> FloatingGroup<'a> {
         // The frame's limits are the body's with the title row on top.
         let frame = self.limits.around(Vec2::new(0.0, header));
         let collapsed = self.collapsed_rect();
-        let mut overlay =
-            Overlay::floating().movable(true).resizable(!self.minimized && collapsed.is_none()).opacity(self.opacity).body_scroll(false);
+        let mut overlay = Overlay::floating()
+            .movable(true)
+            .resizable(self.resizable && !self.minimized && collapsed.is_none())
+            .opacity(self.opacity)
+            .body_scroll(false);
         overlay = if let Some(shown) = collapsed {
             overlay.placed(shown).size_limits(SizeLimits::new(shown.size(), shown.size()))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
