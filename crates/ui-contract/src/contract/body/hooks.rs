@@ -1421,9 +1421,11 @@ impl BodyHooks<'_> {
             Pos2::new(if rtl { shows.max.x } else { shows.max.x - inset.x }, shows.max.y - inset.y),
         );
         let (width, height) = (if scroll.horizontal_on() { big } else { seen.width() }, if scroll.vertical_on() { big } else { seen.height() });
-        // The content moves by whole steps of egui's UI rounding, as egui places every widget rect: a settled run moved
-        // with the content then replays where a run would be (`lazy::Place::shift_to`).
-        let (x, y) = ((off.x as f32).round_ui(), (off.y as f32).round_ui());
+        // The content moves by whole physical pixels on steps of egui's UI rounding, the grids widget rects and paint
+        // are rounded to: a settled run moved with the content then replays where a run would be
+        // (`lazy::keeps_placement`).
+        let ppp = ctx.pixels_per_point();
+        let (x, y) = ((off.x as f32).round_to_pixels(ppp).round_ui(), (off.y as f32).round_to_pixels(ppp).round_ui());
         let x = if scroll.horizontal_on() { x } else { 0.0 };
         let min_x = if rtl { seen.max.x - width + x } else { seen.min.x - x };
         let max = Rect::from_min_size(Pos2::new(min_x, seen.min.y - y), Vec2::new(width, height));

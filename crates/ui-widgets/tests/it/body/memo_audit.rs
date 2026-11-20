@@ -5,7 +5,7 @@
 use craft_ui::buttons::Button;
 use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::testing::layout::in_region;
-use craft_ui::testing::pointer::moved;
+use craft_ui::testing::pointer::{moved, wheel};
 use craft_ui::testing::{
     Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
 };
@@ -234,4 +234,98 @@ fn a_view_whose_body_measured_in_its_run_replays_as_a_run_in_a_pass_that_does_no
     frames.idle(SETTLE, &mut show);
     let ran: Vec<_> = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).collect();
     assert!(ran.is_empty(), "the view settles: {ran:?}");
+}
+
+/// A card: one pressable member of the arena around it.
+#[derive(MemoProps)]
+struct Card {
+    at: usize,
+}
+
+fn card(props: &mut Card, ui: &mut Ui) {
+    Button::new(format!("Card {}", props.at)).show(ui);
+}
+
+/// Where the pointer rests to scroll the cards: over their body, beside every card.
+const BESIDE: Pos2 = Pos2::new(140.0, 120.0);
+
+/// Cards in a scrolling arena body, under a lead of `lead` points.
+fn cards(lead: f32) -> impl FnMut(&mut Ui) {
+    move |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(160.0, 200.0)), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical()).arena(true)).id_salt("cards").show(ui, |ui, _| {
+                ui.add_space(lead);
+                for at in 0..12 {
+                    MemoView::new(("card", at), Card { at }, card).show(ui);
+                }
+            });
+        });
+    }
+}
+
+/// The cards that replayed in the last frame.
+fn replayed(frames: &Frames) -> usize {
+    last_frame_memo_runs(&frames.ctx).into_iter().filter(|(name, _, run)| name.contains("Card") && *run == MemoRun::Replayed).count()
+}
+
+/// A wheel step of a fraction of a pixel moves the content by whole pixels: the cards it moves replay, and each replay
+/// paints where a run there paints (paint snaps to the pixel grid, so a record moved by a fraction would not).
+#[trial]
+fn cards_a_fractional_wheel_step_moves_replay_where_they_would_run() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = cards(40.0);
+    frames.frame(vec![moved(BESIDE)], &mut show);
+    frames.idle(SETTLE, &mut show);
+    frames.frame(vec![wheel(-10.4)], &mut show);
+    assert!(replayed(&frames) > 0, "the moved cards replayed");
+    frames.idle(SETTLE, &mut show);
+}
+
+/// A card scrolled partly out of the view replays through the view's clip: the members it joins its arena with are
+/// cut by the clip as a run there cuts them.
+#[trial]
+fn a_card_scrolled_partly_out_of_view_replays_through_the_views_clip() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = cards(0.0);
+    frames.frame(vec![moved(BESIDE)], &mut show);
+    frames.idle(SETTLE, &mut show);
+    frames.frame(vec![wheel(-10.0)], &mut show);
+    assert!(replayed(&frames) > 0, "the moved cards replayed");
+    frames.idle(SETTLE, &mut show);
+}
+
+/// A view that holds a card below a gap of its own.
+#[derive(MemoProps)]
+struct Holder {
+    gap: f32,
+}
+
+fn holder(props: &mut Holder, ui: &mut Ui) {
+    ui.add_space(props.gap);
+    MemoView::new("held", Card { at: 0 }, card).show(ui);
+}
+
+/// An inner view that replays moved inside the outer view's run is in the outer record where it replayed: the outer
+/// view's later replay joins the card's member at the card's new place.
+#[trial]
+fn a_view_replayed_moved_inside_a_run_is_kept_at_its_new_place() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let gap = Cell::new(0.0);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(160.0, 200.0)), |ui| {
+            Slab::new(ContainerProps::new().arena(true)).id_salt("holder").show(ui, |ui, _| {
+                MemoView::new("holder", Holder { gap: gap.get() }, holder).show(ui);
+            });
+        });
+    };
+    frames.idle(SETTLE, &mut show);
+    gap.set(15.0);
+    frames.frame(vec![], &mut show);
+    let runs = last_frame_memo_runs(&frames.ctx);
+    assert!(runs.iter().any(|(name, _, run)| name.contains("Holder") && *run == MemoRun::Ran), "the holder ran: {runs:?}");
+    assert!(runs.iter().any(|(name, _, run)| name.contains("Card") && *run == MemoRun::Replayed), "the card replayed in it: {runs:?}");
+    frames.idle(SETTLE, &mut show);
 }

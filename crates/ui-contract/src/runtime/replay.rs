@@ -34,7 +34,6 @@ pub(crate) struct Entry(Arc<dyn Noted>);
 trait Noted: Send + Sync {
     fn call(&self, ctx: &Context, shift: &RecordShift);
     /// The entry a replay at the place `shift` names calls (`call`).
-    #[cfg(feature = "testing")]
     fn shifted(&self, shift: &RecordShift) -> Entry;
     fn as_any(&self) -> &dyn Any;
     fn same(&self, other: &dyn Noted) -> bool;
@@ -51,7 +50,6 @@ where
     A: PartialEq + fmt::Debug + Shift + Send + Sync + 'static,
     F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
 {
-    #[cfg(feature = "testing")]
     fn shifted(&self, shift: &RecordShift) -> Entry {
         Entry(Arc::new(Note { args: self.args.shifted(shift), again: self.again }))
     }
@@ -309,12 +307,12 @@ fn min_wake(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 pub(crate) fn replay(ctx: &Context, record: &Record, shift: &RecordShift) {
     ctx.replay_pass_records(&record.egui, shift);
     focus::replay(ctx, &record.focus);
-    // The records open around the replay hold its journal as it was: an entry's call notes nothing, whether it is a
-    // service's own registration call or not.
+    // The records open around the replay hold its journal at the place it replays at, as a run there would have noted
+    // it: an entry's call notes nothing, whether it is a service's own registration call or not.
     let noting = recording(ctx);
     if noting {
         pass_state::with::<Recorder, _>(ctx, |recorder| {
-            recorder.journal.extend(record.journal.iter().cloned());
+            recorder.journal.extend(record.journal.iter().map(|entry| if shift.is_none() { entry.clone() } else { entry.0.shifted(shift) }));
             recorder.replaying = true;
         });
     }

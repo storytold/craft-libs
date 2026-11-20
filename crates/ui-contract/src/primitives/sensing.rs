@@ -472,8 +472,8 @@ fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistra
 fn journal_join(ctx: &Context, arena: ArenaId, layer: Layer, clip: Rect, joined: &[MemberDecl]) {
     crate::runtime::replay::journal(
         ctx,
-        || (arena, layer, clip, joined.to_vec()),
-        |ctx, (arena, layer, clip, joined)| join_again(ctx, *arena, *layer, *clip, joined),
+        || (arena, layer, crate::runtime::Clip::new(clip), joined.to_vec()),
+        |ctx, (arena, layer, clip, joined)| join_again(ctx, *arena, *layer, clip.rect(), joined),
     );
 }
 
@@ -506,7 +506,11 @@ fn join_member(state: &mut ArenaState, mut decl: MemberDecl, layer: Layer, targe
 /// so far, as `place_over_widgets` does, and records their shapes on `layer` through `clip`; journaled, so a replay
 /// places them above the members joined in the replaying pass.
 fn place_over(ctx: &Context, (arena, id, member, layer, clip): (ArenaId, Id, bool, Layer, Rect)) {
-    crate::runtime::replay::journal(ctx, || (arena, id, member, layer, clip), |ctx, &args| place_over(ctx, args));
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, id, member, layer, crate::runtime::Clip::new(clip)),
+        |ctx, &(arena, id, member, layer, clip)| place_over(ctx, (arena, id, member, layer, clip.rect())),
+    );
     let read = PassRead::of(ctx);
     let shapes = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
         rotate(state, read.pass_nr);
