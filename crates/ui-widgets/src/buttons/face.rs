@@ -24,6 +24,8 @@ pub(crate) struct FaceLook {
     pub divide_gap: f32,
     /// Whether a stacked face lays its block out from its top (`stacked_lines`): in a ribbon.
     pub stacked_top: bool,
+    /// The room of a trailing menu arrow where the ribbon sets one (`RibbonIcons::arrow`); else the icon side.
+    pub arrow: Option<f32>,
 }
 
 impl FaceLook {
@@ -35,6 +37,7 @@ impl FaceLook {
             stacked_icon: stacked_side(cx.tokens, control.icon, cx.env::<ControlPlace>(), cx.env::<RibbonIcons>()),
             divide_gap: cx.tokens.space.gap.tight,
             stacked_top: stacked_lines(cx.env::<ControlPlace>()) > 0,
+            arrow: arrow_room(cx.env::<ControlPlace>(), cx.env::<RibbonIcons>()),
         }
     }
 }
@@ -51,6 +54,11 @@ fn stacked_lines(place: ControlPlace) -> usize {
 /// the painted icon is the measured one.
 pub(super) fn stacked_side(tokens: &UiTokens, control_icon: f32, place: ControlPlace, icons: RibbonIcons) -> f32 {
     if place == ControlPlace::Ribbon && icons.large > 0 { f32::from(icons.large) } else { tokens.size.icon.lg.max(control_icon) }
+}
+
+/// The room a trailing menu arrow takes in a ribbon that sets one (`RibbonIcons::arrow`).
+pub(crate) fn arrow_room(place: ControlPlace, icons: RibbonIcons) -> Option<f32> {
+    (place == ControlPlace::Ribbon && icons.arrow > 0).then_some(f32::from(icons.arrow))
 }
 
 /// The most characters a stacked label keeps on one line, as the ribbon's large buttons always kept them: a longer
@@ -388,7 +396,7 @@ pub(crate) fn measured_icon<C: Component>(cx: &MeasureCx<'_, C>) -> f32 {
 pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> Vec2 {
     let spec = &spec.at(cx.env.get::<GroupLevel>());
     if spec.arrangement == Arrangement::Stacked {
-        let side = measured_icon(cx);
+        let side = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonIcons>()).unwrap_or_else(|| measured_icon(cx));
         let lead_side = stacked_side(cx.tokens, cx.icon(), cx.env.get::<ControlPlace>(), cx.env.get::<RibbonIcons>());
         let lines = spec.lines();
         let sizes = stacked_sizes(cx, spec, &lines, cx.room.unwrap_or(f32::INFINITY), side);
@@ -403,7 +411,8 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         return Vec2::new(size.x, size.y.max(icon + keep as f32 * line.max(if spec.trail.is_some() { side } else { 0.0 })));
     }
     let icon = measured_icon(cx);
-    let fixed = spec.icons_width(icon, icon) + cx.gap() * spec.gaps() as f32;
+    let trail = arrow_room(cx.env.get::<ControlPlace>(), cx.env.get::<RibbonIcons>()).unwrap_or(icon);
+    let fixed = spec.icons_width(icon, trail) + cx.gap() * spec.gaps() as f32;
     let text = if spec.label.is_empty() {
         Vec2::ZERO
     } else if cx.proposal == Proposal::Min {
@@ -430,8 +439,8 @@ struct Slots {
 
 /// Places the icons of `side` and a label `text_width` wide with `gap` between them, in `area` by `spec.align`: the leading
 /// icon (or picture) at the reading start, the trailing icon at the reading end.
-fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
-    let width = spec.icons_width(side, side) + gap * spec.gaps() as f32 + text_width;
+fn slots(spec: &FaceSpec<'_>, (side, trail): (f32, f32), gap: f32, text_width: f32, area: Rect, rtl: bool) -> Slots {
+    let width = spec.icons_width(side, trail) + gap * spec.gaps() as f32 + text_width;
     let free = (area.width() - width).max(0.0);
     let lead = match spec.align {
         HAlign::Start => 0.0,
@@ -461,7 +470,7 @@ fn slots(spec: &FaceSpec<'_>, side: f32, gap: f32, text_width: f32, area: Rect, 
         if gapped {
             take(gap);
         }
-        slots.trail = Some(take(side));
+        slots.trail = Some(take(trail));
     }
     slots
 }
@@ -493,11 +502,12 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
     let (text_look, icon_look) = ink;
     let (text_color, icon_color, side) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color), icon_look.side);
     let draw = ui.draw();
-    let fixed = spec.icons_width(side, side) + look.gap * spec.gaps() as f32;
+    let trail_side = look.arrow.unwrap_or(side);
+    let fixed = spec.icons_width(side, trail_side) + look.gap * spec.gaps() as f32;
     let run = spec.run().color(text_color);
     let text = if spec.label.is_empty() { None } else { Some(draw.layout(&run, (area.width() - fixed).max(0.0))) };
     let text_width = text.as_ref().map_or(0.0, |text| text.size().x);
-    let slots = slots(spec, side, look.gap, text_width, area, cx.flow.is_rtl());
+    let slots = slots(spec, (side, trail_side), look.gap, text_width, area, cx.flow.is_rtl());
     if let (Some(lead), Some(slot)) = (spec.lead, slots.lead)
         && !spec.loading
     {
@@ -509,7 +519,7 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
         draw.galley(pos2(slot.min.x, text_top(&draw, area, text)), text);
     }
     if let (Some(trail), Some(slot)) = (spec.trail, slots.trail) {
-        draw.icon(icon_at(slot, area, side), &tinted(trail, icon_color));
+        draw.icon(icon_at(slot, area, trail_side), &tinted(trail, icon_color));
     }
 }
 
@@ -517,7 +527,8 @@ pub(crate) fn paint<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextL
 /// last line. A loading face leaves the leading icon's slot (the label's, without an icon) to the spinner.
 fn paint_stacked<C: Component>(ui: &PaintUi<'_>, cx: &Cx<'_, C>, ink: (&TextLook, &IconLook), look: &FaceLook, spec: &FaceSpec<'_>, area: Rect) {
     let (text_look, icon_look) = ink;
-    let (text_color, icon_color, side) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color), icon_look.side);
+    let (text_color, icon_color) = (cx.resolve(&text_look.color), cx.resolve(&icon_look.color));
+    let side = look.arrow.unwrap_or(icon_look.side);
     let draw = ui.draw();
     let lines = spec.lines();
     let colored: Vec<TextRun<'_>> = lines.into_iter().map(|run| run.color(text_color)).collect();
@@ -586,9 +597,10 @@ pub(super) fn spinner_rect<C: Component>(
 
 /// The slots of an inline face in `area`, its label laid out in the room the icons and gaps leave.
 fn inline_slots<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> Slots {
-    let fixed = spec.icons_width(side, side) + look.gap * spec.gaps() as f32;
+    let trail = look.arrow.unwrap_or(side);
+    let fixed = spec.icons_width(side, trail) + look.gap * spec.gaps() as f32;
     let text_width = if spec.label.is_empty() { 0.0 } else { cx.layout_at(&spec.run(), (area.width() - fixed).max(0.0)).size().x };
-    slots(spec, side, look.gap, text_width, area, rtl)
+    slots(spec, (side, trail), look.gap, text_width, area, rtl)
 }
 
 /// The box of the face's leading part in `area`, as `paint` places it: the leading icon's square, or the picture's
@@ -596,7 +608,7 @@ fn inline_slots<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: 
 pub(super) fn lead_rect<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, look: &FaceLook, side: f32, area: Rect, rtl: bool) -> Option<Rect> {
     let spec = &spec.at(cx.env.get::<GroupLevel>());
     if spec.arrangement == Arrangement::Stacked {
-        return stacked_in(cx, spec, look, side, area, rtl).lead;
+        return stacked_in(cx, spec, look, look.arrow.unwrap_or(side), area, rtl).lead;
     }
     let slot = inline_slots(cx, spec, look, side, area, rtl).lead?;
     Some(Rect::from_center_size(pos2(slot.center().x, area.center().y), Vec2::new(slot.width(), side)))

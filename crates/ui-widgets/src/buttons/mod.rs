@@ -82,12 +82,21 @@ pub struct RibbonIcons {
     pub large: u8,
     /// Every other button's icon and glyph.
     pub small: u8,
+    /// The room a menu arrow after a label takes. Set, the ribbon's buttons draw that arrow as the small filled
+    /// triangle right after their label, as the old ribbon drew it, in place of the stroked chevron.
+    pub arrow: u8,
 }
 
 impl RibbonIcons {
     /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
     pub const fn new(large: u8, small: u8) -> Self {
-        RibbonIcons { large, small }
+        RibbonIcons { large, small, arrow: 0 }
+    }
+
+    /// Menu arrows as filled triangles in `arrow` points of room right after the label; 0 keeps the chevron.
+    pub const fn arrow(mut self, arrow: u8) -> Self {
+        self.arrow = arrow;
+        self
     }
 }
 

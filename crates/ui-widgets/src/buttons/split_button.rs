@@ -146,9 +146,12 @@ impl<'a, T: Value + 'static> SplitButton<'a, T> {
 }
 
 /// The chevron the arrow part shows.
-fn chevron() -> IconSpec<'static> {
-    crate::controls::disclosure::DisclosureGlyph::menu_button()
+fn chevron(look: &FaceLook) -> IconSpec<'static> {
+    if look.arrow.is_some() { IconSpec::glyph(&RIBBON_ARROW) } else { crate::controls::disclosure::DisclosureGlyph::menu_button() }
 }
+
+/// The ribbon's menu arrow where it sets one (`RibbonIcons::arrow`): the small filled triangle, pointing down.
+const RIBBON_ARROW: crate::controls::disclosure::DisclosureGlyph = crate::controls::disclosure::DisclosureGlyph::new(1.0);
 
 impl<T: Value + 'static> Component for SplitButton<'_, T> {
     const ROLE: Role = Role::BUTTON;
@@ -185,11 +188,12 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     /// Inline: the face and the arrow part, which sits in the end padding. Stacked: the face, whose chevron follows
     /// the label inside the arrow part.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let chevron = chevron();
+        let arrow = face::arrow_room(cx.env.get::<super::ControlPlace>(), cx.env.get::<super::RibbonIcons>());
+        let chevron = chevron(&FaceLook { arrow, ..cx.style.face.clone() });
         let face = face::measure(cx, &self.spec(cx.resolved.label, &chevron));
         match self.arrangement {
             Arrangement::Stacked => face,
-            _ => Vec2::new(face.x + face::measured_icon(cx), face.y),
+            _ => Vec2::new(face.x + arrow.unwrap_or_else(|| face::measured_icon(cx)), face.y),
         }
     }
 
@@ -200,12 +204,12 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let arrow = match self.arrangement {
             Arrangement::Stacked => {
-                let chevron = chevron();
-                let (look, side) = (&cx.style.face, cx.style.icon.side);
+                let chevron = chevron(&cx.style.face);
+                let (look, side) = (&cx.style.face, cx.style.face.arrow.unwrap_or(cx.style.icon.side));
                 let y = face::stacked_divide(cx, &self.spec(cx.resolved.label, &chevron), look, side, cx.content_rect);
                 Rect::from_min_max(egui::pos2(rect.left(), y.clamp(rect.top(), rect.bottom())), rect.max)
             }
-            _ => Flow::new(rect, cx.flow.is_rtl()).take_end(cx.style.icon.side).0,
+            _ => Flow::new(rect, cx.flow.is_rtl()).take_end(cx.style.face.arrow.unwrap_or(cx.style.icon.side)).0,
         };
         let part = cx
             .part(ARROW, arrow)
@@ -278,18 +282,18 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
             return;
         }
         let (rtl, direction) = (cx.flow.is_rtl(), cx.env.direction());
-        let (arrow, main) = Flow::new(cx.rect, rtl).take_end(cx.style.icon.side);
+        let arrow_side = cx.style.face.arrow.unwrap_or(cx.style.icon.side);
+        let (arrow, main) = Flow::new(cx.rect, rtl).take_end(arrow_side);
         let main = main.rect();
         let main_fill = cx.root_state().resolve(&cx.style.part_fill);
         let draw = ui.draw();
         draw.fill(&PaintShape::Rect(main, Corners::Start.apply(cx.style.radius, direction)), main_fill);
         draw.fill(&PaintShape::Rect(arrow, Corners::End.apply(cx.style.radius, direction)), cx.resolve_part(ARROW, &cx.style.part_fill));
         let area = Flow::new(main, rtl).inset(cx.style.metrics.padding);
-        let chevron = chevron().color(cx.resolve(&cx.style.chevron));
+        let chevron = chevron(&cx.style.face).color(cx.resolve(&cx.style.chevron));
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, &chevron), area);
         let draw = ui.draw();
-        let side = cx.style.icon.side;
-        draw.icon(Rect::from_center_size(arrow.center(), Vec2::splat(side)), &chevron);
+        draw.icon(Rect::from_center_size(arrow.center(), Vec2::splat(arrow_side)), &chevron);
         let x = if rtl { arrow.right() } else { arrow.left() };
         let inset = cx.style.divider_inset;
         let divider = RuleLook { color: cx.resolve(&cx.style.divider).egui(), width: cx.style.divider_width };
@@ -313,7 +317,7 @@ impl<T: Value + 'static> SplitButton<'_, T> {
         let draw = ui.draw();
         draw.fill(&PaintShape::Rect(main, CornerRadius { sw: 0, se: 0, ..radius }), cx.root_state().resolve(&cx.style.part_fill));
         draw.fill(&PaintShape::Rect(arrow, CornerRadius { nw: 0, ne: 0, ..radius }), cx.resolve_part(ARROW, &cx.style.part_fill));
-        let chevron = chevron().color(cx.resolve(&cx.style.chevron));
+        let chevron = chevron(&cx.style.face).color(cx.resolve(&cx.style.chevron));
         face::paint(ui, cx, (&cx.style.text, &cx.style.icon), &cx.style.face, &self.spec(cx.resolved.label, &chevron), cx.content_rect);
         if main.height() > 0.0 {
             let inset = cx.style.divider_inset;
