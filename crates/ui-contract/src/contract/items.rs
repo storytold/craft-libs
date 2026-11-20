@@ -47,7 +47,6 @@ pub fn show_item<C>(ui: &mut Ui, rect: Rect, item: C, at: crate::runtime::access
 where
     C: super::Component + super::Props + super::Show,
 {
-    use super::Show as _;
     with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show_at(ui, rect))
 }
 
@@ -56,7 +55,6 @@ pub fn show_item_in_flow<C>(ui: &mut Ui, item: C, at: crate::runtime::access::Se
 where
     C: super::Component + super::Props + super::Show,
 {
-    use super::Show as _;
     with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show(ui))
 }
 

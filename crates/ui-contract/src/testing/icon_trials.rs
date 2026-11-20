@@ -133,18 +133,16 @@ fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_t
     let disabled = paint(LAYERED_NAME, DataMode::Dimmed, ink);
     let enabled_in_the_disabled_colour = paint(LAYERED_NAME, DataMode::Full, off);
 
-    let [(ink_layer, ink_tint), (accent_layer, accent_tint), (fixed_layer, fixed_tint)] = enabled[..] else {
-        panic!("an app icon paints its ink, accent and fixed layers, got {enabled:?}")
-    };
+    assert_eq!(enabled.len(), 3, "an app icon paints its ink, accent and fixed layers, got {enabled:?}");
+    let [(ink_layer, ink_tint), (accent_layer, accent_tint), (fixed_layer, fixed_tint)] = enabled[..] else { return };
     assert_eq!(ink_tint, ink, "the plain parts read in the icon's colour");
     assert_eq!(accent_tint, rgba_color(tokens.color.accent.solid), "the accent parts read in the accent ink");
     assert_ne!(accent_tint, ink_tint);
     assert_eq!(fixed_tint, Color32::WHITE, "the fixed parts keep the colours they are drawn in");
     assert!(ink_layer != accent_layer && accent_layer != fixed_layer && ink_layer != fixed_layer, "each layer is its own texture");
 
-    let [(off_ink, a), (off_accent, b), (off_fixed, c)] = disabled[..] else {
-        panic!("a disabled app icon paints the same three layers, got {disabled:?}")
-    };
+    assert_eq!(disabled.len(), 3, "a disabled app icon paints the same three layers, got {disabled:?}");
+    let [(off_ink, a), (off_accent, b), (off_fixed, c)] = disabled[..] else { return };
     assert_eq!([a, b, c], [ink; 3], "every layer takes the one ink when the component is disabled");
     assert_eq!((off_ink, off_accent), (ink_layer, accent_layer), "the ink and accent layers are the same drawings, tinted");
     assert_ne!(off_fixed, fixed_layer, "a disabled fixed part is drawn as a silhouette, not in its own colours");
@@ -153,7 +151,9 @@ fn an_accent_part_paints_in_the_accent_ink_a_fixed_part_as_drawn_and_both_take_t
     assert_eq!(tints, [off, rgba_color(tokens.color.accent.solid), Color32::WHITE], "an enabled icon in the disabled colour keeps its layers");
 
     // What each layer holds: the class split is the SVG engine's, so a sheet it ignored would give every layer the whole drawing.
-    let Some(layered) = icon(LAYERED_NAME) else { panic!("the layered icon resolves") };
+    let layered = icon(LAYERED_NAME);
+    assert!(layered.is_some(), "the layered icon resolves");
+    let Some(layered) = layered else { return };
     let (body, nib, cap) = ((9, 12), (16, 12), (3, 12));
     let [plain, accent, fixed] = [Layer::Ink, Layer::Accent, Layer::Fixed].map(|layer| layered.layer(24.0, 1.0, layer));
     assert!(texel(&plain, body.0, body.1).a() > 0 && texel(&plain, nib.0, nib.1).a() == 0, "the ink layer holds the plain body only");

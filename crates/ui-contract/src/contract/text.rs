@@ -307,17 +307,16 @@ fn serve_access<C: Component>(cx: &mut Cx<'_, C>, state: &mut TextState, widget:
     }
 }
 
-/// The text facts AccessKit reads this pass, built only while AccessKit runs.
-fn facts<C: Component>(
-    cx: &Cx<'_, C>,
-    state: &mut TextState,
-    widget: egui::Id,
-    out: &adapter::AdapterOut,
-    rect: Rect,
+/// What a field says about itself to AccessKit besides its text.
+struct FieldFacts {
     masked: bool,
     read_only: bool,
     enabled: bool,
-) {
+}
+
+/// The text facts AccessKit reads this pass, built only while AccessKit runs.
+fn facts<C: Component>(cx: &Cx<'_, C>, state: &mut TextState, widget: egui::Id, out: &adapter::AdapterOut, rect: Rect, field: FieldFacts) {
+    let FieldFacts { masked, read_only, enabled } = field;
     if !text_access::exposed(&cx.core.ctx, widget) {
         state.rows = None;
         return;
@@ -514,7 +513,7 @@ pub(crate) fn run<C: Component>(
     if let Some(baseline) = out.baseline {
         cx.core.paint.borrow_mut().baseline.get_or_insert(baseline);
     }
-    facts(cx, &mut state, widget, &out, decl.rect, decl.options.mask, read_only, enabled);
+    facts(cx, &mut state, widget, &out, decl.rect, FieldFacts { masked: decl.options.mask, read_only, enabled });
     cx.core.text_invalid = state.invalid;
     cx.core.text_unparsed = decl.options.unparsed.clone().filter(|_| state.invalid);
     cx.core.escape_to_list = state.completions.open || list_open;

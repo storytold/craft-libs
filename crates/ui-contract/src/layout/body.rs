@@ -658,7 +658,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
             vec![0; levelled.len()]
         };
         let width_at = |leaf: &Reported, level: usize| leaf.levels.get(level).copied().unwrap_or_default();
-        let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(*leaf, *level)).sum();
+        let held: f32 = levelled.iter().zip(&levels).map(|(leaf, level)| width_at(leaf, *level)).sum();
         let widths = if room.is_finite() {
             shrink_or_drop(&units, &whole, &first, (fixed + held, gap), room, order, drops)
         } else {
@@ -675,7 +675,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
         }
         for (leaf, level) in levelled.iter().zip(levels) {
             // The level travels as the record's height (`level_of`).
-            let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width_at(*leaf, level), level as f32));
+            let measured = layout_memory::Measured::new(Vec2::new(room, 0.0), Vec2::new(width_at(leaf, level), level as f32));
             layout_memory::emit_shrink(&ctx, shrink_key(id, leaf.leaf), measured, false);
         }
         again

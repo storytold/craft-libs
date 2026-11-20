@@ -6,7 +6,7 @@ use super::{header, rows};
 use crate::contract::body::EnvFacts;
 use crate::contract::collection::RowState;
 use crate::contract::run::{Measuring, ShowAt};
-use crate::contract::{Collection, Internal, ItemCx, Props, Show as _, Sizing};
+use crate::contract::{Collection, Internal, ItemCx, Props, Show as _};
 use crate::runtime::access::SetPosition;
 use crate::runtime::env::{Env, EnvView, ItemFacts};
 use crate::runtime::layout_memory;

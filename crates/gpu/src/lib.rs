@@ -23,7 +23,8 @@ mod registry;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, feature = "startup"))]
+#[cfg(test)]
+#[cfg(feature = "startup")]
 mod device_tests;
 
 pub use caps::DeviceCaps;

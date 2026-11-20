@@ -218,7 +218,7 @@ impl FileIntake {
     pub fn take(&self) -> Vec<Intake> {
         #[cfg(any(test, all(target_os = "macos", feature = "apple-events")))]
         {
-            let mine: Vec<std::rc::Rc<dyn Fn(&IntakeSender)>> = DRAINS.with(|drains| {
+            let mine: Vec<_> = DRAINS.with(|drains| {
                 drains
                     .borrow()
                     .iter()

@@ -267,6 +267,8 @@ struct View {
     edits: Option<(EditSet, EditSet)>,
     gens: ViewGens,
 }
+/// A press's double-press matcher, its time, and whether a binding's command accepts the press where it lands.
+type ChordMatch<'a> = (&'a mut Matcher, f64, &'a dyn Fn(&CommandRef) -> bool);
 
 /// What a resolution read besides the board's own generation and the gate.
 #[derive(Default)]
@@ -822,13 +824,7 @@ impl KeyScopes {
     /// held scope's keys stay with the text while typing; a typing scope's keys are the text component's own.
     /// With a matcher, a binding of a command `accept` refuses (disabled where the press lands) is passed over for the
     /// press's next binding.
-    fn press(
-        &self,
-        layout: &Layout,
-        input: &KeyInput,
-        typing: bool,
-        matcher: Option<(&mut Matcher, f64, &dyn Fn(&CommandRef) -> bool)>,
-    ) -> Option<Hit> {
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<ChordMatch<'_>>) -> Option<Hit> {
         let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
         let held: &[&'static str] = if typing { &[] } else { &self.held };
         let contexts: Vec<&str> = self.typing.iter().chain(held).copied().collect();
