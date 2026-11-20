@@ -126,3 +126,15 @@ fn chunk_buffer_splits_on_storage_binding_limit() {
     let chunks = chunk_buffer(&caps, b"abcdef").expect("chunk_buffer");
     assert_eq!(chunks, vec![&b"abcd"[..], &b"ef"[..]]);
 }
+
+#[test]
+fn caps_without_vendor_or_software_read_as_unknown_hardware() {
+    let json = r#"{"backend_name":"Vulkan","device_name":"gpu","max_storage_buffer_binding_size":1,"max_buffer_size":2,"max_texture_dimension_2d":3,"features":["TEXTURE_FORMAT_NV12"]}"#;
+    let caps: DeviceCaps = serde_json::from_str(json).expect("caps");
+    assert_eq!((caps.vendor_id, caps.software), (0, false));
+    assert!(caps.has_feature("TEXTURE_FORMAT_NV12"));
+    assert!(!caps.has_feature("TEXTURE_FORMAT_P010") && !caps.has_feature(""));
+    let software = DeviceCaps { vendor_id: 0x10005, software: true, ..caps };
+    let back: DeviceCaps = serde_json::from_str(&serde_json::to_string(&software).expect("json")).expect("caps");
+    assert_eq!(back, software);
+}
