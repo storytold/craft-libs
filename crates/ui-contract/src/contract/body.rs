@@ -33,6 +33,7 @@ pub use regions::pad_of;
 #[doc(hidden)]
 pub use reorder::REORDER_BAND;
 pub use scroll::{STRIP_BACK, STRIP_FORWARD};
+#[cfg(feature = "testing")]
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
 pub use window::grip_band;
