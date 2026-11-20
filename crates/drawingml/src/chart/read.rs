@@ -915,4 +915,30 @@ mod tests {
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="0"/>"#).as_bytes()).is_some_and(|c| !c.vary_colors));
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="1"/>"#).as_bytes()).is_some_and(|c| c.vary_colors));
     }
+
+    #[test]
+    fn data_table_first_slice_angle_and_pivot_source_roundtrip() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:pivotSource><c:name>[Book.xlsx]Sheet1!PivotTable1</c:name><c:fmtId val="0"/></c:pivotSource><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:dTable><c:showHorzBorder/><c:showVertBorder val="0"/><c:showOutline val="1"/><c:showKeys/></c:dTable></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.pivot_source.as_deref(), Some("[Book.xlsx]Sheet1!PivotTable1"));
+        assert_eq!(c.data_table, Some(ChartDataTable { show_keys: true, horizontal_border: true, vertical_border: false, outline: true }));
+        let mut edited = c.clone();
+        edited.raw = None;
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.pivot_source, c.pivot_source);
+        assert_eq!(back.data_table, c.data_table);
+
+        let pie_xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:chart><c:plotArea><c:pieChart><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser><c:firstSliceAng val="450"/></c:pieChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let mut pie = read_chart_xml(pie_xml.as_bytes()).unwrap();
+        assert_eq!(pie.first_slice_angle, 90);
+        pie.raw = None;
+        let (pie_written, _) = crate::chart::write::chart_xml(&pie);
+        assert_eq!(read_chart_xml(&pie_written).unwrap().first_slice_angle, 90);
+    }
 }

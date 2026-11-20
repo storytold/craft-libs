@@ -576,7 +576,20 @@ mod tests {
         assert_eq!(next, Some(3));
         assert!(r.row(&craft_xml::El::new("row").with_attr("r", "1048577")).is_none());
         assert!(r.row(&craft_xml::El::new("row").with_attr("r", "0")).is_none());
-        assert_eq!((r.rows, r.dropped), (4, 3));
+        assert_eq!((r.rows, r.dropped, r.dropped_cells), (4, 3, 1));
+    }
+
+    #[test]
+    fn dropped_cells_counts_cells_in_dropped_rows_and_bad_refs() {
+        let mut r = RowReader::default();
+        let bad_row_zero = craft_xml::Options::local().parse(br#"<row r="0"><c><v>1</v></c><c><v>2</v></c></row>"#).unwrap();
+        let bad_row_high = craft_xml::Options::local().parse(br#"<row r="1048577"><c r="A1048577"><v>3</v></c></row>"#).unwrap();
+        let bad_cell = craft_xml::Options::local().parse(br#"<row r="1"><c r="XFE1"><v>4</v></c><c r="A1"><v>5</v></c></row>"#).unwrap();
+        assert!(r.row(&bad_row_zero).is_none());
+        assert!(r.row(&bad_row_high).is_none());
+        let kept = r.row(&bad_cell).unwrap();
+        assert_eq!(kept.cells.len(), 1);
+        assert_eq!((r.dropped, r.dropped_cells), (3, 4));
     }
 
     #[test]
