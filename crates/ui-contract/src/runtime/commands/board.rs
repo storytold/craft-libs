@@ -1236,8 +1236,6 @@ fn resolve_in(
     from: Option<&Vantage>,
     mut reads: Reads,
 ) -> (ResolvedCommand, ResolveKey) {
-    // The resolved command carries the chord the keymap shows.
-    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     let (resolved, key, first_unknown) = with(ctx, |board| {
         let first_unknown = board.def(&command.id).is_none() && board.unknown.insert(command.id.clone());
         // A command no state named yet has a key too, so a state given later reaches the regions that read it.
@@ -1294,6 +1292,8 @@ pub(crate) fn resolve_bound(ctx: &Context, chain: &CommandChain, command: &Comma
 /// `command` as `reader` is shown it, noted as its read: the kept resolution while its inputs are unchanged, else a new
 /// one, kept.
 fn read(ctx: &Context, reader: Reader, command: &CommandRef) -> Arc<ResolvedCommand> {
+    // The resolved command carries the chord the keymap shows, kept or made now.
+    crate::runtime::replay::note_input(ctx, crate::runtime::inputs::Input::Keymap);
     let viewport = pass::current_viewport(ctx);
     let vantage = vantage_of(ctx, &reader);
     let found = with(ctx, |board| board.lookup(viewport, &reader, command, vantage.as_ref()));

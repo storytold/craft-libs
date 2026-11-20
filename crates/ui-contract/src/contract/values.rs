@@ -454,8 +454,8 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(_) => None,
             SourceMut::Mut(value) => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
             SourceMut::MutMixed(value) => Some(BindKey::Place(std::ptr::from_ref::<Mixed<T>>(value) as usize, TypeId::of::<Mixed<T>>())),
-            SourceMut::Tracked { at, .. } => Some(BindKey::Tracked(at.source, at.offset, TypeId::of::<T>())),
-            SourceMut::TrackedMixed { at, .. } => Some(BindKey::Tracked(at.source, at.offset, TypeId::of::<Mixed<T>>())),
+            SourceMut::Tracked { at, .. } => Some(BindKey::Tracked(at.source, at.offset, size_of::<T>(), TypeId::of::<T>())),
+            SourceMut::TrackedMixed { at, .. } => Some(BindKey::Tracked(at.source, at.offset, size_of::<Mixed<T>>(), TypeId::of::<Mixed<T>>())),
             SourceMut::Kept => Some(match self.save {
                 Some(save) => BindKey::Saved(Id::NULL.with(&save.key)),
                 None => BindKey::Kept(id),

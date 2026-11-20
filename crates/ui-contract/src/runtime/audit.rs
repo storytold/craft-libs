@@ -18,10 +18,10 @@ use crate::runtime::shift::Shift;
 use egui::{Context, Id, RecordShift, Rect};
 use std::collections::HashSet;
 
-/// How far apart, in points, the audit lets a coordinate or float of a replay and of the real run lie
+/// How far apart, in points, the audit lets a coordinate of a replay and of the real run lie
 /// (`Shift::snapped`, `PassRecords::first_difference`): a record moved by a whole pixel from positions off the float
-/// grid differs from the run at the new place by rounding only, far less than this; ids, counts, colours and text
-/// compare exactly.
+/// grid differs from the run at the new place by rounding only, far less than this; ids, counts, colours, text and
+/// every other float compare exactly.
 pub(crate) const WITHIN: f32 = 1.0 / 256.0;
 
 /// Whether two outputs of a memoized view are equal: both of its output type, and `==` within `WITHIN`.

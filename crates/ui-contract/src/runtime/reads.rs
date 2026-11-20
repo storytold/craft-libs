@@ -18,8 +18,9 @@ pub(crate) enum BindKey {
     /// A write-through place: its address and the type stored there. An address names the place in its pass only:
     /// a record kept for a later pass keeps no such read.
     Place(usize, TypeId),
-    /// A field of a `Tracked` value (`bind_tracked!`): the value's source id, the field's offset in it and its type.
-    Tracked(u64, usize, TypeId),
+    /// A field of a `Tracked` value (`bind_tracked!`) or a story value: the value's source id, the field's offset in
+    /// it, its size and its type.
+    Tracked(u64, usize, usize, TypeId),
     /// Session memory under this component id.
     Kept(Id),
     /// The saved tier under the key with this hash.
@@ -30,6 +31,19 @@ pub(crate) enum BindKey {
     Command(u32, Option<Id>),
     /// A command the focused stop answers for (an edit it takes): the command's number.
     FocusedEdit(u32),
+}
+
+impl BindKey {
+    /// Whether an edit of `self` changes the value a reader of `read` read: the same value, or a part inside the edited
+    /// one, as a whole story value's edit changes each field of it a story binds (`StoryData::value_at`).
+    pub(crate) fn reaches(self, read: BindKey) -> bool {
+        match (self, read) {
+            (BindKey::Tracked(source, offset, size, _), BindKey::Tracked(read_source, at, ..)) if size > 0 => {
+                source == read_source && at.wrapping_sub(offset) < size
+            }
+            _ => self == read,
+        }
+    }
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.
@@ -153,11 +167,11 @@ pub(crate) struct EarlierReads {
     pub samples: Vec<Sample>,
 }
 
-/// The reads of `key` made so far in this pass, as `editor`'s edit of it sees them.
+/// The reads `key` reaches (`BindKey::reaches`) made so far in this pass, as `editor`'s edit of it sees them.
 pub(crate) fn earlier(ctx: &Context, key: BindKey, editor: Id) -> EarlierReads {
     with(ctx, |reads| {
         let mut earlier = EarlierReads::default();
-        for read in reads.reads.iter().filter(|read| read.key == key) {
+        for read in reads.reads.iter().filter(|read| key.reaches(read.key)) {
             if read.reader != editor {
                 earlier.other = true;
                 continue;

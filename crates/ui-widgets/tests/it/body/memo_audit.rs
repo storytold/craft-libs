@@ -4,6 +4,7 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::runtime::inspect;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::layout::{allocate, in_region};
 use craft_ui::testing::pointer::{moved, wheel};
@@ -101,6 +102,76 @@ fn the_audit_names_a_view_whose_paint_went_stale() {
     assert!(message.contains("Swatch"), "names the view: {message}");
     assert!(message.contains("paint"), "names the paint difference: {message}");
     assert!(!message.contains("rect:") && !message.contains("output:"), "extent and output are the same: {message}");
+}
+
+/// A view that returns a fraction of `HIDDEN`, which its props do not hold, and paints nothing from it.
+#[derive(MemoProps)]
+struct Fraction {
+    size: f32,
+}
+
+fn fraction(props: &mut Fraction, ui: &mut Ui) -> f32 {
+    ui.allocate_exact_size(Vec2::splat(props.size), egui::Sense::hover());
+    HIDDEN.get() as f32 / 1000.0
+}
+
+/// A bare float a view returns compares exactly: a fraction stale by far less than the audit's position tolerance
+/// fails the audit, naming the output only.
+#[trial]
+fn the_audit_names_a_view_whose_returned_fraction_went_stale() {
+    HIDDEN.set(500);
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("fraction", Fraction { size: 20.0 }, fraction).show(ui));
+        })
+    };
+    for _ in 0..3 {
+        frame(&mut frames);
+    }
+    HIDDEN.set(501);
+    let message = failure(|| {
+        frame(&mut frames);
+    });
+    assert!(message.contains("Fraction") && message.contains("output:"), "names the view and its output: {message}");
+    assert!(!message.contains("paint"), "the paint is the same: {message}");
+}
+
+/// A view that reads an inspection record only while `HIDDEN` is odd, and paints the same either way.
+#[derive(MemoProps)]
+struct Reads {
+    size: f32,
+}
+
+fn reads(props: &mut Reads, ui: &mut Ui) {
+    if HIDDEN.get() % 2 == 1 {
+        let _ = inspect::recorded(ui.ctx(), egui::Id::unique("audit record"));
+    }
+    ui.allocate_exact_size(Vec2::splat(props.size), egui::Sense::hover());
+}
+
+/// A kept run that missed a read the real run makes fails the audit, naming the read: a replay would note the kept
+/// run's reads, so an edit of the missed value would not run the view.
+#[trial]
+fn the_audit_names_a_view_whose_kept_run_missed_a_read() {
+    HIDDEN.set(2);
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            in_region(ui, region(0), |ui| MemoView::new("reads", Reads { size: 20.0 }, reads).show(ui));
+        })
+    };
+    for _ in 0..3 {
+        frame(&mut frames);
+    }
+    HIDDEN.set(3);
+    let message = failure(|| {
+        frame(&mut frames);
+    });
+    assert!(message.contains("Reads") && message.contains("reads:"), "names the view and the read: {message}");
+    assert!(!message.contains("paint"), "the paint is the same: {message}");
 }
 
 #[derive(MemoProps)]

@@ -266,8 +266,8 @@ impl Record {
     }
 
     /// How a replay of `self` at the place `shift` names differs from the real run `run` there: one line per kind that
-    /// differs (paint, widget rects and AccessKit nodes; focus registrations; the journal), each with its first
-    /// difference.
+    /// differs (paint, widget rects and AccessKit nodes; focus registrations; the journal; the values and framework
+    /// inputs read), each with its first difference.
     pub(crate) fn differences(&self, run: &Record, shift: &RecordShift) -> Vec<String> {
         let within = crate::runtime::audit::WITHIN;
         let mut found = Vec::new();
@@ -294,15 +294,41 @@ impl Record {
         {
             found.push(format!("journal entry {index}: left {:?} / right {:?}", left.get(index), right.get(index)));
         }
+        // A replay notes the kept run's reads and inputs in place of the run's: one the kept run missed is one a later
+        // edit doesn't rerun the view for.
+        if self.facts.reads != run.facts.reads {
+            let only = |a: &HashSet<BindKey>, b: &HashSet<BindKey>| {
+                let mut only: Vec<String> = a.difference(b).map(|key| format!("{key:?}")).collect();
+                only.sort_unstable();
+                only
+            };
+            found.push(format!(
+                "reads: left only {:?} / right only {:?}",
+                only(&self.facts.reads, &run.facts.reads),
+                only(&run.facts.reads, &self.facts.reads)
+            ));
+        }
+        if self.facts.inputs != run.facts.inputs {
+            let list = |inputs: Inputs| Input::ALL.into_iter().filter(|input| inputs.contains(*input)).collect::<Vec<_>>();
+            found.push(format!("inputs: left {:?} / right {:?}", list(self.facts.inputs), list(run.facts.inputs)));
+        }
         found
     }
 }
 
 impl Facts {
     /// Whether the run these facts are of still holds at `now`, after the values `edited` changed in the frame: nothing
-    /// in it moves, the time it asked to be shown again has not come, and it read none of them.
+    /// in it moves, the time it asked to be shown again has not come, and it read none of them, nor a part of one.
     pub(crate) fn quiet(&self, now: f64, edited: Option<&HashSet<BindKey>>) -> bool {
-        !self.unsettled && self.wake.is_none_or(|at| at > now) && edited.is_none_or(|edited| self.reads.is_disjoint(edited))
+        !self.unsettled && self.wake.is_none_or(|at| at > now) && edited.is_none_or(|edited| !edited.iter().any(|edit| self.read(*edit)))
+    }
+
+    /// Whether the run read a value the edit of `edit` changes (`BindKey::reaches`).
+    fn read(&self, edit: BindKey) -> bool {
+        match edit {
+            BindKey::Tracked(..) => self.reads.iter().any(|read| edit.reaches(*read)),
+            _ => self.reads.contains(&edit),
+        }
     }
 }
 

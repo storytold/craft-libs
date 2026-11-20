@@ -286,8 +286,8 @@ pub struct ValueAt<'a> {
 
 impl<'a> ValueAt<'a> {
     /// Where `value`, the story value named `name`, lies in the data whose writes `count` counts under `source`.
-    fn of<T>(count: &'a std::cell::Cell<u64>, source: u64, name: &'static str, value: &T) -> Self {
-        ValueAt { count, source, key: slot_offset(name), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() }
+    fn of<T: 'static>(count: &'a std::cell::Cell<u64>, source: u64, name: &'static str, value: &T) -> Self {
+        ValueAt { count, source, key: slot_offset(name, TypeId::of::<T>()), base: std::ptr::from_ref::<T>(value).addr(), size: size_of::<T>() }
     }
 
     /// A binding of `part`, the value itself or a field inside it.
@@ -427,7 +427,7 @@ impl StoryData {
         let slot = values.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
         let (_, count, source) = written.__split_for_bind();
         match slot.any_mut().downcast_mut::<T>() {
-            Some(value) => crate::contract::Bind::__tracked(value, count, source, slot_offset(name)),
+            Some(value) => crate::contract::Bind::__tracked(value, count, source, slot_offset(name, TypeId::of::<T>())),
             None => unreachable!("a slot's value has the type its key names"),
         }
     }
@@ -440,7 +440,7 @@ impl StoryData {
         let slot = values.entry((name, TypeId::of::<Mixed<T>>())).or_insert_with(|| Box::new(init));
         let (_, count, source) = written.__split_for_bind();
         match slot.any_mut().downcast_mut::<Mixed<T>>() {
-            Some(value) => crate::contract::Bind::__tracked_mixed(value, count, source, slot_offset(name)),
+            Some(value) => crate::contract::Bind::__tracked_mixed(value, count, source, slot_offset(name, TypeId::of::<Mixed<T>>())),
             None => unreachable!("a slot's value has the type its key names"),
         }
     }
@@ -458,7 +458,7 @@ impl StoryData {
         let StoryData { values, how, written, .. } = self;
         let value = values.get_mut(&key)?.as_mut();
         let (_, count, source) = written.__split_for_bind();
-        Some(Slot { value, how: how.get(&key), count, source, offset: slot_offset(key.0) })
+        Some(Slot { value, how: how.get(&key), count, source, offset: slot_offset(key.0, key.1) })
     }
 
     /// Called by the Properties editor only: it wrote the value under `key` outside a binding (an assignment after a
@@ -467,7 +467,8 @@ impl StoryData {
     #[doc(hidden)]
     pub fn __wrote(&mut self, ctx: &egui::Context, key: (&'static str, TypeId)) {
         *self.written = ();
-        let read = crate::runtime::reads::BindKey::Tracked(self.written.source(), slot_offset(key.0), key.1);
+        let size = self.values.get(&key).map_or(0, |value| size_of_val(&**value));
+        let read = crate::runtime::reads::BindKey::Tracked(self.written.source(), slot_offset(key.0, key.1), size, key.1);
         crate::runtime::inspect::edited(ctx, read, Id::NULL);
     }
 
@@ -803,11 +804,11 @@ where
     shown
 }
 
-/// A story value's place in its data, by its name: with the data's source and the value's type it names the value in
-/// every pass (`BindKey::Tracked`).
-fn slot_offset(name: &str) -> usize {
+/// A story value's place in its data, by its name and type, as the data keeps it: with the data's source it names the
+/// value in every pass (`BindKey::Tracked`), and a part of it by this plus the part's offset.
+fn slot_offset(name: &str, ty: TypeId) -> usize {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    name.hash(&mut hasher);
+    (name, ty).hash(&mut hasher);
     hasher.finish() as usize
 }

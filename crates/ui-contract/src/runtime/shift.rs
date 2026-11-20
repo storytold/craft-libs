@@ -14,10 +14,10 @@ pub trait Shift {
     #[must_use]
     fn shifted(&self, by: &RecordShift) -> Self;
 
-    /// `self` with each coordinate `shifted` moves, and each float it holds, taken from `to` where the two lie within
-    /// `within` points; everything else stays. The replay audit compares a moved record with a real run this way
-    /// (`==` after it): positions off the float grid moved by a whole pixel differ from the same positions computed at
-    /// the new place by rounding only.
+    /// `self` with each coordinate `shifted` moves, and each distance a hit shape holds (`reach`, `min_across`), taken
+    /// from `to` where the two lie within `within` points; everything else, a bare float included, stays. The replay
+    /// audit compares a moved record with a real run this way (`==` after it): positions off the float grid moved by a
+    /// whole pixel differ from the same positions computed at the new place by rounding only.
     #[must_use]
     fn snapped(&self, to: &Self, within: f32) -> Self;
 }
@@ -75,26 +75,6 @@ impl Shift for Pos2 {
     }
 }
 
-impl Shift for f32 {
-    fn shifted(&self, _: &RecordShift) -> Self {
-        *self
-    }
-
-    fn snapped(&self, to: &Self, within: f32) -> Self {
-        snap(*self, *to, within)
-    }
-}
-
-impl Shift for f64 {
-    fn shifted(&self, _: &RecordShift) -> Self {
-        *self
-    }
-
-    fn snapped(&self, to: &Self, within: f32) -> Self {
-        if (self - to).abs() <= f64::from(within) { *to } else { *self }
-    }
-}
-
 /// Types with no place: they stay as they are at any place.
 #[macro_export]
 #[doc(hidden)]
@@ -114,9 +94,10 @@ macro_rules! stays {
     };
 }
 
-// A scalar is a length or a count; a coordinate is a `Pos2` or a `Rect`.
+// A scalar is a length, a fraction, a zoom, a time or a count, which a replay at another place never changes, so the
+// audit compares it exactly; a coordinate is a `Pos2` or a `Rect`.
 stays!(craft_behavior::PartRef, craft_behavior::Sense);
-stays!((), bool, u8, u16, u32, u64, usize, i32, i64, String, Arc<str>, &'static str, egui::Id, egui::LayerId);
+stays!((), bool, f32, f64, u8, u16, u32, u64, usize, i32, i64, String, Arc<str>, &'static str, egui::Id, egui::LayerId);
 
 impl<T: Shift> Shift for Option<T> {
     fn shifted(&self, by: &RecordShift) -> Self {

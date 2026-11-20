@@ -39,7 +39,7 @@ pub(crate) enum Input {
 }
 
 impl Input {
-    const ALL: [Input; 10] = [
+    pub(crate) const ALL: [Input; 10] = [
         Input::Modifiers,
         Input::Pointer,
         Input::Keys,
