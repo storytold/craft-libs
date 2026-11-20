@@ -512,9 +512,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             }
             if history && !measuring {
                 let mut steps = steps.unwrap_or_else(|| EditHistory::new(&values));
-                // A change becomes a step once the gesture that makes it has ended.
+                // Use the history's settled value: `before` can be an intermediate drag value
+                // because a change becomes a step only after its gesture has ended.
                 if !running {
-                    steps.record(&EditEvent::set(Mixed::Same(before.clone()), values.clone(), name.clone(), None));
+                    steps.record(&EditEvent::set(Mixed::Mixed, values.clone(), name.clone(), None));
                 }
                 cx.memory::<History<V>>().0 = Some(steps);
             }

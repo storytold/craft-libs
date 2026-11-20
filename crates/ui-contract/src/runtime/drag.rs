@@ -233,6 +233,7 @@ pub(crate) struct Targets {
     this: Vec<Registration>,
     winner: Option<(Id, u32)>,
     winner_window: bool,
+    pointer: Option<Pos2>,
 }
 
 fn board<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -371,9 +372,10 @@ fn os_files(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let hovering = !seen.hovered.is_empty();
     let host = WindowHost::of(ctx);
-    let positioned = if host.desktop_pointer().is_some() { host.pointer_in(viewport).is_some() } else { pointer::frame(ctx).pos.is_some() };
-    // A window target does not need a position and can already have won while files hovered.
-    let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window);
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame(ctx).pos };
+    let positioned = position.is_some();
+    // A window target can take the drop immediately only if the pointer has not moved since resolution.
+    let window_winner = PerViewport::<Targets>::with(ctx, viewport, |targets| targets.winner_window && targets.pointer == position);
     let mut repaint = false;
     board(ctx, |board| match &mut board.session {
         None if hovering || !seen.dropped.is_empty() => {
@@ -405,12 +407,12 @@ fn os_files(ctx: &Context) {
                 let hovered = session.payload.downcast_ref::<OsFiles>();
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
-                if positioned {
+                if window_winner {
+                    session.dropped = Some(frame);
+                } else if positioned {
                     // Resolve targets at the drop position before any previously winning window target can take it.
                     session.dropped = Some(frame.saturating_add(1));
                     repaint = true;
-                } else if window_winner {
-                    session.dropped = Some(frame);
                 } else {
                     session.waiting_for_pointer = true;
                 }
@@ -643,6 +645,8 @@ pub(crate) fn ended<P: 'static>(ctx: &Context, source: Id) -> Option<DropOperati
 /// window holds the drop, it waits there for one more frame so that window's pass takes it.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
+    let host = WindowHost::of(ctx);
+    let position = if host.desktop_pointer().is_some() { host.pointer_in(viewport) } else { pointer::frame(ctx).pos };
     // A modal holds input: targets on layers below it, and on the window, never accept.
     let scopes: Vec<Option<Id>> =
         PerViewport::<Targets>::with(ctx, viewport, |targets| targets.this.iter().map(|registration| registration.scope).collect());
@@ -658,6 +662,7 @@ pub(crate) fn end_pass(ctx: &Context) {
             .max_by_key(|(at, registration)| (!registration.window, areas::layer_position(ctx, registration.layer), *at))
             .map(|(_, registration)| registration);
         targets.winner_window = best.is_some_and(|registration| registration.window);
+        targets.pointer = position;
         let best = best.map(|registration| ((registration.owner, registration.ordinal), (registration.mark, registration.op)));
         targets.winner = best.map(|(key, _)| key);
         targets.this.clear();
