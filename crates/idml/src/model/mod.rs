@@ -205,30 +205,6 @@ impl FillValues {
         }
         result
     }
-
-    /// Writes prefixed cell/table stroke attributes onto `el`. When `line_style_for_kind` is
-    /// true, `kind` is written as `{prefix}LineStyle` (used for `EndColumnLineStyle`).
-    pub fn push_prefixed_attrs(&self, el: &mut El, prefix: &str, line_style_for_kind: bool) {
-        if let Some(value) = self.weight {
-            el.attrs.push((format!("{prefix}StrokeWeight"), crate::value::num(value)));
-        }
-        if let Some(value) = &self.color {
-            el.attrs.push((format!("{prefix}StrokeColor"), value.clone()));
-        }
-        if let Some(value) = self.tint {
-            el.attrs.push((format!("{prefix}StrokeTint"), crate::value::num(value)));
-        }
-        if let Some(value) = &self.kind {
-            let key = if line_style_for_kind { format!("{prefix}LineStyle") } else { format!("{prefix}StrokeType") };
-            el.attrs.push((key, value.clone()));
-        }
-        if let Some(value) = &self.gap_color {
-            el.attrs.push((format!("{prefix}StrokeGapColor"), value.clone()));
-        }
-        if let Some(value) = self.gap_tint {
-            el.attrs.push((format!("{prefix}StrokeGapTint"), crate::value::num(value)));
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
