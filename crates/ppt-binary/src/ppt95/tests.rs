@@ -814,8 +814,13 @@ fn a_masters_centred_title_gives_the_title_style_its_ruler() {
         Some(text(b"T", &[plain(2)], &[para_run(2, false, 0, 1, 0)], 3, [0; 4], MASTER_BODY)),
     );
     let atoms = [style_atom([LEVEL; 5], 0x13)];
-    let stream =
-        stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, DEFAULT, [0; 4], &[title])], environment_with(&[styles(&atoms)]));
+    let stream = stream_with(
+        document_atom(5760, 4320, 0),
+        &[],
+        &[master_with(MASTER, DEFAULT, [0; 4], &[title])],
+        environment_with(&[], &[styles(&atoms)]),
+        &[],
+    );
     let t = import(&stream).unwrap().masters[0].title_style.level(0).cloned().unwrap();
     // The wide ruler (slot 3): level 1 at 576 units, its first line at 288.
     assert_eq!((t.para.margin_left, t.para.indent), (Some(72.0), Some(-36.0)));
