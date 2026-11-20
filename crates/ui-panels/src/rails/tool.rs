@@ -314,7 +314,11 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
     /// Shows the rail laid out `width` wide.
     fn show_within(mut self, ui: &mut Ui, width: f32, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
         let draw = self.prepare(ui, width, footer);
-        let last = remembered(draw.slots, draw.current, draw.last_used);
+        // The last-used tools after this pass: derived while the slots, the remembered and hidden tools and the current tool are as they were.
+        let key = (draw.slots.revision(), draw.last_used.revision(), draw.hidden.map(Tracked::revision), draw.current);
+        let last =
+            crate::runtime::derived::derived(ui.ctx(), ui.id().with("remembered"), &key, || remembered(draw.slots, draw.current, draw.last_used));
+        let last = last.as_ref().clone();
         let (mut events, mut edit_toolbar) = (Vec::new(), None);
         let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
         let (mut select, mut double_clicked, mut flyout, mut dropped) = (None, None, None, None);
