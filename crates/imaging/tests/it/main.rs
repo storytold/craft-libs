@@ -6,6 +6,7 @@ mod blur_pins;
 mod color_range;
 mod contour_field;
 mod curve;
+mod curve_hover_readout;
 mod fill;
 mod filter_gallery;
 mod histogram;

@@ -397,6 +397,10 @@ impl<'a> CurvesPanel<'a> {
             if pencil {
                 editor = editor.pencil();
             }
+            // The dialog reads out the curve under the pointer; Properties keeps its fields.
+            if context.is_dialog() {
+                editor = editor.hover_readout();
+            }
             if let Some(data) = &data {
                 editor = editor.histogram(data);
             }
