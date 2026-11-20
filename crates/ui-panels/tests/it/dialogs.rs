@@ -334,7 +334,8 @@ fn unsaved_question_keeps_long_text_inside_its_dialog() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = running(&host);
     fixture.room(vec2(820.0, 520.0));
-    host.borrow_mut().open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
+    host.borrow_mut()
+        .open(UnsavedChangesDialog::new(CloseScope::Close, "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.pdf"));
     fixture.idle(6);
     let dialog = fixture.by_role(Role::DIALOG).first().expect("the question").rect;
     assert!(dialog.left() >= 0.0 && dialog.right() <= 820.0, "the question stays on screen: {dialog:?}");

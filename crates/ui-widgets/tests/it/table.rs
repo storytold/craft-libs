@@ -24,16 +24,22 @@ fn a_table_cell_text_field_reports_edits() {
         let columns = vec![ColumnSpec::new(NAME, "Name", ColumnWidth::fill(1.0)), ColumnSpec::new(SIZE, "Pages", ColumnWidth::fill(1.0))];
         let keys = [0_usize, 1, 2];
         let source = keyed(&keys, |key: &usize| *key);
-        Table::new("Files", columns).selection(Bind::given(Selection::single(0))).reorder(ReorderRule::new()).deletable(true).space(SpaceAction::Preview).show_items(ui, &source, &mut |_, icx| {
-            let seen = seen.clone();
-            ListRow::new("File").cells(icx.cells()).cell_field(SIZE, TextField::new("Page range", Bind::given(String::new())), move |out| {
-                for event in out.events {
-                    if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event {
-                        *seen.borrow_mut() = Some(value);
+        Table::new("Files", columns)
+            .selection(Bind::given(Selection::single(0)))
+            .reorder(ReorderRule::new())
+            .deletable(true)
+            .space(SpaceAction::Preview)
+            .show_items(ui, &source, &mut |_, icx| {
+                let seen = seen.clone();
+                ListRow::new("File").cells(icx.cells()).cell_field(SIZE, TextField::new("Page range", Bind::given(String::new())), move |out| {
+                    for event in out.events {
+                        if let EditEvent::Update { value, .. } | EditEvent::Commit { after: value, .. } | EditEvent::Set { after: value, .. } = event
+                        {
+                            *seen.borrow_mut() = Some(value);
+                        }
                     }
-                }
-            })
-        });
+                })
+            });
     });
     fixture.in_room(Room::Dialog).settle();
     let field = fixture.by_label("Page range").expect("the cell field");

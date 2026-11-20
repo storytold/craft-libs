@@ -98,7 +98,10 @@ impl PageSource for SmallPages {
 fn go_to_a_narrow_page_brings_it_back_into_horizontal_view() {
     let Rig { mut fixture, state, out, .. } = rig_over(
         UnequalPages(DemoPages::new(2)),
-        state_with(|s| { s.fit = Fit::None; s.zoom = 1.0; }),
+        state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 1.0;
+        }),
         NavigationOptions::default(),
         true,
     );
@@ -117,7 +120,10 @@ fn wheel_zoom_keeps_a_point_on_a_wide_page_under_the_pointer() {
         for fraction in [0.1, 0.5, 0.9] {
             let mut navigation = NavigationOptions::default();
             navigation.wheel = WheelScheme::Acrobat;
-            let start = state_with(|s| { s.fit = Fit::None; s.zoom = zoom; });
+            let start = state_with(|s| {
+                s.fit = Fit::None;
+                s.zoom = zoom;
+            });
             let Rig { mut fixture, state, out, .. } = rig_over(SmallPages(DemoPages::new(20)), start, navigation, true);
             let pointer = {
                 let out = out.borrow();
@@ -129,18 +135,25 @@ fn wheel_zoom_keeps_a_point_on_a_wide_page_under_the_pointer() {
                 (out.on_page(0, out.under(pointer)), out.pages[0].rect.width() > out.view.width())
             };
             let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
-            fixture.frame(vec![egui::Event::ModifiersChanged(mods), egui::Event::PointerMoved(pointer), egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: vec2(0.0, 20.0),
-                modifiers: mods,
-                phase: egui::TouchPhase::Move,
-                source: egui::MouseWheelSource::Unknown,
-            }]);
+            fixture.frame(vec![
+                egui::Event::ModifiersChanged(mods),
+                egui::Event::PointerMoved(pointer),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 20.0),
+                    modifiers: mods,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                },
+            ]);
             fixture.settle();
             assert!(state.borrow().zoom > zoom, "the wheel zoomed");
             let out = out.borrow();
             let (now, under) = (out.point(0, before), out.under(pointer));
-            assert!((!wide || (now.x - under.x).abs() < 2.0) && (now.y - under.y).abs() < 2.0, "zoom {zoom} at {fraction} moved the point: {now:?} vs {under:?}");
+            assert!(
+                (!wide || (now.x - under.x).abs() < 2.0) && (now.y - under.y).abs() < 2.0,
+                "zoom {zoom} at {fraction} moved the point: {now:?} vs {under:?}"
+            );
         }
     }
 }

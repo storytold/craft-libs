@@ -19,7 +19,12 @@ fn drop_veil(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(DropVeil, covers = [], drive = Drive::Never)]
 fn positional_drop_veil(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    DropVeil::new("Drop files").positional().show(ui, |ui, _| {
-        Checkbox::new(Bind::given(true)).label("Keep originals").show(ui);
-    }).output.response.into()
+    DropVeil::new("Drop files")
+        .positional()
+        .show(ui, |ui, _| {
+            Checkbox::new(Bind::given(true)).label("Keep originals").show(ui);
+        })
+        .output
+        .response
+        .into()
 }

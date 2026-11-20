@@ -175,9 +175,14 @@ impl Component for Text {
         }
         let role = cx.style.text.role;
         // Rows reserve the widest word, up to an enclosing reading-width cap.
-        let widest =
-            || cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max)
-                .min(cx.wrap_limit().unwrap_or(f32::INFINITY));
+        let widest = || {
+            cx.resolved
+                .label
+                .split_whitespace()
+                .map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x)
+                .fold(0.0, f32::max)
+                .min(cx.wrap_limit().unwrap_or(f32::INFINITY))
+        };
         if cx.proposal == Proposal::Min && self.elide == Elide::Off {
             let widest = widest();
             return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);

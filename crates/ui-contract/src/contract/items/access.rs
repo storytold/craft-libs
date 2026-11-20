@@ -76,7 +76,14 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// AccessKit requests on an item row's node or on a section row's collection node (`report_section_node`): Focus
     /// moves the lead to the row and key focus to the collection; Click also picks an item and activates it when the
     /// collection activates on click, or activates a section; Expand and Collapse open and close rows with children.
-    pub(super) fn node_by_access(&mut self, comp: &C, cx: &mut Cx<'_, C>, props: &crate::contract::CollectionProps, layout: &C::ItemLayout, place: Placement) {
+    pub(super) fn node_by_access(
+        &mut self,
+        comp: &C,
+        cx: &mut Cx<'_, C>,
+        props: &crate::contract::CollectionProps,
+        layout: &C::ItemLayout,
+        place: Placement,
+    ) {
         use craft_behavior::AccessAction;
         let (_, built) = self.built(layout, place.rect, place.offset);
         let rows: Vec<(u64, usize)> = built

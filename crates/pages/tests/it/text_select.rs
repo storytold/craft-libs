@@ -48,7 +48,13 @@ impl Grid {
         let (line, range) = self.line_of(glyph)?;
         let column = glyph - range.start;
         let column = if self.reverse_cells && line == 0 {
-            if column < 3 { column + 4 } else if column >= 4 { column - 4 } else { column }
+            if column < 3 {
+                column + 4
+            } else if column >= 4 {
+                column - 4
+            } else {
+                column
+            }
         } else {
             column
         } as f64;

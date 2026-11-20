@@ -1,7 +1,9 @@
 //! Live preferences apply an edit without waiting for the window to close.
 
 use craft_ui::contract::Bind;
-use craft_ui::patterns::preferences::{PageSpec, PrefValue, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec};
+use craft_ui::patterns::preferences::{
+    PageSpec, PrefValue, PreferencesMode, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, RowSpec,
+};
 use craft_ui::testing::{Fixture, trial};
 use egui::Ui;
 use std::cell::RefCell;
@@ -19,14 +21,26 @@ impl PreferencesModel for Model {
         vec![PageSpec::new("general", "General", vec![RowSpec::new("snap", "Snap", RowKind::Bool(self.draft))])]
     }
     fn set(&mut self, _: &str, value: PrefValue) {
-        if let PrefValue::Bool(value) = value { self.draft = value; }
+        if let PrefValue::Bool(value) = value {
+            self.draft = value;
+        }
     }
     fn custom_row(&mut self, _: &mut Ui, _: &str) {}
     fn custom_page(&mut self, _: &mut Ui, _: &str) {}
-    fn differs(&self) -> bool { self.draft != self.saved }
-    fn apply(&mut self) -> Result<(), String> { self.saved = self.draft; self.applies += 1; Ok(()) }
-    fn cancel(&mut self) { self.draft = self.saved; }
-    fn reset_page(&mut self, _: &str) { self.draft = false; }
+    fn differs(&self) -> bool {
+        self.draft != self.saved
+    }
+    fn apply(&mut self) -> Result<(), String> {
+        self.saved = self.draft;
+        self.applies += 1;
+        Ok(())
+    }
+    fn cancel(&mut self) {
+        self.draft = self.saved;
+    }
+    fn reset_page(&mut self, _: &str) {
+        self.draft = false;
+    }
 }
 
 #[trial]

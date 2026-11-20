@@ -405,7 +405,8 @@ impl<'a> TextSelectTool<'a> {
             };
             if let (Some((left, right)), Some((to_left, to_right))) = (outer(&unit), outer(&reached)) {
                 let dy = to_left.1.center().y - left.1.center().y;
-                let later = if dy.abs() > left.1.height().min(to_left.1.height()) / 2.0 { dy > 0.0 } else { to_left.1.center().x >= left.1.center().x };
+                let later =
+                    if dy.abs() > left.1.height().min(to_left.1.height()) / 2.0 { dy > 0.0 } else { to_left.1.center().x >= left.1.center().x };
                 let (anchor, head) = if later { (left.0, to_right.0) } else { (right.0, to_left.0) };
                 if text.rows_between(anchor, head, end_x).is_some() {
                     return Some(TextSpan::Run { anchor, head, head_page, end_x: Some(end_x) });

@@ -736,7 +736,12 @@ impl<'a> TransformBox<'a> {
                         self.report.apply = Some(ApplyBy::DoubleClick);
                     }
                     let Some(grip) = held.take() else { continue };
-                    if click && start.button == PointerButton::Primary && grip.part != BoxPart::Outside && !grip.moves_pivot && self.move_only().is_none() {
+                    if click
+                        && start.button == PointerButton::Primary
+                        && grip.part != BoxPart::Outside
+                        && !grip.moves_pivot
+                        && self.move_only().is_none()
+                    {
                         self.report.clicked = Some((grip.part, grip.from));
                     }
                     if grip.began && click && grip.last == grip.pressed {

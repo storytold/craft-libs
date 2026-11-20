@@ -171,7 +171,8 @@ impl<'a> PreferencesWindow<'a> {
             ok = ok.disabled_reason(words.cannot_ok.clone());
         }
         let apply = FooterButton::new(words.apply.clone(), DialogRole::Other).enabled(differs).stays_open(true);
-        let buttons = if mode == PreferencesMode::Live { vec![ok] } else { vec![ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)] };
+        let buttons =
+            if mode == PreferencesMode::Live { vec![ok] } else { vec![ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)] };
 
         let mut open = true;
         // Filed by a swatch press in this pass.

@@ -212,11 +212,17 @@ struct OnPositionalWindow;
 impl WindowDropTarget<OsFiles> for OnPositionalWindow {
     type Drop = Vec<String>;
 
-    fn requires_pointer(&self) -> bool { true }
+    fn requires_pointer(&self) -> bool {
+        true
+    }
 
-    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> { Some(names(files)) }
+    fn accept(&self, files: &OsFiles, _: DropOperation) -> Option<Self::Drop> {
+        Some(names(files))
+    }
 
-    fn mark(&self, _: &Self::Drop) -> DropMark { DropMark::Into(WINDOW) }
+    fn mark(&self, _: &Self::Drop) -> DropMark {
+        DropMark::Into(WINDOW)
+    }
 }
 
 impl WindowDropTarget<OsFiles> for OnWindow {
@@ -265,14 +271,20 @@ impl Component for PositionalWindow<'_> {
     type Style = PlainStyle;
     type Output = Response;
 
-    fn style(_: &StyleCx<'_>, _: PositionalWindowStyleKey) -> PlainStyle { PlainStyle::default() }
-    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 { WINDOW.size() }
+    fn style(_: &StyleCx<'_>, _: PositionalWindowStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        WINDOW.size()
+    }
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         if let Some(files) = cx.window_drop_target(&OnPositionalWindow) {
             self.landed.borrow_mut().window.push(files);
         }
     }
-    fn finish(self, cx: Cx<'_, Self>) -> Response { cx.response.clone() }
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
 }
 
 #[trial]

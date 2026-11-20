@@ -31,7 +31,9 @@ fn recent_files_follow_the_supplied_list_when_cleared() {
         let current = supplied.borrow().clone();
         let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &current)
             .drop_hint("Drop files here")
-            .section(StartPlace::BeforeRecent, |ui, _| { Text::new("Welcome").show(ui); })
+            .section(StartPlace::BeforeRecent, |ui, _| {
+                Text::new("Welcome").show(ui);
+            })
             .show(ui);
         for action in out.actions {
             match action {
