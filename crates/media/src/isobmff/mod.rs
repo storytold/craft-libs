@@ -18,6 +18,7 @@ mod config_fields;
 mod demux;
 mod error;
 mod mux;
+mod parameter_sets;
 
 pub use crate::source::{ByteSource, ReadSeekSource};
 pub use bytes::FourCc;
@@ -30,3 +31,4 @@ pub use config_fields::{avcc_length_size, dac3_layout, dec3_layout, esds_object_
 pub use demux::{Edit, Metadata, Mp4File, Sample, SampleGroup, Track, TrackKind, open};
 pub use error::{Error, Result};
 pub use mux::{Brand, FragmentedWriter, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
+pub use parameter_sets::{AvcSps, HevcSps};
