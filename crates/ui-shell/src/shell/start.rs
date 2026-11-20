@@ -43,6 +43,7 @@ const CARD_ZOOM: f32 = 2.0;
 /// The width and height parts of a card's picture.
 const PICTURE_WIDE: u16 = 16;
 const PICTURE_HIGH: u16 = 9;
+const HOME_RECENT_PICTURE_ASPECT: f32 = 3.0 / 2.0;
 
 /// The number of recent files shown until `max_recent` says otherwise.
 const RECENT_SHOWN: usize = 12;
@@ -409,7 +410,8 @@ impl StartScreen<'_> {
             if let (true, Some(hint), Some((center, wide))) = (files.is_empty(), page.drop_hint, drop_area) {
                 home_drop(&page, ui, hint, center, wide);
             } else {
-                recent_section(&page, ui, &view, &sort, current_view, &files);
+                let desktop_home = drop_area.is_some_and(|(_, wide)| wide);
+                recent_section(&page, ui, &view, &sort, current_view, &files, desktop_home);
             }
             if let Some(pinned) = pinned {
                 pinned_section(&page, ui, pinned);
@@ -646,6 +648,7 @@ fn recent_section(
     sort: &RefCell<Bind<'_, RecentSort>>,
     current: RecentView,
     files: &[RecentFile],
+    desktop_home: bool,
 ) {
     let words = page.words;
     let modes = [
@@ -698,7 +701,9 @@ fn recent_section(
             let file_of = |path: &PathBuf| files.iter().find(|file| &file.path == path);
             let source = keyed(files, |file: &RecentFile| file.path.clone()).with_text(|file| Cow::Borrowed(file.name.as_str()));
             let (response, (opened, removed)) = if current == RecentView::Grid {
-                let out = page.grid::<PathBuf>(words.recent.clone(), true).show_items(ui, &source, &mut |path, _| {
+                let grid = page.grid::<PathBuf>(words.recent.clone(), true);
+                let grid = if desktop_home { grid.aspect(HOME_RECENT_PICTURE_ASPECT).regular_card_padding() } else { grid };
+                let out = grid.show_items(ui, &source, &mut |path, _| {
                     let Some(file) = file_of(path) else { return Tile::new(Label::Empty) };
                     page.tile(&file.name, page.age(file.opened), ThumbKey::Recent(file.path.clone()))
                         .corner_action(IconId::new("close"), StartRecentCommands::Remove)

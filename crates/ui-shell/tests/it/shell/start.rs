@@ -138,6 +138,48 @@ fn the_home_screen_places_navigation_to_the_left_of_recent_files() {
     assert!(rect("GitHub").top() - rect("Discord").bottom() >= 6.0);
 }
 
+/// A desktop Recent tile gives its picture and filename room while keeping the whole card clickable.
+#[trial]
+fn desktop_home_recent_cards_give_the_picture_and_caption_room() {
+    use egui::{Shape, pos2, vec2};
+
+    let (mut fixture, log) = home_screen(true);
+    fixture.room(vec2(1100.0, 700.0)).settle();
+    let card = fixture.by_label("Poster.psd").expect("the recent file shows").rect;
+    let shapes = fixture.frame_shapes();
+    let picture = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Rect(shape)
+                if card.contains_rect(shape.rect)
+                    && shape.rect.width() > card.width() * 0.8
+                    && shape.rect.width() < card.width() - 1.0
+                    && shape.rect.height() > 100.0 =>
+            {
+                Some(shape.rect)
+            }
+            _ => None,
+        })
+        .expect("the tile paints an inset picture well");
+    let caption = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            Shape::Text(text) if text.galley.text() == "Poster.psd" => Some(text.pos),
+            _ => None,
+        })
+        .expect("the tile paints its filename");
+
+    assert!((390.0..400.0).contains(&card.width()), "{card:?}");
+    assert!(card.height() >= 285.0, "there is more vertical room: {card:?}");
+    assert!(picture.left() - card.left() >= 8.0, "the picture has horizontal padding: {picture:?}");
+    assert!(picture.top() - card.top() >= 8.0, "the picture has top padding: {picture:?}");
+    assert!(caption.x - card.left() >= 8.0 && caption.y - picture.bottom() >= 8.0, "the filename has space: {caption:?}");
+
+    log.borrow_mut().clear();
+    fixture.click_at(pos2(card.left() + 3.0, card.top() + 3.0)).settle();
+    assert_eq!(*log.borrow(), vec![StartAction::OpenRecent(PathBuf::from("/tmp/work/Poster.psd"))]);
+}
+
 /// The Home surround can have the same colour as ordinary separators. The title and drop card still need visible ink.
 #[trial]
 fn the_home_title_and_drop_card_keep_their_outlines_visible() {

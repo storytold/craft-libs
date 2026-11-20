@@ -121,8 +121,8 @@ pub(super) struct AroundPicture {
 }
 
 impl AroundPicture {
-    fn of(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, place).around(place, detail);
+    fn of(cx: &StyleCx<'_>, card: bool, regular_card_padding: bool) -> AroundPicture {
+        let around = |place: CaptionPlace, detail: bool| Sizes::of(cx, card, place, regular_card_padding).around(place, detail);
         AroundPicture {
             below: around(CaptionPlace::Below, false),
             below_detail: around(CaptionPlace::Below, true),
@@ -145,11 +145,12 @@ impl AroundPicture {
 impl Sizes {
     /// The sizes of a tile with its caption in `place`. A bare tile keeps only the room its selection ring draws in, so
     /// a grid packs bare tiles close.
-    fn of(cx: &StyleCx<'_>, card: bool, place: CaptionPlace) -> Sizes {
+    fn of(cx: &StyleCx<'_>, card: bool, place: CaptionPlace, regular_card_padding: bool) -> Sizes {
         let (tokens, control) = (cx.tokens, cx.control());
         let line = tokens.typography.get(TypeRole::Caption).line_height;
         let name_line = if card { tokens.typography.get(TypeRole::BodyStrong).line_height } else { line };
         let inset = match (card, place) {
+            (true, _) if regular_card_padding => tokens.space.pad.regular,
             (true, _) => tokens.space.pad.control,
             (false, CaptionPlace::None) => tokens.space.gap.tight,
             (false, _) => tokens.space.gap.inline,
@@ -297,6 +298,9 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop]
     caption: CaptionPlace,
+    /// The grid asked for the theme's regular padding around a framed card.
+    #[style_key]
+    regular_card_padding: bool,
     /// The card has a line for the detail, whether this tile has one or not: the grid's, applied to its tiles.
     #[prop]
     detail_line: bool,
@@ -375,6 +379,7 @@ impl<'a> Tile<'a> {
         Tile {
             common: Common::new(),
             caption: CaptionPlace::Below,
+            regular_card_padding: false,
             detail_line: false,
             card: false,
             detail: None,
@@ -454,12 +459,17 @@ impl<'a> Tile<'a> {
     /// What a tile adds around its picture: its padding, the caption band under the picture or the column at its
     /// reading start. A tile grid sizes a tile as the picture plus this.
     pub fn around_picture(cx: &StyleCx<'_>, place: CaptionPlace, detail: bool) -> Around {
-        Sizes::of(cx, false, place).around(place, detail)
+        Sizes::of(cx, false, place, false).around(place, detail)
     }
 
     /// What a tile adds around its picture for every caption arrangement.
-    pub(super) fn around(cx: &StyleCx<'_>, card: bool) -> AroundPicture {
-        AroundPicture::of(cx, card)
+    pub(super) fn around(cx: &StyleCx<'_>, card: bool, regular_card_padding: bool) -> AroundPicture {
+        AroundPicture::of(cx, card, regular_card_padding)
+    }
+
+    pub(super) fn with_regular_card_padding(mut self, enabled: bool) -> Self {
+        self.regular_card_padding = enabled;
+        self
     }
 
     /// Whether the caption band holds a detail line.
@@ -627,7 +637,7 @@ impl Component for Tile<'_> {
         let (state, text) = (&colors.state, &colors.text);
         let clear = Rgba::TRANSPARENT;
         let c = |rgba: Rgba| cx.color(rgba);
-        let sizes = Sizes::of(cx, key.card, key.caption);
+        let sizes = Sizes::of(cx, key.card, key.caption, key.regular_card_padding);
         // Selection and hover are rings around the picture; only a card has a fill of its own.
         let fill = if key.card {
             let raised = colors.surface.raised;
