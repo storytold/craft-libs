@@ -44,6 +44,15 @@ impl Matrix {
             _ => None,
         }
     }
+    /// The ISO/IEC 23091-2 `matrix_coefficients` code to write for this matrix.
+    /// [`Matrix::Bt601`] writes 6 (SMPTE 170M); code 5 has the same coefficients.
+    pub fn to_code(self) -> u8 {
+        match self {
+            Matrix::Bt709 => 1,
+            Matrix::Bt601 => 6,
+            Matrix::Bt2020Ncl => 9,
+        }
+    }
 }
 
 /// Transfer characteristics.
@@ -73,6 +82,17 @@ impl Transfer {
             _ => None,
         }
     }
+    /// The ISO/IEC 23091-2 `transfer_characteristics` code to write for this transfer.
+    /// [`Transfer::Bt709`] writes 1; codes 6, 14 and 15 also read as it.
+    pub fn to_code(self) -> u8 {
+        match self {
+            Transfer::Bt709 => 1,
+            Transfer::Linear => 8,
+            Transfer::Srgb => 13,
+            Transfer::Pq => 16,
+            Transfer::Hlg => 18,
+        }
+    }
 }
 
 /// Chromaticity primaries.
@@ -84,6 +104,32 @@ pub enum Primaries {
     Bt601_525,
     Bt2020,
     P3D65,
+}
+
+impl Primaries {
+    /// From an ISO/IEC 23091-2 `colour_primaries` code.
+    pub fn from_code(c: u8) -> Option<Primaries> {
+        match c {
+            1 => Some(Primaries::Bt709),
+            5 => Some(Primaries::Bt601_625),
+            // SMPTE 240M (7) has the same primaries as SMPTE 170M (6).
+            6 | 7 => Some(Primaries::Bt601_525),
+            9 => Some(Primaries::Bt2020),
+            // H.273 table 2: code 11 is DCI-P3 with its own white point, not D65.
+            12 => Some(Primaries::P3D65),
+            _ => None,
+        }
+    }
+    /// The ISO/IEC 23091-2 `colour_primaries` code to write for these primaries.
+    pub fn to_code(self) -> u8 {
+        match self {
+            Primaries::Bt709 => 1,
+            Primaries::Bt601_625 => 5,
+            Primaries::Bt601_525 => 6,
+            Primaries::Bt2020 => 9,
+            Primaries::P3D65 => 12,
+        }
+    }
 }
 
 /// Quantisation range of integer Y'CbCr samples.
@@ -436,5 +482,41 @@ mod tests {
         assert_eq!(Matrix::from_code(6), Some(Matrix::Bt601));
         assert_eq!(Transfer::from_code(16), Some(Transfer::Pq));
         assert_eq!(Transfer::from_code(99), None);
+    }
+
+    #[test]
+    fn codes_written_are_the_h273_values() {
+        assert_eq!([Matrix::Bt709, Matrix::Bt601, Matrix::Bt2020Ncl].map(Matrix::to_code), [1, 6, 9]);
+        assert_eq!([Transfer::Bt709, Transfer::Linear, Transfer::Srgb, Transfer::Pq, Transfer::Hlg].map(Transfer::to_code), [1, 8, 13, 16, 18]);
+        assert_eq!(
+            [Primaries::Bt709, Primaries::Bt601_625, Primaries::Bt601_525, Primaries::Bt2020, Primaries::P3D65].map(Primaries::to_code),
+            [1, 5, 6, 9, 12]
+        );
+    }
+
+    #[test]
+    fn primaries_codes() {
+        assert_eq!(Primaries::from_code(1), Some(Primaries::Bt709));
+        assert_eq!(Primaries::from_code(5), Some(Primaries::Bt601_625));
+        assert_eq!(Primaries::from_code(6), Some(Primaries::Bt601_525));
+        assert_eq!(Primaries::from_code(7), Some(Primaries::Bt601_525));
+        assert_eq!(Primaries::from_code(9), Some(Primaries::Bt2020));
+        assert_eq!(Primaries::from_code(12), Some(Primaries::P3D65));
+        for c in [0, 2, 3, 4, 8, 10, 11, 13, 22, 255] {
+            assert_eq!(Primaries::from_code(c), None, "{c}");
+        }
+    }
+
+    #[test]
+    fn written_codes_read_back() {
+        for m in [Matrix::Bt601, Matrix::Bt709, Matrix::Bt2020Ncl] {
+            assert_eq!(Matrix::from_code(m.to_code()), Some(m));
+        }
+        for t in [Transfer::Bt709, Transfer::Srgb, Transfer::Linear, Transfer::Pq, Transfer::Hlg] {
+            assert_eq!(Transfer::from_code(t.to_code()), Some(t));
+        }
+        for p in [Primaries::Bt709, Primaries::Bt601_625, Primaries::Bt601_525, Primaries::Bt2020, Primaries::P3D65] {
+            assert_eq!(Primaries::from_code(p.to_code()), Some(p));
+        }
     }
 }
