@@ -124,6 +124,30 @@ fn escape_mid_drag_cancels_the_tool_once_and_its_release_reaches_nothing() {
 }
 
 #[trial]
+fn a_release_before_escape_in_one_frame_commits_the_drag() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    let to = from + BY;
+    fixture.press_at(from).move_to(to);
+    fixture.fixture().frame(vec![pointer::release(to), key_press(Key::Escape, Modifiers::NONE)]).idle(2);
+    let tool = fixture.tool();
+    assert_eq!(tool.count(Call::Release), 1, "the earlier release commits: {:?}", tool.calls);
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 0, "Escape does not cancel an ended drag: {:?}", tool.calls);
+}
+
+#[trial]
+fn escape_before_a_release_in_one_frame_cancels_the_drag() {
+    let mut fixture = ToolFixture::new("Document", Recorder::default());
+    let from = fixture.canvas().rect.center();
+    let to = from + BY;
+    fixture.press_at(from).move_to(to);
+    fixture.fixture().frame(vec![key_press(Key::Escape, Modifiers::NONE), pointer::release(to)]).idle(2);
+    let tool = fixture.tool();
+    assert_eq!(tool.count(Call::Cancel(CancelReason::Escape)), 1, "the earlier Escape cancels: {:?}", tool.calls);
+    assert_eq!(tool.count(Call::Release), 0, "the later release does not commit: {:?}", tool.calls);
+}
+
+#[trial]
 fn a_press_on_a_canvas_control_never_reaches_the_tool_and_one_away_from_it_does() {
     let crop = Rc::new(RefCell::new(craft_behavior::geometry::CropBox::upright(craft_behavior::kurbo::Rect::new(20.0, 20.0, 100.0, 80.0))));
     let shown = Rc::clone(&crop);

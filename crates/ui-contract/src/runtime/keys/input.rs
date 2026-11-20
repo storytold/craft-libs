@@ -486,13 +486,19 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
         let mut batch = Batch::default();
         let mut visible = None;
         let mut later = Vec::new();
+        let mut released = false;
         stage.keyed = false;
         events.retain(|arrived| {
             let read = raw_input::key_event(&arrived.event, os, latin);
-            if !later.is_empty() || strip.ends_pass(&batch, &read) {
+            // Sensing commits a release during the pass, after the key stage. Let it finish before a later Escape;
+            // otherwise Escape would cancel a gesture that the user had already released.
+            let escape_after_release =
+                released && matches!(&read, KeyEvent::Press { key, input, .. } if matches!(strip.use_of(*key, input), PressUse::Escape));
+            if !later.is_empty() || escape_after_release || strip.ends_pass(&batch, &read) {
                 later.push(arrived.clone());
                 return false;
             }
+            released |= matches!(arrived.event, egui::Event::PointerButton { pressed: false, .. });
             if requested_paste && let KeyEvent::Clip { command: EditCommand::Paste, pasted: Some(content) } = &read {
                 let combined = requested_content.get_or_insert_default();
                 combined.text = content.text.clone().or(combined.text.take());
