@@ -14,7 +14,10 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::js_sys;
 
-use crate::{Inbox, Incoming, Mode, Outgoing, VERSION, file_name, message_type};
+use crate::{
+    FontIndex, FontsProblem, Inbox, Incoming, MAX_FONT_INDEX_URL_BYTES, MAX_FONT_INDEXES, Mode, Outgoing, VERSION, check_font_index_len,
+    check_font_index_url, file_name, message_type,
+};
 
 /// A file the host passes in, not yet copied into the app's memory: check its size first.
 pub enum FileData {
@@ -34,6 +37,43 @@ impl FileData {
     }
 }
 
+/// A font index a host gives, checked for shape only, its `bytes` still a view: the bridge copies
+/// no index's bytes into wasm memory until the app takes the set ([`FontIndexView::copy`]), so an app
+/// that ignores `fonts` holds only the `url` and `sha256` strings (at most 1024 and 64 bytes). In
+/// parent mode a queued message still keeps the browser's structured clone of each whole buffer
+/// alive. In page mode the buffers must come from the app page's own realm. Mirrors [`FontIndex`].
+#[derive(Debug, Clone)]
+pub enum FontIndexView {
+    /// `bytes`, 1 to [`crate::MAX_FONT_INDEX_BYTES`] of them, viewed in place.
+    Bytes(js_sys::Uint8Array),
+    /// An `https` URL and the sha256 of the index file there: copied, at most
+    /// [`MAX_FONT_INDEX_URL_BYTES`] and 64 bytes once read. (Before the URL is judged it is copied
+    /// from a string of at most that many UTF-16 units, so at most 3 times as many bytes.)
+    Url { url: String, sha256: String },
+}
+
+impl FontIndexView {
+    /// The contract's [`FontIndex`]. The bytes' length is checked again, as a view's buffer may have
+    /// been transferred since the message was read, and only then are they copied through a view of
+    /// that fixed length (a growing buffer cannot change it): at most [`crate::MAX_FONT_INDEX_BYTES`]
+    /// per index and 16 times that for a set.
+    pub fn copy(&self) -> Result<FontIndex, FontsProblem> {
+        match self {
+            Self::Bytes(view) => {
+                let len = byte_length(view)?;
+                let fixed = view.subarray(0, len as u32);
+                if fixed.length() as usize != len {
+                    return Err(FontsProblem::NoBytes);
+                }
+                let mut bytes = vec![0; len];
+                fixed.copy_to(&mut bytes);
+                FontIndex::from_bytes(bytes)
+            }
+            Self::Url { url, sha256 } => FontIndex::from_url(url, sha256),
+        }
+    }
+}
+
 /// A message from the host.
 pub enum Message {
     /// What the host supports; `handoff`: it routes files the app hands off.
@@ -43,6 +83,12 @@ pub enum Message {
     /// Attach one PDF page to the current drawing without opening another document.
     /// Bytes stay a view until the app checks their length. Page numbers start at one.
     AttachPdf { name: String, bytes: js_sys::Uint8Array, page: u32, insertion: [f64; 3], width: f64, height: f64 },
+    /// Font indexes the host supplies (RFC-0034), each checked for shape only and its bytes still a
+    /// view ([`FontIndexView::copy`] copies them): the app checks the indexes' contents itself and
+    /// takes the list whole or not at all. A list the bridge refuses arrives as its problem, for the
+    /// app to report with `failed` (no `id`, the text starting `fonts:`). The host's sending it is
+    /// its consent; a script able to run in the host page or the app's frame can send it too.
+    Fonts { indexes: Result<Vec<FontIndexView>, FontsProblem> },
     /// The save with this `id` is stored.
     Saved { id: String },
     /// The host gave a handed-off file to the app that edits it.
@@ -162,7 +208,8 @@ impl Host {
         self.post(Outgoing::Save, &fields, Some(&buffer))
     }
 
-    /// The app couldn't start, couldn't take a document, or a save went unconfirmed (`id`).
+    /// The app couldn't start, couldn't take a document, a save went unconfirmed (`id`), or the
+    /// bridge refused a `fonts` list ([`Message::Fonts`]: no `id`, and the error starts `fonts:`).
     pub fn post_failed(&self, error: &str, id: Option<&str>) -> Result<(), String> {
         let mut fields = vec![("error", JsValue::from(error))];
         if let Some(id) = id {
@@ -201,7 +248,9 @@ impl Host {
     }
 }
 
-/// The message a host's object describes, or `None` when a required field is missing.
+/// The message a host's object describes, or `None` when a required field is missing. `fonts` is
+/// the exception: it always reaches the app, with its [`FontsProblem`] in place of the indexes, even
+/// when `indexes` is missing.
 fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
     Some(match kind {
         Incoming::Host => Message::Host {
@@ -237,11 +286,78 @@ fn read(kind: Incoming, data: &JsValue) -> Option<Message> {
                 height,
             }
         }
+        Incoming::Fonts => Message::Fonts { indexes: font_indexes(&get(data, "indexes")) },
         Incoming::Saved => Message::Saved { id: string(data, "id")? },
         Incoming::HandoffDone => {
             Message::HandoffDone { name: string(data, "name").unwrap_or_default(), app: string(data, "app").unwrap_or_default() }
         }
     })
+}
+
+/// The `indexes` of a `fonts` message: all of them (one or more), or the problem with the first one
+/// refused. The host is trusted and its message is plain data (see the crate's `fonts` notes), so
+/// this reads it as `open` does.
+fn font_indexes(list: &JsValue) -> Result<Vec<FontIndexView>, FontsProblem> {
+    let list = list.dyn_ref::<js_sys::Array>().ok_or(FontsProblem::NotAList)?;
+    let count = list.length();
+    if count == 0 {
+        return Err(FontsProblem::NoIndexes);
+    }
+    if count as usize > MAX_FONT_INDEXES {
+        return Err(FontsProblem::TooMany);
+    }
+    (0..count).map(|i| font_index(&list.get(i))).collect()
+}
+
+/// One entry: exactly `{bytes}` or `{url, sha256}`, where `undefined` and `null` count as absent.
+fn font_index(entry: &JsValue) -> Result<FontIndexView, FontsProblem> {
+    if !entry.is_object() {
+        return Err(FontsProblem::BadEntry);
+    }
+    let (bytes, url, sha256) = (get(entry, "bytes"), get(entry, "url"), get(entry, "sha256"));
+    let absent = |v: &JsValue| v.is_undefined() || v.is_null();
+    match (absent(&bytes), absent(&url)) {
+        (false, true) if absent(&sha256) => font_bytes(&bytes).map(FontIndexView::Bytes),
+        (true, false) => {
+            // `length()` counts UTF-16 units, so the URL is copied from at most 1024 units: at most
+            // 3072 bytes, and `check_font_index_url` refuses one over 1024 bytes. A sha256 is copied only at 64.
+            let Some(url) = url.dyn_ref::<js_sys::JsString>().filter(|u| u.length() as usize <= MAX_FONT_INDEX_URL_BYTES) else {
+                return Err(FontsProblem::BadUrl);
+            };
+            let sha256 = sha256.dyn_ref::<js_sys::JsString>().filter(|s| s.length() == 64).map(String::from).unwrap_or_default();
+            let url = String::from(url);
+            // The URL is judged before the sha256, as `FontIndex::from_url` judges them.
+            check_font_index_url(&url, &sha256)?;
+            Ok(FontIndexView::Url { url, sha256 })
+        }
+        _ => Err(FontsProblem::BadEntry),
+    }
+}
+
+/// `bytes` as a view, not copied: a `Uint8Array` as it is, an `ArrayBuffer` after its length is read
+/// (a detached one reads 0 and never reaches the constructor).
+fn font_bytes(bytes: &JsValue) -> Result<js_sys::Uint8Array, FontsProblem> {
+    if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+        byte_length(array)?;
+        Ok(array.clone())
+    } else if let Some(buffer) = bytes.dyn_ref::<js_sys::ArrayBuffer>() {
+        byte_length(buffer)?;
+        Ok(js_sys::Uint8Array::new(buffer))
+    } else {
+        Err(FontsProblem::BadEntry)
+    }
+}
+
+/// The length of an `ArrayBuffer` or `Uint8Array`, checked: `byteLength` is read as a float, since
+/// the `u32` getter wraps a buffer of 4 GiB or more to a small length.
+fn byte_length(bytes: &JsValue) -> Result<usize, FontsProblem> {
+    let length = get(bytes, "byteLength").as_f64().unwrap_or(0.0);
+    if length > crate::MAX_FONT_INDEX_BYTES as f64 {
+        return Err(FontsProblem::TooLarge);
+    }
+    let length = length as usize;
+    check_font_index_len(length)?;
+    Ok(length)
 }
 
 /// `file` (a `Blob`; its `size` field is ignored for the Blob's own) or `bytes` (an `ArrayBuffer` or `Uint8Array`), not copied.
@@ -359,6 +475,103 @@ mod tests {
             js_sys::Reflect::set(&data, &key.into(), &value).unwrap();
             assert!(read(Incoming::AttachPdf, &data).is_none(), "invalid {key} must be dropped");
         }
+    }
+
+    fn index_list(entries: &[JsValue]) -> JsValue {
+        let list = js_sys::Array::new();
+        for entry in entries {
+            list.push(entry);
+        }
+        obj(&[("indexes", list.into())])
+    }
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// What the app is handed for a `fonts` message: the indexes, or why the bridge refused the list.
+    fn fonts(data: &JsValue) -> Result<Vec<FontIndex>, FontsProblem> {
+        match read(Incoming::Fonts, data) {
+            // A list the bridge took must copy; one it refuses is the bridge's problem, not the copy's.
+            Some(Message::Fonts { indexes }) => Ok(indexes?.iter().map(|index| index.copy().expect("a list the bridge took copies")).collect()),
+            _ => panic!("a fonts message always reaches the app"),
+        }
+    }
+
+    /// `buffer` with its contents transferred away: it reads 0 bytes, and `Uint8Array::new` on it throws.
+    fn detach(buffer: &js_sys::ArrayBuffer) {
+        let global = js_sys::global();
+        let clone = js_sys::Reflect::get(&global, &JsValue::from_str("structuredClone")).and_then(|f| f.dyn_into::<js_sys::Function>());
+        let options = obj(&[("transfer", js_sys::Array::of1(buffer).into())]);
+        assert!(matches!(clone, Ok(f) if f.call2(&global, buffer, &options).is_ok()), "structuredClone transfers it away");
+    }
+
+    fn good_url() -> JsValue {
+        obj(&[("url", "https://fonts.example/i.json".into()), ("sha256", SHA.into())])
+    }
+
+    #[wasm_bindgen_test]
+    fn fonts_take_both_forms_of_index() {
+        let array = js_sys::Uint8Array::from(&[1u8, 2, 3][..]);
+        let source = js_sys::Uint8Array::from(&[0u8, 1, 2, 3, 4, 5, 6, 7][..]);
+        let window = js_sys::Uint8Array::new_with_byte_offset_and_length(&source.buffer(), 2, 3);
+        let data = index_list(&[good_url(), obj(&[("bytes", array.into())]), obj(&[("bytes", buffer(2).into())]), obj(&[("bytes", window.into())])]);
+        assert_eq!(
+            fonts(&data),
+            Ok(vec![
+                FontIndex::Url { url: "https://fonts.example/i.json".into(), sha256: SHA.into() },
+                FontIndex::Bytes(vec![1, 2, 3]),
+                FontIndex::Bytes(vec![0, 0]),
+                FontIndex::Bytes(vec![2, 3, 4]),
+            ])
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn a_fonts_list_has_one_to_sixteen_entries() {
+        for data in [obj(&[]), obj(&[("indexes", "https://fonts.example/i.json".into())]), obj(&[("indexes", obj(&[]))]), JsValue::NULL] {
+            assert_eq!(fonts(&data), Err(FontsProblem::NotAList));
+        }
+        assert_eq!(fonts(&index_list(&[])), Err(FontsProblem::NoIndexes));
+        let many: Vec<JsValue> = (0..=MAX_FONT_INDEXES).map(|_| good_url()).collect();
+        assert_eq!(fonts(&index_list(&many)), Err(FontsProblem::TooMany));
+        assert_eq!(fonts(&index_list(&many[1..])).map(|i| i.len()), Ok(MAX_FONT_INDEXES));
+    }
+
+    #[wasm_bindgen_test]
+    fn a_fonts_message_with_one_bad_entry_is_refused_whole_with_its_problem() {
+        let a = "https://a.example/i";
+        let detached = buffer(8);
+        detach(&detached);
+        for (entry, problem) in [
+            (JsValue::from_str("a string"), FontsProblem::BadEntry),
+            (obj(&[]), FontsProblem::BadEntry),
+            (obj(&[("bytes", buffer(1).into()), ("url", a.into()), ("sha256", SHA.into())]), FontsProblem::BadEntry),
+            (obj(&[("bytes", buffer(1).into()), ("sha256", SHA.into())]), FontsProblem::BadEntry),
+            (obj(&[("bytes", "text".into())]), FontsProblem::BadEntry),
+            (obj(&[("bytes", buffer(0).into())]), FontsProblem::NoBytes),
+            (obj(&[("bytes", js_sys::Uint8Array::new_with_length(0).into())]), FontsProblem::NoBytes),
+            (obj(&[("bytes", js_sys::Uint8Array::new_with_length(crate::MAX_FONT_INDEX_BYTES as u32 + 1).into())]), FontsProblem::TooLarge),
+            (obj(&[("bytes", detached.into())]), FontsProblem::NoBytes),
+            (obj(&[("bytes", buffer(crate::MAX_FONT_INDEX_BYTES as u32 + 1).into())]), FontsProblem::TooLarge),
+            (obj(&[("url", 3.into()), ("sha256", SHA.into())]), FontsProblem::BadUrl),
+            (obj(&[("url", "http://a.example/i".into()), ("sha256", SHA.into())]), FontsProblem::BadUrl),
+            (obj(&[("url", a.into())]), FontsProblem::BadSha256),
+            (obj(&[("url", a.into()), ("sha256", SHA.to_uppercase().into())]), FontsProblem::BadSha256),
+        ] {
+            assert_eq!(fonts(&index_list(&[good_url(), entry])), Err(problem));
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn the_bytes_are_copied_only_when_the_app_takes_them() {
+        let buffer = buffer(4);
+        let Some(Message::Fonts { indexes: Ok(indexes) }) = read(Incoming::Fonts, &index_list(&[obj(&[("bytes", buffer.clone().into())])])) else {
+            panic!("a valid list is read");
+        };
+        // Written after the message was read: the app's copy sees it, so nothing was copied before.
+        js_sys::Uint8Array::new(&buffer).fill(7, 0, 4);
+        assert_eq!(indexes[0].copy(), Ok(FontIndex::Bytes(vec![7; 4])));
+        detach(&buffer);
+        assert_eq!(indexes[0].copy(), Err(FontsProblem::NoBytes), "transferred away before the app took it");
     }
 
     fn buffer(len: u32) -> js_sys::ArrayBuffer {

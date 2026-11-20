@@ -10,12 +10,35 @@
 //! | `host` | host → app | `version`, `handoff?` (`true`: the host routes hand-offs) |
 //! | `open` | host → app | `name`, and `bytes` or `file` + `size` |
 //! | `attach-pdf` | host → app | `name`, `bytes`, `page` (from 1), `insertion` ([x,y,z]), `width`, `height` in drawing units |
+//! | `fonts` | host → app | `indexes`: 1 to [`MAX_FONT_INDEXES`] entries, each `{bytes}` or `{url, sha256}` (see [`FontIndex`]) |
 //! | `save` | app → host | `name`, `bytes`, `id?`, `saveAs?` |
 //! | `saved` | host → app | `id` |
 //! | `dirty` | app → host | `dirty` |
 //! | `failed` | app → host | `error`, `id?` |
 //! | `handoff` | app → host | `name`, and `bytes` or `file` + `size` |
 //! | `handoff-done` | host → app | `name`, `app` |
+//!
+//! `fonts` hands the app font indexes in craft-font-index format (RFC-0034, storytold/craft-libs#2331).
+//! The host is trusted (RFC-0034 section 7). Its message is plain data, as structured clone gives in
+//! parent mode: arrays, objects, strings, `ArrayBuffer`, `Uint8Array`. A page host that passes an
+//! object with getters, a `Proxy`, a subclass or a view of the app's own memory is outside the
+//! contract, and the bridge promises nothing for it. The host's sending `fonts` is its consent to
+//! fetch from those indexes; a script able to run in the host page (page mode) or the app's frame
+//! (parent mode) can dispatch one too, and a document and the app's command channel give no way to.
+//! The bridge only catches honest mistakes, as it does for `open`, and does not parse an index or a
+//! URL: the app checks each index itself (`craft-font-store`'s `Index::from_user_bytes` rules) and
+//! takes the whole list or none of it. A list the bridge refuses is refused whole:
+//! `web::Message::Fonts` carries the [`FontsProblem`] in place of the indexes, and the app reports it
+//! with `failed` (no `id`; the error starts `fonts:`, and an app starts its own fonts refusals with
+//! `fonts:` too) and keeps the set it had. An app that does not handle `fonts` ignores it, so silence
+//! tells the host nothing. A host sends `fonts` after `ready`, and again after every `ready`: a
+//! reloaded app starts with no host set, and a `fonts` sent before the app listens is lost.
+//! Each `fonts` message replaces the host's set: a host adds an index by sending the whole set
+//! again, and an index it leaves out is gone. An app applies sets in the order they arrive: a later
+//! accepted set replaces an earlier one, and a refused one changes nothing. A host that transfers
+//! `bytes` gives the buffer up, so it keeps its own copy if it may send the set again. In page mode
+//! `bytes` come from the app page's own realm (an `ArrayBuffer` from another frame is not one).
+//! An app's own errors about a document never start `fonts:`, so a host can tell the two apart.
 //!
 //! A host answers `saved` only for a `save` that carries an `id`; an app that sends none treats a
 //! save as done once it is posted. Fields marked `?` are optional, so the bridges shipped before
@@ -41,6 +64,114 @@ pub const VERSION: &str = "1";
 
 /// Longest file name taken from a host or put in a message, in characters.
 pub const MAX_NAME_CHARS: usize = 255;
+
+/// The most indexes one `fonts` message may carry.
+pub const MAX_FONT_INDEXES: usize = 16;
+
+/// The most bytes one index's `bytes` may hold (the size `craft-font-store` reads an index up to).
+pub const MAX_FONT_INDEX_BYTES: usize = 32 << 20;
+
+/// The longest index URL taken, in bytes: `craft-font-store`'s bound for a string (`MAX_STR`).
+pub const MAX_FONT_INDEX_URL_BYTES: usize = 1024;
+
+/// A font index a host gives: the constructors check the shape, and the app parses it and refuses a
+/// bad one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontIndex {
+    /// An index in craft-font-index format (JSON or gzipped JSON), at most [`MAX_FONT_INDEX_BYTES`].
+    Bytes(Vec<u8>),
+    /// An index to fetch: an `https` URL and the lowercase hex sha256 of the file there.
+    Url { url: String, sha256: String },
+}
+
+/// Why a `fonts` message is refused. The whole message is: nothing is taken from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontsProblem {
+    /// `indexes` is missing or not an array.
+    NotAList,
+    /// `indexes` is empty: a host gives one or more indexes.
+    NoIndexes,
+    /// More than [`MAX_FONT_INDEXES`] entries.
+    TooMany,
+    /// An entry that is not an object with exactly one of `bytes` and `url`: neither, `{bytes, url}`,
+    /// `{bytes, sha256}`, or a `bytes` that is neither an `ArrayBuffer` nor a `Uint8Array` (in page
+    /// mode one from the app page's own realm). A field
+    /// that is `undefined` or `null` counts as absent.
+    BadEntry,
+    /// `bytes` that are empty or were transferred away (a detached buffer reads as empty).
+    NoBytes,
+    /// `bytes` over [`MAX_FONT_INDEX_BYTES`].
+    TooLarge,
+    /// A `url` that is not a string, is not lowercase `https://` with something after it, is over
+    /// [`MAX_FONT_INDEX_URL_BYTES`], or holds a control character, whitespace or `\`. The bridge does
+    /// not parse the URL: one the browser refuses fails when the app fetches it, which the app
+    /// reports as `failed`.
+    BadUrl,
+    /// A `sha256` that is missing (`{url}` alone: it is required with `url`), not a string, or not 64
+    /// lowercase hex digits.
+    BadSha256,
+}
+
+impl std::fmt::Display for FontsProblem {
+    /// The reason, as an app puts it in `failed`: it starts `fonts:`, so a host can tell a refused
+    /// list from a failed document.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "fonts: {}",
+            match self {
+                Self::NotAList => "`indexes` is missing or is not a list of font indexes".to_string(),
+                Self::NoIndexes => "`indexes` is empty: give one or more font indexes".to_string(),
+                Self::TooMany => format!("`indexes` has more than {MAX_FONT_INDEXES} entries"),
+                Self::BadEntry => "an index is `{bytes}` or `{url, sha256}`, one of them, where `bytes` is an ArrayBuffer or Uint8Array".to_string(),
+                Self::NoBytes => "an index's `bytes` are empty or were transferred away".to_string(),
+                Self::TooLarge => format!("an index's `bytes` is over {} MiB", MAX_FONT_INDEX_BYTES >> 20),
+                Self::BadUrl => format!(
+                    "an index's `url` is a lowercase https:// URL string with something after https://, of at most {MAX_FONT_INDEX_URL_BYTES} bytes, without whitespace, control characters or backslashes"
+                ),
+                Self::BadSha256 => "an index's `sha256` is required with `url`: 64 lowercase hexadecimal digits".to_string(),
+            }
+        )
+    }
+}
+
+impl FontIndex {
+    /// An index by its bytes; refuses empty bytes and bytes over [`MAX_FONT_INDEX_BYTES`]. A caller
+    /// checks the length before it copies them.
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, FontsProblem> {
+        check_font_index_len(bytes.len())?;
+        Ok(Self::Bytes(bytes))
+    }
+
+    /// An index by its `https` URL and the sha256 of the file there; the URL is judged first.
+    pub fn from_url(url: &str, sha256: &str) -> Result<Self, FontsProblem> {
+        check_font_index_url(url, sha256)?;
+        Ok(Self::Url { url: url.to_string(), sha256: sha256.to_string() })
+    }
+}
+
+/// Refuse a URL and sha256 that [`FontIndex::from_url`] would refuse, without building the value.
+pub(crate) fn check_font_index_url(url: &str, sha256: &str) -> Result<(), FontsProblem> {
+    let lowercase_https = url.strip_prefix("https://").is_some_and(|rest| !rest.is_empty());
+    if !lowercase_https || url.len() > MAX_FONT_INDEX_URL_BYTES || url.chars().any(|c| c.is_control() || c.is_whitespace() || c == '\\') {
+        return Err(FontsProblem::BadUrl);
+    }
+    if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err(FontsProblem::BadSha256);
+    }
+    Ok(())
+}
+
+/// Refuse an index of `len` bytes that is empty or over [`MAX_FONT_INDEX_BYTES`], before it is copied.
+pub(crate) fn check_font_index_len(len: usize) -> Result<(), FontsProblem> {
+    if len == 0 {
+        Err(FontsProblem::NoBytes)
+    } else if len > MAX_FONT_INDEX_BYTES {
+        Err(FontsProblem::TooLarge)
+    } else {
+        Ok(())
+    }
+}
 
 /// How a page hosts the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +214,7 @@ pub enum Incoming {
     Host,
     Open,
     AttachPdf,
+    Fonts,
     Saved,
     HandoffDone,
 }
@@ -100,13 +232,14 @@ impl Outgoing {
 }
 
 impl Incoming {
-    pub const ALL: [Self; 5] = [Self::Host, Self::Open, Self::AttachPdf, Self::Saved, Self::HandoffDone];
+    pub const ALL: [Self; 6] = [Self::Host, Self::Open, Self::AttachPdf, Self::Fonts, Self::Saved, Self::HandoffDone];
 
     pub const fn kind(self) -> &'static str {
         match self {
             Self::Host => "host",
             Self::Open => "open",
             Self::AttachPdf => "attach-pdf",
+            Self::Fonts => "fonts",
             Self::Saved => "saved",
             Self::HandoffDone => "handoff-done",
         }
@@ -210,6 +343,26 @@ mod tests {
             assert_eq!(Incoming::parse("gridcraft", &message_type("gridcraft", kind.kind())), Some(kind));
         }
         assert_eq!(message_type("cadcraft", Outgoing::Handoff.kind()), "cadcraft:handoff");
+    }
+
+    #[test]
+    fn an_index_url_is_lowercase_https_within_its_bound_and_without_spaces() {
+        let sha = "0123456789abcdef".repeat(4);
+        let url = |len: usize| format!("https://a.example/{}", "x".repeat(len - "https://a.example/".len()));
+        assert!(FontIndex::from_url("https://fonts.example:8443/index.json?v=2", &sha).is_ok());
+        assert!(FontIndex::from_url(&url(MAX_FONT_INDEX_URL_BYTES), &sha).is_ok(), "the bound itself");
+        for refused in [
+            "http://fonts.example/i.json".to_string(),
+            "HTTPS://fonts.example/i.json".to_string(),
+            "https://".to_string(),
+            url(MAX_FONT_INDEX_URL_BYTES + 1),
+            "https://fonts.example/a b.json".to_string(),
+            "https://fonts.example/a\u{0}b.json".to_string(),
+            "https://fonts.example/a\nb.json".to_string(),
+            "https://fonts.example\\i.json".to_string(),
+        ] {
+            assert_eq!(FontIndex::from_url(&refused, &sha), Err(FontsProblem::BadUrl), "{refused:?}");
+        }
     }
 
     #[test]
