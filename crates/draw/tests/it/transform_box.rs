@@ -922,38 +922,43 @@ fn moved_by(h: &Harness) -> Vec2 {
 }
 
 #[trial]
-fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_no_jump() {
+fn a_drag_moves_the_box_once_the_pointer_has_gone_four_points_along_an_axis_and_then_by_its_whole_travel() {
     let mut h = upright();
-    let slop = craft_ui::testing::input::slop(h.fixture.ctx());
     // Inside, away from the reference point at the box's centre.
     let from = h.screen(Point::new(150.0, 120.0));
     frame(&mut h, vec![pointer::moved(from)]);
     frame(&mut h, vec![pointer::press(from)]);
     frame(&mut h, Vec::new());
     assert!(h.host.borrow().events.is_empty(), "a press alone moves nothing: {:?}", h.host.borrow().events);
-    // One step per frame, a third of the slop each, through the slop and past it.
-    for step in 1..=9 {
-        let offset = by(slop / 3.0 * step as f32, slop / 6.0 * step as f32);
+    // Under four points on both axes, straight or diagonal, the box stays.
+    for offset in [by(3.0, 0.0), by(0.0, 3.0), by(3.0, 3.0), by(-3.5, 2.0)] {
         frame(&mut h, vec![pointer::moved(from + offset)]);
-        assert!((moved_by(&h) - offset).length() < 1e-3, "step {step}: the box keeps the pointer's offset {offset:?}, moved {:?}", moved_by(&h));
+        assert_eq!(moved_by(&h), Vec2::ZERO, "{offset:?} moves nothing");
     }
-    let end = from + by(slop * 3.0, slop * 1.5);
-    frame(&mut h, vec![pointer::release(end)]);
+    assert!(h.host.borrow().events.is_empty(), "no gesture yet: {:?}", h.host.borrow().events);
+    // Four points along one axis applies the whole travel at once, and the box keeps up from there.
+    for offset in [by(4.0, 1.0), by(2.0, 1.0), by(30.0, 12.0)] {
+        frame(&mut h, vec![pointer::moved(from + offset)]);
+        assert!((moved_by(&h) - offset).length() < 1e-3, "the box keeps the pointer's offset {offset:?}, moved {:?}", moved_by(&h));
+    }
+    frame(&mut h, vec![pointer::release(from + by(30.0, 12.0))]);
     frame(&mut h, Vec::new());
     let events = h.host.borrow().events.clone();
     assert_eq!(events.iter().filter(|seen| **seen == Seen::Begin).count(), 1, "one gesture: {events:?}");
     assert_eq!(events.iter().filter(|seen| **seen == Seen::Commit).count(), 1, "one commit: {events:?}");
 
-    // A move inside the slop and a release there still commit the move the user saw.
-    let mut h = upright();
-    let from = h.screen(Point::new(150.0, 120.0));
-    frame(&mut h, vec![pointer::moved(from)]);
-    frame(&mut h, vec![pointer::press(from)]);
-    frame(&mut h, vec![pointer::moved(from + by(slop / 2.0, 0.0))]);
-    frame(&mut h, vec![pointer::release(from + by(slop / 2.0, 0.0))]);
-    frame(&mut h, Vec::new());
-    assert!((moved_by(&h) - by(slop / 2.0, 0.0)).length() < 1e-3, "the box stays where it followed to: {:?}", moved_by(&h));
-    assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit), "{:?}", h.host.borrow().events);
+    // A drag released under four points does nothing, on a handle as inside.
+    for at in [Point::new(150.0, 120.0), Point::new(RECT.x1, (RECT.y0 + RECT.y1) / 2.0)] {
+        let mut h = upright();
+        let from = h.screen(at);
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(3.0, 3.0))]);
+        frame(&mut h, vec![pointer::release(from + by(3.0, 3.0))]);
+        frame(&mut h, Vec::new());
+        assert_eq!(h.state(), BoxState::from_rect(RECT), "a 3 + 3 point drag at {at:?} leaves the box");
+        assert!(h.host.borrow().events.is_empty(), "no gesture at {at:?}: {:?}", h.host.borrow().events);
+    }
 }
 
 #[trial]
@@ -979,8 +984,8 @@ fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_
     assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
 }
 
-// A double click inside whose presses wobble within the slop and come back applies the box as it was: the wobble the
-// box followed is cancelled, never committed as a move before the apply.
+// A double click inside whose presses wobble within the slop and come back applies the box as it was: no move is
+// committed before the apply.
 #[trial]
 fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     let mut h = upright();
@@ -995,7 +1000,6 @@ fn a_jittery_double_click_inside_applies_with_no_move_committed() {
     }
     frame(&mut h, Vec::new());
     let events = h.host.borrow().events.clone();
-    assert!(events.contains(&Seen::Begin), "the box followed the wobble: {events:?}");
     assert!(!events.contains(&Seen::Commit), "no move is committed: {events:?}");
     assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
     assert_eq!(h.host.borrow().applied, 1, "the double click applies");

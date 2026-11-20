@@ -370,8 +370,6 @@ struct Grip {
     /// The press in document space.
     from: Point,
     began: bool,
-    /// The pressed part follows the pointer inside the slop ([`follows_in_slop`]).
-    follows: bool,
     /// An Alt press away from the handles: a click there moves the reference point.
     moves_pivot: bool,
     /// The box at the press.
@@ -383,7 +381,7 @@ struct Grip {
 impl Default for Grip {
     fn default() -> Self {
         let none = BoxState::from_rect(DocRect::ZERO);
-        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, follows: false, moves_pivot: false, pressed: none, last: none }
+        Grip { part: BoxPart::Inside, start: none, from: Point::ZERO, began: false, moves_pivot: false, pressed: none, last: none }
     }
 }
 
@@ -402,23 +400,22 @@ impl Default for EndGrip {
     }
 }
 
-/// Whether a press on `part` moves the box from the first pointer move inside the slop, so the box does not jump when
-/// the drag is recognised: every part but the outside, where a click applies the box. The parts' declared sense
-/// ([`slop_sense`]) and the grip both read it.
-fn follows_in_slop(part: BoxPart) -> bool {
-    part != BoxPart::Outside
-}
+/// How far the pointer must move from the press, in screen points along either axis, before a drag moves the box: a
+/// move under this on both axes does nothing, and the first move that reaches it applies the pointer's whole travel at
+/// once, as the reference application does. The press slop (3 points in the shipped sizes) is below it.
+const DRAG_START: f32 = 4.0;
 
-/// [`Sense::FOLLOWS_IN_SLOP`] for a part that [`follows_in_slop`].
-fn slop_sense(part: BoxPart) -> Sense {
-    if follows_in_slop(part) { Sense::FOLLOWS_IN_SLOP } else { Sense::empty() }
+/// Whether the pointer at `pos` has gone [`DRAG_START`] from the press at `start` along either axis.
+fn past_drag_start(start: Pos2, pos: Pos2) -> bool {
+    let travel = pos - start;
+    travel.x.abs() >= DRAG_START || travel.y.abs() >= DRAG_START
 }
 
 /// The box of Free Transform: eight handles and a reference point over the host's content, dragged through
 /// [`quad::drag`]'s rules, moved and picked from the keyboard.
 ///
-/// - The value is the box in document units. A drag is one gesture (`Begin` on the first move, also inside the slop
-///   on every part but the outside, `Commit` on the release); Escape cancels it, as does a click that ends with the
+/// - The value is the box in document units. A drag is one gesture (`Begin` once the pointer has gone [`DRAG_START`]
+///   from the press, `Commit` on the release); Escape cancels it, as does a click that ends with the
 ///   box as it was at the press. The host applies the box on [`TransformBoxOutput::apply`] (Enter, a click outside,
 ///   a double click inside) and closes it on [`discard`](TransformBoxOutput::discard).
 /// - The pointer takes the nearest handle or the reference point, else a side (the whole side along its length, a
@@ -818,32 +815,18 @@ impl<'a> TransformBox<'a> {
                     // an Alt press on it rotates.
                     let away_from_handles = part == BoxPart::Inside || (part == BoxPart::Outside && self.rotate_zone != RotateZone::Handle);
                     let moves_pivot = acting.alt && self.move_only().is_none() && away_from_handles;
-                    let follows = follows_in_slop(part);
                     // The reference application puts the point half a document pixel up and left of the press.
                     let (part, begin) =
                         if moves_pivot { (BoxPart::Pivot, BoxState::new(shown.quad, from + ALT_PRESS_PIVOT)) } else { (part, *shown) };
-                    held = Some(Grip { part, start: begin, from, began: false, follows, moves_pivot, pressed: *shown, last: *shown });
+                    held = Some(Grip { part, start: begin, from, began: false, moves_pivot, pressed: *shown, last: *shown });
                 }
-                // Inside the slop a part that follows there moves the box from the first move; the outside starts at
-                // the drag.
-                PressPhase::Held { start, pos, .. } => {
-                    let Some(mut grip) = held else { continue };
-                    if !self.rules.allows(grip.part) || !grip.follows || (!grip.began && pos == start.origin) {
-                        continue;
-                    }
-                    if !grip.began {
-                        cx.begin();
-                        grip.began = true;
-                    }
-                    self.follow(cx, space, snap.as_ref(), &mut grip, pos, mods);
-                    held = Some(grip);
-                }
-                PressPhase::DragStart { pos, .. } | PressPhase::Drag { pos, .. } => {
+                PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                     let Some(mut grip) = held else { continue };
                     if !self.rules.allows(grip.part) {
                         continue;
                     }
-                    if matches!(press.phase, PressPhase::DragStart { .. }) && !grip.began {
+                    // Past the slop the drag still waits for the drag start.
+                    if !grip.began && past_drag_start(start.origin, pos) {
                         cx.begin();
                         grip.began = true;
                     }
@@ -1072,7 +1055,7 @@ fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points
     let outward = outward_normals(quad);
     let mut declare = |part: usize, shape: Vec<Pos2>| {
         cx.part(MOVE_RING.at(part as u64), HitShape::Polygon(shape))
-            .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+            .sense(Sense::DRAG | Sense::CLICK)
             .priority(HitPriority::new(HitLevel::Body, RING_SUB))
             .pointer_only(MOVE_BY_KEY);
     };
@@ -1247,7 +1230,7 @@ impl Component for TransformBox<'_> {
                     )
                 }
             };
-            cx.part(BOX.at(part.index()), shape).sense(sense | slop_sense(part)).priority(priority).focus_shape(focus).focusable();
+            cx.part(BOX.at(part.index()), shape).sense(sense).priority(priority).focus_shape(focus).focusable();
             any = true;
         }
         if let Some(line) = self.line {
@@ -1268,7 +1251,7 @@ impl Component for TransformBox<'_> {
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
             cx.part(EDGE.at(u64::from(k)), side_band(&quad, side, line, style.side_band))
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Edge(k)))
+                .sense(Sense::DRAG | Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
         }
@@ -1278,7 +1261,7 @@ impl Component for TransformBox<'_> {
             for (end, side) in [(0u64, corner), (1, (corner + 3) % 4)] {
                 let Some(reach) = corner_reach(&quad, side, corner, line, style.side_band) else { continue };
                 cx.part(CORNER_REACH.at(2 * u64::from(k) + end), reach)
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Corner(k)))
+                    .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(CORNER_BY_KEY);
             }
@@ -1286,7 +1269,7 @@ impl Component for TransformBox<'_> {
         if self.declares_centre() {
             let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
             cx.part(CENTRE.at(0), HitShape::circle(centre.to_pos2(), style.hit))
-                .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
+                .sense(Sense::DRAG | Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                 .pointer_only(MOVE_BY_KEY);
         }
@@ -1297,7 +1280,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Outside | RotateZone::Border { .. } => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK)
                         .priority(HitPriority::new(HitLevel::Background, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1305,7 +1288,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Band if self.rules.allows(BoxPart::Outside) => {
                 for (corner, ring) in band_rings(&screen, style).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(ring))
-                        .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                        .sense(Sense::DRAG | Sense::CLICK)
                         .priority(HitPriority::new(HitLevel::Body, 0))
                         .pointer_only(ROTATE_BY_KEY);
                 }
@@ -1314,7 +1297,7 @@ impl Component for TransformBox<'_> {
             RotateZone::Handle if self.rules.allows(BoxPart::Outside) => {
                 let (_, knob) = rotate_handle(&quad, style.rotate_stem);
                 cx.part(ROTATE_HANDLE.at(0), HitShape::circle(knob, style.handle_reach))
-                    .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
+                    .sense(Sense::DRAG | Sense::CLICK)
                     .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                     .pointer_only(ROTATE_BY_KEY);
             }
