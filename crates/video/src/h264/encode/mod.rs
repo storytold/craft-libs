@@ -149,6 +149,15 @@ pub enum PacketFormat {
     LengthPrefixed,
 }
 
+/// Which field of an interlaced frame is shown first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldOrder {
+    /// The top field (the frame's even lines, from line 0) first.
+    TopFirst,
+    /// The bottom field (the odd lines) first.
+    BottomFirst,
+}
+
 #[derive(Clone, Debug)]
 pub struct EncoderConfig {
     pub width: u32,
@@ -194,6 +203,13 @@ pub struct EncoderConfig {
     /// The program and version the identification SEI of the first picture names (`craft-h264enc`
     /// and this crate's version by default): an application sets its own.
     pub writer: String,
+    /// Interlaced video (1080i, 576i, 480i…): each input frame holds two fields, shown in this
+    /// order. The frames are coded as frame pictures of an interlaced sequence
+    /// (`frame_mbs_only_flag` 0, no MBAFF), and every picture carries a picture timing SEI whose
+    /// `pic_struct` gives the field order (D.2.3). The coded height must be a whole number of
+    /// macroblock pairs, and the level is kept within 2.1 to 4.1 (Table A-4 allows interlaced
+    /// coding there). `None` (the default): progressive.
+    pub interlaced: Option<FieldOrder>,
 }
 
 impl EncoderConfig {
@@ -223,6 +239,7 @@ impl EncoderConfig {
             bit_depth: 8,
             intra_only: false,
             writer: format!("craft-h264enc {}", env!("CARGO_PKG_VERSION")),
+            interlaced: None,
         }
     }
 }
@@ -447,6 +464,11 @@ impl<P: Pixel> Core<P> {
         let depth = Depth::new(cfg.bit_depth);
         let mbw = cfg.width.div_ceil(16) as usize;
         let mbh = cfg.height.div_ceil(16) as usize;
+        // An interlaced frame is a whole number of macroblock pairs, cropped in units of 4 lines (7.4.2.1.1).
+        let crop = cfg.height.div_ceil(16) * 16 - cfg.height;
+        if cfg.interlaced.is_some() && (!mbh.is_multiple_of(2) || !crop.is_multiple_of(4)) {
+            return Err(Error::InvalidConfig(format!("an interlaced picture {} lines high is not a whole number of macroblock pairs", cfg.height)));
+        }
         let fps = cfg.fps_num as f64 / cfg.fps_den as f64;
         let cabac = cfg.profile != Profile::Baseline;
         let high = cfg.profile.high();
@@ -577,6 +599,15 @@ impl<P: Pixel> Core<P> {
         let auto = nal::pick_level(mbw as u32, mbh as u32, fps, max_refs as u32, kbps_for_level, br_factor)
             .ok_or_else(|| Error::InvalidConfig("configuration exceeds H.264 level 6.2 limits".into()))?;
         let level = cfg.level.map_or(auto, |l| nal::level_at_least(l, auto));
+        // Interlaced coding (frame_mbs_only_flag 0) is allowed at levels 2.1 to 4.1 only (Table A-4).
+        let level = if cfg.interlaced.is_some() {
+            if level > 41 {
+                return Err(Error::InvalidConfig(format!("interlaced video needs level 4.1 or lower, this one needs {level}")));
+            }
+            nal::level_at_least(21, level)
+        } else {
+            level
+        };
         let (profile_idc, constraint) = match cfg.profile {
             Profile::Baseline => (66u8, 0xC0u8), // constraint_set0 + set1 => Constrained Baseline
             Profile::Main => (77, 0x40),
@@ -597,6 +628,7 @@ impl<P: Pixel> Core<P> {
             log2_max_poc_lsb: LOG2_MAX_POC_LSB,
             max_num_ref_frames: max_refs as u32,
             bit_depth: cfg.bit_depth,
+            interlaced: cfg.interlaced.is_some(),
             vui: Vui {
                 sar: cfg.sar,
                 video_full_range: cfg.color.full_range,
@@ -981,6 +1013,7 @@ impl<P: Pixel> Core<P> {
             disable_deblocking: if self.slices > 1 { 2 } else { 0 },
             alpha_offset_div2: 0,
             beta_offset_div2: 0,
+            interlaced: self.cfg.interlaced.is_some(),
         };
         let rec = self.new_frame();
         let mbs = self.new_mbs();
@@ -1110,6 +1143,10 @@ impl<P: Pixel> Core<P> {
         }
         if idr && (self.cfg.mastering_display.is_some() || self.cfg.content_light.is_some()) {
             nals.push(nal::nal(0, NAL_SEI, &nal::sei_hdr_rbsp(self.cfg.mastering_display.as_ref(), self.cfg.content_light)));
+        }
+        // Interlaced: the field order of every picture (D.2.3, pic_struct 3 or 4).
+        if let Some(order) = self.cfg.interlaced {
+            nals.push(nal::nal(0, NAL_SEI, &nal::sei_pic_timing_rbsp(order == FieldOrder::TopFirst)));
         }
         for r in results {
             nals.push(r.nal);
