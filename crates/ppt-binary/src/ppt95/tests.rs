@@ -2808,13 +2808,13 @@ fn the_wmf_reader_stays_in_each_record() {
 }
 
 /// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
-/// straight outline matches a polygon PowerPoint 95 drew, each a polygon of its own: two shapes
-/// moved onto one place don't both match it. The number of shapes checked.
+/// straight outline matches a polygon PowerPoint 95 drew, each a polygon of its own
+/// ([`match_outlines`]): two shapes moved onto one place don't both match it. The number of shapes
+/// checked.
 fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     let polygons = wmf_polygons(wmf, p.slide_size);
     let Some(slide) = p.slides.first() else { return 0 };
-    let mut checked = 0;
-    let mut used = vec![false; polygons.len()];
+    let mut outlines = vec![];
     for s in &slide.shapes {
         let Some(corners) = outline_corners(s) else { continue };
         // A dashed line is drawn dash by dash.
@@ -2823,12 +2823,51 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
         }
         let width = s.line.as_ref().and_then(|l| l.width).unwrap_or(1.0);
         let near = polygons.iter().min_by_key(|poly| poly.len().abs_diff(corners.len()));
-        let hit = (0..polygons.len()).find(|&i| !used[i] && outline_matches(&corners, &polygons[i], width));
-        let Some(i) = hit else { panic!("{name}: {corners:?} is not drawn, or only where another shape is; nearest {near:?}") };
-        used[i] = true;
-        checked += 1;
+        assert!(polygons.iter().any(|poly| outline_matches(&corners, poly, width)), "{name}: {corners:?} is not drawn; nearest {near:?}");
+        outlines.push((corners, width));
     }
-    checked
+    if let Err(i) = match_outlines(&outlines, &polygons) {
+        panic!("{name}: {:?} is drawn only where another shape is", outlines[i].0);
+    }
+    outlines.len()
+}
+
+/// Gives each outline (its corners and line width) a polygon of its own that it matches, trying
+/// every assignment rather than the first that fits, or else the first outline left without one.
+fn match_outlines(outlines: &[(Vec<(f64, f64)>, f64)], polygons: &[Vec<(f64, f64)>]) -> Result<(), usize> {
+    let fits: Vec<Vec<usize>> =
+        outlines.iter().map(|(corners, width)| (0..polygons.len()).filter(|&q| outline_matches(corners, &polygons[q], *width)).collect()).collect();
+    // Kuhn's algorithm: a polygon already taken is freed when its owner can move to another.
+    fn assign(fits: &[Vec<usize>], s: usize, seen: &mut [bool], owner: &mut [Option<usize>]) -> bool {
+        for &q in &fits[s] {
+            if std::mem::replace(&mut seen[q], true) {
+                continue;
+            }
+            if owner[q].is_none_or(|t| assign(fits, t, seen, owner)) {
+                owner[q] = Some(s);
+                return true;
+            }
+        }
+        false
+    }
+    let mut owner = vec![None; polygons.len()];
+    for s in 0..outlines.len() {
+        if !assign(&fits, s, &mut vec![false; polygons.len()], &mut owner) {
+            return Err(s);
+        }
+    }
+    Ok(())
+}
+
+/// Two shapes can't both match one drawn polygon, and a polygon that fits two shapes goes to the
+/// one that needs it, whatever order the polygons were drawn in.
+#[test]
+fn each_outline_matches_a_polygon_of_its_own() {
+    let rect = |x: f64| vec![(x, 0.0), (x + 10.0, 0.0), (x + 10.0, 10.0), (x, 10.0)];
+    // Shapes at 100 and 102 drawn at 101 and 99: the first fits both, the second only 101.
+    assert_eq!(match_outlines(&[(rect(100.0), 1.0), (rect(102.0), 1.0)], &[rect(101.0), rect(99.0)]), Ok(()));
+    // Two shapes moved onto one place, drawn at two.
+    assert_eq!(match_outlines(&[(rect(0.0), 1.0), (rect(0.0), 1.0)], &[rect(0.0), rect(50.0)]), Err(1));
 }
 
 /// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,
