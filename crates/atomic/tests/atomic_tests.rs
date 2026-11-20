@@ -279,6 +279,9 @@ fn sweep_keeps_files_it_did_not_name_and_folders() -> io::Result<()> {
         leftover(&d.0, ".12-3.craft_tmp", old)?,
         leftover(&d.0, &format!(".scene.json.{other}-7.craft_tmp.bak"), old)?,
         leftover(&d.0, ".scene.json.99999999999-7.craft_tmp", old)?,
+        // temp_name writes the process id and the counter without leading zeros.
+        leftover(&d.0, ".scene.json.012-0.craft_tmp", old)?,
+        leftover(&d.0, ".scene.json.12-03.craft_tmp", old)?,
         // temp_name keeps at most 64 characters of the destination's name.
         leftover(&d.0, &format!(".{}.{other}-7.craft_tmp", "s".repeat(65)), old)?,
     ];

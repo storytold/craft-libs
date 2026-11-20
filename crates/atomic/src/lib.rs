@@ -640,7 +640,8 @@ pub fn sweep_temp_files(dir: &Path, min_age: std::time::Duration) -> io::Result<
 /// of at most 64 characters.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_temp_name(name: &str) -> bool {
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    // Decimal digits with no leading zero, as `format!` writes an integer; a lone `0` is allowed.
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
     let Some((stem, tail)) = name.strip_prefix('.').and_then(|rest| rest.strip_suffix(".craft_tmp")).and_then(|rest| rest.rsplit_once('.')) else {
         return false;
     };
