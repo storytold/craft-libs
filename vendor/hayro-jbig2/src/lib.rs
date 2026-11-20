@@ -72,6 +72,7 @@ mod symbol_id_decoder;
 #[cfg(test)]
 mod pdfcraft_tests;
 
+pub use bitmap::Limits;
 use error::bail;
 pub use error::{
     DecodeError, FormatError, HuffmanError, OverflowError, ParseError, RegionError, Result,
@@ -108,6 +109,8 @@ pub struct Image<'a> {
     height: u32,
     /// The height determined from `EndOfStripe` segments, if applicable.
     height_from_stripes: Option<u32>,
+    /// Craft patch: the bounds the image is opened and decoded within.
+    limits: Limits,
 }
 
 impl<'a> Image<'a> {
@@ -117,7 +120,7 @@ impl<'a> Image<'a> {
     /// as defined in Annex D.1 and D.2.
     pub fn new(data: &'a [u8]) -> Result<Self> {
         let file = parse_file(data)?;
-        Self::from_segments(file.segments)
+        Self::from_segments(file.segments, Limits::default())
     }
 
     /// Parse an embedded JBIG2 image with optional global segments.
@@ -127,6 +130,12 @@ impl<'a> Image<'a> {
     /// is read past it, in the organization it declares, as Acrobat and PDFBox
     /// draw such streams; its segments still count together with the globals'.
     pub fn new_embedded(data: &'a [u8], globals: Option<&'a [u8]>) -> Result<Self> {
+        Self::new_embedded_with_limits(data, globals, Limits::default())
+    }
+
+    /// Craft patch: [`Image::new_embedded`] within `limits` instead of the defaults. The page is
+    /// checked against them when it is opened, and the image decodes within them.
+    pub fn new_embedded_with_limits(data: &'a [u8], globals: Option<&'a [u8]>, limits: Limits) -> Result<Self> {
         let mut segments = Vec::new();
         let mut count = SegmentCount::default();
         if let Some(globals_data) = globals {
@@ -149,10 +158,10 @@ impl<'a> Image<'a> {
 
         segments.sort_by_key(|seg| seg.header.segment_number);
 
-        Self::from_segments(segments)
+        Self::from_segments(segments, limits)
     }
 
-    fn from_segments(segments: Vec<segment::Segment<'a>>) -> Result<Self> {
+    fn from_segments(segments: Vec<segment::Segment<'a>>, limits: Limits) -> Result<Self> {
         // Pre-scan for stripe height from EndOfStripe segments.
         let height_from_stripes = segments
             .iter()
@@ -181,13 +190,14 @@ impl<'a> Image<'a> {
         if page_info.width == 0 || height == 0 {
             bail!(FormatError::EmptyPage);
         }
-        bitmap::check_page_size(page_info.width, height)?;
+        bitmap::check_page_size(page_info.width, height, limits.max_pixels())?;
 
         Ok(Self {
             segments,
             width: page_info.width,
             height,
             height_from_stripes,
+            limits,
         })
     }
 
@@ -213,8 +223,8 @@ impl<'a> Image<'a> {
     /// This is useful in case you want to convert multiple JBIG2 images,
     /// as it allows `hayro-jbig2` to reuse allocations during decoding.
     pub fn decode_with<D: Decoder>(&self, decoder: &mut D, ctx: &mut DecoderContext) -> Result<()> {
-        let mut work_left = bitmap::MAX_WORK;
-        decode_segments(&self.segments, self.height_from_stripes, ctx, &mut work_left)?;
+        let mut work_left = self.limits.work();
+        decode_segments(&self.segments, self.height_from_stripes, ctx, &mut work_left, self.limits)?;
         emit_bitmap(&ctx.page_bitmap, decoder);
 
         Ok(())
@@ -224,21 +234,22 @@ impl<'a> Image<'a> {
     /// across a run of images. An image spends what it took, failing or not, starting with its
     /// page's pixels, which whoever asked for them will go through, and its segments, so images
     /// that decode nothing add up too. On top of that, it takes at most [`bitmap::MAX_WORK`]
-    /// whatever `work` says. One that `work` can't pay for spends all of it, so a run ends rather
-    /// than trying every image it has left. Reading the stream comes before this and is charged
-    /// by [`charge_reading`].
+    /// (Craft patch: the work of the image's [`Limits`]) whatever `work` says. One that `work`
+    /// can't pay for spends all of it, so a run ends rather than trying every image it has left.
+    /// Reading the stream comes before this and is charged by [`charge_reading`].
     pub fn decode_within<D: Decoder>(&self, decoder: &mut D, work: &mut u64) -> Result<()> {
         let start = bitmap::decode_work(self.width, self.height).saturating_add(self.segments.len() as u64);
         if charge_work(work, start).is_err() {
             *work = 0;
             bail!(OverflowError::DecodingWork);
         }
-        let allowed = bitmap::MAX_WORK.min(*work);
+        let most = self.limits.work();
+        let allowed = most.min(*work);
         let mut left = allowed;
         let mut ctx = DecoderContext::default();
-        let decoded = decode_segments(&self.segments, self.height_from_stripes, &mut ctx, &mut left);
+        let decoded = decode_segments(&self.segments, self.height_from_stripes, &mut ctx, &mut left, self.limits);
         let refused = decoded == Err(OverflowError::DecodingWork.into());
-        *work = if refused && allowed < bitmap::MAX_WORK { 0 } else { *work - (allowed - left) };
+        *work = if refused && allowed < most { 0 } else { *work - (allowed - left) };
         decoded?;
         emit_bitmap(&ctx.page_bitmap, &mut *decoder);
 
@@ -334,8 +345,8 @@ fn region_work(region: &decode::RegionSegmentInfo) -> u64 {
 /// PdfCraft patch: the page restricted to a refinement's area, its reference when it refers to no
 /// other region (7.4.7.4). Copying it a word at a time costs less than the region's own decoding,
 /// already charged, and it is held, as large as the region, only while the region decodes.
-fn page_area(page: &Bitmap, region: &decode::RegionSegmentInfo) -> Result<Bitmap> {
-    page.area(region.x_location, region.y_location, region.width, region.height)
+fn page_area(page: &Bitmap, region: &decode::RegionSegmentInfo, max_pixels: u64) -> Result<Bitmap> {
+    page.area(region.x_location, region.y_location, region.width, region.height, max_pixels)
 }
 
 fn decode_segments(
@@ -343,7 +354,9 @@ fn decode_segments(
     height_from_stripes: Option<u32>,
     decoder_ctx: &mut DecoderContext,
     work_left: &mut u64,
+    limits: Limits,
 ) -> Result<()> {
+    let max_pixels = limits.max_pixels();
     // Find and parse page information segment first.
     if let Some(page_info) = segments
         .iter()
@@ -355,6 +368,7 @@ fn decode_segments(
             height_from_stripes,
             &mut decoder_ctx.page_state,
             &mut decoder_ctx.page_bitmap,
+            limits,
         )?;
     } else {
         bail!(FormatError::MissingPageInfo);
@@ -380,7 +394,7 @@ fn decode_segments(
                 if page_state.can_decode_directly(page_bitmap, &header.region_info, false) {
                     generic::decode_into(&header, page_bitmap, scratch_buffers)?;
                 } else {
-                    let region = generic::decode(&header, scratch_buffers)?;
+                    let region = generic::decode(&header, scratch_buffers, max_pixels)?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
@@ -389,13 +403,13 @@ fn decode_segments(
                 // Intermediate segments cannot have unknown length.
                 let header = generic::parse(&mut reader, false)?;
                 charge_work(work_left, region_work(&header.region_info))?;
-                let region = generic::decode(&header, scratch_buffers)?;
+                let region = generic::decode(&header, scratch_buffers, max_pixels)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::PatternDictionary => {
                 let header = pattern::parse(&mut reader)?;
                 charge_work(work_left, header.work())?;
-                let dictionary = pattern::decode(&header, scratch_buffers, page_state.retained_room())?;
+                let dictionary = pattern::decode(&header, scratch_buffers, page_state.retained_room(), max_pixels)?;
                 page_state.store_pattern_dictionary(seg.header.segment_number, dictionary)?;
             }
             SegmentType::SymbolDictionary => {
@@ -431,6 +445,7 @@ fn decode_segments(
                     retained_contexts,
                     page_state.retained_room(),
                     work_left,
+                    max_pixels,
                 )?;
                 page_state.store_symbol_dictionary(seg.header.segment_number, dictionary)?;
             }
@@ -470,6 +485,7 @@ fn decode_segments(
                         page_bitmap,
                         scratch_buffers,
                         work_left,
+                        max_pixels,
                     )?;
                 } else {
                     let region = text::decode(
@@ -479,6 +495,7 @@ fn decode_segments(
                         &page_state.standard_tables,
                         scratch_buffers,
                         work_left,
+                        max_pixels,
                     )?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
@@ -511,6 +528,7 @@ fn decode_segments(
                     &page_state.standard_tables,
                     scratch_buffers,
                     work_left,
+                    max_pixels,
                 )?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
@@ -522,7 +540,7 @@ fn decode_segments(
                     .and_then(|&num| page_state.get_pattern_dictionary(num))
                     .ok_or(SegmentError::MissingPatternDictionary)?;
 
-                let header = halftone::parse(&mut reader)?;
+                let header = halftone::parse(&mut reader, limits)?;
                 charge_work(work_left, halftone::work(&header, pattern_dict))?;
 
                 if page_state.can_decode_directly(
@@ -530,9 +548,9 @@ fn decode_segments(
                     &header.region_info,
                     header.flags.initial_pixel_color,
                 ) {
-                    halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers)?;
+                    halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers, limits)?;
                 } else {
-                    let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
+                    let region = halftone::decode(&header, pattern_dict, scratch_buffers, limits)?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
@@ -545,9 +563,9 @@ fn decode_segments(
                     .and_then(|&num| page_state.get_pattern_dictionary(num))
                     .ok_or(SegmentError::MissingPatternDictionary)?;
 
-                let header = halftone::parse(&mut reader)?;
+                let header = halftone::parse(&mut reader, limits)?;
                 charge_work(work_left, halftone::work(&header, pattern_dict))?;
-                let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
+                let region = halftone::decode(&header, pattern_dict, scratch_buffers, limits)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::IntermediateGenericRefinementRegion => {
@@ -565,11 +583,11 @@ fn decode_segments(
                 let reference = match referred_segment {
                     Some(region) => region,
                     None => {
-                        area = page_area(page_bitmap, &header.region_info)?;
+                        area = page_area(page_bitmap, &header.region_info, max_pixels)?;
                         &area
                     }
                 };
-                let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
+                let region = generic_refinement::decode(&header, reference, scratch_buffers, max_pixels)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::ImmediateGenericRefinementRegion
@@ -603,11 +621,11 @@ fn decode_segments(
                     let reference = match referred_segment {
                         Some(region) => region,
                         None => {
-                            area = page_area(page_bitmap, &header.region_info)?;
+                            area = page_area(page_bitmap, &header.region_info, max_pixels)?;
                             &area
                         }
                     };
-                    let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
+                    let region = generic_refinement::decode(&header, reference, scratch_buffers, max_pixels)?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
@@ -631,16 +649,28 @@ fn decode_segments(
 }
 
 /// PdfCraft patch: the words a stored item costs in its list, at least, apart from what it holds.
-const ENTRY_WORDS: u64 = 32;
+pub(crate) const ENTRY_WORDS: u64 = 32;
 
 /// PdfCraft patch: the most words a page's segments may hold for later ones, 64 MiB: two square
 /// bitmaps of 16,384 a side (`bitmap::MAX_PIXELS`). Each stored item is bounded on its own, but without a
 /// bound on all of them a stream of a few dozen bytes a segment held 33 MB each (a 16,384-sample
 /// square region of typical rows), and a few kilobytes could exhaust memory. A segment being
 /// decoded takes more for a while, within its own bounds: the page bitmap isn't counted, nor is
-/// what a region or a grid uses until it is stored or freed.
-const MAX_RETAINED_WORDS: u64 =
-    2 * (bitmap::MAX_PIXELS / bitmap::WORD_BITS as u64 + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS);
+/// what a region or a grid uses until it is stored or freed. Craft patch: the bitmaps have
+/// `max_pixels` pixels each (see [`Limits::max_pixels`]), so the 64 MiB is the bound at the
+/// default [`Limits`], apart from row padding. Each row of a bitmap is padded to a whole word, up
+/// to 31 bits more a row, so a bitmap counts the padding of as many rows as it may have: a narrow
+/// or row-padded one within the limit still fits.
+const fn max_retained_words(max_pixels: u64) -> u64 {
+    let word_bits = bitmap::WORD_BITS as u64;
+    let rows = if max_pixels < bitmap::MAX_DIMENSION as u64 { max_pixels } else { bitmap::MAX_DIMENSION as u64 };
+    let words = max_pixels.saturating_add(rows * (word_bits - 1)).div_ceil(word_bits);
+    (words + bitmap::BITMAP_WORDS as u64 + ENTRY_WORDS).saturating_mul(2)
+}
+
+/// Craft patch: [`max_retained_words`] at the default [`Limits`].
+#[cfg(test)]
+const MAX_RETAINED_WORDS: u64 = max_retained_words(bitmap::MAX_PIXELS);
 
 /// PdfCraft patch: the most symbols one segment may refer to, 2^20, far beyond the 65,535 a
 /// dictionary may export. References may repeat, so each names the same symbols again: without
@@ -664,14 +694,17 @@ pub(crate) struct PageState {
     /// "Tables – see 7.4.13." (type 53)
     pub(crate) huffman_tables: Vec<(u32, HuffmanTable)>,
     /// PdfCraft patch: the words the regions, dictionaries and tables above hold, at most
-    /// [`MAX_RETAINED_WORDS`].
+    /// [`max_retained_words`] of the page's limits.
     pub(crate) retained_words: u64,
+    /// Craft patch: the limits the page decodes within, which set the bound on `retained_words`.
+    pub(crate) limits: Limits,
     /// Standard Huffman tables (`TABLE_A` through `TABLE_O`).
     pub(crate) standard_tables: StandardHuffmanTables,
 }
 
 impl PageState {
-    fn reset(&mut self, page_info: PageInformation) {
+    fn reset(&mut self, page_info: PageInformation, limits: Limits) {
+        self.limits = limits;
         self.page_info = page_info;
         self.page_pristine = true;
         self.referred_segments.clear();
@@ -718,14 +751,14 @@ impl PageState {
 
     /// PdfCraft patch: the words the page may still hold for later segments.
     fn retained_room(&self) -> u64 {
-        MAX_RETAINED_WORDS.saturating_sub(self.retained_words)
+        max_retained_words(self.limits.max_pixels()).saturating_sub(self.retained_words)
     }
 
     /// PdfCraft patch: count a stored item holding `words` for later segments, refusing past
-    /// [`MAX_RETAINED_WORDS`].
+    /// [`max_retained_words`] of the page's limits.
     fn retain(&mut self, words: usize) -> Result<()> {
         self.retained_words = self.retained_words.saturating_add(words as u64).saturating_add(ENTRY_WORDS);
-        if self.retained_words > MAX_RETAINED_WORDS {
+        if self.retained_words > max_retained_words(self.limits.max_pixels()) {
             bail!(OverflowError::RetainedBitmaps);
         }
         Ok(())
@@ -811,6 +844,7 @@ fn init_page(
     height_from_stripes: Option<u32>,
     page: &mut PageState,
     bitmap: &mut Bitmap,
+    limits: Limits,
 ) -> Result<()> {
     let page_info = parse_page_information(reader)?;
 
@@ -826,9 +860,9 @@ fn init_page(
     // "Bit 2: Page default pixel value. This bit contains the initial value
     // for every pixel in the page, before any region segments are decoded
     // or drawn." (7.4.8.5)
-    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0)?;
+    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0, limits.max_pixels())?;
 
-    page.reset(page_info);
+    page.reset(page_info, limits);
 
     Ok(())
 }
@@ -852,6 +886,43 @@ mod tests {
         assert!(Image::new_embedded(&stream(16385, 16384), None).is_err());
         assert!(Image::new_embedded(&stream(65536, 1), None).is_err(), "too wide, though few pixels");
         assert!(Image::new_embedded(&stream(1 << 20, 1 << 20), None).is_err());
+        // Craft patch: within a raised limit, a page past 2^28 pixels opens.
+        let raised = Limits::with_max_pixels(1 << 29);
+        assert!(Image::new_embedded_with_limits(&stream(32768, 16384), None, Limits::default()).is_err());
+        assert!(Image::new_embedded_with_limits(&stream(32768, 16384), None, raised).is_ok());
+        assert!(Image::new_embedded_with_limits(&stream(65536, 1), None, raised).is_err(), "a side is still at most 65535");
+    }
+
+    /// Craft patch: the page and its regions follow the image's limits. A 9 × 8 generic region on an
+    /// 8 × 8 page is decoded into a bitmap of its own, which a limit of 64 pixels refuses and one of
+    /// 72 allows; the page alone opens within 64 and not within 63.
+    #[test]
+    fn the_page_and_its_regions_follow_the_limits() {
+        let mut region: Vec<u8> = [9u32, 8, 0, 0].iter().flat_map(|v| v.to_be_bytes()).collect();
+        region.push(OR);
+        region.extend_from_slice(GENERIC);
+        region.extend_from_slice(&[0x5a; 16]);
+        let stream = [page_of_8(), segment(1, 38, &[], &region)].concat();
+        struct Count(u32);
+        impl Decoder for Count {
+            fn push_pixel(&mut self, _: bool) {
+                self.0 += 1;
+            }
+            fn push_pixel_chunk(&mut self, _: bool, chunks: u32) {
+                self.0 += 8 * chunks;
+            }
+            fn next_line(&mut self) {}
+        }
+        let decoded = |max_pixels: u64| {
+            let mut count = Count(0);
+            Image::new_embedded_with_limits(&stream, None, Limits::with_max_pixels(max_pixels))
+                .and_then(|image| image.decode(&mut count))
+                .map(|()| count.0)
+        };
+        assert_eq!(decoded(1 << 28), Ok(64));
+        assert_eq!(decoded(72), Ok(64));
+        assert_eq!(decoded(64), Err(OverflowError::BitmapLimit.into()));
+        assert_eq!(decoded(63), Err(OverflowError::BitmapLimit.into()));
     }
 
     /// Segment `number` of `kind` on page 1, referring to `refers_to`.
@@ -1027,9 +1098,9 @@ mod tests {
     /// that padding (patch 13), so the page's words are set to all 1s, padding included.
     #[test]
     fn a_page_area_is_the_page_inside_it_and_0_outside() {
-        let mut page = Bitmap::new_with(40, 3, 0, 0, true).unwrap();
+        let mut page = Bitmap::new_with(40, 3, 0, 0, true, bitmap::MAX_PIXELS).unwrap();
         page.data.fill(!0);
-        let area = |x, y, width, height| page.area(x, y, width, height).unwrap().data;
+        let area = |x, y, width, height| page.area(x, y, width, height, bitmap::MAX_PIXELS).unwrap().data;
         assert_eq!(area(30, 1, 20, 3), [0xFFC0_0000, 0xFFC0_0000, 0], "10 columns and 2 rows of the page");
         assert_eq!(area(0, 0, 33, 1), [!0, 0x8000_0000], "the whole of a word, and none of the area's padding");
         assert_eq!(area(36, 0, 8, 1), [0xF000_0000], "4 columns, and none of the page's padding");
@@ -1107,6 +1178,58 @@ mod tests {
         assert_eq!(page.retained_room(), MAX_RETAINED_WORDS - 1000 - ENTRY_WORDS);
         page.retained_words = MAX_RETAINED_WORDS;
         assert_eq!(page.retained_room(), 0);
+        // Craft patch: the bound follows the page's limits.
+        page.limits = Limits::with_max_pixels(1 << 30);
+        assert_eq!(page.retained_room(), max_retained_words(1 << 30) - MAX_RETAINED_WORDS);
+        assert!(max_retained_words(1 << 30) > 4 * ((1 << 28) / 32));
+    }
+
+    /// Craft patch: a pattern dictionary keeps its shifted copies only when the page can store
+    /// them with the entry charge. One word short of that, it is decoded without them and stored.
+    #[test]
+    fn shifted_copies_leave_room_for_the_entry_charge() {
+        let header = pattern::PatternDictionaryHeader {
+            mmr: false,
+            template: decode::Template::Template0,
+            pattern_width: 8,
+            pattern_height: 8,
+            num_patterns: 1,
+            data: &[],
+        };
+        let decode_within = |room| pattern::decode(&header, &mut ScratchBuffers::default(), room, bitmap::MAX_PIXELS).unwrap();
+        let cached = decode_within(u64::MAX);
+        assert!(cached.shifted_pattern(0, 0).is_some());
+        let needed = cached.words() as u64 + ENTRY_WORDS;
+        for (room, keeps_copies) in [(needed - 1, false), (needed, true)] {
+            let mut page = PageState { retained_words: MAX_RETAINED_WORDS - room, ..Default::default() };
+            let dictionary = decode_within(page.retained_room());
+            assert_eq!(dictionary.shifted_pattern(0, 0).is_some(), keeps_copies, "room {room}");
+            assert!(page.store_pattern_dictionary(0, dictionary).is_ok(), "room {room}");
+        }
+    }
+
+    /// Craft patch: a region of one column within a low limit takes a word a row, and the page
+    /// can still store it.
+    #[test]
+    fn a_narrow_region_within_a_low_limit_can_be_stored() {
+        let max_pixels = u64::from(bitmap::MAX_DIMENSION);
+        let mut page = PageState { limits: Limits::with_max_pixels(max_pixels), ..Default::default() };
+        let region = Bitmap::new(1, bitmap::MAX_DIMENSION, max_pixels).unwrap();
+        assert!(page.store_region(0, region).is_ok());
+    }
+
+    /// Craft patch: two regions within the limit whose rows are padded to whole words can both be
+    /// stored, at a raised limit and at the default one.
+    #[test]
+    fn two_row_padded_regions_within_the_limit_can_be_stored() {
+        for (max_pixels, width, height) in [(10_000_000, 153, 65_359), (bitmap::MAX_PIXELS, 4097, 65_520)] {
+            assert!(u64::from(width) * u64::from(height) <= max_pixels);
+            let mut page = PageState { limits: Limits::with_max_pixels(max_pixels), ..Default::default() };
+            for segment in 0..2 {
+                let region = Bitmap::new(width, height, max_pixels).unwrap();
+                assert!(page.store_region(segment, region).is_ok(), "{width} x {height} within {max_pixels}");
+            }
+        }
     }
 
     /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at
@@ -1114,11 +1237,12 @@ mod tests {
     /// the next image.
     #[test]
     fn a_bitmap_of_1s_has_nothing_past_its_width() {
-        assert_eq!(Bitmap::new_with(33, 2, 0, 0, true).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
-        let mut page = Bitmap::new_with(40, 1, 0, 0, false).unwrap();
-        page.reinitialize(7, 2, true).unwrap();
+        let max = bitmap::MAX_PIXELS;
+        assert_eq!(Bitmap::new_with(33, 2, 0, 0, true, max).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
+        let mut page = Bitmap::new_with(40, 1, 0, 0, false, max).unwrap();
+        page.reinitialize(7, 2, true, max).unwrap();
         assert_eq!(page.data, [0xFE00_0000, 0xFE00_0000]);
-        assert_eq!(Bitmap::new_with(64, 1, 0, 0, true).unwrap().data, [!0, !0], "words filled whole");
-        assert!(Bitmap::new_with(0, 3, 0, 0, true).unwrap().data.is_empty(), "no width");
+        assert_eq!(Bitmap::new_with(64, 1, 0, 0, true, max).unwrap().data, [!0, !0], "words filled whole");
+        assert!(Bitmap::new_with(0, 3, 0, 0, true, max).unwrap().data.is_empty(), "no width");
     }
 }

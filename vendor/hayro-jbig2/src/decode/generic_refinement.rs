@@ -13,11 +13,13 @@ use crate::decode::generic::ContextGatherer;
 use crate::error::{ParseError, RegionError, Result, bail};
 use crate::reader::Reader;
 
-/// Generic refinement region decoding procedure (6.3).
+/// Generic refinement region decoding procedure (6.3). Craft patch: the region has at most
+/// `max_pixels` pixels (see `Limits::max_pixels`).
 pub(crate) fn decode(
     header: &GenericRefinementRegionHeader<'_>,
     reference: &Bitmap,
     ctx: &mut ScratchBuffers,
+    max_pixels: u64,
 ) -> Result<RegionBitmap> {
     let mut region = Bitmap::new_with(
         header.region_info.width,
@@ -25,6 +27,7 @@ pub(crate) fn decode(
         header.region_info.x_location,
         header.region_info.y_location,
         false,
+        max_pixels,
     )?;
 
     decode_into(header, reference, &mut region, ctx)?;

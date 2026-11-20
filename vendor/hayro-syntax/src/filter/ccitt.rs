@@ -8,12 +8,14 @@ use alloc::vec::Vec;
 use core::iter;
 use hayro_ccitt::{DecodeSettings, Decoder, DecoderContext, EncodingMode};
 
-/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`).
+/// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
+/// `max_pixels` the most pixels (columns × rows) the image may decode to.
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
     limit: usize,
+    max_pixels: u64,
 ) -> Option<FilterResult<'static>> {
     let k = params.get::<i32>(K).unwrap_or(0);
 
@@ -32,7 +34,7 @@ pub(crate) fn decode(
     };
     let end_of_block = params.get::<bool>(END_OF_BLOCK).unwrap_or(true);
     // A `/Columns` past `u32::MAX` is refused: truncated, it would wrap to a small width that
-    // passes `ccitt_size_ok` and decode the image at the wrong width.
+    // passes `ccitt_size_within` and decode the image at the wrong width.
     let columns = match params.get::<usize>(COLUMNS) {
         Some(columns) => u32::try_from(columns).ok()?,
         None => 1728,
@@ -55,15 +57,15 @@ pub(crate) fn decode(
     };
 
     // PdfCraft patch: refuse absurd sizes before the decoder allocates for them.
-    if !super::ccitt_size_ok(settings.columns, settings.rows) {
+    if !super::ccitt_size_within(settings.columns, settings.rows, max_pixels) {
         return None;
     }
     // PdfCraft patch: the decoder stops after `rows` rows; with `/Rows 0` (unknown) it ran to the
     // end of the data, and a bit of 2D code can repeat a whole row, so a small stream produced
-    // gigabytes. Decode at most the rows that fit the output limit and the pixel cap. The limit
+    // gigabytes. Decode at most the rows that fit the output limit and the pixel limit. The limit
     // counts the stream's own 1-bit rows (`decode_limit`), whatever depth the rows are widened to.
     let mut settings = settings;
-    let fit = super::ccitt_max_rows(settings.columns, settings.columns.div_ceil(8), limit);
+    let fit = super::ccitt_max_rows(settings.columns, settings.columns.div_ceil(8), limit, max_pixels);
     settings.rows = if settings.rows == 0 { fit } else { settings.rows.min(fit) };
     if settings.rows == 0 {
         return None;
@@ -197,9 +199,19 @@ mod tests {
     #[test]
     fn columns_past_u32_max_are_refused_not_wrapped() {
         let params = ImageDecodeParams { width: 8, height: 4, ..Default::default() };
-        let decoded = |dict: &[u8]| decode(&ALL_BLACK_8X4, &Dict::from_bytes(dict).unwrap(), &params, 1 << 20);
+        let decoded = |dict: &[u8]| decode(&ALL_BLACK_8X4, &Dict::from_bytes(dict).unwrap(), &params, 1 << 20, 1 << 28);
         assert!(decoded(b"<< /K -1 /Columns 8 >>").is_some());
         // 2^32 + 8 would wrap to 8 columns.
         assert!(decoded(b"<< /K -1 /Columns 4294967304 >>").is_none());
+    }
+
+    /// The image's 32 pixels are decoded with a pixel limit of 32 and refused with one of 31.
+    #[test]
+    fn the_pixel_limit_given_is_the_one_applied() {
+        let params = ImageDecodeParams { width: 8, height: 4, ..Default::default() };
+        let dict = Dict::from_bytes(b"<< /K -1 /Columns 8 >>").unwrap();
+        let decoded = |max_pixels| decode(&ALL_BLACK_8X4, &dict, &params, 1 << 20, max_pixels);
+        assert_eq!(decoded(32).map(|r| r.data.len()), Some(32));
+        assert!(decoded(31).is_none());
     }
 }

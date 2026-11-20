@@ -24,15 +24,6 @@ use crate::reader::Reader;
 
 const MAX_SYMBOLS: u32 = u16::MAX as u32;
 
-/// PdfCraft patch: the most symbol pixels one dictionary may decode, as many as the largest page
-/// bitmap holds (2^28, `bitmap::MAX_PIXELS`). Symbols are decoded pixel by pixel, and up to 65535
-/// of them of up to 65535 × 65535 each kept a fuzzed file decoding for minutes; each symbol now
-/// pays for its pixels out of the stream's decoding work (`bitmap::MAX_WORK`), which bounds the
-/// time, and holds them in the retained bitmaps (`room`), which bounds the memory. The bound was
-/// 2^26, a quarter of this, which a real scan passes: the soft mask of a 14,642 × 8,879 drawing
-/// with one dictionary of 7,559 symbols (#6722) needed more, and was refused.
-const MAX_DICTIONARY_PIXELS: u64 = crate::bitmap::MAX_PIXELS;
-
 /// PdfCraft patch: decoding steps that decode nothing, allowed beyond what a valid dictionary can
 /// need. A height class without a symbol and an export run of length 0 don't move their loops
 /// on, and past the end of its data the arithmetic decoder can decode them for ever: one changed
@@ -51,6 +42,7 @@ pub(crate) fn decode(
     input_contexts: Option<&RetainedContexts>,
     room: u64,
     work_left: &mut u64,
+    max_pixels: u64,
 ) -> Result<SymbolDictionary> {
     let num_new_symbols = header.num_new_symbols;
 
@@ -64,6 +56,7 @@ pub(crate) fn decode(
         total_width: 0,
         height_class_height: 0,
         pixels: 0,
+        max_pixels,
         new_words: 0,
         room,
         work_left,
@@ -134,11 +127,11 @@ pub(crate) fn decode(
                 .total_width
                 .checked_add(symbol_width)
                 .ok_or(OverflowError::BitmapDimension)?;
-            // PdfCraft patch: see `MAX_DICTIONARY_PIXELS`.
+            // PdfCraft patch: see `SymbolDecodeContext::max_pixels`.
             ctx.pixels = ctx
                 .pixels
                 .saturating_add(u64::from(symbol_width) * u64::from(ctx.height_class_height));
-            if ctx.pixels > MAX_DICTIONARY_PIXELS {
+            if ctx.pixels > ctx.max_pixels {
                 bail!(OverflowError::BitmapLimit);
             }
             // PdfCraft patch: see `bitmap::INTEGER_WORK`. Its width, and a stream can hold thousands
@@ -159,7 +152,7 @@ pub(crate) fn decode(
                 (false, false) => {
                     // Decode a single symbol using a simple generic decoding procedure,
                     // described in 6.5.8.1.
-                    let mut region = Bitmap::new(symbol_width, ctx.height_class_height)?;
+                    let mut region = Bitmap::new(symbol_width, ctx.height_class_height, ctx.max_pixels)?;
                     generic::decode_bitmap_arithmetic_coding(
                         &mut region,
                         &mut ctx.a_ctx.decoder,
@@ -319,7 +312,7 @@ fn decode_refinement_bitmap(
     };
 
     let reference_region = ctx.symbols.get(symbol_id).ok_or(SymbolError::OutOfRange)?;
-    let mut region = Bitmap::new(symbol_width, ctx.height_class_height)?;
+    let mut region = Bitmap::new(symbol_width, ctx.height_class_height, ctx.max_pixels)?;
 
     if use_huffman {
         let bitmap_size = ctx
@@ -462,8 +455,9 @@ fn decode_aggregation_bitmap(
         header.region_info.x_location,
         header.region_info.y_location,
         header.flags.default_pixel,
+        ctx.max_pixels,
     )?;
-    decode_with(decode_ctx, &all_symbols, &header, &mut bitmap, ctx.work_left)?;
+    decode_with(decode_ctx, &all_symbols, &header, &mut bitmap, ctx.work_left, ctx.max_pixels)?;
     Ok(bitmap)
 }
 
@@ -512,8 +506,18 @@ struct SymbolDecodeContext<'a> {
     new_words: u64,
     /// PdfCraft patch: the decoding work the stream may still ask for (see `bitmap::MAX_WORK`).
     work_left: &'a mut u64,
-    /// PdfCraft patch: symbol pixels decoded so far (see `MAX_DICTIONARY_PIXELS`).
+    /// PdfCraft patch: symbol pixels decoded so far (see `max_pixels`).
     pixels: u64,
+    /// PdfCraft patch: the most symbol pixels one dictionary may decode, as many as the largest
+    /// page bitmap holds (2^28, `bitmap::MAX_PIXELS`). Symbols are decoded pixel by pixel, and up
+    /// to 65535 of them of up to 65535 × 65535 each kept a fuzzed file decoding for minutes; each
+    /// symbol now pays for its pixels out of the stream's decoding work (`bitmap::MAX_WORK`),
+    /// which bounds the time, and holds them in the retained bitmaps (`room`), which bounds the
+    /// memory. The bound was 2^26, a quarter of this, which a real scan passes: the soft mask of a
+    /// 14,642 × 8,879 drawing with one dictionary of 7,559 symbols (#6722) needed more, and was
+    /// refused. Craft patch: this is `Limits::max_pixels`, 2^28 by default, which also bounds each
+    /// bitmap the dictionary makes.
+    max_pixels: u64,
 }
 
 impl SymbolDecodeContext<'_> {
@@ -677,7 +681,7 @@ fn decode_height_class_collective_bitmap(ctx: &mut SymbolDecodeContext<'_>) -> R
         // each byte. Rows are padded to the byte boundary.
         let row_bytes = ctx.total_width.div_ceil(8);
 
-        let mut bitmap = Bitmap::new(ctx.total_width, ctx.height_class_height)?;
+        let mut bitmap = Bitmap::new(ctx.total_width, ctx.height_class_height, ctx.max_pixels)?;
         for y in 0..ctx.height_class_height {
             for byte_x in 0..row_bytes {
                 let byte = ctx
@@ -703,7 +707,7 @@ fn decode_height_class_collective_bitmap(ctx: &mut SymbolDecodeContext<'_>) -> R
             .read_bytes(bitmap_size as usize)
             .ok_or(ParseError::UnexpectedEof)?;
 
-        let mut bitmap = Bitmap::new(ctx.total_width, ctx.height_class_height)?;
+        let mut bitmap = Bitmap::new(ctx.total_width, ctx.height_class_height, ctx.max_pixels)?;
         decode_bitmap_mmr(&mut bitmap, bitmap_data)?;
         bitmap
     };
@@ -713,7 +717,7 @@ fn decode_height_class_collective_bitmap(ctx: &mut SymbolDecodeContext<'_>) -> R
     let mut x_offset: u32 = 0;
     for symbol_idx in ctx.height_class_first_symbol..ctx.symbols_decoded_count {
         let symbol_width = ctx.symbol_widths[symbol_idx as usize];
-        let mut symbol = Bitmap::new(symbol_width, ctx.height_class_height)?;
+        let mut symbol = Bitmap::new(symbol_width, ctx.height_class_height, ctx.max_pixels)?;
 
         for y in 0..ctx.height_class_height {
             let src_bit_offset = x_offset % WORD_BITS;
@@ -944,12 +948,13 @@ mod tests {
         // Huffman coding, 1,000 exported and no new symbols; export runs of 0 and 1,000 (B.1).
         let data = [0x00, 0x01, 0, 0, 0x03, 0xE8, 0, 0, 0, 0, 0x06, 0x02, 0xD8];
         let header = parse(&mut Reader::new(&data)).unwrap();
-        let symbol = Bitmap::new(32, 32).unwrap();
+        let max = crate::bitmap::MAX_PIXELS;
+        let symbol = Bitmap::new(32, 32, max).unwrap();
         let input = vec![&symbol; 1000];
         let tables = StandardHuffmanTables::new();
         let words = symbol.words() as u64 * 1000;
-        let decoded = decode(&header, &input, &[], &tables, None, words, &mut u64::MAX.clone()).unwrap();
+        let decoded = decode(&header, &input, &[], &tables, None, words, &mut u64::MAX.clone(), max).unwrap();
         assert_eq!(decoded.exported_symbols.len(), 1000);
-        assert!(decode(&header, &input, &[], &tables, None, words - 1, &mut u64::MAX.clone()).is_err());
+        assert!(decode(&header, &input, &[], &tables, None, words - 1, &mut u64::MAX.clone(), max).is_err());
     }
 }

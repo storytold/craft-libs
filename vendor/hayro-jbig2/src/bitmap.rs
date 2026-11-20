@@ -7,7 +7,6 @@
 
 use crate::decode::CombinationOperator;
 use crate::error::{OverflowError, Result, bail};
-use alloc::vec;
 use alloc::vec::Vec;
 
 // To guard better against malicious files, we limit bitmap dimensions
@@ -16,8 +15,60 @@ pub(crate) const MAX_DIMENSION: u32 = u16::MAX as u32;
 
 /// PdfCraft patch: the most pixels one bitmap may have (2^28, the renderer's
 /// `MAX_IMAGE_PIXELS`). Each side alone may be 65535, so a single region could be 4.3 billion
-/// pixels, decoded one by one.
+/// pixels, decoded one by one. Craft patch: this is the default of [`Limits::max_pixels`].
 pub(crate) const MAX_PIXELS: u64 = 1 << 28;
+
+/// Craft patch: the bounds a stream is decoded within. The bound on the pixels of one bitmap, the
+/// decoding work ([`MAX_WORK`]), the symbol pixels of a dictionary, the halftone grid cells
+/// ([`MAX_GRID_CELLS`]) and the words a page's segments may hold all follow
+/// [`Limits::max_pixels`], in the proportions they have at its default of 2^28. The decoding work
+/// is never less than the most that decoding one bitmap within the limit takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    max_pixels: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self { max_pixels: MAX_PIXELS }
+    }
+}
+
+impl Limits {
+    /// The limits for a caller that allows `max_pixels` pixels in one bitmap. Each side of a
+    /// bitmap is still at most 65535.
+    pub fn with_max_pixels(max_pixels: u64) -> Self {
+        Self { max_pixels }
+    }
+
+    /// The most pixels one bitmap (the page, a region, a symbol) may have.
+    pub fn max_pixels(&self) -> u64 {
+        self.max_pixels
+    }
+
+    /// The decoding work one image may ask for (see [`MAX_WORK`]). It is at least the most work
+    /// that decoding one bitmap within `max_pixels` takes as a refined text instance, which costs
+    /// the most of the ways to code one: decoding it (see [`decode_work`]), which is its pixels and
+    /// the cost of up to 65535 rows that a bitmap of width 0 has with no pixels; copying it into
+    /// its text region, and a text region of the same size (see [`copy_work`]); decoding its
+    /// reference symbol of width 0, which costs the up to 65535 rows of its height class; and
+    /// [`ONE_INSTANCE_WORK`]. A low limit still decodes a bitmap it allows.
+    pub(crate) fn work(&self) -> u64 {
+        let decode = self.max_pixels.saturating_add(decode_work(0, MAX_DIMENSION));
+        // A copy costs at most a word for each 32 pixels and two for each row, whatever the shape.
+        let copy = (self.max_pixels / u64::from(WORD_BITS)).saturating_add(2 * u64::from(MAX_DIMENSION));
+        // The reference symbol of width 0 may sit in a height class of 65535 rows.
+        let reference = decode_work(0, MAX_DIMENSION);
+        let one_bitmap = decode.saturating_add(copy.saturating_mul(2)).saturating_add(reference).saturating_add(ONE_INSTANCE_WORK);
+        self.max_pixels.saturating_mul(MAX_WORK / MAX_PIXELS).max(one_bitmap)
+    }
+
+    /// The most cells a halftone grid may have (see [`MAX_GRID_CELLS`]), rounded up, so a limit
+    /// of fewer than eight pixels still allows a grid of one cell.
+    pub(crate) fn grid_cells(&self) -> u64 {
+        self.max_pixels.div_ceil(MAX_PIXELS / MAX_GRID_CELLS)
+    }
+}
 
 /// PdfCraft patch: the most cells a halftone grid may have, which still gives the largest page
 /// (see [`MAX_PIXELS`]) cells of 3 × 3, unrotated. Each cell takes a 4-byte value while the grid decodes, so
@@ -40,6 +91,12 @@ pub(crate) const INTEGER_WORK: u64 = 38;
 /// PdfCraft patch: the work of a line of a Huffman table built for symbols, about 50 ns (see
 /// [`MAX_WORK`]).
 pub(crate) const HUFFMAN_LINE_WORK: u64 = 10;
+
+/// Craft patch: the work of a refined text instance apart from its bitmap's decoding and copies
+/// (see [`Limits::work`]): the four integers of its refinement and the four of its placement, its
+/// text region's symbol count and Huffman line, and the integers of a dictionary of one symbol with
+/// no pixels to refine (its rows are charged separately), with room to spare.
+pub(crate) const ONE_INSTANCE_WORK: u64 = 16 * INTEGER_WORK;
 
 /// PdfCraft patch: the work of decoding a bitmap pixel by pixel (see [`MAX_WORK`]). A row costs up
 /// to 21 ns however few pixels it has, about 4 pixels' worth, so one of no width isn't free: 16,384
@@ -68,14 +125,27 @@ pub(crate) const BITMAP_WORDS: usize = size_of::<Bitmap>() / size_of::<Word>();
 /// PdfCraft patch: refuse a page past the bounds on a bitmap (see `MAX_PIXELS`). A stream is held
 /// to this when it is opened as well as when its page bitmap is sized: a caller sizes its own
 /// output from the page header in between, and a 743-byte PDF's Indexed image asked for 137 GB.
-pub(crate) fn check_page_size(width: u32, height: u32) -> Result<()> {
+/// Craft patch: at most `max_pixels` pixels (see [`Limits::max_pixels`]).
+pub(crate) fn check_page_size(width: u32, height: u32, max_pixels: u64) -> Result<()> {
     if width > MAX_DIMENSION || height > MAX_DIMENSION {
         return Err(OverflowError::BitmapLimit.into());
     }
-    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+    if u64::from(width) * u64::from(height) > max_pixels {
         return Err(OverflowError::BitmapLimit.into());
     }
     Ok(())
+}
+
+/// Craft patch: a vector of `len` copies of `value`, or `OverflowError::BitmapLimit` when the
+/// memory for it cannot be reserved. A raised [`Limits`] lets a bitmap or a gray-scale image take
+/// gigabytes, and `vec!` ends the process when such an allocation fails.
+pub(crate) fn try_filled<T: Clone>(value: T, len: usize) -> Result<Vec<T>> {
+    let mut filled = Vec::new();
+    if filled.try_reserve_exact(len).is_err() {
+        bail!(OverflowError::BitmapLimit);
+    }
+    filled.resize(len, value);
+    Ok(filled)
 }
 
 /// A decoded bitmap with position information.
@@ -115,9 +185,10 @@ impl Bitmap {
 
     /// Create a new bitmap filled with white pixels (false).
     ///
-    /// The bitmap is positioned at (0, 0).
-    pub(crate) fn new(width: u32, height: u32) -> Result<Self> {
-        Self::new_with(width, height, 0, 0, false)
+    /// The bitmap is positioned at (0, 0). Craft patch: it has at most `max_pixels` pixels (see
+    /// [`Limits::max_pixels`]).
+    pub(crate) fn new(width: u32, height: u32, max_pixels: u64) -> Result<Self> {
+        Self::new_with(width, height, 0, 0, false, max_pixels)
     }
 
     /// Create a new bitmap with full configuration.
@@ -127,18 +198,19 @@ impl Bitmap {
         x_location: u32,
         y_location: u32,
         default_pixel: bool,
+        max_pixels: u64,
     ) -> Result<Self> {
         if width > MAX_DIMENSION || height > MAX_DIMENSION {
             bail!(OverflowError::BitmapLimit);
         }
         // PdfCraft patch: see `MAX_PIXELS`.
-        if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        if u64::from(width) * u64::from(height) > max_pixels {
             bail!(OverflowError::BitmapLimit);
         }
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
-        let data = vec![default_word; stride as usize * height as usize];
+        let data = try_filled(default_word, stride as usize * height as usize)?;
         let mut bitmap = Self {
             width,
             height,
@@ -177,19 +249,25 @@ impl Bitmap {
         width: u32,
         height: u32,
         default_pixel: bool,
+        max_pixels: u64,
     ) -> Result<()> {
-        check_page_size(width, height)?;
+        check_page_size(width, height, max_pixels)?;
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
+        let len = stride as usize * height as usize;
+        // Craft patch: the words are reserved before the bitmap changes, and memory that cannot
+        // be reserved is refused (see `try_filled`).
+        if self.data.try_reserve_exact(len.saturating_sub(self.data.len())).is_err() {
+            bail!(OverflowError::BitmapLimit);
+        }
         self.width = width;
         self.height = height;
         self.stride = stride;
         self.x_location = 0;
         self.y_location = 0;
         self.data.clear();
-        self.data
-            .resize(stride as usize * height as usize, default_word);
+        self.data.resize(len, default_word);
         if default_pixel {
             self.clear_padding();
         }
@@ -324,9 +402,10 @@ impl Bitmap {
     /// the page buffer, restricted to the area of the page buffer specified by this segment's
     /// region segment information field" (7.4.7.4). Off this bitmap the area is 0, past its width
     /// too whatever the padding of its rows holds, and outside the area the refinement reads 0
-    /// (6.3.5.2), where reading the page itself took in the pixels around the area.
-    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self> {
-        let mut area = Self::new_with(width, height, x, y, false)?;
+    /// (6.3.5.2), where reading the page itself took in the pixels around the area. Craft patch:
+    /// the area has at most `max_pixels` pixels.
+    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32, max_pixels: u64) -> Result<Self> {
+        let mut area = Self::new_with(width, height, x, y, false, max_pixels)?;
         for row in 0..height {
             let Some(from_row) = y.checked_add(row).filter(|r| *r < self.height) else {
                 continue;
@@ -368,24 +447,80 @@ mod pdfcraft_limit_tests {
     fn a_bitmap_past_its_bounds_is_refused_by_a_limit() {
         let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
         assert_eq!(
-            Bitmap::new(MAX_DIMENSION + 1, 1).map(|_| ()),
+            Bitmap::new(MAX_DIMENSION + 1, 1, MAX_PIXELS).map(|_| ()),
             limit,
             "a side"
         );
         assert_eq!(
-            Bitmap::new(1, MAX_DIMENSION + 1).map(|_| ()),
+            Bitmap::new(1, MAX_DIMENSION + 1, MAX_PIXELS).map(|_| ()),
             limit,
             "the other"
         );
         // 2^28 + 2^14 pixels, each side within its bound.
         assert_eq!(
-            Bitmap::new(1 << 14, (1 << 14) + 1).map(|_| ()),
+            Bitmap::new(1 << 14, (1 << 14) + 1, MAX_PIXELS).map(|_| ()),
             limit,
             "the pixels"
         );
         assert!(
-            Bitmap::new(1 << 14, 1 << 14).is_ok(),
+            Bitmap::new(1 << 14, 1 << 14, MAX_PIXELS).is_ok(),
             "2^28 pixels are within it"
         );
+    }
+
+    /// Craft patch: the pixel bound is the caller's, and the bounds derived from it keep their
+    /// proportions to it. A side is still at most 65535 whatever the limit.
+    #[test]
+    fn the_pixel_bound_follows_the_limits() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(Bitmap::new(8, 4, 31).map(|_| ()), limit);
+        assert!(Bitmap::new(8, 4, 32).is_ok());
+        assert_eq!(check_page_size(1 << 15, 1 << 14, MAX_PIXELS), limit);
+        assert!(check_page_size(1 << 15, 1 << 14, 1 << 29).is_ok());
+        assert_eq!(check_page_size(MAX_DIMENSION + 1, 1, u64::MAX), limit);
+
+        let default = Limits::default();
+        assert_eq!(default.max_pixels(), MAX_PIXELS);
+        assert_eq!(default.work(), MAX_WORK);
+        assert_eq!(default.grid_cells(), MAX_GRID_CELLS);
+        let raised = Limits::with_max_pixels(1 << 30);
+        assert_eq!(raised.work(), 4 << 30);
+        assert_eq!(raised.grid_cells(), 1 << 27);
+        assert_eq!(Limits::with_max_pixels(u64::MAX).work(), u64::MAX);
+    }
+
+    /// Craft patch: a limit below eight pixels still allows a halftone grid of one cell, and the
+    /// grid bound rounds up between multiples of eight.
+    #[test]
+    fn a_low_limit_allows_a_grid_of_one_cell() {
+        assert_eq!(Limits::with_max_pixels(0).grid_cells(), 0);
+        assert_eq!(Limits::with_max_pixels(1).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(7).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(8).grid_cells(), 1);
+        assert_eq!(Limits::with_max_pixels(9).grid_cells(), 2);
+    }
+
+    /// Craft patch: memory that cannot be reserved is an error, not the end of the process.
+    #[test]
+    fn memory_that_cannot_be_reserved_is_refused() {
+        let limit = Err(DecodeError::Overflow(OverflowError::BitmapLimit));
+        assert_eq!(try_filled(0_u32, usize::MAX), limit);
+        assert_eq!(try_filled(7_u32, 3).as_deref(), Ok(&[7, 7, 7][..]));
+    }
+
+    /// Craft patch: a low limit still pays for decoding a bitmap it allows, the row cost of
+    /// [`decode_work`] included.
+    #[test]
+    fn a_low_limit_pays_for_a_bitmap_it_allows() {
+        let bitmaps = [(1, 1), (1, 4), (1, MAX_DIMENSION), (2, MAX_DIMENSION)];
+        for (width, height) in bitmaps {
+            let max_pixels = u64::from(width) * u64::from(height);
+            let work = Limits::with_max_pixels(max_pixels).work();
+            assert!(work >= decode_work(width, height), "{width} by {height}: {work}");
+        }
+        for max_pixels in [0, 1] {
+            let work = Limits::with_max_pixels(max_pixels).work();
+            assert!(work >= decode_work(0, MAX_DIMENSION), "0 by 65535 within {max_pixels}: {work}");
+        }
     }
 }

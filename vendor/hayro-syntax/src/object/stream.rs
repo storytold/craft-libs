@@ -279,7 +279,8 @@ impl<'a> Stream<'a> {
                 continue;
             }
             // PdfCraft patch: see `filter::decode_limit`.
-            let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
+            let limits = self.dict.ctx().decode_limits();
+            let limit = crate::filter::decode_limit(image_params, i + 1 == count, limits).min(max);
             // PdfCraft patch: the last filter of an image produces its rows.
             let rows = (i + 1 == count && image_params.height > 0)
                 .then(|| usize::try_from(image_params.height).ok())
@@ -289,6 +290,7 @@ impl<'a> Stream<'a> {
                 params,
                 image_params,
                 limit,
+                limits.max_image_pixels(),
                 self.dict.ctx().control(),
                 rows,
             )?;
