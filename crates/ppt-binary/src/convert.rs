@@ -93,6 +93,8 @@ struct Ctx<'a> {
     /// Notes pages converted already. Distinct slides can share a slide id, and so a notes page:
     /// it goes to the first of them only, so its text isn't copied into every one.
     used_notes: HashSet<usize>,
+    /// Paragraphs and runs made so far, against [`text::MAX_TEXT_ITEMS`].
+    text_items: std::cell::Cell<usize>,
 }
 
 /// A page side in master units as points, else `fallback` when it is missing or out of range.
@@ -119,6 +121,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
         master_props: HashMap::new(),
         app,
         used_notes: HashSet::new(),
+        text_items: std::cell::Cell::new(0),
     };
     let environment = d.document.child(rt::ENVIRONMENT);
     if let Some(hf) = doc::headers_footers(&d.document, 3) {
@@ -869,6 +872,9 @@ impl<'a> Ctx<'a> {
         let mut out = vec![];
         let mut start = 0usize;
         loop {
+            if !text::take_text_item(&self.text_items) {
+                break;
+            }
             let end = chars.get(start..).and_then(|rest| rest.iter().position(|&c| c == 0x0D)).map_or(total, |e| start + e);
             let (level, pf_exc) = run_at(&para_starts, start).and_then(|i| block.para_runs.get(i)).map_or((0, None), |r| (r.1, Some(&r.2)));
             let (mut pf, base_cf) = scope.styles.resolve(block.text_type, level);
@@ -908,6 +914,9 @@ impl<'a> Ctx<'a> {
             }
             let mut i = start;
             while i < end {
+                if !text::take_text_item(&self.text_items) {
+                    break;
+                }
                 let props = self.run_props(&cf_at(i), &scope.scheme);
                 let c = chars.get(i).copied().unwrap_or(0);
                 if let Some(k) = fields.get(&i) {
