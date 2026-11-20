@@ -97,7 +97,7 @@ macro_rules! stays {
 // A scalar is a length, a fraction, a zoom, a time or a count, which a replay at another place never changes, so the
 // audit compares it exactly; a coordinate is a `Pos2` or a `Rect`.
 stays!(craft_behavior::PartRef, craft_behavior::Sense);
-stays!((), bool, f32, f64, u8, u16, u32, u64, usize, i32, i64, String, Arc<str>, &'static str, egui::Id, egui::LayerId);
+stays!((), bool, f32, f64, u8, u16, u32, u64, usize, i32, i64, String, Arc<str>, &'static str, egui::Id, egui::LayerId, egui::TextureId);
 
 impl<T: Shift> Shift for Option<T> {
     fn shifted(&self, by: &RecordShift) -> Self {
@@ -118,6 +118,16 @@ fn snapped_items<'a, T: Shift + 'a>(values: impl ExactSizeIterator<Item = &'a T>
         values.zip(to).map(|(value, to)| value.snapped(to, within)).collect()
     } else {
         values.map(|value| value.snapped(value, within)).collect()
+    }
+}
+
+impl<T: Shift, const N: usize> Shift for [T; N] {
+    fn shifted(&self, by: &RecordShift) -> Self {
+        std::array::from_fn(|index| self[index].shifted(by))
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        std::array::from_fn(|index| self[index].snapped(&to[index], within))
     }
 }
 
