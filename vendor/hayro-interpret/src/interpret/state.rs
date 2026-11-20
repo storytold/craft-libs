@@ -430,6 +430,21 @@ pub(crate) fn handle_gs_single<'a>(
             context.get_mut().graphics_state.stroke_props.dash_array =
                 convert_dash_array(dash_array.iter::<f32>());
         }
+        // PdfCraft patch (35): `OP` sets stroking overprint, and non-stroking overprint too when
+        // the dictionary has no `op` of its own; `OPM` is 0 or 1 (§8.6.7).
+        "OP" => {
+            let overprint = dict.get::<bool>(key)?;
+            let state = &mut context.get_mut().graphics_state;
+            state.overprint_stroke = overprint;
+            if !dict.contains_key("op") {
+                state.overprint_fill = overprint;
+            }
+        }
+        "op" => context.get_mut().graphics_state.overprint_fill = dict.get::<bool>(key)?,
+        "OPM" => {
+            let mode = dict.get::<u8>(key)?;
+            context.get_mut().graphics_state.overprint_mode = u8::from(mode == 1);
+        }
         "Type" => {}
         _ => {}
     }
