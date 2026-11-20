@@ -78,7 +78,13 @@ off from where PowerPoint 95 puts it. Freeforms read as custom paths through the
 their box, with
 their format's fill, line and shadow, and open ones with their arrowheads. Groups read as groups
 of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip a
-group), nested up to 32 deep. Pictures and notes come later.
+group), nested up to 32 deep. Pictures read as picture shapes in their box, with their crop and
+the line and fill PowerPoint 95 draws them with. PowerPoint 95 keeps every picture as a Windows
+metafile, whatever was inserted; each becomes `image/x-wmf` media as stored, as the PowerPoint 97
+path keeps its metafiles, read once however many shapes show it, and all of them within the
+PowerPoint 97 path's 2 GiB budget. A picture whose picture can't be read is left out. Each slide's
+notes page gives the slide its notes: the text of the page's notes placeholder, its paragraphs
+and runs formatted as a slide's are.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
