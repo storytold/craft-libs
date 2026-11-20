@@ -59,6 +59,8 @@ const REC_PROJECT_VERSION: u16 = 0x0009;
 /// REFERENCEREGISTERED: [MS-OVBA] §2.3.4.2.2 says the record's `Size` field is ignored on
 /// read; the payload's own nested lengths say where the next record starts.
 const REC_REFERENCE_REGISTERED: u16 = 0x000D;
+/// REFERENCEPROJECT: its `Size` is ignored on read too ([MS-OVBA] §2.3.4.2.2.6).
+const REC_REFERENCE_PROJECT: u16 = 0x000E;
 const REC_MODULES_COUNT: u16 = 0x000F;
 const REC_MODULE_NAME: u16 = 0x0019;
 const REC_MODULE_STREAM_NAME: u16 = 0x001A;
@@ -190,15 +192,28 @@ fn read_source(module: &mut Module, stream: &[u8], stream_cut: bool, budget: &mu
         (rest.to_vec(), stream_cut)
     };
     let take = raw.len().min(MAX_SOURCE as usize);
+    if *budget == 0 && !raw.is_empty() {
+        // The total-source budget is spent: not decoding at all, a repeated reference to a
+        // cached stream would otherwise decode (and throw away) the full prefix per module.
+        log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+        module.truncated = true;
+        module.source = None;
+        return;
+    }
     let decoded = decode(&raw[..take]);
-    let mut end = decoded.len().min(*budget as usize);
+    // The decoded form is what the budget and [`MAX_SOURCE`] cap: lossy decoding can only
+    // expand (each dropped byte becomes three replacement bytes), so the text of a
+    // `MAX_SOURCE`-byte raw source can outgrow the per-module cap and is cut with the rest.
+    let mut end = decoded.len().min(*budget as usize).min(MAX_SOURCE as usize);
     while !decoded.is_char_boundary(end) {
         end -= 1;
     }
     if end == 0 && !decoded.is_empty() {
-        // The total-source budget is spent (or only part of one character fits): the module is
-        // listed without source rather than with a cut one.
+        // Only part of one character fits: the module is listed without source rather than
+        // with a cut one, and marked truncated so a caller can tell a budget cut from an
+        // unreadable stream.
         log::warn!("docx: the VBA project's total source budget is spent; {:?} is listed without source", module.stream_name);
+        module.truncated = true;
         module.source = None;
         return;
     }
@@ -244,14 +259,29 @@ fn walk_dir(dir: &[u8]) -> Result<Project, DocxError> {
             at = next;
             continue;
         }
-        // REFERENCEREGISTERED: the outer `Size` is ignored on read ([MS-OVBA] §2.3.4.2.2) —
-        // real writers have put 0xFFFFFFFF there — so the walk advances by the payload's own
-        // nested lengths (SizeOfLibid, Libid, Reserved). The generic bound check below would
-        // refuse the record and stop before the module records, listing none.
+        // The reference records' outer `Size` is ignored on read ([MS-OVBA] §2.3.4.2.2) —
+        // real writers have put 0xFFFFFFFF there — so the walk advances by their own nested
+        // lengths. The generic bound check below would refuse the record and stop before the
+        // module records, listing none.
         if id == REC_REFERENCE_REGISTERED {
+            // SizeOfLibid (4), Libid, Reserved1 (4), Reserved2 (2) ([MS-OVBA] §2.3.4.2.2.3).
             let Some(libid_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
             let Some(next) =
-                at.checked_add(10).and_then(|at| at.checked_add(libid_len)).and_then(|at| at.checked_add(2)).filter(|&next| next <= dir.len())
+                at.checked_add(10).and_then(|at| at.checked_add(libid_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
+            else {
+                break;
+            };
+            at = next;
+            continue;
+        }
+        if id == REC_REFERENCE_PROJECT {
+            // SizeOfLibidAbsolute (4), LibidAbsolute, SizeOfLibidRelative (4), LibidRelative,
+            // MajorVersion (4), MinorVersion (2) ([MS-OVBA] §2.3.4.2.2.6).
+            let Some(abs_len) = u32_at(dir, at + 6).map(|n| n as usize) else { break };
+            let Some(rel_at) = at.checked_add(10).and_then(|at| at.checked_add(abs_len)) else { break };
+            let Some(rel_len) = u32_at(dir, rel_at).map(|n| n as usize) else { break };
+            let Some(next) =
+                rel_at.checked_add(4).and_then(|at| at.checked_add(rel_len)).and_then(|at| at.checked_add(6)).filter(|&next| next <= dir.len())
             else {
                 break;
             };
