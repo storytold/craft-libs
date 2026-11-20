@@ -10,3 +10,5 @@ mod ruler;
 mod style_options;
 mod style_panel;
 mod tabs;
+
+mod character;
