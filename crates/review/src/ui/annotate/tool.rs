@@ -71,6 +71,11 @@ enum Change {
     Move {
         ids: Vec<AnnotationId>,
     },
+    /// Moving a callout's text box leaves its arrow point in place.
+    MoveBox {
+        target: AnnotationId,
+        from: Rect,
+    },
     /// `from` is the annotation as the press found it: its box and its own aspect.
     Resize {
         target: AnnotationId,
@@ -798,7 +803,12 @@ impl AnnotateTool {
                 }
                 let ids = self.editable();
                 if !ids.is_empty() {
-                    self.gesture = Some(Drag::Edit { id, begun: false, origin: reading.at, change: Change::Move { ids }, mods: pointer.mods });
+                    let box_move = (ids.len() == 1)
+                        .then(|| self.annotations.iter().find(|a| a.id == target && a.kind == AnnotationKind::Callout && a.rect.contains(reading.at)))
+                        .flatten()
+                        .map(|a| Change::MoveBox { target, from: a.rect });
+                    let change = box_move.unwrap_or(Change::Move { ids });
+                    self.gesture = Some(Drag::Edit { id, begun: false, origin: reading.at, change, mods: pointer.mods });
                 }
             }
             None => match self.select_options.empty_press {
@@ -912,6 +922,7 @@ impl AnnotateTool {
 fn edit_value(change: &Change, origin: Point, at: Point, mods: Mods, lock: ShiftLock) -> AnnotationEdit {
     match change {
         Change::Move { ids } => AnnotationEdit::Move { ids: ids.clone(), delta: at - origin },
+        Change::MoveBox { target, from } => AnnotationEdit::Resize { id: *target, rect: *from + (at - origin) },
         Change::Resize { target, handle, from } => {
             let aspect = corner_aspect(from, from.rect, mods.shift);
             AnnotationEdit::Resize { id: *target, rect: resized(from.rect, *handle, at - origin, aspect) }
@@ -932,6 +943,7 @@ fn edit_value(change: &Change, origin: Point, at: Point, mods: Mods, lock: Shift
 fn slipped(change: &Change, value: &AnnotationEdit) -> bool {
     match (change, value) {
         (Change::Move { .. }, AnnotationEdit::Move { delta, .. }) => delta.hypot() <= SLIP_MOVE,
+        (Change::MoveBox { from, .. }, AnnotationEdit::Resize { rect, .. }) => (rect.origin() - from.origin()).hypot() <= SLIP_MOVE,
         (Change::Resize { from, .. }, AnnotationEdit::Resize { rect, .. }) => {
             corners(from.rect.abs()).into_iter().zip(corners(rect.abs())).all(|(was, now)| (now - was).hypot() <= SLIP_RESIZE)
         }
@@ -941,7 +953,7 @@ fn slipped(change: &Change, value: &AnnotationEdit) -> bool {
 
 fn edit_label<'a>(change: &Change, words: &'a AnnotateWords) -> &'a str {
     match change {
-        Change::Move { .. } => words.edit_move.as_str(),
+        Change::Move { .. } | Change::MoveBox { .. } => words.edit_move.as_str(),
         Change::Resize { .. } => words.edit_resize.as_str(),
         Change::Reshape { .. } => words.edit_reshape.as_str(),
     }

@@ -74,6 +74,34 @@ fn near(a: Point, b: Point) -> bool {
     (a - b).hypot() < 0.01
 }
 
+#[trial]
+fn a_callout_box_and_leader_drag_report_distinct_edits() {
+    let mut callout = annotation(1, AnnotationKind::Callout, Rect::new(150.0, 100.0, 250.0, 140.0));
+    callout.points = vec![Point::new(60.0, 60.0), Point::new(120.0, 120.0)];
+    let make = || {
+        let mut tool = AnnotateTool::new(AnnotationTool::Select, 0);
+        tool.annotations = vec![callout.clone()];
+        tool.selected = vec![callout.id];
+        rig(tool)
+    };
+    let mut box_rig = make();
+    drag(&mut box_rig, Point::new(200.0, 120.0), Point::new(220.0, 130.0));
+    assert!(
+        values(&box_rig)
+            .iter()
+            .any(|edit| matches!(edit, AnnotationEdit::Resize { id, rect } if *id == callout.id && *rect == Rect::new(170.0, 110.0, 270.0, 150.0))),
+        "a box drag moves the box without its arrow"
+    );
+    let mut leader_rig = make();
+    drag(&mut leader_rig, Point::new(90.0, 90.0), Point::new(100.0, 90.0));
+    assert!(
+        values(&leader_rig)
+            .iter()
+            .any(|edit| matches!(edit, AnnotationEdit::Move { ids, delta } if ids == &[callout.id] && *delta == Vec2::new(10.0, 0.0))),
+        "a leader drag moves the whole callout"
+    );
+}
+
 fn button(at: Pos2, pressed: bool, modifiers: Modifiers) -> Event {
     Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers }
 }
