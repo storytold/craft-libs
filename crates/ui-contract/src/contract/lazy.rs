@@ -67,10 +67,10 @@ impl Lazy {
     /// - its place, room, clip or scale differs from its last run, or its environment does: the theme, density, language
     ///   or the window's active state;
     /// - its [`content`](Self::content) version differs from its last run;
-    /// - the app asked for a repaint outside every settling child (`frame::request_repaint`), or a given value was
-    ///   edited: the framework cannot see which children show that app data, so every child runs then;
-    /// - for a child with no content version: the frame or the one before had input other than pointer motion, which
-    ///   may have changed app data it shows;
+    /// - the app asked for a repaint outside every settling child (`frame::request_repaint`): the framework cannot see
+    ///   which children show that app data, so every child runs then;
+    /// - for a child with no content version: the frame or the one before had input other than pointer motion or an edit
+    ///   of a given value, either of which may have changed app data it shows;
     /// - its last run showed an overlay or painted on another layer.
     ///
     /// A bound value is known by where it lives, so a settled reader needs a binding that stays in place between
@@ -83,8 +83,8 @@ impl Lazy {
 
     /// The version of the app data a settling child shows that the framework does not track (a document's revision,
     /// a job's progress): the child runs when it differs from the version of its last run. A child with a version
-    /// does not run for input that reaches other parts of the window: what that input changes in the data it shows
-    /// moves the version, or reaches it as a command or app repaint request.
+    /// does not run for input that reaches other parts of the window or for an edit of a given value elsewhere: what
+    /// either changes in the data it shows moves the version, or reaches it as a command or app repaint request.
     pub fn content(mut self, version: u64) -> Lazy {
         self.content = Some(version);
         self
