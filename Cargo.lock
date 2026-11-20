@@ -3165,6 +3165,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sbs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-mime",
+ "craft-xml",
+ "flate2",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
