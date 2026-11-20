@@ -4,7 +4,7 @@
 use craft_keymap::Platform;
 use craft_timeline::ui::{TimecodeField, TimecodePanel, TimecodePanelSettings, TimecodeRow, TimecodeRowKind, TimecodeSource, TimecodeText};
 use craft_timeline::{FrameRate, Tick, TimeFormat};
-use craft_ui::contract::{Bind, Role, Show as _};
+use craft_ui::contract::{Role, Show as _};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, pointer, trial};
 use egui::{Key, Modifiers, Ui, Vec2};
 
