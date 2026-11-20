@@ -2,187 +2,10 @@
 //! shape containers, each shape with its `FSP` (type, id, flags), property tables (`FOPT`),
 //! anchor and client records (placeholder, text).
 
-use std::collections::HashMap;
-
 use crate::doc::rt;
 use crate::record::{MAX_DEPTH, Rec};
 
-/// Property ids ([MS-ODRAW] §2.3).
-pub mod prop {
-    pub const ROTATION: u16 = 0x0004;
-    pub const TEXT_LEFT: u16 = 0x0081;
-    pub const TEXT_TOP: u16 = 0x0082;
-    pub const TEXT_RIGHT: u16 = 0x0083;
-    pub const TEXT_BOTTOM: u16 = 0x0084;
-    pub const WRAP_TEXT: u16 = 0x0085;
-    pub const ANCHOR_TEXT: u16 = 0x0087;
-    pub const CROP_TOP: u16 = 0x0100;
-    pub const CROP_BOTTOM: u16 = 0x0101;
-    pub const CROP_LEFT: u16 = 0x0102;
-    pub const CROP_RIGHT: u16 = 0x0103;
-    pub const PIB: u16 = 0x0104;
-    pub const GEO_LEFT: u16 = 0x0140;
-    pub const GEO_TOP: u16 = 0x0141;
-    pub const GEO_RIGHT: u16 = 0x0142;
-    pub const GEO_BOTTOM: u16 = 0x0143;
-    pub const SHAPE_PATH: u16 = 0x0144;
-    pub const VERTICES: u16 = 0x0145;
-    pub const SEGMENT_INFO: u16 = 0x0146;
-    pub const ADJUST_VALUE: u16 = 0x0147;
-    pub const FILL_TYPE: u16 = 0x0180;
-    pub const FILL_COLOR: u16 = 0x0181;
-    pub const FILL_OPACITY: u16 = 0x0182;
-    pub const FILL_BACK_COLOR: u16 = 0x0183;
-    pub const FILL_BACK_OPACITY: u16 = 0x0184;
-    pub const FILL_BLIP: u16 = 0x0186;
-    pub const FILL_ANGLE: u16 = 0x018B;
-    pub const FILL_FOCUS: u16 = 0x018C;
-    pub const FILL_BOOLS: u16 = 0x01BF;
-    pub const LINE_COLOR: u16 = 0x01C0;
-    pub const LINE_OPACITY: u16 = 0x01C1;
-    pub const LINE_WIDTH: u16 = 0x01CB;
-    pub const LINE_STYLE: u16 = 0x01CD;
-    pub const LINE_DASHING: u16 = 0x01CE;
-    pub const LINE_START_ARROW: u16 = 0x01D0;
-    pub const LINE_END_ARROW: u16 = 0x01D1;
-    pub const LINE_START_ARROW_WIDTH: u16 = 0x01D2;
-    pub const LINE_START_ARROW_LENGTH: u16 = 0x01D3;
-    pub const LINE_END_ARROW_WIDTH: u16 = 0x01D4;
-    pub const LINE_END_ARROW_LENGTH: u16 = 0x01D5;
-    pub const LINE_JOIN: u16 = 0x01D6;
-    pub const LINE_CAP: u16 = 0x01D7;
-    pub const LINE_BOOLS: u16 = 0x01FF;
-    pub const SHADOW_COLOR: u16 = 0x0201;
-    pub const SHADOW_OPACITY: u16 = 0x0204;
-    pub const SHADOW_OFFSET_X: u16 = 0x0205;
-    pub const SHADOW_OFFSET_Y: u16 = 0x0206;
-    pub const SHADOW_BOOLS: u16 = 0x023F;
-    pub const HSP_MASTER: u16 = 0x0301;
-    pub const NAME: u16 = 0x0380;
-    pub const DESCRIPTION: u16 = 0x0381;
-    pub const GROUP_BOOLS: u16 = 0x03BF;
-}
-
-/// UTF-16 units kept of a string property.
-pub const MAX_STRING: usize = 4096;
-
-/// Distinct properties one set keeps. Ids are 14 bits, so a file's tables could name about 16K of
-/// them, and every shape copies the drawing defaults' and its master shape's sets into its own:
-/// unbounded, that is shapes × 16K. [MS-ODRAW] defines a few hundred properties and a real shape
-/// or the drawing defaults set tens of them. Entries past the limit are still read (their complex
-/// data keeps its place) but not kept.
-pub const MAX_PROPS: usize = 1024;
-
-/// One property value: the 32-bit operand and, for complex properties, the extra bytes.
-#[derive(Clone, Copy, Debug)]
-pub struct PropVal<'a> {
-    pub op: u32,
-    pub complex: Option<&'a [u8]>,
-}
-
-/// A shape's merged property tables (primary first; secondary and tertiary fill gaps).
-#[derive(Clone, Debug, Default)]
-pub struct Props<'a> {
-    map: HashMap<u16, PropVal<'a>>,
-}
-
-impl<'a> Props<'a> {
-    /// Read one `FOPT` body: `count` 6-byte entries then the complex data in entry order. Entries
-    /// already present are kept (the caller adds the most specific table first).
-    pub fn add_table(&mut self, r: &Rec<'a>) {
-        let count = usize::from(r.instance);
-        let mut complex_at = count.saturating_mul(6);
-        for i in 0..count {
-            let (Some(id), Some(op)) = (r.u16(i * 6), r.u32(i * 6 + 2)) else { break };
-            let is_complex = id & 0x8000 != 0;
-            let pid = id & 0x3FFF;
-            let complex = if is_complex {
-                let len = op as usize;
-                let data = r.data.get(complex_at..complex_at.saturating_add(len).min(r.data.len()));
-                complex_at = complex_at.saturating_add(len);
-                data
-            } else {
-                None
-            };
-            self.fill_gap(pid, PropVal { op, complex });
-        }
-    }
-
-    /// Fill gaps from another set (a master shape's or the drawing defaults).
-    pub fn inherit(&mut self, other: &Props<'a>) {
-        for (k, v) in &other.map {
-            self.fill_gap(*k, *v);
-        }
-    }
-
-    /// Add `v` for `id` where this set doesn't say it already. A boolean property word ([MS-ODRAW]:
-    /// the last id of each 64-id group) holds sixteen flags, each with its own `fUse` bit 16
-    /// places up, so it is merged flag by flag: a shape that sets only `fNoFillHitTest` still
-    /// inherits `fFilled` from its master or the defaults.
-    fn fill_gap(&mut self, id: u16, v: PropVal<'a>) {
-        let full = self.map.len() >= MAX_PROPS;
-        match self.map.get_mut(&id) {
-            None if full => {}
-            None => {
-                self.map.insert(id, v);
-            }
-            Some(have) if id & 0x3F == 0x3F => {
-                let unset = !(have.op >> 16) & 0xFFFF;
-                let take = (v.op >> 16) & unset;
-                have.op |= take << 16;
-                have.op = (have.op & !take) | (v.op & take);
-            }
-            Some(_) => {}
-        }
-    }
-
-    /// Set a simple (non-complex) property.
-    pub fn set(&mut self, id: u16, op: u32) {
-        self.map.insert(id, PropVal { op, complex: None });
-    }
-
-    pub fn get(&self, id: u16) -> Option<u32> {
-        self.map.get(&id).map(|v| v.op)
-    }
-
-    pub fn complex(&self, id: u16) -> Option<&'a [u8]> {
-        self.map.get(&id).and_then(|v| v.complex)
-    }
-
-    /// A 16.16 fixed-point value.
-    pub fn fixed(&self, id: u16) -> Option<f64> {
-        self.get(id).map(|v| f64::from(v as i32) / 65536.0)
-    }
-
-    /// A boolean from a bool-property word: bit `bit` holds the value, bit `bit + 16` says it is set.
-    pub fn flag(&self, id: u16, bit: u32) -> Option<bool> {
-        let v = self.get(id)?;
-        (v & (1 << (bit + 16)) != 0).then_some(v & (1 << bit) != 0)
-    }
-
-    /// A UTF-16 string property (names, alt text), at most [`MAX_STRING`] units: a master shape's
-    /// name is copied into every shape that inherits it.
-    pub fn string(&self, id: u16) -> Option<String> {
-        let b = self.complex(id)?;
-        let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take(MAX_STRING).take_while(|&u| u != 0).collect();
-        Some(String::from_utf16_lossy(&units)).filter(|s| !s.is_empty())
-    }
-
-    /// An `IMsoArray` property: element size and the elements' bytes.
-    pub fn array(&self, id: u16) -> Option<(usize, &'a [u8])> {
-        let b = self.complex(id)?;
-        let n = usize::from(crate::record::u16_at(b, 0)?);
-        let size = crate::record::u16_at(b, 4)?;
-        // 0xFFF0 marks 4-byte elements stored as two 2-byte halves.
-        let size = if size == 0xFFF0 { 4 } else { usize::from(size) };
-        if size == 0 {
-            return None;
-        }
-        let body = b.get(6..)?;
-        let len = n.saturating_mul(size).min(body.len() / size * size);
-        Some((size, body.get(..len)?))
-    }
-}
+pub use craft_officeart::props::{Props, prop};
 
 /// An anchor rectangle in its own coordinate units: master units for a client anchor, the parent
 /// group's units for a child anchor.
@@ -361,6 +184,7 @@ mod tests {
 
     use super::*;
     use crate::record::build::*;
+    use craft_officeart::props::MAX_PROPS;
 
     pub fn fopt(entries: &[(u16, u32)], complex: &[u8]) -> Vec<u8> {
         let mut b = vec![];
@@ -370,60 +194,6 @@ mod tests {
         }
         b.extend_from_slice(complex);
         atom(rt::FOPT, entries.len() as u16, &b)
-    }
-
-    #[test]
-    fn reads_properties_and_complex_strings() {
-        let name: Vec<u8> = "Logo\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let t = fopt(&[(prop::FILL_COLOR, 0x0011_2233), (0x8000 | prop::NAME, name.len() as u32), (prop::FILL_BOOLS, 0x0010_0000)], &name);
-        let mut p = Props::default();
-        p.add_table(&Rec::at(&t, 0).unwrap());
-        assert_eq!(p.get(prop::FILL_COLOR), Some(0x0011_2233));
-        assert_eq!(p.string(prop::NAME).as_deref(), Some("Logo"));
-        assert_eq!(p.flag(prop::FILL_BOOLS, 4), Some(false));
-        assert_eq!(p.flag(prop::LINE_BOOLS, 3), None);
-    }
-
-    /// A boolean word inherits the flags it doesn't set (storytold/deckcraft#1137 review): a text box that sets only
-    /// `fNoFillHitTest` (bit 4 is `fFilled`, bit 0 `fNoFillHitTest`) still gets "not filled"
-    /// from below, and its own flags win over the inherited ones.
-    #[test]
-    fn boolean_properties_merge_flag_by_flag() {
-        let mut p = Props::default();
-        p.set(prop::FILL_BOOLS, 0x0001_0001); // fNoFillHitTest = true; fFilled not said
-        p.set(prop::LINE_BOOLS, 0x0008_0008); // fLine = true
-        let mut below = Props::default();
-        below.set(prop::FILL_BOOLS, 0x0011_0000); // fFilled = false, fNoFillHitTest = false
-        below.set(prop::LINE_BOOLS, 0x0008_0000); // fLine = false
-        p.inherit(&below);
-        assert_eq!(p.flag(prop::FILL_BOOLS, 4), Some(false));
-        assert_eq!(p.flag(prop::FILL_BOOLS, 0), Some(true));
-        assert_eq!(p.flag(prop::LINE_BOOLS, 3), Some(true));
-        // The same merge applies between a shape's own tables.
-        let t = fopt(&[(prop::FILL_BOOLS, 0x0001_0001)], &[]);
-        let t2 = fopt(&[(prop::FILL_BOOLS, 0x0010_0010)], &[]);
-        let mut q = Props::default();
-        q.add_table(&Rec::at(&t, 0).unwrap());
-        q.add_table(&Rec::at(&t2, 0).unwrap());
-        assert_eq!(q.flag(prop::FILL_BOOLS, 4), Some(true));
-        assert_eq!(q.flag(prop::FILL_BOOLS, 0), Some(true));
-        // Non-boolean properties still keep the first value.
-        let mut r = Props::default();
-        r.set(prop::FILL_COLOR, 1);
-        let mut s = Props::default();
-        s.set(prop::FILL_COLOR, 2);
-        r.inherit(&s);
-        assert_eq!(r.get(prop::FILL_COLOR), Some(1));
-    }
-
-    /// A string property longer than [`MAX_STRING`] units is cut there.
-    #[test]
-    fn a_long_string_property_is_capped() {
-        let name: Vec<u8> = "x".repeat(10_000).encode_utf16().flat_map(u16::to_le_bytes).collect();
-        let t = fopt(&[(0x8000 | prop::NAME, name.len() as u32)], &name);
-        let mut p = Props::default();
-        p.add_table(&Rec::at(&t, 0).unwrap());
-        assert_eq!(p.string(prop::NAME).map(|s| s.len()), Some(MAX_STRING));
     }
 
     /// A table naming more than [`MAX_PROPS`] properties keeps that many, and still reads the
@@ -437,7 +207,7 @@ mod tests {
         let anchor = atom(rt::CHILD_ANCHOR, 0, &[1i32, 2, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
         let sp = container(rt::SP_CONTAINER, 0, &[fsp, fopt(&entries, &name), anchor]);
         let s = shape(&Rec::at(&sp, 0).unwrap());
-        assert_eq!(s.props.map.len(), MAX_PROPS);
+        assert_eq!(s.props.len(), MAX_PROPS);
         assert_eq!(s.props.string(prop::NAME).as_deref(), Some("Kept"));
         assert_eq!(s.props.get(0x1000), Some(0));
         assert_eq!(s.props.get(0x1000 + MAX_PROPS as u16), None, "past the limit");
@@ -446,7 +216,7 @@ mod tests {
         let mut p = Props::default();
         p.set(prop::FILL_COLOR, 1);
         p.inherit(&s.props);
-        assert_eq!(p.map.len(), MAX_PROPS);
+        assert_eq!(p.len(), MAX_PROPS);
     }
 
     /// A shape's later primary property table wins over its earlier one, and both over its
@@ -469,15 +239,6 @@ mod tests {
         );
         let s = shape(&Rec::at(&sp, 0).unwrap());
         assert_eq!((s.props.get(prop::FILL_COLOR), s.props.get(prop::LINE_WIDTH), s.props.get(prop::LINE_COLOR)), (Some(2), Some(1), Some(3)));
-    }
-
-    #[test]
-    fn a_complex_length_past_the_record_is_clipped() {
-        let t = fopt(&[(0x8000 | prop::NAME, 0xFFFF_FFFF), (0x8000 | prop::DESCRIPTION, 10)], b"A\0");
-        let mut p = Props::default();
-        p.add_table(&Rec::at(&t, 0).unwrap());
-        assert_eq!(p.string(prop::NAME).as_deref(), Some("A"));
-        assert_eq!(p.complex(prop::DESCRIPTION), None);
     }
 
     #[test]
