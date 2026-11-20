@@ -126,6 +126,26 @@ impl Text {
         self
     }
 
+    fn widest_word(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        let role = cx.style.text.role;
+        self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max)
+    }
+
+    fn ideal_plain(&self, cx: &MeasureCx<'_, Self>, run: &TextRun<'_>, band: f32, widest: Option<f32>) -> Vec2 {
+        let mut layout = cx.layout_at(run, band);
+        // A row can offer less than a word. Its shrink step will make room for the word.
+        if self.elide == Elide::Off && layout.galley.rows.len() > 1 {
+            let widest = widest.unwrap_or_else(|| self.widest_word(cx));
+            if widest > band {
+                layout = cx.layout_at(run, widest);
+            }
+        }
+        match cx.room {
+            Some(room) if layout.elided => Vec2::new(room, layout.size().y),
+            _ => layout.size(),
+        }
+    }
+
     fn doc(&self) -> DocText<'_> {
         let doc = DocText::new(&self.spans);
         if self.elide == Elide::Off { doc } else { doc.elide() }
@@ -203,33 +223,33 @@ impl Component for Text {
                 _ => layout.size(),
             };
         }
-        let role = cx.style.text.role;
-        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
-        let widest = || self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max);
-        if cx.proposal == Proposal::Min && self.elide == Elide::Off {
-            let widest = widest();
-            return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
-        }
-        // At its least an elided line is at its readable least.
+        let run = self.run(cx.style.text.role, cx.resolved.label);
         if cx.proposal == Proposal::Min {
-            let run = self.run(role, cx.resolved.label);
+            if self.elide == Elide::Off {
+                let widest = self.widest_word(cx);
+                return Vec2::new(widest, cx.layout_at(&run, widest).size().y);
+            }
             return cx.least(&run).size();
         }
-        let band = wrap.unwrap_or(f32::INFINITY);
-        let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
-        // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
-        // then makes room for the word.
-        if self.elide == Elide::Off && layout.galley.rows.len() > 1 {
-            let widest = widest();
-            if widest > band {
-                layout = cx.layout_at(&self.run(role, cx.resolved.label), widest);
-            }
+        self.ideal_plain(cx, &run, wrap.unwrap_or(f32::INFINITY), None)
+    }
+
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        if !self.spans.is_empty() {
+            return None;
         }
-        // A cut line takes the whole room: its width must not follow where the last glyph happened to fit.
-        match cx.room {
-            Some(room) if layout.elided => Vec2::new(room, layout.size().y),
-            _ => layout.size(),
+        let band = ideal.column_room().unwrap_or(f32::INFINITY);
+        let _ = least.column_room();
+        let run = self.run(ideal.style.text.role, ideal.resolved.label);
+        if self.elide == Elide::Off {
+            let widest = self.widest_word(least);
+            let ideal_size = self.ideal_plain(ideal, &run, band, Some(widest));
+            return Some((ideal_size, Vec2::new(widest, least.layout_at(&run, widest).size().y)));
         }
+        let ideal_size = self.ideal_plain(ideal, &run, band, None);
+        Some((ideal_size, least.least(&run).size()))
     }
 
     fn cut_first(&self) -> bool {
