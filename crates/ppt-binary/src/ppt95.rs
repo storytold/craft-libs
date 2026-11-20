@@ -741,13 +741,15 @@ fn convert_within(document: &Rec, app: &dyn Defaults, budget: usize) -> Presenta
 /// Document itself, isn't read: the PowerPoint 97 path doesn't import notes masters either.
 fn notes(page: &Rec, env: &Env, slide_scheme: &Scheme) -> Option<TextBody> {
     let scheme = page.child(rt::SCHEME).and_then(|s| s.child(rt::COLOR_SCHEME)).map_or(*slide_scheme, |s| scheme_of(&s));
-    let is_notes = |r: &Rec| {
-        let kind = r.child(rt::PLACEHOLDER_ATOM).filter(|_| r.kind == rt::PLACEHOLDER).and_then(|a| a.u8(0));
+    let kind = |r: &Rec| r.child(rt::PLACEHOLDER_ATOM).filter(|_| r.kind == rt::PLACEHOLDER).and_then(|a| a.u8(0));
+    let notes_text = |r: &Rec| {
         let text_type = r.child(rt::TEXT).and_then(|t| t.child(rt::TEXT_BODY)).and_then(|b| b.child(rt::TEXT_ATOM)).and_then(|a| a.u32(0));
-        kind == Some(NOTES_PLACEHOLDER) || (kind.is_none() && text_type == Some(NOTES_TEXT))
+        kind(r).is_none() && text_type == Some(NOTES_TEXT)
     };
     let objects = page.child(rt::OBJECTS)?;
-    let found = objects.children().take(MAX_OBJECTS).filter(|r| matches!(r.kind, rt::SHAPE | rt::PLACEHOLDER)).find(|r| is_notes(r))?;
+    let candidates = || objects.children().take(MAX_OBJECTS).filter(|r| matches!(r.kind, rt::SHAPE | rt::PLACEHOLDER));
+    // The notes placeholder wherever it is, before any other text of the notes type.
+    let found = candidates().find(|r| kind(r) == Some(NOTES_PLACEHOLDER)).or_else(|| candidates().find(|r| notes_text(r)))?;
     let mut body = text::text_body(&found.child(rt::TEXT)?, env, &scheme, None, false)?;
     body.body = BodyProps::default();
     Some(body)

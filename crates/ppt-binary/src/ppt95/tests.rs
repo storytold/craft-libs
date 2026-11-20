@@ -2137,6 +2137,18 @@ fn notes_land_on_their_slide() {
     assert_eq!(p.slides[0].notes.paragraphs[0].runs[0].props.size, Some(24.0));
     assert_eq!(texts(&p), ["On the slide"]);
     assert!(p.slides[1..].iter().all(|s| s.shapes.is_empty()));
+
+    // Text of the notes type before the notes placeholder: the placeholder's text is the notes.
+    let mut spec = SlideSpec::new(0x100, 16);
+    spec.notes = Some(notes_with(
+        0x100,
+        vec![
+            shape_95(bx, Some(text_typed(simple_text(b"Typed first", bx, BODY), 2))),
+            placeholder_95(0x0E, 0, 1, bx, Some(simple_text(b"From the placeholder", bx, BODY))),
+        ],
+    ));
+    let p = import(&stream_of(document_atom(5760, 4320, 1), &[slide(&spec)], &[master(MASTER, DEFAULT, [0; 4])])).unwrap();
+    assert_eq!(p.slides[0].notes.text(), "From the placeholder");
 }
 
 /// Notes paragraphs keep their spacing and justified alignment, as a slide's do.
