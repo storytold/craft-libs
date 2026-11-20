@@ -128,13 +128,18 @@ struct CameraLevels {
 fn kelvin_presets(maker: Option<&Ifd>) -> Option<crate::kelvin::KelvinPresets> {
     let v = maker?.u64s(COLOR_DATA)?;
     let rows = match v.first().copied()? {
-        16..=19 => crate::cr2::preset_records(136, 166),
-        32 | 33 => crate::cr2::preset_records(150, 180),
-        34 | 48 => crate::cr2::preset_records(205, 235),
-        64..=66 => crate::cr2::preset_records(110, 135),
+        16..=19 => crate::canon_wb::preset_records(136, 166),
+        32 | 33 => crate::canon_wb::preset_records(150, 180),
+        34 | 48 => crate::canon_wb::preset_records(205, 235),
+        64..=66 => crate::canon_wb::preset_records(110, 135),
         _ => return None,
     };
-    crate::cr2::presets_at(&v, &rows)
+    crate::canon_wb::presets_at(&v, &rows)
+}
+
+/// The Kelvin presets of the timed (per-frame) maker note `color_maker`, else of the file's static one.
+fn kelvin_presets_of(color_maker: Option<&Ifd>, maker: Option<&Ifd>) -> Option<crate::kelvin::KelvinPresets> {
+    kelvin_presets(color_maker).or_else(|| kelvin_presets(maker))
 }
 
 /// Canon's versioned word arrays. Offsets are word indices from the published tag tables, not
@@ -270,7 +275,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop,
         orientation: Orientation::from_exif(ifd0.and_then(|i| i.u16(craft_tiff::tags::ORIENTATION)).unwrap_or(1)),
-        color: ColorData { kelvin_presets: kelvin_presets(color_maker), ..Default::default() },
+        // timed presets first; the static CMT3 note when the timed ones make no curve
+        color: ColorData { kelvin_presets: kelvin_presets_of(color_maker, maker), ..Default::default() },
         wb_multipliers: levels.wb,
         linearized: false,
         linearization_table: None,
@@ -423,6 +429,31 @@ mod tests {
             assert!(kelvin_presets(Some(&ifd(words))).is_none(), "{version}: unknown");
         }
         assert!(kelvin_presets(None).is_none());
+    }
+
+    /// storytold/craft-libs#2234 review: a timed maker note whose `ColorData` gives no presets falls back to the static
+    /// CMT3 note's; when both give presets the timed one wins.
+    #[test]
+    fn kelvin_presets_fall_back_to_the_static_note() {
+        let note = |version: u16, flash_k: u16| {
+            let mut words = vec![0u16; 300];
+            words[0] = version;
+            let records = [(2013u16, 1479u16, 5200u16), (2300, 1280, 7000), (2153, 1374, 6000), (1442, 2089, 3200), (2203, 1371, flash_k)];
+            for (i, (r, b, k)) in records.into_iter().enumerate() {
+                let at = if i == 4 { 135 } else { 110 + 5 * i };
+                words[at..at + 5].copy_from_slice(&[r, 1024, 1024, b, k]);
+            }
+            let b = IfdBuilder::new().with(COLOR_DATA, Value::Short(words));
+            let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[b]).unwrap();
+            Tiff::parse(&bytes).unwrap().ifds.remove(0)
+        };
+        let kelvins = |p: Option<crate::kelvin::KelvinPresets>| p.map(|p| p.points().iter().map(|&(k, _)| k).collect::<Vec<f32>>());
+        let (timed_unknown, timed, stat) = (note(255, 6156), note(64, 6100), note(64, 6156));
+        assert_eq!(kelvins(kelvin_presets_of(Some(&timed_unknown), Some(&stat))), kelvins(kelvin_presets(Some(&stat))));
+        assert!(kelvins(kelvin_presets_of(Some(&timed_unknown), Some(&stat))).is_some());
+        assert_eq!(kelvins(kelvin_presets_of(Some(&timed), Some(&stat))), kelvins(kelvin_presets(Some(&timed))));
+        assert_ne!(kelvins(kelvin_presets(Some(&timed))), kelvins(kelvin_presets(Some(&stat))));
+        assert!(kelvin_presets_of(Some(&timed_unknown), None).is_none());
     }
 
     fn maker(version: u16, wb_at: usize, black_at: usize, white_at: usize) -> Ifd {

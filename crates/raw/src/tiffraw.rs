@@ -4,7 +4,7 @@
 use crate::unpack::inflate;
 use crate::unpack::{f16_to_f32, f24_to_f32, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb_with};
 use crate::{Limits, RawData, RawError, Result, ljpeg};
-use craft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
+use craft_tiff::image::{Chunk, ImageInfo, Layout, chunk_bytes};
 use craft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
 
@@ -125,7 +125,15 @@ pub(crate) fn read_image_in(
             {
                 match info.compression {
                     7 => {
-                        ljpeg::frame_info(src)?;
+                        // the full decode's frame-size limit, from the header alone
+                        let (w, h, nc, _) = ljpeg::frame_info(src)?;
+                        let planar = info.planar == 2 && info.samples_per_pixel > 1;
+                        let cpp = if planar { 1 } else { info.samples_per_pixel as usize };
+                        let (cw, ch, _, _) = chunk_dims(info, &c);
+                        let n = cw.saturating_mul(ch).saturating_mul(cpp);
+                        if w.saturating_mul(h).saturating_mul(nc) > ljpeg_frame_limit(info, &c, n, cpp, limits) {
+                            return Err(RawError::Limit("lossless JPEG frame larger than expected"));
+                        }
                     }
                     comp::JPEG_XL => {
                         let planar = info.planar == 2 && info.samples_per_pixel > 1;
@@ -346,7 +354,7 @@ fn decode_chunk(
         comp::JPEG => {
             // A frame may hold at most twice the tile's samples, with no floor: a 65,536-sample floor let each of
             // many tiny tiles decode (and keep) a frame far larger than the tile budget counts (storytold/lightcraft#4024)
-            let f = ljpeg::decode(src, n.saturating_mul(2))?;
+            let f = ljpeg::decode(src, ljpeg_frame_limit(info, c, n, cpp, limits))?;
             if f.data.len() < n {
                 // Some writers encode edge tiles smaller than nominal: accept a frame that covers the rows inside the image.
                 if f.data.is_empty() || f.data.len() % (cw * cpp) != 0 || f.data.len() / (cw * cpp) < vh {
@@ -425,6 +433,20 @@ fn decode_chunk(
 }
 
 /// A chunk's nominal size and the part of it inside the image (smaller for edge tiles).
+/// The most samples a lossless JPEG frame coded for chunk `c` (of `n` samples) may hold: twice the chunk's. A final
+/// strip, clipped to the image, may also be coded at the full RowsPerStrip (as some writers pad it), so it may hold
+/// that strip's nominal samples, within the sample limit; only its leading, visible rows are kept.
+fn ljpeg_frame_limit(info: &ImageInfo, c: &Chunk, n: usize, cpp: usize, limits: &Limits) -> usize {
+    let twice = n.saturating_mul(2);
+    match info.layout {
+        Layout::Strips { rows_per_strip } if c.height < rows_per_strip => {
+            let nominal = (c.width as usize).saturating_mul(rows_per_strip as usize).saturating_mul(cpp);
+            twice.max(nominal.min(limits.samples()))
+        }
+        _ => twice,
+    }
+}
+
 fn chunk_dims(info: &ImageInfo, c: &Chunk) -> (usize, usize, usize, usize) {
     let (cw, ch) = (c.width as usize, c.height as usize);
     let vw = cw.min(info.width.saturating_sub(c.x) as usize);
@@ -1150,11 +1172,72 @@ mod budget_tests {
     fn tiny_tiles_with_a_large_frame_are_refused() {
         let tile = ljpeg::encode(&vec![300u16; 128 * 128 * 4], 128, 128, 4, 12, 1, 0);
         let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![tile.len() as u64; 1024], ..aliased(64, 64, 2, 0) };
-        assert!(read_image(&tile, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).is_err());
+        let err = read_image(&tile, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
+        assert_eq!(err, RawError::Limit("lossless JPEG frame larger than expected"));
         // a frame of the tile's own size still decodes
         let fits = ljpeg::encode(&[300u16; 4], 2, 2, 1, 12, 1, 0);
         let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![fits.len() as u64; 4], ..aliased(4, 4, 2, 0) };
         assert_eq!(read_image(&fits, &info, ByteOrder::Little, Packing::Msb, &Limits::default()), Ok(RawData::U16(vec![300; 4 * 4])));
+    }
+
+    /// The header read applies the full decode's frame-size limit: a 16 × 16 tile coded as a 16 × 48 frame (768
+    /// samples where the tile allows 512) fails both modes alike, without decoding pixels in the header read.
+    #[test]
+    fn header_reads_apply_the_lossless_frame_limit() {
+        let tall = ljpeg::encode(&vec![300u16; 16 * 48], 16, 48, 1, 12, 1, 0);
+        let info = ImageInfo { bits_per_sample: vec![12], byte_counts: vec![tall.len() as u64], ..aliased(16, 16, 16, 0) };
+        for mode in [crate::Mode::Header, crate::Mode::Full] {
+            let err = read_image_in(mode, &tall, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
+            assert_eq!(err, RawError::Limit("lossless JPEG frame larger than expected"), "{mode:?}");
+        }
+        let fits = ljpeg::encode(&vec![300u16; 16 * 16], 16, 16, 1, 12, 1, 0);
+        let info = ImageInfo { byte_counts: vec![fits.len() as u64], ..info };
+        for mode in [crate::Mode::Header, crate::Mode::Full] {
+            assert!(read_image_in(mode, &fits, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).is_ok(), "{mode:?}");
+        }
+    }
+
+    /// A final strip clipped to the image (1 row of RowsPerStrip 8) may be coded at the full RowsPerStrip, as some
+    /// writers pad it: its visible row is kept. Only the final strip gets that room: a frame past the nominal strip, or
+    /// an inner strip coded taller than twice its rows, is still refused.
+    #[test]
+    fn a_final_strip_padded_to_rows_per_strip_decodes() {
+        let (w, rps) = (16usize, 8usize);
+        let strip = |v: u16, rows: usize| ljpeg::encode(&vec![v; w * rows], w, rows, 1, 12, 1, 0);
+        let build = |parts: &[Vec<u8>]| {
+            let (mut file, mut offsets, mut counts) = (Vec::new(), Vec::new(), Vec::new());
+            for p in parts {
+                offsets.push(file.len() as u64);
+                counts.push(p.len() as u64);
+                file.extend_from_slice(p);
+            }
+            let info = ImageInfo {
+                width: w as u32,
+                height: 17,
+                bits_per_sample: vec![12],
+                offsets,
+                byte_counts: counts,
+                layout: Layout::Strips { rows_per_strip: rps as u32 },
+                ..aliased(16, 17, 16, 0)
+            };
+            (file, info)
+        };
+        let (file, info) = build(&[strip(100, rps), strip(200, rps), strip(300, rps)]);
+        let mut want = vec![100u16; w * rps];
+        want.extend(vec![200u16; w * rps]);
+        want.extend(vec![300u16; w]);
+        assert!(read_image_in(crate::Mode::Header, &file, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).is_ok());
+        assert_eq!(read_image(&file, &info, ByteOrder::Little, Packing::Msb, &Limits::default()), Ok(RawData::U16(want)));
+        // past the nominal strip
+        let (file, info) = build(&[strip(100, rps), strip(200, rps), strip(300, 3 * rps)]);
+        let err = read_image(&file, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
+        assert_eq!(err, RawError::Limit("lossless JPEG frame larger than expected"));
+        // an inner strip gets no such room
+        let (file, info) = build(&[strip(100, 3 * rps), strip(200, rps), strip(300, rps)]);
+        for mode in [crate::Mode::Header, crate::Mode::Full] {
+            let err = read_image_in(mode, &file, &info, ByteOrder::Little, Packing::Msb, &Limits::default()).unwrap_err();
+            assert_eq!(err, RawError::Limit("lossless JPEG frame larger than expected"), "{mode:?}");
+        }
     }
 
     /// storytold/lightcraft#2554: tiled decoders decode the grid in groups of at most a quarter of the image (1 Mi samples at

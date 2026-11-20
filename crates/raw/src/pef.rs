@@ -137,7 +137,10 @@ fn kelvin_presets(mn: Option<&makernote::MakerNote>) -> Option<crate::kelvin::Ke
         .0
         .iter()
         .filter(|e| e[0] != 0 && e[0] < 53190 && e[2] != 0 && e[3] != 0)
-        .map(|e| ((53190 - u32::from(e[0])) as f32, [f32::from(e[2]), 8192.0, f32::from(e[3])]));
+        .map(|e| ((53190 - u32::from(e[0])) as f32, [f32::from(e[2]), 8192.0, f32::from(e[3])]))
+        // a white balance preset is a light between 1000 K and 20000 K (as for the other makers' presets): an entry
+        // decoding outside that is dropped, the others kept
+        .filter(|(k, _)| (1000.0..=20000.0).contains(k));
     crate::kelvin::KelvinPresets::from_unordered(points)
 }
 
@@ -298,6 +301,16 @@ mod tests {
         // no tag, or too few usable entries: none
         assert!(kelvin_presets(None).is_none());
         assert!(kelvin_presets(Some(&note(&words[..9]))).is_none());
+        // an entry decoding to 1 K (53189) is dropped; the other calibration points remain
+        let mut odd = words.clone();
+        odd[5] = 53189;
+        let kelvins: Vec<f32> = kelvin_presets(Some(&note(&odd))).unwrap().points().iter().map(|p| p.0).collect();
+        assert_eq!(kelvins, [3330.0, 4550.0, 5205.0, 6500.0]);
+        // and one decoding past 20000 K
+        let mut hot = words.clone();
+        hot[5] = 53190 - 30000;
+        let kelvins: Vec<f32> = kelvin_presets(Some(&note(&hot))).unwrap().points().iter().map(|p| p.0).collect();
+        assert_eq!(kelvins, [3330.0, 4550.0, 5205.0, 6500.0]);
     }
 
     /// Our own prefix code for categories 0..=14: lengths 2,2,3,3,4,5,..., codes assigned canonically.
