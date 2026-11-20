@@ -226,7 +226,7 @@ pub struct LayerMove {
 }
 
 /// The open document.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Document {
     /// The title of the window and the tab.
@@ -399,7 +399,7 @@ impl Document {
 }
 
 /// Everything the mock edits.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MockState {
     /// The dock's panels and where they sit.

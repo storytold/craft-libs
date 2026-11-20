@@ -326,6 +326,13 @@ impl<T: PlainData + Clone> Clone for Tracked<T> {
     }
 }
 
+/// Two values are equal when what they hold is: the revision says which writes a value saw, not what it is.
+impl<T: PlainData + PartialEq> PartialEq for Tracked<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
 impl<T: PlainData> Deref for Tracked<T> {
     type Target = T;
 
