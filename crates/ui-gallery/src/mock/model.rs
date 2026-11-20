@@ -12,6 +12,9 @@ use craft_ui::contract::{CommandSet, Tracked};
 use craft_ui::rails::{LastUsed, RailTool, SlotId, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use egui::{Color32, Rect};
+use std::sync::Arc;
+
+use super::panels::MockSpecs;
 
 /// The width of the dock column at the end edge.
 const SIDE_WIDTH: f32 = 220.0;
@@ -403,7 +406,9 @@ impl Document {
 #[non_exhaustive]
 pub struct MockState {
     /// The dock's panels and where they sit.
-    pub workspace: Workspace<Panel>,
+    pub workspace: Arc<Workspace<Panel>>,
+    /// The dock's panel specs.
+    pub specs: Tracked<MockSpecs>,
     /// The open document.
     pub document: Document,
     /// The current tool.
@@ -433,7 +438,8 @@ impl Default for MockState {
             Node::split(Axis::X, SplitSize::Ratio(CANVAS_SHARE), Node::tabs(vec![Panel::Canvas], 0), Node::dock(DockEdge::End, vec![side, icons]));
         let root = Node::split(Axis::X, SplitSize::FixedFirst(TOOLS_DOCK_WIDTH), Node::dock(DockEdge::Start, vec![tools]), canvas);
         MockState {
-            workspace: Workspace::new(Layout::new(Some(root), Vec::new())),
+            workspace: Arc::new(Workspace::new(Layout::new(Some(root), Vec::new()))),
+            specs: Tracked::new(MockSpecs),
             document: Document::default(),
             tool: Tool::Move,
             last_used: LastUsed::default(),

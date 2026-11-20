@@ -19,7 +19,9 @@ use super::{
 };
 
 /// The panels of a workspace: a docked tree plus floating windows. Every panel occurs once.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+///
+/// Equality compares the tree and the windows, not the window id counter.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Layout<P> {
     /// The docked layout; `None` when nothing is docked.
@@ -27,18 +29,53 @@ pub struct Layout<P> {
     /// Floating windows, with unique ids.
     #[serde(deserialize_with = "super::node::floating_serde::unique_ids")]
     pub floating: Vec<Floating<P>>,
+    /// The least id [`Self::fresh_window_id`] may draw: above every id this layout has drawn, and above every id
+    /// the layouts it replaced held. Not saved.
+    #[serde(skip)]
+    pub(super) next_window: u64,
+}
+
+impl<P: PartialEq> PartialEq for Layout<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root && self.floating == other.floating
+    }
 }
 
 impl<P> Default for Layout<P> {
     fn default() -> Self {
-        Self { root: None, floating: Vec::new() }
+        Self { root: None, floating: Vec::new(), next_window: 0 }
     }
 }
 
 impl<P> Layout<P> {
     /// A layout with the docked tree `root` and the floating windows `floating`.
     pub fn new(root: Option<Node<P>>, floating: Vec<Floating<P>>) -> Self {
-        Self { root, floating }
+        Self { root, floating, next_window: 0 }
+    }
+
+    /// An id for a new floating window: above every window id the layout holds or has drawn, so an id, and the OS
+    /// window it names, is never given to another window while the layout lives.
+    pub fn fresh_window_id(&mut self) -> u64 {
+        let id = self.window_floor();
+        self.next_window = id.saturating_add(1);
+        id
+    }
+
+    /// The least id no window of the layout holds or has held.
+    fn window_floor(&self) -> u64 {
+        self.floating.iter().map(|window| window.id.saturating_add(1)).fold(self.next_window, u64::max)
+    }
+
+    /// Takes the windows of `incoming`, which replaces this layout, onto ids this layout never gave out: a window
+    /// whose id is below this layout's floor gets a fresh one, and the counter keeps growing from both.
+    pub(super) fn hand_ids_to(&self, incoming: &mut Layout<P>) {
+        let floor = self.window_floor();
+        incoming.next_window = incoming.window_floor().max(floor);
+        let stale: Vec<usize> = incoming.floating.iter().enumerate().filter(|(_, window)| window.id < floor).map(|(at, _)| at).collect();
+        for at in stale {
+            let id = incoming.fresh_window_id();
+            incoming.floating[at].id = id;
+        }
     }
 }
 

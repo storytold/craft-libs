@@ -37,3 +37,13 @@ fn sizes(gap: f32, least_pane: f32, strip: f32) -> DockSizes {
         sizes
     })
 }
+
+/// Panel specs that name each panel by its number ("Panel 3"), with every permission.
+#[derive(craft_ui::contract::PlainData)]
+struct Numbered;
+
+impl<P: std::fmt::Display> craft_ui::docking::PanelSpecs<P> for Numbered {
+    fn spec(&self, panel: &P) -> craft_ui::docking::PanelSpec {
+        craft_ui::docking::PanelSpec::new(format!("Panel {panel}"))
+    }
+}

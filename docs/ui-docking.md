@@ -12,7 +12,7 @@ An app with dockable panels shows a `DockArea`. The parts are for patterns that 
 
 ## Model
 
-A `Workspace` is a saved arrangement: its `layout` and the `hidden` panels with the place each one goes back to. A `Layout` is a docked tree (`root: Option<Node<P>>`) plus floating windows (`floating: Vec<Floating<P>>`). `P` is the app's panel key. Every panel occurs once.
+A `Workspace` is a saved arrangement: its `layout()` and the `hidden()` panels with the place each one goes back to. Its fields are private; it changes only through its methods. A `Layout` is a docked tree (`root: Option<Node<P>>`) plus floating windows (`floating: Vec<Floating<P>>`). `P` is the app's panel key. Every panel occurs once.
 
 `Node` has four forms:
 
@@ -39,7 +39,7 @@ To load a saved workspace:
 
 ```rust
 let mut panels = Panels { document: &mut state.document };
-let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &mut panels, DockConfig::default());
+let mut area = DockArea::new("Dock", Bind::bound(&mut state.workspace), &state.specs, &mut panels, DockConfig::default());
 if let Some(panel) = state.maximized {
     area = area.maximized(panel);
 }
@@ -50,18 +50,27 @@ for event in area.show(ui).events {
 }
 ```
 
-The host implements `DockPanels<P>`:
+The host holds the workspace as an `Arc<Workspace<P>>` (`state.workspace`): a pass shares it instead of cloning it, and an edit writes a new one (`Arc::make_mut`).
+
+The host keeps its panels' specs in a plain-data model that implements `PanelSpecs<P>`, held in a `Tracked` (`state.specs`):
 
 | Method | Does |
 | --- | --- |
-| `spec` | The panel's `PanelSpec`, read every pass: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`. |
+| `spec` | The panel's `PanelSpec`: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`, `grid`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
+
+The area reads them only when the model's revision, the workspace's revision or the lock changes (`runtime::derived`), and keeps what it read otherwise, so an idle pass reads no spec. A host changes a label or a limit by editing the model. A spec reads no style: a tool rail's grid is `DockGrid::rail(cells)`, which the dock sizes from its own tokens.
+
+The host implements `DockPanels<P>` for the views:
+
+| Method | Does |
+| --- | --- |
 | `body` | Shows the panel's body in the group's body, which the group insets by the panel padding (`Pad::Regular`). The group is the body's panel, so the body adds no `Panel` or padding of its own. A document panel's body (`WindowKind::Document`) is shown edge to edge. |
 | `group_view` | Takes a whole group in place of its tab strip and body, in a `Ui` held to the group's rect; a canvas group draws its document here. Default `None`. |
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
 
-The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy: the actions hold every change of the pass, divider sizes and window moves included. `DockArea::read_only` shows a layout locked.
+The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy: the actions hold every change of the pass, divider sizes and window moves included. `DockArea::read_only` shows a workspace locked, keyed by its revision.
 
 A panel body, or code a body calls, changes the workspace during the pass with `docking::request_actions(ctx, actions)`, never by writing the workspace the area shows. The running area takes them unapplied and returns them in `DockAreaOutput::requested`, in order, for the host to apply after `actions` in the same frame. With no area over that panel type running, `request_actions` hands the actions back for the caller to apply.
 
@@ -103,9 +112,10 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A column collapsed to icons takes drops as an expanded column does: its edges (a new column beside it, docked only), the seams between its icon groups, the top of the first group and the bottom of the last (a new group above or below), and each icon group's cells (join its tabs). The column's state wins: a panel dropped into a collapsed column shows as an icon, one dropped into an expanded column shows expanded.
 - Nothing goes beside a floating window: its column registers no edge bands, and its groups (`DockGroup::in_window`) take no drop on their start and end sides.
 - A collapsed column's flyouts open on the side `IconicColumn::opens` names: away from a dock's window edge, and towards the room of the float area for a floating window. A floating window keeps to its edge of the float area: `Floating::edge`, else the one nearer its rect. A move keeps the edge it began with. A collapsed window's move ends at the edge nearer its strip where it was dropped, with the rect that shows the strip there (`WindowColumn::dropped`), and the area records that edge (`Action::MoveFloating`'s `edge`); a unit dragged out of a collapsed column (`start_icon_drag`) floats collapsed the same way, its strip under the pointer (`Target::Float`'s `edge`). Collapsing a floating column and moving an expanded window clear the edge. A column that neither collapses nor has steps shows no double arrow and offers no collapse in its menu (`ColumnArrow::Fixed`).
-- A panel that lays its content in a grid (a toolbar) declares it with `PanelSpec::grid` (`DockGrid`: the width at one content column, the width each further column adds, and the most columns). Its column, given steps (`Column::steps`), is a whole number of content columns wide and as tall as the content measures at that width: docked from the top of the dock, content taller than the dock scrolls inside; floating under the title row, at the window's place. A drag of the column's edge, or of a floating window's side, sets the most steps that fit, and a drag of a floating window's left side keeps its right edge, one of its top its bottom edge; a drag of a floating window's top or bottom sets the fewest whose content fits. When the column's panels do not collapse, its double arrow switches between one and two steps (`ColumnArrow::Steps`), named for the count it switches to and pointing the way the column grows or shrinks. A dock side's total width (`DockSizes::resize_side`) leaves a stepped column's width alone.
+- A panel that lays its content in a grid (a toolbar) declares it with `PanelSpec::grid` (`DockGrid`: the width at one content column, the width each further column adds, and the most columns; `DockGrid::rail` for a tool rail, sized by the dock). Its column, given steps (`Column::steps`), is a whole number of content columns wide and as tall as the content measures at that width: docked from the top of the dock, content taller than the dock scrolls inside; floating under the title row, at the window's place. A drag of the column's edge, or of a floating window's side, sets the most steps that fit, and a drag of a floating window's left side keeps its right edge, one of its top its bottom edge; a drag of a floating window's top or bottom sets the fewest whose content fits. When the column's panels do not collapse, its double arrow switches between one and two steps (`ColumnArrow::Steps`), named for the count it switches to and pointing the way the column grows or shrinks. A dock side's total width (`DockSizes::resize_side`) leaves a stepped column's width alone.
 - Ctrl or Cmd held at the release floats the drop. A release over the dragged unit's own group leaves it where it is.
-- A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's revision, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the revision, so they keep the drag.
+- A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's generation, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the generation, so they keep the drag. Every write moves the workspace's revision (`Workspace::revision`), which keys what the area derives.
+- A floating window's id comes from a counter its layout owns (`Layout::fresh_window_id`): it only grows while the layout lives, and `Workspace::replace` gives the incoming windows ids the replaced layout never gave out, so an OS window never passes to another window.
 - A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.

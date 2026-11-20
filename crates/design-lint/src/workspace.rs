@@ -195,8 +195,6 @@ const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     ("crates/imaging/src/ui/layer_style/hosted.rs", "PAINT"),
     // Settled fact: a test fake of the font store; it writes a temporary folder.
     ("crates/font-manager/src/store/fake.rs", FS),
-    // later task of #2336: the dock node id counter is hidden state.
-    ("crates/behavior/src/dock/node.rs", "NEXT"),
     // later task of #2336: the brush trail id counter is hidden state.
     ("crates/ui-canvas/src/canvas_controls/brush/trail.rs", "NEXT_ID"),
     // later task of #2336: the outline hover generation counter is hidden state.

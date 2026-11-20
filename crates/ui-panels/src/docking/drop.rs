@@ -409,12 +409,12 @@ impl<P: Clone + Eq + Hash + Send + 'static> DropTarget<GroupDrag<P>> for DockDro
     }
 }
 
-/// The arrangement a dock drag started on: the dock area and the revision of the workspace it showed.
+/// The arrangement a dock drag started on: the dock area and the generation of the workspace it showed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct Arrangement {
     pub dock: Id,
-    pub revision: u64,
+    pub generation: u64,
 }
 
 /// The env value a dock area puts into its body: the arrangement it shows. `None` outside a dock area.
@@ -463,9 +463,9 @@ where
     cx.start_drag(GroupDrag { unit, active, source: None, strip: Some(strip), started }, DragPreview::Named(label));
 }
 
-/// Ends a running tab or group drag that started on `shown`'s dock under another revision: another arrangement
+/// Ends a running tab or group drag that started on `shown`'s dock under another generation: another arrangement
 /// replaced the workspace, and the panel or group the drag names may be gone or elsewhere. The dock's own edits keep
-/// the revision, and so the drag.
+/// the generation, and so the drag.
 #[doc(hidden)]
 pub fn end_replaced_drags<P: Send + Sync + 'static>(ctx: &Context, shown: Arrangement) {
     let replaced = |started: Option<Arrangement>| started.is_some_and(|started| started.dock == shown.dock && started != shown);

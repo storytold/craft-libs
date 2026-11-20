@@ -4,9 +4,9 @@ use super::SplitFramesCx as _;
 use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
-use super::{DockCommands, DockGroup, DockPanels, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelTitle, SplitArea, Splitter, WindowMenuRows};
+use super::{DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, WindowMenuRows};
 use crate::contract::SizeLimits;
-use crate::contract::{Bind, BodyCx, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Message;
@@ -130,21 +130,20 @@ fn between_sections(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 }
 
 /// The panels of the Window menu story: each labelled by its number.
+#[derive(crate::contract::PlainData)]
 struct NumberedPanels;
 
-impl DockPanels<u32> for NumberedPanels {
+impl PanelSpecs<u32> for NumberedPanels {
     fn spec(&self, panel: &u32) -> PanelSpec {
         PanelSpec::new(format!("Panel {panel}"))
     }
-
-    fn body(&mut self, _: &u32, _: &mut Ui, _: &mut BodyCx<'_>) {}
 }
 
 #[story(WindowMenuRows<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn window_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let layout = Layout::new(Some(Node::tabs(vec![1], 0)), Vec::new());
     let menu = Menu::new("Window").open(data.bind("open", true)).show(ui, |ui, _| {
-        WindowMenuRows::new(&layout, &NumberedPanels, &[1, 2]).show(ui);
+        WindowMenuRows::new(&layout, &Tracked::new(NumberedPanels), &[1, 2]).show(ui);
     });
     StoryOutput::from(menu.output)
 }

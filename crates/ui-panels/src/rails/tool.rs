@@ -92,7 +92,7 @@ type FooterFn<'a> = Box<dyn FnMut(&mut Ui, RailFooter) + 'a>;
 /// The rail of tool slots, laid out in a grid of columns: one `FlyoutButton` per visible slot showing the slot's shown
 /// tool, the slot with the current tool toggled on. A click selects the shown tool, a row of the flyout selects that
 /// tool. The rail takes as many columns as the width it gets holds, the most whole columns that fit
-/// ([`dock_grid`](ToolRail::dock_grid)): it is `first` wide at one column and `step` wider for each further column,
+/// ([`dock_grid`](ToolRail::dock_grid)): it is a button and the control padding wide at one column and a button and the tight gap wider for each further column,
 /// and the slots fill the rows in reading order. The control padding surrounds the buttons; a slot that ends a group
 /// leaves `space.gap.inline` after its row; slots within a group sit `space.gap.tight` apart. The Edit Toolbar button
 /// follows the last slot; the host's footer stays in view under the slots, which scroll when the room is short under
@@ -156,15 +156,11 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
         .label(label)
     }
 
-    /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) as its dock column sizes
-    /// it ([`PanelSpec::grid`](crate::docking::PanelSpec::grid)): `first` is a button and the control padding on both
-    /// sides, `step` a button and the tight gap before it, and `most` the cells.
+    /// The grid of a rail of `cells` cells (its visible slots and the Edit Toolbar button) in the root style:
+    /// [`DockGrid::rail`] resolved there. A panel's spec gives the unresolved [`DockGrid::rail`], which its dock
+    /// resolves in its own style.
     pub fn dock_grid(ctx: &egui::Context, cells: usize) -> DockGrid {
-        StyleCx::with_root(ctx, |cx| {
-            let button = cx.tokens.size.rail.button;
-            let most = u16::try_from(cells).unwrap_or(u16::MAX).max(1);
-            DockGrid::new(button + 2.0 * cx.tokens.space.pad.control, button + cx.tokens.space.gap.tight, most)
-        })
+        DockGrid::rail(cells).resolved(&crate::docking::DockSizes::of(ctx))
     }
 
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
@@ -311,7 +307,7 @@ impl<'a, T: Value + MemoProps + 'static> ToolRail<'a, T> {
     /// Shows the rail one column wide, for a host that lays it at the start of a row (the full-window workspaces'
     /// tool strips): the width `ui` has left belongs to what follows it in the row.
     pub fn show_column(self, ui: &mut Ui, footer: impl FnMut(&mut Ui, RailFooter) + 'a) -> ToolRailOutput<T> {
-        let one = Self::dock_grid(ui.ctx(), 1).first;
+        let one = Self::dock_grid(ui.ctx(), 1).width(1);
         self.show_within(ui, one, footer)
     }
 

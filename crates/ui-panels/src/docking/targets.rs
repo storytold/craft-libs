@@ -66,6 +66,11 @@ pub struct DockSizes {
     pub iconic_least: f32,
     /// The width of an expanded column the user has not resized (the dock column width).
     pub column: f32,
+    /// A tool rail's width at one column: a rail button and the control padding on both sides
+    /// ([`DockGrid::rail`](super::DockGrid::rail)).
+    pub rail_first: f32,
+    /// The width each further column of a tool rail adds: a rail button and the tight gap before it.
+    pub rail_step: f32,
 }
 
 impl DockSizes {
@@ -99,6 +104,8 @@ impl DockSizes {
             jump: cx.control().height,
             iconic_least: size.rail.width,
             column: size.dock.column,
+            rail_first: size.rail.button + 2.0 * cx.tokens.space.pad.control,
+            rail_step: size.rail.button + cx.tokens.space.gap.tight,
         }
     }
 

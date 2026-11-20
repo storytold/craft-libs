@@ -18,7 +18,7 @@ use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
-use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
+use craft_ui::docking::{DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::primitives::textures::Revision;
@@ -48,9 +48,11 @@ pub(super) struct Panels<'a> {
     pub(super) last_used: &'a mut LastUsed<Tool>,
     /// The tool the toolbar picked in this pass.
     pub(super) picked: Option<Tool>,
-    /// The context the toolbar's grid is measured in.
-    pub(super) ctx: &'a egui::Context,
 }
+
+/// The dock's panel specs: fixed for the mock's four panels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, craft_ui::contract::PlainData)]
+pub struct MockSpecs;
 
 impl Panels<'_> {
     /// The toolbar's rail in the rect the dock gives it, or its height at a width: as many tool columns as the width
@@ -92,13 +94,13 @@ fn name(panel: Panel) -> &'static str {
     }
 }
 
-impl DockPanels<Panel> for Panels<'_> {
+impl PanelSpecs<Panel> for MockSpecs {
     fn spec(&self, panel: &Panel) -> PanelSpec {
         let spec = PanelSpec::new(name(*panel)).limits(SizeLimits::default());
         match panel {
             Panel::Canvas => spec.canvas(),
             // The toolbar's column is whole tool columns wide.
-            Panel::Tools => spec.grid(ToolRail::<Tool>::dock_grid(self.ctx, Tool::slots().len())),
+            Panel::Tools => spec.grid(DockGrid::rail(Tool::slots().len())),
             _ => spec,
         }
     }
@@ -111,7 +113,9 @@ impl DockPanels<Panel> for Panels<'_> {
             _ => Permissions::ALL,
         }
     }
+}
 
+impl DockPanels<Panel> for Panels<'_> {
     fn body(&mut self, panel: &Panel, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         match panel {
             Panel::Navigator => {
