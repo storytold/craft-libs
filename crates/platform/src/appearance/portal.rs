@@ -390,8 +390,18 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
         Some(icons) => shared.publish_icons(icons),
         None => fallbacks.icons(shared).await,
     }
+    follow(shared, &connection, &mut settings, &mut owners, &mut answers).await
+}
+/// Follows the settings after the first read until the portal's owner goes away or a stream ends.
+async fn follow(
+    shared: &Shared,
+    connection: &zbus::Connection,
+    settings: &mut [zbus::MessageStream],
+    owners: &mut zbus::MessageStream,
+    answers: &mut Answers,
+) -> Option<()> {
     loop {
-        let message = match next_event(&mut settings, &mut owners).await? {
+        let message = match next_event(settings, owners).await? {
             Event::Owner(message) => {
                 // Activation is already covered by the initial read. Loss/replacement reconnects.
                 if let Ok((_, old, _)) = message.ok()?.body().deserialize::<(String, String, String)>()
@@ -408,7 +418,7 @@ async fn watch_connection(shared: &Shared, fallbacks: &mut Fallbacks, connected:
                 // KDE announces a new animation speed only as `reduced-motion`, and its own key has
                 // no value while the speed is at its default, so all three keys are read again
                 // rather than kept at what they last said; one answer is published per change.
-                answers.reread_motion(shared, read_motion(&connection).await);
+                answers.reread_motion(shared, read_motion(connection).await);
             } else {
                 answers.apply(shared, &namespace, &key, &value);
             }
