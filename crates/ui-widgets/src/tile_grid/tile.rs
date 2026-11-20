@@ -309,6 +309,10 @@ pub struct Tile<'a> {
     #[style_key]
     #[prop(flag)]
     card: bool,
+    /// Draws the preview directly on the tile so a small symbol has no separate background or selection frame.
+    #[style_key]
+    #[prop(flag)]
+    flat_thumbnail: bool,
     /// A second line under the name.
     #[prop(into)]
     detail: Option<Label>,
@@ -382,6 +386,7 @@ impl<'a> Tile<'a> {
             regular_card_padding: false,
             detail_line: false,
             card: false,
+            flat_thumbnail: false,
             detail: None,
             accessible_name: None,
             rating: None,
@@ -642,7 +647,14 @@ impl Component for Tile<'_> {
         let fill = if key.card {
             let raised = colors.surface.raised;
             let (rest, hover, pressed) = (c(raised), c(over(state.hover, raised)), c(over(state.pressed, raised)));
-            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(States::new(rest, hover, pressed, rest))
+            let on = if key.flat_thumbnail {
+                let selected = c(over(state.selected, raised));
+                let selected_hover = c(over(state.selected_hover, raised));
+                States::new(selected, selected_hover, pressed, selected)
+            } else {
+                States::new(rest, hover, pressed, rest)
+            };
+            Stateful::new(rest).off(States::new(rest, hover, pressed, rest)).on(on)
         } else {
             Stateful::new(c(clear))
         };
@@ -821,7 +833,7 @@ impl Component for Tile<'_> {
         let style = cx.style;
         let picture = placed.picture;
         let flat = CornerRadius::ZERO;
-        {
+        if !self.flat_thumbnail {
             // Filled from the outside in, under the picture, so the rings sit outside its edge.
             let (ring, halo) = (cx.resolve(&style.ring_width), cx.resolve(&style.halo_width));
             let draw = ui.draw();
@@ -831,12 +843,12 @@ impl Component for Tile<'_> {
             if ring > 0.0 {
                 draw.fill(&PaintShape::Rect(picture.expand(ring), flat), cx.resolve(&style.ring));
             }
-        }
-        if style.sizes.card {
-            ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
-        } else {
-            let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
-            ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+            if style.sizes.card {
+                ui.draw().surface(picture, SurfaceKind::Sunken, Corners::All);
+            } else {
+                let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
+                ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
+            }
         }
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
