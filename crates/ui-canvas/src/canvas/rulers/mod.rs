@@ -178,6 +178,9 @@ enum MenuRow {
 /// The rulers of a canvas: ticks and labels counted from a zero point, level whatever the view's rotation, a pointer
 /// marker, the guide drag-out and the zero point's corner.
 ///
+/// Rulers show only through [`Canvas::with_rulers`](super::Canvas::with_rulers): the canvas hands them its space and
+/// snap, and shown anywhere else they take no input.
+///
 /// - Give it to the canvas ([`Canvas::with_rulers`](super::Canvas::with_rulers)), which shows it along the top and
 ///   left of its rect and lays its view out inside the strips. The units come from the canvas
 ///   ([`Canvas::rulers`](super::Canvas::rulers)); the rulers hold the zero point's edit.
@@ -218,8 +221,8 @@ pub struct Rulers<'a> {
 }
 
 impl<'a> Rulers<'a> {
-    /// Rulers named `label` that edit the zero point `zero` (document units). The units and the zero they count from
-    /// are the canvas's ([`Canvas::rulers`](super::Canvas::rulers)); the app passes the same zero to both.
+    /// Rulers named `label` that edit the zero point `zero` (document units). The canvas reads its zero from here;
+    /// the units are the canvas's ([`Canvas::rulers`](super::Canvas::rulers)).
     pub fn new(label: impl Into<Label>, zero: Bind<'a, Point>) -> Self {
         Rulers {
             common: Common::new(),
@@ -248,6 +251,11 @@ impl<'a> Rulers<'a> {
     /// included. `zoom` is screen points per document unit along the axis. Empty when the units are unusable.
     pub fn ticks(units: &RulerUnits, rule: TickRule<'_>, zoom: f64, values: std::ops::RangeInclusive<f64>) -> Vec<RulerTick> {
         ticks::ticks(units, rule, zoom, values)
+    }
+
+    /// The zero point the binding holds, which the canvas publishes in its space.
+    pub(super) fn zero(&self) -> Point {
+        Self::zero_of(self.zero.value())
     }
 
     fn zero_of(value: Option<&Point>) -> Point {

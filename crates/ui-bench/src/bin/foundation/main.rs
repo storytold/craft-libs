@@ -475,9 +475,8 @@ impl Scene for CanvasViewScene {
         let text = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
         let canvas = ui.scope_id().with("canvas scene");
         let mut hosted = None;
-        let at = *zero;
         let strips = Rulers::new("Rulers", Bind::bound(&mut *zero));
-        let shown = Canvas::new("Document").id(canvas).view(*view).rulers(text, text, at).with_rulers(Some(strips)).show(ui, |ui, body| {
+        let shown = Canvas::new("Document").id(canvas).view(*view).rulers(text, text).with_rulers(Some(strips)).show(ui, |ui, body| {
             let _ = Guides::new("Guides", canvas, Bind::bound(&mut *guides)).show_at(ui, body.rect);
             if let Some(pass) = tool_pass(&body.env) {
                 hosted = Some(ToolHost::new().run(ui, &pass, &mut *hand));

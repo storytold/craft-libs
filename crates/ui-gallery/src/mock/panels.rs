@@ -216,9 +216,8 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let mut scrolled = None;
     let mut zero = document.zero;
     let strips = show_rulers.then(|| Rulers::new("Rulers", Bind::bound(&mut zero)).units(&UNITS));
-    let shown = Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units, document.zero).show(
-        ui,
-        |ui, body| {
+    let shown =
+        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).with_rulers(strips).rulers(units, units).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
             let Document { guides, guide, .. } = &mut *document;
             let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
@@ -246,8 +245,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
             if let Some(rect) = document.marquee {
                 let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
             }
-        },
-    );
+        });
     if let Some(picked) = shown.output.rulers.and_then(|rulers| rulers.unit_picked) {
         document.units = picked;
     }

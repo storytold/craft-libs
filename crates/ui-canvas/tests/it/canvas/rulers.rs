@@ -116,15 +116,20 @@ fn with_rulers_on_the_tool_and_a_canvas_control_paint_inside_the_view_and_the_ru
     let overflowing: Vec<&(Rect, Shape)> = shapes.iter().filter(|(_, shape)| past(shape)).collect();
     // The tool's fill and the marquee's outline reach past the canvas; the strips and the surface do not.
     assert!(overflowing.len() >= 2, "the tool and the pasteboard paint past the canvas: {overflowing:?}");
-    let strip = fixture.fixture().shape_bounds().first().copied();
-    let _ = strip;
+    // The view starts where the strips end: the top strip is as thick as the view's clip lies below the canvas's top.
+    let thickness = overflowing.iter().map(|(clip, _)| clip.min.y - canvas.min.y).fold(f32::INFINITY, f32::min);
     for (clip, shape) in overflowing {
         assert!(
             clip.min.x > canvas.min.x && clip.min.y > canvas.min.y && canvas.contains_rect(*clip),
             "past the canvas, a shape paints inside the view, past the strips: clip {clip:?} in {canvas:?} for {shape:?}"
         );
     }
-    let strips_keep_the_canvas =
-        shapes.iter().any(|(clip, shape)| matches!(shape, Shape::Rect(rect) if rect.rect.min == canvas.min) && *clip == canvas);
-    assert!(strips_keep_the_canvas, "the rulers' corner paints under the canvas's rect: {shapes:?}");
+    // The canvas's own surface spans the whole rect, so only a shape inside the top strip, under the canvas's rect as
+    // its clip, comes from the rulers.
+    let strip = Rect::from_min_max(canvas.min, egui::pos2(canvas.max.x, canvas.min.y + thickness));
+    let strips_keep_the_canvas = shapes.iter().any(|(clip, shape)| {
+        let bounds = shape.visual_bounding_rect();
+        bounds.is_finite() && bounds.width() > 0.0 && strip.expand(1.0).contains_rect(bounds) && clip.contains_rect(strip)
+    });
+    assert!(strips_keep_the_canvas, "the rulers paint inside the top strip under the canvas's rect: {strip:?} in {shapes:?}");
 }

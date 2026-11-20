@@ -205,6 +205,8 @@ pub struct Canvas<'a> {
     keys_to_body: bool,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
+    /// The zero point of the rulers given to `with_rulers`, which the space publishes in `rulers`.
+    ruler_zero: Point,
     /// The snapping of the coordinates the pointer sets on this canvas (View > Snap To), as data over the document's
     /// targets: the rulers snap their zero point with it, the guides snap a guide with it and the tool host hands it to
     /// the tool ([`ToolContext::snap`]). The canvas sets its tolerance each pass from the view it shows. Without it
@@ -286,6 +288,7 @@ impl<'a> Canvas<'a> {
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
+            ruler_zero: Point::ZERO,
             snap: None,
             settled: None,
             context_key: false,
@@ -493,18 +496,20 @@ impl<'a> Canvas<'a> {
     /// places with [`ruler_guide`]. What they report comes back in [`CanvasOutput::rulers`].
     #[must_use]
     pub fn with_rulers(mut self, rulers: Option<Rulers<'a>>) -> Self {
+        self.ruler_zero = rulers.as_ref().map_or(Point::ZERO, Rulers::zero);
         self.strips_shown = rulers.is_some();
         self.strips = rulers;
         self
     }
 
-    /// Measures the document's axes in `x` and `y`, counted from `zero` (document units). The rulers, the guides and
-    /// the measures of the body read the units and the zero from the canvas's [`CanvasSpace`], so the app states them
+    /// Measures the document's axes in `x` and `y`, counted from the zero point of the [`Rulers`] given to
+    /// [`with_rulers`](Self::with_rulers) (the document's origin without them). The rulers, the guides and the
+    /// measures of the body read the units and the zero from the canvas's [`CanvasSpace`], so the app states the zero
     /// once. A canvas that publishes none measures in pixels from the document's origin. Whether the strips show, and
     /// so where the view lies, is [`with_rulers`](Self::with_rulers).
     #[must_use]
-    pub fn rulers(mut self, x: RulerText, y: RulerText, zero: Point) -> Self {
-        self.rulers = Some(CanvasRulers::new(x, y, zero));
+    pub fn rulers(mut self, x: RulerText, y: RulerText) -> Self {
+        self.rulers = Some(CanvasRulers::new(x, y, Point::ZERO));
         self
     }
 
@@ -522,7 +527,7 @@ impl<'a> Canvas<'a> {
         let space = space
             .with_keys(keys)
             .with_document(self.document_size())
-            .with_rulers(self.rulers)
+            .with_rulers(self.rulers.map(|rulers| CanvasRulers::new(rulers.x, rulers.y, self.ruler_zero)))
             .with_pasteboard(self.pasteboard)
             .with_background(background)
             .with_precise(self.precise_cursors != caps_lock)

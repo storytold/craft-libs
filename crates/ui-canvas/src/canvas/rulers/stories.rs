@@ -70,12 +70,12 @@ fn configured<'a>(rulers: Rulers<'a>, settings: Settings) -> Rulers<'a> {
     rulers.interactive(settings.interactive).origin_locked(settings.locked)
 }
 
-/// A canvas that shows `rulers` and whose view lies inside the strips, counting from `zero` in pixels.
-fn rulers_canvas<'a>(room: Rect, pixels_per_point: f32, zero: Point, settings: Settings, rulers: Rulers<'a>) -> Canvas<'a> {
+/// A canvas that shows `rulers` and whose view lies inside the strips, counting from their zero in pixels.
+fn rulers_canvas<'a>(room: Rect, pixels_per_point: f32, settings: Settings, rulers: Rulers<'a>) -> Canvas<'a> {
     let text = pixels();
     let view =
         StoryDocument::STANDARD.view(room, pixels_per_point, settings.zoom).rotation(settings.rotation).flip_x(settings.flip).aspect(settings.aspect);
-    Canvas::new("Document").view(view).with_rulers(Some(configured(rulers, settings))).rulers(text, text, zero)
+    Canvas::new("Document").view(view).with_rulers(Some(configured(rulers, settings))).rulers(text, text)
 }
 
 #[story(Rulers<'static>, covers = [Default], drive = Drive::Custom(drag_corner))]
@@ -83,8 +83,7 @@ fn zero_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let zero = data.value("zero", Point::ZERO);
     let room = stage(ui);
-    let at = *zero;
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), at, settings, Rulers::new("Rulers", Bind::bound(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -93,8 +92,7 @@ fn units_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let zero = data.value("zero", Point::ZERO);
     let room = stage(ui);
-    let at = *zero;
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), at, settings, Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -103,7 +101,7 @@ fn zero_points_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
     let zero = data.value("zero", Mixed::<Point>::Mixed);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), Point::ZERO, settings, Rulers::new("Rulers", Bind::bound_mixed(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound_mixed(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
@@ -112,9 +110,8 @@ fn zero_point_left_of_the_document(ui: &mut Ui, data: &mut StoryData) -> StoryOu
     let settings = settings(data);
     let zero = data.value("zero", Point::new(LEAST_X - 1.0, 0.0));
     let room = stage(ui);
-    let at = *zero;
     let inside =
         |zero: &Point| if zero.x < LEAST_X { Validity::Refuse(Message::new("The zero point is left of the document")) } else { Validity::Ok };
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), at, settings, Rulers::new("Rulers", Bind::bound(&mut *zero).check(inside)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero).check(inside)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }

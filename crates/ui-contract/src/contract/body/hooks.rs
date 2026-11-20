@@ -1255,7 +1255,7 @@ impl BodyHooks<'_> {
             columns: LabelColumns::of(props, !self.wide() && !self.held(props, env)),
             env: body_env,
             reveal_clip,
-            view_clip: props.scroll_owner,
+            view_clip: props.scroll_owner && props.transform.is_none(),
         };
         let body_rect = plan.body_rect;
         let share = plan.share(false);
