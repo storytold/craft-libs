@@ -158,11 +158,20 @@ fn answer(code: u32, results: &HashMap<String, OwnedValue>) -> Result<Option<Sav
         .map_err(|e: zbus::zvariant::Error| e.to_string())?;
     let uri = uris.first().ok_or("no file in the portal's answer")?;
     let path = file_uri_path(uri).ok_or_else(|| format!("not a local file: {uri}"))?;
-    let filter = results.get("current_filter").and_then(|v| {
-        let (label, _globs): (String, Vec<(u32, String)>) = v.try_clone().ok()?.try_into().ok()?;
-        Some(label)
-    });
+    let filter = results.get("current_filter").and_then(|v| filter_label(v));
     Ok(Some(Saved { path, filter }))
+}
+
+/// The label of a file type as the portal sends it, a `(sa(us))` structure; `None` for a value of
+/// another shape.
+fn filter_label(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Structure(s) => match s.fields() {
+            [Value::Str(label), Value::Array(globs)] if globs.element_signature() == "(us)" => Some(label.to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// `file:///home/me/A%20b.psd` → `/home/me/A b.psd`; `None` for other schemes.
