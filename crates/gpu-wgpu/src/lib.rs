@@ -313,7 +313,8 @@ impl WgpuContext {
     fn wait_between_reads(&mut self, request: ReadRequest) -> Option<GpuFault> {
         #[cfg(feature = "adapter-probe")]
         if let Backing::Device(d) = &mut self.backing
-            && !d.health.wait(&d.device, d.queue.submit([]))
+            // a recorded fault other than out of memory: no empty submission to wait on
+            && (d.health.fault().is_some_and(|f| !f.is_out_of_memory()) || !d.health.wait(&d.device, d.queue.submit([])))
         {
             d.health.probe(&d.device);
             if d.health.device_status().is_err() {
