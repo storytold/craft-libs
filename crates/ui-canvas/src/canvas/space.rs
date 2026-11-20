@@ -406,6 +406,11 @@ pub fn canvas_space(env: &EnvView<'_>) -> Option<CanvasSpace> {
     env.get::<InCanvas>().0
 }
 
+/// Runs `body` with `space` as the canvas space inherited by its controls.
+pub fn with_canvas_space<R>(ui: &mut egui::Ui, space: CanvasSpace, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    crate::runtime::env::with_env(ui, |overrides| { overrides.values.set(InCanvas(Some(space))); }, body)
+}
+
 /// The text of one axis' ruler units: its tick maths with the unit kind it is written in, over `Units` (the one
 /// number formatter of the env).
 #[derive(Clone, Copy, Debug)]

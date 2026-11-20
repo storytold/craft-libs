@@ -5,7 +5,7 @@ use craft_behavior::{GESTURE_GAP, kurbo};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
 use craft_pages::ui::{GoTo, PageBody, PagePreview, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
-use craft_ui::canvas::{CanvasTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
 
@@ -101,7 +101,7 @@ fn rig_with(
         let offset = now.offset;
         let keep = held.borrow().clone();
         let shown =
-            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show(ui, &mut body);
+            PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show_with(ui, &mut body, |ui, page, body| { body(ui, page); None }, |_, _, _| ());
         let scrolled = seen.borrow().scrolled || shown.scrolled;
         *seen.borrow_mut() =
             Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect, scrolled };
@@ -949,6 +949,50 @@ fn the_view_reports_the_readers_wheel_and_scroll_bar_but_not_a_go_to_or_a_zoom()
 struct Nudges {
     takes: Rc<Cell<bool>>,
     taken: Rc<Cell<usize>>,
+}
+
+/// A hand drag must move the pages in the pass that receives the movement.
+#[trial]
+fn hand_drag_places_pages_at_the_tools_view_in_the_same_pass() {
+    let observed = Rc::new(RefCell::new(None));
+    let seen = Rc::clone(&observed);
+    let mut hand = HandTool::new(NavigationOptions::default());
+    let start = state_with(|s| {
+        s.fit = Fit::None;
+        s.zoom = 2.0;
+        s.offset = (200.0, 200.0);
+    });
+    let mut state = start;
+    let source = DemoPages::new(5);
+    let (before_runs, after_runs) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (before_count, after_count) = (Rc::clone(&before_runs), Rc::clone(&after_runs));
+    let mut fixture = Fixture::new(move |ui| {
+        let mut target = None;
+        PageView::new("Pages", &source, &mut state, PAPER).show_with(ui, &mut target, |ui, body, target| {
+            before_count.set(before_count.get() + 1);
+            let reply = body.pass.map(|pass| ToolHost::new().run(ui, pass, &mut hand));
+            let view = reply.and_then(|reply| reply.view);
+            *target = view.and_then(|view| body.pages.first().map(|page| (view, body.view.to_doc(page.rect.min))));
+            view
+        }, |_, body, target| {
+            after_count.set(after_count.get() + 1);
+            if let (Some((view, point)), Some(page)) = (*target, body.pages.first()) {
+                *seen.borrow_mut() = Some((body.view, view, page.rect.min, point));
+            }
+        });
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let at = pos2(450.0, 300.0);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(at)]);
+    *observed.borrow_mut() = None;
+    fixture.frame(vec![craft_ui::testing::pointer::moved(at + vec2(0.0, -20.0))]);
+    let (drawn, target, page_min, point) = observed.borrow().expect("the hand reports its moved view");
+    let distance = (drawn.center - target.center).hypot() * target.zoom;
+    assert!(distance < 1.0, "the pages use the hand's view in the movement pass: {distance} points apart");
+    assert!(page_min.distance(target.to_screen(point)) < 1.0, "the page is placed at the hand's view in the movement pass");
+    assert_eq!(before_runs.get(), after_runs.get(), "each placement hosts tools once before its overlay");
 }
 
 impl CanvasTool for Nudges {

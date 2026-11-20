@@ -30,7 +30,7 @@ pub use craft_behavior::{FRAME_STEP_MAX, frame_step};
 pub use crop::{CropApply, CropOutside, CropOverlay, CropOverlayOutput, CropShield, CropStyle, ShieldColor, paint_outside};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
-pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
+pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned, with_canvas_space};
 pub use words::CanvasWords;
 
 #[doc(hidden)]
