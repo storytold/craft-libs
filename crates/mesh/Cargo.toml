@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = ["stl", "obj", "ply", "gltf", "fbx", "threemf", "dae", "abc"]
+default = ["stl", "obj", "ply", "gltf", "fbx", "threemf"]
 stl = []
 obj = []
 ply = []
