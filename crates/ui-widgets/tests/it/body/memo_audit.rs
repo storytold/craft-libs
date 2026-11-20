@@ -4,7 +4,7 @@
 
 use craft_ui::buttons::Button;
 use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
-use craft_ui::runtime::inspect;
+use craft_ui::runtime::lock_keys;
 use craft_ui::style::SurfaceKind;
 use craft_ui::testing::layout::{allocate, in_region};
 use craft_ui::testing::pointer::{moved, wheel};
@@ -138,29 +138,30 @@ fn the_audit_names_a_view_whose_returned_fraction_went_stale() {
     assert!(!message.contains("paint"), "the paint is the same: {message}");
 }
 
-/// A view that reads an inspection record only while `HIDDEN` is odd, and paints the same either way.
+/// A view that reads the Caps Lock state, a framework input, only while `HIDDEN` is odd, and paints the same either
+/// way. An input read is noted in the run's facts only, never in its journal.
 #[derive(MemoProps)]
-struct Reads {
+struct InputReader {
     size: f32,
 }
 
-fn reads(props: &mut Reads, ui: &mut Ui) {
+fn input_reader(props: &mut InputReader, ui: &mut Ui) {
     if HIDDEN.get() % 2 == 1 {
-        let _ = inspect::recorded(ui.ctx(), egui::Id::unique("audit record"));
+        let _ = lock_keys::caps_lock(ui.ctx());
     }
     ui.allocate_exact_size(Vec2::splat(props.size), egui::Sense::hover());
 }
 
-/// A kept run that missed a read the real run makes fails the audit, naming the read: a replay would note the kept
-/// run's reads, so an edit of the missed value would not run the view.
+/// A kept run that missed a framework input the real run reads fails the audit, naming the input: a replay would note
+/// the kept run's inputs, so a change of the missed one would not run the view.
 #[trial]
-fn the_audit_names_a_view_whose_kept_run_missed_a_read() {
+fn the_audit_names_a_view_whose_kept_run_missed_an_input() {
     HIDDEN.set(2);
     let mut frames = Frames::new();
     audit_replays(&frames.ctx, true);
     let frame = |frames: &mut Frames| {
         frames.frame(vec![], |ui| {
-            in_region(ui, region(0), |ui| MemoView::new("reads", Reads { size: 20.0 }, reads).show(ui));
+            in_region(ui, region(0), |ui| MemoView::new("input reader", InputReader { size: 20.0 }, input_reader).show(ui));
         })
     };
     for _ in 0..3 {
@@ -170,8 +171,8 @@ fn the_audit_names_a_view_whose_kept_run_missed_a_read() {
     let message = failure(|| {
         frame(&mut frames);
     });
-    assert!(message.contains("Reads") && message.contains("reads:"), "names the view and the read: {message}");
-    assert!(!message.contains("paint"), "the paint is the same: {message}");
+    assert!(message.contains("InputReader") && message.contains("inputs:"), "names the view and the input: {message}");
+    assert!(!message.contains("paint") && !message.contains("journal"), "paint and journal are the same: {message}");
 }
 
 #[derive(MemoProps)]
