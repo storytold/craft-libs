@@ -51,6 +51,8 @@ mod av1;
 mod pes;
 mod psi;
 
+pub(crate) use psi::OPUS_DESCRIPTOR_EXTENSION;
+
 use std::fmt;
 use std::io::{self, Write};
 
