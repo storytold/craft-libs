@@ -11,6 +11,7 @@ match straighten(&image, &Options::default()) {
     Outcome::Straightened { skew, samples, .. } => { /* re-encode `samples` */ }
     Outcome::AlreadyStraight(_) => {}
     Outcome::Declined(why) => { /* tell the user it couldn't tell */ }
+    _ => {}
 }
 ```
 

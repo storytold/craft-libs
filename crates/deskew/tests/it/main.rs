@@ -145,6 +145,24 @@ fn a_full_size_bilevel_scan_is_straightened() {
     assert!(residual_degrees.abs() < skew.angle_degrees.abs());
 }
 
+/// Black printed as K alone is ink. Straight rules have no text corners, and level ones no
+/// stair-steps, to rescue them through the edge vote.
+#[test]
+fn black_rules_printed_in_k_alone_are_measured() {
+    for degrees in [0.0, 3.0] {
+        let (sin, cos) = f64::to_radians(degrees).sin_cos();
+        let rules = |x: u32, y: u32| {
+            let (u, v) = (f64::from(x) - 500.0, f64::from(y) - 650.0);
+            let (along, across) = (u * cos - v * sin, u * sin + v * cos);
+            along.abs() < 400.0 && (across + 500.0).rem_euclid(200.0) < 2.0
+        };
+        let layout = Layout::new(W, H, 4, 8, Paper::Zero);
+        let samples = pack(layout, rules, &[0, 0, 0, 255], &[0, 0, 0, 0]);
+        let got = measure(layout, &samples);
+        assert!(got.is_some_and(|got| (got - degrees).abs() < 0.1), "{degrees}° measured as {got:?}");
+    }
+}
+
 /// One long rule is too little ink to project, but its edges still vote.
 #[test]
 fn a_sparse_page_is_measured_by_its_edges() {

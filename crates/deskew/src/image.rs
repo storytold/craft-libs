@@ -136,35 +136,45 @@ impl<'a> Image<'a> {
         self.layout.bits_per_component >= 8 && !self.layout.indexed
     }
 
-    /// Where sample `c` of pixel `(x, y)` starts, as (byte, bit within it).
-    fn locate(&self, x: u32, y: u32, c: u32) -> (usize, usize) {
-        let bpc = usize::from(self.layout.bits_per_component);
-        let bit = (x as usize * self.components() as usize + c as usize) * bpc;
-        (y as usize * self.row_bytes + bit / 8, bit % 8)
+    /// Where sample `c` of pixel `(x, y)` starts, as (byte, bit within it), or `None` past the
+    /// address space. Computed in `u64`: a bit offset can pass `usize` on a 32-bit target even
+    /// when the byte offset fits.
+    fn locate(&self, x: u32, y: u32, c: u32) -> Option<(usize, usize)> {
+        let bpc = u64::from(self.layout.bits_per_component);
+        let bit = (u64::from(x) * u64::from(self.components()) + u64::from(c)) * bpc;
+        let row = u64::from(y).checked_mul(u64::try_from(self.row_bytes).ok()?)?;
+        let byte = usize::try_from(row.checked_add(bit / 8)?).ok()?;
+        Some((byte, (bit % 8) as usize))
     }
 
     /// Sample `c` of pixel `(x, y)`; 0 outside the buffer.
     pub(crate) fn get(&self, x: u32, y: u32, c: u32) -> u32 {
-        read_sample(self.samples, self.layout.bits_per_component, self.locate(x, y, c))
+        self.locate(x, y, c).map_or(0, |at| read_sample(self.samples, self.layout.bits_per_component, at))
     }
 
     /// Write sample `c` of pixel `(x, y)` into `out`, a buffer of this layout; ignored outside it.
     pub(crate) fn put(&self, out: &mut [u8], x: u32, y: u32, c: u32, value: u32) {
-        write_sample(out, self.layout.bits_per_component, self.locate(x, y, c), value);
+        if let Some(at) = self.locate(x, y, c) {
+            write_sample(out, self.layout.bits_per_component, at, value);
+        }
     }
 
-    /// How far pixel `(x, y)` is from paper towards full ink, 0 to 255. For an indexed image,
-    /// 255 when it differs from `background` and 0 when not.
+    /// How far pixel `(x, y)` is from paper towards full ink, 0 to 255. Additive components are
+    /// averaged, so a saturated colour on white counts as ink by how dark it is. Subtractive
+    /// components take the strongest, so black printed as K alone is full ink. For an indexed
+    /// image, 255 when it differs from `background` and 0 when not.
     pub(crate) fn ink_level(&self, x: u32, y: u32, background: &[u32]) -> u8 {
         if self.layout.indexed {
             let differs = background.first().is_some_and(|&b| self.get(x, y, 0) != b);
             return if differs { 255 } else { 0 };
         }
-        let sum: u64 = (0..self.components()).map(|c| u64::from(self.get(x, y, c))).sum();
-        let full = u64::from(self.max()) * u64::from(self.components());
-        let level = match self.layout.paper {
-            Paper::Max => full.saturating_sub(sum),
-            Paper::Zero => sum,
+        let samples = (0..self.components()).map(|c| u64::from(self.get(x, y, c)));
+        let (level, full) = match self.layout.paper {
+            Paper::Max => {
+                let full = u64::from(self.max()) * u64::from(self.components());
+                (full.saturating_sub(samples.sum()), full)
+            }
+            Paper::Zero => (samples.max().unwrap_or(0), u64::from(self.max())),
         };
         u8::try_from(level.saturating_mul(255) / full.max(1)).unwrap_or(u8::MAX)
     }
