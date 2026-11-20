@@ -226,7 +226,8 @@ impl Opened {
 ///   brush live and report [`BrushPresetPickerOutput::tip`], [`diameter`](BrushPresetPickerOutput::diameter) and
 ///   [`hardness`](BrushPresetPickerOutput::hardness).
 /// - **Search row.** The browser's search field (any letter case, groups open while filtering) unless Show Search
-///   Bar is off, then at its reading end the Brush Settings and New Brush Preset buttons and the gear.
+///   Bar is off, then at its reading end the Brush Settings and New Brush Preset buttons and the gear. The popover
+///   opens with the focus in the search field, so typing filters the presets.
 /// - **Gear menu.** New Brush Preset…; Rename Brush… (opens the name field on the current preset) and Delete Brush…
 ///   (enabled with a current preset); the Brush Name, Brush Stroke and Brush Tip boxes (at least one stays on); Show
 ///   Search Bar; Import Brushes… with [`import`](Self::import). The app adds its own rows to each section with

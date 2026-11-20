@@ -217,6 +217,9 @@ pub struct PresetBrowser<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 's
     drop_zone: Option<DropZone>,
     extra_items: Vec<Entry<String>>,
     actions: Vec<Label>,
+    /// The search field is its scope's default stop (`Initial::Default`): a picker's popover opens with the focus in
+    /// it, so typing filters the presets.
+    search_first: bool,
     /// A footer under the presets, made from these options with the browser's zoom bound to its slider and the count
     /// of presets.
     #[prop]
@@ -261,12 +264,19 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser
             drop_zone: None,
             extra_items: Vec::new(),
             actions: Vec::new(),
+            search_first: false,
             footer: None,
             max_rows: None,
             room_height: None,
             columns: 0,
             empty: None,
         }
+    }
+
+    /// Makes the search field, when shown, its scope's default stop.
+    pub(super) fn search_first(mut self) -> Self {
+        self.search_first = true;
+        self
     }
 
     /// Rows after the presets, below a divider, as a preset menu lists its commands ("Create preset", "Detach"). They
@@ -536,6 +546,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
             drop_zone,
             extra_items,
             actions,
+            search_first,
             footer,
             max_rows,
             room_height,
@@ -581,6 +592,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                     if search {
                         let field = TextField::search(words.search.clone(), Bind::bound(&mut local.filter)).placeholder(words.search.clone());
                         let field = field.drives(list_id);
+                        let field = if search_first { field.default_stop() } else { field };
                         field.show(ui);
                     }
                     if !locked {

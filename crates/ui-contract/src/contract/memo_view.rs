@@ -3,7 +3,7 @@
 
 use super::lazy::{Lazy, Shown};
 use super::memo::{MemoKey, MemoProps};
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, Scoped};
 use crate::runtime::shift::Shift;
 use egui::Ui;
 use std::fmt;
@@ -44,8 +44,8 @@ use std::sync::Arc;
 /// - what the scope around it hands down beyond those (enabled, read-only, size, ink, the command chain, motion, every
 ///   app value, and the rest of `Scoped::scope_key`), in the key;
 /// - the framework inputs it reads outside its props (`runtime::inputs`: the modifiers, the pointer, the keys held, the
-///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the scroll view of a nested
-///   `Lazy`): a change of one runs only the views that read it;
+///   window facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the requests to collections,
+///   the scroll view of a nested `Lazy`): a change of one runs only the views that read it;
 /// - the clock, read through `frame::stepped_clock`: the view runs at the next step;
 /// - commands sent to a command scope instance inside it: it runs while one waits.
 ///
@@ -103,17 +103,10 @@ impl<P: MemoProps, R: Clone + PartialEq + Shift + Send + Sync + 'static> MemoVie
         let env = Env::of(ui);
         let key = Self::key(&ctx, &env, &props, show);
         let shown = lazy.run_keyed(ui, std::any::type_name::<P>(), crate::runtime::lazy::Key::Memo(key), |ui, run| {
-            // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps the
-            // axes that body sizes from its content, so the view takes what its content used there, as the same
-            // content shown without the view would: a child that fills takes its measured size, never the open room.
-            let installed = Env::install_for(
-                ui,
-                env.derive_local(|scoped| {
-                    let content = scoped.content;
-                    scoped.start_room();
-                    scoped.content = content;
-                }),
-            );
+            // The content is a layout room of its own: the flow of the body around it does not reach in. It keeps how
+            // that body sizes from its content, so the view takes what its content used there, as the same content
+            // shown without the view would.
+            let installed = Env::install_for(ui, env.derive_local(Scoped::start_view_room));
             let out = show(&mut props, ui);
             Env::restore(&ctx, installed);
             run.output = Some(Arc::new(out.clone()));

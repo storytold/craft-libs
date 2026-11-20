@@ -4,9 +4,12 @@
 use crate::values::kit::Scrub;
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked};
+use craft_ui::contract::{
+    Bind, CollectionEvent, MemoProps, MemoView, Props as _, Show as _, ShowCollection as _, ShowContainer as _, Tracked, request_rename,
+};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::list::{List, ListRow};
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
@@ -1184,6 +1187,84 @@ fn a_view_in_an_open_popover_replays_while_nothing_changes() {
     assert!(painted(&frames, "Inside"), "the replayed view is painted");
     let over = scene.button.expect("the popover shows the view").center();
     assert_eq!(scene.frame(&mut frames, vec![moved(over)]), ["Title"], "the pointer over the view runs it");
+}
+
+/// The id of the list in [`rows`], which a rename request names.
+fn rows_id() -> Id {
+    Id::NULL.with("memo_rows")
+}
+
+#[derive(MemoProps)]
+struct Rows {}
+
+/// A renamable list of three rows; returns how many renames it began.
+fn rows(_: &mut Rows, ui: &mut Ui) -> usize {
+    let keys = [0_usize, 1, 2];
+    let source = craft_behavior::keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Owned(format!("Row {key}")));
+    let out = List::new("Rows").id(rows_id()).rename(true).show_items(ui, &source, &mut |key, _| ListRow::new(format!("Row {key}")));
+    out.events.iter().filter(|event| matches!(event, CollectionEvent::Rename(craft_behavior::EditEvent::Begin { .. }))).count()
+}
+
+/// A rename request from outside runs the view whose list takes it, once; without a request the view replays.
+#[trial]
+fn a_rename_request_runs_the_view_that_takes_it_once() {
+    let mut began = 0;
+    let mut frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| began = MemoView::new("rows", Rows {}, rows).show(ui).unwrap_or(0));
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect::<Vec<_>>()
+    };
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        frame(&mut frames);
+    }
+    assert!(frame(&mut frames).is_empty(), "with no request the view replays");
+    request_rename(&frames.ctx, rows_id(), &7_usize);
+    assert_eq!(frame(&mut frames), ["Rows"], "a request runs the view that takes it");
+    assert!(frame(&mut frames).is_empty(), "a taken request runs it no more");
+    request_rename(&frames.ctx, rows_id(), &1_usize);
+    frame(&mut frames);
+    drop(frame);
+    assert_eq!(began, 1, "the taken request opens the rename field");
+}
+
+#[derive(MemoProps)]
+struct Filling {}
+
+/// A button over a rule that fills its width.
+fn filling(_: &mut Filling, ui: &mut Ui) {
+    Button::new("Inside").show(ui);
+    craft_ui::display::Divider::horizontal().show(ui);
+}
+
+/// The width of an open popover at a point holding a stack with a button, under a header with a button over a rule
+/// that fills its width, the header's content shown plainly or in a memoized view.
+fn popover_width(memo: bool) -> f32 {
+    let mut fixture = craft_ui::testing::Fixture::new(move |ui| {
+        Popover::new("Filling", Bind::given(true)).at_point(Pos2::new(40.0, 40.0)).collection_body().show(ui, |ui, _| {
+            Stack::new()
+                .fill()
+                .header(|ui, _| {
+                    if memo {
+                        let _ = MemoView::new("filling", Filling {}, filling).show(ui);
+                    } else {
+                        filling(&mut Filling {}, ui);
+                    }
+                })
+                .show(ui, |ui, _| Button::new("Search").show(ui));
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0));
+    fixture.settle();
+    fixture.by_role(craft_ui::contract::Role::DIALOG).first().map(|target| target.rect.width()).expect("the popover shows")
+}
+
+/// A popover sizes from its content: a rule that fills its width, in the header of a stack held in the popover's
+/// content-sized column, makes it as wide inside a memoized view as shown plainly, never as wide as the open room.
+#[trial]
+fn a_view_in_a_popover_fills_its_width_as_without_the_view() {
+    let (plain, memo) = (popover_width(false), popover_width(true));
+    assert!(plain > 0.0 && (memo - plain).abs() <= 0.5, "the popover is as wide with the view: {memo} against {plain}");
 }
 
 #[derive(MemoProps)]

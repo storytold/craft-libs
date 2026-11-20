@@ -142,8 +142,8 @@ fn list_runs(fixture: &Fixture, props: &str) -> (usize, u32) {
     (views, rows)
 }
 
-/// While nothing changes an open picker's list replays: no list row runs. The popover's first stop, the search field,
-/// takes the focus on open, as in the Brush Preset picker: a list that holds the focus runs in every pass.
+/// While nothing changes an open picker's list replays: no list row runs. The search field takes the focus on open, as
+/// in the Brush Preset picker: a list that holds the focus runs in every pass.
 #[trial]
 fn an_open_picker_with_nothing_changing_runs_no_list_row() {
     let mut value = Some(CORAL);

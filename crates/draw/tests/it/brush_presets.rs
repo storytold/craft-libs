@@ -3,7 +3,7 @@
 //! roundness; Escape reverts the head's edits.
 
 use craft_draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
-use craft_draw::ui::brush_settings::TipAngle;
+use craft_draw::ui::brush_settings::{TipAngle, ellipse_handles};
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Env;
@@ -208,7 +208,11 @@ fn escape_reverts_size_hardness_angle_and_roundness() {
     let (mut fixture, host) = opened_rig(true, false);
     let tip = fixture.by_label("Tip angle and roundness").expect("the angle widget shows");
     fixture.click_at(tip.rect.center() + Vec2::new(tip.rect.width() / 4.0, -tip.rect.height() / 4.0));
-    fixture.key(Key::ArrowDown, Modifiers::ALT);
+    fixture.idle(2);
+    // A roundness dot dragged halfway to the centre squashes the ellipse. The ellipse spans most of the disc.
+    let turned = host.borrow().values.tip.expect("the tip shows");
+    let dot = ellipse_handles(turned, tip.rect.width().min(tip.rect.height()) / 2.0 * 0.85)[0];
+    fixture.drag_at(tip.rect.center() + dot, -dot / 2.0);
     for label in ["Size", "Hardness"] {
         let slider = fixture.by_role(Role::SLIDER).into_iter().find(|target| fixture.tree().name_of(target.node) == Some(label));
         let slider = slider.unwrap_or_else(|| panic!("the {label} slider shows"));

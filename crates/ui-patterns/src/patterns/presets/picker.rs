@@ -25,6 +25,7 @@ use crate::layout_components::Stack;
 use crate::pickers::{FaceKind, SelectFace};
 use crate::popover::Popover;
 use crate::runtime::env::{Env, EnvView, Label};
+use crate::runtime::focus::Initial;
 use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
@@ -131,7 +132,8 @@ impl<K: Value> Outcome for PresetPickerOutput<K> {
 /// - **State.** `state` is the browser's view settings; bind it with `Bind::bound`.
 /// - **Thumbnails.** Each row's `preview` paints its thumbnail, in the field and in the browser.
 /// - **Popover.** A `Popover` container: it hangs from the field, or from a point with [`open_at`](Self::open_at),
-///   and with [`resizable`](Self::resizable) its edge grips resize it and the size is saved.
+///   and with [`resizable`](Self::resizable) its edge grips resize it and the size is saved. It opens with the focus
+///   in the toolbar's search field, so typing filters the presets; without one, on its first stop.
 ///
 /// ```ignore
 /// let out = PresetPicker::new("Contour", Bind::bound(&mut shape), &rows, Bind::bound(&mut state)).field(PickerField::ThumbnailAndName).show(ui);
@@ -389,7 +391,8 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
                     .row_menu(row_menu)
                     .thumb_range(thumb_range)
                     .columns(columns)
-                    .actions(action_labels.clone());
+                    .actions(action_labels.clone())
+                    .search_first();
                 if let Some(options) = footer.as_ref() {
                     browser = browser.footer(options.clone());
                 }
@@ -404,7 +407,7 @@ impl<'a, K: Value + Eq + Hash + MemoProps + 'static> PresetPicker<'a, K> {
                 }
                 browser.show(ui)
             };
-            let popover = popover.collection_body();
+            let popover = popover.collection_body().initial_focus(Initial::Default);
             let popover = match resizable.clone() {
                 Some(key) => popover.resizable(true).remember(key),
                 None => popover,

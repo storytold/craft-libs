@@ -1,5 +1,6 @@
 //! Tracked inputs: the framework inputs a view can read outside its props (the modifiers, the pointer, the window's
-//! facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the keys held), each with a generation
+//! facts, the keyboard layout, the keymap, a drag, the focus, the open layers, the keys held, the requests to
+//! collections), each with a generation
 //! that moves when its value changes. The accessor that reads one notes it into the records open around the running
 //! code (`replay::note_input`); a memoized view's replay is refused when an input its run read has another generation
 //! now (`runtime::lazy::settled`), so a change runs only the views that read it, and a view absent while it changed
@@ -34,12 +35,15 @@ pub(crate) enum Input {
     Focus,
     /// The layers shown last frame (`overlay::is_open`, `any_open`, `top`, `family`, `entry`).
     Overlays,
+    /// The requests to collections from outside them (`items::request_rename`), read by the item step that takes
+    /// them, so a pending request runs the view that takes it.
+    Requests,
     /// The view of the scroll area a nested `Lazy` child decides by. No generation: compared by value.
     Scroll,
 }
 
 impl Input {
-    pub(crate) const ALL: [Input; 10] = [
+    pub(crate) const ALL: [Input; 11] = [
         Input::Modifiers,
         Input::Pointer,
         Input::Keys,
@@ -49,6 +53,7 @@ impl Input {
         Input::Drag,
         Input::Focus,
         Input::Overlays,
+        Input::Requests,
         Input::Scroll,
     ];
 
@@ -117,7 +122,7 @@ pub(crate) fn observe<T: PartialEq + Send + Sync + 'static>(ctx: &Context, input
 
 /// The generation `input` has now. The inputs a pass can change while views run (keys, drag, focus, open layers) are
 /// observed here; the pointer and the modifiers by the pointer's begin hook, the window facts and the layout where
-/// the frame's root env is built, the keymap by the command board.
+/// the frame's root env is built, the keymap by the command board, the requests by each request.
 pub(crate) fn generation(ctx: &Context, input: Input) -> u64 {
     match input {
         Input::Keys => observe(ctx, input, crate::runtime::keys::keys_state(ctx)),
@@ -125,7 +130,7 @@ pub(crate) fn generation(ctx: &Context, input: Input) -> u64 {
         Input::Focus => observe(ctx, input, crate::runtime::focus::focus_state(ctx)),
         Input::Overlays => observe(ctx, input, crate::runtime::overlay::open_state(ctx)),
         Input::Keymap => return crate::runtime::commands::keymap_built(ctx),
-        Input::Modifiers | Input::Pointer | Input::Shell | Input::Keyboard | Input::Scroll => {}
+        Input::Modifiers | Input::Pointer | Input::Shell | Input::Keyboard | Input::Requests | Input::Scroll => {}
     }
     with(ctx, |generations| generations.gens[input as usize])
 }
