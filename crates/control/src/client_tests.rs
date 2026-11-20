@@ -1,7 +1,7 @@
 //! The client against the shared server ([`crate::server::Hub`]) on an ephemeral loopback port.
 
 use super::*;
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Socket, Type};
 use crate::ControlRequest;
 use crate::server::{Hub, Protocol, Stop, Summary, Waits as ServerWaits};
 use std::ffi::OsString;
@@ -81,7 +81,7 @@ fn addr(port: u16) -> String {
 
 /// Keep this port bound without listening, so another normal test listener cannot take it.
 fn reserve_non_listening_port() -> (Socket, u16) {
-    let reserved = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).unwrap();
+    let reserved = Socket::new(Domain::IPV4, Type::STREAM, Some(socket2::Protocol::TCP)).unwrap();
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
     reserved.bind(&address.into()).unwrap();
     let port = reserved.local_addr().unwrap().as_socket().unwrap().port();
