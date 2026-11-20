@@ -61,10 +61,16 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
-pub use renderer::{image_resampling_size, tiling_cell_scale, usable_cell_scale};
+pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
+/// PdfCraft patch (27): exported for its regression test.
+#[doc(hidden)]
+pub use renderer::set_cmyk_band_pixels;
+/// PdfCraft patch (30): exported for its regression tests.
+#[doc(hidden)]
+pub use renderer::{OffscreenDraws, offscreen_draws};
 
 /// A cache used by the renderer.
 ///
@@ -157,6 +163,10 @@ pub struct RenderSettings {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped while
     /// rendering; `None` renders exactly as without the patch.
     pub color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch (31): the most coverage values the rasterizer keeps for the page; paths
+    /// past it are left out, with `InterpreterWarning::ContentTruncated`. `None` keeps as many
+    /// as a strip's index reaches (2^31).
+    pub max_coverage: Option<usize>,
 }
 
 impl Default for RenderSettings {
@@ -170,6 +180,7 @@ impl Default for RenderSettings {
             x_offset: 0.0,
             y_offset: 0.0,
             color_replacement: None,
+            max_coverage: None,
         }
     }
 }
@@ -253,6 +264,11 @@ pub fn render_into<'a>(
         render_settings.color_replacement,
         interpreter_settings.preview,
     );
+
+    // NOTE: vello_cpu in craft-libs is unvendored (0.0.8) and does not yet expose
+    // `set_max_coverage` / `coverage_full`; `render_settings.max_coverage` is preserved
+    // on `RenderSettings` for API parity with pdfcraft.
+    let _ = render_settings.max_coverage;
 
     // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
     // objects composite with an initially transparent backdrop, and the group is then put on
