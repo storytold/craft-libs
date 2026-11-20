@@ -756,8 +756,10 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     let k = 1.0 + sign * (p - g.start).dot(uh) / reach;
     let k = side_factor_lean(g.quad0, edge, k);
     // The opposite side and the height follow a factor eased by the box's slant ([`alt_spread`], as for a top or
-    // bottom drag); the dragged side stays where the plain drag puts it (measured on the reference, seven boxes).
-    let k = if k.abs() > 1e-9 { k - 0.12 * alt_spread(g.quad0) * (k - 1.0) / k } else { k };
+    // bottom drag), the more as the sides converge ([`top_weight_ratio`]); the dragged side stays where the plain drag
+    // puts it (measured on the reference, thirteen boxes).
+    let spread = alt_spread(g.quad0);
+    let k = if k.abs() > 1e-9 { k - 0.12 * spread * (k - 1.0) / k - 0.3 * spread * (top_weight_ratio(g.quad0) - 1.0) * (k - 1.0) } else { k };
     let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
     let height = k * (dragged + ((v[1] - v[0]) + (v[2] - v[3])) / 2.0);
     if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && height.is_finite() && height > 1e-9) {

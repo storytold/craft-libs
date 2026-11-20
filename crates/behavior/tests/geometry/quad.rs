@@ -1059,3 +1059,30 @@ fn an_alt_side_drag_on_a_box_converging_both_ways_scales_like_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ side drags on boxes whose edges converge both ways under a tilted top, measured on the reference: the factor eases
+/// by the box's slant the more as the sides converge.
+#[test]
+fn an_alt_side_drag_under_a_tilted_top_eases_like_the_reference() {
+    let narrow = [(240.0, 125.0), (362.0, 165.0), (452.0, 327.0), (150.0, 327.0)];
+    let wide = [(210.0, 125.0), (392.0, 185.0), (452.0, 327.0), (150.0, 327.0)];
+    let rising = [(210.0, 165.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        // Was 2.5 px off.
+        (narrow, 3, (195.0, 226.0), (155.0, 226.0), [(239.7671, 89.3877), (404.5935, 143.4292), (474.3983, 419.3878), (88.0512, 292.7166)], 1.7),
+        // Was 2.1 px off.
+        (wide, 3, (180.0, 226.0), (140.0, 226.0), [(195.192, 92.3404), (435.4711, 171.5533), (468.5937, 410.0285), (106.9462, 290.8041)], 0.8),
+        // Was 1.8 px off.
+        (wide, 1, (422.0, 256.0), (462.0, 256.0), [(177.7583, 154.5574), (391.1041, 224.8912), (507.4625, 354.878), (136.7824, 232.6758)], 0.5),
+        // Was 1.4 px off.
+        (rising, 1, (422.0, 226.0), (462.0, 226.0), [(160.6116, 101.3486), (401.0671, 48.5012), (513.0646, 354.8984), (127.6353, 439.6081)], 0.6),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
