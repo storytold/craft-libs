@@ -2759,9 +2759,15 @@ fn a_position_offset_without_sprm_t_pc_positions_from_the_defaults() {
 #[test]
 fn truncated_and_out_of_range_position_operands_are_safe() {
     // Operands cut short read as absent; distances out of XAS_nonNeg/YAS_nonNeg's range clamp.
-    for papx in [vec![0x0D, 0x36], vec![0x0E, 0x94, 0x01], vec![0x0F, 0x94], vec![0x10, 0x94, 0x05], vec![0x65, 0x34]] {
+    for papx in [vec![0x0D, 0x36], vec![0x0E, 0x94, 0x01], vec![0x0F, 0x94]] {
         let row = crate::table::decode(&papx);
         assert!(row.float.is_none(), "{papx:02X?}");
+    }
+    // After a sprmTPc, so the table floats: a cut-short distance stays 0 and a cut-short overlap
+    // flag leaves overlapping allowed.
+    for tail in [vec![0x10, 0x94, 0x05], vec![0x65, 0x34]] {
+        let f = crate::table::decode(&[vec![0x0D, 0x36, 0x60], tail.clone()].concat()).float.expect("floats");
+        assert_eq!((f.dist[0], f.overlap), (0.0, true), "{tail:02X?}");
     }
     let row = crate::table::decode(&grpprl(&[(0x360D, &[0x60]), (0x9410, &0xFFFFu16.to_le_bytes()), (0x940E, &i16::MIN.to_le_bytes())]));
     let f = row.float.expect("floats");
