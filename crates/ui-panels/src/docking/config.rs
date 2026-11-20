@@ -84,6 +84,15 @@ pub struct DockConfig {
     pub native_windows: bool,
     /// Docked groups' menus get Minimize and Move Group Up and Down.
     pub group_order_items: bool,
+    /// Right-clicking a docked group's tab opens a tab menu of its own instead of the group's panel menu: the Close
+    /// rows `close_menu_items` shows, the Minimize row `group_order_items` shows, a separator, and the column's
+    /// Collapse to Icons and Auto-Collapse Iconic Panels rows, with the host's [`tab_rows`] rows after them.
+    /// Right-clicking a docked iconic column's icon opens the same menu for that panel, expanded rather than
+    /// collapsed. The panel menu button keeps the full menu either way; floating groups, accordion sections and
+    /// iconic flyouts keep today's context menu.
+    ///
+    /// [`tab_rows`]: crate::docking::DockPanels::tab_rows
+    pub tab_context_menu: bool,
 }
 
 impl Default for DockConfig {
@@ -102,6 +111,7 @@ impl Default for DockConfig {
             wheel_selects_tabs: false,
             native_windows: true,
             group_order_items: false,
+            tab_context_menu: false,
         }
     }
 }
@@ -111,6 +121,13 @@ impl DockConfig {
     #[must_use]
     pub fn group_order_items(mut self, on: bool) -> Self {
         self.group_order_items = on;
+        self
+    }
+
+    /// The tab menu of docked groups and the icon menu of docked iconic columns on or off.
+    #[must_use]
+    pub fn tab_context_menu(mut self, on: bool) -> Self {
+        self.tab_context_menu = on;
         self
     }
 

@@ -19,6 +19,11 @@ pub enum GroupItem {
     CollapseToIcons,
     /// Auto-Collapse Iconic Panels.
     AutoCollapse,
+    /// Close the panel. The context menu of a collapsed column's icon has no group command scope to carry a Close
+    /// command row, so it names this row instead; inside a group, use the `ClosePanel` command row.
+    ClosePanel,
+    /// Close the panel's tab group, for the same reason as [`ClosePanel`](Self::ClosePanel).
+    CloseGroup,
 }
 
 /// One row of a panel menu.

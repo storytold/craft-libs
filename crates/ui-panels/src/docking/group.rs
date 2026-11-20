@@ -252,6 +252,10 @@ pub struct DockGroup<'a, P: Clone + Hash + Send + Sync + 'static> {
     /// The rows of the group menu: the panel menu button and a context request on a tab open them.
     #[prop]
     menu: Vec<PanelRow>,
+    /// The rows a context request on a tab opens instead of the group menu, when it has any: the tab menu, named by
+    /// `DockConfig::tab_context_menu` at the dock. The panel menu button still opens the group menu.
+    #[prop]
+    tab_menu: Vec<PanelRow>,
     /// Whether the panel menu button shows beside the tabs; a context request on a tab opens the menu either way.
     #[prop]
     panel_menu_shown: bool,
@@ -288,6 +292,7 @@ impl<'a, P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> DockGroup<
             zones: ZoneRule::Fraction,
             in_window: false,
             menu: Vec::new(),
+            tab_menu: Vec::new(),
             panel_menu_shown: true,
             command_states: Vec::new(),
             extra: None,
@@ -458,7 +463,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         let from = PanelKey::of(&self.anchor);
         let started = drop::started(&cx.env);
         let (panels, active, closable, wheel_selects) = (self.panels, self.active, self.closable, self.wheel_selects_tabs);
-        let menu_rows = self.menu.clone();
+        // A context request opens the tab menu when the dock gave one, and the group menu otherwise.
+        let context_rows = if self.tab_menu.is_empty() { self.menu.clone() } else { self.tab_menu.clone() };
         let panel_menu = words.panel_menu.clone();
         let mut extra = self.extra.take();
         let name = Label::from(words.panels.as_str().to_owned());
@@ -515,8 +521,8 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
             // The strip's empty room is a handle the group is dragged by; a double click on it minimizes the group.
             reported.empty_drag |= strip.empty_drag;
             reported.toggle_minimized |= strip.empty_double;
-            if !menu_rows.is_empty() {
-                let rows = menu_rows.clone();
+            if !context_rows.is_empty() {
+                let rows = context_rows.clone();
                 let shown = Menu::context(panel_menu.clone(), &strip.response.response)
                     .show(ui, |ui, _| PanelMenu::new(Vec::new(), rows.clone()).show(ui).picked);
                 reported.item = shown.inner.flatten().or(reported.item);

@@ -8,6 +8,7 @@ mod render;
 
 mod panel_menu;
 mod runs;
+mod tab_menu;
 
 mod split;
 
