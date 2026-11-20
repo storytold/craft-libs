@@ -20,7 +20,7 @@ use craft_ui::runtime::inspect::{self, Recorded};
 use craft_ui::runtime::layout_memory;
 use craft_ui::sections::{HeaderCommand, HeaderStrength, Panel};
 use craft_ui::style::SurfaceKind;
-use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration};
+use craft_ui::testing::{StoryData, StoryOutput, StoryRegistration, least_stage_width};
 
 /// A story's show function.
 type StoryFn = fn(&mut Ui, &mut StoryData) -> StoryOutput;
@@ -198,7 +198,7 @@ impl Card<'_> {
                 let gap = Gap::Item.points(ui);
                 // The narrowest a column of stories may be is the least story width, as the old gallery's grids kept
                 // their cases.
-                let least = Env::of(ui).tokens.size.story.width_min;
+                let least = least_stage_width(&Env::of(ui).tokens);
                 let fit = ((ui.available_width() + gap) / (least + gap)).floor() as usize;
                 let columns = fit.clamp(1, usize::from(most).clamp(1, COLUMNS.len()));
                 Grid::new(&COLUMNS[..columns]).gap(Gap::Item).fill_width().show(ui, |ui, _| {

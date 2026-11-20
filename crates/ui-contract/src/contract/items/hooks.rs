@@ -745,7 +745,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             // The rows blend into the surface they sit on.
             let background = surface_style(&env.tokens, SurfaceKind::under(own, env.surface)).fill;
             let hidden = HiddenContent::new(self.content, rect.size(), Vec2::new(self.offset_x as f32, self.offset as f32), rtl);
-            ui.painter().extend(ScrollBar::fades(&look, rect, hidden, background));
+            ui.painter().extend(ScrollBar::fades(rect, hidden, background));
             if self.shows_bar(rect) {
                 let track = bar_track(rect, look.thickness, rtl);
                 let content = f64::from(self.content.y);
