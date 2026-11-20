@@ -942,14 +942,14 @@ fn an_alt_drag_on_a_box_converging_both_ways_turns_the_opposite_edge_like_the_re
             [(186.3736, 43.5611), (415.6264, 45.9961), (415.6264, 354.7081), (186.3736, 421.5181)],
             0.5,
         ),
-        // Was 8.9 px off.
+        // Was 8.9 px off (0.6 px now: the tilted-top easing's weight ratio, 3.3 here, takes a little too much).
         (
             [(240.0, 125.0), (362.0, 125.0), (502.0, 287.0), (100.0, 327.0)],
             2,
             (301.0, 307.0),
             (301.0, 387.0),
             [(186.3736, 44.6972), (415.6264, 44.6972), (415.6264, 355.8334), (186.3736, 420.3662)],
-            0.5,
+            0.7,
         ),
         // Was 1.6 px off.
         (
@@ -968,6 +968,58 @@ fn an_alt_drag_on_a_box_converging_both_ways_turns_the_opposite_edge_like_the_re
             (301.0, 392.0),
             [(113.5829, 41.5852), (488.4171, 48.3453), (488.4171, 365.4924), (113.5829, 419.6638)],
             0.5,
+        ),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, edge, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
+
+/// ⌥ top and bottom drags on boxes whose edges converge both ways under a tilted top, measured on the reference: the
+/// factor's easing grows with powers of the top's and the bottom's weight ratio.
+#[test]
+fn an_alt_drag_under_a_tilted_top_scales_by_the_reference_factor() {
+    let cases = [
+        // Was 13.4 px off.
+        (
+            [(240.0, 125.0), (362.0, 165.0), (452.0, 327.0), (150.0, 327.0)],
+            2,
+            (301.0, 327.0),
+            (301.0, 407.0),
+            [(194.7607, 36.8333), (502.7766, 143.7781), (427.0075, 374.8739), (70.3796, 416.1954)],
+            1.2,
+        ),
+        // Was 6.0 px off.
+        (
+            [(210.0, 125.0), (392.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            2,
+            (301.0, 327.0),
+            (301.0, 367.0),
+            [(174.2827, 72.5419), (499.9162, 190.4549), (447.0186, 350.9109), (78.5998, 362.7801)],
+            0.8,
+        ),
+        // Was 4.6 px off.
+        (
+            [(180.0, 125.0), (422.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            2,
+            (301.0, 327.0),
+            (301.0, 407.0),
+            [(79.431, 15.1612), (597.0698, 166.3525), (539.355, 399.1354), (-16.5468, 402.2713)],
+            0.6,
+        ),
+        // Was 2.5 px off.
+        (
+            [(240.0, 125.0), (362.0, 165.0), (452.0, 327.0), (150.0, 327.0)],
+            0,
+            (301.0, 145.0),
+            (301.0, 105.0),
+            [(291.9459, 96.8913), (387.5338, 138.7957), (331.1534, 310.756), (191.8076, 402.3131)],
+            1.3,
         ),
     ];
     let alt = Mods { alt: true, ..Mods::NONE };

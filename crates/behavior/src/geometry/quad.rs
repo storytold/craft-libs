@@ -774,9 +774,10 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
 }
 
 /// An ⌥ top or bottom drag on a box whose top and bottom converge, within 0.35 px of the reference on boxes with
-/// parallel sides (1.3 px where they differ by 60 %, 5 px where the sides converge too). The perspective side rule
-/// turned on its side, in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r`
-/// (`r` the dragged edge's middle's distance from the reference point across the frame, eased by [`alt_spread`]), the
+/// parallel sides (1.3 px where they differ by 60 %, 1.4 px where the sides converge hard too; 0.23 px on average over
+/// 88 drags). The perspective side rule turned on its side, in the top edge's frame about the reference point: the box
+/// scales evenly by `k = 1 + d / r` (`r` the dragged edge's middle's distance from the reference point across the
+/// frame, eased by [`alt_spread`] and [`top_weight_ratio`]), the
 /// opposite edge turns about its middle to a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
 /// gives them ([`side_run_scale`]); then the sides turn across the frame, `k (|top| ± m)` apart (`m` the sides' mean
 /// run along the frame, added for the bottom edge and taken off for the top one).
@@ -790,10 +791,16 @@ fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min
     let reach = if edge == 2 { reach_to(c, across(tl, bl, tr, br), nh, bl, br) } else { reach_to(c, -across(tl, bl, tr, br), -nh, tl, tr) };
     let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
     // The box grows by a factor eased from the pointer's `k`: a bottom drag by less, a top drag by slightly more as
-    // the drag grows (measured on the reference, eleven boxes), by `spread`.
+    // the drag grows, by the box's slant (`spread`) and, where the sides converge, powers of the top's and the
+    // bottom's weight ratio: 2.2 on a bottom drag's even part and 1 on the part growing with the drag, 3 on a top drag
+    // (measured on the reference, nineteen boxes: within 1.1 px on a bottom drag, 0.25 px on average).
     let spread = alt_spread(g.quad0);
-    let k =
-        if edge == 2 { 1.0 + (k - 1.0) * (1.0 - spread * (0.22 + 0.1 * (k - 1.0))) } else { 1.0 + (k - 1.0) * (1.0 + 0.111 * spread * (k - 1.0)) };
+    let ratio = top_weight_ratio(g.quad0);
+    let k = if edge == 2 {
+        1.0 + (k - 1.0) * (1.0 - spread * (0.22 * ratio.powf(2.2) + 0.1 * ratio * (k - 1.0)))
+    } else {
+        1.0 + (k - 1.0) * (1.0 + 0.111 * spread * ratio * ratio * ratio * (k - 1.0))
+    };
     let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
     if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
         return None;
@@ -830,6 +837,15 @@ fn side_factor_lean(q: [Point; 4], edge: u8, k: f64) -> f64 {
     let lean = 0.28 * (wt / wb).ln() * (wr / wl).ln() * if edge == 3 { 1.0 } else { -1.0 };
     let out = 1.0 + (k - 1.0) * (1.0 + lean * (1.0 + 1.4 * (k - 1.0)));
     if out.is_finite() { out } else { k }
+}
+
+/// `w_t / w_b`, the projective weights of the top's and the bottom's middles: 1 where the sides are parallel, and for
+/// a degenerate box.
+fn top_weight_ratio(q: [Point; 4]) -> f64 {
+    match (unit_weight(q, 0.5, 0.0), unit_weight(q, 0.5, 1.0)) {
+        (Some(top), Some(bottom)) if (top / bottom).is_finite() && top / bottom > 0.0 => top / bottom,
+        _ => 1.0,
+    }
 }
 
 /// The projective weight of the unit square's point `(u, v)` in `q`, `None` for a degenerate box.
