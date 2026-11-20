@@ -35,7 +35,6 @@ pub use reorder::REORDER_BAND;
 pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 pub(crate) use window::MOVE_BAND;
 use window::WindowMode;
-#[cfg(feature = "testing")]
 pub use window::grip_band;
 pub(crate) use window::keep_inside;
 
