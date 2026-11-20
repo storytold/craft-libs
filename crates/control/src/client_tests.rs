@@ -1,9 +1,9 @@
 //! The client against the shared server ([`crate::server::Hub`]) on an ephemeral loopback port.
 
 use super::*;
-use socket2::{Domain, Socket, Type};
 use crate::ControlRequest;
 use crate::server::{Hub, Protocol, Stop, Summary, Waits as ServerWaits};
+use socket2::{Domain, Socket, Type};
 use std::ffi::OsString;
 use std::net::TcpListener;
 use std::path::PathBuf;
