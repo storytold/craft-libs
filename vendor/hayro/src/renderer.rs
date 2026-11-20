@@ -554,11 +554,22 @@ fn premultiply_rgba(rgba: &mut [u8]) {
 /// stay far below this.
 const MAX_DASHES_PER_STROKE: f64 = 250_000.0;
 
-/// PdfCraft patch: the dash pattern to stroke `path` with. Empty (a solid line) when the pattern
-/// is invalid, or when it could cut the path into more than [`MAX_DASHES_PER_STROKE`] pieces.
-/// ISO 32000-2 §8.4.3.6 requires nonnegative entries that are not all zero; a pattern whose
-/// period isn't positive (`[-1 -1] 0 d`) made kurbo's search for the starting dash loop for ever.
-fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
+/// PdfCraft patch: a dash pattern whose period is shorter than this many device pixels, in every
+/// direction, is drawn solid. Its dashes and gaps are a small fraction of a pixel, so stroke
+/// expansion would cut each pixel of the line into dozens of pieces only for the rasterizer to
+/// average them again: a plan with 157,000 short strokes dashed `[.001 .001] 0 d` (a period of
+/// 0.0027 px at 96 dpi) spent over 17 s on it. PDFium and MuPDF draw such a pattern solid
+/// (PDFium below about 0.1 px, MuPDF below about 0.5 px); at 0.1 px and above it is dashed as
+/// before.
+const SOLID_DASH_PERIOD_PX: f64 = 0.1;
+
+/// PdfCraft patch: the dash pattern to stroke `path` with under `transform` (user space to
+/// device pixels). Empty (a solid line) when the pattern is invalid, when its period is under
+/// [`SOLID_DASH_PERIOD_PX`] device pixels, or when it could cut the path into more than
+/// [`MAX_DASHES_PER_STROKE`] pieces. ISO 32000-2 §8.4.3.6 requires nonnegative entries that are
+/// not all zero; a pattern whose period isn't positive (`[-1 -1] 0 d`) made kurbo's search for
+/// the starting dash loop for ever.
+fn usable_dash_pattern(path: &BezPath, dashes: &[f32], transform: &Affine) -> Vec<f64> {
     if dashes.iter().any(|d| !d.is_finite() || *d < 0.0) {
         return Vec::new();
     }
@@ -572,6 +583,12 @@ fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
     if !period.is_finite() || period <= 0.0 {
         return Vec::new();
     }
+    // The longest a user-space period can be on the device, whatever the path's direction; a
+    // NaN (from a non-finite transform) fails the comparison and is drawn solid too.
+    let device_period = period * largest_stretch(transform);
+    if !(device_period >= SOLID_DASH_PERIOD_PX) {
+        return Vec::new();
+    }
     let (length, restarts) = control_polygon_length(path);
     // kurbo restarts the pattern at every subpath and after every `ClosePath`, so each restart
     // can begin up to a whole period of pieces however short its segment is.
@@ -580,6 +597,19 @@ fn usable_dash_pattern(path: &BezPath, dashes: &[f32]) -> Vec<f64> {
         return Vec::new();
     }
     dashes.iter().map(|d| f64::from(*d)).collect()
+}
+
+/// PdfCraft patch: the most `transform` lengthens any vector, its largest singular value:
+/// `sqrt((F + sqrt(F² - 4 det²)) / 2)` with `F` the sum of the squared coefficients of its linear
+/// part. Infinite when they overflow, NaN when one is NaN.
+fn largest_stretch(transform: &Affine) -> f64 {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    let sum_sq = a * a + b * b + c * c + d * d;
+    let det = a * d - b * c;
+    // Rounding can leave the discriminant a hair below zero for a uniform scale; `max` also
+    // turns an `inf - inf` NaN into 0, leaving `sum_sq` (infinite) to decide.
+    let disc = (sum_sq * sum_sq - 4.0 * det * det).max(0.0);
+    ((sum_sq + disc.sqrt()) / 2.0).sqrt()
 }
 
 /// PdfCraft patch: the length of `path`'s control polygon, which a curve never exceeds, and how
@@ -1066,7 +1096,12 @@ impl Renderer {
             start_cap: stroke_props.line_cap,
             end_cap: stroke_props.line_cap,
             // PdfCraft patch: see `usable_dash_pattern`.
-            dash_pattern: usable_dash_pattern(path, &stroke_props.dash_array).into(),
+            dash_pattern: usable_dash_pattern(
+                path,
+                &stroke_props.dash_array,
+                self.ctx.transform(),
+            )
+            .into(),
             dash_offset: if stroke_props.dash_offset.is_finite() {
                 stroke_props.dash_offset as f64
             } else {
@@ -3600,5 +3635,66 @@ mod area_shrink_tests {
         assert_eq!(area_shrink::<1>(&data, (4, 4), (0, 2)), None, "an empty side");
         assert_eq!(area_shrink::<1>(&data[1..], (4, 4), (2, 2)), None, "data shorter than the source");
         assert_eq!(area_shrink::<3>(&data, (4, 4), (2, 2)), None, "data of another channel count");
+    }
+}
+
+#[cfg(test)]
+mod dash_tests {
+    use super::{Affine, BezPath, Point, largest_stretch, usable_dash_pattern};
+
+    fn line(length: f64) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        path.line_to(Point::new(length, 0.0));
+        path
+    }
+
+    /// The largest singular value: the scale of a uniform matrix, the larger axis of a
+    /// non-uniform one, and more than either column's length under a shear.
+    #[test]
+    fn largest_stretch_is_the_largest_singular_value() {
+        assert!((largest_stretch(&Affine::scale(4.0 / 3.0)) - 4.0 / 3.0).abs() < 1e-12);
+        assert!((largest_stretch(&Affine::scale_non_uniform(0.25, 3.0)) - 3.0).abs() < 1e-12);
+        assert!((largest_stretch(&Affine::rotate(0.7)) - 1.0).abs() < 1e-12);
+        // [1 1; 0 1]: singular values are the golden ratio and its inverse.
+        let shear = Affine::new([1.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
+        assert!((largest_stretch(&shear) - (1.0 + 5f64.sqrt()) / 2.0).abs() < 1e-12);
+        assert_eq!(largest_stretch(&Affine::scale(0.0)), 0.0);
+        assert_eq!(largest_stretch(&Affine::scale(1e300)), f64::INFINITY);
+        assert!(largest_stretch(&Affine::scale(f64::NAN)).is_nan());
+    }
+
+    /// ISO 32000-2 §8.4.3.6 gives dash lengths in user space; one whose period is under a tenth
+    /// of a device pixel is drawn solid, as PDFium and MuPDF draw it, instead of being cut into
+    /// pieces that only average out again. A period of a tenth of a pixel or more still dashes.
+    #[test]
+    fn a_period_under_a_tenth_of_a_device_pixel_is_drawn_solid() {
+        let path = line(20.0);
+        let at_96_dpi = Affine::scale(96.0 / 72.0);
+        // `[.001 .001]` at 96 dpi: a period of 0.0027 px.
+        assert!(usable_dash_pattern(&path, &[0.001, 0.001], &at_96_dpi).is_empty());
+        // An odd-length pattern repeats once: `[.03]` is a period of 0.06 user units, 0.08 px.
+        assert!(usable_dash_pattern(&path, &[0.03], &at_96_dpi).is_empty());
+        // 0.125 px (`[3/64 3/64]`) and an ordinary 4 pt dash keep their pattern.
+        assert_eq!(
+            usable_dash_pattern(&path, &[0.046875, 0.046875], &at_96_dpi),
+            vec![0.046875, 0.046875]
+        );
+        assert_eq!(
+            usable_dash_pattern(&path, &[4.0, 4.0], &at_96_dpi),
+            vec![4.0, 4.0]
+        );
+        // The same `[.001 .001]` enlarged 100 times is a 0.2 px period and dashes.
+        assert_eq!(usable_dash_pattern(&path, &[0.001, 0.001], &Affine::scale(100.0)).len(), 2);
+        // The period is measured along the device direction that stretches most, whatever the
+        // path's own direction, so a matrix that stretches one axis enough keeps the pattern.
+        let one_axis = Affine::scale_non_uniform(0.001, 100.0);
+        assert_eq!(
+            usable_dash_pattern(&path, &[0.001, 0.001], &one_axis).len(),
+            2
+        );
+        // A degenerate or NaN matrix draws solid rather than dashing by a meaningless length.
+        assert!(usable_dash_pattern(&path, &[4.0, 4.0], &Affine::scale(0.0)).is_empty());
+        assert!(usable_dash_pattern(&path, &[4.0, 4.0], &Affine::scale(f64::NAN)).is_empty());
     }
 }
