@@ -13,7 +13,18 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
     parse_in(s, images, false)
 }
 
+/// [`parse_with`] without collapsing source whitespace or splitting `<pre>` on line breaks.
+/// HTML input newline normalization still applies. This is useful to callers extracting source
+/// text; it does not preserve skipped elements, markup, or source block boundaries exactly.
+pub fn parse_with_source_whitespace(s: &str, images: ImageLoader) -> Flow {
+    parse_in_mode(s, images, false, true)
+}
+
 pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
+    parse_in_mode(s, images, page, false)
+}
+
+fn parse_in_mode(s: &str, images: ImageLoader, page: bool, source_whitespace: bool) -> Flow {
     // HTML normalizes input newlines before tokenization, not after decoding character references.
     let normalized = if s.contains('\r') {
         let mut out = String::with_capacity(s.len());
@@ -30,7 +41,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     // The lexer's offsets (a style element's text is cut out by them) are into the normalized text.
     let s: &str = &normalized;
     let mut lx = Lexer::new(s);
-    let mut b = Builder::new(images, page);
+    let mut b = Builder::new(images, page, source_whitespace);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;

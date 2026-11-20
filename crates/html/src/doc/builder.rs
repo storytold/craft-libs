@@ -173,6 +173,7 @@ pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
 
 pub(super) struct Builder<'r> {
     images: ImageLoader<'r>,
+    source_whitespace: bool,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
     tables: Vec<TableB>,
@@ -581,9 +582,10 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 impl<'r> Builder<'r> {
-    pub(super) fn new(images: ImageLoader<'r>, page: bool) -> Builder<'r> {
+    pub(super) fn new(images: ImageLoader<'r>, page: bool, source_whitespace: bool) -> Builder<'r> {
         Builder {
             images,
+            source_whitespace,
             containers: vec![Vec::new()],
             cells: Vec::new(),
             tables: Vec::new(),
@@ -726,7 +728,7 @@ impl<'r> Builder<'r> {
     fn flush(&mut self) {
         let Some(mut p) = self.para.take() else { return };
         let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
-        if p.kind != Kind::Code {
+        if p.kind != Kind::Code && !self.source_whitespace {
             // Preserved white space keeps its spaces and tabs at the edges; line breaks there
             // (source formatting) still go.
             const ALL: &[char] = &[' ', '\t', '\r', '\n'];
@@ -816,6 +818,11 @@ impl<'r> Builder<'r> {
         }
         let code = self.stack.iter().any(|e| e.kind == ElKind::Pre);
         let f = self.fmt();
+        if self.source_whitespace {
+            self.note_edge(true);
+            self.start_para().push_text(t, &f);
+            return;
+        }
         if code {
             let mut first = true;
             for line in t.split('\n') {
@@ -878,7 +885,7 @@ impl<'r> Builder<'r> {
     /// base, or no reading) is plain text instead: a guide that annotates nothing is no guide, and
     /// the text it held is never lost.
     pub(super) fn push_ruby(&mut self, base: &str, ruby: &str) {
-        let preserve = self.preserve();
+        let preserve = self.source_whitespace || self.preserve();
         let text = |s: &str| if preserve { s.to_string() } else { collapse_ws(s) };
         let (base, ruby) = (text(base), text(ruby));
         let f = self.fmt();

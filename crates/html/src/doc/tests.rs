@@ -2164,3 +2164,16 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+#[test]
+fn source_whitespace_mode_keeps_spaces_and_preformatted_lines() {
+    let html = "<p> A  <a href='#x'>B\n C</a> D </p><pre>first  line\n  second</pre>";
+    let ordinary = parse_with(html, &|_| None);
+    let flow = parse_with_source_whitespace(html, &|_| None);
+    let paragraphs = paras(&flow);
+    assert_eq!(paragraphs.len(), 2);
+    assert_eq!(paragraphs[0].text(), " A  B\n C D ");
+    assert_eq!(paragraphs[1].text(), "first  line\n  second");
+    assert!(paragraphs[0].inlines.iter().any(|i| matches!(i, Inline::Text(text, fmt) if text == "B\n C" && fmt.link.as_deref() == Some("#x"))));
+    assert_ne!(paras(&ordinary)[0].text(), paragraphs[0].text());
+}

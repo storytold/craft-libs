@@ -42,7 +42,7 @@ pub use entity::{decode, decode_as, decode_entity, unescape};
 pub use export::{esc, export, export_flow, export_fragment, inlines_html};
 #[cfg(test)]
 use import::parse_in;
-pub use import::{PAGE_FONT, import, import_on, import_page, import_with, parse, parse_with};
+pub use import::{PAGE_FONT, import, import_on, import_page, import_with, parse, parse_with, parse_with_source_whitespace};
 
 #[cfg(test)]
 use css::css_unescape;
