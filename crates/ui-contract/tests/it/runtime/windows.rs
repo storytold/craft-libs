@@ -154,6 +154,23 @@ fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
     }
 }
 
+/// A window that closes leaves the next frame's input, as an integration drops it, so the modal it showed in its last
+/// pass blocks no other window: the root window's close request then reaches the app in that frame.
+#[trial]
+fn a_closed_windows_modal_no_longer_blocks_the_root_close() {
+    let windows = Windows::new();
+    modal_frame(&windows);
+    windows.frame(vec![], vec![], |_| {});
+    windows.root_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
+    let (listed, asked) = (Cell::new(true), Cell::new(false));
+    windows.frame(vec![], vec![], |ui| {
+        listed.set(ui.ctx().input(|input| input.raw.viewports.contains_key(&child())));
+        asked.set(craft_ui::runtime::windows::root_close_requested(ui.ctx()));
+    });
+    assert!(!listed.get(), "the closed window is gone from the input");
+    assert!(asked.get(), "the closed window's modal refuses no close");
+}
+
 /// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window
 /// forward with it, in the pass the main window gains focus; a pass without a focus change sends nothing.
 #[trial]
