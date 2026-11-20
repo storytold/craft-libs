@@ -1497,8 +1497,9 @@ mod tests {
         let out = w.finish().unwrap().into_inner();
         let size = u32::from_be_bytes(out[0..4].try_into().unwrap()) as usize;
         assert_eq!(&out[4..8], b"ftyp");
-        let brands: Vec<&[u8]> = out[16..size].chunks_exact(4).collect();
-        assert!(brands.contains(&b"av01".as_slice()), "missing av01 in {brands:?}");
-        assert_eq!(brands.iter().filter(|&&b| b == b"isom").count(), 1);
+        let (brands, rest) = out[16..size].as_chunks::<4>();
+        assert!(rest.is_empty());
+        assert!(brands.contains(b"av01"), "missing av01 in {brands:?}");
+        assert_eq!(brands.iter().filter(|&&b| b == *b"isom").count(), 1);
     }
 }
