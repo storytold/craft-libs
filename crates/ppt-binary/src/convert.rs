@@ -939,7 +939,9 @@ impl<'a> Ctx<'a> {
                 para.runs.push(Run::with(String::from_utf16_lossy(&units), props));
                 i = j;
             }
-            para.end_props = first;
+            // The paragraph mark's own formatting, as PowerPoint reads it: the character run at the
+            // CR, or at the text's end for the last paragraph.
+            para.end_props = self.run_props(&cf_at(end), &scope.scheme);
             para.normalize();
             out.push(para);
             if end >= total {
