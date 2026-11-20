@@ -227,11 +227,11 @@ pub(crate) fn line_baseline(ctx: &Context, env: &TextEnv<'_>, role: TypeRole, ce
 }
 
 /// A bounded per-context cache. Equality compares the complete input, rather than trusting a hash collision.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 struct LayoutKey {
     run: TextRun<'static>,
     tokens: u64,
-    token_values: Arc<craft_theme::Tokens>,
+    token_values: UiTokens,
     direction: Direction,
     ink: Color32,
     fonts: StackFacts,
@@ -243,7 +243,7 @@ struct LayoutKey {
 struct LayoutQuery<'a> {
     run: &'a TextRun<'a>,
     tokens: u64,
-    token_values: &'a Arc<craft_theme::Tokens>,
+    token_values: &'a UiTokens,
     direction: Direction,
     ink: Color32,
     fonts: StackFacts,
@@ -298,7 +298,7 @@ impl LayoutQuery<'_> {
     fn matches(&self, key: &LayoutKey) -> bool {
         key.run == *self.run
             && key.tokens == self.tokens
-            && (Arc::ptr_eq(&key.token_values, self.token_values) || key.token_values.as_ref() == self.token_values.as_ref())
+            && key.token_values.same_source_tokens(self.token_values)
             && key.direction == self.direction
             && key.ink == self.ink
             && key.fonts == self.fonts
@@ -334,7 +334,7 @@ impl LayoutQuery<'_> {
                 rotation: self.run.rotation,
             },
             tokens: self.tokens,
-            token_values: Arc::clone(self.token_values),
+            token_values: self.token_values.clone(),
             direction: self.direction,
             ink: self.ink,
             fonts: self.fonts,
@@ -385,7 +385,7 @@ impl TextRun<'_> {
         LayoutQuery {
             run: self,
             tokens: env.tokens.key(),
-            token_values: env.tokens.tokens(),
+            token_values: env.tokens,
             direction: env.direction,
             ink: env.ink,
             fonts: env.fonts,
