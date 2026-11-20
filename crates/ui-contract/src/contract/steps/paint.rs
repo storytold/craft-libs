@@ -27,14 +27,8 @@ pub(crate) struct Fade {
 
 /// The layer whose open veil the components shown here lie under: set by `PaintUi` for the children a faded
 /// component shows while its paint runs, which its veil covers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UnderVeil(pub Option<Layer>);
-
-impl crate::contract::MemoProps for UnderVeil {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        key.feed_hash(&self.0);
-    }
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
+pub(crate) struct UnderVeil(#[memo_props(hash = "an egui layer id is its order and id")] pub Option<Layer>);
 
 impl EnvValue for UnderVeil {
     fn root() -> Self {

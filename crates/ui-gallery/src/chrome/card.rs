@@ -45,23 +45,18 @@ pub enum CardCommands {
 }
 
 /// The appearance values a card sets for its story beyond the window's.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, MemoProps)]
 #[non_exhaustive]
 pub struct Look {
     /// The mode the story's tokens resolve in.
+    #[memo_props(hash = "a fieldless enum of the theme")]
     pub mode: Option<Mode>,
     /// The layout direction.
+    #[memo_props(hash = "a fieldless enum of the i18n crate")]
     pub direction: Option<Direction>,
     /// The control size.
+    #[memo_props(hash = "a fieldless enum of the theme")]
     pub size: Option<ControlSize>,
-}
-
-/// The theme's own enums, by their derived `Hash`.
-impl MemoProps for Look {
-    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
-        let Look { mode, direction, size } = *self;
-        key.feed_hash(&(mode, direction, size));
-    }
 }
 
 /// One story a card shows.
