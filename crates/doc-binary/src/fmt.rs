@@ -200,6 +200,20 @@ fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
     });
 }
 
+/// A complex-script toggle (sprmCFBoldBi, sprmCFItalicBi) against the style's own complex-script
+/// value, `style`, which is off where the style leaves it out: the ordinary bold or italic plays
+/// no part ([MS-DOC] 2.9.336 ToggleOperand). The style's value (0x80) is set too, so the run's
+/// ordinary bold or italic isn't taken for it where the model would fall back to it.
+fn set_bi(props: &mut Option<bool>, t: Toggle, style: Option<bool>) {
+    let base = style.unwrap_or(false);
+    *props = Some(match t {
+        Toggle::On => true,
+        Toggle::Off => false,
+        Toggle::Invert => !base,
+        Toggle::Keep => base,
+    });
+}
+
 /// Apply a character-property sprm. `base` carries the style-inherited values so toggle
 /// operands can invert them; `fonts` maps sprmCRgFtc0 indices to names.
 pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: &[String]) {
@@ -213,8 +227,8 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
         C_F_COMPLEX_SCRIPTS => set(&mut p.cs, sprm::toggle(prl), base.cs.unwrap_or(false)),
         C_F_BIDI => set(&mut p.rtl, sprm::toggle(prl), base.rtl.unwrap_or(false)),
-        C_F_BOLD_BI => set(&mut p.bold_cs, sprm::toggle(prl), base.bold_cs.or(base.bold).unwrap_or(false)),
-        C_F_ITALIC_BI => set(&mut p.italic_cs, sprm::toggle(prl), base.italic_cs.or(base.italic).unwrap_or(false)),
+        C_F_BOLD_BI => set_bi(&mut p.bold_cs, sprm::toggle(prl), base.bold_cs),
+        C_F_ITALIC_BI => set_bi(&mut p.italic_cs, sprm::toggle(prl), base.italic_cs),
         C_HPS_BI => {
             if let Some(hps) = u16_of(prl) {
                 p.size_cs = Some((hps as f32 / 2.0).clamp(1.0, 1638.0));

@@ -3137,3 +3137,26 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
     let run = &para0(&read(&rich_doc(&spec)).expect("opens")).runs[0].props;
     assert_eq!((run.cs, run.bold_cs, run.italic_cs), (Some(true), Some(true), Some(true)));
 }
+
+/// The complex-script bold and italic toggles (sprmCFBoldBi, sprmCFItalicBi) work against the
+/// style's own complex-script value, off where the style leaves it out, whatever its ordinary
+/// bold and italic ([MS-DOC] 2.9.336 ToggleOperand): under a bold, italic Normal with no
+/// complex-script bold or italic, 0x81 (the style's value inverted) turns complex-script bold on
+/// and 0x80 (the style's value) leaves complex-script italic off.
+#[test]
+fn complex_script_bold_and_italic_toggles_follow_the_styles_own_value() {
+    let on = &[0x01u8][..];
+    let spec = RichSpec {
+        text: "\u{e17}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), grpprl(&[(0x0835, on), (0x0836, on)]))],
+        fonts: vec!["Angsana New"],
+        chpx_runs: vec![(0, grpprl(&[(0x0882, on), (0x085C, &[0x81]), (0x085D, &[0x80])]))],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    let run = &p.runs[0].props;
+    assert_eq!((run.bold_cs, run.italic_cs), (Some(true), Some(false)), "{run:?}");
+    let rc = doc.styles.resolve_char(p.props.style.as_deref(), run).complex();
+    assert_eq!((rc.bold, rc.italic), (true, false));
+}
