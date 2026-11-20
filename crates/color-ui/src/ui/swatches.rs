@@ -3,6 +3,8 @@
 //! change as a resolved [`SwatchEdit`] (new, rename, delete, move, group edits, import) that the host runs, with
 //! [`SwatchLibrary::apply`] for an in-memory host.
 
+use craft_ui::tile_grid::TileZoom;
+
 mod library;
 mod menu;
 mod panel;
@@ -12,6 +14,10 @@ mod stories;
 pub use library::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, swatch_rows};
 pub use menu::{SwatchesCommand, SwatchesFileOutput, SwatchesMenu, SwatchesMenuOutput};
 pub use panel::{SwatchesPanel, SwatchesPanelOutput};
+
+/// Compact colour tiles at the default zoom, with the same upper limit as the preset browser.
+const SWATCH_MIN_ZOOM: f64 = 1.0 / 3.0;
+const SWATCH_ZOOM: TileZoom = TileZoom::bounded(SWATCH_MIN_ZOOM, 5.0, 1.0 / 12.0, SWATCH_MIN_ZOOM);
 
 /// The most swatches a library holds (PhotoCraft's `MAX_SWATCHES`).
 pub const MAX_SWATCHES: usize = 100_000;

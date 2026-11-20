@@ -5,3 +5,4 @@ mod lists;
 mod recorder;
 mod rows;
 mod sets;
+mod tabs;

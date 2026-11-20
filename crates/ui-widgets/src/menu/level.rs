@@ -279,6 +279,11 @@ impl MenuLevel {
         self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row == id))
     }
 
+    /// Whether a sibling's submenu is open in this level.
+    pub(super) fn sibling_submenu_open(&self, id: Id) -> bool {
+        self.with(|state| state.open_submenu.as_ref().is_some_and(|open| open.row != id))
+    }
+
     /// The submenu of row `id` was shown at `rect`, or closed itself.
     pub(super) fn note_submenu(&self, id: Id, open: bool, rect: Rect) {
         self.with(|state| match &mut state.open_submenu {
