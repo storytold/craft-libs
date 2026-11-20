@@ -42,6 +42,7 @@ impl BodyHooks<'_> {
             .sense(craft_behavior::Sense::DRAG)
             .priority(HitPriority::new(HitLevel::Edge, 0))
             .cursor(cursor)
+            .exact_hit()
             .pointer_only("no command resizes a docked pane; its extent is the app's layout");
         Some((edge, least))
     }

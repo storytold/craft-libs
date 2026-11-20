@@ -244,12 +244,12 @@ pub fn float_drop<P: Clone + PartialEq>(
 ) -> DockDropped<P> {
     let size = space.size_of(unit, source).min(space.area.size());
     let under = |size: Vec2| {
-        let min = (at - Vec2::new(size.x * 0.5, space.title_row * 0.5)).min(space.area.max - size).max(space.area.min);
+        let min = (at - Vec2::new(size.x * 0.5, space.chrome * 0.5)).min(space.area.max - size).max(space.area.min);
         Rect::from_min_size(min, size)
     };
     let (rect, edge, mark) = match strip.filter(|_| !matches!(unit, DragUnit::Window(_))) {
         Some(strip) => {
-            let shown = under((strip + Vec2::new(0.0, space.title_row)).min(space.area.size()));
+            let shown = under((strip + Vec2::new(0.0, space.chrome)).min(space.area.size()));
             let (rect, edge) = WindowColumn::around_strip(shown, size, space.area, rtl);
             (rect, Some(edge), shown)
         }
