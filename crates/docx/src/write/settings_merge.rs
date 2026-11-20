@@ -14,6 +14,7 @@
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
 const OWNED: &[&str] = &[
+    "w:zoom",
     "w:removePersonalInformation",
     "w:removeDateAndTime",
     "w:displayBackgroundShape",
@@ -259,7 +260,6 @@ pub fn has_unowned(original: &[u8]) -> bool {
     let Some(xml) = std::str::from_utf8(original).ok() else { return false };
     let Some((_, _, kids)) = children(xml, "w:settings") else { return false };
     kids.iter().any(|k| match k.name.as_str() {
-        "w:zoom" => false,
         // Anything in `w:compat` beyond its own tag and the compatibility mode.
         "w:compat" => xml.get(k.start..k.end).is_some_and(|c| {
             let mode = usize::from(c.contains("w:name=\"compatibilityMode\""));
@@ -386,6 +386,22 @@ mod tests {
         let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(out.contains("<w:compat><w:compatSetting") && out.contains("</w:compat>"), "{out}");
         assert!(out.contains("<w:rsidRoot w:val=\"00112233\"/>"), "{out}");
+    }
+
+    #[test]
+    fn zoom_comes_from_the_generated_part_while_foreign_settings_stay() {
+        let original_zoom = r#"<w:zoom w:percent="120"/>"#;
+        let updated_zoom = r#"<w:zoom w:val="bestFit" w:percent="145"/>"#;
+        let original = format!(
+            r#"<w:settings xmlns:w="w" xmlns:mc="mc" mc:Ignorable="w15" xmlns:w15="w15">{original_zoom}<w:proofState w:spelling="clean"/><w:docVars><w:docVar w:name="ClauseSet" w:val="B"/></w:docVars></w:settings>"#
+        );
+        let generated = format!(r#"<w:settings xmlns:w="w">{updated_zoom}</w:settings>"#);
+        for source in [original.clone(), original.replace(original_zoom, "")] {
+            assert!(has_unowned(source.as_bytes()));
+            let out = String::from_utf8(merge(source.as_bytes(), generated.as_bytes()).unwrap()).unwrap();
+            assert_eq!(out, original.replace(original_zoom, updated_zoom));
+            assert_eq!(out.matches("<w:zoom ").count(), 1);
+        }
     }
 
     #[test]
