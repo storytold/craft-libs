@@ -12,7 +12,8 @@ use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::input::key_press;
-use craft_ui::testing::layout::{in_region, measured_block};
+use craft_ui::popover::Popover;
+use craft_ui::testing::layout::{allocate, in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{
     Frames, MemoRun, last_frame_memo_runs, last_pass_measuring_runs, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs,
@@ -1082,6 +1083,68 @@ fn a_view_replayed_for_frames_keeps_the_layout_memory_it_kept() {
     let after_replays = measured_frame(&mut frames, 2);
     assert_eq!(runs_of(&frames, "Measured"), [MemoRun::Ran], "a new prop runs the view");
     assert_eq!(after_replays, after_a_run, "the replays kept the stack's measurements alive");
+}
+
+/// A view as large as the region `COVERED` gives it, under the popover of the covered trial.
+#[derive(MemoProps)]
+struct Board {
+    title: String,
+}
+
+fn board(props: &mut Board, ui: &mut Ui) {
+    Button::new(props.title.clone()).show(ui);
+    allocate(ui, Vec2::new(300.0, 200.0));
+}
+
+/// Where the board view is: the popover hangs over its middle.
+const COVERED: Rect = Rect { min: Pos2::new(10.0, 10.0), max: Pos2::new(410.0, 260.0) };
+
+/// A board view with an open popover over it whose slider edits a value the board does not show.
+struct Covered {
+    size: f32,
+    /// Where the slider in the popover was shown in the last frame.
+    slider: Option<Rect>,
+}
+
+impl Covered {
+    fn show(&mut self, ui: &mut Ui) {
+        in_region(ui, COVERED, |ui| MemoView::new("board", Board { title: "Board".to_owned() }, board).show(ui));
+        let (size, slider) = (&mut self.size, &mut self.slider);
+        Popover::new("Size", Bind::given(true)).at_point(Pos2::new(80.0, 80.0)).show(ui, |ui, _| {
+            *slider = Some(Scrub::new(Bind::bound(size)).show(ui).response.rect);
+        });
+    }
+
+    /// One frame with `events`; returns the views that ran in any of its passes, by props type name.
+    fn frame(&mut self, frames: &mut Frames, events: Vec<egui::Event>) -> Vec<&'static str> {
+        frames.frame(events, |ui| self.show(ui));
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect()
+    }
+}
+
+/// A drag of a slider on a popover over a memoized view leaves the view replaying: the press is on the popover, the
+/// top layer where it started, so it engages nothing beneath it.
+#[trial]
+fn a_drag_on_a_popover_over_a_view_replays_the_view() {
+    let mut scene = Covered { size: 10.0, slider: None };
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        scene.frame(&mut frames, vec![]);
+    }
+    let slider = scene.slider.expect("the popover shows its slider");
+    let from = Pos2::new(slider.left() + 10.0, slider.center().y);
+    assert!(COVERED.contains(from), "the slider lies over the board");
+    scene.frame(&mut frames, vec![moved(from)]);
+    assert_eq!(scene.frame(&mut frames, vec![press(from)]), Vec::<&str>::new(), "the press runs no view");
+    let start = scene.size;
+    let mut runs = Vec::new();
+    for step in 1..=4 {
+        runs.push(scene.frame(&mut frames, vec![moved(from + Vec2::new(12.0 * step as f32, 0.0))]));
+    }
+    scene.frame(&mut frames, vec![release(from + Vec2::new(48.0, 0.0))]);
+    assert_ne!(scene.size, start, "the drag edited the size");
+    assert!(runs.iter().all(Vec::is_empty), "the board replays in every drag frame: {runs:?}");
 }
 
 #[derive(MemoProps)]

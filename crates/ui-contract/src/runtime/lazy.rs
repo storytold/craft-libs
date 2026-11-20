@@ -559,10 +559,13 @@ fn moved(ctx: &Context, settled: &Settled, view: Option<(Option<View>, Option<Vi
         || crate::runtime::commands::queued_for(ctx, &facts.instances)
 }
 
-/// Whether the pointer is over `rect` (shown) on `layer`, or a press that is held started there.
+/// Whether the pointer is over `rect` (shown) on `layer`, or a press that is held started there. Both halves ask
+/// whether `layer` is the top layer at the point, so a pointer or a press on an overlay above the view leaves it alone.
 fn engaged(ctx: &Context, layer: Layer, rect: Rect) -> bool {
     let screen = ctx.layer_transform_to_global(layer).map_or(rect, |transform| transform * rect);
-    ctx.rect_contains_pointer(layer, rect) || input_state::held_press_origin(ctx).is_some_and(|origin| screen.contains(origin))
+    ctx.rect_contains_pointer(layer, rect)
+        || input_state::held_press_origin(ctx)
+            .is_some_and(|origin| screen.contains(origin) && ctx.layer_id_at(origin) == Some(layer))
 }
 
 /// Adds the last real run of the memoized view `id` to the running pass, in place of running it, at the place `shift`
