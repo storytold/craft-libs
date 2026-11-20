@@ -67,6 +67,27 @@ fn a_notice_reports_its_action_and_dismissal_in_a_frame_that_runs_twice() {
     assert_eq!(taken.get().1, 1, "the dismissal is reported once");
 }
 
+#[trial]
+fn escape_on_a_notice_action_reaches_the_window() {
+    let dismissed = Rc::new(Cell::new(false));
+    let cancelled = Rc::new(Cell::new(false));
+    let (seen, window) = (dismissed.clone(), cancelled.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let out = Notice::new(Tone::Info, "Document repaired").dismiss().action(NoticeAction::new("Details")).show(ui);
+        seen.set(seen.get() || out.dismissed);
+        craft_ui::runtime::keys::with_window_intents(ui.ctx(), false, |intents| {
+            let took = intents.take_exact(&craft_behavior::Intent::Cancel);
+            window.set(window.get() || took);
+            took
+        });
+    });
+    fixture.settle();
+    fixture.key(egui::Key::Tab, egui::Modifiers::NONE);
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(cancelled.get(), "Escape the notice action leaves reaches the window");
+    assert!(!dismissed.get(), "Escape does not press the notice's dismiss button");
+}
+
 /// A centred notice hosts the app's own leaf under its actions: the leaf sits centred under them, and a click on it
 /// reaches the app through the leaf's output.
 #[trial]
