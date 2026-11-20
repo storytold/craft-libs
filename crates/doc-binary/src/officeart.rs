@@ -85,7 +85,10 @@ pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
         // The format cannot be drawn: kept as a placeholder of the right size.
         Format::Pict => ("pict", true),
     };
-    Some(Blip { bytes: b.bytes(limit, work)?, ext, placeholder })
+    let bytes = b.bytes(limit, work)?;
+    // A WMF gets back the placeable header the BLIP leaves out, so it keeps its size.
+    let bytes = if b.format == Format::Wmf { craft_officeart::wmf::with_placeable_header(b.header?, bytes)? } else { bytes };
+    Some(Blip { bytes, ext, placeholder })
 }
 
 // ---------------------------------------------------------------------------------------------

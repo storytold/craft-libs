@@ -37,8 +37,8 @@ fn picture_of(blip: &[u8], limit: usize) -> Option<Picture> {
 /// once; one that decodes costs its compressed bytes and what they inflated to.
 #[test]
 fn the_store_decodes_lazily_within_a_budget() {
-    let wmf = vec![7u8; 1000];
-    let blip = metafile(rt::BLIP_WMF, 0x216, 1000, &wmf, true);
+    let emf = vec![7u8; 1000];
+    let blip = metafile(rt::BLIP_EMF, 0x3D4, 1000, &emf, true);
     let input = blip.len() - 8 - 16 - 34;
     let entries: Vec<Vec<u8>> = (0..5).map(|_| fbse_at(0, blip.len() as u32)).collect();
     let mut store = store_of(&entries, &blip, 2 * (input + 1000) + 10);
@@ -96,7 +96,8 @@ fn decodes_png_and_deflated_metafiles() {
 
     let wmf = b"\x01\x00\x09\x00\x00\x03 a tiny metafile".to_vec();
     let p = picture_of(&metafile(rt::BLIP_WMF, 0x216, wmf.len(), &wmf, true), usize::MAX).unwrap();
-    assert_eq!((p.ext, p.data), ("wmf", wmf.clone()));
+    // The WMF gets back the 22-byte placeable header the BLIP leaves out.
+    assert_eq!((p.ext, &p.data[..4], &p.data[22..]), ("wmf", &0x9AC6_CDD7u32.to_le_bytes()[..], &wmf[..]));
     // Damaged deflate data is no picture rather than a panic.
     let mut bad = metafile(rt::BLIP_EMF, 0x3D4, wmf.len(), &wmf, true);
     let n = bad.len();
@@ -104,8 +105,9 @@ fn decodes_png_and_deflated_metafiles() {
     assert!(picture_of(&bad, usize::MAX).is_none());
 }
 
+/// A DIB is decoded and made a PNG.
 #[test]
-fn a_dib_becomes_a_bmp_the_image_crate_reads() {
+fn a_dib_becomes_a_png() {
     // 1×1, 24-bit.
     let mut dib = vec![0u8; 40];
     dib[0] = 40;
@@ -115,9 +117,8 @@ fn a_dib_becomes_a_bmp_the_image_crate_reads() {
     dib[14] = 24;
     dib.extend_from_slice(&[0, 0, 255, 0]);
     let p = picture_of(&atom(rt::BLIP_DIB, 0x7A8, &[&[0u8; 17][..], &dib].concat()), usize::MAX).unwrap();
-    assert_eq!((p.ext, &p.data[..2]), ("bmp", &b"BM"[..]));
-    assert_eq!(u32::from_le_bytes(p.data[10..14].try_into().unwrap()), 54);
-    let img = image::load_from_memory_with_format(&p.data, image::ImageFormat::Bmp).unwrap().to_rgba8();
+    assert_eq!((p.ext, p.content_type), ("png", "image/png"));
+    let img = image::load_from_memory_with_format(&p.data, image::ImageFormat::Png).unwrap().to_rgba8();
     assert_eq!(img.dimensions(), (1, 1));
     assert_eq!(img.get_pixel(0, 0).0, [255, 0, 0, 255]);
 }
@@ -202,13 +203,13 @@ fn decodes_an_uncompressed_metafile() {
 /// refused, compressed or not.
 #[test]
 fn a_metafile_over_the_budget_is_refused() {
-    let wmf = vec![9u8; 4000];
-    let deflated = metafile(rt::BLIP_WMF, 0x216, 4000, &wmf, true);
+    let emf = vec![9u8; 4000];
+    let deflated = metafile(rt::BLIP_EMF, 0x3D4, 4000, &emf, true);
     let input = deflated.len() - 8 - 16 - 34;
     // The budget covers the compressed bytes read as well as the bytes they inflate to.
     assert!(picture_of(&deflated, 3999 + input).is_none());
     assert_eq!(picture_of(&deflated, 4000 + input).map(|p| p.data.len()), Some(4000));
-    let raw = metafile(rt::BLIP_WMF, 0x216, 4000, &wmf, false);
+    let raw = metafile(rt::BLIP_EMF, 0x3D4, 4000, &emf, false);
     assert!(picture_of(&raw, 3999).is_none());
     assert!(picture_of(&raw, 4000).is_some());
 }

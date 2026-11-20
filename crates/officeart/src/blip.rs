@@ -180,17 +180,23 @@ pub struct Picture {
     pub data: Vec<u8>,
 }
 
-/// A BLIP as a picture file within `limit` bytes and `work`: a DIB becomes a BMP file. `None` for a
-/// Macintosh PICT, which has no decoder here.
+/// A BLIP as a picture file within `limit` bytes and `work`: a DIB decoded and made a PNG (or kept
+/// as a BMP when it can't be decoded or its pixels don't fit), and a WMF with the placeable header
+/// the BLIP leaves out put back, so it keeps its size. `None` for a Macintosh PICT, which has no
+/// decoder here.
 pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> {
-    if blip.format == Format::Pict {
-        return None;
-    }
-    let mut data = blip.bytes(limit, work)?;
-    if blip.format == Format::Dib {
-        data = dib::to_bmp(&data).filter(|b| b.len() <= limit)?;
-    }
     let (ext, content_type) = blip.format.file();
+    let data = match blip.format {
+        Format::Pict => return None,
+        Format::Dib => {
+            return match dib::to_png(blip.raw(), limit, work)? {
+                dib::Dib::Png(data) => Some(Picture { ext: "png", content_type: "image/png", data }),
+                dib::Dib::Bmp(data) => Some(Picture { ext, content_type, data }),
+            };
+        }
+        Format::Wmf => crate::wmf::with_placeable_header(blip.header?, blip.bytes(limit, work)?)?,
+        _ => blip.bytes(limit, work)?,
+    };
     Some(Picture { ext, content_type, data })
 }
 

@@ -318,7 +318,7 @@ fn dib_becomes_png_and_compressed_metafiles_inflate() {
     let img = image::load_from_memory(&blip.bytes).unwrap().to_rgb8();
     assert_eq!((img.width(), img.height(), img.get_pixel(0, 0).0), (2, 1, [255, 0, 0]));
 
-    // A deflated WMF stays a WMF (the metafile renderer draws it).
+    // A deflated WMF stays a WMF (the metafile renderer draws it), its placeable header put back.
     let wmf: Vec<u8> = [1u16, 9, 0x300].iter().flat_map(|v| v.to_le_bytes()).chain([0u8; 12]).collect();
     let packed = miniz_oxide::deflate::compress_to_vec_zlib(&wmf, 6);
     let mut hdr = Vec::new();
@@ -329,7 +329,7 @@ fn dib_becomes_png_and_compressed_metafiles_inflate() {
     let r = rec(0, 0x216, 0xF01B, &[[0u8; 16].as_slice(), &hdr, &packed].concat());
     let (wmf_rec, _) = officeart::record(&r).unwrap();
     let blip = officeart::blip(&wmf_rec, 1 << 20, &mut officeart::Decode::new(usize::MAX)).expect("WMF inflates");
-    assert_eq!((blip.ext, blip.bytes), ("wmf", wmf));
+    assert_eq!((blip.ext, &blip.bytes[..4], &blip.bytes[22..]), ("wmf", &0x9AC6_CDD7u32.to_le_bytes()[..], &wmf[..]));
 }
 
 #[test]

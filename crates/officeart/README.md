@@ -39,7 +39,8 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 - `wmf`: a WMF's placeable header, which the BLIP store leaves out, rebuilt from the BLIP's
   metafile header.
 
-All three readers read BLIPs, property tables and drawings with these rules and limits. Each keeps
-the total of its budget and what it makes of a picture: `craft-doc-binary` turns DIBs into PNG and
-keeps PICT as a placeholder, `craft-xls` gives a WMF its placeable header back and doesn't read
-PICT or TIFF, and `craft-ppt-binary` keeps DIBs as BMP.
+All three readers read BLIPs, property tables and drawings with these rules and limits, and make
+the same files of them: a DIB decoded as a PNG (a BMP when it can't be), a WMF with its placeable
+header back. Each sets its budget's total. `craft-doc-binary` also keeps a Macintosh PICT as a
+placeholder its document model can show; the `.ppt` and `.xls` models have no such placeholder, so
+those readers leave PICT out, and `craft-xls` leaves TIFF out too.

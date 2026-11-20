@@ -5,10 +5,10 @@
 
 use std::sync::Arc;
 
-use craft_officeart::blip::{Decode, Format, fbse_record, parse, store_entries};
+use craft_officeart::blip::{Decode, Format, fbse_record, parse, picture, store_entries};
 use craft_officeart::props::{entries, prop};
 use craft_officeart::record::{MAX_DEPTH, MAX_RECORDS, Records};
-use craft_officeart::{dib, rt, wmf};
+use craft_officeart::rt;
 
 use crate::model::ClientAnchor;
 
@@ -41,21 +41,15 @@ type Bytes = Option<(Vec<u8>, &'static str)>;
 
 /// The picture of one FBSE (its BLIP record after its description and name), within `work`: a
 /// metafile inflated, a WMF with its placeable header put back so the picture keeps its size, a
-/// DIB as a BMP file. PICT and TIFF are not read.
+/// DIB decoded and made a PNG (or a BMP when it can't be decoded). PICT and TIFF are not read.
 fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
     let (rec, _) = fbse_record(fbse, &[])?;
     let blip = parse(&rec)?;
-    let mime = match blip.format {
-        Format::Pict | Format::Tiff => return None,
-        f => f.file().1,
-    };
-    let bytes = blip.bytes(usize::MAX, work)?;
-    let bytes = match blip.format {
-        Format::Wmf => wmf::with_placeable_header(blip.header?, bytes)?,
-        Format::Dib => dib::to_bmp(&bytes)?,
-        _ => bytes,
-    };
-    Some((bytes, mime))
+    if matches!(blip.format, Format::Pict | Format::Tiff) {
+        return None;
+    }
+    let p = picture(&blip, usize::MAX, work)?;
+    Some((p.data, p.content_type))
 }
 
 /// A picture shape: its BLIP (1-based) and client anchor.
@@ -190,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn a_wmf_gets_its_placeable_header_back_and_a_dib_becomes_a_bmp() {
+    fn a_wmf_gets_its_placeable_header_back_and_a_dib_becomes_a_png() {
         // Bounds 0,0–2000×1000 units over 2 × 1 inches (EMUs): 1000 units an inch; stored as is.
         let wmf = b"WMF records".to_vec();
         let n = wmf.len() as u32;
@@ -202,7 +196,7 @@ mod tests {
         let sum = bytes[..20].chunks(2).fold(0u16, |x, w| x ^ u16::from_le_bytes([w[0], w[1]]));
         assert_eq!(u16::from_le_bytes([bytes[20], bytes[21]]), sum);
         assert_eq!(&bytes[22..], &wmf[..]);
-        // A 1 × 1, 24-bit DIB: the pixels start right after the file and info headers.
+        // A 1 × 1, 24-bit DIB, decoded and made a PNG.
         let mut dib = Vec::new();
         for v in [40u32, 1, 1] {
             dib.extend_from_slice(&v.to_le_bytes());
@@ -212,11 +206,8 @@ mod tests {
         dib.extend_from_slice(&[0; 24]);
         dib.extend_from_slice(&[0, 0, 255, 0]);
         let fbse = fbse_of(&rec(0x7A80, 0xF01F, &[&[0u8; 17][..], &dib].concat()));
-        let (bmp, mime) = fbse_blip(&fbse, &mut Decode::new(usize::MAX)).expect("bmp");
-        assert_eq!(mime, "image/bmp");
-        assert_eq!(&bmp[..2], b"BM");
-        assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
-        assert_eq!(bmp.len(), 14 + dib.len());
+        let (png, mime) = fbse_blip(&fbse, &mut Decode::new(usize::MAX)).expect("png");
+        assert_eq!((mime, &png[..4]), ("image/png", &[0x89, b'P', b'N', b'G'][..]));
     }
 
     /// A drawing reads at most the shared limit of records, and containers nested at most the
