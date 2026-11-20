@@ -1,7 +1,7 @@
 //! `TaskBar`: the contextual task bar over a canvas, hung below its anchor until the user moves it.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::CanvasControlWords;
 use crate::bars::{Bar, BarKind};

@@ -118,4 +118,4 @@ enum Failure {
 
 #[cfg(all(test, feature = "ui"))]
 #[path = "client_tests.rs"]
-mod client_tests;
+pub(crate) mod client_tests;

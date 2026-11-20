@@ -15,7 +15,7 @@ use crate::text::tests::{cf_bytes, pf_bytes};
 /// A default master as an application gives one: title, body and footer placeholders on the
 /// master, and the layouts `.ppt` layout types map to, each with its placeholders. The `.ppt`
 /// masters place and style these.
-struct AppDefaults;
+pub(crate) struct AppDefaults;
 
 impl Defaults for AppDefaults {
     fn master(&self, size: Size, after: u32) -> (Master, u32) {
@@ -74,7 +74,7 @@ fn import_checked(bytes: &[u8]) -> Result<(Presentation, Vec<String>), crate::Pp
 }
 
 /// A version 3 compound file holding `streams` at its root.
-fn build(streams: &[(&str, &[u8])]) -> Vec<u8> {
+pub(crate) fn build(streams: &[(&str, &[u8])]) -> Vec<u8> {
     craft_cfb::write_streams(craft_cfb::Version::V3, streams).unwrap()
 }
 
@@ -390,7 +390,7 @@ fn file_with(token: u32) -> Vec<u8> {
     build(&[("Current User", &cu), ("PowerPoint Document", &doc), ("Pictures", &pics)])
 }
 
-fn file() -> Vec<u8> {
+pub(crate) fn file() -> Vec<u8> {
     file_with(0xE391_C05F)
 }
 

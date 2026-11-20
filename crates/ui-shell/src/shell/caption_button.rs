@@ -16,8 +16,8 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, ColorImage, CornerRadius, Painter, Pos2, Rect, Response, Stroke, StrokeKind, Vec2, pos2, vec2};
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The button's one part: the whole slot.
 const BUTTON: PartKey = PartKey::new("button");

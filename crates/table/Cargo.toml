@@ -15,6 +15,7 @@ test = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The table widgets (`craft_table::ui`).
 ui = ["dep:craft-ui", "dep:craft-behavior", "dep:craft-keymap", "dep:craft-theme", "dep:egui"]
@@ -29,11 +30,11 @@ craft-ui = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 
 [dev-dependencies]
-craft-table = { path = ".", features = ["screen-testing"] }
+craft-table = { path = ".", features = ["suite"] }
 egui = { workspace = true }
 
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
 harness = false
-required-features = ["screen-testing"]
+required-features = ["suite"]

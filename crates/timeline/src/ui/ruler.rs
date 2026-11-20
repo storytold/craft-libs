@@ -1,8 +1,8 @@
 //! `TimelineRuler`: the time ruler across the top of a timeline (N1.01), a leaf that reads the `TimeAxis` of the
 //! `TimelineView` around it.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::{Axis, CursorIcon, HitLevel, HitPriority, Metrics, NavMove, PartKey, PointerButton, PressPhase, RulerUnits, Sense, Ticks};
 use craft_ui::canvas::{Rulers, StepLadder, TickRule};

@@ -7,8 +7,8 @@ use craft_ui::patterns::presets::{CellShape, PresetBrowser, PresetEvent, PresetR
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_color_ui::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 

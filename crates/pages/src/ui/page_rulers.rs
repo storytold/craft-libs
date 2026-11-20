@@ -2,8 +2,8 @@
 //! [`PageRulers`], which joins a [`TextRuler`], a [`VerticalRuler`] and
 //! [`MarginHandles`] around the page.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use craft_behavior::kurbo::Point;
 use craft_behavior::{

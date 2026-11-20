@@ -4,12 +4,12 @@
 //!
 //! [`export_file_name`] is the pure file-name rule the export dialogs share.
 
-mod as_dialog;
-mod options;
-mod path_row;
+pub(crate) mod as_dialog;
+pub(crate) mod options;
+pub(crate) mod path_row;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::PreviewRequest;
 use crate::contract::SaveKey;
