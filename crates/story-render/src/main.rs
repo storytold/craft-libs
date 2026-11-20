@@ -137,7 +137,7 @@ fn options() -> Result<Options, String> {
 /// What a job renders.
 enum Shown {
     /// One story in a card's story body.
-    Story(StoryRegistration),
+    Story(Box<StoryRegistration>),
     /// The Overview card of one story group, which the card's frames show.
     Card(Arc<Spec>),
 }
@@ -202,7 +202,7 @@ fn jobs(options: &Options) -> Vec<Job> {
                 name: component.name.clone(),
                 level: entry.level.title(),
                 crate_name: story.registration.crate_name,
-                shown: Shown::Story(story.registration),
+                shown: Shown::Story(Box::new(story.registration)),
                 surface: entry.surface,
                 story: story.registration.story.name.to_owned(),
                 title: story.registration.story.caption(&component.name),
@@ -332,7 +332,7 @@ fn card(spec: &Arc<Spec>, env: &RootEnv, options: &Options) -> (Fixture, Option<
 fn render(job: &Job, renderer: &mut Renderer, env: &RootEnv, options: &Options) -> Result<RgbaImage, String> {
     let (mut fixture, shown, dialog) = match &job.shown {
         Shown::Story(registration) => {
-            let (fixture, shown) = story(*registration, job.surface, env, options);
+            let (fixture, shown) = story(**registration, job.surface, env, options);
             (fixture, shown, false)
         }
         Shown::Card(spec) => card(spec, env, options),

@@ -29,7 +29,7 @@ pub(crate) mod pair;
 pub(crate) mod palette;
 pub(crate) mod panel;
 pub(crate) mod picker;
-mod picker_dialog;
+pub(crate) mod picker_dialog;
 pub(crate) mod popover;
 pub(crate) mod profile_prompts;
 pub(crate) mod ramp;
