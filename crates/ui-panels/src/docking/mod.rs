@@ -136,9 +136,10 @@ impl Titles {
     }
 }
 
-impl crate::contract::MemoProps for Titles {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        self.key.key(key);
+/// Feeds the content key taken when the titles were made, not the titles.
+impl Hash for Titles {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
     }
 }
 

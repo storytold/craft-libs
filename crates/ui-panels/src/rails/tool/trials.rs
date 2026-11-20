@@ -284,6 +284,9 @@ fn an_open_flyout_builds_no_derived_values() {
     }
 }
 
+/// The room of the key-byte trial.
+const KEY_BYTES_ROOM: Vec2 = Vec2::new(120.0, 400.0);
+
 /// The key bytes of an idle pass of a rail of `count` slots, a quarter of whose tools are hidden and half remembered.
 fn idle_key_bytes(count: u8) -> usize {
     let slots = Tracked::new((0..count).map(|id| ToolSlot::new(u32::from(id), tools(&[id]))).collect::<Vec<_>>());
@@ -296,7 +299,7 @@ fn idle_key_bytes(count: u8) -> usize {
     let mut fixture = Fixture::new(move |ui| {
         ToolRail::new("Tools", &slots, &0, &last).hidden(&hidden).show_rail(ui, |_, _| {});
     });
-    fixture.room(Vec2::new(120.0, 400.0)).settle().idle(1);
+    fixture.room(KEY_BYTES_ROOM).settle().idle(1);
     assert_eq!(last_frame_derived_builds(fixture.ctx()), Vec::new(), "an idle rail builds no derived value");
     last_pass_memo_key_bytes(fixture.ctx())
 }

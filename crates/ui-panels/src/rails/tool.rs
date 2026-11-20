@@ -120,6 +120,7 @@ pub struct ToolRail<'a, T: Value + MemoProps + PlainData + 'static> {
     #[prop(flag)]
     editing: bool,
     /// The tools the user's toolbar settings hide.
+    #[prop(into)]
     hidden: Option<&'a Tracked<Vec<T>>>,
     footer: Option<FooterFn<'a>>,
     /// The columns the rail lays out in this pass.
@@ -155,13 +156,6 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
         .label(label)
     }
 
-    /// The tools the user's toolbar settings hide.
-    #[must_use]
-    pub fn hidden(mut self, hidden: &'a Tracked<Vec<T>>) -> Self {
-        self.hidden = Some(hidden);
-        self
-    }
-
     /// The cells the rail lays out: its visible slots and the Edit Toolbar button.
     fn cells(&self) -> usize {
         visible_slots(self.slots, hidden_in(self.hidden)).len() + usize::from(self.edit_toolbar.is_some())
@@ -189,10 +183,7 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
 }
 
 /// The tools a rail hides: the host's, or none.
-fn hidden_in<'a, T>(hidden: Option<&'a Tracked<Vec<T>>>) -> &'a [T]
-where
-    T: PlainData,
-{
+fn hidden_in<T: PlainData>(hidden: Option<&Tracked<Vec<T>>>) -> &[T] {
     hidden.map_or(&[], |hidden| hidden.as_slice())
 }
 

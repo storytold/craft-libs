@@ -585,6 +585,7 @@ struct TabRow<'a, P> {
     /// The group's anchor panel, which names its drop spots.
     #[memo_props(hash = "a dock's panels are plain values it keys by their hash")]
     anchor: P,
+    #[memo_props(hash = "its Hash is the content key taken when the titles were made")]
     panels: Titles,
     active: PanelKey,
     closable: bool,

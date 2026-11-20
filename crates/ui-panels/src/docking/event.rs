@@ -1,7 +1,7 @@
 //! `DockEvent`, `FloatSpace` and `HidePanels`: what a dock reports to the host and the host tells a dock.
 
 use super::{DockCommands, DockSizes, DragUnit, PanelKey};
-use crate::contract::{MemoKey, MemoProps, Tracked};
+use crate::contract::{MemoProps, Tracked};
 use egui::{Rect, Vec2};
 use std::collections::BTreeSet;
 
@@ -47,7 +47,7 @@ pub enum DockEvent<P> {
 ///
 /// The set is a `Tracked` value, so a dock keys what it shows by the set's revision and keeps the pruned layout until
 /// the set, the workspace or the shell's visibility changes.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, MemoProps)]
 #[non_exhaustive]
 pub enum HidePanels<'a> {
     /// Hides none.
@@ -56,19 +56,6 @@ pub enum HidePanels<'a> {
     All,
     /// Every panel except those whose [`PanelKey`] the set holds.
     Except(&'a Tracked<BTreeSet<PanelKey>>),
-}
-
-impl MemoProps for HidePanels<'_> {
-    fn key(&self, key: &mut MemoKey) {
-        match self {
-            HidePanels::None => key.write_u32(0),
-            HidePanels::All => key.write_u32(1),
-            HidePanels::Except(keep) => {
-                key.write_u32(2);
-                keep.key(key);
-            }
-        }
-    }
 }
 
 /// Where a docking command floats a panel, group or column when it gives no rect. A dock records one each pass;
