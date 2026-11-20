@@ -19,7 +19,8 @@ pub struct Request<'a> {
     /// (`Features::all_experimental_mask`) are left out here: the device descriptor does not
     /// enable experimental features, and wgpu refuses a device that asks for one without that.
     pub optional_features: Features,
-    /// The limits to ask for; `None` asks for the adapter's own limits.
+    /// The limits to ask for; `None` asks for the adapter's own limits. An adapter whose limits
+    /// are lower is skipped.
     pub limits: Option<Limits>,
 }
 
@@ -353,6 +354,26 @@ mod tests {
         let OpenError::NoDevice(notices) = &err else { panic!("{err}") };
         assert!(notices.iter().any(|n| matches!(n, Notice::DeviceFailed { error, .. } if error.contains("SHADER_F16"))), "{notices:?}");
         assert!(err.to_string().starts_with("no graphics adapter could be opened"), "{err}");
+    }
+
+    #[test]
+    fn an_adapter_below_the_requested_limits_is_reported() {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::NOOP;
+        desc.backend_options.noop = wgpu::NoopBackendOptions { enable: true, limits: Some(Limits::default()), ..Default::default() };
+        let instance = Instance::new(desc);
+        let over = Limits::default().max_texture_dimension_2d + 1;
+        let request = Request { limits: Some(Limits { max_texture_dimension_2d: over, ..Limits::default() }), ..Default::default() };
+        let err = open(&instance, None, &Preference::Software, &request).unwrap_err();
+        let OpenError::NoDevice(notices) = &err else { panic!("{err}") };
+        assert!(
+            notices.iter().any(|n| matches!(n, Notice::DeviceFailed { error, .. }
+                if error.contains("max_texture_dimension_2d"))),
+            "{notices:?}"
+        );
+        // limits within the adapter's still open
+        let within = Request { limits: Some(Limits::downlevel_defaults()), ..Default::default() };
+        assert!(open(&instance, None, &Preference::Software, &within).is_ok());
     }
 
     #[test]
