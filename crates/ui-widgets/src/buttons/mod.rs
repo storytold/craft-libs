@@ -92,12 +92,14 @@ pub struct RibbonLook {
     pub tab_ink: bool,
     /// The height of a ribbon strip's underline under the shown tab; 0 keeps the thick stroke.
     pub underline: u8,
+    /// Whether the ribbon's body stands on its own lighter fill, ruled at its top and bottom, as the old ribbon's did.
+    pub body: bool,
 }
 
 impl RibbonLook {
     /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
     pub const fn new(large: u8, small: u8) -> Self {
-        RibbonLook { large, small, arrow: 0, row: 0, tab_ink: false, underline: 0 }
+        RibbonLook { large, small, arrow: 0, row: 0, tab_ink: false, underline: 0, body: false }
     }
 
     /// The strip's tabs in the normal text colour at rest, and its underline `underline` points high (0 keeps the
@@ -105,6 +107,12 @@ impl RibbonLook {
     pub const fn tabs(mut self, underline: u8) -> Self {
         self.tab_ink = true;
         self.underline = underline;
+        self
+    }
+
+    /// The body on its own lighter fill, ruled at its top and bottom.
+    pub const fn body(mut self) -> Self {
+        self.body = true;
         self
     }
 

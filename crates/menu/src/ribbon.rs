@@ -168,7 +168,13 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
                 )
             });
             let region = match (&current, minimised) {
-                (Some(key), false) => Some(show_row(ui, id, tabs, key, (icons, &launcher), &mut body)),
+                (Some(key), false) => Some(craft_ui::runtime::env::with_env(
+                    ui,
+                    |overrides| {
+                        overrides.values.set(icons);
+                    },
+                    |ui| show_row(ui, id, tabs, key, (icons, &launcher), &mut body),
+                )),
                 _ => None,
             };
             (strip, region)
@@ -458,6 +464,10 @@ pub struct RibbonMenuRequest {
 }
 
 /// The style of the row's regions: the slide distance and the edge chevrons' width.
+/// How opaque the raised surface lies over the chrome in a looks body fill: 60 %, the old ribbons band (249 over the
+/// 240 bars of the light theme).
+const BODY_LIFT: u8 = 153;
+
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 struct RegionStyle {
     #[style(metrics)]
@@ -474,6 +484,9 @@ struct RegionStyle {
     title: f32,
     /// The room before the first group (`space.pad.regular`), as the old ribbon kept it.
     start: f32,
+    /// The body's own fill where the look asks for one (`RibbonLook::body`): the raised surface laid thinly
+    /// over the chrome (`BODY_LIFT`), a band lighter than the bars around it.
+    fill: Option<craft_ui::style::StyleColor>,
 }
 
 /// What a row region reports.
@@ -540,11 +553,22 @@ impl Component for Region {
             body,
             title,
             start: cx.tokens.space.pad.regular,
+            fill: cx.env::<RibbonLook>().body.then(|| cx.color(cx.tokens.color.surface.raised.with_alpha(BODY_LIFT))),
         }
     }
 
     fn sense(&self) -> Sense {
         if self.senses { Sense::SURFACE | Sense::CONTEXT_CLICK } else { Sense::empty() }
+    }
+
+    /// The outer region paints the body's fill and its top and bottom rules where the look asks for them.
+    fn paint(&mut self, ui: &mut craft_ui::contract::PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(fill) = cx.style.fill.filter(|_| self.senses) else { return };
+        let draw = ui.draw();
+        draw.fill(&craft_ui::primitives::PaintShape::Rect(cx.rect, egui::CornerRadius::ZERO), fill);
+        for side in [craft_ui::primitives::RectSide::Top, craft_ui::primitives::RectSide::Bottom] {
+            draw.edge_rule(craft_ui::style::RuleKind::Divider, cx.rect, side);
+        }
     }
 
     /// The region only lays out the groups: it is no node of its own.
