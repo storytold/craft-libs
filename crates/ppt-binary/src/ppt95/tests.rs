@@ -799,6 +799,25 @@ fn the_masters_text_styles_are_read() {
     assert_eq!(defaults(&cut), defaults(&plain_master));
 }
 
+/// A master whose title placeholder is a centred title (PowerPoint 95 type 0x0F) gives the title
+/// style its ruler's margins, as a plain title does.
+#[test]
+fn a_masters_centred_title_gives_the_title_style_its_ruler() {
+    let title = placeholder_95(
+        0x0F,
+        0,
+        0,
+        [-2448, -1776, 2448, -1056],
+        Some(text(b"T", &[plain(2)], &[para_run(2, false, 0, 1, 0)], 3, [0; 4], MASTER_BODY)),
+    );
+    let atoms = [style_atom([LEVEL; 5], 0x13)];
+    let stream =
+        stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, DEFAULT, [0; 4], &[title])], environment_with(&[styles(&atoms)]));
+    let t = import(&stream).unwrap().masters[0].title_style.level(0).cloned().unwrap();
+    // The wide ruler (slot 3): level 1 at 576 units, its first line at 288.
+    assert_eq!((t.para.margin_left, t.para.indent), (Some(72.0), Some(-36.0)));
+}
+
 /// A shape with text is a text box with no fill or line of its own; a shape without text isn't
 /// read yet; a placeholder of a type PowerPoint 95 isn't known to write keeps its text as a text
 /// box.
@@ -876,6 +895,22 @@ fn text_is_windows_1252() {
 
 /// Damaged text never panics and stays bounded: runs past the text, huge run lengths and counts,
 /// truncated entries, control characters, empty text, and a character atom past the cap.
+/// Paragraphs and runs are about 4 and 2 KB each, so the document's text makes at most
+/// [`super::text::MAX_TEXT_ITEMS`] of them together, across all its shapes; text past that is
+/// left out.
+#[test]
+fn text_makes_a_bounded_number_of_paragraphs_and_runs() {
+    let bx = [0, 0, 1000, 1000];
+    // 40,000 one-letter paragraphs, a paragraph and a run each: 80,000 items in one shape.
+    let many = [b'a', 13].repeat(40_000);
+    let p = deck_of(vec![shape_95(bx, Some(simple_text(&many, bx, BODY))), shape_95(bx, Some(simple_text(b"after", bx, BODY)))], &[]);
+    let items: usize = p.slides[0].shapes.iter().filter_map(|s| s.text.as_ref()).flat_map(|t| &t.paragraphs).map(|para| 1 + para.runs.len()).sum();
+    assert_eq!(items, super::text::MAX_TEXT_ITEMS);
+    let first = body_of(&p.slides[0].shapes[0]);
+    assert_eq!((first.paragraphs.len(), first.paragraphs[0].runs[0].text.as_str()), (super::text::MAX_TEXT_ITEMS / 2, "a"));
+    assert!(!texts(&p).iter().any(|t| t == "after"), "the budget is the document's, not each shape's");
+}
+
 #[test]
 fn hostile_text_never_panics() {
     let bx = [0, 0, 1000, 1000];
