@@ -189,7 +189,6 @@ fn drawn_with(candidates: &[Candidate], index: usize) -> Option<usize> {
 
 /// Whether `preference` asked for `candidate` itself: software for a software adapter, or the key
 /// of this adapter.
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn asked_for(preference: &Preference, candidate: &Candidate) -> bool {
     match preference {
         Preference::Software => candidate.is_software(),

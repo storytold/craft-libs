@@ -20,11 +20,12 @@ Licensed under MIT OR Apache-2.0.
 | `select(candidates, preference)` | the adapter to draw with, as a `Selection` with its `Notice`s |
 | `ranked(candidates, preference)` | the order in which to try opening a device: the selection, then the other usable adapters by type with software after hardware, never an older version of a driver listed twice, or the Vulkan entry of an Intel Gen 9 to Gen 11 GPU on Intel's Windows driver |
 | `open(instance, surface, preference, request)` | native only, like `list`: opens a device through `ranked`, then wgpu's fallback adapter; returns `Opened` (adapter, device, queue, `Capabilities`, `DeviceHealth`, notices) or `OpenError` |
+| `list_async`, `open_async` | `list` and `open` as futures, for a `wasm32` web worker as well as native; in a browser `list_async` gives the high-performance adapter, the one `open_async` opens for `Auto` and a named adapter |
 | `pick(adapters, surface, preference)` | `select` over listed adapters, for egui-wgpu's `native_adapter_selector`; the error is an `OpenError` (convert it with `map_err(\|e\| e.to_string())` for that selector) |
-| `Capabilities`, `Vendor` | NV12 and P010 (sampled only in wgpu 30), 16-bit norm, `f16` and timestamp support, the largest texture and buffer, the vendor, and whether the adapter is a software one |
+| `Capabilities`, `Vendor` | NV12 and P010 (sampled only in wgpu 30), 16-bit norm, `f16` and timestamp support, the largest texture and buffer, the vendor, and whether the adapter is a software one, read from the `craft_gpu::DeviceCaps` it holds (its fields are readable through `Deref`; `From` converts both ways) |
 | `DeviceHealth`, `Fault`, `WaitOutcome` | records a device loss or an uncaptured error instead of panicking; polls and bounded waits that do not touch a lost device |
 | `Recovery`, `RecoveryPolicy` | the preference to open after a loss: the user's own, and `Software` once the device was lost 3 times in 10 minutes (both values can be set) |
-| `device_caps(device)`, `Opened::device_caps` | the `craft_gpu::DeviceCaps` of a device: its own limits and enabled feature names, in the form `craft-gpu-wgpu` reports |
+| `device_caps(device)`, `Opened::device_caps` | the `craft_gpu::DeviceCaps` of a device: its own limits, enabled feature names, vendor id and software flag, in the form `craft-gpu-wgpu` reports |
 | `DeviceHealth::device_status` | a recorded loss as `craft_gpu::GpuFault::DeviceLost`, in the form of `GpuContext::device_status`; `Fault` converts to `GpuFault` (a loss to `DeviceLost`, an error to `Operation`) |
 | `Notice` | the adapter asked for is missing, no software adapter is listed, only a software adapter can draw, an adapter failed to open, or drawing moved to software after losses; the `Display` text is English, for the log |
 
@@ -33,11 +34,14 @@ Licensed under MIT OR Apache-2.0.
 - With no usable adapter, `select` returns `None`, and `open` and `pick` return
   `OpenError::NoAdapter`, or `OpenError::UnsafeDriver` when only a driver that can end the
   process can draw.
-- In a browser, WebGPU lists only the adapter the browser offers, so a named adapter cannot be
-  chosen. A web build requests the adapter with `Preference::power()` as the power preference
-  and opens the device itself. `Capabilities` and `Recovery` work there as they do on native,
-  and so does `DeviceHealth` apart from `wait`, `wait_timeout` and `wait_timeout_cancelable`,
-  which are native only.
+- In a browser, WebGPU offers one adapter for a power preference, so a named adapter cannot be
+  chosen. `open_async` asks for the adapter with `Preference::power()` as the power preference,
+  and gives the automatic choice with `Notice::AdapterMissing` for a named adapter. wgpu 30
+  does not pass the fallback-adapter option to the browser, so `Preference::Software` opens the
+  browser's adapter, with `Notice::NoSoftwareAdapter` unless that adapter is a software one, and
+  `Recovery` cannot move drawing to software there. `Capabilities` and
+  `Recovery` otherwise work there as they do on native, and so does `DeviceHealth` apart from `wait`,
+  `wait_timeout` and `wait_timeout_cancelable`, which are native only.
 - An adapter that lacks `Request::required_features`, or whose `request_device` fails, adds a
   `Notice::DeviceFailed`, and `open` tries the next one. When every adapter fails, the error lists
   each failure.
@@ -67,6 +71,32 @@ Licensed under MIT OR Apache-2.0.
   passes the count to `DeviceHealth::clear_out_of_memory`. The device is then healthy again,
   unless it was lost, another error was recorded, or a new out-of-memory error came in after the
   count was read.
+
+## After a device loss
+
+`DeviceHealth::device_lost` turns true, and `DeviceHealth::device_status` returns
+`GpuFault::DeviceLost`, once the device is lost. Nothing made with the lost device can be used
+again, and wgpu keeps none of its contents. The caller then:
+
+1. Drops the old `Opened` and everything made with its device: buffers, textures and their
+   views, samplers, bind group layouts and bind groups, shader modules, pipeline layouts and
+   pipelines, query sets, unsubmitted command encoders, and any renderer that holds them (an
+   egui-wgpu `Renderer`, for example). Work submitted before the loss does not complete, and
+   waits on it return `false`.
+2. Calls `Recovery::lost` with the time and opens a new device with `open` or `open_async`,
+   using the returned preference and the same `Request`. When the step has a notice
+   (`Notice::SoftwareAfterLosses`), the app shows it.
+3. Reads the new `Opened::caps` before choosing pipelines again. The new device can be another
+   adapter, or a software one, with other features and limits: for example, without NV12 the
+   planes are drawn into `R8Unorm` and `Rg8Unorm` textures instead.
+4. Configures each window surface again with the new device (`Surface::configure`). The surface
+   itself is kept when it was passed to `open`, which then opens only an adapter that can draw
+   to it.
+5. Builds the pipelines, bind groups and renderers again, and uploads the textures and buffers
+   again from the app's own copies of their data.
+6. Makes any `craft-gpu` context again on the new device, with the new `Opened::device_caps`, and
+   submits again the jobs and frames that did not complete.
+7. Uses the new `Opened::health`. The old `DeviceHealth` keeps reporting the loss.
 
 ## Tests
 
