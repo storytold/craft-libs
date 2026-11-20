@@ -8,6 +8,8 @@ interaction; `layout` provides toolbar fitting, split geometry and resize handle
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
 `localized` supplies number fields that write and read the user's region's numbers.
+`meter` paints an audio level meter on a dB scale with zone colors, RMS and peak-hold marks, and
+exposes it to screen readers as a meter; `meter::PeakHold` keeps a held peak against the caller's clock.
 The current delivery covers nine creative apps (DesignCraft, VectorCraft, PhotoCraft, FilmCraft, EffectCraft, CADCraft, PDFCraft, LightCraft and SoundCraft); prior basic and office adapters are separate. The [suite audit](../../docs/ui-components-audit.md#adoption-and-acceptance)
 records their scope and acceptance limits. Assets (font files included), complete themes, localization
 and command handling remain in each application. No icons, fonts or application engines are bundled.
