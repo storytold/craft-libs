@@ -191,7 +191,9 @@ impl<'a> FindBar<'a> {
                         state.served();
                     }
                 }
-                if let Some(value) = edit.events.value() {
+                if let Some(value) = edit.events.value()
+                    && value != &*query
+                {
                     query.clone_from(value);
                     out.search = true;
                 }

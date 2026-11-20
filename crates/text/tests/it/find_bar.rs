@@ -51,6 +51,40 @@ impl Bar {
     }
 }
 
+/// An unchanged query must not request another search and discard a user's selected match.
+#[trial]
+fn settling_a_typed_query_does_not_request_the_same_search_again() {
+    let query = Rc::new(RefCell::new(String::new()));
+    let replacement = Rc::new(RefCell::new(String::new()));
+    let searches = Rc::new(Cell::new(0));
+    let (shown_query, shown_replacement, shown_searches) = (Rc::clone(&query), Rc::clone(&replacement), Rc::clone(&searches));
+    let mut options = FindOptions::default();
+    let mut matches = FindMatches::new(0);
+    let mut state = FindBarState::default();
+    state.open_replace();
+    let mut open = true;
+    let mut fixture = Fixture::new(move |ui| {
+        let before = shown_query.borrow().clone();
+        let previous_options = options;
+        let out = FindBar::new(&mut shown_query.borrow_mut(), &mut options, &mut matches)
+            .state(&mut state)
+            .replace(&mut shown_replacement.borrow_mut(), &mut open)
+            .show(ui);
+        if out.search && *shown_query.borrow() == before && options == previous_options {
+            shown_searches.set(shown_searches.get() + 1);
+        }
+    });
+    fixture.frame(Vec::new()).settle();
+    fixture.type_text("cat");
+    *replacement.borrow_mut() = "dog".into();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    for _ in 0..8 {
+        fixture.frame(Vec::new());
+    }
+    assert_eq!(&*query.borrow(), "cat");
+    assert_eq!(searches.get(), 0, "the unchanged query did not ask for another search");
+}
+
 #[trial]
 fn asking_for_the_bar_again_selects_its_query_unless_a_composition_runs() {
     let mut bar = Bar::new();
