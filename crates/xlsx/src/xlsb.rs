@@ -1,15 +1,17 @@
-//! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheets (rows, cells,
-//! columns, default sizes, merged cells), from their records. Cell formulas are decoded from
-//! their tokens ([`formula`]) into the text an `.xlsx` file holds; one that can't be keeps only
-//! its saved result, with a warning saying why. The styles part is read into the same
-//! [`crate::styles::Styles`] ([`styles`]). A record that does not parse fails the read.
+//! Binary workbooks ([MS-XLSB]): the workbook part with its defined names, shared strings and
+//! worksheets (rows, cells, columns, default sizes, merged cells), from their records. Cell
+//! formulas are decoded from their tokens ([`formula`]) into the text an `.xlsx` file holds;
+//! one that can't be keeps only its saved result, with a warning saying why. Table parts are
+//! read in `table`; the styles part is read into the same [`crate::styles::Styles`]
+//! ([`styles`]). A record that does not parse fails the read.
 
 mod expr;
 mod formula;
 mod ftab;
 mod styles;
+mod table;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_opc::{ContentTypes, Rels};
@@ -18,11 +20,12 @@ use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Visibility};
 use crate::features::SheetFormat;
 use crate::sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart};
 use crate::strings::StringItem;
-use crate::workbook::{SheetEntry, SheetKind, Workbook};
+use crate::workbook::{DefinedName, SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
 pub(crate) use styles::styles;
+pub(crate) use table::{TABLE, index_table, table};
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
@@ -36,6 +39,8 @@ const MAX_SHEETS: usize = 1024;
 const MAX_BOOKS: usize = 65_536;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// Table parts one worksheet lists at most.
+const MAX_TABLE_PARTS: usize = 65_536;
 /// Most column records in one worksheet: one per column.
 const MAX_COLUMNS: usize = MAX_COLS as usize;
 /// The tallest row, in twips (409.6 points).
@@ -188,11 +193,13 @@ struct Records<'a, 'l> {
     /// Read the alternate content meant for Excel 2007 (version 12), as an `.xlsx` reader sees
     /// the main attribute where Excel keeps a newer spelling in an extension.
     excel_2007: bool,
+    /// Future-record and alternate-content blocks skipped so far.
+    skipped: usize,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
     fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false }
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false, skipped: 0 }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
@@ -245,6 +252,7 @@ impl<'a, 'l> Records<'a, 'l> {
                     let read = read && self.blocks.iter().all(|(_, r)| *r);
                     self.blocks.push((id + 1, read));
                     if !read {
+                        self.skipped += 1;
                         warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
                     }
                 }
@@ -281,18 +289,23 @@ impl<'a, 'l> Records<'a, 'l> {
 
 /// The workbook part: BrtBeginBook, BrtWbProp, the BrtBundleSh list.
 /// The workbook part, and the tables its formulas refer to ([`Links`]): `None` when those can't
-/// be read, so that the workbook still opens, with every formula kept as its saved result.
+/// be read, so that the workbook still opens, with every formula kept as its saved result. Its
+/// defined names come back undecoded ([`Names`]): [`read_names`] decodes them once the workbook's
+/// tables are indexed, so a name's formula can use a structured reference.
 pub(crate) fn workbook(
     bytes: &[u8],
     rels: &Rels,
     limits: &Limits,
     budget: &Budget,
     warnings: &mut Warnings,
-) -> Result<(Workbook, Option<Links>), Error> {
+) -> Result<(Workbook, Option<Links>, Names), Error> {
     let mut records = Records::new(bytes, limits, budget);
     records.first(131, warnings)?;
     let mut wb = Workbook::default();
     let mut links = Some(Links::default());
+    let mut pending = vec![];
+    // Each BrtBundleSh's place in `wb.sheets`, `None` for a skipped one.
+    let mut bundle_sheets: Vec<Option<u32>> = vec![];
     let mut bundle = false;
     let mut bundle_seen = false;
     // Every BrtBundleSh counts toward the cap, a skipped module sheet too: each keeps a place
@@ -309,14 +322,11 @@ pub(crate) fn workbook(
                 if wb.sheets.is_empty() {
                     return Err(invalid("no supported worksheets"));
                 }
-                if links.is_none() {
-                    warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results");
-                }
-                return Ok((wb, links));
+                return Ok((wb, links, Names { pending, sheets: bundle_sheets }));
             }
             39 | 355 | 357 | 358 | 362 | 667 => {
                 if let Some(l) = links.as_mut()
-                    && link_record(id, payload, l).is_err()
+                    && link_record(id, payload, l, &mut pending).is_err()
                 {
                     links = None;
                 }
@@ -372,6 +382,7 @@ pub(crate) fn workbook(
                     if let Some(l) = links.as_mut() {
                         l.sheets.push(None);
                     }
+                    bundle_sheets.push(None);
                     continue;
                 };
                 let rel = rels.by_id(&rel_id).ok_or_else(|| invalid("worksheet relationship is missing"))?;
@@ -387,6 +398,7 @@ pub(crate) fn workbook(
                 if let Some(l) = links.as_mut() {
                     l.sheets.push(matches!(kind, SheetKind::Worksheet | SheetKind::Macrosheet).then(|| name.clone()));
                 }
+                bundle_sheets.push(u32::try_from(wb.sheets.len()).ok());
                 wb.sheets.push(SheetEntry { name, sheet_id, visibility, rel_id, kind, part: Some(rel.target.clone()) });
             }
             _ => {}
@@ -395,9 +407,200 @@ pub(crate) fn workbook(
     Err(invalid("missing workbook end record"))
 }
 
+/// A `BrtName`'s parts that only its [`DefinedName`] needs, until the workbook part is read.
+struct PendingName {
+    /// Its place in [`Links`]'s names.
+    index: usize,
+    flags: u32,
+    /// `chKey`: a macro's shortcut key.
+    key: u8,
+    rgce: Vec<u8>,
+    rgcb: Vec<u8>,
+    comment: Option<String>,
+    description: Option<String>,
+    help: Option<String>,
+}
+
+/// The workbook part's defined names, not yet decoded, and each BrtBundleSh's place in
+/// [`Workbook::sheets`] (`None` for a skipped one).
+pub(crate) struct Names {
+    pending: Vec<PendingName>,
+    sheets: Vec<Option<u32>>,
+}
+
+/// Decodes the workbook part's defined names `names` into `wb`, after the tables in `links` are
+/// indexed. Without `links` none can be read, and formulas keep their saved results.
+pub(crate) fn read_names(wb: &mut Workbook, names: Names, links: Option<&mut Links>, limits: &Limits, budget: &Budget, warnings: &mut Warnings) {
+    match links {
+        Some(l) => wb.defined_names = defined_names(names.pending, &names.sheets, l, limits, budget, warnings),
+        None => warnings.warn("XLSB: the workbook's sheet links or names could not be read; formulas keep their saved results"),
+    }
+}
+
+/// The workbook's defined names, as `.xlsx` has them in `definedNames`: every `BrtName` but the
+/// hidden ones for newer functions and LET parameters, which Excel doesn't write there. `sheets`
+/// maps a name's `itab` (its sheet's place in `BrtBundleSh` order) to [`Workbook::sheets`].
+/// A name whose formula can't be read, or that belongs to a sheet the reader skips, is left out
+/// with a warning, and a cell formula using it keeps its saved result.
+fn defined_names(
+    pending: Vec<PendingName>,
+    sheets: &[Option<u32>],
+    links: &mut Links,
+    limits: &Limits,
+    budget: &Budget,
+    warnings: &mut Warnings,
+) -> Vec<DefinedName> {
+    // Each name's formula, and the names it uses. A name whose formula uses a name that is left
+    // out is left out too, whatever their order, so a cell using it keeps its saved result.
+    let mut omitted = vec![false; links.names.len()];
+    let mut kept = vec![];
+    // PtgName identifies a record, but a bare workbook name in a sheet-scoped definition
+    // would instead bind to a same-spelled local name. Without a workbook qualifier, keep
+    // the cached results rather than silently changing that identity. Index once so hostile
+    // files with many names and references cannot turn this check into a quadratic scan.
+    // Ordinary shadows still count if their own formulas are omitted: do not infer a new
+    // binding from a partially emitted name environment. Synthetic names are not definitions.
+    let local_names: HashSet<_> =
+        links.names.iter().filter(|n| !n.future && !formula::is_param(&n.text)).filter_map(|n| n.scope.map(|s| (s, n.text.to_lowercase()))).collect();
+    for p in pending {
+        let Some(name) = links.names.get(p.index) else { continue };
+        if name.future || formula::is_param(&name.text) {
+            continue;
+        }
+        let local_sheet_id = match name.scope {
+            None => None,
+            Some(itab) => match usize::try_from(itab).ok().and_then(|i| sheets.get(i)) {
+                Some(Some(i)) => Some(*i),
+                _ => {
+                    warnings.warn("XLSB: some defined names were left out (names of sheets the reader skips)");
+                    omit(&mut omitted, p.index);
+                    continue;
+                }
+            },
+        };
+        // Excel omits the formula for a workbook-level Database built-in and a VBA function
+        // (fFunc, fOB, fProc). They remain usable by formulas without a definedNames entry.
+        // Other empty names are malformed: omitting them must also omit their dependants.
+        if p.rgce.is_empty() {
+            let database = p.flags & 0x20 != 0 && name.scope.is_none() && name.text == "_xlnm.Database";
+            let vba_function = p.flags & 0x0E == 0x0E;
+            if database || vba_function {
+                if let Some(n) = links.names.get_mut(p.index) {
+                    n.read = true;
+                }
+            } else {
+                warnings.warn("XLSB: some defined names were left out (empty formula)");
+                omit(&mut omitted, p.index);
+            }
+            continue;
+        }
+        let mut used = vec![];
+        let formula = match formula::decode_using(&p.rgce, &p.rgcb, links, Mode::Name, &mut used) {
+            Ok(e) => expr::print(&e),
+            Err(formula::Unsupported(why)) => {
+                warnings.warn(format!("XLSB: some defined names were left out ({why})"));
+                omit(&mut omitted, p.index);
+                continue;
+            }
+        };
+        if name.scope.is_some_and(|scope| {
+            used.iter().filter_map(|&i| links.names.get(i)).any(|target| {
+                target.scope.is_none()
+                    && !target.future
+                    && !formula::is_param(&target.text)
+                    && local_names.contains(&(scope, target.text.to_lowercase()))
+            })
+        }) {
+            warnings.warn("XLSB: some defined names were left out (workbook names shadowed by local names)");
+            omit(&mut omitted, p.index);
+            continue;
+        }
+        if !budget.try_formula_text(formula.len(), limits) {
+            warnings.warn("XLSB: some defined names were left out (more formula text than the limits allow)");
+            omit(&mut omitted, p.index);
+            continue;
+        }
+        kept.push((p, local_sheet_id, formula, used));
+    }
+    // Who uses each name, then every name reached from a left-out one: once each, so a chain
+    // of any length costs what its uses do.
+    let mut users: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (k, (.., used)) in kept.iter().enumerate() {
+        for &u in used {
+            users.entry(u).or_default().push(k);
+        }
+    }
+    let mut queue: Vec<usize> = (0..omitted.len()).filter(|&i| omitted[i]).collect();
+    while let Some(i) = queue.pop() {
+        for &k in users.get(&i).map_or(&[][..], Vec::as_slice) {
+            let Some((p, ..)) = kept.get(k) else { continue };
+            if omit(&mut omitted, p.index) {
+                warnings.warn("XLSB: some defined names were left out (names using a name that was left out)");
+                queue.push(p.index);
+            }
+        }
+    }
+    let mut out = vec![];
+    for (p, local_sheet_id, formula, _) in kept {
+        if omitted.get(p.index).copied().unwrap_or(true) {
+            continue;
+        }
+        let Some(name) = links.names.get(p.index) else { continue };
+        let mut attrs = vec![];
+        let mut put = |k: &str, v: String| attrs.push((k.to_string(), v));
+        // In `CT_DefinedName`'s order.
+        if let Some(d) = p.description {
+            put("description", d);
+        }
+        if let Some(h) = p.help {
+            put("help", h);
+        }
+        let (func, vba, proc) = (p.flags & 0x02 != 0, p.flags & 0x04 != 0, p.flags & 0x08 != 0);
+        if func {
+            put("function", "1".into());
+        }
+        if vba {
+            put("vbProcedure", "1".into());
+        } else if proc {
+            put("xlm", "1".into());
+        }
+        let group = (p.flags >> 6) & 0x1FF;
+        if proc && group != 0 {
+            put("functionGroupId", group.to_string());
+        }
+        if p.key != 0 {
+            put("shortcutKey", char::from(p.key).to_string());
+        }
+        if p.flags & (1 << 15) != 0 {
+            put("publishToServer", "1".into());
+        }
+        if p.flags & (1 << 16) != 0 {
+            put("workbookParameter", "1".into());
+        }
+        out.push(DefinedName {
+            name: name.text.clone(),
+            local_sheet_id,
+            formula,
+            comment: p.comment.unwrap_or_default(),
+            hidden: p.flags & 1 != 0,
+            attrs,
+        });
+        if let Some(n) = links.names.get_mut(p.index) {
+            n.read = true;
+        }
+    }
+    out
+}
+
+/// Marks name `i` left out; whether it wasn't already.
+fn omit(omitted: &mut [bool], i: usize) -> bool {
+    omitted.get_mut(i).is_some_and(|o| !std::mem::replace(o, true))
+}
+
 /// A supporting link (`BrtSupSelf`, `BrtSupSame`, `BrtSupAddin`, `BrtSupBookSrc`), the sheet links
-/// (`BrtExternSheet`) or a defined name (`BrtName`), added to `links`.
-fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), Error> {
+/// (`BrtExternSheet`) or a defined name (`BrtName`), added to `links`; a name's other parts go to
+/// `pending`.
+fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<PendingName>) -> Result<(), Error> {
     let mut b = Bytes::new(payload);
     if matches!(id, 355 | 357 | 358 | 667) && links.books.len() >= MAX_BOOKS {
         return Err(invalid("too many supporting links"));
@@ -426,15 +629,40 @@ fn link_record(id: u16, payload: &[u8], links: &mut Links) -> Result<(), Error> 
             b.finish()?;
         }
         _ => {
-            // BrtName ([MS-XLSB] 2.4.718): flags, chKey, itab, then the name; the formula and the
-            // rest aren't needed to call a function or tell a name from one.
+            // BrtName ([MS-XLSB] 2.4.718). Its formula is decoded once the workbook part is read.
             if links.names.len() >= MAX_NAMES {
                 return Err(invalid("too many defined names"));
             }
             let flags = b.u32()?;
-            b.take(5)?;
+            let key = b.u8()?;
+            let itab = b.u32()?;
             let text = b.text(255)?;
-            links.names.push(Name { text, future: flags & (1 << 17) != 0 });
+            let cce = b.u32()? as usize;
+            let rgce = b.take(cce)?.to_vec();
+            let cb = b.u32()? as usize;
+            let rgcb = b.take(cb)?.to_vec();
+            let comment = b.string(255, true)?;
+            // A macro's name (fProc) has four more strings: one unused, its description, its help
+            // topic and another unused. ([MS-XLSB] calls the second the custom menu and the third
+            // the description; Excel writes them as `.xlsx`'s `description` and `help`.) Excel
+            // leaves them out of a VBA function's name (fOB), which ends after its comment.
+            let vba_without_strings = flags & 0x04 != 0 && b.rest.is_empty();
+            let (description, help) = if flags & 0x08 != 0 && !vba_without_strings {
+                b.string(32767, true)?;
+                let description = b.string(32767, true)?;
+                let help = b.string(32767, true)?;
+                b.string(32767, true)?;
+                (description, help)
+            } else {
+                (None, None)
+            };
+            b.finish()?;
+            let scope = (itab != u32::MAX).then_some(itab);
+            // A built-in name (fBuiltin) is stored bare; `.xlsx` spells it `_xlnm.Print_Area`, in
+            // `definedNames` and in formulas alike.
+            let text = if flags & 0x20 != 0 { format!("_xlnm.{text}") } else { text };
+            pending.push(PendingName { index: links.names.len(), flags, key, rgce, rgcb, comment, description, help });
+            links.names.push(Name { text, future: flags & (1 << 17) != 0, scope, read: false });
         }
     }
     Ok(())
@@ -1009,6 +1237,18 @@ pub(crate) fn worksheet(
                 });
                 col = Some(c);
             }
+            // BrtListPart: one of the sheet's tables, by relationship id.
+            661 => {
+                if data {
+                    return Err(invalid("table part inside worksheet data"));
+                }
+                let rel = b.text(255)?;
+                b.finish()?;
+                if sheet.features.table_parts.len() >= MAX_TABLE_PARTS {
+                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_TABLE_PARTS} tables on a sheet")));
+                }
+                sheet.features.table_parts.push(rel);
+            }
             485 => {
                 if data_seen {
                     return Err(invalid("sheet format after worksheet data"));
@@ -1056,4 +1296,26 @@ pub(crate) fn worksheet(
         }
     }
     Err(invalid("missing worksheet end record"))
+}
+
+#[cfg(test)]
+mod records_merge_tests {
+    use super::*;
+
+    #[test]
+    fn table_skip_count_preserves_excel_2007_style_blocks() {
+        // BrtACBegin for Excel 2007, an empty record, BrtACEnd.
+        let bytes = [37, 6, 1, 0, 12, 0, 0, 0, 1, 0, 38, 0];
+        let limits = Limits::default();
+        let budget = Budget::default();
+        let mut warnings = Warnings::default();
+        let mut styles = Records::new(&bytes, &limits, &budget);
+        styles.excel_2007 = true;
+        assert_eq!(styles.next(&mut warnings).unwrap(), Some((1, &[][..])));
+        assert_eq!(styles.skipped, 0, "supported style content was read, not skipped");
+        assert!(styles.next(&mut warnings).unwrap().is_none());
+        let mut tables = Records::new(&bytes, &limits, &budget);
+        assert!(tables.next(&mut warnings).unwrap().is_none());
+        assert_eq!(tables.skipped, 1, "table filters still detect skipped alternate content");
+    }
 }

@@ -5,6 +5,48 @@
 //! Unknown direction values retain PhotoCraft's vertical interpretation. Grid cycles, reserved
 //! bytes and trailing data are not interpreted. Resource 1097 remains opaque except its count.
 
+/// One legacy Grid and Guides record (resource 1032).
+/// Position is signed 1/32 pixel; direction 1 is horizontal, all others vertical.
+/// Adapted from PhotoCraft's reader by Brandon Thomas and writer by aiongg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuideV1 {
+    /// Signed position in units of 1/32 pixel.
+    pub location: i32,
+    /// Raw direction byte, retained without normalization.
+    pub direction: u8,
+}
+
+impl GuideV1 {
+    /// Encode exactly one five-byte record without allocation.
+    pub fn to_bytes(self) -> [u8; 5] {
+        let p = self.location.to_be_bytes();
+        [p[0], p[1], p[2], p[3], self.direction]
+    }
+}
+
+/// Encode a legacy resource header. Grid cycles and count are caller supplied.
+pub fn header_v1(horizontal_cycle: u32, vertical_cycle: u32, count: u32) -> [u8; 16] {
+    let mut out = [0; 16];
+    for (chunk, value) in out.as_chunks_mut::<4>().0.iter_mut().zip([1u32, horizontal_cycle, vertical_cycle, count]) {
+        chunk.copy_from_slice(&value.to_be_bytes());
+    }
+    out
+}
+
+/// Read complete legacy records, preserving the valid prefix on truncation.
+/// Matches PhotoCraft recovery: version/grid fields are ignored. Declared counts
+/// cannot drive allocation or scanning beyond complete records in the input.
+pub fn parse_v1_prefix(data: &[u8]) -> impl Iterator<Item = GuideV1> + '_ {
+    let count = be_u32(data, 12).unwrap_or(0);
+    data.get(16..)
+        .unwrap_or_default()
+        .as_chunks::<5>()
+        .0
+        .iter()
+        .zip(0..count)
+        .map(|(g, _)| GuideV1 { location: i32::from_be_bytes([g[0], g[1], g[2], g[3]]), direction: g[4] })
+}
+
 /// Grid and Guides version 2 resource ID.
 pub const GUIDES_V2: u16 = 1092;
 /// Associated guide identifiers resource ID.
@@ -99,5 +141,33 @@ mod tests {
         assert_eq!(parse_v2(&data).map(|v| v.len()), Some(2));
         assert_eq!(ids_count(&[0, 0, 0, 2, 255]), Some(2));
         assert_eq!(ids_count(&[0, 0, 0]), None);
+    }
+}
+
+#[cfg(test)]
+mod v1_tests {
+    use super::*;
+
+    #[test]
+    fn wire_roundtrip_and_signed_unknown_direction() {
+        let entries = [GuideV1 { location: -33, direction: 1 }, GuideV1 { location: i32::MAX, direction: 255 }];
+        let mut data = header_v1(576, 576, 2).to_vec();
+        assert_eq!(data, [0, 0, 0, 1, 0, 0, 2, 64, 0, 0, 2, 64, 0, 0, 0, 2]);
+        for e in entries {
+            data.extend(e.to_bytes());
+        }
+        assert_eq!(&data[16..21], &[255, 255, 255, 223, 1]);
+        assert_eq!(parse_v1_prefix(&data).collect::<Vec<_>>(), entries);
+        for end in 0..=data.len() {
+            assert_eq!(parse_v1_prefix(&data[..end]).count(), end.saturating_sub(16) / 5);
+        }
+        data[..4].copy_from_slice(&99u32.to_be_bytes());
+        data[12..16].copy_from_slice(&u32::MAX.to_be_bytes());
+        data.extend([9, 9, 9, 9]);
+        assert_eq!(parse_v1_prefix(&data).collect::<Vec<_>>(), entries);
+        data[12..16].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(parse_v1_prefix(&data).collect::<Vec<_>>(), &entries[..1]);
+        data[12..16].fill(0);
+        assert_eq!(parse_v1_prefix(&data).count(), 0);
     }
 }

@@ -1,6 +1,6 @@
 //! Chart parts (`c:chartSpace`) → [`Chart`]. The original XML is kept in `Chart.raw`.
 
-use crate::chart::{Chart, ChartType, ErrorBars, Series, Trendline, TrendlineType};
+use crate::chart::{Chart, ChartDataTable, ChartType, ErrorBars, Series, Trendline, TrendlineType};
 use crate::style::Fill;
 
 use craft_xml::{El, Local, value};
@@ -143,6 +143,7 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
     c.legend = ch.child(Local("legend")).map(|l| l.child(Local("legendPos")).and_then(|c| c.attr_local("val")).unwrap_or("r").to_string());
     c.legend_overlay =
         ch.child(Local("legend")).and_then(|l| l.child(Local("overlay"))).and_then(|o| o.attr_local("val").and_then(value::to_bool)).unwrap_or(false);
+    c.legend_entries = legend_entries(ch.child(Local("legend")));
     c.chart_fill = simple_fill(root.child(Local("spPr")));
     c.plot_fill = simple_fill(pa.child(Local("spPr")));
 
@@ -193,6 +194,16 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         }
     }
     c.lang = root.child(Local("lang")).and_then(|c| c.attr_local("val")).map(str::to_string);
+    c.pivot_source = root.path(&[Local("pivotSource"), Local("name")]).map(|n| n.deep_text().trim().to_string()).filter(|n| !n.is_empty());
+    c.data_table = pa.child(Local("dTable")).map(|t| {
+        let flag = |name: &str| t.child(Local(name)).is_some_and(|e| e.attr_local("val").and_then(value::to_bool).unwrap_or(true));
+        ChartDataTable {
+            show_keys: flag("showKeys"),
+            horizontal_border: flag("showHorzBorder"),
+            vertical_border: flag("showVertBorder"),
+            outline: flag("showOutline"),
+        }
+    });
     let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
@@ -286,6 +297,9 @@ fn read_group_settings(g: &El, c: &mut Chart) -> Option<bool> {
     }
     if let Some(v) = g.child(Local("holeSize")).and_then(|c| c.attr_local("val")).and_then(|v| v.parse::<f64>().ok()) {
         c.hole_size = (v / 100.0).clamp(0.0, 0.9);
+    }
+    if let Some(v) = g.child(Local("firstSliceAng")).and_then(|c| c.attr_local("val")).and_then(|v| v.trim().parse::<u16>().ok()) {
+        c.first_slice_angle = v % 360;
     }
     // `<c:showVal/>` without a val attribute means true, as in the schema's default.
     // The setting belongs to this plot group: a group that asks for no labels keeps them
@@ -542,6 +556,52 @@ fn text_color(e: Option<&El>) -> Option<crate::style::ColorRef> {
                 && let Some(Fill::Solid { color }) = simple_fill(Some(c))
             {
                 return Some(color);
+            }
+            if let Some(v) = rec(c, depth + 1) {
+                return Some(v);
+            }
+        }
+        None
+    }
+    rec(e?, 0)
+}
+
+/// Legend entries read from one chart; a legend lists at most one per series or category.
+const MAX_LEGEND_ENTRIES: usize = 1024;
+
+/// The legend's entries with text of their own (`c:legendEntry/c:txPr`), over the legend's.
+fn legend_entries(legend: Option<&El>) -> Vec<crate::chart::LegendEntry> {
+    legend
+        .into_iter()
+        .flat_map(|l| l.children(Local("legendEntry")))
+        .take(MAX_LEGEND_ENTRIES)
+        .filter_map(|e| {
+            // The paragraph's own run properties first, then the list style's defaults
+            // (`a:lstStyle` comes before `a:p`, and is the less specific of the two).
+            let tx = e.child(Local("txPr"));
+            let para = tx.and_then(|t| t.child(Local("p")));
+            let entry = crate::chart::LegendEntry {
+                idx: e.child(Local("idx")).and_then(|i| i.attr_local("val")).and_then(|v| v.parse().ok())?,
+                size: text_size(para).or_else(|| text_size(tx)),
+                bold: text_bold(para).or_else(|| text_bold(tx)),
+                color: text_color(para).or_else(|| text_color(tx)),
+            };
+            (entry.size.is_some() || entry.bold.is_some() || entry.color.is_some()).then_some(entry)
+        })
+        .collect()
+}
+
+/// The weight (`b`) of the first `a:defRPr` or `a:rPr` that sets one under `e`.
+fn text_bold(e: Option<&El>) -> Option<bool> {
+    fn rec(e: &El, depth: usize) -> Option<bool> {
+        if depth > 8 {
+            return None;
+        }
+        for c in e.elements() {
+            if (c.is(Local("defRPr")) || c.is(Local("rPr")))
+                && let Some(b) = c.attr_local("b").and_then(value::to_bool)
+            {
+                return Some(b);
             }
             if let Some(v) = rec(c, depth + 1) {
                 return Some(v);
@@ -854,5 +914,31 @@ mod tests {
     fn explicit_vary_colors_is_respected() {
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="0"/>"#).as_bytes()).is_some_and(|c| !c.vary_colors));
         assert!(read_chart_xml(vary_xml(r#"<c:varyColors val="1"/>"#).as_bytes()).is_some_and(|c| c.vary_colors));
+    }
+
+    #[test]
+    fn data_table_first_slice_angle_and_pivot_source_roundtrip() {
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:pivotSource><c:name>[Book.xlsx]Sheet1!PivotTable1</c:name><c:fmtId val="0"/></c:pivotSource><c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart><c:dTable><c:showHorzBorder/><c:showVertBorder val="0"/><c:showOutline val="1"/><c:showKeys/></c:dTable></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.pivot_source.as_deref(), Some("[Book.xlsx]Sheet1!PivotTable1"));
+        assert_eq!(c.data_table, Some(ChartDataTable { show_keys: true, horizontal_border: true, vertical_border: false, outline: true }));
+        let mut edited = c.clone();
+        edited.raw = None;
+        let (written, kept) = crate::chart::write::chart_xml(&edited);
+        assert!(!kept);
+        let back = read_chart_xml(&written).unwrap();
+        assert_eq!(back.pivot_source, c.pivot_source);
+        assert_eq!(back.data_table, c.data_table);
+
+        let pie_xml = format!(
+            r#"<c:chartSpace xmlns:c="{NS_C}"><c:chart><c:plotArea><c:pieChart><c:ser><c:idx val="0"/><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser><c:firstSliceAng val="450"/></c:pieChart></c:plotArea></c:chart></c:chartSpace>"#
+        );
+        let mut pie = read_chart_xml(pie_xml.as_bytes()).unwrap();
+        assert_eq!(pie.first_slice_angle, 90);
+        pie.raw = None;
+        let (pie_written, _) = crate::chart::write::chart_xml(&pie);
+        assert_eq!(read_chart_xml(&pie_written).unwrap().first_slice_angle, 90);
     }
 }

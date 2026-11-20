@@ -18,7 +18,8 @@ concurrency:
 jobs:
   linux:
     timeout-minutes: 15
-    name: Menu (Linux)
+    # fmt, native clippy and the tests run in the Workspace gate on every OS.
+    name: Menu macOS and WASM lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -26,14 +27,8 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
           targets: aarch64-apple-darwin, wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2.9.3
-        with:
-          key: craft-menu-linux
-      - run: cargo fmt -p craft-menu --check
-      - run: cargo clippy -p craft-menu --all-targets --locked -- -D warnings
       # The macOS backend type-checks from Linux; it needs no linker or SDK.
       - run: cargo clippy -p craft-menu --lib --locked --target aarch64-apple-darwin -- -D warnings
       - run: cargo clippy -p craft-menu --lib --locked --target wasm32-unknown-unknown -- -D warnings
-      - run: cargo test -p craft-menu --locked

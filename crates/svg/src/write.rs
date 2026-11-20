@@ -229,12 +229,22 @@ pub fn path_data(path: &BezPath) -> String {
 /// Path data with `decimals` decimals per coordinate, written compactly: `M1.00 2.00L3.50 2.00Z`.
 /// Coordinates that are not finite are written as zero.
 pub fn path_data_fixed(path: &BezPath, decimals: usize) -> String {
+    path_data_with_format(path, |value| num(value, decimals))
+}
+
+/// Compact absolute path commands with caller-owned coordinate formatting.
+///
+/// The formatter is called once per coordinate, in path order. It must produce a valid SVG
+/// number (including handling nonfinite inputs); it controls rounding and negative zero.
+/// Command letters and separators are shared, while the application's precision policy stays
+/// with the caller. No intermediate geometry or coordinate collection is allocated.
+pub fn path_data_with_format<T: Display>(path: &BezPath, mut format: impl FnMut(f64) -> T) -> String {
     let mut d = String::new();
     let mut command = |letter: char, points: &[Point]| {
         d.push(letter);
         for (i, p) in points.iter().enumerate() {
             let sep = if i == 0 { "" } else { " " };
-            let _ = write!(d, "{sep}{} {}", num(p.x, decimals), num(p.y, decimals));
+            let _ = write!(d, "{sep}{} {}", format(p.x), format(p.y));
         }
     };
     for el in path.elements() {
@@ -258,6 +268,42 @@ pub fn path_data_fixed(path: &BezPath, decimals: usize) -> String {
 #[derive(Clone, Debug, Default)]
 pub struct SvgWriter(craft_xml::Writer);
 
+// A subset ends with `] S? >`; quoted entity values, comments and PIs may contain that text.
+// Scan once without allocations; malformed unterminated constructs remain the caller's error.
+fn closes_internal_subset(internal: &str) -> bool {
+    let bytes = internal.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"<!--") || bytes[i..].starts_with(b"<?") {
+            let (start, end): (usize, &[u8]) = if bytes[i..].starts_with(b"<!--") { (4, b"-->") } else { (2, b"?>") };
+            let Some(offset) = bytes[i + start..].windows(end.len()).position(|part| part == end) else {
+                return false;
+            };
+            i += start + offset + end.len();
+        } else if matches!(bytes[i], b'\'' | b'"') {
+            let quote = bytes[i];
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+        } else if bytes[i] == b']' {
+            i += 1;
+            while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'>') {
+                return true;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 impl SvgWriter {
     /// A document: starts with the XML declaration.
     pub fn new() -> SvgWriter {
@@ -270,25 +316,28 @@ impl SvgWriter {
         SvgWriter::default()
     }
     /// A document that starts with an XML declaration naming `encoding` (for example `UTF-8` or
-    /// `ISO-8859-1`) and a newline. Nothing is written if `encoding` is not an XML name.
+    /// `ISO-8859-1`) and a newline. Nothing is written for an invalid XML encoding name.
     pub fn with_encoding(encoding: &str) -> SvgWriter {
         let mut w = SvgWriter::fragment();
         w.decl(encoding, "\n");
         w
     }
     /// Writes `<?xml version="1.0" encoding="{encoding}"?>` followed by `newline`. Nothing is
-    /// written if `encoding` is not an XML name.
+    /// written unless `encoding` starts with an ASCII letter and continues with ASCII letters,
+    /// digits, `.`, `_`, or `-` (XML EncName).
     pub fn decl(&mut self, encoding: &str, newline: &str) {
-        if craft_xml::is_name(encoding) {
+        let mut bytes = encoding.bytes();
+        if bytes.next().is_some_and(|b| b.is_ascii_alphabetic()) && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
             self.0.raw(&format!("<?xml version=\"1.0\" encoding=\"{encoding}\"?>{newline}"));
         }
     }
     /// Writes `<!DOCTYPE name [` + `newline` + `internal` + `newline` + `]>` + `newline`. When
     /// `internal` is empty, the inner newline is omitted, so a minified document can be
     /// `<!DOCTYPE svg []>` with no extra breaks. Nothing is written if `name` is not an XML name
-    /// or `internal` contains `]]>`.
+    /// or `internal` closes the subset outside a quoted value, comment or processing instruction.
+    /// The caller still supplies valid DTD declarations; this is not a DTD validator.
     pub fn doctype_internal(&mut self, name: &str, internal: &str, newline: &str) {
-        if !craft_xml::is_name(name) || internal.contains("]]>") {
+        if !craft_xml::is_name(name) || closes_internal_subset(internal) {
             return;
         }
         let mut out = format!("<!DOCTYPE {name} [");
@@ -359,6 +408,25 @@ mod tests {
         p.curve_to((1.0, 1.0), (2.0, 2.0), (3.0, 1.0 / 3.0));
         p.close_path();
         p
+    }
+
+    #[test]
+    fn custom_path_format_keeps_commands_and_coordinate_order() {
+        let mut path = BezPath::new();
+        path.move_to((1.0, 2.0));
+        path.line_to((3.0, 4.0));
+        path.quad_to((5.0, 6.0), (7.0, 8.0));
+        path.curve_to((9.0, 10.0), (11.0, 12.0), (13.0, 14.0));
+        path.close_path();
+        let mut seen = Vec::new();
+        let output = path_data_with_format(&path, |v| {
+            seen.push(v);
+            v
+        });
+        assert_eq!(output, "M1 2L3 4Q5 6 7 8C9 10 11 12 13 14Z");
+        assert_eq!(seen, (1..=14).map(f64::from).collect::<Vec<_>>());
+        assert_eq!(BezPath::from_svg(&output).unwrap(), path);
+        assert_eq!(path_data_with_format(&BezPath::new(), |_: f64| -> String { panic!("empty path") }), "");
     }
 
     #[test]
@@ -456,6 +524,12 @@ mod tests {
         assert_eq!(SvgWriter::with_encoding("ISO-8859-1").finish(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n");
         assert!(SvgWriter::with_encoding("UTF-8\"").is_empty());
         assert!(SvgWriter::with_encoding("").is_empty());
+        for valid in ["A", "a0._-"] {
+            assert_eq!(SvgWriter::with_encoding(valid).finish(), format!("<?xml version=\"1.0\" encoding=\"{valid}\"?>\n"));
+        }
+        for invalid in [":UTF-8", "_UTF8", "1UTF8", "é", "UTF:8", "UTFé", "UTF 8"] {
+            assert!(SvgWriter::with_encoding(invalid).is_empty(), "{invalid}");
+        }
         let mut compact = SvgWriter::fragment();
         compact.decl("ISO-8859-1", "");
         compact.root().open();
@@ -479,7 +553,22 @@ mod tests {
         assert_eq!(empty.finish(), "<!DOCTYPE svg [\n]>\n");
         let mut refused = SvgWriter::fragment();
         refused.doctype_internal("svg", "]]>", "\n");
+        refused.doctype_internal("svg", "]><svg/><!--", "\n");
+        refused.doctype_internal("svg", "] \t\r\n><svg/><!--", "\n");
         refused.doctype_internal("not a name", "<!ENTITY st1 \"x\">", "\n");
         assert!(refused.is_empty());
+    }
+    #[test]
+    fn doctype_keeps_terminators_inside_values_comments_and_processing_instructions() {
+        for internal in [r#"<!ENTITY a "]>">"#, "<!ENTITY a '] >'>", "<!-- ]> -->", "<?note ] >?>"] {
+            let mut writer = SvgWriter::fragment();
+            writer.doctype_internal("svg", internal, "");
+            assert_eq!(writer.finish(), format!("<!DOCTYPE svg [{internal}]>"));
+        }
+        for internal in ["<!-- ok -->]>", "<?note ?>] >", "<!ENTITY a 'ok'>]>"] {
+            let mut writer = SvgWriter::fragment();
+            writer.doctype_internal("svg", internal, "");
+            assert!(writer.is_empty());
+        }
     }
 }

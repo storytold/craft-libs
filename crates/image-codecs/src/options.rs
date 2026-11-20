@@ -108,7 +108,8 @@ pub struct DecodeOptions {
     pub limits: Limits,
     /// Keep the pixels as stored instead of applying the EXIF / TIFF
     /// orientation (by default they are turned upright and the metadata's
-    /// orientation is rewritten to 1).
+    /// orientation is rewritten to 1). JPEG XL ignores this: `craft-jxl` applies the codestream's
+    /// orientation while rendering, so a JPEG XL image is always upright with orientation 1.
     pub keep_orientation: bool,
 }
 
@@ -235,60 +236,8 @@ impl DpxBits {
     }
 }
 
-/// How a DDS texture stores its pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DdsCompression {
-    /// Uncompressed, 8 bits per channel: BGRA (BGRX without alpha), or luminance with or
-    /// without alpha for grayscale. Lossless.
-    #[default]
-    None,
-    /// BC1 (DXT1): 4 bits per pixel. Alpha is on or off: texels under half opacity become
-    /// transparent black.
-    Bc1,
-    /// BC2 (DXT3): 8 bits per pixel, with 4 bits of explicit alpha per texel.
-    Bc2,
-    /// BC3 (DXT5): 8 bits per pixel, with smooth interpolated alpha.
-    Bc3,
-}
-
-impl DdsCompression {
-    pub const ALL: [DdsCompression; 4] = [DdsCompression::None, DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3];
-
-    /// The name scripts and the CLI use: `none`, `bc1`, `bc2` or `bc3`.
-    pub fn name(self) -> &'static str {
-        match self {
-            DdsCompression::None => "none",
-            DdsCompression::Bc1 => "bc1",
-            DdsCompression::Bc2 => "bc2",
-            DdsCompression::Bc3 => "bc3",
-        }
-    }
-
-    /// [`Self::name`] back to a compression, also taking the DXT names (`dxt1`, `dxt3`,
-    /// `dxt5`), in any case. Anything else is `None`.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
-            "none" => Some(DdsCompression::None),
-            "bc1" | "dxt1" => Some(DdsCompression::Bc1),
-            "bc2" | "dxt3" => Some(DdsCompression::Bc2),
-            "bc3" | "dxt5" => Some(DdsCompression::Bc3),
-            _ => None,
-        }
-    }
-
-    /// A block compression (lossy), not uncompressed pixels.
-    pub fn is_block(self) -> bool {
-        self != DdsCompression::None
-    }
-}
-
-/// What a DDS file is written with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DdsOptions {
-    pub compression: DdsCompression,
-    /// Write the full mip chain down to 1×1, each level a box filter of the one above.
-    pub mipmaps: bool,
-}
+/// How a DDS texture stores its pixels and whether it carries a mip chain, from [`craft_dds`].
+pub use craft_dds::{DdsCompression, DdsOptions};
 
 /// The longer side, in pixels, at which a TIFF image pyramid stops: the last level written is
 /// the first one no longer than this ([`EncodeOptions::tiff_pyramid`]).
@@ -327,6 +276,9 @@ pub struct EncodeOptions {
     /// the full image, which comes first.
     pub tiff_pyramid: bool,
     pub exr_compression: ExrCompression,
+    /// OpenEXR `chromaticities` attribute (`[red, green, blue, white]` CIE xy), written into the
+    /// image header when set.
+    pub exr_chromaticities: Option<[[f32; 2]; 4]>,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
     /// DDS compression and mip chain.
@@ -353,6 +305,7 @@ impl Default for EncodeOptions {
             tiff_bigtiff: false,
             tiff_pyramid: false,
             exr_compression: ExrCompression::Zip16,
+            exr_chromaticities: None,
             dpx_bits: None,
             dds: DdsOptions::default(),
             embed_icc: true,

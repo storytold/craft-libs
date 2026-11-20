@@ -107,7 +107,8 @@ fn the_fallback_keeps_order_visibility_and_direction() {
     // is copied into the outer one's text, so it comes after it).
     let tb = xml.find(r#"<v:textbox style="layout-flow:vertical;mso-layout-flow-alt:bottom-to-top">"#).expect("the outer box's text, turned");
     let rect = &xml[xml[..tb].rfind("<v:rect ").expect("its v:rect")..tb];
-    assert!(rect.contains("z-index:10;"), "{rect}");
+    // Its anchor's `relativeHeight`: the stored order, one less (see `Float::z`).
+    assert!(rect.contains("z-index:9;"), "{rect}");
     assert!(rect.contains("visibility:hidden"), "{rect}");
 }
 
@@ -134,7 +135,8 @@ fn behind_text_shapes_keep_their_order() {
         .collect();
     got.sort_unstable();
     let low = -(1i64 << 31);
-    assert_eq!(got, vec![low + 10, low + 20, -1], "{xml}");
+    // The anchors' `relativeHeight`s (one less than `z`), the top one past `i32::MAX` kept at -1.
+    assert_eq!(got, vec![low + 9, low + 19, -1], "{xml}");
 }
 
 /// A shape VML has no simple form for stays a bare `wps:wsp`: guarded without a fallback, an old
@@ -155,4 +157,34 @@ fn a_shape_without_a_vml_form_is_not_guarded() {
         }
     });
     assert_eq!(kinds, vec![ShapeKind::Star]);
+}
+
+/// A partial fallback must not turn a linked story into independent boxes in older readers.
+#[test]
+fn linked_boxes_stay_bare_while_unlinked_boxes_keep_their_fallback() {
+    let mut d = Document::from_text("a\nb\nc\nd");
+    let mut ids = Vec::new();
+    for (i, text) in ["Flows on", "", "", "Independent"].into_iter().enumerate() {
+        let id = d.add_part(PartKind::TextBox, vec![para_block(craft_wordmodel::Paragraph::with_text(text, Default::default()))]);
+        ids.push(id);
+        d.insert_object(&craft_wordmodel::Pos::body(i, 1), shape(ShapeKind::TextBox, Some(id)), &Default::default()).unwrap();
+    }
+    d.parts.get_mut(&ids[0]).unwrap().body.next = Some(ids[1]);
+    d.parts.get_mut(&ids[1]).unwrap().body.next = Some(ids[2]);
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert_eq!(xml.matches("<mc:AlternateContent>").count(), 1, "{xml}");
+    assert_eq!(xml.matches("<mc:Fallback>").count(), 1, "{xml}");
+    let fallback = xml.split("<mc:Fallback>").nth(1).unwrap().split("</mc:Fallback>").next().unwrap();
+    assert!(fallback.contains(">Independent</w:t>"), "{fallback}");
+    assert!(!fallback.contains("Flows on"), "the chain head must not get an unlinked fallback");
+    assert_eq!(xml.matches(">Flows on</w:t>").count(), 1);
+    assert!(xml.contains(r#"<wps:txbx id="1">"#), "{xml}");
+    assert!(xml.contains(r#"<wps:linkedTxbx id="1" seq="1"/>"#), "{xml}");
+    assert!(xml.contains(r#"<wps:linkedTxbx id="1" seq="2"/>"#), "{xml}");
+    let read = craft_docx::read(&bytes).unwrap();
+    let chains = read.text_box_chains();
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].len(), 3);
+    assert_eq!(read.plain_text(craft_wordmodel::StoryRef::Part(chains[0][0])), "Flows on");
 }

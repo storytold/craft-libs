@@ -11,7 +11,7 @@ use crate::date::{dttm_to_iso, iso_date};
 pub(super) struct Reader {
     pub(super) st: St,
     stack: Vec<St>,
-    overflow: usize,
+    pub(super) overflow: usize,
     pub(super) fonts: HashMap<i32, Arc<str>>,
     pub(super) font_cur: i32,
     pub(super) font_name: String,
@@ -56,6 +56,10 @@ pub(super) struct Reader {
     pub(super) ov_list: i32,
     pub(super) ov_ls: i32,
     pub(super) fields: Vec<String>,
+    /// The fields being read in the text, innermost last (`import` only).
+    pub(super) open_fields: Vec<super::field::OpenField>,
+    /// Counts the paragraphs ended, so a field knows whether its result stayed in one.
+    pub(super) para_seq: u64,
     // Picture being read.
     pub(super) pict_depth: Option<usize>,
     pub(super) pict_hex: Vec<u8>,
@@ -110,6 +114,17 @@ pub(super) struct Reader {
     pub(super) range_ends: HashSet<i32>,
     pub(super) claimed: HashSet<i32>,
     pub(super) synth: i32,
+    /// Drawing shapes and text boxes (only when the caller wants them), and the one being read.
+    pub(super) boxes_on: bool,
+    pub(super) shape: Option<Box<super::shape::ShapeSt>>,
+    /// The depth of the group the last shape closed in, when it was read (the picture of it Word
+    /// writes right after it is not a picture of its own); whether the picture being read follows
+    /// it, and whether it is marked `\defshp`.
+    pub(super) shape_read_at: Option<usize>,
+    pub(super) pict_after_shape: bool,
+    /// The depth of the open `\*\shppict` group: a picture in it stands where the group does.
+    pub(super) shppict_at: Option<usize>,
+    pub(super) pict_defshp: bool,
 }
 
 impl Reader {
@@ -119,7 +134,7 @@ impl Reader {
 
     /// Set the output aside (a header or footer starts) or put it back (it ended), returning the
     /// other one.
-    fn swap_output(&mut self, mut o: Output) -> Output {
+    pub(super) fn swap_output(&mut self, mut o: Output) -> Output {
         std::mem::swap(&mut o.body, &mut self.body);
         std::mem::swap(&mut o.para, &mut self.para);
         std::mem::swap(&mut o.para_has, &mut self.para_has);
@@ -173,7 +188,8 @@ impl Reader {
 
     /// A footnote, endnote or comment group starts: read it into an output of its own.
     pub(super) fn start_sub(&mut self, comment: bool) {
-        if self.overflow > 0 || self.notes.len() >= MAX_NOTES || self.comments.len() >= MAX_NOTES {
+        // A note in a text box's text is not kept (it would have no place in the body).
+        if self.overflow > 0 || self.notes.len() >= MAX_NOTES || self.comments.len() >= MAX_NOTES || self.in_shape_text() {
             self.st.dest = Dest::Skip;
             return;
         }
@@ -344,6 +360,10 @@ impl Reader {
         if self.sub.as_ref().is_some_and(|s| s.depth == self.depth()) {
             self.end_sub();
         }
+        if self.closes_shape_text() {
+            self.end_shape_text();
+        }
+        self.close_field_group();
         let closing = self.st.dest;
         // Destination-level commits.
         match closing {
@@ -363,6 +383,8 @@ impl Reader {
                 self.in_creatim = false;
             }
             Dest::Atn(k) => self.commit_atn(k),
+            Dest::ShpSv => self.commit_shape_prop(),
+            Dest::ShpInst if self.closes_shape_inst() => self.finish_shape(),
             _ => {}
         }
         let Some(mut prev) = self.stack.pop() else { return };
@@ -398,6 +420,7 @@ impl Reader {
             }
         }
         self.st = prev;
+        self.after_shape_group();
         if self.hf.as_ref().is_some_and(|(d, _, _)| self.depth() < *d) {
             self.end_header_footer();
         }
@@ -428,6 +451,7 @@ impl Reader {
 
     /// End the current paragraph (`\par`, `\cell`).
     pub(super) fn end_para(&mut self, in_cell: bool) {
+        self.para_seq += 1;
         let read = std::mem::take(&mut self.para);
         let props = self.para_props(&self.st);
         let mut p = Para { inlines: read.inlines, mark_ins: read.mark_ins, mark_del: read.mark_del, ..props };
