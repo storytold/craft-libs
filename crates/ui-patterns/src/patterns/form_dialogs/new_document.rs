@@ -14,6 +14,8 @@ use crate::runtime::requests::{ColorRequest, HostAnswer};
 
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 
+use crate::contract::Show as _;
+use crate::display::Divider;
 use crate::layout_components::{Grid, Stack};
 
 use crate::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary, PresetWords as LibraryWords};
@@ -376,8 +378,8 @@ impl Outcome for NewDocumentOutput {
     }
 }
 
-/// The columns of the body: the cards take the room the details column leaves.
-const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
+/// Leave most of the dialog to the presets and keep the details column at a consistent share of the width.
+const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(2.0), ColumnWidth::fill(1.0)];
 
 /// The body of the dialog: the columns, then what they asked for.
 fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, shared: &Shared<'_>) -> bool {
@@ -421,6 +423,8 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
     let read = Read { setup, recents: &recents, library: &library, words, preset_words, library_words, units };
     let mut left = Left::default();
     let mut right = Right::default();
+    cards::tabs(ui, &session, &read, &mut left);
+    Divider::horizontal().show(ui);
     Grid::new(&COLUMNS).fill().show(ui, |ui, _| {
         Stack::new().fill().show(ui, |ui, _| {
             cards::show(ui, &session, values, &read, &mut left);

@@ -14,3 +14,5 @@ pub(crate) mod ruler;
 pub(crate) mod style_options;
 pub(crate) mod style_panel;
 pub(crate) mod tabs;
+
+pub(crate) mod character;

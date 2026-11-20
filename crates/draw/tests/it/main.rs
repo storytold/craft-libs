@@ -7,6 +7,7 @@ pub(crate) mod shape_cells;
 
 // draw-gradient-b
 pub(crate) mod gradient_fill;
+pub(crate) mod gradient_map;
 pub(crate) mod gradient_overlay;
 
 // draw-connector

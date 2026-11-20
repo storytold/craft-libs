@@ -17,7 +17,7 @@ use egui::{Rect, Response, Ui};
 
 use super::library::{find_swatch, has};
 use super::menu::event_edits;
-use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_rows};
+use super::{SWATCH_ZOOM, SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_rows};
 use crate::palette::{SwatchColor, SwatchGroup, SwatchNote, SwatchReport};
 
 /// What [`SwatchesPanel::show`] reports.
@@ -103,6 +103,7 @@ impl<'a> SwatchesPanel<'a> {
             let out = {
                 let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
                 let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &rows)
+                    .thumb_range(SWATCH_ZOOM)
                     .toolbar(true)
                     .reorder(PresetReorder::items_and_groups())
                     .footer(PresetFooterOptions::new().can_delete(st.selected.is_some()))

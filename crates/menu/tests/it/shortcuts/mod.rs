@@ -5,3 +5,4 @@ pub(crate) mod lists;
 pub(crate) mod recorder;
 pub(crate) mod rows;
 pub(crate) mod sets;
+pub(crate) mod tabs;

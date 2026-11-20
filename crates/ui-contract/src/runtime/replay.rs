@@ -184,7 +184,7 @@ fn min_wake(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 
 /// Adds `record` to the running pass in place of the run that made it.
 pub(crate) fn replay(ctx: &Context, record: &Record) {
-    ctx.replay_pass_records(&record.egui);
+    ctx.replay_pass_records(&record.egui, &egui::RecordShift::none(egui::Rect::EVERYTHING));
     focus::replay(ctx, &record.focus);
     for entry in &record.journal {
         entry.0.call(ctx);
