@@ -29,7 +29,7 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::tabs::{StripEnd, Tab, TabKind, TabRole, TabStrip, TabStripOutput};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2, vec2};
 
-pub use craft_ui::buttons::{GroupLevel, RibbonIcons};
+pub use craft_ui::buttons::{GroupLevel, RibbonLook};
 pub use gallery::{Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput};
 use group::BodyHeight;
 pub use group::RibbonGroup;
@@ -70,7 +70,7 @@ pub struct Ribbon<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> {
     /// The body of the context menu: the rows for the request that opened it.
     context_menu: Option<ContextMenuBody<'a>>,
     /// The icon sides of the groups' buttons.
-    icons: RibbonIcons,
+    icons: RibbonLook,
     /// The icon of every group's dialog launcher.
     launcher: IconId,
 }
@@ -85,7 +85,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
             trailing: &[],
             minimised: None,
             context_menu: None,
-            icons: RibbonIcons::default(),
+            icons: RibbonLook::default(),
             launcher: IconId::new("maximize_2"),
         }
     }
@@ -112,10 +112,10 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     }
 
     /// The key of the tab shown: the binding's, else the first tab's.
-    /// The icon sides of the groups' buttons (`RibbonIcons`): an app whose ribbon icons are larger than its other
-    /// controls' sets them here. The framework's sides by default.
-    pub fn icons(mut self, icons: RibbonIcons) -> Self {
-        self.icons = icons;
+    /// How the groups' controls look (`RibbonLook`): an app whose ribbon icons, menu arrows or small rows differ
+    /// from its other controls sets them here. The framework's look by default.
+    pub fn look(mut self, look: RibbonLook) -> Self {
+        self.icons = look;
         self
     }
 
@@ -279,7 +279,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
     base: Id,
     tabs: &[RibbonTab<T>],
     key: &T,
-    (icons, launcher): (RibbonIcons, &IconId),
+    (icons, launcher): (RibbonLook, &IconId),
     body: &mut impl FnMut(&mut RibbonRow<'_>, &T),
 ) -> RegionOutput {
     let place = tabs.iter().position(|tab| tab.key == *key).unwrap_or(0) as f32;
@@ -293,7 +293,11 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             let distance = cx.style::<Region>().map_or(0.0, |style| style.slide);
             let lead = gap.clamp(-1.0, 1.0) * side * distance;
             let chevron = cx.style::<Region>().map_or(0.0, |style| style.chevron);
-            let least = cx.style::<Region>().map_or(0.0, |style| style.body);
+            // Rows a look sets stand a tight gap apart: three of them are the body's least height.
+            let least = match icons.row {
+                0 => cx.style::<Region>().map_or(0.0, |style| style.body),
+                row => 3.0 * f32::from(row) + 2.0 * craft_ui::contract::Gap::Tight.points(ui),
+            };
             let title_line = cx.style::<Region>().map_or(0.0, |style| style.title);
             let start = cx.style::<Region>().map_or(0.0, |style| style.start);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
@@ -416,7 +420,7 @@ pub struct RibbonRow<'a> {
     /// The tallest open group content of this run, every level the row measured included.
     tallest: f32,
     /// The icon sides of the groups' buttons (`Ribbon::icons`).
-    icons: RibbonIcons,
+    icons: RibbonLook,
     /// The icon of every group's dialog launcher (`Ribbon::launcher_icon`).
     launcher: IconId,
 }

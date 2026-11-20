@@ -150,7 +150,7 @@ fn chevron(look: &FaceLook) -> IconSpec<'static> {
     if look.arrow.is_some() { IconSpec::glyph(&RIBBON_ARROW) } else { crate::controls::disclosure::DisclosureGlyph::menu_button() }
 }
 
-/// The ribbon's menu arrow where it sets one (`RibbonIcons::arrow`): the small filled triangle, pointing down.
+/// The ribbon's menu arrow where it sets one (`RibbonLook::arrow`): the small filled triangle, pointing down.
 const RIBBON_ARROW: crate::controls::disclosure::DisclosureGlyph = crate::controls::disclosure::DisclosureGlyph::new(1.0);
 
 impl<T: Value + 'static> Component for SplitButton<'_, T> {
@@ -188,7 +188,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     /// Inline: the face and the arrow part, which sits in the end padding. Stacked: the face, whose chevron follows
     /// the label inside the arrow part.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        let arrow = face::arrow_room(cx.env.get::<super::ControlPlace>(), cx.env.get::<super::RibbonIcons>());
+        let arrow = face::arrow_room(cx.env.get::<super::ControlPlace>(), cx.env.get::<super::RibbonLook>());
         let chevron = chevron(&FaceLook { arrow, ..cx.style.face.clone() });
         let face = face::measure(cx, &self.spec(cx.resolved.label, &chevron));
         match self.arrangement {

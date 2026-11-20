@@ -10,7 +10,7 @@ use craft_ui::tabs::StripEnd;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Event, Modifiers, PointerButton, Ui};
 
-use super::{Ribbon, RibbonGroup, RibbonIcons, RibbonMenuRequest, RibbonRow, RibbonTab};
+use super::{Ribbon, RibbonGroup, RibbonLook, RibbonMenuRequest, RibbonRow, RibbonTab};
 
 /// The group titles of each tab.
 const GROUPS: [[&str; 4]; 3] =
@@ -83,7 +83,7 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         ribbon = ribbon.context_menu(&mut rows);
     }
     if setup.app_icons {
-        ribbon = ribbon.icons(RibbonIcons::new(32, 17)).launcher_icon(IconId::new("chevron_down"));
+        ribbon = ribbon.look(RibbonLook::new(32, 17)).launcher_icon(IconId::new("chevron_down"));
     }
     let direction = if setup.rtl { Direction::Rtl } else { Env::of(ui).direction };
     let out = with_env(

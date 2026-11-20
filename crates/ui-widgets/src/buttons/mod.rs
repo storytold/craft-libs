@@ -77,7 +77,7 @@ pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleC
 /// (`Ribbon::icons`); outside a ribbon it changes nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
 #[env(style)]
-pub struct RibbonIcons {
+pub struct RibbonLook {
     /// A stacked button's leading icon.
     pub large: u8,
     /// Every other button's icon and glyph.
@@ -85,12 +85,21 @@ pub struct RibbonIcons {
     /// The room a menu arrow after a label takes. Set, the ribbon's buttons draw that arrow as the small filled
     /// triangle right after their label, as the old ribbon drew it, in place of the stroked chevron.
     pub arrow: u8,
+    /// The height of a non-stacked button, so three of them, a tight gap apart, fill the ribbon's body (the old
+    /// ribbon's 22-point pitch); 0 keeps the control's height.
+    pub row: u8,
 }
 
-impl RibbonIcons {
+impl RibbonLook {
     /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
     pub const fn new(large: u8, small: u8) -> Self {
-        RibbonIcons { large, small, arrow: 0 }
+        RibbonLook { large, small, arrow: 0, row: 0 }
+    }
+
+    /// Non-stacked buttons `row` points high; 0 keeps the control's height.
+    pub const fn row(mut self, row: u8) -> Self {
+        self.row = row;
+        self
     }
 
     /// Menu arrows as filled triangles in `arrow` points of room right after the label; 0 keeps the chevron.
@@ -102,7 +111,7 @@ impl RibbonIcons {
 
 /// The side of a non-stacked button's icon or glyph in `cx`: the ribbon's small side where one is set, else `side`.
 pub(crate) fn small_icon(cx: &crate::style::StyleCx<'_>, side: f32) -> f32 {
-    let small = cx.env::<RibbonIcons>().small;
+    let small = cx.env::<RibbonLook>().small;
     if small > 0 && cx.env::<ControlPlace>() == ControlPlace::Ribbon { f32::from(small) } else { side }
 }
 

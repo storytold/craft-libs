@@ -17,7 +17,7 @@ use craft_ui::runtime::memory::{key_salt, with_session};
 use craft_ui::style::TypeRole;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 
-use super::{GroupLevel, RibbonIcons, RibbonRow};
+use super::{GroupLevel, RibbonLook, RibbonRow};
 
 craft_ui::words! {
     /// The words of a ribbon group.
@@ -133,7 +133,7 @@ impl<'a> RibbonGroup<'a> {
             with_env(
                 ui,
                 |overrides| {
-                    overrides.values.set(RibbonIcons::default());
+                    overrides.values.set(RibbonLook::default());
                 },
                 |ui| IconButton::command(icon, command.clone()).label(name).show_at(ui, at),
             );
@@ -144,7 +144,7 @@ impl<'a> RibbonGroup<'a> {
 
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
     /// popup the content opens does not close the popover: the overlay family keeps it open.
-    fn collapsed(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), icons: RibbonIcons) {
+    fn collapsed(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), icons: RibbonLook) {
         let button = Button::new(self.title.clone()).icon(self.icon.clone()).arrangement(Arrangement::Stacked).show(ui);
         Popover::new(self.title.clone(), Bind::kept()).overlay(|overlay| overlay.opened_by(&button.response, Trigger::Click)).show(ui, |ui, _| {
             with_env(
@@ -212,7 +212,7 @@ struct TitleRoom {
     body: f32,
     line: f32,
     /// The icon sides the group's buttons take.
-    icons: RibbonIcons,
+    icons: RibbonLook,
     /// The dialog launcher's icon (`Ribbon::launcher_icon`).
     launcher: IconId,
 }
