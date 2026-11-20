@@ -468,16 +468,33 @@ pub struct WavRepair {
 }
 
 /// Rewrites the size fields of a PCM or float WAV whose writer stopped before finishing it, such
-/// as a recorder's file after a crash, for the whole frames the file holds. Every chunk before the
-/// data (`bext`, `fmt `, `fact` and others) keeps its contents, and a file that grew past 4 GiB
-/// becomes RF64 when it starts with the 28-byte `JUNK` chunk that [`FileEncoder`] and
-/// [`wav_float_header`] write. The file must end in its data chunk: everything after the data
-/// chunk's header counts as samples, whatever its size field says.
+/// as a recorder's file after a crash, for the whole frames the file holds. The file must end in
+/// its data chunk: everything after the data chunk's header counts as samples, whatever its size
+/// field says.
 ///
-/// Errors: [`AudioError::Malformed`] when `file` is not a WAV or has no `fmt ` or data chunk,
-/// [`AudioError::Unsupported`] for a compressed format and for unfinished 8-bit mono data of even
-/// length (its last byte may be a sample or a pad byte), and [`AudioError::TooLarge`] for a RIFF
-/// file past 4 GiB with no room for a `ds64` chunk.
+/// It writes these fields and leaves every other byte before the samples as it is, `fmt `, `bext`
+/// and unknown chunks included:
+///
+/// - the RIFF size and the data chunk's size (both `0xFFFF_FFFF` in an RF64 file);
+/// - the frame count, the first field of a `fact` chunk (`0xFFFF_FFFF` past `u32::MAX` frames);
+/// - in an RF64 file, the RIFF size, data size and frame count at the start of the `ds64` chunk;
+/// - the pad byte after an odd data length.
+///
+/// A RIFF file that grew past 4 GiB becomes RF64 when it starts with the 28-byte `JUNK` chunk that
+/// [`FileEncoder`] and [`wav_float_header`] write: `RIFF` becomes `RF64` and that `JUNK` chunk
+/// becomes the `ds64` chunk.
+///
+/// Errors:
+///
+/// - [`AudioError::Malformed`] when `file` is not a RIFF or RF64 WAVE file, has no data chunk within
+///   its first 100,000 chunks, has its data chunk before its `fmt ` chunk, has a `fmt ` chunk shorter
+///   than 16 bytes or cut short by the end of the file, has 0 channels or 0 bits, has a block size
+///   other than the channels times the bytes per sample, or is RF64 without a `ds64` chunk.
+/// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
+///   whose subformat is neither, and unfinished 8-bit mono data of even length (its last byte may
+///   be a sample or a pad byte).
+/// - [`AudioError::TooLarge`] for a RIFF file past 4 GiB that does not start with that `JUNK` chunk.
+/// - [`AudioError::Io`] when reading, writing or seeking `file` fails.
 ///
 /// ```
 /// use craft_audio::{repair_wav, wav_float_header};
