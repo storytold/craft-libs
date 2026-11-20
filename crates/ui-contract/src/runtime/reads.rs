@@ -27,6 +27,8 @@ pub(crate) enum BindKey {
     Command(u32, Option<Id>),
     /// A command the focused stop answers for (an edit it takes): the command's number.
     FocusedEdit(u32),
+    /// The modifiers held, with the latched ones (`Cx::modifiers`).
+    Modifiers,
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.

@@ -333,6 +333,8 @@ pub use craft_smime as smime;
 pub use craft_sniff as sniff;
 #[cfg(feature = "sourcemap")]
 pub use craft_sourcemap as sourcemap;
+#[cfg(feature = "sqlite")]
+pub use craft_sqlite as sqlite;
 #[cfg(feature = "ssip")]
 pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]
