@@ -139,7 +139,7 @@ pub fn render(blocks: &[HtmlBlock<'_>], title: &str, simple: bool, language: Opt
             }
             HtmlBlock::Table(t) => s.push_str(&render_table(t, simple)),
             HtmlBlock::Image { mime, bytes } => {
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(bytes)));
+                s.push_str(&format!("<p><img alt=\"\" src=\"data:{};base64,{}\"></p>\n", esc(mime), base64(bytes)));
             }
             HtmlBlock::PageBreak => s.push_str("<hr>\n"),
         }
@@ -182,5 +182,13 @@ mod tests {
     fn heading_level_clamps_to_h6() {
         let runs = [HtmlRun { text: "Deep", bold: true, italic: false, color: [0, 0, 0] }];
         assert_eq!(render_para(&runs, 9, true).as_deref(), Some("<h6>Deep</h6>\n"));
+    }
+
+    #[test]
+    fn image_mime_is_attribute_escaped() {
+        let blocks = [HtmlBlock::Image { mime: "image/png\" onerror=\"alert(1)", bytes: b"abc" }];
+        let out = render(&blocks, "Img", true, None);
+        assert!(out.contains("src=\"data:image/png&quot; onerror=&quot;alert(1);base64,YWJj\""), "{out}");
+        assert!(!out.contains("onerror=\"alert(1)\""), "{out}");
     }
 }

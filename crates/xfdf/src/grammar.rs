@@ -303,8 +303,9 @@ pub fn rich_text_element(rc: &str) -> Option<String> {
     Some(parsed.to_xml())
 }
 
-/// A `<contents-richtext>` element's plain text, a line per paragraph: what `/Contents` gets
-/// when the element comes without `<contents>`.
+/// Recursively extract plain text from a `<contents-richtext>` element, a `\r`-separated line
+/// per paragraph or `<br>` (what `/Contents` gets when `<contents-richtext>` comes without
+/// `<contents>`). Unlike [`direct_text`], this walks descendant elements.
 pub fn rich_plain(node: &craft_xml::El) -> String {
     fn walk(node: &craft_xml::El, out: &mut String) {
         for n in &node.children {
@@ -386,8 +387,9 @@ pub fn format_color_attr(name: &str, color: &[f64], out: &mut String) {
     }
 }
 
-/// Plain text concatenated from an XML element's direct text children.
-pub fn rich_text_plain(node: &craft_xml::El) -> String {
+/// Concatenate only the direct text children of `node`, without recursing into child elements
+/// (unlike [`rich_plain`]).
+pub fn direct_text(node: &craft_xml::El) -> String {
     el_text(node)
 }
 
