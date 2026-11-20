@@ -124,6 +124,7 @@ enum Alias {
 struct Index {
     faces: Vec<Face>,
     infos: Arc<[FaceInfo]>,
+    physical_infos: Arc<[FaceInfo]>,
     families: Arc<[String]>,
     by_family: HashMap<String, Vec<usize>>,
     aliases: HashMap<String, Vec<Alias>>,
@@ -134,6 +135,9 @@ impl Index {
     /// Added faces first: a document's or the app's own face wins over an installed face of the
     /// same family and style.
     fn build(added: &[Face], scanned: &[Face]) -> Self {
+        // The same input and precedence as canonical lookup, without dropping physical owners.
+        // FaceInfo owns metadata and blob IDs, never the added font payloads.
+        let physical_infos: Arc<[FaceInfo]> = added.iter().chain(scanned).map(|f| f.info.clone()).collect();
         let mut faces: Vec<Face> = Vec::new();
         let mut seen = HashSet::new();
         for f in added.iter().chain(scanned) {
@@ -181,8 +185,9 @@ impl Index {
             });
         }
         families.sort_by_cached_key(|f| (f.to_lowercase(), f.clone()));
-        let infos: Arc<[FaceInfo]> = faces.iter().map(|f| f.info.clone()).collect();
-        Self { faces, infos, families: families.into(), by_family, aliases, postscript }
+        let infos: Arc<[FaceInfo]> =
+            if faces.len() == physical_infos.len() { Arc::clone(&physical_infos) } else { faces.iter().map(|f| f.info.clone()).collect() };
+        Self { faces, infos, physical_infos, families: families.into(), by_family, aliases, postscript }
     }
 
     fn face(&self, i: usize) -> Option<&Face> {
@@ -501,6 +506,21 @@ impl Catalog {
         Arc::clone(&self.snapshot().infos)
     }
 
+    /// Every contributing face, added faces first, before canonical name/style deduplication.
+    ///
+    /// Unlike [`Self::faces`], this preserves distinct physical owners with the same canonical
+    /// family, style, PostScript name and variations. Their legacy names or bytes may differ.
+    /// It uses the same scan, sources and index generation as canonical lookups; retain one
+    /// returned view when associating names with the source/index passed to [`Self::load_with_limit`].
+    ///
+    /// Only metadata is retained, not font bytes. With duplicates this adds O(N) metadata for
+    /// the contributing faces; without duplicates it shares the canonical view. Old views remain
+    /// metadata after a rescan or removal, not a promise of immutable or still-available bytes.
+    /// This does not change canonical resolution or make removed document blobs available.
+    pub fn faces_including_duplicates(&self) -> Arc<[FaceInfo]> {
+        Arc::clone(&self.snapshot().physical_infos)
+    }
+
     /// The family `name` names: its own name ignoring ASCII case, or any other of its names
     /// (another language, a legacy name) ignoring case and everything but letters and digits.
     pub fn family(&self, name: &str) -> Option<String> {
@@ -547,6 +567,52 @@ impl Catalog {
             return Ok(FontData { bytes: font.into(), index: 0 });
         }
         Ok(FontData { bytes: self.file_bytes(path)?, index: face.index })
+    }
+
+    /// Load `face` with an additional byte ceiling, including already cached or added data.
+    ///
+    /// Disk reads retain their existing source ceiling and stop at most one byte past
+    /// `max_bytes` to detect growth. A suitcase caps its raw fork too and copies only the
+    /// selected resource; its returned index is zero, as with [`Self::load`]. Other files
+    /// retain their face index, and allowed cached or added bytes retain their shared `Arc`.
+    /// This bounds read and returned payload sizes, not aggregate heap use or discovery.
+    pub fn load_with_limit(&self, face: &FaceInfo, max_bytes: u64) -> Result<FontData, FontFileError> {
+        if let Some(blob) = face.blob {
+            let added = lock(&self.added);
+            let bytes = added.blobs.get(&blob).ok_or(FontFileError::Gone)?;
+            let size = bytes.len() as u64;
+            if size > max_bytes {
+                return Err(FontFileError::TooLarge { size, max: max_bytes });
+            }
+            return Ok(FontData { bytes: Arc::clone(bytes), index: face.index });
+        }
+        let path = face.path.as_deref().ok_or(FontFileError::Gone)?;
+        if crate::suitcase::is_suitcase(path) {
+            let font = crate::suitcase::read_font_capped(path, face.index, max_bytes)?;
+            return Ok(FontData { bytes: font.into(), index: 0 });
+        }
+        Ok(FontData { bytes: self.file_bytes_with_limit(path, max_bytes)?, index: face.index })
+    }
+
+    // Keep file_bytes' old cache-hit behavior: only this opt-in path applies a caller ceiling.
+    fn file_bytes_with_limit(&self, path: &Path, max_bytes: u64) -> Result<Arc<[u8]>, FontFileError> {
+        let max = max_bytes.min(MAX_LOAD);
+        if let Some(bytes) = lock(&self.files).get(path).and_then(Weak::upgrade) {
+            let size = bytes.len() as u64;
+            if size > max {
+                return Err(FontFileError::TooLarge { size, max });
+            }
+            return Ok(bytes);
+        }
+        let size = std::fs::metadata(path)?.len();
+        if size > max {
+            return Err(FontFileError::TooLarge { size, max });
+        }
+        let bytes: Arc<[u8]> = read_capped(path, max)?.into();
+        let mut files = lock(&self.files);
+        files.retain(|_, w| w.strong_count() > 0);
+        files.insert(path.to_path_buf(), Arc::downgrade(&bytes));
+        Ok(bytes)
     }
 
     fn file_bytes(&self, path: &Path) -> Result<Arc<[u8]>, FontFileError> {

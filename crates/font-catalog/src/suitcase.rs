@@ -65,6 +65,33 @@ pub(crate) fn read_fonts(path: &Path) -> Vec<Vec<u8>> {
     sfnt_resources(&fork).into_iter().map(<[u8]>::to_vec).collect()
 }
 
+/// Load just one resource with a caller ceiling on both the raw fork and selected output.
+#[cfg(target_os = "macos")]
+pub(crate) fn read_font_capped(path: &Path, index: u32, max_bytes: u64) -> Result<Vec<u8>, crate::FontFileError> {
+    read_font_fork_capped(&fork_path(path), index, max_bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn read_font_capped(_: &Path, _: u32, _: u64) -> Result<Vec<u8>, crate::FontFileError> {
+    Err(crate::FontFileError::NotAFont)
+}
+
+// The raw-fork reader is shared with portable tests; named-fork access itself is macOS-only.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn read_font_fork_capped(path: &Path, index: u32, max_bytes: u64) -> Result<Vec<u8>, crate::FontFileError> {
+    let max = max_bytes.min(MAX_FORK);
+    let fork = crate::catalog::read_capped(path, max)?;
+    // These are borrowed slices, not read_fonts' copies of every resource. References may
+    // alias the same data many times; only the requested output gets an owned allocation.
+    let resources = sfnt_resources(&fork);
+    let font = resources.get(index as usize).ok_or(crate::FontFileError::NotAFont)?;
+    let size = font.len() as u64;
+    if size > max {
+        return Err(crate::FontFileError::TooLarge { size, max });
+    }
+    Ok(font.to_vec())
+}
+
 /// Whether the file at `path` is a suitcase font: nothing in its data fork and something in its
 /// resource fork.
 pub(crate) fn is_suitcase(path: &Path) -> bool {
