@@ -7,4 +7,4 @@ mod words;
 
 pub use anchored::{Popover, PopoverOutput, PopoverStyle};
 pub use drop_veil::{DropVeil, DropVeilOutput, DropVeilStyle, WholeWindow};
-pub use popup_list::{PopupList, PopupListStyle};
+pub use popup_list::{PopupList, PopupListKind, PopupListStyle};

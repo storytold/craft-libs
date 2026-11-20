@@ -1,9 +1,9 @@
 //! Stories of `PopupList`.
 
-use super::PopupList;
+use super::{PopupList, PopupListKind};
 use crate::buttons::Button;
 use crate::contract::overlay::Anchor;
-use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _};
+use crate::contract::{Bind, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::fonts::FontRef;
 use crate::layout_components::Stack;
 use crate::list::{DocumentRows, List, ListRow};
@@ -65,9 +65,16 @@ const DOCUMENT_SIZE: f32 = 12.0;
 /// anchor, as a form field drawn on a document is.
 fn document_popup(ui: &mut Ui, data: &mut StoryData, rows: DocumentRows) -> StoryOutput {
     let names = ["Round", "Square", "Chisel", "Fan"];
-    let page = Stack::new().fill().show(ui, |ui, _| Button::new("Brush tip").show(ui).rect);
+    let page = Stack::new().fill().show(ui, |ui, _| {
+        let opener = Button::new("Brush tip").show(ui);
+        if clicked(&opener) {
+            *data.value("open", false) = true;
+        }
+        opener.rect
+    });
     let field = page.inner.unwrap_or(page.output.rect);
-    PopupList::new("Brush tips", Bind::bound(data.value("open", true)))
+    PopupList::new("Brush tips", Bind::bound(data.value("open", false)))
+        .kind(PopupListKind::Document)
         .opened_by(&page.output)
         .overlay(|overlay| overlay.opener_anchor(Anchor::Rect(field)))
         .show(ui, |ui, _| {

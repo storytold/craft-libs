@@ -1,7 +1,7 @@
 //! `PopupList` (15, 17): a dropdown under a field, holding the caller's `List`.
 
 use super::anchored::PopoverOutput;
-use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, POPUP_PAD, Props as _, Role, Trigger};
+use crate::contract::{Bind, BindMut, Common, Component, Container, ContainerProps, Cx, Mount, Overlay, POPUP_PAD, Pad, Props as _, Role, Trigger};
 use crate::runtime::env::Label;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
@@ -17,6 +17,16 @@ mod stories;
 pub struct PopupListStyle {
     #[style(metrics)]
     metrics: Metrics,
+}
+
+/// How a popup list relates its rows to its opener.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PopupListKind {
+    /// A UI list with padding around its rows.
+    #[default]
+    Standard,
+    /// Document-field options whose rows extend to the field's edges.
+    Document,
 }
 
 /// A list popup under a field the app owns (a combo, a history picker). The body is the caller's `List::options`.
@@ -45,6 +55,16 @@ impl<'a> PopupList<'a> {
     pub fn new(label: impl Into<Label>, open: Bind<'a, bool>) -> Self {
         let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(POPUP_PAD).collection_body().mount(Mount::Layer(Overlay::dropdown()));
         PopupList { common: Common::new(), props, open, closed: None }.label(label)
+    }
+
+    /// Selects the list's relationship to its opener.
+    #[must_use]
+    pub fn kind(mut self, kind: PopupListKind) -> Self {
+        self.props = self.props.pad(match kind {
+            PopupListKind::Standard => POPUP_PAD,
+            PopupListKind::Document => Pad::None,
+        });
+        self
     }
 
     /// Changes the popup's overlay as `Popover::overlay` does; callers hang the list from a part with

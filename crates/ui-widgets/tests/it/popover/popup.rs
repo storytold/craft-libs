@@ -6,7 +6,7 @@ use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, CollectionEvent, Overlay, Props as _, Scroll, Show as _, ShowCollection as _, ShowContainer as _, Trigger, clicked};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, ListRow};
-use craft_ui::popover::PopupList;
+use craft_ui::popover::{PopupList, PopupListKind};
 use craft_ui::testing::pointer::{self, click, moved, press, release};
 use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, Vec2};
@@ -122,6 +122,23 @@ fn a_popup_list_with_short_rows_fits_its_wide_opener() {
     assert!(popup.width() >= opener.width() - 1.0, "the popup is at least as wide as its opener: {popup:?} {opener:?}");
     assert!(popup.width() <= opener.width() + 1.0, "padding does not widen the popup: {popup:?} {opener:?}");
     assert!(row.left() >= popup.left() && row.right() <= popup.right(), "the row stays inside the popup: {row:?} {popup:?}");
+}
+
+/// A document field's options start at its edge, so the selection fills the field's width.
+#[trial]
+fn a_document_popup_list_aligns_its_rows_with_the_opener() {
+    let mut open = true;
+    let anchor = Rect::from_min_size(Pos2::new(100.0, 100.0), Vec2::new(240.0, 30.0));
+    let mut fixture = Fixture::new(move |ui| {
+        let opener = Button::new("Open").show_at(ui, anchor).response;
+        PopupList::new("Popup", Bind::bound(&mut open)).kind(PopupListKind::Document).opened_by(&opener).show(ui, |ui, _| {
+            List::<usize>::options("Choices").show_items(ui, &Rows, &mut |at, _| ListRow::new(row(*at)).option());
+        });
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    let opener = fixture.by_label("Open").expect("the opener").rect;
+    let row = fixture.by_label(&row(0)).expect("a row").rect;
+    assert!((row.left() - opener.left()).abs() <= 1.0 && (row.right() - opener.right()).abs() <= 1.0, "row {row:?}, opener {opener:?}");
 }
 
 /// A scrolling page taller than the window: an "Open" button that opens a popup list of `ROWS` rows while `open`, then
