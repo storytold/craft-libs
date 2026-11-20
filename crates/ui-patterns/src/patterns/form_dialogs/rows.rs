@@ -13,7 +13,7 @@ use super::words::ParamWords;
 use crate::buttons::{Button, ToggleButton};
 use crate::choice::{Checkbox, Radio, RadioGroup, Swatch};
 use crate::contract::{
-    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, BodyCx, CanvasGesture, Entry, NoValue, Outcome, Props as _, Remember as _, Sampler as _, Show as _, ShowContainer as _, Sizing, clicked,
 };
 use crate::display::Text;
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -272,12 +272,16 @@ struct Line<'r> {
     key: &'r str,
     name: Label,
     enabled: bool,
+    compact: bool,
 }
 
 impl Line<'_> {
     /// Shows `body` in a field named by the row: its label beside the control, its tooltip over both.
     fn show(&self, ui: &mut Ui, mut body: impl FnMut(&mut Ui)) {
         let mut field = Field::new(self.name.clone()).id_salt(self.key).enabled(self.enabled);
+        if self.compact {
+            field = field.sizing(Sizing::Content);
+        }
         if let Some(tip) = self.param.tooltip_text() {
             field = field.tooltip(tip.clone());
         }
@@ -376,29 +380,45 @@ impl<'p> Pass<'p> {
     fn rows(&mut self, ui: &mut Ui, params: &[Param]) {
         let is_section = |param: &Param| matches!(param.kind, ParamKind::Section);
         let first = params.iter().position(is_section).unwrap_or(params.len());
-        for param in &params[..first] {
-            self.row(ui, param);
-        }
+        self.section_rows(ui, &params[..first]);
         let mut rest = &params[first..];
         while let Some((head, tail)) = rest.split_first() {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
                 Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
-                    for param in body {
-                        self.row(ui, param);
-                    }
+                    self.section_rows(ui, body);
                 });
             }
             rest = after;
         }
     }
 
-    fn row(&mut self, ui: &mut Ui, param: &Param) {
+    fn section_rows(&mut self, ui: &mut Ui, params: &[Param]) {
+        let mut params = params.iter();
+        while let Some(param) = params.next() {
+            if param.pairs_with_next()
+                && let Some(next) = params.next()
+            {
+                // A row with no visible fields must not add a gap to the form.
+                if !param.visible(&self.work) && !next.visible(&self.work) {
+                    continue;
+                }
+                Row::new().id_salt(param.key.as_str()).wrap(true).fill_width().show(ui, |ui, _| {
+                    self.row(ui, param, true);
+                    self.row(ui, next, true);
+                });
+            } else {
+                self.row(ui, param, false);
+            }
+        }
+    }
+
+    fn row(&mut self, ui: &mut Ui, param: &Param, compact: bool) {
         if !param.visible(&self.work) {
             return;
         }
-        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work) };
+        let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work), compact };
         let held = self.work.get(line.key).cloned();
         self.show_row(ui, &line);
         param.drop_dependents(held.as_ref(), &mut self.work);
@@ -653,7 +673,8 @@ impl<'p> Pass<'p> {
             .or_else(|| rows.iter().find(is_pattern))
             .map(|row| row.key.clone());
         // With no pattern to offer the row is disabled and writes nothing.
-        let line = Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some() };
+        let line =
+            Line { param: line.param, key: line.key, name: line.name.clone(), enabled: line.enabled && current.is_some(), compact: line.compact };
         line.show(ui, |ui| {
             let picked = PresetPicker::pattern(line.name.clone(), Bind::given(current.clone()), rows, Bind::kept()).show(ui).picked;
             if let Some(id) = picked.filter(|id| rows.iter().filter(is_pattern).any(|row| row.key == *id)) {
