@@ -555,6 +555,15 @@ fn repair_wav_refuses_what_it_cannot_repair() {
     let mut other_guid = ext.clone();
     other_guid[fmt + 39] ^= 0xFF;
     assert!(matches!(repair(other_guid), Err(AudioError::Unsupported(_))));
+    // Extensible fields the reader refuses: a cbSize below 22 and more valid bits than the sample holds.
+    let mut short_cb = ext.clone();
+    short_cb[fmt + 16..fmt + 18].copy_from_slice(&21u16.to_le_bytes());
+    let mut wide_valid = ext.clone();
+    wide_valid[fmt + 18..fmt + 20].copy_from_slice(&25u16.to_le_bytes());
+    for bad in [short_cb, wide_valid] {
+        assert!(craft_audio::decode(&bad, Some("wav")).is_err());
+        assert!(matches!(repair(bad), Err(AudioError::Malformed(_))));
+    }
     // The Ambisonic PCM subformat {00000001-0721-11D3-8644-C8C1CA000000}, which the reader reads as PCM.
     let mut ambisonic = ext;
     ambisonic[fmt + 26..fmt + 40].copy_from_slice(&[0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00]);

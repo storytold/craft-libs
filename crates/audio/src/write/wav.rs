@@ -276,8 +276,14 @@ fn pcm_block_align<F: Read + Seek>(file: &mut F, pos: u64, size: u32) -> Result<
     }
     let field = |at: usize| u16::from_le_bytes([fmt[at], fmt[at + 1]]);
     let mut tag = field(0);
-    if tag == WAVE_FORMAT_EXTENSIBLE && n == 40 && (fmt[26..] == GUID_TAIL || fmt[26..] == AMBISONIC_TAIL) {
-        tag = field(24);
+    if tag == WAVE_FORMAT_EXTENSIBLE && n == 40 {
+        // The extensible fields the reader checks.
+        if field(16) < 22 || field(18) > field(14) {
+            return Err(AudioError::Malformed("WAVE_FORMAT_EXTENSIBLE fmt chunk has a cbSize below 22 or too many valid bits".into()));
+        }
+        if fmt[26..] == GUID_TAIL || fmt[26..] == AMBISONIC_TAIL {
+            tag = field(24);
+        }
     }
     if tag != WAVE_FORMAT_PCM && tag != WAVE_FORMAT_IEEE_FLOAT {
         return Err(AudioError::Unsupported(format!("repairing a WAV of format tag {tag:#06x}")));

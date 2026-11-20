@@ -476,8 +476,8 @@ pub struct WavRepair {
 /// and unknown chunks included:
 ///
 /// - the RIFF size and the data chunk's size (both `0xFFFF_FFFF` in an RF64 file);
-/// - the frame count, the first field of a `fact` chunk (`0xFFFF_FFFF` past `u32::MAX` frames);
-/// - in an RF64 file, the RIFF size, data size and frame count at the start of the `ds64` chunk;
+/// - the frame count, the first field of the first `fact` chunk (`0xFFFF_FFFF` past `u32::MAX` frames);
+/// - in an RF64 file, the RIFF size, data size and frame count at the start of the first `ds64` chunk;
 /// - the pad byte after an odd data length.
 ///
 /// A RIFF file that grew past 4 GiB becomes RF64 when it starts with the 28-byte `JUNK` chunk that
@@ -490,7 +490,8 @@ pub struct WavRepair {
 /// - [`AudioError::Malformed`] when `file` is not a RIFF or RF64 WAVE file, has no data chunk within
 ///   its first 100,000 chunks, has its data chunk before its `fmt ` chunk, has a `fmt ` chunk shorter
 ///   than 16 bytes or cut short by the end of the file, has 0 channels or 0 bits, has a block size
-///   other than the channels times the bytes per sample, or is RF64 without a `ds64` chunk.
+///   other than the channels times the bytes per sample, has an extensible `fmt ` chunk with a cbSize
+///   below 22 or more valid bits than bits per sample, or is RF64 without a `ds64` chunk.
 /// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
 ///   whose subformat is neither, a sample width the WAV reader does not decode (PCM above 32 bits,
 ///   float other than 32 or 64 bits), and unfinished 8-bit mono data of even length (its last byte
