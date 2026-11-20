@@ -832,20 +832,39 @@ impl CalRgb {
         ]
     }
 
-    fn to_flat(source_white_point: &[f32; 3], lms: &[f32; 3]) -> [f32; 3] {
-        [
-            lms[0] / source_white_point[0],
-            lms[1] / source_white_point[1],
-            lms[2] / source_white_point[2],
-        ]
-    }
-
-    fn to_d65(source_white_point: &[f32; 3], lms: &[f32; 3]) -> [f32; 3] {
-        [
-            lms[0] * Self::D65_WHITEPOINT[0] / source_white_point[0],
-            lms[1] * Self::D65_WHITEPOINT[1] / source_white_point[1],
-            lms[2] * Self::D65_WHITEPOINT[2] / source_white_point[2],
-        ]
+    /// Bradford chromatic adaptation of `xyz` from `source_white` to
+    /// `destination_white` (ISO 32000-2 §8.6.5.1 leaves the method to the
+    /// reader; §8.6.5.3 makes the space's own `/WhitePoint` the colour that is
+    /// white). The cone responses are scaled by the ratio of the two whites'
+    /// cone responses, so the source white lands exactly on the destination
+    /// white whatever its chromaticity.
+    ///
+    /// PdfCraft patch (storytold/pdfcraft#7314): this divided the cone response
+    /// by the white point's XYZ instead of its cone response, which is close for
+    /// D50 and D65 but turned the white of a space with an unusual white point
+    /// (X 0.55, Z 1.99) cyan. A white with a zero or non-finite cone response
+    /// leaves the colour unadapted rather than dividing by zero.
+    fn bradford_adapt(
+        source_white: &[f32; 3],
+        destination_white: &[f32; 3],
+        xyz: &[f32; 3],
+    ) -> [f32; 3] {
+        let source = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, source_white);
+        let destination = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, destination_white);
+        if source
+            .iter()
+            .chain(destination.iter())
+            .any(|v| !v.is_finite() || v.abs() <= f32::EPSILON)
+        {
+            return *xyz;
+        }
+        let lms = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, xyz);
+        let adapted = [
+            lms[0] * destination[0] / source[0],
+            lms[1] * destination[1] / source[1],
+            lms[2] * destination[2] / source[2],
+        ];
+        Self::matrix_product(&Self::BRADFORD_SCALE_INVERSE_MATRIX, &adapted)
     }
 
     fn decode_l(l: f32) -> f32 {
@@ -884,15 +903,11 @@ impl CalRgb {
         if source_white_point[0] == 1.0 && source_white_point[2] == 1.0 {
             return *xyz;
         }
-        let lms = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, xyz);
-        let lms_flat = Self::to_flat(source_white_point, &lms);
-        Self::matrix_product(&Self::BRADFORD_SCALE_INVERSE_MATRIX, &lms_flat)
+        Self::bradford_adapt(source_white_point, &Self::FLAT_WHITEPOINT, xyz)
     }
 
     fn normalize_white_point_to_d65(source_white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
-        let lms = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, xyz);
-        let lms_d65 = Self::to_d65(source_white_point, &lms);
-        Self::matrix_product(&Self::BRADFORD_SCALE_INVERSE_MATRIX, &lms_d65)
+        Self::bradford_adapt(source_white_point, &Self::D65_WHITEPOINT, xyz)
     }
 }
 
@@ -966,30 +981,15 @@ impl Lab {
         }
     }
 
-    /// Bradford adaptation scales cone responses, so both white points must
-    /// be expressed in LMS before taking their ratios. CalRGB's separate
-    /// flat-white/black-point pipeline retains its existing normalization.
+    /// Bradford adaptation from the space's white to D65 (shared with CalRGB).
     fn adapt_to_d65(white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
         Self::adapt(white_point, &CalRgb::D65_WHITEPOINT, xyz)
     }
 
-    /// `xyz`, seen under `white_point`, Bradford-adapted to `destination`.
+    /// `xyz`, seen under `white_point`, Bradford-adapted to `destination`, as
+    /// `CalRgb::bradford_adapt` adapts it.
     fn adapt(white_point: &[f32; 3], destination: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
-        let source_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, white_point);
-        // A malformed but positive XYZ white can still yield a zero or
-        // overflowing cone response. Leave it unadapted rather than divide by
-        // zero or propagate a non-finite scale.
-        if source_lms.iter().any(|v| !v.is_finite() || v.abs() <= f32::EPSILON) {
-            return *xyz;
-        }
-        let destination_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, destination);
-        let lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, xyz);
-        let adapted = [
-            lms[0] * destination_lms[0] / source_lms[0],
-            lms[1] * destination_lms[1] / source_lms[1],
-            lms[2] * destination_lms[2] / source_lms[2],
-        ];
-        CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_INVERSE_MATRIX, &adapted)
+        CalRgb::bradford_adapt(white_point, destination, xyz)
     }
 
     /// Inverse of the CIE f(t) helper that maps relative fX/fY/fZ to absolute
@@ -3165,6 +3165,82 @@ mod nesting_tests {
     #[test]
     fn a_long_indirect_chain_fails_without_exhausting_the_stack() {
         assert!(chain_space(100_000).is_none());
+    }
+}
+
+/// PdfCraft patch (storytold/pdfcraft#7314): a CalRGB space's own `/WhitePoint` is the colour
+/// that is white (ISO 32000-2 §8.6.5.3), whatever its chromaticity.
+#[cfg(test)]
+mod cal_rgb_white_point_tests {
+    use super::{CalRgb, ToRgb};
+
+    /// The 8-bit sRGB `convert_f32` gives `abc` in the CalRGB space of `white`, `gamma` and
+    /// `matrix` (black point 0 0 0).
+    fn convert(white: [f32; 3], gamma: [f32; 3], matrix: [f32; 9], abc: [f32; 3]) -> [u8; 3] {
+        let space = CalRgb {
+            white_point: white,
+            black_point: [0.0; 3],
+            matrix,
+            gamma,
+        };
+        let mut out = [0; 3];
+        assert!(space.convert_f32(&abc, &mut out, false).is_some());
+        out
+    }
+
+    fn assert_near(got: [u8; 3], expected: [u8; 3], tolerance: u8, what: &str) {
+        assert!(
+            got.iter().zip(expected).all(|(g, e)| g.abs_diff(e) <= tolerance),
+            "{what}: got {got:?}, expected {expected:?}"
+        );
+    }
+
+    /// A CalRGB space whose /WhitePoint is far from daylight (X 0.5505, Z 1.989) and whose
+    /// /Matrix maps A = B = C = 1 onto exactly that white: 1 1 1 is white and a dark, nearly
+    /// equal triple a dark grey. Dividing the cone response by the white's XYZ instead of its
+    /// cone response drew the grey dark green and the white cyan. The expected values are the
+    /// Bradford adaptation of these numbers to D65, then sRGB.
+    #[test]
+    fn calrgb_with_an_extreme_white_point_keeps_white_white() {
+        let white = [0.5505, 1.0, 1.989];
+        let gamma = [2.22221; 3];
+        let matrix = [0.0124, 0.2126, 0.9193, 0.3576, 0.71519, 0.1192, 0.1805, 0.0722, 0.9505];
+        for (abc, expected) in [([1.0; 3], [255, 255, 255]), ([0.161, 0.145, 0.149], [27, 33, 34])] {
+            assert_near(convert(white, gamma, matrix, abc), expected, 2, &format!("CalRGB {abc:?}"));
+        }
+    }
+
+    /// An ordinary CalRGB space (sRGB primaries, gamma 2.2, D65 white) and a D50 one keep white
+    /// white, and the D65 space draws the colours it drew before: adapting D65 to D65 is the
+    /// identity either way.
+    #[test]
+    fn ordinary_calrgb_spaces_keep_their_colours() {
+        let srgb = [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505];
+        for (abc, expected) in [
+            ([1.0, 1.0, 1.0], [255, 255, 255]),
+            ([0.0, 0.0, 0.0], [0, 0, 0]),
+            ([0.5, 0.5, 0.5], [128, 128, 128]),
+            ([0.8, 0.2, 0.1], [205, 47, 19]),
+            ([0.1, 0.6, 0.9], [19, 154, 230]),
+        ] {
+            let got = convert([0.9505, 1.0, 1.089], [2.2; 3], srgb, abc);
+            assert_near(got, expected, 1, &format!("D65 CalRGB {abc:?}"));
+        }
+        let d50 = [0.6097, 0.3111, 0.0195, 0.2053, 0.6257, 0.0609, 0.1492, 0.0632, 0.7446];
+        let got = convert([0.9642, 1.0, 0.8249], [1.8; 3], d50, [1.0; 3]);
+        assert_near(got, [255, 255, 255], 1, "D50 CalRGB white");
+    }
+
+    /// A degenerate /WhitePoint (a zero, huge or negative component) leaves the colour
+    /// unadapted instead of dividing by zero or overflowing, and still converts.
+    #[test]
+    fn calrgb_with_a_degenerate_white_point_still_converts() {
+        let srgb = [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505];
+        for white in [[0.0, 1.0, 0.0], [1e38, 1.0, 1e38], [-1.0, 1.0, -1.0]] {
+            convert(white, [1.0; 3], srgb, [0.5; 3]);
+            let bradford = CalRgb::bradford_adapt(&white, &CalRgb::D65_WHITEPOINT, &[0.5; 3]);
+            assert!(bradford.iter().all(|v| v.is_finite()), "{white:?}: {bradford:?}");
+        }
     }
 }
 

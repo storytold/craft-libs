@@ -78,6 +78,15 @@ object where two objects overlap. The erase pass resolves the group's resources 
 adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
 #870, a Multiply knockout group over a yellow page.
 
+Colour, function and shading fixes, ported from PdfCraft pull requests by mtlcl410 that were
+open when they were ported (craft-libs #2675). Only their `hayro-interpret` and `hayro` part is
+ported. Code comments keep each pull request's `PdfCraft patch` label and number, where it has
+one. The tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#7314](https://github.com/storytold/pdfcraft/pull/7314) | hayro-interpret `color.rs` | CalRGB's Bradford adaptation scales the cone responses by the ratio of the two whites' cone responses, not their XYZ, so a space's `/WhitePoint` draws as white whatever its chromaticity (ISO 32000-2 §8.6.5.3); a white with a zero or non-finite cone response leaves the colour unadapted. Lab shares the adaptation | `color::cal_rgb_white_point_tests::calrgb_with_an_extreme_white_point_keeps_white_white`, `ordinary_calrgb_spaces_keep_their_colours`, `calrgb_with_a_degenerate_white_point_still_converts` |
+
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
 §11.6.5.2 and §10.4.2.2 give `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, where the colors as
