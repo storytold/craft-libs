@@ -498,7 +498,7 @@ struct NoteWindow {
 impl NoteWindow {
     fn new(label: Label, overlay: Overlay, look: NoteLook, close_label: Label, allowed: bool, anchor: Option<(Rect, bool)>, selected: bool) -> Self {
         let props =
-            ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).header(HeaderRegion::new().band(DragBand::Move));
+            ContainerProps::new().mount(Mount::Layer(overlay)).surface(SurfaceKind::Floating).header(HeaderRegion::new().band(DragBand::Move).trailing(true));
         NoteWindow {
             common: Common::new(),
             props,

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use craft_host::{AppInfo, Host, InlineJobs, Jobs, ManualJobs, MemorySections, Picked, ScriptedFiles, Section};
 use craft_review::signature::{MAX_IMAGE_BYTES, SavedSignature, SignatureDraft, SignatureImage, SignatureTab};
-use craft_review::ui::{SignaturePadDialog, SignatureSettings};
+use craft_review::ui::{ScanEvent, SignaturePadDialog, SignatureSettings};
 use craft_ui::contract::Role;
 use craft_ui::dialog::{DialogStack, StackDialog as _};
 use craft_ui::popover::DropVeil;
@@ -46,6 +46,27 @@ fn pad(draft: SignatureDraft) -> Rc<RefCell<Pad>> {
     let mut stack = DialogStack::default();
     stack.push(dialog.id(), None);
     Rc::new(RefCell::new(Pad { dialog, stack, ctx: None }))
+}
+
+/// Clear must also reach scan-owned state so a later scan pass cannot restore the cleared image.
+#[trial]
+fn clearing_a_scan_does_not_let_the_scan_restore_the_image() {
+    let pad = pad(SignatureDraft { tab: SignatureTab::Scan, ..SignatureDraft::default() });
+    let mut pending = true;
+    pad.borrow_mut().dialog = SignaturePadDialog::new(SignatureDraft { tab: SignatureTab::Scan, ..SignatureDraft::default() })
+        .scan(move |_, draft, event| {
+            match event {
+                ScanEvent::Clear => pending = false,
+                ScanEvent::Show(_) if pending => draft.image = Some(SignatureImage::new(5, 1, PHOTO.to_vec())),
+                ScanEvent::Show(_) => {}
+            }
+        });
+    let shown = pad.clone();
+    let mut fx = Fixture::new(move |ui| show(&shown, ui));
+    fx.room(vec2(900.0, 900.0)).settle();
+    let clear = fx.by_label("Clear").expect("Clear is shown");
+    fx.click(&clear).settle();
+    assert!(saved(&pad).is_none(), "the cleared scan must not restore a pending result");
 }
 
 /// Shows the dialog in `ui`.

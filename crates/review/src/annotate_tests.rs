@@ -158,6 +158,15 @@ fn a_callout_knee_stays_on_its_line_at_least_the_gap_from_the_box_and_only_the_t
     assert!(matches!(held.as_slice(), [t, k] if *k == knee && diagonal(*t)), "held to 45 degrees from the knee: {held:?}");
 }
 
+/// The document-space knee gap corresponds to twelve page points at the standard page scale.
+#[trial]
+fn a_callout_knee_keeps_the_page_point_gap_in_document_space() {
+    let rect = Rect::new(200.0, 100.0, 300.0, 150.0);
+    let points = [Point::new(20.0, 125.0), Point::new(160.0, 125.0)];
+    let moved = callout_reshaped(rect, &points, 1, Point::new(210.0, 125.0), None);
+    assert!((rect.x0 - moved[1].x - 12.0 * 96.0 / 72.0).abs() < 0.001);
+}
+
 /// The overlay paints an annotation as the in-flight edit leaves it: moved with its points and strokes, resized,
 /// reshaped with its box around the new points, and a resized callout's box going while its tip and knee stay.
 #[cfg(feature = "ui")]

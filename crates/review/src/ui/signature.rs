@@ -403,10 +403,16 @@ fn pop_stroke(strokes: &mut Vec<Vec<[f32; 2]>>) -> bool {
     false
 }
 
-/// The Scan tab's content, the app's.
-///
-/// It is handed the file dropped on the window in this pass, and `None` in every other call.
-pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send>;
+/// Input delivered to the host's scan tab.
+pub enum ScanEvent {
+    /// Draw the scan tab, with any file dropped on it this pass.
+    Show(Option<OsFile>),
+    /// Clear the scan's own state and cancel any pending work.
+    Clear,
+}
+
+/// The Scan tab's content and its clear handler, supplied by the host.
+pub type ScanTab = Box<dyn FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send>;
 
 /// Acrobat's signature pad on the dialog host: "Create signature" or "Change initials" with the tabs Type (a field over
 /// the pad that shows the typed signature), Draw (a pad of strokes, Undo), Image (Browse… a PNG or JPEG up to
@@ -444,9 +450,9 @@ impl SignaturePadDialog {
         Self { draft, scan: None, open: true, pick: None, decoding: None, error: None }
     }
 
-    /// The Scan tab's content: it fills `draft.image`.
+    /// The Scan tab's content: it fills `draft.image` and handles [`ScanEvent::Clear`].
     #[must_use]
-    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft, Option<OsFile>) + Send + 'static) -> Self {
+    pub fn scan(mut self, tab: impl FnMut(&mut egui::Ui, &mut SignatureDraft, ScanEvent) + Send + 'static) -> Self {
         self.scan = Some(Box::new(tab));
         self
     }
@@ -589,7 +595,7 @@ impl StackDialog for SignaturePadDialog {
                 }
                 SignatureTab::Scan => {
                     if let Some(tab) = scan.as_mut() {
-                        DropVeil::new(words.drop_photo.clone()).show(ui, |ui, files| tab(ui, draft, first_file(files)));
+                        DropVeil::new(words.drop_photo.clone()).show(ui, |ui, files| tab(ui, draft, ScanEvent::Show(first_file(files))));
                     }
                 }
             }
@@ -600,6 +606,9 @@ impl StackDialog for SignaturePadDialog {
                 if clicked(&Button::new(words.clear.clone()).show(ui)) {
                     draft.clear();
                     *error = None;
+                    if let Some(tab) = scan.as_mut() {
+                        tab(ui, draft, ScanEvent::Clear);
+                    }
                 }
             });
         });

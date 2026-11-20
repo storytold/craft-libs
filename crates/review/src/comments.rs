@@ -121,7 +121,12 @@ pub struct CommentMessage {
     pub reactions: Vec<Reaction>,
     /// Read by the viewer (FigCraft's read state).
     pub read: bool,
+    /// Whether this message and its descendants may be deleted.
+    #[serde(default = "message_deletable")]
+    pub deletable: bool,
 }
+
+fn message_deletable() -> bool { true }
 
 /// A comment and its replies.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
