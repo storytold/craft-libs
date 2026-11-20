@@ -140,6 +140,19 @@ impl<'a> PageTreeFrame<'a> {
 /// this one).
 const MAX_USER_UNIT: f64 = 75_000.0;
 
+/// PdfCraft patch: whether a `/Kids` entry is an intermediate node of the page tree. A node is
+/// `/Type /Pages`, or has a `/Kids` array and is not `/Type /Page`: ISO 32000-2 §7.7.3.2
+/// requires both keys of a node, but writers leave `/Type` out, and a page has no `/Kids`
+/// (§7.7.3.3), so the array tells them apart. A `/Kids` that is null (the same as absent,
+/// §7.3.9) or not an array leaves an untyped dictionary a page.
+fn is_page_tree_node(dict: &Dict<'_>) -> bool {
+    match dict.get::<Name<'_>>(TYPE).as_deref() {
+        Some(PAGES) => true,
+        Some(PAGE) => false,
+        _ => dict.get::<Array<'_>>(KIDS).is_some(),
+    }
+}
+
 fn resolve_pages<'a>(
     pages_dict: &Dict<'a>,
     entries: &mut Vec<Page<'a>>,
@@ -184,21 +197,16 @@ fn resolve_pages<'a>(
             continue;
         };
 
-        match dict.get::<Name<'_>>(TYPE).as_deref() {
-            Some(PAGES) => {
-                if let Some(child) = PageTreeFrame::new(&dict, frame.ctx.clone(), frame.resources.clone()) {
-                    stack.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
-                    stack.push(child);
-                }
+        if is_page_tree_node(&dict) {
+            if let Some(child) = PageTreeFrame::new(&dict, frame.ctx.clone(), frame.resources.clone()) {
+                stack.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
+                stack.push(child);
             }
+        } else if let Some(page) = Page::new(&dict, &frame.ctx, frame.resources.clone(), false) {
             // Let's be lenient and assume it's a `Page` in case it's `None` or something else
             // (see corpus test case 0083781).
-            _ => {
-                if let Some(page) = Page::new(&dict, &frame.ctx, frame.resources.clone(), false) {
-                    entries.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
-                    entries.push(page);
-                }
-            }
+            entries.try_reserve(1).map_err(|_| PageTreeError::Limit)?;
+            entries.push(page);
         }
     }
 
@@ -1114,6 +1122,45 @@ mod page_tree_tests {
         let repaired = cached_with_limit(&objects, 1).unwrap();
         assert_eq!(repaired.get().len(), 1);
         assert_eq!(repaired.get()[0].raw().obj_id().unwrap().obj_number, 3);
+    }
+
+    /// PdfCraft patch (storytold/pdfcraft#6498): intermediate nodes without `/Type` are told from
+    /// pages by their `/Kids` array (ISO 32000-2 §7.7.3.2, §7.7.3.3), so the pages under them are
+    /// read in order with what they inherit, and an untyped leaf is still a page.
+    #[test]
+    fn pages_under_nodes_without_a_type_are_read_in_order() {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 19 0 R] /Count 5 /MediaBox [0 0 612 792] >>",
+            // Node 3: no /Type, its own box.
+            "<< /Parent 2 0 R /Kids [4 0 R 9 0 R] /Count 4 /MediaBox [0 0 300 200] >>",
+            // Node 4: no /Type, its /Kids reached through two references.
+            "<< /Parent 3 0 R /Kids 16 0 R /Count 3 >>",
+            "null",
+            "<< /Type /Page /Parent 4 0 R /Contents [] >>",
+            // A `/Type /Page` given by reference, with a stray empty `/Kids`, is a page.
+            "<< /Parent 4 0 R /Type 18 0 R /Kids [] /Contents [] >>",
+            "<< /Type /Page /Parent 4 0 R /Contents [] >>",
+            // No /Type and a null /Kids (the same as no /Kids, §7.3.9): a page.
+            "<< /Parent 3 0 R /Kids null /Contents [] >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Contents [] >>",
+            "null",
+            "null",
+            "null",
+            "null",
+            "null",
+            "17 0 R",
+            "[6 0 R 7 0 R 8 0 R]",
+            "/Page",
+            "10 0 R",
+        ]
+        .map(str::to_string);
+        let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+        let pages = pdf.pages();
+        let ids: Vec<_> = pages.iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+        assert_eq!(ids, [6, 7, 8, 9, 10]);
+        let sizes: Vec<_> = pages.iter().map(|page| page.base_dimensions()).collect();
+        assert_eq!(sizes, [(300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (400.0, 400.0)]);
     }
 
     fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {

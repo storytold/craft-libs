@@ -78,6 +78,15 @@ object where two objects overlap. The erase pass resolves the group's resources 
 adapts its tests; a plate-mode test in `crates/pdf/tests/plates.rs` checks the case of craft-libs
 #870, a Multiply knockout group over a yellow page.
 
+Page-tree, reference and content-array repairs, ported from PdfCraft pull requests by mtlcl410
+that were open when they were ported (craft-libs #2528). Only their `hayro-syntax` part is ported.
+Code comments keep each pull request's `PdfCraft patch` label and number, where it has one. The
+tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#6498](https://github.com/storytold/pdfcraft/pull/6498) | `page.rs` | A `/Kids` entry with a `/Kids` array and no `/Type /Page` is a page-tree node, so the pages under a node without `/Type` are read (ISO 32000-2 §7.7.3.1–7.7.3.3); an untyped leaf is still a page | `page::page_tree_tests::pages_under_nodes_without_a_type_are_read_in_order` |
+
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2
 §11.6.5.2 and §10.4.2.2 give `1 - min(1, 0.3c + 0.59m + 0.11y + k)`, where the colors as
