@@ -27,15 +27,19 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.
-- Password-protected files are refused (`PptError::Encrypted`), as are PowerPoint 4.0 and earlier
-  files (`PptError::TooOld`).
+- Password-protected files are refused (`PptError::Encrypted`). Formats older than PowerPoint 95
+  aren't read: a compound file whose current user record has neither of [MS-PPT]'s tokens and
+  that has no edit record is refused as too old (`PptError::TooOld`), and a file that isn't a
+  compound file is `PptError::NotPpt`. No file from an earlier PowerPoint was tried.
 
 ## PowerPoint 95
 
 PowerPoint 95 (7.0) files use the same compound file and many of the same record numbers, but a
 16-byte record header and a single record tree with no edit chain. A file whose `PowerPoint
 Document` stream starts with that tree is read on its own path; anything else takes the
-PowerPoint 97 path. What was learned of the format came from files PowerPoint 95 itself wrote,
+PowerPoint 97 path. The tree's Document must hold its DocumentAtom, which counts the slides;
+`import_checked` names the slides that count says a cut-short file is missing ("slide 3"). What
+was learned of the format came from files PowerPoint 95 itself wrote,
 one feature per file, and the public [MS-PPT] numbering where the records keep it.
 
 So far a PowerPoint 95 file imports with its slide size, its masters (each the caller's default

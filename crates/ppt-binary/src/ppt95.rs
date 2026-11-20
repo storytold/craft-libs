@@ -66,6 +66,8 @@ const NO_INSTANCE: u32 = 0xFFFF;
 /// Slides, and masters, read at most: beyond any real presentation, so a file of empty slide
 /// records can't make an unbounded presentation.
 const MAX_SLIDES: usize = 1 << 16;
+/// Where the DocumentAtom holds the number of slides.
+const SLIDE_COUNT: usize = 32;
 /// Masters read at most. Each becomes a copy of the caller's default master with its layouts, so
 /// the cap is lower than for slides; PowerPoint 95 writes one.
 const MAX_MASTERS: usize = 256;
@@ -149,11 +151,23 @@ impl<'a> Iterator for Records<'a> {
 }
 
 /// The Document container of a PowerPoint 95 `PowerPoint Document` stream: the stream starts with
-/// a type-3 record whose first child is a Document (1000) with no instance. `None` for anything
-/// else, PowerPoint 97 files included (their 8-byte headers don't read this way).
+/// a type-3 record whose first child is a Document (1000) with no instance, holding a DocumentAtom
+/// (1001) long enough for its slide count. `None` for anything else, PowerPoint 97 files included
+/// (their 8-byte headers don't read this way).
 pub fn document(stream: &[u8]) -> Option<Rec<'_>> {
     let root = Rec::at(stream, 0).filter(|r| r.kind == rt::ROOT)?;
-    root.children().next().filter(|d| d.kind == rt::DOCUMENT && d.instance == NO_INSTANCE)
+    let document = root.children().next().filter(|d| d.kind == rt::DOCUMENT && d.instance == NO_INSTANCE)?;
+    document.child(rt::DOCUMENT_ATOM)?.u32(SLIDE_COUNT)?;
+    Some(document)
+}
+
+/// The slides the DocumentAtom counts but the file doesn't hold, by position ("slide 3"): what a
+/// truncated file lost. Empty for a whole file.
+pub fn lost(document: &Rec, p: &Presentation) -> Vec<String> {
+    let count = document.child(rt::DOCUMENT_ATOM).and_then(|a| a.u32(SLIDE_COUNT)).map_or(0, |c| c as usize);
+    let read = p.slides.len();
+    // At most as many as could have been read, so a damaged count can't make a huge list.
+    (read + 1..=count.min(read + MAX_SLIDES)).map(|n| format!("slide {n}")).collect()
 }
 
 /// What a slide or master says about itself.
