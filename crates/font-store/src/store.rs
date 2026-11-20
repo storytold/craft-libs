@@ -75,6 +75,9 @@ pub enum Error {
     /// Not an https URL a source can be added from.
     #[error("{0} is not an https URL")]
     BadUrl(String),
+    /// The family is from a host's index, which the store folder doesn't hold fonts of.
+    #[error("{0} is from a host's index, whose fonts the store folder doesn't install")]
+    HostFamily(String),
     /// No exact match in the index.
     #[error(transparent)]
     Unavailable(#[from] Unavailable),
@@ -495,6 +498,10 @@ impl FontStore {
         cancel: &Cancel,
         progress: &mut dyn FnMut(Progress),
     ) -> Result<InstalledFamily, Error> {
+        // The store folder is native only; a host's index belongs to a build without one (RFC-0034).
+        if family.source.starts_with("host:") {
+            return Err(Error::HostFamily(family.family.clone()));
+        }
         let installed = self.installed_family(&family.source, &family.family);
         let folder = self.dir.join(family.dir());
         let have = |f: &FontFile| installed.as_ref().is_some_and(|i| i.files.iter().any(|x| x.name == f.file_name() && x.sha256 == f.sha256));
