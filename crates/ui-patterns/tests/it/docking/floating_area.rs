@@ -4,11 +4,12 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, PanelSpec, request_actions};
+use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, IconicSizes, PanelSpec, request_actions};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
 use craft_ui::testing::pointer::{moved, press, release, secondary};
+use craft_ui::testing::snapshot::layer_rects;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Modifiers, Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
@@ -428,8 +429,7 @@ fn a_collapsed_window_dragged_across_the_middle_keeps_its_strip_under_the_pointe
         let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
         let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
         let by = Vec2::new(middle.map_or(-250.0, |x: f32| x - icon.center().x), 0.0);
-        // The title row's band, clear of the double arrow at the end the window keeps to.
-        let band = Pos2::new(icon.left() + 4.0, window_title().y);
+        let band = strip_band(icon);
         bed.fixture.drag_hold_at(band, by);
         let held = button_rect(&bed, &title(WINDOW)).expect("the icon shows while the window moves");
         assert!((held.left() - (icon.left() + by.x)).abs() <= SLACK, "by {by:?}: the strip follows the pointer: {icon:?}, then {held:?}");
@@ -471,6 +471,64 @@ fn an_icon_floated_in_the_middle_band_lands_collapsed_under_the_pointer() {
     assert!((settled.left() - floated.left()).abs() <= SLACK, "the strip stays: {floated:?}, then {settled:?}");
 }
 
+/// The rect of the collapsed window's layer: the smallest layer around its icon.
+fn strip_window(bed: &Bed) -> Rect {
+    let icon = button_rect(bed, &title(WINDOW)).expect("the collapsed window shows its icon");
+    let layers = layer_rects(bed.fixture.ctx()).into_iter().filter(|rect| rect.contains(icon.center()));
+    layers.min_by(|a, b| a.area().total_cmp(&b.area())).expect("the window's layer holds its icon")
+}
+
+/// A point of a collapsed window's title band: the band's start, clear of the side grip (`size.handle.sm` deep) and
+/// of the double arrow at the end the window keeps to.
+fn strip_band(icon: Rect) -> Pos2 {
+    Pos2::new(icon.left() + 10.0, window_title().y)
+}
+
+/// A collapsed window's sides resize its width, and only its width, as a docked collapsed column's inner edge does:
+/// the column's iconic width follows, names show beside the icons from the docked column's labels width on, the
+/// column stays as tall as its icons, and the expanded rect keeps its size. The width stays across expanding and
+/// collapsing again.
+#[trial]
+fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_columns_step() {
+    let mut bed = bed(collapsed_at(WINDOW_AT), |_| Permissions::ALL);
+    let sizes = IconicSizes::of(bed.fixture.ctx());
+    let height = sizes.icons_height(&bed.workspace.borrow().layout.floating[0].column);
+    let named = |bed: &Bed| bed.fixture.texts().iter().any(|run| run.text == title(WINDOW));
+    let height = height + bed.chrome.get();
+    let strip = strip_window(&bed);
+    assert!(!named(&bed), "a rail-wide strip shows no names");
+    assert!((strip.height() - height).abs() <= SLACK, "the window is as tall as its icons and its chrome: {strip:?}, {height}");
+    assert!((strip.right() - WINDOW_AT.right()).abs() <= SLACK, "the strip keeps to the end edge: {strip:?}");
+    // The start side faces the room; a press just inside it holds the window's grip.
+    let mut side = Pos2::new(strip.left() + 2.0, strip.center().y);
+    for width in [sizes.labels - 10.0, sizes.labels + 20.0] {
+        let by = Vec2::new(strip_window(&bed).width() - width, 0.0);
+        press_and_move(&mut bed.fixture, side, by);
+        bed.fixture.frame(vec![release(side + by)]);
+        bed.fixture.settle();
+        side += by;
+        let window = bed.workspace.borrow().layout.floating[0].clone();
+        let shown = strip_window(&bed);
+        let kept = window.column.iconic_width;
+        assert!(window.column.iconic && kept.is_some_and(|kept| (kept - width).abs() <= SLACK), "{width}: the column keeps the width: {window:?}");
+        assert!((shown.width() - width).abs() <= SLACK, "{width}: the strip shows at it: {shown:?}");
+        assert!((shown.height() - height).abs() <= SLACK, "{width}: the height stays its icons' and its chrome's: {shown:?}");
+        assert!(
+            (window.rect.min - WINDOW_AT.min).length() <= SLACK && window.rect.size() == WINDOW_AT.size(),
+            "{width}: the expanded rect stays: {window:?}"
+        );
+        assert_eq!(named(&bed), width >= sizes.labels, "{width}: names show from the labels width ({}) on", sizes.labels);
+    }
+    let resized = strip_window(&bed);
+    for iconic in [false, true] {
+        bed.workspace.borrow_mut().apply(Action::set_iconic(WINDOW, iconic), false, |_| Permissions::ALL).expect("the column toggles");
+        bed.fixture.settle();
+    }
+    let again = strip_window(&bed);
+    assert!((again.width() - resized.width()).abs() <= SLACK, "collapsed again, the strip keeps its width: {resized:?}, then {again:?}");
+    assert_eq!(bed.workspace.borrow().layout.floating[0].rect, WINDOW_AT, "the expanded rect is unchanged");
+}
+
 /// A floating collapsed column opens its flyouts towards the room of the float area, away from the edge it keeps to.
 #[trial]
 fn a_floating_collapsed_columns_flyout_opens_towards_the_room() {
@@ -496,7 +554,7 @@ fn a_double_click_on_a_floating_windows_band_collapses_and_expands_its_column() 
     assert!(window.column.iconic, "the band's double click collapsed the column: {:?}", bed.actions.borrow());
     assert!(window.groups().iter().all(|group| !group.minimized), "no group minimized");
     let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
-    let band = Pos2::new(icon.left() + 4.0, window_title().y);
+    let band = strip_band(icon);
     bed.fixture.click_at(band).click_at(band).settle();
     assert!(!bed.workspace.borrow().layout.floating[0].column.iconic, "a second double click expanded it: {:?}", bed.actions.borrow());
 }

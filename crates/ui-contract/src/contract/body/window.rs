@@ -51,7 +51,7 @@ impl WindowParts {
 
 /// The band a layer keeps clear at its top for its top grip, so that grip never lies over the header: the grip's
 /// width ([`grip_band`]) on a layer whose header is on a line of its own and whose top grip or a top corner's stands,
-/// or that the user moves: a floating window keeps the band while it cannot be resized (collapsed, minimized), so its
+/// or that the user moves: a floating window keeps the band while it has no top grip (collapsed, minimized), so its
 /// header stays where it was. None elsewhere, nor on a layer whose band moves the window below it. The regions start
 /// below the band, or below the padding where that is deeper. An OS window keeps none: its grips, the platform's or
 /// the app's, lie over its title bar as an OS title bar's resize edge does.

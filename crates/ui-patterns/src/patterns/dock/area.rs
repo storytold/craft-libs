@@ -1281,7 +1281,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// double arrow sits at that end, and its collapsed column shows against that edge of its rect. A move or resize
     /// keeps the edge the window had when it began, so nothing jumps while the window crosses the middle. A collapsed
     /// window's move ends at the edge nearer the strip where it was dropped, with the rect that shows the strip there
-    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. An OS window is measured
+    /// ([`WindowColumn::dropped`]); an expanded window's move leaves its edge to its rect. A collapsed window's sides
+    /// resize its column's width within [`DockSizes::iconic_bounds`] (`Action::ResizeIconic`, as a docked collapsed
+    /// column's inner edge does), and the window keeps its edge and its expanded rect's size. An OS window is measured
     /// where it would sit in the app window ([`native::in_app`]), and the end of each of its moves and resizes records
     /// that rect and edge; its placement keeps its expanded rect while its column is collapsed ([`WindowColumn::kept`]).
     ///
@@ -1342,7 +1344,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let width = scene.sizes.expanded_width(&window.column, &spec_of);
             let shape = if window.column.iconic {
                 let size = Vec2::new(scene.sizes.width(&window.column, &spec_of), IconicSizes::of(&ctx).icons_height(&window.column));
-                WindowColumn::collapsed(edge, size)
+                WindowColumn::collapsed(edge, size, scene.sizes.iconic_bounds(&window.column, &spec_of))
             } else if let Some(content) = self.stepped_height(ui, body, &window.column, width, true) {
                 WindowColumn::fitted(edge, Vec2::new(width, content))
             } else {
@@ -1412,7 +1414,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                         && let Some(change) = output.placed.filter(|change| change.phase == GesturePhase::Commit)
                         && let Some(rect) = native::in_app(&ctx, change.rect)
                     {
-                        let (rect, keeps) = shape.dropped(rect, scene.bounds, scene.rtl);
+                        // A resize of a collapsed window keeps its edge; a move ends where its strip was dropped.
+                        let (rect, keeps) =
+                            if output.collapsed_width.is_some() { (rect, Some(edge)) } else { shape.dropped(rect, scene.bounds, scene.rtl) };
                         kept.edge = keeps.unwrap_or(kept.edge);
                         self.report.actions.push(Action::move_floating_with_edge(anchor.clone(), rect, keeps));
                     }
@@ -1422,7 +1426,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             } else if let Some(mut change) = output.placed {
                 // A collapsed window keeps the edge its move began with until the move ends where its strip was dropped.
                 let mut keeps = shape.collapsed.map(|_| edge);
-                if change.phase == GesturePhase::Commit {
+                if change.phase == GesturePhase::Commit && output.collapsed_width.is_none() {
                     (change.rect, keeps) = shape.dropped(change.rect, scene.bounds, scene.rtl);
                 }
                 // The window keeps the place of its steps; its size is the steps' own, whatever the rect keeps.
@@ -1433,6 +1437,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
                     self.report.events.push(DockEvent::FloatPlaced { panel: anchor.clone(), rect: change.rect });
                 }
                 moved = Some((anchor.clone(), change, keeps));
+            }
+            // The sides of a collapsed window set its column's width, as a docked collapsed column's inner edge does.
+            if let Some(width) = output.collapsed_width {
+                let work = ColumnWork { iconic: None, picked: None, resized: Vec::new(), width: Some(width), flyout: None };
+                self.column_work(&window.column, work);
             }
             // The OS close of a native window arrives here as well, also where the title row offers no Close.
             if output.action == Some(HeaderAction::Close) && rights.iter().all(|rights| rights.closable) {

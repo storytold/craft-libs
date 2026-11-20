@@ -102,7 +102,8 @@ pub struct IconicColumnOutput<P> {
     pub iconic: Option<bool>,
     /// The dock row the user picked in the column menu.
     pub picked: Option<GroupItem>,
-    /// The width the user gave the iconic column on its inner edge this pass.
+    /// The width the user gave a docked iconic column on its inner edge this pass. A floating window's sides set the
+    /// width of the column it holds (`FloatingGroupOutput::collapsed_width`).
     pub width: Option<f32>,
     /// The size the user gave the open flyout, with the top edge's offset from the icons when it moved.
     pub flyout: Option<FlyoutResize<P>>,
@@ -179,8 +180,8 @@ pub struct IconicColumnStyle {
 /// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
 /// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 ///
-/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar: the column shows its
-/// icons under it and keeps the divider of its inner edge, which sets its width, and registers no edge bands.
+/// In a floating window ([`ColumnBar::Window`]) the window's title row is the column's bar and the window's sides set
+/// its width: the column shows its icons under it, with no divider on its inner edge, and registers no edge bands.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(IconicColumn<'static, u8>))]
 pub struct IconicColumn<'a, P: Value + Hash + 'static> {
@@ -309,8 +310,8 @@ impl<'a, P: Value + Hash + Debug + 'static> IconicColumn<'a, P> {
     /// The panels of the column in order, each with its group.
     /// The divider on the column's inner edge: the width runs from the rail to the width the column expands to.
     fn edge_divider(&self, rect: Rect, sizes: &DockSizes) -> Divider {
-        let least = sizes.iconic_least;
-        let most = sizes.expanded_width(self.column, self.spec).max(least).min((self.within.width() - sizes.least_pane).max(rect.width()));
+        let (least, most) = sizes.iconic_bounds(self.column, self.spec);
+        let most = most.min((self.within.width() - sizes.least_pane).max(rect.width()));
         Divider::column_edge(rect, self.edge, (least, most), sizes.reach)
     }
 
@@ -474,7 +475,9 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
                 .drag_cursor(CursorIcon::Grabbing)
                 .pointer_only("Move Panel To in the panel menu moves the group's panels");
         }
-        divider::declare(cx, rect, EDGE, 0, &self.edge_divider(rect, &sizes.column));
+        if self.bar == ColumnBar::Own {
+            divider::declare(cx, rect, EDGE, 0, &self.edge_divider(rect, &sizes.column));
+        }
         self.laid = Some(plan);
     }
 
@@ -509,12 +512,14 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
                 began = true;
             }
         }
-        let edge = self.edge_divider(rect, &sizes.column);
-        if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
-            self.move_edge(rect, &edge, coord);
-        }
-        if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.column.step, sizes.column.jump) {
-            self.move_edge(rect, &edge, coord);
+        if self.bar == ColumnBar::Own {
+            let edge = self.edge_divider(rect, &sizes.column);
+            if let Some(Drag::To(coord)) = divider::pointer(cx, EDGE, 0, &edge) {
+                self.move_edge(rect, &edge, coord);
+            }
+            if let Some((_, coord)) = divider::keys(cx, EDGE, &[(0, edge)], sizes.column.step, sizes.column.jump) {
+                self.move_edge(rect, &edge, coord);
+            }
         }
         let handles: Vec<_> = (0..flat.len()).map(|at| popup.at(at)).collect();
         // A toggle of an icon (click, Enter, Alt+Down) changed a popup this pass: the user chose. Otherwise the
@@ -582,10 +587,13 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             let bar = Rect::from_center_size(strip.center(), Vec2::new(style.grip_length.min(strip.width()), style.grip_thickness));
             ui.draw().fill(&PaintShape::Rect(bar, style.grip_radius), ink);
         }
-        // The edge's line lies on the column's inner edge; its handle stays inside the column.
-        let (rect, edge) = (cx.rect, self.edge_divider(cx.rect, &cx.style.sizes.column));
-        let x = if cx.flow.is_rtl() { rect.right() - (edge.at - rect.left()) } else { edge.at };
-        ui.face(EDGE.at(0), Splitter::new(Axis::X).boundary(x));
+        // The edge's line lies on the column's inner edge; its handle stays inside the column. A floating window's
+        // edges are the window's.
+        if self.bar == ColumnBar::Own {
+            let (rect, edge) = (cx.rect, self.edge_divider(cx.rect, &cx.style.sizes.column));
+            let x = if cx.flow.is_rtl() { rect.right() - (edge.at - rect.left()) } else { edge.at };
+            ui.face(EDGE.at(0), Splitter::new(Axis::X).boundary(x));
+        }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -601,8 +609,8 @@ impl<P: Value + Hash + Debug + 'static> Component for IconicColumn<'_, P> {
             let name = words.move_group.fill(&[("name", (self.spec)(shown).label.as_str())]);
             access.node(GRIP.at(*group as u64), Role::BUTTON).name = Name::Text(name);
         }
-        divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
         if self.bar == ColumnBar::Own {
+            divider::describe(access, EDGE, 0, &self.edge_divider(cx.rect, &sizes.column), words.resize.as_str(), sizes.column.step);
             describe_chevron(access, &ColumnArrow::Collapse.name(&words, false));
         }
     }

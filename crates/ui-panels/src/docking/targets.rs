@@ -129,13 +129,18 @@ impl DockSizes {
         column.width.unwrap_or(self.column).clamp(lo, hi)
     }
 
+    /// The width bounds of a column collapsed to icons, docked or floating: the rail width up to the width it expands
+    /// to. A docked column's inner edge and a floating window's sides resize it within them.
+    pub fn iconic_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
+        (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+    }
+
     /// The bounds [`width`](Self::width) keeps a column in: an expanded column's [`width_bounds`](Self::width_bounds);
-    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's rail width up
-    /// to the width it expands to.
+    /// a stepped one's width at one step up to its width at all its grid's columns; an iconic column's
+    /// [`iconic_bounds`](Self::iconic_bounds).
     pub fn shown_bounds<P>(&self, column: &Column<P>, spec: &dyn Fn(&P) -> PanelSpec) -> (f32, f32) {
         if column.iconic {
-            // Widening an iconic column stops at the width it expands to.
-            (self.iconic_least, self.expanded_width(column, spec).max(self.iconic_least))
+            self.iconic_bounds(column, spec)
         } else if let Some((grid, _)) = stepped(column, spec) {
             (grid.width(1), grid.width(grid.most))
         } else {
