@@ -391,10 +391,14 @@ fn far_edge_drags_in_perspective_stay_near_the_reference() {
     let narrow_top = [p(210.0, 125.0), p(392.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
     let tripled = edge_dragged(narrow_top, 1, p(422.0, 226.0), p(622.0, 226.0));
     assert!(within(&tripled, [(210.0, 14.01), (480.49, 46.41), (817.96, 474.68), (150.0, 437.99)], 1.0), "{:?}", tripled.quad);
+    // Shrunk to under a third, and to a third of a narrower box in the other direction: within 2.5 px.
     let sliver = edge_dragged(narrow_top, 3, p(180.0, 226.0), p(310.0, 226.0));
     let reference = [(310.6, 238.38), (392.0, 197.14), (452.0, 254.86), (310.6, 267.83)];
     let worst = sliver.quad.iter().zip(reference).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
-    assert!(worst < 45.0, "{worst} px off: {:?}", sliver.quad);
+    assert!(worst < 2.5, "{worst} px off: {:?}", sliver.quad);
+    let narrow_bottom = [p(150.0, 125.0), p(452.0, 125.0), p(412.0, 327.0), p(190.0, 327.0)];
+    let shrunk = edge_dragged(narrow_bottom, 1, p(432.0, 226.0), p(282.0, 226.0));
+    assert!(within(&shrunk, [(150.0, 175.17), (280.33, 168.02), (283.04, 262.18), (190.0, 276.83)], 0.5), "{:?}", shrunk.quad);
 }
 
 /// A Perspective corner drag on a turned box (measured on the reference): the corner moves along the box's top edge,
