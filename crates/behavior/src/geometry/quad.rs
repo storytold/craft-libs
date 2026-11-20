@@ -746,10 +746,9 @@ fn turned_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, k
 fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
     let c = g.pivot0;
-    let f = g.quad0.map(|x| (x - c).dot(uh));
     let v = g.quad0.map(|x| (x - c).dot(nh));
     if edge % 2 == 0 {
-        return converging_top_scale(g, p, uh, nh, len, f, v);
+        return converging_top_scale(g, p, uh, nh, len, min_side);
     }
     let [tl, tr, br, bl] = g.quad0;
     let sign = if edge == 1 { 1.0 } else { -1.0 };
@@ -767,37 +766,40 @@ fn converging_side_scale(g: &Gesture, p: Point, min_side: f64, uh: Vec2, nh: Vec
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
-/// An ⌥ top or bottom drag on a box whose top and bottom converge, an approximation of the reference within 5 to 25 px
-/// (the frame scaling was 40 to 240 off): in the top edge's frame about the reference point, the sides turn across
-/// the frame, `k (|top| ± m)` apart (`m` the sides' mean run along the frame, added for the bottom edge and taken off
-/// for the top one); the top and bottom keep their slopes, `k h` apart through the reference point's column, `h` the
-/// box's height there and `k = 1 + 2 d·nh / h`. (The reference turns the top and bottom a little further.)
-fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, f: [f64; 4], v: [f64; 4]) -> Option<BoxState> {
+/// An ⌥ top or bottom drag on a box whose top and bottom converge, within 2 px of the reference for short drags and
+/// 10 px at the longest measured (the frame scaling was 40 to 240 off). The perspective side rule turned on its side,
+/// in the top edge's frame about the reference point: the box scales evenly by `k = 1 + d / r` (`r` the dragged
+/// edge's middle's distance from the reference point across the frame), the opposite edge turns about its middle to
+/// a run of `r + (k - 1)(r - r') / 2` across the frame, the dragged corners keep the place across the frame a plain drag
+/// gives them ([`side_run_scale`]); then the sides turn across the frame, `k (|top| ± m)` apart (`m` the sides' mean
+/// run along the frame, added for the bottom edge and taken off for the top one).
+fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, min_side: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
-    let (top_run, bottom_run) = (f[1] - f[0], f[2] - f[3]);
-    if top_run.abs() <= 1e-9 || bottom_run.abs() <= 1e-9 {
-        return None;
-    }
-    let (top_slope, bottom_slope) = ((v[1] - v[0]) / top_run, (v[2] - v[3]) / bottom_run);
-    let (top_at, bottom_at) = (v[0] - top_slope * f[0], v[3] - bottom_slope * f[3]);
-    let height = bottom_at - top_at;
-    let sign = if edge == 2 { 1.0 } else { -1.0 };
-    let k = 1.0 + 2.0 * sign * (p - g.start).dot(nh) / height;
-    let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
-    if !(height.is_finite() && height > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
-        return None;
-    }
-    let middle = (top_at + bottom_at) / 2.0;
-    let (top, bottom, half) = (middle - k * height / 2.0, middle + k * height / 2.0, width / 2.0);
+    let [tl, tr, br, bl] = g.quad0;
     let c = g.pivot0;
-    let at = |a: f64, b: f64| c + uh * a + nh * b;
-    let quad = [
-        at(-half, top - top_slope * half),
-        at(half, top + top_slope * half),
-        at(half, bottom + bottom_slope * half),
-        at(-half, bottom - bottom_slope * half),
-    ];
-    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
+    let f = g.quad0.map(|x| (x - c).dot(uh));
+    let v = g.quad0.map(|x| (x - c).dot(nh));
+    let sign = if edge == 2 { 1.0 } else { -1.0 };
+    let reach = if edge == 2 { (br.midpoint(bl) - c).dot(nh) } else { (c - tl.midpoint(tr)).dot(nh) };
+    let k = 1.0 + sign * (p - g.start).dot(nh) / reach;
+    let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
+    if !(reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
+        return None;
+    }
+    let mut out = g.quad0.map(|x| c + (x - c) * k);
+    let (top_run, bottom_run) = (v[1] - v[0], v[2] - v[3]);
+    let ([a0, a1], (run, other)) = if edge == 2 { ([0, 1], (top_run, bottom_run)) } else { ([3, 2], (bottom_run, top_run)) };
+    let (middle, along) = (out[a0].midpoint(out[a1]), (out[a1] - out[a0]).dot(uh));
+    let half = (uh * along + nh * (run + (k - 1.0) * (run - other) / 2.0)) / 2.0;
+    (out[a0], out[a1]) = (middle - half, middle + half);
+    let plain = side_run_scale(g, p, min_side)?.quad;
+    for i in if edge == 2 { [2, 3] } else { [0, 1] } {
+        out[i] = c + uh * (out[i] - c).dot(uh) + nh * (plain[i] - c).dot(nh);
+    }
+    for (i, column) in [(0, -width / 2.0), (1, width / 2.0), (2, width / 2.0), (3, -width / 2.0)] {
+        out[i] = c + uh * column + nh * (out[i] - c).dot(nh);
+    }
+    out.iter().all(|x| x.is_finite()).then_some(BoxState { quad: out, pivot: c })
 }
 
 /// An ⌥⇧ drag (free stretch about the reference point) as the reference does it, also on a box in perspective:

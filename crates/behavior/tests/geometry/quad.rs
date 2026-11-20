@@ -519,14 +519,14 @@ fn an_alt_side_drag_on_converging_top_and_bottom_levels_them() {
 }
 
 /// ⌥ top or bottom drags on a box whose top and bottom converge (measured on the reference): the sides turn across
-/// the top edge's frame; the rest is approximate, within 25 px of the reference (the frame scaling was up to 240 off).
+/// the top edge's frame; within 10 px of the reference at the longest drag (the frame scaling was up to 240 off).
 #[test]
 fn an_alt_top_drag_on_converging_top_and_bottom_turns_the_sides_across() {
     let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
     let cases = [
-        (2, (301.0, 307.0), (301.0, 347.0), [(79.84, 67.96), (553.21, 149.57), (530.76, 319.1), (39.5, 372.57)], 12.0),
-        (2, (301.0, 307.0), (301.0, 387.0), [(10.86, 11.87), (632.0, 131.65), (603.26, 348.66), (-44.23, 427.8)], 25.0),
-        (0, (301.0, 145.0), (301.0, 115.0), [(123.76, 82.93), (507.16, 150.79), (485.52, 314.18), (87.54, 356.37)], 10.0),
+        (2, (301.0, 307.0), (301.0, 347.0), [(79.84, 67.96), (553.21, 149.57), (530.76, 319.1), (39.5, 372.57)], 4.5),
+        (2, (301.0, 307.0), (301.0, 387.0), [(10.86, 11.87), (632.0, 131.65), (603.26, 348.66), (-44.23, 427.8)], 10.0),
+        (0, (301.0, 145.0), (301.0, 115.0), [(123.76, 82.93), (507.16, 150.79), (485.52, 314.18), (87.54, 356.37)], 0.5),
     ];
     let alt = Mods { alt: true, ..Mods::NONE };
     for (edge, from, to, want, tol) in cases {
