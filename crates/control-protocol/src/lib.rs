@@ -157,8 +157,13 @@ impl FirstRequestDeadline<'_> {
         })
     }
 
-    /// The peer sent an authenticated request: from now on each read waits at most `idle`.
+    /// The peer sent an authenticated request: from now on each read waits at most `idle`. A
+    /// request admitted after the first-request deadline returns `TimedOut` instead, and the
+    /// deadline stays in place.
     fn admit(&mut self, idle: Option<Duration>) -> std::io::Result<()> {
+        if self.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
         self.deadline = None;
         self.set_timeout(idle)
     }
@@ -342,6 +347,28 @@ mod tests {
         let (result, calls) = server.join().unwrap();
         assert!(result.is_ok());
         assert!(calls.is_empty());
+    }
+    #[test]
+    fn tcp_input_waiting_after_the_deadline_is_not_read() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(b"\n\n").unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert_eq!(input.read(&mut [0; 8]).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(timeout_error.take().is_none());
+    }
+    #[test]
+    fn tcp_request_read_after_the_deadline_is_not_admitted() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert_eq!(input.admit(None).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(input.deadline.is_some());
+        assert!(timeout_error.take().is_none());
     }
     #[test]
     fn tcp_peer_waits_idle_time_after_its_first_request() {
