@@ -296,20 +296,22 @@ fn a_tab_switch_runs_only_its_group() {
     assert_eq!(ran(&fixture), 0, "and they settle at it: {:?}", memo_runs(&fixture));
 }
 
-/// A new label for one panel runs only its group's tab row: the other groups' menus, which name it, are built only
-/// while open.
+/// A new label for one panel runs only its group's tab row, once: the other groups' menus, which name it, are built
+/// only while open.
 #[trial]
 fn a_label_change_runs_only_its_groups_chrome() {
     let MemoDock { mut fixture, labels, .. } = memo_dock(side_by_side(3), None);
     labels.borrow_mut()[4] = "Renamed".to_owned();
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
-    assert!(
-        rows_ran.len() == 2 && rows_ran[0] == rows_ran[1],
-        "only the third group's tab row ran: its real run, then one measuring run in the discard pass's sizing pass: {:?}",
+    assert_eq!(
+        rows_ran.len(),
+        1,
+        "only the third group's tab row ran, once: it measures the new label before it places its tabs: {:?}",
         frame_memo_runs(&fixture)
     );
-    assert_eq!(memo_of(&fixture, "TabRow"), (0, 3), "the last pass replays every tab row: {:?}", memo_runs(&fixture));
+    assert_eq!(fixture.passes(), 1, "the frame runs once");
+    assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "the other tab rows replay: {:?}", memo_runs(&fixture));
     assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
     assert!(fixture.texts().iter().any(|text| text.text == "Renamed"), "the tab shows the new label");
     fixture.idle(SETTLE).frame(Vec::new());
