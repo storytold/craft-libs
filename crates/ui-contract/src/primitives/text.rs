@@ -973,7 +973,12 @@ pub(crate) mod memo_tests {
             Appearance { mode: Mode::Dark, contrast: Contrast::Standard, size: Size::Compact, text_size: TextSize::Small, reduced_motion: false };
         let tokens = UiTokens::new(Arc::new(resolve(&builtins()[0], appearance, None).tokens), Contrast::Standard, Size::Compact);
         let ctx = Context::default();
-        let env = TextEnv { tokens: &tokens, direction: Direction::Ltr, ink: egui::Color32::WHITE, fonts: StackFacts::default() };
+        let env = TextEnv {
+            tokens: &tokens,
+            direction: Direction::Ltr,
+            ink: crate::style::rgba_color(tokens.tokens().color.text.normal),
+            fonts: StackFacts::default(),
+        };
         let run = TextRun::new("cached layout");
         let mut first = None;
         let mut output = ctx.run_pass(Default::default(), |ctx| first = Some(run.layout(ctx, &env, 100.0).galley));
