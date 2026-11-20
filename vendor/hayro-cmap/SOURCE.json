@@ -74,7 +74,7 @@
       "path": "src/bcmap/mod.rs",
       "source_sha256": "38dafbd8fcb5ca6f647d70d02cdb5af532ea7f2a3ac3f7ac8d1dea23abc93058",
       "source_git_blob": "997bc00d85db1504c63cf56e3cb157410ebdb0bb",
-      "sha256": "3d0ea5e34bc92c40a250923ecb71b48571100bba5cc4664ea2c46d51086fe6be"
+      "sha256": "c9a07d146408aefc2dd03df9209721f4e6e576f5d941f2fc5e658af045c6adfe"
     },
     {
       "path": "src/bcmap/reader.rs",
@@ -86,13 +86,13 @@
       "path": "src/lib.rs",
       "source_sha256": "d666b3d8e4d37fc06c299a60ab9748ae17badcea271ff2cf864dcee76e27648c",
       "source_git_blob": "fb42ff37ec9ccece66d33d1888bd25963cbf1171",
-      "sha256": "d6b9c6fa8de00942dd4cdfbd43578d3e53f8a3a6cf1e3563b345a9f6f35bc5e8"
+      "sha256": "9dd76a9c6e50725851f3b50c35264a222c968e253c2f8d37ad5a11b960a1cb02"
     },
     {
       "path": "src/parse.rs",
       "source_sha256": "1999127f05b59bdd55e2a7349dafc0b2213238201da37f7c35cd698996f2dc6b",
       "source_git_blob": "a936209275ffca797912dec052dc03ddb0d2dce4",
-      "sha256": "1999127f05b59bdd55e2a7349dafc0b2213238201da37f7c35cd698996f2dc6b"
+      "sha256": "373b1044800b231d96d40baeb089c5224a9a8ca4925aacfec58b215cd64bea8b"
     }
   ]
 }
