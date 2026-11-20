@@ -93,6 +93,13 @@ pub struct ImeSeen {
     pub reset: Option<egui::ImeResetId>,
     /// Where the candidate window opens.
     pub caret: Rect,
+
+    /// The IME context the output belongs to; it changes with the owner, its epoch, its focus or its purpose.
+    pub generation: u64,
+    /// The bounded committed text around the caret, or `Unavailable`.
+    pub surrounding: egui::output::IMESurroundingText,
+    /// Whether the input method made the change to `surrounding`.
+    pub cause: egui::output::ImeChangeCause,
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
@@ -336,6 +343,9 @@ pub(crate) fn run_frame(
             interrupt: ime.should_interrupt_composition,
             reset: ime.reset_request,
             caret: ime.cursor_rect,
+            generation: ime.context_generation,
+            surrounding: ime.surrounding_text.clone(),
+            cause: ime.change_cause,
         }),
         textures: std::mem::take(&mut output.textures_delta),
         shapes: output.shapes,

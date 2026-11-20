@@ -3,14 +3,57 @@
 
 use craft_theme::{Channel, ColorModel, DefaultOn, HsbModel, LabModel, MAX_CHANNELS, ModelValues, OklchModel, RgbModel, Srgba};
 use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::dialog::stories::hosted;
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, TrackRamp};
 use super::screen_pick::ScreenPickButton;
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor};
-use crate::ui::{AreaMode, ColorPickerDialog, ColorWarning};
-use craft_ui::dialog::stories::hosted;
+use crate::ui::{AreaMode, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerTab, ColorWarning};
+
+type StandardColors = (Vec<(Label, Srgba)>, Vec<(Label, Srgba)>);
+
+/// A colour of full brightness and saturation at `hue` (0 to 1).
+fn hue_color(hue: f32) -> Srgba {
+    let channel = |n: f32| (((hue * 6.0 + n) % 6.0 - 3.0).abs() - 1.0).clamp(0.0, 1.0);
+    Srgba::rgb(channel(5.0), channel(3.0), channel(1.0))
+}
+
+/// The Standard tab's honeycomb of 19 hues and its row of greys.
+fn standard_colors() -> StandardColors {
+    let cells = (0..19).map(|i| (Label::from(format!("Color {}", i + 1)), hue_color(i as f32 / 19.0))).collect();
+    let greys = (0..8)
+        .map(|i| {
+            let level = i as f32 / 7.0;
+            (Label::from(format!("Gray {}", i + 1)), Srgba::rgb(level, level, level))
+        })
+        .collect();
+    (cells, greys)
+}
+
+/// The tabbed dialog on the story's dialog host, opened from a button, on `tab`.
+fn tabbed(ui: &mut Ui, data: &mut StoryData, tab: ColorPickerTab) -> StoryOutput {
+    hosted(ui, data, (), || {
+        let (cells, greys) = standard_colors();
+        ColorPickerDialog::new("story", "Colors", Srgba::rgb(0.2, 0.5, 0.8))
+            .layout(ColorPickerDialogLayout::Tabbed)
+            .standard(cells, greys)
+            .tab(tab)
+            .web_colors_remembered(false)
+    })
+}
+
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_tabbed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    tabbed(ui, data, ColorPickerTab::Standard)
+}
+
+#[story(ColorPickerDialog, covers = [], drive = Drive::Never)]
+fn color_picker_dialog_tabbed_custom(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    tabbed(ui, data, ColorPickerTab::Custom)
+}
 
 /// A naive CMYK in percent, without a working space: a host's model for the stories. A real host converts through its
 /// CMYK profile.

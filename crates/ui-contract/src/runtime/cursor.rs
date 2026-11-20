@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// cap cursors at 256 and fall back to slow software cursors, or reject them, past that.
 const MAX_SIDE_LINUX: u16 = 255;
 /// The largest side elsewhere: winit's limit; AppKit sets none on an `NSCursor` image.
-const MAX_SIDE: u16 = 2048;
+pub(crate) const MAX_SIDE: u16 = 2048;
 
 /// A cursor image in straight (not premultiplied) RGBA, row by row, its hotspot on the centre pixel.
 #[derive(Clone, Debug, PartialEq)]
@@ -101,7 +101,7 @@ pub(crate) fn end_pass(ctx: &Context) {
     let won = PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
         let (won, region) = match pick_index(&state.requests) {
             _ if blocked => (Some(Cursor::System(CursorIcon::NotAllowed)), None),
-            Some(at) => (Some(state.requests[at].0.clone()), state.regions[at]),
+            Some(at) => (state.requests.get(at).map(|(cursor, _)| cursor.clone()), state.regions.get(at).copied().flatten()),
             None => (None, None),
         };
         state.requests.clear();

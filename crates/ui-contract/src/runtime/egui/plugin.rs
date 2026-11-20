@@ -17,16 +17,19 @@ impl Plugin for RuntimePlugin {
         frame::input_hook(ctx, input);
     }
 
-    fn output_hook(&mut self, ctx: &Context, output: &mut FullOutput) {
-        let _ = ctx;
-        crate::runtime::egui::access::drop_dangling_relations(output);
-    }
     fn on_begin_pass(&mut self, ui: &mut Ui) {
         frame::begin_pass(ui);
     }
 
     fn on_end_pass(&mut self, ui: &mut Ui) {
+        crate::runtime::egui::access::note_pass_end(ui.ctx());
         frame::end_pass(ui);
+    }
+
+    fn output_hook(&mut self, ctx: &Context, output: &mut FullOutput) {
+        // Dangling `controls` go first, so the settled tree the testing module reads is the one the platform gets.
+        crate::runtime::egui::access::drop_dangling_relations(output);
+        crate::runtime::egui::access::settle_output(ctx, output);
     }
 }
 

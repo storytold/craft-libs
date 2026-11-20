@@ -1,32 +1,147 @@
-//! The contents of the preferences window: a search field over a page list and the shown page.
+//! `PreferencesPage`: the preferences body without a window, applying each value at once.
 
-use super::model::{PageSpec, PrefValue, PreferencesModel};
+#[cfg(feature = "testing")]
+mod stories;
+
+use super::model::{PageSpec, PreferencesModel};
 use super::rows::{RowsOut, ShownRow, reset_button, show_row};
 use super::search::{self, Listed};
 use super::window::PreferencesState;
 use super::words::PreferencesWords;
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
+    ActivateOn, Bind, CollectionEvent, NoValue, Outcome, Pattern, Props, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    Sizing,
 };
 use crate::display::{Divider, Shade, Text};
 use crate::form::FieldGroup;
 use crate::layout_components::{Row, Stack};
 use crate::list::{List, ListRow, RowInk};
 use crate::notices::{Notice, NoticeLayout};
-use crate::runtime::env::{Label, Units};
+use crate::runtime::env::{Env, Label, Units};
+use crate::runtime::memory::Remember as _;
+use crate::runtime::requests::ColorRequest;
 use crate::sections::Section;
 use crate::style::TypeRole;
 use crate::text::TextField;
-use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange};
+use craft_behavior::{DisplayOrder, EditEvent, ItemSource, Mixed, Selection, SelectionChange};
 use craft_i18n::matcher::Matcher;
 use craft_theme::variant::Tone;
-use egui::Ui;
+use egui::{Response, Ui};
+use std::sync::Arc;
+
+/// A preferences page that applies each value at once, with search and Reset Section. [`PreferencesWindow`] shows its
+/// body through this page, so one page path remains.
+///
+/// - **Pages and search.** The page lists the host's pages that match the search (the empty ones dimmed) and shows
+///   the picked one, or the first listed when the search hides it. Up, Down and Enter in the search field go to the
+///   page list.
+/// - **Edits.** Each edit reaches [`PreferencesModel::set`] in the pass it lands in, and Reset Section reaches
+///   [`PreferencesModel::reset_page`]; the page has no OK, Cancel or Apply of its own.
+/// - **State.** The search, the picked page and the error live in the bound [`PreferencesState`]. A page that has just
+///   appeared starts with no search and no error; an edit or a Reset clears the error.
+///
+/// [`PreferencesWindow`]: super::PreferencesWindow
+#[derive(Pattern, Props)]
+pub struct PreferencesPage<'a> {
+    state: Bind<'a, PreferencesState>,
+}
+
+/// What a [`PreferencesPage`] reports: its response, the colour the host should pick and the page shown.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct PreferencesPageOutput {
+    /// The page's response.
+    pub response: Response,
+    /// A colour row asked for the picker; the host answers through [`PreferencesModel::set_color`].
+    pub pick_color: Option<ColorRequest>,
+    /// The id of the page shown, `None` when the search lists no page.
+    pub page: Option<String>,
+}
+
+impl Outcome for PreferencesPageOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
+/// What the rows of one run ask of the host: the values they edited and whether Reset Section was pressed.
+#[derive(Default)]
+struct BodyOut {
+    rows: RowsOut,
+    reset: bool,
+}
+
+/// What one run of the page's body did: the state it read and the state it leaves, and what the rows asked for.
+struct PageRun {
+    before: PreferencesState,
+    work: PreferencesState,
+    out: BodyOut,
+    page: Option<String>,
+}
+
+impl<'a> PreferencesPage<'a> {
+    /// A page over the host's `state`.
+    pub fn new(state: Bind<'a, PreferencesState>) -> Self {
+        PreferencesPage { state }
+    }
+
+    /// Shows the page for this pass over `host`. The values the rows edit and Reset Section reach the host once, after
+    /// the body's real run, so a measuring run of the body applies nothing.
+    pub fn show<H: PreferencesModel + ?Sized>(self, ui: &mut Ui, host: &mut H) -> PreferencesPageOutput {
+        let PreferencesPage { mut state } = self;
+        let env = Env::of(ui);
+        let words = env.words::<PreferencesWords>();
+        let units = env.units();
+        let title: Arc<str> = words.title.as_str().into();
+        let mut shown = Stack::new().fill().show(ui, |ui, cx| {
+            let before = match state.reborrow().read(cx) {
+                Some(Mixed::Same(held)) => held,
+                _ => PreferencesState::default(),
+            };
+            let mut work = before.clone();
+            if cx.appeared() {
+                work.search.clear();
+                work.error = None;
+            }
+            let matcher = Matcher::new(&env.folder(), work.search.trim());
+            let snap = snapshot(&*host, &matcher, &work.selected);
+            let mut out = BodyOut::default();
+            show_body(ui, &mut *host, &snap, &mut work, &words, &units, &mut out);
+            PageRun { before, work, out, page: snap.shown.map(|page| page.id) }
+        });
+        let pick_color = shown
+            .settle(|cx, run| {
+                let edits = std::mem::take(&mut run.out.rows.edits);
+                if !edits.is_empty() || run.out.reset {
+                    run.work.error = None;
+                }
+                for (key, value) in edits {
+                    host.set(&key, value);
+                }
+                if run.out.reset
+                    && let Some(page) = &run.page
+                {
+                    host.reset_page(page);
+                }
+                if run.work != run.before {
+                    let event = EditEvent::set(Mixed::Same(run.before.clone()), run.work.clone(), title.clone(), None);
+                    let _ = state.reborrow().write(cx, &event);
+                }
+                run.out.rows.pick_color.take()
+            })
+            .flatten();
+        let page = shown.inner.and_then(|run| run.page);
+        PreferencesPageOutput { response: shown.output, pick_color, page }
+    }
+}
 
 /// One entry of the page list.
-pub(super) struct PageEntry {
-    pub id: String,
-    pub title: Label,
-    pub dimmed: bool,
+struct PageEntry {
+    id: String,
+    title: Label,
+    dimmed: bool,
 }
 
 /// A group of the shown page: its title and the rows the search keeps.
@@ -36,8 +151,8 @@ struct ShownGroup {
 }
 
 /// The page to draw, copied from the host's model so that the host can be borrowed again to draw custom rows.
-pub(super) struct ShownPage {
-    pub id: String,
+struct ShownPage {
+    id: String,
     title: Label,
     custom: bool,
     footnote: Option<Label>,
@@ -45,15 +160,15 @@ pub(super) struct ShownPage {
 }
 
 /// What the host's pages look like under the search: the pages to list and the page to show.
-pub(super) struct Snapshot {
-    pub list: Vec<PageEntry>,
-    pub shown: Option<ShownPage>,
-    pub searching: bool,
+struct Snapshot {
+    list: Vec<PageEntry>,
+    shown: Option<ShownPage>,
+    searching: bool,
 }
 
 /// The listed pages of `host` under `matcher`, and the part of the selected page the search keeps (the first listed
 /// page when the search hides the selected one).
-pub(super) fn snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher, selected: &str) -> Snapshot {
+fn snapshot<H: PreferencesModel + ?Sized>(host: &H, matcher: &Matcher, selected: &str) -> Snapshot {
     let pages = host.pages();
     let listed = search::list_pages(&pages, matcher);
     let list = listed
@@ -82,19 +197,6 @@ fn shown_page(matcher: &Matcher, listed: &Listed, page: &PageSpec<'_>) -> ShownP
     }
 }
 
-/// What the body asks of the window: the values the rows edited and whether Reset Section was pressed.
-#[derive(Default)]
-pub(super) struct BodyOut {
-    pub rows: RowsOut,
-    pub reset: bool,
-}
-
-impl BodyOut {
-    pub fn edits(&mut self) -> Vec<(String, PrefValue)> {
-        std::mem::take(&mut self.rows.edits)
-    }
-}
-
 /// The page list's rows: one per listed page, keyed by the page id.
 struct Pages<'a>(&'a [PageEntry]);
 
@@ -115,8 +217,8 @@ impl DisplayOrder<String> for Pages<'_> {
 impl ItemSource<String> for Pages<'_> {}
 
 /// Shows the search field, the page list and the page. `state.search` and `state.selected` change as the user types
-/// and picks.
-pub(super) fn show_body<H: PreferencesModel + ?Sized>(
+/// and picks; the rows' edits and a press of Reset Section go to `out`.
+fn show_body<H: PreferencesModel + ?Sized>(
     ui: &mut Ui,
     host: &mut H,
     snap: &Snapshot,

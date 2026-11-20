@@ -264,6 +264,8 @@ pub struct StoryBody {
 pub struct BodyShown {
     /// Where the story shows in flow: its surface; `None` while the button that opens the story's dialog shows.
     pub flow: Option<Rect>,
+    /// The story's output when the pass ran it for real: not in a sizing pass, nor held back behind its button.
+    pub output: Option<StoryOutput>,
 }
 
 impl StoryBody {
@@ -310,6 +312,8 @@ impl StoryBody {
         let data = &mut state.data;
         // The record of the story's real run, when it is inspected.
         let mut recorded = None;
+        // The story's output of its real run.
+        let mut real = None;
         let surface = host.stack().show(ui, |ui, cx| {
             if !runs {
                 return;
@@ -321,10 +325,11 @@ impl StoryBody {
             if let Some(readout) = &output.readout {
                 Text::new(readout.clone()).shade(Shade::Muted).show(ui);
             }
+            layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
             if !ui.is_sizing_pass() {
                 ran.set(Some(shell.is_some_and(|shell| shell.dialogs_shown() > before)));
+                real = Some(output);
             }
-            layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
         });
         if !runs {
             ui.ctx().request_repaint();
@@ -354,7 +359,7 @@ impl StoryBody {
             // only the measuring run or held the story back has not made them yet.
             state.note_start();
         }
-        BodyShown { flow: Some(surface.output.rect) }
+        BodyShown { flow: Some(surface.output.rect), output: real }
     }
 
     /// The shown value as the story's component words it ([`StoryOutput::value_text`]), as this pass's run of the

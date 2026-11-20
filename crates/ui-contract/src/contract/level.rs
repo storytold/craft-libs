@@ -127,6 +127,8 @@ const LIBRARY: &[(&str, Level)] = &[
     ("shell", Shells),
     ("table", Composites),
     ("tabs", Composites),
+    // The story card of `Draw::face_run`, a paint primitive.
+    ("testing::face_runs", Primitives),
     ("text", Controls),
     ("tile_grid", Composites),
     ("value_drag", Controls),

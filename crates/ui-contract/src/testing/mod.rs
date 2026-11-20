@@ -10,6 +10,7 @@ pub mod access;
 pub mod bypass;
 pub mod contract;
 pub mod dump;
+pub mod face_runs;
 pub mod fixture;
 pub mod focus;
 pub mod frames;

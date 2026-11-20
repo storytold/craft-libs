@@ -665,9 +665,11 @@ fn expand_for_overflow(ui: &mut Ui, at: ShowAt, rect: Rect, overflow: f32, rtl: 
 }
 
 /// What the component senses itself: a disabled one that shows a reason on focus stays a Tab stop and senses nothing else.
+/// One bound to an edit command keeps the focus where it is on a press, so the edit reaches the focused component.
 fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense {
     match (inert, resolved.enabled) {
         (true, _) => Sense::HOVER,
+        (false, true) if resolved.command.is_some_and(|command| command.edit) => e.sense().difference(Sense::TAKE_FOCUS).union(Sense::KEEP_FOCUS),
         (false, true) => e.sense(),
         (false, false) if steps::takes_focus(resolved) => Sense::HOVER | e.comp_sense().intersection(Sense::FOCUS),
         (false, false) => Sense::HOVER,
@@ -680,7 +682,8 @@ fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, me
         let decl = &decl.part;
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
+        let draft = crate::contract::text::draft(memory, id);
+        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));
@@ -1285,7 +1288,8 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
+    let tip_in = tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, canvas_control: facts.canvas_control, message };
+    tooltip::run(e.core_ref(), tip_in);
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;

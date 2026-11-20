@@ -8,6 +8,7 @@ use crate::runtime::egui::sizing::{Rerun, request_discard};
 use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, measure, pass_state, pointer};
 use craft_behavior::PartRef;
+use craft_keymap::CommandRef;
 use egui::{Context, Id, IdMap, IdSet, Rect, Ui};
 use std::sync::Arc;
 
@@ -141,6 +142,16 @@ pub struct Element {
     pub facts: Option<Facts>,
     /// Its place in Tab order within the region, from 1, when keyboard focus reaches it.
     pub stop: Option<usize>,
+    /// The command bound to the control, when it has one.
+    pub command: Option<CommandRef>,
+}
+
+impl Element {
+    /// The id of the access node the element stands for: the component's own id, or the sub-node of its part. A
+    /// member of a collection's run is recorded as such a part of the collection.
+    pub fn node(&self) -> Id {
+        self.part.map_or(self.id, |part| crate::runtime::access::sub_node_id(self.id, part))
+    }
 }
 
 /// A hit area the sensing core registered for a component of the region.
@@ -156,9 +167,11 @@ pub struct HitArea {
 }
 
 /// What an inspected region showed in a pass.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Recorded {
+    /// The region's layer, which the rects of its elements and hit areas are in.
+    pub layer: areas::LayerKey,
     /// The elements in tree order: a component before what it shows, its parts right after it.
     pub elements: Vec<Element>,
     /// The hit areas, in the tree order of their components, a component's from the top start.
@@ -171,6 +184,19 @@ impl Recorded {
         let element = self.elements.get(index)?;
         let hit = self.hits.iter().find(|hit| hit.owner == element.id && hit.part == element.part);
         Some(hit.map_or(element.rect, |hit| hit.rect))
+    }
+
+    /// The stop rect of the element at `index` (as [`Recorded::stop_rect`]) mapped into the layer `target`.
+    ///
+    /// A region on another layer than its reader (a title bar's toolbar read from the ribbon's layer) has rects in
+    /// its own layer's points; this maps them through the screen, so the reader never composes transforms itself.
+    pub fn rect_in(&self, ctx: &Context, index: usize, target: areas::LayerKey) -> Option<Rect> {
+        let rect = self.stop_rect(index)?;
+        if target == self.layer {
+            return Some(rect);
+        }
+        let to_target = areas::layer_to_screen(ctx, target).inverse() * areas::layer_to_screen(ctx, self.layer);
+        Some(to_target * rect)
     }
 }
 
@@ -329,7 +355,8 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
                 let Some(owner) = index.get(&(id, None)).copied() else { continue };
                 let rect = hits.iter().find(|hit| hit.owner == id && hit.part == part).map_or(elements[owner].rect, |hit| hit.rect);
                 let depth = elements[owner].depth + 1;
-                let element = Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None };
+                let element =
+                    Element { id, part, component: elements[owner].component, depth, rect, content: rect, facts: None, stop: None, command: None };
                 let at = owner + 1;
                 elements.insert(at, element);
                 for old in index.values_mut() {
@@ -343,7 +370,7 @@ fn finish(ctx: &Context, open: Open) -> Recorded {
         };
         elements[at].stop = Some(stop + 1);
     }
-    Recorded { elements, hits }
+    Recorded { layer: open.layer, elements, hits }
 }
 
 /// Names each node without a name of its own by the nodes of the region that label it, as a screen reader reads it.
@@ -389,8 +416,17 @@ pub(crate) fn open_element(ui: &Ui, id: Id, component: &'static str) -> bool {
         let Some(open) = log.open.last_mut() else { return false };
         let component = component.rsplit("::").next().unwrap_or(component);
         let component = component.split('<').next().unwrap_or(component);
-        let element =
-            Element { id, part: None, component, depth: open.stack.len(), rect: Rect::NOTHING, content: Rect::NOTHING, facts: None, stop: None };
+        let element = Element {
+            id,
+            part: None,
+            component,
+            depth: open.stack.len(),
+            rect: Rect::NOTHING,
+            content: Rect::NOTHING,
+            facts: None,
+            stop: None,
+            command: None,
+        };
         open.stack.push(open.elements.len());
         open.elements.push((element, layer));
         true
@@ -410,6 +446,17 @@ pub(crate) fn close_element(ctx: &Context, id: Id, rect: Rect, content: Rect) {
     });
 }
 
+/// Notes the command bound to the control `id` in the open region's record; the report step calls it with the
+/// component's resolved command. It does nothing outside a region or for a component whose record is not open.
+pub(crate) fn note_command(ctx: &Context, id: Id, command: Option<CommandRef>) {
+    pass_state::with::<Log, _>(ctx, |log| {
+        let Some(open) = log.open.last_mut() else { return };
+        let Some(at) = open.stack.iter().rposition(|index| open.elements[*index].0.id == id) else { return };
+        let index = open.stack[at];
+        open.elements[index].0.command = command;
+    });
+}
+
 /// Records what the node of the component `id`, or of its part `part` at `rect`, says.
 pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rect, facts: Facts) {
     pass_state::with::<Log, _>(ctx, |log| {
@@ -420,7 +467,17 @@ pub(crate) fn node_facts(ctx: &Context, id: Id, part: Option<PartRef>, rect: Rec
             Some(part) => {
                 let (component, depth) = (owner.0.component, owner.0.depth + 1);
                 open.parts.retain(|element| !(element.id == id && element.part == Some(part)));
-                open.parts.push(Element { id, part: Some(part), component, depth, rect, content: rect, facts: Some(facts), stop: None });
+                open.parts.push(Element {
+                    id,
+                    part: Some(part),
+                    component,
+                    depth,
+                    rect,
+                    content: rect,
+                    facts: Some(facts),
+                    stop: None,
+                    command: None,
+                });
             }
         }
     });

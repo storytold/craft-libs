@@ -51,6 +51,7 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
         Pad::Control => pads.control,
         Pad::Regular => pads.regular,
         Pad::Roomy => pads.roomy,
+        Pad::Page => pads.roomy * 2.5,
         _ => 0.0,
     }
 }
@@ -370,8 +371,9 @@ impl<'b> BodyHooks<'b> {
         let top = inner.min.y + stacked_h;
         // Along an axis the container is not given, its body is offered the room the container was offered and the
         // container takes what the body took.
-        let content_sized = self.sizing(props) == Sizing::Content;
-        let content_y = content_sized || ((self.sizing(props) == Sizing::Fill || !inner.max.y.is_finite()) && !self.given.1);
+        // `content_sized` is the width's rule (`FillHeight` takes its content's width); the height has its own.
+        let content_sized = self.sizing(props).content_width();
+        let content_y = self.sizing(props) == Sizing::Content || ((self.sizing(props).fills_height() || !inner.max.y.is_finite()) && !self.given.1);
         let (bottom, footer_top) = if content_y {
             let body_room = (room.y - stacked_h - across_h).max(0.0);
             // A body that fills records the band it was given, which may predate the footer's measure: the line is
@@ -404,6 +406,11 @@ impl<'b> BodyHooks<'b> {
         } else {
             inner.width()
         };
+        // A measure with no room limit along x offers an unbounded width. Left to right the body runs from its start
+        // edge to +inf as egui allows; right to left its start edge is the right one, and an unbounded width would put
+        // its left edge at -inf and every rect laid out from it at NaN. It is as wide as a scrolling region there, as
+        // the measuring rect is (`measure_run`).
+        let width = if rtl && !width.is_finite() { crate::contract::MAX_EXTENT } else { width };
         let (left, right) = if rtl { (inner.max.x - width, inner.max.x) } else { (inner.min.x, inner.min.x + width) };
         let band = |top: f32, bottom: f32| Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom.max(top)));
         let header_top = inner.min.y + self.rules.above;

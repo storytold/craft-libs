@@ -3,7 +3,7 @@
 
 use super::limits::MAX_TEXTURE;
 use super::loader::{LoadFailure, LoadedPicture, LoaderOptions, Priority, TextureLoader};
-use super::store::{Revision, TextureKey, TextureState, TextureStoreOptions};
+use super::store::{CachedTexture, Revision, TextureKey, TextureState, TextureStoreOptions};
 use crate::primitives::{ContentPainterCx, IconSpec, Surface};
 use crate::runtime::egui::{memory, pass, repaint, textures};
 use crate::style::{Corners, DataColor, SurfaceKind, surface_style};
@@ -361,7 +361,7 @@ impl<K: TextureKey> Thumbnails<K> {
         match state {
             TextureState::Empty => false,
             TextureState::Ready(texture) | TextureState::Loading { stand_in: Some(texture) } => {
-                paint_picture(cx, rect, texture.id, texture.size_vec2(), paint);
+                paint_picture(cx, rect, texture, paint);
                 true
             }
             TextureState::Missing | TextureState::Loading { stand_in: None } => {
@@ -439,10 +439,12 @@ fn thumb_size(frame: PixelSize, longest_side: u32) -> PixelSize {
     PixelSize::new((frame_width * scale).round().max(1.0) as u32, (frame_height * scale).round().max(1.0) as u32)
 }
 
-/// Draws the transparency grid and the picture for `paint.fit`.
-fn paint_picture(cx: &ContentPainterCx<'_>, cell: Rect, texture: egui::TextureId, size: Vec2, paint: &ThumbPaint) {
+/// Draws the transparency grid and the picture for `paint.fit`. The fit's uv is in the picture's own 0..1 square
+/// and is mapped into the picture's part of its texture, so a picture on a shared page shows only itself.
+fn paint_picture(cx: &ContentPainterCx<'_>, cell: Rect, texture: &CachedTexture, paint: &ThumbPaint) {
+    let size = texture.size_vec2();
     let full = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    let (target, uv) = match paint.fit {
+    let (target, fit) = match paint.fit {
         ThumbFit::Contain => (fit_rect(cell, size).round_to_pixels(cx.pixels_per_point()), full),
         ThumbFit::Cover => (cell, cover_uv(cell, size)),
     };
@@ -451,7 +453,13 @@ fn paint_picture(cx: &ContentPainterCx<'_>, cell: Rect, texture: egui::TextureId
     } else if paint.checker {
         cx.checker(target);
     }
-    textures::paint(&cx.painter, texture, target, uv, paint.tint.0, egui::CornerRadius::ZERO);
+    textures::paint(&cx.painter, texture.id, target, within(texture.uv(), fit), paint.tint.0, egui::CornerRadius::ZERO);
+}
+
+/// The part `fit` (fractions of `outer`, 0 to 1) of the uv rect `outer`.
+fn within(outer: Rect, fit: Rect) -> Rect {
+    let at = |t: egui::Pos2| outer.min + vec2(t.x * outer.width(), t.y * outer.height());
+    Rect::from_min_max(at(fit.min), at(fit.max))
 }
 
 /// The part of a picture a `Cover` fit shows in `cell`: centred, cut at the long sides.
@@ -478,7 +486,7 @@ fn paint_placeholder(cx: &ContentPainterCx<'_>, rect: Rect, paper: Option<DataCo
 fn paint_failure(cx: &ContentPainterCx<'_>, rect: Rect) {
     let side = cx.tokens.size.icon.sm.min(rect.width().min(rect.height()));
     let icon = Rect::from_center_size(rect.center(), vec2(side, side));
-    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")));
+    crate::primitives::icon::paint(&cx.painter, cx.tokens, cx.direction, icon, &IconSpec::svg(IconId::new("warning")), false);
 }
 
 /// A [`ThumbSource`] for stories and tests in every crate: pictures made from the key and a revision the test sets,

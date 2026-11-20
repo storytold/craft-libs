@@ -138,6 +138,10 @@ pub struct MotionTokens {
     pub caret: Motion,
     /// A selection outline gliding to its new cells (`motion.outline`).
     pub outline: Motion,
+    /// How far content that a switch brings in (a ribbon's group row on a tab change) travels as it slides into place,
+    /// in whole points (`motion.slide`). Whole points keep the group `Eq` and `Hash`; reduced motion zeroes the time,
+    /// not the distance.
+    pub slide: u32,
     /// The appearance asks for reduced motion: every duration above is zero.
     pub reduced: bool,
 }

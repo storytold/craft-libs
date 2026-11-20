@@ -18,9 +18,7 @@ mod inner {
     impl<S: Simd> mask32x8<S> {
         #[inline(always)]
         pub(crate) fn select(self, if_true: u32x8<S>, if_false: u32x8<S>) -> u32x8<S> {
-            u32x8 {
-                inner: self.inner.select(if_true.inner, if_false.inner),
-            }
+            u32x8 { inner: self.inner.select(if_true.inner, if_false.inner) }
         }
     }
 
@@ -34,16 +32,12 @@ mod inner {
     impl<S: Simd> u32x8<S> {
         #[inline(always)]
         pub(crate) fn from_slice(simd: S, slice: &[u32]) -> Self {
-            Self {
-                inner: fearless_simd::u32x8::from_slice(simd, &slice[..SIMD_WIDTH]),
-            }
+            Self { inner: fearless_simd::u32x8::from_slice(simd, &slice[..SIMD_WIDTH]) }
         }
 
         #[inline(always)]
         pub(crate) fn splat(simd: S, val: u32) -> Self {
-            Self {
-                inner: fearless_simd::u32x8::splat(simd, val),
-            }
+            Self { inner: fearless_simd::u32x8::splat(simd, val) }
         }
 
         #[inline(always)]
@@ -53,9 +47,7 @@ mod inner {
 
         #[inline(always)]
         pub(crate) fn simd_gt(self, other: Self) -> mask32x8<S> {
-            mask32x8 {
-                inner: self.inner.simd_gt(other.inner),
-            }
+            mask32x8 { inner: self.inner.simd_gt(other.inner) }
         }
     }
 
@@ -63,9 +55,7 @@ mod inner {
         type Output = Self;
         #[inline(always)]
         fn bitand(self, rhs: Self) -> Self {
-            Self {
-                inner: self.inner & rhs.inner,
-            }
+            Self { inner: self.inner & rhs.inner }
         }
     }
 
@@ -73,9 +63,7 @@ mod inner {
         type Output = Self;
         #[inline(always)]
         fn bitor(self, rhs: Self) -> Self {
-            Self {
-                inner: self.inner | rhs.inner,
-            }
+            Self { inner: self.inner | rhs.inner }
         }
     }
 
@@ -83,9 +71,7 @@ mod inner {
         type Output = Self;
         #[inline(always)]
         fn bitxor(self, rhs: Self) -> Self {
-            Self {
-                inner: self.inner ^ rhs.inner,
-            }
+            Self { inner: self.inner ^ rhs.inner }
         }
     }
 
@@ -140,16 +126,9 @@ mod inner {
         pub(crate) fn select(self, if_true: u32x8<S>, if_false: u32x8<S>) -> u32x8<S> {
             let mut result = [0u32; SIMD_WIDTH];
             for i in 0..SIMD_WIDTH {
-                result[i] = if self.val[i] {
-                    if_true.val[i]
-                } else {
-                    if_false.val[i]
-                };
+                result[i] = if self.val[i] { if_true.val[i] } else { if_false.val[i] };
             }
-            u32x8 {
-                val: result,
-                _marker: PhantomData,
-            }
+            u32x8 { val: result, _marker: PhantomData }
         }
     }
 
@@ -166,18 +145,12 @@ mod inner {
         pub(crate) fn from_slice(_simd: S, slice: &[u32]) -> Self {
             let mut val = [0u32; SIMD_WIDTH];
             val.copy_from_slice(&slice[..SIMD_WIDTH]);
-            Self {
-                val,
-                _marker: PhantomData,
-            }
+            Self { val, _marker: PhantomData }
         }
 
         #[inline(always)]
         pub(crate) fn splat(_simd: S, val: u32) -> Self {
-            Self {
-                val: [val; SIMD_WIDTH],
-                _marker: PhantomData,
-            }
+            Self { val: [val; SIMD_WIDTH], _marker: PhantomData }
         }
 
         #[inline(always)]
@@ -191,10 +164,7 @@ mod inner {
             for i in 0..SIMD_WIDTH {
                 result[i] = self.val[i] > other.val[i];
             }
-            mask32x8 {
-                val: result,
-                _marker: PhantomData,
-            }
+            mask32x8 { val: result, _marker: PhantomData }
         }
     }
 
@@ -206,10 +176,7 @@ mod inner {
             for i in 0..SIMD_WIDTH {
                 result[i] = self.val[i] & rhs.val[i];
             }
-            Self {
-                val: result,
-                _marker: PhantomData,
-            }
+            Self { val: result, _marker: PhantomData }
         }
     }
 
@@ -221,10 +188,7 @@ mod inner {
             for i in 0..SIMD_WIDTH {
                 result[i] = self.val[i] | rhs.val[i];
             }
-            Self {
-                val: result,
-                _marker: PhantomData,
-            }
+            Self { val: result, _marker: PhantomData }
         }
     }
 
@@ -236,10 +200,7 @@ mod inner {
             for i in 0..SIMD_WIDTH {
                 result[i] = self.val[i] ^ rhs.val[i];
             }
-            Self {
-                val: result,
-                _marker: PhantomData,
-            }
+            Self { val: result, _marker: PhantomData }
         }
     }
 

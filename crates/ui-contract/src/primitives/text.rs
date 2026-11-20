@@ -299,6 +299,9 @@ impl TextRun<'_> {
             if span.underline {
                 format.underline = egui::Stroke::new(env.tokens.stroke.thin, color);
             }
+            if let Some(tone) = span.flag {
+                format.underline = egui::Stroke::new(env.tokens.stroke.thin, to_color(tone.ink(env.tokens)));
+            }
             job.append(text_part, 0.0, format);
         }
         job
@@ -520,6 +523,12 @@ impl TextLayout {
     /// The galley size.
     pub fn size(&self) -> egui::Vec2 {
         self.galley.size()
+    }
+
+    /// Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
+    /// an input method's cursor inside its composition. Past the end, the end of the text.
+    pub fn char_x(&self, chars: usize) -> f32 {
+        self.galley.pos_from_cursor(egui::text::CCursor::new(chars)).min.x
     }
 }
 

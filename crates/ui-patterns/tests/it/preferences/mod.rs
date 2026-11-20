@@ -2,4 +2,5 @@
 //! window's answers and the hex codec.
 
 mod model;
+mod page;
 mod path_setting;

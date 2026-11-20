@@ -107,7 +107,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             _ => ColumnLayout::default(),
         });
         self.column_layout_at_read = bound.clone();
-        self.header.read(stage, id, comp.items(), bound);
+        let hosted: Vec<_> = comp.items().columns.iter().map(|spec| spec.key.clone()).filter(|key| comp.hosts_header(key)).collect();
+        self.header.read(stage, id, comp.items(), bound, hosted);
         self.drags = stage.session::<Drags<C::Key>>(sub(id, "drags")).clone();
         self.lead = stage.session::<Lead<C::Key>>(sub(id, "lead")).clone();
         // A collection in a layer starts from `lead_on_open` at every opening of the layer, not only the first.
@@ -178,9 +179,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
+        let env = Env::of(ui);
+        // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
+        // its room until its exit ends.
+        let scx = &scx.measured_by(ui).owned_by(id, env.motion);
         self.room = room;
         self.indent_step = scx.control().icon;
-        let env = Env::of(ui);
         let room = Self::inner_room(comp, scx.tokens, room);
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
@@ -212,7 +216,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
                 // the widest row it would get.
                 let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
-                widest.max(columns).max(comp.ideal_width(item, scx)).max(floor).min(room.x)
+                widest.max(columns).max(comp.ideal_width(item, self.source.len(), scx)).max(floor).min(room.x)
             }
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
@@ -257,7 +261,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         match comp.props(Internal::new()).sizing {
             // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
             // collection's do: the body has no room of its own to hand it.
-            Sizing::Fill => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
+            Sizing::Fill | Sizing::FillHeight => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
             Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
         }
     }
@@ -275,8 +279,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
-            (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
-            (true, Sizing::Fill) => size.y.min(self.room.y),
+            (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
+            (true, Sizing::Fill | Sizing::FillHeight) => size.y.min(self.room.y),
             (true, Sizing::Content | Sizing::FillWidth) => size.y.min(self.room.y),
             (false, _) => size.y,
         };
@@ -452,7 +456,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        self.header.paint(ui, cx, env, id, rtl);
+        self.header.paint(ui, cx, comp, env, id, rtl);
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);
@@ -638,7 +642,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         row = self.screen(&layout, rect, at, offset, rtl);
                     }
                 }
-                shown_rows.push(ShownRow::new(key.clone(), row, shown_cells.clone()));
+                // A member has no node of its own: it reports as a sub-node of the collection's.
+                let row_node = if C::MEMBERS { super::members::lead_node(id, &key) } else { item_id };
+                shown_rows.push(ShownRow::new(key.clone(), row_node, row, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
                     debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
                     let shown = shown_rows.len() - 1;
