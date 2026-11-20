@@ -23,7 +23,18 @@ use crate::{Cue, Document, Error, Result, parse_clock};
 pub(crate) fn is_header(head: &str) -> bool {
     let mut lines = head.lines().map(str::trim).filter(|l| !l.is_empty());
     match lines.next() {
-        Some("[INFORMATION]") => lines.any(|l| l == "[SUBTITLE]" || l == "[END INFORMATION]" || (l.starts_with('[') && l.ends_with(']'))),
+        Some("[INFORMATION]") => lines.any(|l| {
+            l == "[SUBTITLE]"
+                || l == "[END INFORMATION]"
+                || l.starts_with("[TITLE")
+                || l.starts_with("[AUTHOR")
+                || l.starts_with("[SOURCE")
+                || l.starts_with("[FILEPATH")
+                || l.starts_with("[DELAY")
+                || l.starts_with("[CD TRACK")
+                || l.starts_with("[COMMENT")
+                || (l.starts_with('[') && l.contains(']'))
+        }),
         Some("[SUBTITLE]") => true,
         _ => false,
     }

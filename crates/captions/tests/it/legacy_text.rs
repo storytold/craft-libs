@@ -174,6 +174,9 @@ fn detection_finds_each_format() {
     assert_eq!(detect(b"1\n00:00:01,000 --> 00:00:02,000\n[INFORMATION] about movie\n", None), Some(Format::Srt));
     // Genuine SubViewer with only [SUBTITLE] header
     assert_eq!(detect(b"[SUBTITLE]\n00:00:01.00,00:00:02.00\nText\n", None), Some(Format::SubViewer));
+    // Genuine SubViewer with long/truncated [TITLE] line
+    let truncated_sv = format!("[INFORMATION]\n[TITLE]{}", "A".repeat(5000));
+    assert_eq!(detect(truncated_sv.as_bytes(), None), Some(Format::SubViewer));
     assert_eq!(detect(b"just some prose\n", Some("txt")), None);
 }
 
