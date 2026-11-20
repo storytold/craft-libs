@@ -240,4 +240,24 @@ mod tests {
             assert_eq!(xy_to_temp_tint(p), (6500.0, 0.0), "{p:?}");
         }
     }
+
+    /// Pins the current behavior for warm, strongly green illuminants (e.g. 2000–3500 K with high
+    /// positive tint) where the source white's Bradford blue cone response is `<= 0.0`. The
+    /// checked Bradford path currently returns `Mat3::IDENTITY` there (so `wb_matrix` is
+    /// `REC2020.from_xyz() * REC2020.to_xyz()`, i.e. identity within `f64` rounding) rather than
+    /// inverting blue; final `#587` process-version policy for this region remains open.
+    #[test]
+    fn warm_green_wb_with_non_positive_cone_response_returns_identity() {
+        for (t, tint) in [(2000.0, 30.0), (2500.0, 60.0), (3000.0, 100.0), (3500.0, 125.0)] {
+            let src = temp_tint_to_xy(t, tint);
+            assert_eq!(crate::bradford(src, REC2020.white), Mat3::IDENTITY, "{t} K tint {tint}");
+            let m = wb_matrix(&REC2020, src);
+            for (i, row) in m.0.iter().enumerate() {
+                for (j, &val) in row.iter().enumerate() {
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!((val - want).abs() < 1e-12, "{t} K tint {tint} [{i}][{j}] = {val}");
+                }
+            }
+        }
+    }
 }
