@@ -10,6 +10,48 @@ use egui::vec2;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+struct RecordedPages {
+    pages: DemoPages,
+    sides: Rc<RefCell<Vec<u32>>>,
+}
+
+impl craft_ui::primitives::textures::ThumbSource<usize> for RecordedPages {
+    fn revision(&self, key: &usize, request: &craft_ui::primitives::textures::ThumbRequest) -> craft_ui::primitives::textures::Revision {
+        self.pages.revision(key, request)
+    }
+
+    fn render(&self, key: &usize, request: &craft_ui::primitives::textures::ThumbRequest) -> craft_ui::primitives::textures::ThumbRender {
+        self.sides.borrow_mut().push(request.side);
+        self.pages.render(key, request)
+    }
+}
+
+impl craft_pages::ui::PageSource for RecordedPages {
+    fn page_count(&self) -> usize {
+        self.pages.page_count()
+    }
+
+    fn page_size(&self, page: usize) -> craft_behavior::kurbo::Size {
+        self.pages.page_size(page)
+    }
+}
+
+#[trial]
+fn zoomed_grid_requests_a_picture_at_the_drawn_size() {
+    let sides = Rc::new(RefCell::new(Vec::new()));
+    let pages = RecordedPages { pages: DemoPages::new(1), sides: Rc::clone(&sides) };
+    let mut picked = Selection::default();
+    let mut zoom = 3.0;
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).arrangement(ThumbnailArrangement::Organize).size(&mut zoom).show(ui);
+    });
+    fixture.room(vec2(16000.0, 12000.0));
+    fixture.ctx().set_pixels_per_point(16.0);
+    fixture.settle();
+    let side = sides.borrow().iter().copied().max().expect("render requested") as f32;
+    assert!(side > craft_ui::primitives::textures::ThumbnailOptions::new().max_side as f32, "the zoomed page requested only {side} pixels");
+}
+
 /// A click on the New Slide row asks for a new page and goes to no page.
 #[trial]
 fn the_new_slide_row_asks_for_a_new_page() {
@@ -127,6 +169,26 @@ fn delete_over_unfocused_thumbnails_uses_the_current_page_when_unpicked() {
     let at = tile(&fixture, 2);
     fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Delete, egui::Modifiers::NONE).settle();
     assert!(events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])), "Delete reaches the current page");
+}
+
+#[trial]
+fn strip_drag_inserts_after_the_lower_half_of_a_page() {
+    let events: Rc<RefCell<Vec<ThumbnailEvent>>> = Rc::default();
+    let seen = Rc::clone(&events);
+    let pages = DemoPages::new(4);
+    let mut picked = Selection::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).show(ui);
+        seen.borrow_mut().extend(out.events);
+    });
+    fixture.room(vec2(220.0, 800.0));
+    fixture.settle();
+    let from = tile(&fixture, 1);
+    let rect = fixture.by_label("Page 3").expect("third page").rect;
+    let to = egui::pos2(rect.left() + rect.width() * 0.25, rect.top() + rect.height() * 0.75);
+    fixture.drag_at(from, to - from).settle();
+    let events = events.borrow();
+    assert!(events.iter().any(|event| matches!(event, ThumbnailEvent::Reorder(craft_behavior::EditEvent::Set { after, .. } | craft_behavior::EditEvent::Commit { after, .. }) if after.to == 2)), "{events:?}");
 }
 
 /// A drag the host ends with `cancel_press` (its pages changed under it) lands nothing on its release, and the next

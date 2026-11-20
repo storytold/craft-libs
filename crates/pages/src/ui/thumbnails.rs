@@ -30,7 +30,7 @@ use craft_ui::contract::{
     ReorderMove, ReorderRule, Show as _, ShowCollection as _,
 };
 use craft_ui::list::{ThumbAspect, ToggleState};
-use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails};
+use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
 use craft_ui::runtime::commands::CommandRef;
 use craft_ui::runtime::drag::OsFile;
 use craft_ui::runtime::env::{Env, Label};
@@ -493,7 +493,7 @@ impl<'a> PageThumbnails<'a> {
             }
         }
         let ctx = ui.ctx().clone();
-        let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new());
+        let thumbnails = Thumbnails::<usize>::in_context(&ctx, "page-thumbnails", ThumbnailOptions::new().max_side(texture_side(&ctx)));
         let shown = grid.show_items(ui, &tiles, &mut |&page, _| {
             let page_label = source.page_label(page);
             let page_marks = marks.map(|marks| marks(page)).unwrap_or_default();

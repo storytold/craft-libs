@@ -405,7 +405,11 @@ fn os_files(ctx: &Context) {
                 let hovered = session.payload.downcast_ref::<OsFiles>();
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
-                if positioned || window_winner {
+                if positioned {
+                    // Resolve targets at the drop position before any previously winning window target can take it.
+                    session.dropped = Some(frame.saturating_add(1));
+                    repaint = true;
+                } else if window_winner {
                     session.dropped = Some(frame);
                 } else {
                     session.waiting_for_pointer = true;
