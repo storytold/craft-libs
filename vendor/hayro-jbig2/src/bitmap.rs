@@ -26,11 +26,14 @@ pub(crate) const MAX_PIXELS: u64 = 1 << 28;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     max_pixels: u64,
+    /// PdfCraft patch (19): the most pixels the page bitmap may have (see
+    /// [`Limits::with_max_page_pixels`]), at least `max_pixels`.
+    max_page_pixels: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_pixels: MAX_PIXELS }
+        Self::with_max_pixels(MAX_PIXELS)
     }
 }
 
@@ -38,12 +41,31 @@ impl Limits {
     /// The limits for a caller that allows `max_pixels` pixels in one bitmap. Each side of a
     /// bitmap is still at most 65535.
     pub fn with_max_pixels(max_pixels: u64) -> Self {
-        Self { max_pixels }
+        Self { max_pixels, max_page_pixels: max_pixels }
     }
 
-    /// The most pixels one bitmap (the page, a region, a symbol) may have.
+    /// PdfCraft patch (19): these limits, with the page bitmap allowed up to `max_page_pixels`
+    /// pixels (never fewer than [`Limits::max_pixels`]), for a caller that reads the page at a
+    /// reduced size, packing or averaging what its [`crate::Decoder`] is given rather than holding
+    /// a byte a pixel. Only the page bitmap is held to this: every other bitmap, a region decoded
+    /// apart from the page included, keeps [`Limits::max_pixels`], and so do the decoding work and
+    /// the words the page's segments may hold. So such a page draws when its regions decode
+    /// straight into it, as a single region covering a blank page does (a scanned newspaper page
+    /// at 1,200 dpi, 19,467 × 25,517), and the work still bounds it: at twice `max_pixels`,
+    /// reading the page out once and decoding its pixels once take about the work it has.
+    pub fn with_max_page_pixels(self, max_page_pixels: u64) -> Self {
+        Self { max_page_pixels: max_page_pixels.max(self.max_pixels), ..self }
+    }
+
+    /// The most pixels one bitmap (a region, a symbol, and the page unless
+    /// [`Limits::with_max_page_pixels`] says otherwise) may have.
     pub fn max_pixels(&self) -> u64 {
         self.max_pixels
+    }
+
+    /// PdfCraft patch (19): the most pixels the page bitmap may have.
+    pub fn max_page_pixels(&self) -> u64 {
+        self.max_page_pixels
     }
 
     /// The decoding work one image may ask for (see [`MAX_WORK`]). It is at least the most work
@@ -505,6 +527,18 @@ mod pdfcraft_limit_tests {
         assert_eq!(raised.work(), 4 << 30);
         assert_eq!(raised.grid_cells(), 1 << 27);
         assert_eq!(Limits::with_max_pixels(u64::MAX).work(), u64::MAX);
+    }
+
+    /// PdfCraft patch (19): a page read at a reduced size may have more pixels than the other
+    /// bitmaps; nothing else follows that bound, and it is never below theirs.
+    #[test]
+    fn a_page_bound_raises_the_page_alone() {
+        let default = Limits::default();
+        assert_eq!(default.max_page_pixels(), MAX_PIXELS);
+        let reduced = default.with_max_page_pixels(1 << 29);
+        assert_eq!((reduced.max_pixels(), reduced.max_page_pixels()), (MAX_PIXELS, 1 << 29));
+        assert_eq!((reduced.work(), reduced.grid_cells()), (default.work(), default.grid_cells()));
+        assert_eq!(default.with_max_page_pixels(1).max_page_pixels(), MAX_PIXELS, "never below the bitmaps' bound");
     }
 
     /// Craft patch: a limit below eight pixels still allows a halftone grid of one cell, and the

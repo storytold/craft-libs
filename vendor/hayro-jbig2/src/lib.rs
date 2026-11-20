@@ -190,7 +190,8 @@ impl<'a> Image<'a> {
         if page_info.width == 0 || height == 0 {
             bail!(FormatError::EmptyPage);
         }
-        bitmap::check_page_size(page_info.width, height, limits.max_pixels())?;
+        // PdfCraft patch (19): the page's own bound (see `Limits::with_max_page_pixels`).
+        bitmap::check_page_size(page_info.width, height, limits.max_page_pixels())?;
 
         Ok(Self {
             segments,
@@ -861,7 +862,8 @@ fn init_page(
     // "Bit 2: Page default pixel value. This bit contains the initial value
     // for every pixel in the page, before any region segments are decoded
     // or drawn." (7.4.8.5)
-    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0, limits.max_pixels())?;
+    // PdfCraft patch (19): the page's own bound (see `Limits::with_max_page_pixels`).
+    bitmap.reinitialize(page_info.width, height, page_info.flags.default_pixel != 0, limits.max_page_pixels())?;
 
     page.reset(page_info, limits);
 
@@ -892,6 +894,53 @@ mod tests {
         assert!(Image::new_embedded_with_limits(&stream(32768, 16384), None, Limits::default()).is_err());
         assert!(Image::new_embedded_with_limits(&stream(32768, 16384), None, raised).is_ok());
         assert!(Image::new_embedded_with_limits(&stream(65536, 1), None, raised).is_err(), "a side is still at most 65535");
+    }
+
+    /// PdfCraft patch (19): a caller that reads the page reduced may open a page past the bound on
+    /// a bitmap, up to its page bound (2^29 here), and no more; every other caller is held to the
+    /// bound on a bitmap as before.
+    #[test]
+    fn a_page_read_reduced_may_pass_the_bound_on_a_bitmap() {
+        let stream = |width: u32, height: u32| {
+            let mut stream = vec![0, 0, 0, 0, 48, 0, 1, 0, 0, 0, 19];
+            stream.extend_from_slice(&width.to_be_bytes());
+            stream.extend_from_slice(&height.to_be_bytes());
+            stream.extend_from_slice(&[0; 11]); // resolution, flags, striping
+            stream
+        };
+        let reduced = Limits::default().with_max_page_pixels(1 << 29);
+        let opens = |width, height, limits| Image::new_embedded_with_limits(&stream(width, height), None, limits).is_ok();
+        assert!(opens(32768, 16384, reduced), "2^29 pixels");
+        assert!(!opens(32768, 16384, Limits::default()), "past 2^28 for a full-size read");
+        assert!(!opens(32768, 16385, reduced), "past 2^29");
+        assert!(!opens(65536, 1, reduced), "too wide still");
+    }
+
+    /// PdfCraft patch (19): only the page may pass the bound on a bitmap. A 9 × 8 generic region
+    /// on an 8 × 8 page, decoded into a bitmap of its own, is refused within a bitmap bound of 64
+    /// pixels however large the page may be; a region the size of the page decodes straight into it.
+    #[test]
+    fn a_region_keeps_the_bound_on_a_bitmap_when_the_page_passes_it() {
+        let region = |width: u32| {
+            let mut region: Vec<u8> = [width, 8, 0, 0].iter().flat_map(|v| v.to_be_bytes()).collect();
+            region.push(OR);
+            region.extend_from_slice(GENERIC);
+            region.extend_from_slice(&[0x5a; 16]);
+            [page_of_8(), segment(1, 38, &[], &region)].concat()
+        };
+        struct Ignore;
+        impl Decoder for Ignore {
+            fn push_pixel(&mut self, _: bool) {}
+            fn push_pixel_chunk(&mut self, _: bool, _: u32) {}
+            fn next_line(&mut self) {}
+        }
+        let decoded = |stream: &[u8], limits: Limits| {
+            let mut ignore = Ignore;
+            Image::new_embedded_with_limits(stream, None, limits).and_then(|image| image.decode(&mut ignore))
+        };
+        let small = Limits::with_max_pixels(64).with_max_page_pixels(1 << 29);
+        assert_eq!(decoded(&region(9), small), Err(OverflowError::BitmapLimit.into()), "a region decoded apart");
+        assert_eq!(decoded(&region(8), small), Ok(()), "a region decoded into the page");
     }
 
     /// Craft patch: the page and its regions follow the image's limits. A 9 × 8 generic region on an
