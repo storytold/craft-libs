@@ -296,6 +296,16 @@ impl Decoder {
         self.draft = on;
     }
 
+    #[cfg(test)]
+    pub(crate) fn draft(&self) -> bool {
+        self.draft
+    }
+
+    #[cfg(test)]
+    pub(crate) fn threads(&self) -> usize {
+        self.threads
+    }
+
     pub fn take_error(&mut self) -> Option<Error> {
         self.shared.error.lock().ok().and_then(|mut e| e.take())
     }

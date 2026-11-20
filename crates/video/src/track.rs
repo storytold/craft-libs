@@ -175,7 +175,18 @@ impl TrackDecoder {
             Inner::Vp9(dec) => dec.set_draft(on),
             #[cfg(feature = "av1-decode")]
             Inner::Av1 { dec, .. } => dec.set_draft(on),
-            _ => {}
+            #[cfg(feature = "mpeg2-decode")]
+            Inner::Mpeg2(_) => {}
+            #[cfg(feature = "prores")]
+            Inner::ProRes => {}
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => {}
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => {}
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => {}
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(_) => {}
         }
     }
 
