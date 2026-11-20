@@ -40,7 +40,7 @@
 //! `include_str!` on its path as given, so `CRAFT_I18N_DIR` must be absolute and is never
 //! canonicalized (on Windows that gives `\\?\C:\…`, which `include_str!` can't read).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::io;
@@ -115,7 +115,7 @@ impl Catalogs {
     /// in its repository. A locale here is offered even when the checkout lacks it. When the
     /// checkout has the same locale's app catalog too, the two are merged into one file under
     /// `OUT_DIR`: the rows here, then the checkout's rows whose context and source text are not
-    /// defined here; comments and blank lines are left out. A relative `dir` is under the package
+    /// defined here by a row craft-i18n accepts; comments and blank lines are left out. A relative `dir` is under the package
     /// directory. Unlike the checkout, a catalog here that can't be read is always an [`Error`].
     pub fn app_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.app_dir = Some(dir.into());
@@ -258,12 +258,11 @@ fn region_parent(code: &str) -> Option<&str> {
     is_region.then_some(parent)
 }
 
-/// The rows of `ours`, then every row of `theirs` whose context and source text `ours` doesn't
-/// define. Comments and blank lines are left out. The columns are compared as written: each text
-/// has one spelling in the catalog format, whose only escapes are `\n`, `\t` and `\\`. A row of
-/// `ours` without three columns or with an empty source text or translation defines nothing, so
-/// it can't hide the checkout's row; craft-i18n skips and reports it, as it does any other row it
-/// rejects.
+/// The rows of `ours`, then every row of `theirs` whose context and source text `ours` defines
+/// with a row craft-i18n accepts. Comments and blank lines are left out. The columns are compared
+/// as written: each text has one spelling in the catalog format, whose only escapes are `\n`, `\t`
+/// and `\\`. A row of `ours` that craft-i18n's parser (`crates/i18n/src/catalog.rs`) skips defines
+/// nothing, so the checkout's row stays and the app's row is skipped and reported at run time.
 fn merge(ours: &str, theirs: &str) -> String {
     fn rows(text: &str) -> impl Iterator<Item = &str> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -273,19 +272,86 @@ fn merge(ours: &str, theirs: &str) -> String {
         let mut columns = line.splitn(3, '\t');
         Some((columns.next()?, columns.next()?))
     }
-    fn defines(line: &str) -> Option<(&str, &str)> {
-        match line.split('\t').collect::<Vec<_>>().as_slice() {
-            [context, source, translation] if !source.is_empty() && !translation.is_empty() => Some((*context, *source)),
-            _ => None,
-        }
-    }
-    let defined: HashSet<(&str, &str)> = rows(ours).filter_map(defines).collect();
+    let defined: HashMap<(&str, &str), Option<usize>> = rows(ours).filter_map(accepted).collect();
+    let hidden = |line: &&str| {
+        key(line).is_some_and(|k| {
+            defined.get(&k).is_some_and(|ours| {
+                // The build doesn't know a locale's plural forms; the checkout's row has the right
+                // count, so an `@plural` row of `ours` with another count is one craft-i18n skips.
+                ours.is_none() || *ours == line.rsplit_once('\t').and_then(|(_, translation)| plural_forms(k.0, translation))
+            })
+        })
+    };
     let mut out = String::new();
-    for line in rows(ours).chain(rows(theirs).filter(|l| key(l).is_none_or(|k| !defined.contains(&k)))) {
+    for line in rows(ours).chain(rows(theirs).filter(|l| !hidden(l))) {
         out.push_str(line);
         out.push('\n');
     }
     out
+}
+
+/// The context and source text of `line` as written, with the number of plural forms of an
+/// `@plural` row, when craft-i18n's parser (`crates/i18n/src/catalog.rs`) accepts the row: three
+/// columns, no invisible character, valid escapes, a source text and a translation, and the checks
+/// of its context. The plural form count is left to the caller, which knows no locale's rules.
+fn accepted(line: &str) -> Option<((&str, &str), Option<usize>)> {
+    fn escapes_valid(text: &str) -> bool {
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' && !matches!(chars.next(), Some('n' | 't' | '\\')) {
+                return false;
+            }
+        }
+        true
+    }
+    /// `{name}` placeholders, sorted, as craft-i18n compares them.
+    fn placeholders(text: &str) -> Vec<&str> {
+        let mut names = Vec::new();
+        let mut rest = text;
+        while let Some((_, after)) = rest.split_once('{') {
+            let Some((name, after)) = after.split_once('}') else {
+                break;
+            };
+            names.push(name);
+            rest = after;
+        }
+        names.sort_unstable();
+        names
+    }
+    let [context, source, translation] = line.split('\t').collect::<Vec<_>>()[..] else {
+        return None;
+    };
+    if line.chars().any(|c| c != '\t' && (c.is_control() || c == '\u{feff}')) {
+        return None;
+    }
+    if ![context, source, translation].into_iter().all(escapes_valid) || source.is_empty() || translation.is_empty() {
+        return None;
+    }
+    // Escapes never produce `{`, `}` or `…`, so the checks below read the columns as written.
+    let valid = match context {
+        "@id" => true,
+        "@plural" => {
+            let english: Vec<&str> = source.split('|').collect();
+            let translated: Vec<&str> = translation.split('|').collect();
+            match english[..] {
+                [one, other] => {
+                    !one.is_empty()
+                        && !other.is_empty()
+                        && placeholders(one) == placeholders(other)
+                        && translated.iter().all(|f| !f.is_empty() && placeholders(f) == placeholders(other))
+                }
+                _ => false,
+            }
+        }
+        c if c.starts_with('@') && c != "@msg" => false,
+        _ => placeholders(source) == placeholders(translation) && source.ends_with('…') == translation.ends_with('…'),
+    };
+    valid.then(|| ((context, source), plural_forms(context, translation)))
+}
+
+/// The number of plural forms of an `@plural` row's translation, `None` for other rows.
+fn plural_forms(context: &str, translation: &str) -> Option<usize> {
+    (context == "@plural").then(|| translation.split('|').count())
 }
 
 /// The locale folders of `locales`, by lowercase code, without `en` (the source text), `pseudo`
@@ -296,14 +362,20 @@ fn locale_dirs(locales: &Path, cargo: &mut Vec<String>) -> Result<BTreeMap<Strin
     for entry in entries {
         let entry = entry.map_err(|source| Error::Read { path: locales.to_path_buf(), source })?;
         let path = entry.path();
-        if !path.is_dir() {
+        if entry.file_name().as_encoded_bytes().starts_with(b".") {
             continue;
+        }
+        // `Path::is_dir` reads an error as "not a folder", which would drop a locale unreported.
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(source) => return Err(Error::Read { path, source }),
         }
         let Some(code) = entry.file_name().to_str().map(str::to_ascii_lowercase) else {
             cargo.push(format!("cargo::warning=craft-i18n: {} is not a UTF-8 name and is not embedded", path.display()).replace(['\n', '\r'], " "));
             continue;
         };
-        if code == "en" || code == "pseudo" || code.starts_with('.') {
+        if code == "en" || code == "pseudo" {
             continue;
         }
         if dirs.insert(code.clone(), path).is_some() {
@@ -464,7 +536,12 @@ impl fmt::Display for Error {
             }
             Self::AppName { app } => write!(f, "{app:?} is not a catalog name: use lowercase letters, digits and -"),
             Self::NotAbsolute { path } => write!(f, "{DIR_VAR} must be an absolute path, not {}", path.display()),
-            Self::NoLocales { path } => write!(f, "{} has no locales/ folder: {DIR_VAR} must name a storytold/craft-i18n checkout", path.display()),
+            Self::NoLocales { path } => write!(
+                f,
+                "{} has no locales/ folder: {DIR_VAR} must name a storytold/craft-i18n checkout; the build does not watch for the folder, so after \
+                 adding it, change build.rs or run cargo clean -p on the package to rebuild",
+                path.display()
+            ),
             Self::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             Self::LocaleTwice { locales, code } => write!(f, "{} has the locale {code} twice, in different cases", locales.display()),
             Self::NonUtf8Path { path } => write!(f, "cannot embed {}: include_str! needs a UTF-8 path", path.display()),

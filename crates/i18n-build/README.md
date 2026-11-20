@@ -73,8 +73,10 @@ name, lowercase letters, digits and `-`. The builder takes:
 - `app_dir(path)`: the app's own catalogs, `<path>/<locale>/<app>.tsv`, for an app that keeps
   some in its repository. Their locales are offered even when the checkout lacks them. When the
   checkout has the same locale's app catalog, the two are merged into one file under `OUT_DIR`:
-  the rows here, then the checkout's rows whose context and source text are not defined here.
-  Comments and blank lines are left out of the merged file, so a problem `check_all` reports in
+  the rows here, then the checkout's rows whose context and source text are not defined here by
+  a row that craft-i18n accepts. A row here that craft-i18n skips (a trailing `…` or placeholders
+  that differ from the source text, an `@plural` row with another number of forms than the
+  checkout's) leaves the checkout's row in place. Comments and blank lines are left out of the merged file, so a problem `check_all` reports in
   it gives that file's line numbers. A relative path is under the package directory. A catalog
   here that can't be read is always an error.
 - `dir(path)` and `required(bool)` override the two environment variables.
@@ -84,7 +86,8 @@ name, lowercase letters, digits and `-`. The builder takes:
 ## Rules
 
 - Locale folders are matched in lowercase. `en` (the English source rows), `pseudo` and names
-  starting with `.` are never embedded. Two folders that differ only in case are an error.
+  starting with `.` are never embedded. Two folders that differ only in case are an error, and so
+  is an entry of `locales/` whose type can't be read.
 - A locale with only `common.tsv` is embedded only as the parent of a regional locale that has
   the app's catalog: `pt` for `pt-br`, `zh-hant` for `zh-hant-hk`. Only a last subtag of two
   letters or three digits is a region, so `sr-latn` never brings in Cyrillic `sr`. Without the
@@ -96,6 +99,7 @@ name, lowercase letters, digits and `-`. The builder takes:
   `include_str!` can't read.
 - `cargo::rerun-if-changed` names the checkout's `locales/` folder and the app's catalog folder,
   which Cargo scans for changes, and `cargo::rerun-if-env-changed` both variables. A path with a
-  line break is an error.
+  line break is an error. A checkout without `locales/` is not watched: after adding the folder,
+  change `build.rs` or run `cargo clean -p <package>` to rebuild.
 - The table is written on every run, empty on an error. Files whose bytes did not change are not
   rewritten, so Cargo does not rebuild the crate that includes them.

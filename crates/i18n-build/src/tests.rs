@@ -114,6 +114,55 @@ fn the_app_s_rows_replace_the_checkout_s_with_the_same_context_and_source() {
 }
 
 #[test]
+fn an_app_row_craft_i18n_rejects_keeps_the_checkout_s_row() {
+    // Each row of `ours` breaks one of craft-i18n's parser rules for its context.
+    let ours = concat!(
+        "\tOpen…\tOuvrir\n",
+        "\tSave {name}\tEnregistrer\n",
+        "\tClose\tFer\\mer\n",
+        "\tQuit\tQuit\u{7}ter\n",
+        "@nope\tCut\tCouper\n",
+        "@plural\t{n} file|{n} files\t{n} fichier|{n} fichiers|{n} fichiers\n",
+        "@plural\tone|{n} pages\tune|{n} pages\n",
+    );
+    let theirs = concat!(
+        "\tOpen…\tOuvrir…\n",
+        "\tSave {name}\tEnregistrer {name}\n",
+        "\tClose\tFermer\n",
+        "\tQuit\tQuitter\n",
+        "@nope\tCut\tCouper\n",
+        "@plural\t{n} file|{n} files\t{n} fichier|{n} fichiers\n",
+        "@plural\tone|{n} pages\t{n} page|{n} pages\n",
+    );
+    assert_eq!(merge(ours, theirs), format!("{ours}{theirs}"));
+    // Rows craft-i18n accepts still hide the checkout's, `@plural` ones with the checkout's count.
+    let ours = "\tOpen…\tOuvrir…\n@id\tfile.open\tOuvrir\n@msg\tSaved {path}\t{path} enregistré\n@plural\t{n} file|{n} files\t{n} f|{n} fs\n";
+    let theirs =
+        "\tOpen…\tOuvrir…\n@id\tfile.open\tOuvre\n@msg\tSaved {path}\tEnregistré {path}\n@plural\t{n} file|{n} files\t{n} fichier|{n} fichiers\n";
+    assert_eq!(merge(ours, theirs), ours);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_locale_entry_whose_type_cannot_be_read_is_an_error() {
+    let scratch = Scratch::new("dangling");
+    scratch.file("checkout/locales/fr/demo.tsv", "\tOpen\tOuvrir\n");
+    std::os::unix::fs::symlink(scratch.0.join("nowhere"), scratch.0.join("checkout/locales/de")).unwrap();
+    let r = run(&Catalogs::new("demo"), &scratch, Some(&scratch.0.join("checkout")), Some("1"));
+    assert!(matches!(&r.result, Err(Error::Read { path, .. }) if path.ends_with("locales/de")), "{:?}", r.result);
+}
+
+#[test]
+fn a_checkout_without_locales_says_how_to_rebuild_after_adding_it() {
+    let scratch = Scratch::new("no-locales");
+    std::fs::create_dir_all(scratch.0.join("checkout")).unwrap();
+    let r = run(&Catalogs::new("demo"), &scratch, Some(&scratch.0.join("checkout")), None);
+    let warning = warnings(&r.cargo).into_iter().next().unwrap();
+    assert!(warning.contains("cargo clean -p"), "{warning}");
+    assert!(!r.cargo.iter().any(|l| l.starts_with("cargo::rerun-if-changed=")), "{:?}", r.cargo);
+}
+
+#[test]
 fn a_merged_catalog_is_written_under_out_dir_and_embedded_from_there() {
     let scratch = Scratch::new("merged");
     scratch.file("checkout/locales/fr/demo.tsv", "\tOpen\tOuvrir\n\tSave\tEnregistrer\n");
