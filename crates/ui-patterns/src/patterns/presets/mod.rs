@@ -12,6 +12,7 @@ mod files;
 pub(crate) mod footer;
 mod model;
 mod panel_menu;
+mod source;
 mod state;
 
 // The picker and the named row.
@@ -19,7 +20,7 @@ pub(crate) mod manager;
 pub(crate) mod named;
 pub(crate) mod picker;
 
-pub use browser::{BrowserTools, PresetBrowser, PresetItemCommands, PresetReorder, ThumbPainter};
+pub use browser::{BrowserTools, PresetBrowser, PresetItemCommands, PresetReorder};
 pub use event::{PresetEvent, PresetOutput};
 pub use files::{PresetExport, PresetFileEvent, PresetFileFailure, PresetFileRequest, PresetFiles};
 pub use footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions, PresetFooterOutput};
@@ -31,5 +32,6 @@ pub use model::{
 pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};
 pub use picker::{PickerField, PickerHead, PresetPicker, PresetPickerOutput, PresetPickerStyle};
+pub use source::{PresetFns, PresetSource};
 pub use state::{DefaultOpen, PresetState, PresetView, default_is_open};
 pub use words::PresetWords;

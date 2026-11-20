@@ -5,7 +5,7 @@
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
-use craft_ui::patterns::presets::{PickerField, PresetPicker, PresetRow, PresetState};
+use craft_ui::patterns::presets::{PickerField, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState};
 use craft_ui::popover::Popover;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
@@ -27,8 +27,14 @@ fn a_click_picks_and_closes_and_escape_closes_keeping_the_value() {
     let host = Rc::new(RefCell::new(Host { value: Some(CORAL), state: PresetState::new(), picked: Vec::new(), open: false }));
     let shown = Rc::clone(&host);
     // A library longer than a row of the grid, so the room would hold every tile on one line.
-    let mut rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
-    rows.extend((100..130).map(|key| PresetRow::item(key, format!("Preset {key}"), 0)));
+    let rows = PresetSource::new(
+        (),
+        PresetFns::new(|_, _| {
+            let mut rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
+            rows.extend((100..130).map(|key| PresetRow::item(key, format!("Preset {key}"), 0)));
+            rows
+        }),
+    );
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();
         let Host { value, state, picked, open } = &mut *host;
@@ -70,7 +76,7 @@ fn a_click_picks_and_closes_and_escape_closes_keeping_the_value() {
 fn a_picker_in_a_popover_opens_and_picks_with_the_popover_kept_open() {
     let (parent, value) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(Some(1u32))));
     let (parent_seen, value_seen) = (parent.clone(), value.clone());
-    let rows = vec![PresetRow::item(1u32, "Alpha", 0), PresetRow::item(2, "Beta", 0)];
+    let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(1u32, "Alpha", 0), PresetRow::item(2, "Beta", 0)]));
     let mut state = PresetState::<u32>::new();
     let mut fixture = Fixture::new(move |ui| {
         let opener = Button::new("Fill").show(ui);
@@ -101,7 +107,7 @@ fn a_picker_in_a_popover_opens_and_picks_with_the_popover_kept_open() {
 fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
     let size = Rc::new(Cell::new(9u32));
     let shown = Rc::clone(&size);
-    let rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
+    let rows = PresetSource::new((), PresetFns::new(|_, _| vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)]));
     let mut state = PresetState::<u32>::new();
     let mut value = Some(CORAL);
     let mut fixture = Fixture::new(move |ui| {

@@ -324,6 +324,17 @@ impl crate::contract::MemoProps for Units {
 }
 
 impl Units {
+    /// Feeds what the readers and writers are built from: the scope's words (the unit words come from them), the
+    /// number format and the point size. The readers built so far are a cache of these.
+    pub(crate) fn feed(&self, key: &mut crate::contract::MemoKey) {
+        use crate::contract::MemoProps as _;
+        self.scope_words.key(key);
+        self.format.key(key);
+        self.point_size.key(key);
+    }
+}
+
+impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
     /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
     /// typed text by the same rules.

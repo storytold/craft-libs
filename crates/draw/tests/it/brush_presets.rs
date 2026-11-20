@@ -2,10 +2,10 @@
 //! opens the picker at a point without its field; a resized picker keeps its size; the head edits angle and
 //! roundness; Escape reverts the head's edits.
 
-use craft_draw::ui::brush_presets::{BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
+use craft_draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
 use craft_draw::ui::brush_settings::TipAngle;
 use craft_ui::contract::{Bind, Role, SaveKey};
-use craft_ui::patterns::presets::PresetEvent;
+use craft_ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
@@ -13,6 +13,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 const HARD: u32 = 2;
+
+/// Two presets, Soft Round and Hard Round, showing `parts`.
+fn two_rows(parts: &BrushCardParts, env: &Env) -> Vec<PresetRow<u32>> {
+    let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
+    vec![brush_row(1, "Soft Round", 0, 45.0, *parts, env, &paint), brush_row(HARD, "Hard Round", 0, 12.0, *parts, env, &paint)]
+}
 
 struct Host {
     current: Option<u32>,
@@ -25,12 +31,9 @@ fn rename_brush_opens_the_name_field_on_the_current_preset() {
     let host = Rc::new(RefCell::new(Host { current: Some(HARD), state: BrushPickerState::new(), picks: Vec::new() }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
-        let env = Env::of(ui);
-        let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
         let mut host = shown.borrow_mut();
         let Host { current, state, picks } = &mut *host;
-        let rows =
-            vec![brush_row(1, "Soft Round", 0, 45.0, state.parts, &env, &paint), brush_row(HARD, "Hard Round", 0, 12.0, state.parts, &env, &paint)];
+        let rows = PresetSource::new(state.parts, PresetFns::new(two_rows));
         let values = BrushPickerValues::new(12.0, Some(1.0));
         let out = BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), values).show(ui);
         picks.extend(out.picks);
@@ -88,13 +91,10 @@ fn opened_rig(at_point: bool, remember: bool) -> (Fixture, Rc<RefCell<Opened>>) 
     }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
-        let env = Env::of(ui);
-        let paint = BrushRowPaint::new(|_, _| {}, |_, _| {});
         let mut host = shown.borrow_mut();
         let Opened { current, state, values, open, tip_edits, at, offset } = &mut *host;
         ui.add_space(*offset);
-        let rows =
-            vec![brush_row(1, "Soft Round", 0, 45.0, state.parts, &env, &paint), brush_row(HARD, "Hard Round", 0, 12.0, state.parts, &env, &paint)];
+        let rows = PresetSource::new(state.parts, PresetFns::new(two_rows));
         let mut picker = BrushPresetPicker::new("Brush Preset picker", Bind::bound(current), &rows, Bind::bound(state), *values);
         if remember {
             picker = picker.resizable(SaveKey::new("craft_draw_tests.brush_picker"));

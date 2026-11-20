@@ -8,7 +8,9 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 /// How the presets are shown.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, crate::contract::PlainData)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, crate::contract::PlainData, crate::contract::MemoProps,
+)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum PresetView {
@@ -20,7 +22,7 @@ pub enum PresetView {
 }
 
 /// Which groups are open before the user toggles any.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum DefaultOpen {
     /// Every group.

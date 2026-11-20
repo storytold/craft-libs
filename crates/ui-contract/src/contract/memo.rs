@@ -1041,6 +1041,20 @@ impl MemoProps for craft_host::target::WindowKind {
     }
 }
 
+/// Derived `Hash` (the layer's order and id).
+impl MemoProps for egui::LayerId {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// By what the scope's numbers and units are written with: its words, its format and its point size.
+impl MemoProps for crate::runtime::env::Units {
+    fn key(&self, key: &mut MemoKey) {
+        self.feed(key);
+    }
+}
+
 /// Derived `Hash` (an opaque hash value).
 impl MemoProps for egui::Id {
     fn key(&self, key: &mut MemoKey) {
