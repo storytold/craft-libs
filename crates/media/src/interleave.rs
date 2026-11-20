@@ -171,13 +171,11 @@ impl<T> Interleaver<T> {
             }
         }
         let Some((pick, order)) = next else { return Ok(None) };
-        // A stream with nothing queued can still deliver a packet sorting before (order, pick)
-        // unless it has ended or its last packet already sorts after it.
-        let waiting = self
-            .streams
-            .iter()
-            .enumerate()
-            .find(|(i, s)| s.queue.is_empty() && !s.ended && s.last.is_none_or(|last| last < order || (last == order && *i < pick)));
+        // A stream with nothing queued that has not ended can still deliver a packet at its last
+        // order, or at i64::MIN when it has sent nothing; it holds (order, pick) back only when
+        // that packet would sort before it.
+        let waiting =
+            self.streams.iter().enumerate().find(|&(i, s)| s.queue.is_empty() && !s.ended && (s.last.unwrap_or(i64::MIN), i) < (order, pick));
         if let Some((behind, _)) = waiting {
             let newest = self.streams.iter().filter_map(|s| s.queue.back().map(|&(o, _)| o)).max().unwrap_or(order);
             if i128::from(newest) - i128::from(order) > i128::from(self.max_lag) || self.held >= self.max_held {
@@ -318,18 +316,32 @@ mod tests {
     #[test]
     fn extreme_orders_do_not_overflow() {
         let mut il = Interleaver::new(2, 10);
-        il.push(0, i64::MIN, ()).ok();
-        il.push(0, i64::MAX, ()).ok();
-        assert_eq!(il.pop(), Err(InterleaveError::Behind(1)));
+        il.push(1, i64::MIN, ()).ok();
+        il.push(1, i64::MAX, ()).ok();
+        assert_eq!(il.pop(), Err(InterleaveError::Behind(0)));
         il.end_all();
         assert_eq!(drain(&mut il).iter().map(|e| e.1).collect::<Vec<_>>(), [i64::MIN, i64::MAX]);
         // The span from i64::MIN to i64::MAX is u64::MAX: behind just below that limit, not at it.
-        for (lag, expected) in [(u64::MAX - 1, Err(InterleaveError::Behind(1))), (u64::MAX, Ok(None))] {
+        for (lag, expected) in [(u64::MAX - 1, Err(InterleaveError::Behind(0))), (u64::MAX, Ok(None))] {
             let mut il = Interleaver::new(2, lag);
-            il.push(0, i64::MIN, ()).ok();
-            il.push(0, i64::MAX, ()).ok();
+            il.push(1, i64::MIN, ()).ok();
+            il.push(1, i64::MAX, ()).ok();
             assert_eq!(il.pop(), expected);
         }
+    }
+
+    #[test]
+    fn a_silent_higher_stream_does_not_hold_back_the_earliest_order() {
+        // Stream 1 has sent nothing, but nothing it sends can sort before (i64::MIN, 0).
+        let mut il = Interleaver::new(2, 0).with_max_held(NonZeroUsize::MIN);
+        il.push(0, i64::MIN, "v").ok();
+        assert_eq!(il.pop().ok().flatten().map(|r| r.value), Some("v"));
+        // A silent lower stream still holds back a packet at i64::MIN on a higher stream.
+        let mut il = Interleaver::new(2, 0);
+        il.push(1, i64::MIN, "a").ok();
+        assert_eq!(il.pop(), Ok(None));
+        il.end(0).ok();
+        assert_eq!(il.pop().ok().flatten().map(|r| r.value), Some("a"));
     }
 
     #[test]
