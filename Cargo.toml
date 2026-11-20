@@ -11,6 +11,8 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-xfa = { path = "crates/xfa" }
+craft-evm = { path = "crates/evm" }
 craft-java-class = { path = "crates/java-class" }
 craft-sourcemap = { path = "crates/sourcemap" }
 craft-pcap = { path = "crates/pcap" }
@@ -60,6 +62,9 @@ craft-gridcraft-format = { path = "crates/gridcraft-format" }
 craft-aaf = { path = "crates/aaf" }
 craft-behavior = { path = "crates/behavior" }
 craft-atomic = { path = "crates/atomic" }
+# The ArtCraft Launcher's app list for AI agents (storytold/craft-ai-integrations, crates/app/ai-agents).
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "d94a3593adcff504eaaad9e5aee4c84fd2f07a72" }
+craft-dex = { path = "crates/dex" }
 craft-xtask = { path = "crates/xtask" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
@@ -70,6 +75,7 @@ craft-cloud-local = { path = "crates/cloud-local" }
 craft-cloud-ui = { path = "crates/cloud-ui" }
 craft-color = { path = "crates/color" }
 craft-color-ui = { path = "crates/color-ui" }
+craft-color-transform = { path = "crates/color-transform" }
 craft-frame = { path = "crates/frame" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
@@ -96,8 +102,6 @@ vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft.git", rev = 
 vectorcraft-eps = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
 vectorcraft-geom = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
 vectorcraft-pathops = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
-# The ArtCraft Launcher's list of apps AI agents may use, shared with the launcher and the MCP gateway.
-craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
@@ -105,6 +109,7 @@ craft-draw = { path = "crates/draw" }
 craft-dwg = { path = "crates/dwg" }
 craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
+craft-esign = { path = "crates/esign" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
@@ -137,7 +142,7 @@ craft-control = { path = "crates/control" }
 craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
-craft-jxl = { path = "crates/jxl" }
+craft-jxl = { path = "crates/jxl", default-features = false }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
@@ -185,6 +190,9 @@ craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
 craft-rtf = { path = "crates/rtf" }
 craft-raw = { path = "crates/raw" }
+craft-geom = { path = "crates/geom" }
+craft-develop = { path = "crates/develop" }
+craft-develop-model = { path = "crates/develop-model" }
 craft-sheet = { path = "crates/sheet" }
 craft-sketch = { path = "crates/sketch" }
 craft-review = { path = "crates/review" }
@@ -193,6 +201,7 @@ craft-figcraft-format = { path = "crates/figcraft-format" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-svg = { path = "crates/svg" }
 craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
@@ -210,6 +219,7 @@ craft-table = { path = "crates/table" }
 craft-theme = { path = "crates/theme" }
 craft-theme-editor = { path = "crates/theme-editor" }
 craft-theme-store = { path = "crates/theme-store" }
+craft-tracked = { path = "crates/tracked" }
 craft-ui = { path = "crates/ui" }
 craft-ui-canvas = { path = "crates/ui-canvas" }
 craft-ui-contract = { path = "crates/ui-contract" }

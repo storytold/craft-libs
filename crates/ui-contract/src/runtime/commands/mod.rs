@@ -19,16 +19,16 @@ pub use registry::{SetEntry, sets};
 pub use board::declare_child;
 #[doc(hidden)]
 pub use board::focus_within;
-#[cfg(feature = "testing")]
-#[doc(hidden)]
-pub use board::keymap_builds;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
 pub(crate) use board::{
-    begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
+    begin, binds_scoped, edit_chords, end, install, note_focus, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
 #[doc(hidden)]
 pub use board::{bound_around, take_around};
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::{chord_text_builds, keymap_builds};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
 use craft_behavior::CommandFlags;
@@ -261,6 +261,8 @@ pub struct ResolvedCommand {
     pub icon: Option<Cow<'static, str>>,
     /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
+    /// `chord` as the platform writes it, from the table the keymap builds with its bindings.
+    pub chord_text: Option<Arc<str>>,
     /// The state ANDed with the gate, the modal rule and the instance's liveness.
     pub enabled: bool,
     /// The checked state of a toggle or radio command.
@@ -341,7 +343,7 @@ impl CommandInput {
 /// The chain of container instances that receive scoped commands, innermost last. A private inherited field of
 /// the env.
 #[doc(hidden)]
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
 impl CommandChain {

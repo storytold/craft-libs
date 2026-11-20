@@ -6,8 +6,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::AutomationError;
-
 /// The connection file in the app's settings folder, present while the app accepts agents.
 pub const CONNECTION_FILE: &str = "agent-connection.json";
 /// The token file the app keeps in its settings folder for agent connections.
@@ -48,13 +46,13 @@ impl Connection {
     }
 }
 
-fn io_error(path: &Path, e: impl std::fmt::Display) -> AutomationError {
-    AutomationError::Io(format!("{}: {e}", path.display()))
+fn io_error(path: &Path, e: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(format!("{}: {e}", path.display()))
 }
 
 /// Publishes `c` in `dir` (made if missing), written atomically so a reader never sees half a
 /// file.
-pub fn write_connection(dir: &Path, c: &Connection) -> Result<(), AutomationError> {
+pub fn write_connection(dir: &Path, c: &Connection) -> std::io::Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| io_error(dir, e))?;
     let path = dir.join(CONNECTION_FILE);
     let text = serde_json::to_string_pretty(c).map_err(|e| io_error(&path, e))?;
@@ -65,7 +63,7 @@ pub fn write_connection(dir: &Path, c: &Connection) -> Result<(), AutomationErro
 /// that does not parse (invalid UTF-8 included) counts as none: the app rewrites it when it next
 /// starts listening. Anything but a regular file (a FIFO would block the read) or a file over
 /// 1 MiB is an error, and left alone.
-pub fn read_connection(dir: &Path) -> Result<Option<Connection>, AutomationError> {
+pub fn read_connection(dir: &Path) -> std::io::Result<Option<Connection>> {
     let path = dir.join(CONNECTION_FILE);
     let meta = match std::fs::metadata(&path) {
         Ok(m) => m,

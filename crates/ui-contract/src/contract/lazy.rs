@@ -3,6 +3,7 @@
 
 use crate::layout::{flow_region, take_in_flow};
 use crate::runtime::egui::alloc;
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
@@ -100,12 +101,23 @@ impl Lazy {
     /// again in the next pass rather than replay it. A dock group's host view is one: where the host leaves the group
     /// to the dock, the dock's group shows in its place and settles by its own rules. `None` when the child did not
     /// run: it replayed a run of `add`, or was out of view.
+    ///
+    /// `add` runs in a `Ui` that takes room in the child only when it returns `Some`: an `add` that leaves its room
+    /// leaves the child as it found it, so `otherwise` takes the same place whether it runs or replays, and the child's
+    /// extent does not change between them (a change would cost the frame a discard pass).
     pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>> {
-        self.run(ui, |ui, run| match add(ui) {
-            Some(shown) => Ok(shown),
-            None => {
-                run.unkept(ui.ctx());
-                Err(otherwise(ui))
+        self.run(ui, |ui, run| {
+            let mut first = alloc::child(ui, UiBuilder::new().max_rect(flow_region(ui)).layout(*ui.layout()));
+            match add(&mut first) {
+                Some(shown) => {
+                    alloc::advance_past(ui, first.min_rect());
+                    Ok(shown)
+                }
+                None => {
+                    drop(first);
+                    run.unkept(ui.ctx());
+                    Err(otherwise(ui))
+                }
             }
         })
     }
@@ -206,7 +218,7 @@ impl Lazy {
 struct Run {
     recording: bool,
     kept: bool,
-    layer: egui::LayerId,
+    layer: Layer,
 }
 
 impl Run {

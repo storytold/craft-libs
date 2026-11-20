@@ -47,6 +47,8 @@ pub use craft_cms as cms;
 pub use craft_codepage as codepage;
 #[cfg(feature = "color")]
 pub use craft_color as color;
+#[cfg(feature = "color-transform")]
+pub use craft_color_transform as color_transform;
 #[cfg(feature = "color-ui")]
 pub use craft_color_ui as color_ui;
 #[cfg(feature = "control")]
@@ -67,6 +69,12 @@ pub use craft_dds as dds;
 pub use craft_deckcraft_format as deckcraft_format;
 #[cfg(feature = "designcraft-format")]
 pub use craft_designcraft_format as designcraft_format;
+#[cfg(feature = "develop")]
+pub use craft_develop as develop;
+#[cfg(feature = "develop-model")]
+pub use craft_develop_model as develop_model;
+#[cfg(feature = "dex")]
+pub use craft_dex as dex;
 #[cfg(feature = "dialogs")]
 pub use craft_dialogs as dialogs;
 #[cfg(feature = "doc")]
@@ -97,6 +105,10 @@ pub use craft_elf as elf;
 pub use craft_eps as eps;
 #[cfg(feature = "epub")]
 pub use craft_epub as epub;
+#[cfg(feature = "esign")]
+pub use craft_esign as esign;
+#[cfg(feature = "evm")]
+pub use craft_evm as evm;
 #[cfg(feature = "ews")]
 pub use craft_ews as ews;
 #[cfg(feature = "exr")]
@@ -133,6 +145,8 @@ pub use craft_frame as frame;
 pub use craft_gainmap as gainmap;
 #[cfg(feature = "gcode")]
 pub use craft_gcode as gcode;
+#[cfg(feature = "geom")]
+pub use craft_geom as geom;
 #[cfg(feature = "gif")]
 pub use craft_gif as gif;
 #[cfg(feature = "gridcraft-format")]
@@ -315,6 +329,8 @@ pub use craft_stencilcraft_document as stencilcraft_document;
 pub use craft_stencilcraft_format as stencilcraft_format;
 #[cfg(feature = "stream-codecs")]
 pub use craft_stream_codecs as stream_codecs;
+#[cfg(feature = "suite-account")]
+pub use craft_suite_account as suite_account;
 #[cfg(feature = "svg")]
 pub use craft_svg as svg;
 #[cfg(feature = "table")]
@@ -340,6 +356,8 @@ pub use craft_tiff as tiff;
 pub use craft_time as time;
 #[cfg(feature = "timeline")]
 pub use craft_timeline as timeline;
+#[cfg(feature = "tracked")]
+pub use craft_tracked as tracked;
 #[cfg(feature = "ui")]
 pub use craft_ui as ui;
 #[cfg(feature = "update")]
@@ -368,6 +386,8 @@ pub use craft_window as window;
 pub use craft_wordmodel as wordmodel;
 #[cfg(feature = "xcf")]
 pub use craft_xcf as xcf;
+#[cfg(feature = "xfa")]
+pub use craft_xfa as xfa;
 #[cfg(feature = "xfdf")]
 pub use craft_xfdf as xfdf;
 #[cfg(feature = "xfl")]

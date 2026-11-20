@@ -143,6 +143,7 @@ craft-stream-codecs = { workspace = true, optional = true }
 craft-svg = { workspace = true, optional = true }
 craft-tga = { workspace = true, optional = true }
 craft-tiff = { workspace = true, optional = true }
+craft-tracked = { workspace = true, optional = true }
 craft-time = { workspace = true, optional = true }
 craft-vcard = { workspace = true, optional = true }
 craft-vectordrawable = { workspace = true, optional = true }
@@ -204,6 +205,15 @@ craft-pcap = { workspace = true, optional = true }
 craft-sourcemap = { workspace = true, optional = true }
 craft-wasm = { workspace = true, optional = true }
 craft-xfdf = { workspace = true, optional = true }
+craft-color-transform = { workspace = true, optional = true }
+craft-develop = { workspace = true, optional = true }
+craft-develop-model = { workspace = true, optional = true }
+craft-dex = { workspace = true, optional = true }
+craft-esign = { workspace = true, optional = true }
+craft-evm = { workspace = true, optional = true }
+craft-geom = { workspace = true, optional = true }
+craft-suite-account = { workspace = true, optional = true }
+craft-xfa = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -324,6 +334,7 @@ cloud-local = ["dep:craft-cloud-local"]
 
 cloud-ui = ["dep:craft-cloud-ui"]
 cloud-ui-cloud = ["cloud-ui", "craft-cloud-ui/cloud"]
+cloud-ui-esign = ["cloud-ui", "craft-cloud-ui/esign"]
 cloud-ui-share = ["cloud-ui", "craft-cloud-ui/share"]
 
 cms = ["dep:craft-cms"]
@@ -332,9 +343,12 @@ codepage = ["dep:craft-codepage"]
 
 color = ["dep:craft-color"]
 
+color-transform = ["dep:craft-color-transform"]
+
 color-ui = ["dep:craft-color-ui", "keymap", "settings", "window", "platform"]
 
 control = ["dep:craft-control"]
+control-agents = ["control", "craft-control/agents"]
 
 control-protocol = ["dep:craft-control-protocol"]
 
@@ -352,6 +366,12 @@ dds-parallel = ["dds", "craft-dds/parallel"]
 deckcraft-format = ["dep:craft-deckcraft-format"]
 
 designcraft-format = ["dep:craft-designcraft-format"]
+
+develop = ["dep:craft-develop"]
+
+develop-model = ["dep:craft-develop-model"]
+
+dex = ["dep:craft-dex"]
 
 dialogs = ["dep:craft-dialogs"] # native only: rfd's folder picker and file paths
 
@@ -385,6 +405,10 @@ eps = ["dep:craft-eps"]
 eps-paths = ["eps", "craft-eps/paths"]
 
 epub = ["dep:craft-epub"]
+
+esign = ["dep:craft-esign"]
+
+evm = ["dep:craft-evm"]
 
 ews = ["dep:craft-ews"]
 
@@ -443,6 +467,8 @@ gainmap = ["dep:craft-gainmap"]
 
 gcode = ["dep:craft-gcode"]
 
+geom = ["dep:craft-geom"]
+
 gif = ["dep:craft-gif"]
 gif-frames = ["gif", "craft-gif/frames"]
 
@@ -476,6 +502,7 @@ image-codecs-avif = ["image-codecs", "craft-image-codecs/avif"]
 image-codecs-avif-decode = ["image-codecs", "craft-image-codecs/avif-decode"]
 image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
 image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
+image-codecs-jxl = ["image-codecs", "craft-image-codecs/jxl"]
 image-codecs-sgi = ["image-codecs", "craft-image-codecs/sgi"]
 image-codecs-sunraster = ["image-codecs", "craft-image-codecs/sunraster"]
 image-codecs-threads = ["image-codecs", "craft-image-codecs/threads"]
@@ -719,6 +746,8 @@ stencilcraft-format = ["dep:craft-stencilcraft-format"]
 
 stream-codecs = ["dep:craft-stream-codecs"]
 
+suite-account = ["dep:craft-suite-account"]
+
 svg = ["dep:craft-svg"]
 svg-draw = ["svg", "craft-svg/draw"]
 svg-paths = ["svg", "craft-svg/paths"]
@@ -817,9 +846,12 @@ timeline = ["dep:craft-timeline", "keymap"]
 timeline-otio = ["timeline", "craft-timeline/otio"]
 timeline-xml = ["timeline", "craft-timeline/xml"]
 
+tracked = ["dep:craft-tracked"]
+
 ui-app = ["ui", "craft-ui/app"]
 ui-cloud = ["ui", "craft-ui/cloud"]
 ui-color_fonts = ["ui", "craft-ui/color_fonts"]
+ui-esign = ["ui", "craft-ui/esign"]
 ui-share = ["ui", "craft-ui/share"]
 ui-snapshot = ["ui", "craft-ui/snapshot"]
 ui-system_fonts = ["ui", "craft-ui/system_fonts"]
@@ -888,6 +920,8 @@ wordmodel = ["dep:craft-wordmodel"]
 wordmodel-test-support = ["wordmodel", "craft-wordmodel/test-support"]
 
 xcf = ["dep:craft-xcf"]
+
+xfa = ["dep:craft-xfa"]
 
 xfdf = ["dep:craft-xfdf"]
 
