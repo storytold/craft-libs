@@ -3619,6 +3619,7 @@ Layout memory: sizes one pass measures and the next pass places by, the one disc
 
 - `craft_ui::runtime::layout_memory::emit_text`: `pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>)`. Hands forward a text a run found under `id` that content outside the body it runs in shows, as [`emit_record`]
 - `craft_ui::runtime::layout_memory::forget_kept`: `pub fn forget_kept(ctx: &Context)`. Drops every kept measurement, so the next pass measures each body as a first pass would.
+- `craft_ui::runtime::layout_memory::kept_leaves`: `pub fn kept_leaves(ctx: &Context) -> usize`. How many component entries the valid kept measurements hold, each body counting only the components directly in
 - `craft_ui::runtime::layout_memory::text`: `pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>>`. The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
 
 ## `craft_ui::runtime::memory`
@@ -3989,6 +3990,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
+- `craft_ui::testing::kept_measurement_leaves`: re-export of `craft_ui::runtime::layout_memory::kept_leaves`.
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_runs`: re-export of `craft_ui::runtime::measure::last_pass_runs` (defined outside these crates).
 - `craft_ui::testing::measured_contributions`: re-export of `craft_ui::runtime::measure::contributions` (defined outside these crates).
