@@ -22,6 +22,16 @@ fn orientation_uses_icons_and_swaps_the_document_dimensions() {
         fixture.texts().iter().all(|text| text.text != "Portrait" && text.text != "Landscape"),
         "the orientation controls show page icons without painting their accessible names"
     );
+    let shapes = fixture.frame_clipped_shapes();
+    for name in ["Portrait", "Landscape"] {
+        let choice = fixture.by_label(name).expect("an orientation choice").rect;
+        let painted = shapes.iter().any(|(clip, shape)| {
+            let bounds = shape.visual_bounding_rect();
+            choice.contains_rect(bounds) && bounds.area() < choice.area() && clip.contains_rect(bounds)
+        });
+        assert!(painted, "the {name} glyph is painted where it can be seen");
+    }
+    assert!(fixture.by_label("Height Unit").is_none(), "Width's unit select serves Height too");
 
     let original = options.borrow().size;
     assert!(original.width > original.height);

@@ -18,8 +18,8 @@ use crate::runtime::env::{Env, Label, Message, UnitKind};
 use crate::runtime::focus::{self, FocusTarget};
 use crate::runtime::words::CommonWords;
 use crate::style::TypeRole;
-use crate::text::TextField;
-use craft_behavior::{ColumnWidth, EditEvent, EditEvents, IconId, PixelSize};
+use crate::text::{NumberField, TextField};
+use craft_behavior::{ColumnWidth, EditEvent, EditEvents, IconId, NumberCodec, PixelSize};
 use craft_theme::Srgba;
 use egui::Ui;
 
@@ -141,22 +141,35 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
                     Side::Width => (session.size.width(), session.size.width_range()),
                     Side::Height => (session.size.height(), session.size.height_range()),
                 };
+                if matches!(side, Side::Height) {
+                    // One unit serves both sides, so its select sits on the Width row only and Height leaves that
+                    // room to Orientation beside it. The field reads and steps in the shared unit.
+                    let kind = session.size.unit();
+                    let units = Env::of(ui).units();
+                    let shown = NumberField::new(side.name(words).clone(), Bind::given(Some(value)))
+                        .range(range)
+                        .codec(NumberCodec::new(units.reader(Some(kind)), *kind.decimals().end()))
+                        .step(kind.step())
+                        .sizing(Sizing::FillWidth)
+                        .show(ui);
+                    apply_number(session, &shown.edit.events, |size, value| size.set_height(value));
+                    return;
+                }
                 let shown = UnitSelect::new(side.name(words).clone(), Bind::given(Some(value)), Bind::given(session.size.unit()), &size_units)
                     .range(range)
                     .unit_label(side.unit_name(words).clone())
                     .sizing(Sizing::FillWidth)
                     .show(ui);
-                apply_number(session, &shown.edit.events, |size, value| match side {
-                    Side::Width => size.set_width(value),
-                    Side::Height => size.set_height(value),
-                });
+                apply_number(session, &shown.edit.events, |size, value| size.set_width(value));
                 if let Some(kind) = shown.unit.value().copied() {
                     session.size.set_unit(kind);
                 }
             });
         };
         dimension(ui, session, Side::Width);
-        const HEIGHT_AND_ORIENTATION: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content];
+        // Two shares, as Color Mode and Depth: a content-sized column here was measured empty, which clipped Orientation
+        // out of reach.
+        const HEIGHT_AND_ORIENTATION: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::fill(1.0)];
         Grid::new(&HEIGHT_AND_ORIENTATION).fill().show(ui, |ui, _| {
             dimension(ui, session, Side::Height);
             Field::new(words.orientation.clone()).layout(FieldLayout::Above).id_salt("orientation").show(ui, |ui, _| {
