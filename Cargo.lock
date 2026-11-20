@@ -1796,6 +1796,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-deskew"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
