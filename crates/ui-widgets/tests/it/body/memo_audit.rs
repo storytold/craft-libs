@@ -3,8 +3,8 @@
 //! no count.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
-use craft_ui::testing::layout::in_region;
+use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::testing::layout::{allocate, in_region};
 use craft_ui::testing::pointer::{moved, wheel};
 use craft_ui::testing::{
     Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
@@ -246,17 +246,32 @@ fn card(props: &mut Card, ui: &mut Ui) {
     Button::new(format!("Card {}", props.at)).show(ui);
 }
 
-/// Where the pointer rests to scroll the cards: over their body, beside every card.
-const BESIDE: Pos2 = Pos2::new(140.0, 120.0);
+/// A card holding a scrolling body of its own, whose rows report their places to it.
+fn scrolling_card(props: &mut Card, ui: &mut Ui) {
+    let room = allocate(ui, Vec2::new(100.0, 80.0));
+    in_region(ui, room, |ui| {
+        Slab::new(ContainerProps::new().scroll(Scroll::vertical()).sizing(Sizing::Fill)).id_salt(("inner", props.at)).show(ui, |ui, _| {
+            for at in 0..6 {
+                Lazy::new(at, 20.0).show(ui, |ui| {
+                    Button::new(format!("Row {at}")).show(ui);
+                });
+            }
+        });
+    });
+}
 
-/// Cards in a scrolling arena body, under a lead of `lead` points.
-fn cards(lead: f32) -> impl FnMut(&mut Ui) {
+/// Where the pointer rests to scroll the cards: over their body, beside every card (in the lead above them, or beside
+/// the narrow ones).
+const BESIDE: Pos2 = Pos2::new(140.0, 50.0);
+
+/// Cards shown by `body` in a scrolling arena body, under a lead of `lead` points.
+fn cards(lead: f32, body: fn(&mut Card, &mut Ui)) -> impl FnMut(&mut Ui) {
     move |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(160.0, 200.0)), |ui| {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical()).arena(true)).id_salt("cards").show(ui, |ui, _| {
                 ui.add_space(lead);
                 for at in 0..12 {
-                    MemoView::new(("card", at), Card { at }, card).show(ui);
+                    MemoView::new(("card", at), Card { at }, body).show(ui);
                 }
             });
         });
@@ -274,7 +289,7 @@ fn replayed(frames: &Frames) -> usize {
 fn cards_a_fractional_wheel_step_moves_replay_where_they_would_run() {
     let mut frames = Frames::new();
     audit_replays(&frames.ctx, true);
-    let mut show = cards(40.0);
+    let mut show = cards(40.0, card);
     frames.frame(vec![moved(BESIDE)], &mut show);
     frames.idle(SETTLE, &mut show);
     frames.frame(vec![wheel(-10.4)], &mut show);
@@ -282,13 +297,13 @@ fn cards_a_fractional_wheel_step_moves_replay_where_they_would_run() {
     frames.idle(SETTLE, &mut show);
 }
 
-/// A card scrolled partly out of the view replays through the view's clip: the members it joins its arena with are
-/// cut by the clip as a run there cuts them.
+/// A card scrolled partly out of the view replays through the view's clip: the members it joins its arena with and the
+/// view of its own scrolling body are cut by the clip as a run there cuts them.
 #[trial]
 fn a_card_scrolled_partly_out_of_view_replays_through_the_views_clip() {
     let mut frames = Frames::new();
     audit_replays(&frames.ctx, true);
-    let mut show = cards(0.0);
+    let mut show = cards(0.0, scrolling_card);
     frames.frame(vec![moved(BESIDE)], &mut show);
     frames.idle(SETTLE, &mut show);
     frames.frame(vec![wheel(-10.0)], &mut show);
@@ -296,15 +311,30 @@ fn a_card_scrolled_partly_out_of_view_replays_through_the_views_clip() {
     frames.idle(SETTLE, &mut show);
 }
 
-/// A view that holds a card below a gap of its own.
+/// A card holding a scrolling body replays moved: the places its rows report are where the replay put them, from the
+/// view of their own area, which moved with the card.
+#[trial]
+fn a_card_holding_a_scrolling_body_replays_moved_with_its_rows_places() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let mut show = cards(40.0, scrolling_card);
+    frames.frame(vec![moved(BESIDE)], &mut show);
+    frames.idle(SETTLE, &mut show);
+    frames.frame(vec![wheel(-10.0)], &mut show);
+    assert!(replayed(&frames) > 0, "the moved cards replayed");
+    frames.idle(SETTLE, &mut show);
+}
+
+/// A view that holds a card in a room of its own, `gap` points down.
 #[derive(MemoProps)]
 struct Holder {
     gap: f32,
 }
 
 fn holder(props: &mut Holder, ui: &mut Ui) {
-    ui.add_space(props.gap);
-    MemoView::new("held", Card { at: 0 }, card).show(ui);
+    in_region(ui, Rect::from_min_size(Pos2::new(20.0, 40.0 + props.gap), Vec2::new(100.0, 30.0)), |ui| {
+        MemoView::new("held", Card { at: 0 }, card).show(ui);
+    });
 }
 
 /// An inner view that replays moved inside the outer view's run is in the outer record where it replayed: the outer
