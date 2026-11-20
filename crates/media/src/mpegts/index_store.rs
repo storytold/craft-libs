@@ -38,7 +38,10 @@ static STORE: RwLock<Option<Arc<dyn IndexStore>>> = RwLock::new(None);
 /// Registers the store every [`open`](super::open) of this process uses (`None`: none, the
 /// default).
 pub fn set_index_store(store: Option<Arc<dyn IndexStore>>) {
-    *STORE.write().unwrap_or_else(PoisonError::into_inner) = store;
+    // The store it replaces is dropped after the lock is released: its `Drop` may register a
+    // store too.
+    let previous = std::mem::replace(&mut *STORE.write().unwrap_or_else(PoisonError::into_inner), store);
+    drop(previous);
 }
 
 /// The registered store.
@@ -388,10 +391,10 @@ fn starts_a_packet<S: ByteSource + ?Sized>(src: &S, format: Format, id: StreamId
     }
 }
 
-/// Which of `count` units are checked against the file: the first, the last and up to
-/// [`UNIT_CHECKS`] spread between them.
+/// Which of `count` units are checked against the file: up to [`UNIT_CHECKS`] spread over the
+/// table from the first, and the last.
 fn units_to_check(count: usize) -> impl Iterator<Item = usize> {
-    let step = (count / UNIT_CHECKS).max(1);
+    let step = count.div_ceil(UNIT_CHECKS).max(1);
     (0..count).step_by(step).chain(count.checked_sub(1))
 }
 
