@@ -108,7 +108,8 @@ pub struct DecodeOptions {
     pub limits: Limits,
     /// Keep the pixels as stored instead of applying the EXIF / TIFF
     /// orientation (by default they are turned upright and the metadata's
-    /// orientation is rewritten to 1).
+    /// orientation is rewritten to 1). JPEG XL ignores this: `craft-jxl` applies the codestream's
+    /// orientation while rendering, so a JPEG XL image is always upright with orientation 1.
     pub keep_orientation: bool,
 }
 
@@ -275,6 +276,9 @@ pub struct EncodeOptions {
     /// the full image, which comes first.
     pub tiff_pyramid: bool,
     pub exr_compression: ExrCompression,
+    /// OpenEXR `chromaticities` attribute (`[red, green, blue, white]` CIE xy), written into the
+    /// image header when set.
+    pub exr_chromaticities: Option<[[f32; 2]; 4]>,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
     /// DDS compression and mip chain.
@@ -301,6 +305,7 @@ impl Default for EncodeOptions {
             tiff_bigtiff: false,
             tiff_pyramid: false,
             exr_compression: ExrCompression::Zip16,
+            exr_chromaticities: None,
             dpx_bits: None,
             dds: DdsOptions::default(),
             embed_icc: true,

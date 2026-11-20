@@ -1809,6 +1809,10 @@ dependencies = [
  "craft-gcode",
  "craft-geom",
  "craft-gif",
+ "craft-gpu",
+ "craft-gpu-null",
+ "craft-gpu-providers",
+ "craft-gpu-wgpu",
  "craft-gridcraft-format",
  "craft-gzip",
  "craft-har",
@@ -1824,6 +1828,7 @@ dependencies = [
  "craft-imaging",
  "craft-indd",
  "craft-ipc",
+ "craft-ipp",
  "craft-java-class",
  "craft-jmap",
  "craft-jpeg",
@@ -1870,6 +1875,7 @@ dependencies = [
  "craft-platform",
  "craft-plist",
  "craft-plotter",
+ "craft-ppt-binary",
  "craft-pptx",
  "craft-prc",
  "craft-prepress",
@@ -1896,6 +1902,7 @@ dependencies = [
  "craft-smime",
  "craft-sniff",
  "craft-sourcemap",
+ "craft-sqlite",
  "craft-ssip",
  "craft-stencilcraft-document",
  "craft-stencilcraft-format",
@@ -2108,6 +2115,7 @@ dependencies = [
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media",
  "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
@@ -2312,9 +2320,13 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color-transform",
  "craft-develop-model",
+ "craft-render-parity",
  "proptest",
+ "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2635,6 +2647,7 @@ dependencies = [
  "craft-dxf",
  "craft-eps",
  "craft-file-formats",
+ "craft-image-codecs",
  "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
@@ -2795,6 +2808,40 @@ version = "0.1.0"
 dependencies = [
  "gif",
  "image",
+]
+
+[[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-null"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+]
+
+[[package]]
+name = "craft-gpu-providers"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+]
+
+[[package]]
+name = "craft-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-providers",
+ "pollster 0.4.0",
+ "wgpu",
 ]
 
 [[package]]
@@ -2986,6 +3033,10 @@ dependencies = [
  "sha2 0.10.9",
  "widestring",
 ]
+
+[[package]]
+name = "craft-ipp"
+version = "0.1.0"
 
 [[package]]
 name = "craft-java-class"
@@ -3575,7 +3626,21 @@ dependencies = [
 name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
+ "kurbo",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-ppt-binary"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-pptx",
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
 
@@ -3892,6 +3957,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-sqlite"
+version = "0.1.0"
 
 [[package]]
 name = "craft-ssip"
@@ -4396,6 +4465,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]

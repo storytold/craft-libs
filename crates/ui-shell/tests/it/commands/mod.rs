@@ -4,3 +4,4 @@ mod app_catalog;
 mod app_scope;
 mod board;
 mod kit;
+mod resolve;

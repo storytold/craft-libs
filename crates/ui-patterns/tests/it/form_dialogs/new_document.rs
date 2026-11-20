@@ -10,9 +10,9 @@ use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Opens the Save Document Preset pane with the icon beside Name, types `name` over the proposed one and saves.
+/// Opens the Save Document Preset pane with the button below the fields, types `name` over the proposed one and saves.
 fn save_preset(fixture: &mut Fixture, name: &str) {
-    let save = fixture.by_label("Save Document Preset").expect("the icon beside Name");
+    let save = fixture.by_label("Save Document Preset").expect("the Save Document Preset button");
     fixture.click(&save).idle(10);
     assert!(fixture.by_label("Preset Name").is_some(), "the pane asks for a name");
     fixture.type_text(name).idle(4);
@@ -92,7 +92,7 @@ fn the_save_icon_proposes_a_free_name_and_enter_saves_without_creating() {
         *held.borrow_mut() = bound;
     });
     fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
-    let save = fixture.by_label("Save Document Preset").expect("the icon beside Name");
+    let save = fixture.by_label("Save Document Preset").expect("the Save Document Preset button");
     fixture.click(&save).idle(10);
     assert!(shows(&fixture, "Saved 2"), "the first free name is proposed");
     fixture.type_text("Poster").idle(4);
@@ -247,4 +247,24 @@ fn pixel_aspect_lists_the_custom_entries_and_shows_an_unknown_id_as_square() {
     let row = fixture.by_label("Pixel Aspect Ratio").expect("the row under Color Profile");
     fixture.click(&row).idle(10);
     assert!(shows(&fixture, "DVCPRO HD 1080 (1.5)") && shows(&fixture, "Mine"), "the built-in ratios, then the app's");
+}
+
+#[trial]
+fn the_new_document_layout_places_presets_and_details_below_the_tabs() {
+    let mut options = DocumentOptions::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = NewDocumentDialog::new(Bind::bound(&mut options)).show(ui);
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(30);
+    let recent = fixture.by_label("Recent").expect("the Recent tab").rect;
+    let mode = fixture.by_label("Color Mode").expect("the Color Mode field").rect;
+    let depth = fixture.by_label("Depth").expect("the Depth field").rect;
+    let save = fixture.by_label("Save Document Preset").expect("the save action").rect;
+    let create = fixture.by_label("Create").expect("the create action").rect;
+    assert!(shows(&fixture, "PRESET DETAILS"), "the details header is a caption");
+    assert!(fixture.texts().iter().any(|t| t.text.starts_with("BLANK DOCUMENT PRESETS")), "the presets header is a caption");
+    assert!(recent.bottom() <= mode.top(), "tabs go above the details");
+    assert!((mode.top() - depth.top()).abs() < 1.0, "color mode and depth share a row");
+    assert!(mode.right() <= depth.left(), "depth follows color mode");
+    assert!(mode.bottom() <= save.top() && save.bottom() <= create.top(), "Save Preset is between the fields and the footer");
 }

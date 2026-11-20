@@ -8,7 +8,7 @@ use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
 use crate::patterns::presets::PresetId;
 use crate::primitives::{ContentPainterCx, StrokeWidth};
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Env, Label, UnitKind};
 use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{Tile, TileGrid};
@@ -115,8 +115,8 @@ impl ItemSource<usize> for CardList<'_> {}
 /// The columns of preset cards the grid holds: the dialog's left side is as wide as they are.
 const CARD_COLUMNS: usize = 3;
 
-/// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
-pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
+/// Shows the full-width category strip above the two columns.
+pub(super) fn tabs(ui: &mut Ui, session: &Session, read: &Read<'_>, left: &mut Left) {
     let (setup, words) = (read.setup, read.words);
     let tabs: Vec<TabId> =
         std::iter::once(TabId::Recent).chain((0..setup.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
@@ -132,7 +132,11 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
             left.tab = Some(*tab);
         }
     }
+}
 
+/// Shows the cards or saved presets in the category picked in this pass.
+pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
+    let words = read.words;
     let tab = left.tab.unwrap_or(session.tab);
     let cards = cards_of(tab, session, values, read);
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
@@ -166,9 +170,12 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
         }
     } else {
         let count = read.units.number(cards.len() as f64, 0..=0);
-        Text::new(words.presets_heading.fill(&[("n", &count)])).role(TypeRole::Label).shade(Shade::Muted).show(ui);
+        let heading = Label::from(words.presets_heading.fill(&[("n", &count)]));
+        Text::new(Env::of(ui).view().resolve(&heading).as_str().to_uppercase()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         let shown = TileGrid::<usize>::new(words.cards.clone())
             .card_columns(CARD_COLUMNS)
+            .card()
+            .aspect(2.0)
             .select(SelectMode::Single)
             .detail_line()
             .rows_stamp(stamp)
@@ -354,7 +361,8 @@ fn tile_of(card: &Card) -> Tile<'static> {
     let aspect = card.aspect;
     let tile = Tile::new(card.title.clone())
         .detail(card.line.clone())
-        .thumb(ThumbAspect::SQUARE, move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, aspect));
+        .flat_thumbnail()
+        .thumb(ThumbAspect::new(2, 1), move |painter: &ContentPainterCx<'_>, rect: Rect| paint_page(painter, rect, aspect));
     match &card.detail {
         Some(detail) => tile.tooltip(detail.clone()),
         None => tile,

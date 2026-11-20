@@ -25,7 +25,7 @@
 //! contrast without them). A value that is not one of these is refused. `stories.tsv` lists the scale of every image.
 
 use craft_behavior::ColumnWidth;
-use craft_ui::contract::{Pad, Scroll, ShowContainer as _, Surface};
+use craft_ui::contract::{Pad, Scroll, ShowContainer as _, Surface, Tracked};
 use craft_ui::fonts::{I18nScripts, UiFonts};
 use craft_ui::layout_components::{Grid, Stack};
 use craft_ui::runtime::commands::CommandInput;
@@ -312,7 +312,7 @@ fn render(job: &Job, renderer: &mut Renderer, env: &RootEnv, options: &Options) 
     // The command states of the story shown, as the gallery gives them, before the first frame. The Overview gives its
     // cards none, so a card is rendered under none.
     frames.commands(match &job.shown {
-        Shown::Story(registration) => Story::command_input([&registration.story]),
+        Shown::Story(registration) => CommandInput::new().states(&Tracked::new(Story::command_states([&registration.story]))),
         Shown::Card(_) => CommandInput::new(),
     });
     let (shown, dialog) = match &job.shown {

@@ -218,7 +218,21 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         stirred: read.stirred,
     };
     let hover_at = pass_pointer.hover;
-    PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
+    let mods_before = PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(
+        ctx,
+        viewport,
+        pass_nr,
+        |_, _| {},
+        |record| {
+            let before = record.frame.as_ref().map(|frame| frame.mods);
+            *record = Arc::new(pass_pointer);
+            before
+        },
+    );
+    // The modifiers are a value components read (`Cx::modifiers`): a change runs the settled ones that read them.
+    if mods_before.is_some_and(|before| before != mods) {
+        crate::runtime::lazy::note_edit(ctx, crate::runtime::reads::BindKey::Modifiers);
+    }
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| {
         shapes.last = std::mem::take(&mut shapes.this);
         shapes.last_bodies = std::mem::take(&mut shapes.this_bodies);
