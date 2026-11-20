@@ -201,12 +201,16 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("uses: storytold/craft-common-actions/.github/workflows/gate.yml@main", source)
         self.assertIn('os: \'["ubuntu-latest"]\'', source)
         self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
-        self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
-        # Every leg reads the test selection of the platforms job.
-        self.assertIn("  native:\n    name: Workspace\n    needs: platforms\n", source)
+        # The macOS and Windows legs run when the platforms job asks for them or did not succeed.
+        self.assertIn("    if: ${{ !cancelled() && (needs.platforms.result != 'success' "
+                      "|| needs.platforms.outputs.platform == 'true') }}\n", source)
+        # Every leg reads the test selection of the platforms job, and runs every test when that
+        # job did not succeed: a failed selection never skips the gate.
+        self.assertIn("  native:\n    name: Workspace\n    needs: platforms\n    if: ${{ !cancelled() }}\n", source)
         self.assertIn("          select-tests: true\n", source)
-        self.assertIn("        CRAFT_TESTS=${{ needs.platforms.outputs.tests }}\n"
-                      "        CRAFT_TEST_FILTER=${{ needs.platforms.outputs.filter }}\n", source)
+        self.assertIn("        CRAFT_TESTS=${{ needs.platforms.result == 'success' && needs.platforms.outputs.tests || 'all' }}\n"
+                      "        CRAFT_TEST_FILTER=${{ needs.platforms.result == 'success' && needs.platforms.outputs.filter || 'all()' }}\n",
+                      source)
         self.assertIn("      env: *env\n", source)
         # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
         self.assertIn("      lint-command: &lint |\n", source)
