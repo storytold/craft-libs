@@ -21,18 +21,6 @@ use egui::{Rect, Response, Ui};
 /// The angle of the dial runs over half a turn each way.
 pub(super) const ANGLE_RANGE: std::ops::RangeInclusive<f64> = -180.0..=180.0;
 
-/// The host's painter of a swatch's tile. A `fn`, which captures nothing, so the presets that paint it key it by its
-/// address.
-pub type SwatchPainter = fn(&ContentPainterCx<'_>, Rect, &PatternSwatch);
-
-/// What the editor's presets are built from.
-#[derive(craft_ui::contract::MemoProps)]
-struct TileInputs<'a> {
-    swatches: &'a [PatternSwatch],
-    #[memo_props(hash = "a fn pointer: its address names the code, which captures nothing")]
-    thumbnails: Option<SwatchPainter>,
-}
-
 /// What [`PatternFillEditor`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -63,7 +51,7 @@ impl Outcome for PatternFillOutput {
 /// Preset mode (`colors` set, PowerPoint's Pattern fill): a grid of the swatches, then Foreground and Background
 /// colour chips.
 ///
-/// The tiles come from [`thumbnails`](Self::thumbnails); without it a tile shows the swatch's name. Keyboard: Tab
+/// A tile shows its swatch's [`picture`](PatternSwatch::picture); without one, the swatch's name. Keyboard: Tab
 /// through the fields; the grid takes arrows. Right to left the rows mirror. The editor is the body a host passes to
 /// a paint chip's pattern editor.
 #[must_use = "show the editor with `show`"]
@@ -72,29 +60,22 @@ pub struct PatternFillEditor<'a> {
     label: Label,
     options: Bind<'a, PatternFillOptions>,
     swatches: &'a [PatternSwatch],
-    thumbnails: Option<SwatchPainter>,
 }
 
 impl<'a> PatternFillEditor<'a> {
     /// The editor named `label` over `options`, offering `swatches`.
     pub fn new(label: impl Into<Label>, options: Bind<'a, PatternFillOptions>, swatches: &'a [PatternSwatch]) -> Self {
-        PatternFillEditor { label: label.into(), options, swatches, thumbnails: None }
-    }
-
-    /// Paints a swatch's tile into a rect (the picker's field and cells, the preset grid).
-    pub fn thumbnails(mut self, paint: SwatchPainter) -> Self {
-        self.thumbnails = Some(paint);
-        self
+        PatternFillEditor { label: label.into(), options, swatches }
     }
 
     /// Draws the editor and reports the edit.
     pub fn show(self, ui: &mut Ui) -> PatternFillOutput {
-        let PatternFillEditor { label, mut options, swatches, thumbnails } = self;
+        let PatternFillEditor { label, mut options, swatches } = self;
         let env = Env::of(ui);
         let words = env.words::<PatternWords>();
         let units = env.units();
         let name: Arc<str> = label.as_str().into();
-        let rows = PresetSource::new(TileInputs { swatches, thumbnails }, PresetFns::new(tile_rows));
+        let rows = PresetSource::new(swatches, PresetFns::new(tile_rows));
         let mut events = EditEvents::new();
         let shown = FieldGroup::new(label).show(ui, |ui, cx| {
             events = EditEvents::new();
@@ -196,18 +177,20 @@ impl<'a> PatternFillEditor<'a> {
 const SCALE_DECIMALS: usize = 2;
 
 /// The preset row of each swatch: its name, with the tile painter when the host gave one.
-fn tile_rows(inputs: &TileInputs<'_>, _: &Env) -> Vec<PresetRow<String>> {
+fn tile_rows(swatches: &&[PatternSwatch], _: &Env) -> Vec<PresetRow<String>> {
     let tile_row = |swatch: &PatternSwatch| {
         let row = PresetRow::item(swatch.id.clone(), swatch.name.clone(), 0);
-        match inputs.thumbnails {
-            Some(paint) => {
-                let swatch = swatch.clone();
-                row.preview(CellShape::Square.aspect(), move |cx, rect| paint(cx, rect, &swatch))
-            }
+        match swatch.picture {
+            Some(picture) => row.preview(CellShape::Square.aspect(), move |cx, rect| paint_picture(cx, rect, picture)),
             None => row,
         }
     };
-    inputs.swatches.iter().map(tile_row).collect()
+    swatches.iter().map(tile_row).collect()
+}
+
+/// Paints the whole of a swatch's `picture` into `rect`.
+fn paint_picture(cx: &ContentPainterCx<'_>, rect: Rect, picture: egui::TextureId) {
+    cx.picture(picture, rect, Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), 0.0);
 }
 
 /// The key a browser event picked: a click or Enter on a tile.
