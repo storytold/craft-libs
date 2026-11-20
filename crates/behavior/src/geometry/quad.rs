@@ -76,6 +76,9 @@ pub enum TransformMode {
     /// Free Transform: every gesture by its keys.
     #[default]
     Free,
+    /// Corners and edges scale and the inside moves, as in Free Transform, but the outside does nothing and ⌘ adds
+    /// nothing to a corner or an edge (measured on the reference: no turn from outside, no distort).
+    Scale,
     /// Corners and edges turn the box about the reference point.
     Rotate,
     /// A corner moves alone along one of its edges; an edge slides along itself. No rotating.
@@ -252,7 +255,7 @@ impl BoxRules {
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
     pub fn effective_mode(&self) -> TransformMode {
         let refused = match self.mode {
-            TransformMode::Free => false,
+            TransformMode::Free | TransformMode::Scale => false,
             TransformMode::Rotate => !self.allow.rotate,
             TransformMode::Skew => !self.allow.skew,
             TransformMode::Distort | TransformMode::Perspective => !self.allow.distort,
@@ -261,12 +264,12 @@ impl BoxRules {
     }
 
     /// Whether a drag of `part` changes the box: in Distort only the corners, the inside and the
-    /// reference point; in Skew everything but the outside; the outside only where rotating is
+    /// reference point; in Skew and Scale everything but the outside; the outside only where rotating is
     /// allowed. A click outside a refused zone still applies the box (the overlay's rule).
     pub fn allows(&self, part: BoxPart) -> bool {
         let by_mode = match self.effective_mode() {
             TransformMode::Distort => !matches!(part, BoxPart::Outside | BoxPart::Edge(_)),
-            TransformMode::Skew => part != BoxPart::Outside,
+            TransformMode::Skew | TransformMode::Scale => part != BoxPart::Outside,
             _ => true,
         };
         by_mode && (self.allow.rotate || part != BoxPart::Outside)
@@ -374,6 +377,7 @@ fn unlinked_mods(unlinked: bool, legacy: bool, part: BoxPart, mut mods: Mods) ->
 fn mode_mods(mode: TransformMode, part: BoxPart, mut mods: Mods) -> Mods {
     match (mode, part) {
         (TransformMode::Distort, BoxPart::Corner(_)) => mods.cmd = true,
+        (TransformMode::Scale, BoxPart::Corner(_) | BoxPart::Edge(_)) => mods.cmd = false,
         (TransformMode::Perspective, BoxPart::Corner(_)) => {
             mods.cmd = true;
             mods.alt = true;

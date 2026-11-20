@@ -1129,3 +1129,22 @@ fn a_turn_reads_the_pointer_half_a_pixel_up_and_left() {
         assert!((turned - want).abs() < 0.01, "{from:?} to {to:?}: {turned}°, not {want}°");
     }
 }
+
+/// Edit › Transform › Scale (measured on the reference): a drag outside the box leaves it as it is, and ⌘ on a
+/// corner scales it as a plain corner drag does instead of distorting it; the inside still moves it.
+#[test]
+fn scale_mode_neither_turns_from_outside_nor_distorts() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let scale = BoxRules::in_mode(TransformMode::Scale);
+    let free = BoxRules::default();
+    let outside = |rules: &BoxRules| drag(&start, &start, BoxPart::Outside, p(520.0, 226.0), p(513.0, 283.0), Mods::NONE, rules);
+    assert_eq!(outside(&scale).quad, start.quad, "no turn from outside in Scale");
+    assert_ne!(outside(&free).quad, start.quad, "Free Transform turns from outside");
+    assert!(!scale.allows(BoxPart::Outside));
+    let cmd = Mods { cmd: true, ..Mods::NONE };
+    let corner = drag(&start, &start, BoxPart::Corner(1), p(452.0, 125.0), p(482.0, 95.0), cmd, &scale);
+    let want = [(150.0, 101.86), (486.59, 101.86), (486.59, 327.0), (150.0, 327.0)];
+    assert!(corner.quad.iter().zip(want).all(|(a, (x, y))| (a.x - x).abs() < 0.01 && (a.y - y).abs() < 0.01), "{:?}", corner.quad);
+    let moved = drag(&start, &start, BoxPart::Inside, p(301.0, 226.0), p(331.0, 246.0), Mods::NONE, &scale);
+    assert_eq!(moved.quad[0], p(180.0, 145.0));
+}
