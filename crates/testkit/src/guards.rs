@@ -642,8 +642,9 @@ impl Tri {
     }
 }
 
-/// Evaluate the `cfg` predicate at `toks[*pos]` for `wasm32-unknown-unknown`.
-fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
+/// Evaluate the `cfg` predicate at `toks[*pos]` for `wasm32-unknown-unknown`, or with `every` for every
+/// configuration at once, where only `true`, `false` and the operators over them have a known value.
+fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize, every: bool) -> Tri {
     let Some(Kind::Ident(name)) = toks.get(*pos).map(|t| &t.kind) else {
         return Tri::Unknown;
     };
@@ -654,6 +655,9 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
             _ => return Tri::Unknown,
         };
         *pos += 2;
+        if every {
+            return Tri::Unknown;
+        }
         let expected = match name.as_str() {
             "target_arch" => "wasm32",
             "target_os" | "target_vendor" => "unknown",
@@ -683,7 +687,7 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
                 continue;
             }
             let before = *pos;
-            values.push(eval_cfg(toks, pos, depth + 1));
+            values.push(eval_cfg(toks, pos, depth + 1, every));
             if *pos == before {
                 *pos += 1;
             }
@@ -700,7 +704,8 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
         };
     }
     match name.as_str() {
-        "unix" | "windows" | "false" => Tri::False,
+        "false" => Tri::False,
+        "unix" | "windows" if !every => Tri::False,
         "true" => Tri::True,
         _ => Tri::Unknown,
     }
@@ -925,12 +930,23 @@ fn item_end_at(toks: &[Token], start: usize, inner: bool, nested: usize) -> usiz
 /// An outer attribute (`#[cfg(...)]`) covers the item after it; an inner attribute (`#![cfg(...)]`)
 /// covers the rest of the module or block it is in.
 fn native_only(toks: &[Token]) -> Vec<bool> {
-    cfg_covered(toks, false)
+    cfg_covered(toks, Cover::NativeOnly)
 }
 
-/// Mark the tokens of every item that a `cfg` attribute covers: with `any`, whatever its predicate,
-/// otherwise only when the predicate is false on `wasm32-unknown-unknown`, as [`native_only`] does.
-fn cfg_covered(toks: &[Token], any: bool) -> Vec<bool> {
+/// Which `cfg` attributes [`cfg_covered`] marks the items of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cover {
+    /// Every `cfg` attribute, whatever its predicate.
+    Any,
+    /// A `cfg` attribute whose predicate is false on `wasm32-unknown-unknown`, as [`native_only`] reads it.
+    NativeOnly,
+    /// A `cfg` attribute whose predicate is false on every configuration, such as `cfg(any())` or
+    /// `cfg(false)`, so the item is never compiled.
+    Never,
+}
+
+/// Mark the tokens of every item that a `cfg` attribute selected by `cover` covers.
+fn cfg_covered(toks: &[Token], cover: Cover) -> Vec<bool> {
     let mut skip = vec![false; toks.len()];
     let mut i = 0;
     while i < toks.len() {
@@ -951,7 +967,7 @@ fn cfg_covered(toks: &[Token], any: bool) -> Vec<bool> {
         }
         let excluded = toks.get(open + 1).is_some_and(|t| t.is_ident("cfg")) && toks.get(open + 2).is_some_and(|t| t.is_punct('(')) && {
             let mut pos = open + 3;
-            any || eval_cfg(&toks[..close], &mut pos, 0) == Tri::False
+            cover == Cover::Any || eval_cfg(&toks[..close], &mut pos, 0, cover == Cover::Never) == Tri::False
         };
         if !excluded {
             i = close + 1;
@@ -991,7 +1007,7 @@ fn cfg_items(toks: &[Token]) -> BTreeSet<usize> {
             break;
         }
         let mut pos = i + 4;
-        if eval_cfg(&toks[..close], &mut pos, 0) == Tri::True {
+        if eval_cfg(&toks[..close], &mut pos, 0, false) == Tri::True {
             i = close + 1;
             continue;
         }
@@ -1028,7 +1044,9 @@ struct ModDecl {
     /// The inline modules (`mod a { ... }`) the declaration is inside, outermost first, shared between the
     /// declarations inside them.
     inline: Vec<Rc<ModName>>,
-    /// Whether the declaration is inside an item whose `cfg` is false on `wasm32-unknown-unknown`.
+    /// Whether the `skip` tokens given to [`module_decls`] cover the declaration: for [`std_instant`], an
+    /// item whose `cfg` is false on `wasm32-unknown-unknown`, and for [`predefined_quit`], one that is never
+    /// compiled.
     native: bool,
 }
 
@@ -1444,11 +1462,21 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
 
 /// Each `extern crate c;` or `extern crate c as n;` in a file: whether `c` is muda, the name it binds, and
-/// the index of that name.
-fn extern_crates(toks: &[Token]) -> Vec<(bool, &str, usize)> {
+/// the index of that name. A declaration in an item that `never` marks (see [`Cover::Never`]) is left out,
+/// and so are the tokens inside parentheses or brackets, such as the input of `m!(...)`, since an item
+/// is not written there.
+fn extern_crates<'a>(toks: &'a [Token], never: &[bool]) -> Vec<(bool, &'a str, usize)> {
     let mut externs = Vec::new();
+    let mut depth = 0usize;
     for i in 0..toks.len() {
-        if toks[i].is_ident("extern")
+        if toks[i].is_punct('(') || toks[i].is_punct('[') {
+            depth += 1;
+        } else if toks[i].is_punct(')') || toks[i].is_punct(']') {
+            depth = depth.saturating_sub(1);
+        }
+        if depth == 0
+            && !never.get(i).copied().unwrap_or(false)
+            && toks[i].is_ident("extern")
             && toks.get(i + 1).is_some_and(|t| t.is_ident("crate"))
             && let Some(Kind::Ident(krate)) = toks.get(i + 2).map(|t| &t.kind)
         {
@@ -1472,7 +1500,8 @@ fn extern_crates(toks: &[Token]) -> Vec<(bool, &str, usize)> {
 /// or `benches` folder other than `mod.rs` when no declaration without a `#[path]` attribute names it. A root's
 /// names reach every file that a chain of declarations
 /// from it names, where a crate root and a file loaded through a `#[path]` attribute have their modules in their
-/// own folder, as [`module_files`] reads them.
+/// own folder, as [`module_files`] reads them. A declaration in an item whose `cfg` is false on every
+/// configuration neither adds a name nor loads a file.
 fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<String>> {
     let mut index: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (i, path) in paths.iter().enumerate() {
@@ -1482,10 +1511,16 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
     let mut aliases: Vec<Vec<String>> = Vec::with_capacity(paths.len());
     for content in contents {
         let toks = lex_rust(content);
-        decls.push(module_decls(&toks, &vec![false; toks.len()]));
+        // A declaration in an item that is never compiled loads no file, and its alias is not in the prelude.
+        let never = cfg_covered(&toks, Cover::Never);
+        decls.push(module_decls(&toks, &never).into_iter().filter(|decl| !decl.native).collect());
         let (around, _) = brace_scopes(&toks);
         aliases.push(
-            extern_crates(&toks).into_iter().filter(|&(muda, _, at)| muda && around[at].is_none()).map(|(_, name, _)| name.to_owned()).collect(),
+            extern_crates(&toks, &never)
+                .into_iter()
+                .filter(|&(muda, _, at)| muda && around[at].is_none())
+                .map(|(_, name, _)| name.to_owned())
+                .collect(),
         );
     }
     // Node `2 * file` is the file loaded plainly (or as a crate root) and node `2 * file + 1` the file loaded
@@ -1511,8 +1546,9 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
             targets
         })
         .collect();
+    let packages = package_folders(paths);
     let root = |file: usize| {
-        if cargo_target(&paths[file]) {
+        if cargo_target(&paths[file], &packages) {
             return true;
         }
         let mut segments = paths[file].rsplit('/');
@@ -1543,16 +1579,30 @@ fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<Str
     prelude
 }
 
+/// The folders that hold a `src/lib.rs` or `src/main.rs` among `paths`, which are package folders. A relative
+/// `src/lib.rs` gives the empty folder.
+fn package_folders(paths: &[String]) -> BTreeSet<&str> {
+    paths
+        .iter()
+        .filter_map(|path| path.strip_suffix("src/lib.rs").or_else(|| path.strip_suffix("src/main.rs")))
+        .filter_map(|dir| dir.strip_suffix('/').or_else(|| dir.is_empty().then_some("")))
+        .collect()
+}
+
 /// Whether Cargo builds `path` as a crate root of its own, also when another file declares it as a module:
-/// each file other than `mod.rs` directly in a `src/bin` folder and each `main.rs` one folder below it; and in
-/// a package folder, `build.rs`, each file other than `mod.rs` directly in its `tests`, `examples` or `benches`
-/// folder, and each `main.rs` one folder below those. A package folder is one that is not directly inside
-/// `src` and has no `bin`, `tests`, `examples` or `benches` folder above it, so a folder of that name inside
-/// `src` or inside one of those folders holds modules.
-fn cargo_target(path: &str) -> bool {
-    let mut segments = path.rsplit('/');
+/// each file directly in a `src/bin` folder and each `main.rs` one folder below it; and in a package folder,
+/// `build.rs`, each file directly in its `tests`, `examples` or `benches` folder, and each `main.rs` one
+/// folder below those. Cargo's auto-discovery takes a `mod.rs` directly in those folders as a target too.
+/// The package folder is the nearest folder above `path` in `packages` (see [`package_folders`]). Without
+/// one, a package folder is one that is not directly inside `src` and has no `bin`, `tests`, `examples` or
+/// `benches` folder above it, so a folder of that name inside `src` or inside one of those folders holds
+/// modules. With one, only the folders below it count.
+fn cargo_target(path: &str, packages: &BTreeSet<&str>) -> bool {
+    let inside = path.rmatch_indices('/').map(|(i, _)| i).find(|&i| i > 0 && packages.contains(&path[..i])).map(|i| &path[i + 1..]);
+    let inside = inside.or_else(|| (packages.contains("") && !path.starts_with('/')).then_some(path));
+    let mut segments = inside.unwrap_or(path).rsplit('/');
     let Some(name) = segments.next() else { return false };
-    if name == "mod.rs" || !name.ends_with(".rs") {
+    if !name.ends_with(".rs") {
         return false;
     }
     let folders: Vec<&str> = segments.collect();
@@ -1573,15 +1623,17 @@ fn cargo_target(path: &str) -> bool {
 /// name and each pair of braces, the bindings record whether a `use` or an `extern crate` in them binds
 /// the name to the crate, and whether a `use`, an `extern crate` or a `mod` in them binds it to something
 /// else. A binding to something else inside an item with a `cfg` attribute, or through `crate::`, `self::`
-/// or `super::` (which may be a re-export of the crate), is left out.
+/// or `super::` (which may be a re-export of the crate), is left out, and so is an `extern crate` in an
+/// item that `never` marks or inside parentheses or brackets (see [`extern_crates`]).
 fn muda_crate_bindings<'a>(
     toks: &'a [Token],
     leaves: &'a [UseLeaf],
     around: &[Option<usize>],
     gated: &[bool],
+    never: &[bool],
     prelude: &'a BTreeSet<String>,
 ) -> (BTreeSet<&'a str>, CrateBindings<'a>) {
-    let externs = extern_crates(toks);
+    let externs = extern_crates(toks, never);
     // Whether a `use` path names the crate itself: `muda`, or a name of the crate in the extern prelude.
     let crate_path = |leaf: &UseLeaf| leaf.path.len() == 1 && (leaf.path[0] == "muda" || prelude.contains(&leaf.path[0]));
     let mut names: BTreeSet<&'a str> = BTreeSet::from(["muda"]);
@@ -1663,12 +1715,16 @@ fn muda_crate_bindings<'a>(
 /// another `lib.rs` or `main.rs`, or a file directly in a `bin`, `examples`, `tests` or `benches` folder other
 /// than `mod.rs`, unless a `mod` declaration in another of `files` names it, for a file in those folders one
 /// without a `#[path]` attribute; a file directly in `src/bin`, a package's `build.rs`, a file directly in its
-/// `tests`, `examples` or `benches` folder, and a `main.rs` one folder below those, are crate roots even when a
-/// declaration names them, where a package folder is not directly inside `src` and has no `bin`, `tests`,
-/// `examples` or `benches` folder above it) also adds `menu` to
+/// `tests`, `examples` or `benches` folder, `mod.rs` included, and a `main.rs` one folder below those, are crate
+/// roots even when a declaration names them, where the package folder is the nearest folder above the file
+/// that holds a `src/lib.rs` or `src/main.rs` of `files`, and without one, a folder not directly inside `src`
+/// with no `bin`, `tests`, `examples` or `benches` folder above it) also adds `menu` to
 /// the crate's extern prelude, so in that file and in every file of `files` that a chain of `mod`
 /// declarations from it names, `menu` is read like `muda` and `::menu::PredefinedMenuItem::quit` is
-/// reported. Elsewhere a path that starts with `::` names the crate only through `muda`. It also
+/// reported. An `extern crate` or `mod` declaration in an item whose `cfg` is false on every configuration
+/// (`cfg(any())`, `cfg(false)`) is read as absent, and so are the tokens of an `extern crate` inside
+/// parentheses or brackets, such as a macro's input. Elsewhere a path that starts with `::` names the crate
+/// only through `muda`. It also
 /// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
 /// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a
 /// name `muda` that the braces around the `use` or `type` bind to something else, read as for a qualified
@@ -1698,8 +1754,9 @@ where
         let toks = lex_rust(content);
         let leaves = use_leaves(&toks, &BTreeSet::new());
         let (around, opener) = brace_scopes(&toks);
-        let gated = cfg_covered(&toks, true);
-        let (crate_names, crate_bound) = muda_crate_bindings(&toks, &leaves, &around, &gated, &prelude[index]);
+        let gated = cfg_covered(&toks, Cover::Any);
+        let never = cfg_covered(&toks, Cover::Never);
+        let (crate_names, crate_bound) = muda_crate_bindings(&toks, &leaves, &around, &gated, &never, &prelude[index]);
         let names_crate = |s: &str| crate_names.contains(s);
         // Whether `name`, read at token `i`, names the crate. After a leading `::`, `muda` does, and so
         // does a name that `extern crate muda as name;` outside any braces of the file's crate root gives it
