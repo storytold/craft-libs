@@ -863,7 +863,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for TileGrid<'_, K>
                 continue;
             }
             let header = match &event {
-                CollectionEvent::Activate(key) | CollectionEvent::LeadMoved { key, .. } => group_of(key),
+                CollectionEvent::Activate(key) => group_of(key),
                 CollectionEvent::ContextMenu(request) => group_of(&request.key),
                 CollectionEvent::Open(change) => group_of(&change.key),
                 _ => None,

@@ -3,12 +3,30 @@
 use craft_behavior::{EditEvent, keyed};
 use craft_ui::contract::{Bind, CollectionEvent, ShowCollection as _};
 use craft_ui::testing::{Fixture, pointer, trial};
-use craft_ui::tile_grid::{GridEvent, GridZoom, RatingKeys, Tile, TileGrid, TileZoom};
+use craft_ui::tile_grid::{GridEvent, GridZoom, RatingKeys, Tile, TileGrid, TileGroup, TileZoom};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 const NAMES: [&str; 4] = ["Tile 1", "Tile 2", "Tile 3", "Tile 4"];
+
+#[trial]
+fn keyboard_lead_on_a_group_header_is_reported() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [1_usize, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let groups = [TileGroup::new(0, 0, 2, "Folder")];
+        let out = TileGrid::new("Library").groups(&groups).collapsible().show_items(ui, &source, &mut |_, _| Tile::new("Tile"));
+        held.borrow_mut().extend(out.response.events);
+    });
+    fixture.room(Vec2::new(600.0, 400.0)).settle();
+    fixture.key(Key::Tab, Modifiers::NONE).idle(2);
+    fixture.key(Key::Home, Modifiers::NONE).idle(2);
+    fixture.key(Key::ArrowUp, Modifiers::NONE).idle(2);
+    assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::LeadMoved { key: 0, .. })));
+}
 
 /// What the grid reported, kept across frames, and the zoom value a bound grid writes.
 #[derive(Default)]

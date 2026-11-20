@@ -71,9 +71,9 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
     assert!(fixture.by_label("Customize").is_some_and(|button| button.node == focused), "the focus is back on Edit Toolbar");
 }
 
-/// A tool already on the toolbar is dimmed and does not drag; a tool that is not on it drags to the rail.
+/// A grouped tool can also be dragged from the drawer into its own slot.
 #[trial]
-fn only_a_tool_off_the_toolbar_drags() {
+fn a_grouped_tool_also_drags_from_the_drawer() {
     let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
@@ -88,8 +88,22 @@ fn only_a_tool_off_the_toolbar_drags() {
         fixture.release_at(row.center() + Vec2::new(0.0, 30.0)).settle();
         started
     };
-    assert!(!drags(&mut fixture, "Pencil"), "Pencil is on the toolbar");
+    assert!(drags(&mut fixture, "Pencil"), "Pencil can also have its own slot");
     assert!(drags(&mut fixture, "Eraser"), "Eraser is not");
+}
+
+#[trial]
+fn adding_a_grouped_tool_keeps_the_group_entry() {
+    let slots = [slot(0, &[UNDO, REDO])];
+    let edit = ToolbarEdit::add(tool(REDO), DropAt::new_slot(1));
+    let result = apply_toolbar_edit(&slots, &edit, &[]);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].tools.len(), 2);
+    assert_eq!(result[1].tools[0].id, REDO);
+    let removed = apply_toolbar_edit(&result, &ToolbarEdit::remove_from(result[1].id, 0), &[]);
+    assert_eq!(layout(&removed), layout(&slots), "removing the separate occurrence preserves the group");
+    let moved = apply_toolbar_edit(&result, &ToolbarEdit::move_from(result[1].id, 0, DropAt::new_slot(0)), &[]);
+    assert_eq!(moved[1].tools.len(), 2, "moving the separate occurrence preserves the group");
 }
 
 /// A click on a tool reports it as the one to select and leaves no row selected: the drawer's rows pick, they do not

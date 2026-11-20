@@ -223,12 +223,14 @@ pub struct Shape<O> {
     /// The named stacking order: stacked parts of one priority rank by it before the nearest centre, the higher order
     /// winning.
     pub stacking: u32,
+    /// Whether a passed drag targets the arena root instead of the next shape.
+    pub drag_to_root: bool,
 }
 
 impl<O> Shape<O> {
     /// A shape of `owner` at stack `position`.
     pub const fn new(shape: HitShape, sense: Sense, owner: O, part: Option<PartRef>, priority: HitPriority, position: u32) -> Self {
-        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0, stacking: 0 }
+        Shape { shape, sense, owner, part, priority, position, local: false, min_across: 0.0, stacking: 0, drag_to_root: false }
     }
 
     /// The hit area is at least `across` points wide and high.
@@ -280,6 +282,8 @@ pub struct Winner<O> {
     pub sense: Sense,
     /// Its shape lies in the body layer's space.
     pub local: bool,
+    /// A passed drag targets the arena root.
+    pub drag_to_root: bool,
 }
 
 /// The winner among `shapes` at `point`: stack position first, then level, sub-level, stacking order, the nearest
@@ -303,7 +307,7 @@ pub fn resolve_mapped<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFo
                 .then_with(|| distance(b).partial_cmp(&distance(a)).unwrap_or(Ordering::Equal))
                 .then(ia.cmp(ib))
         })
-        .map(|(index, shape)| Winner { index, owner: shape.owner, part: shape.part, sense: shape.sense, local: shape.local })
+        .map(|(index, shape)| Winner { index, owner: shape.owner, part: shape.part, sense: shape.sense, local: shape.local, drag_to_root: shape.drag_to_root })
 }
 
 #[cfg(test)]

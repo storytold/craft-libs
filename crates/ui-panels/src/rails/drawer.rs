@@ -58,18 +58,34 @@ pub enum ToolbarEdit<T> {
         /// Where it goes.
         at: DropAt,
     },
-    /// Take the tool off the toolbar.
+    /// Take every occurrence of the tool off the toolbar. Use `RemoveFrom` to remove one occurrence.
     #[non_exhaustive]
     Remove {
         /// The tool.
         tool: T,
     },
-    /// Move a tool that is on the toolbar to `at`.
+    /// Move a tool by id to `at`, removing its other occurrences. Use `MoveFrom` to move one occurrence.
     #[non_exhaustive]
     Move {
         /// The tool.
         tool: T,
         /// Where it goes.
+        at: DropAt,
+    },
+    /// Remove one occurrence, identified by its slot and index.
+    RemoveFrom {
+        /// The source slot.
+        slot: SlotId,
+        /// The index in the source slot.
+        index: usize,
+    },
+    /// Move one occurrence, identified by its slot and index.
+    MoveFrom {
+        /// The source slot.
+        slot: SlotId,
+        /// The index in the source slot.
+        index: usize,
+        /// The destination.
         at: DropAt,
     },
     /// Go back to the default toolbar.
@@ -90,6 +106,16 @@ impl<T> ToolbarEdit<T> {
     /// Move the toolbar's tool `tool` to `at`.
     pub fn move_to(tool: T, at: DropAt) -> Self {
         ToolbarEdit::Move { tool, at }
+    }
+
+    /// Remove the occurrence at `index` in `slot`.
+    pub fn remove_from(slot: SlotId, index: usize) -> Self {
+        ToolbarEdit::RemoveFrom { slot, index }
+    }
+
+    /// Move the occurrence at `index` in `slot` to `at`.
+    pub fn move_from(slot: SlotId, index: usize, at: DropAt) -> Self {
+        ToolbarEdit::MoveFrom { slot, index, at }
     }
 }
 
@@ -240,9 +266,9 @@ fn match_texts<T>(command: &ResolvedCommand, tool: &RailTool<T>) -> Vec<Label> {
     texts
 }
 
-/// Whether the toolbar holds the tool `id`.
+/// Whether the toolbar already has a separate slot for `id`.
 fn on_toolbar<T: PartialEq>(toolbar: &[ToolSlot<T>], id: &T) -> bool {
-    toolbar.iter().any(|slot| slot.tools.iter().any(|tool| tool.id == *id))
+    toolbar.iter().any(|slot| slot.tools.len() == 1 && slot.tools.iter().any(|tool| tool.id == *id))
 }
 
 impl<T: Value + 'static> ToolbarDrawer<'_, T> {
@@ -354,9 +380,9 @@ impl<T: Value + 'static> ToolbarDrawer<'_, T> {
                     });
             });
             if let Some(ToolDrag::Rail { slot: from, index }) = slot.output.dropped
-                && let Some(tool) = toolbar.iter().find(|candidate| candidate.id == from).and_then(|candidate| candidate.tools.get(index))
+                && toolbar.iter().find(|candidate| candidate.id == from).and_then(|candidate| candidate.tools.get(index)).is_some()
             {
-                edits.push(ToolbarEdit::Remove { tool: tool.id.clone() });
+                edits.push(ToolbarEdit::RemoveFrom { slot: from, index });
             }
         });
         if restore {
@@ -376,11 +402,11 @@ pub fn drop_edit<T: Value>(drag: ToolDrag, at: DropAt, groups: &[DrawerGroup<T>]
             Some(ToolbarEdit::Add { tool: tool.clone(), at })
         }
         ToolDrag::Rail { slot, index } => {
-            let tool = toolbar.iter().find(|candidate| candidate.id == slot)?.tools.get(index)?;
+            toolbar.iter().find(|candidate| candidate.id == slot)?.tools.get(index)?;
             if matches!(at, DropAt::Slot { slot: onto, .. } if onto == slot) {
                 return None;
             }
-            Some(ToolbarEdit::Move { tool: tool.id.clone(), at })
+            Some(ToolbarEdit::MoveFrom { slot, index, at })
         }
     }
 }
@@ -389,7 +415,7 @@ pub fn drop_edit<T: Value>(drag: ToolDrag, at: DropAt, groups: &[DrawerGroup<T>]
 pub fn apply_toolbar_edit<T: Clone + PartialEq>(slots: &[ToolSlot<T>], edit: &ToolbarEdit<T>, defaults: &[ToolSlot<T>]) -> Vec<ToolSlot<T>> {
     match edit {
         ToolbarEdit::Reset => defaults.to_vec(),
-        ToolbarEdit::Add { tool, at } => place(slots, tool.clone(), *at),
+        ToolbarEdit::Add { tool, at } => insert(slots.to_vec(), tool.clone(), *at),
         ToolbarEdit::Move { tool, at } => match slots.iter().flat_map(|slot| &slot.tools).find(|candidate| candidate.id == *tool) {
             Some(found) => place(slots, found.clone(), *at),
             None => slots.to_vec(),
@@ -402,10 +428,42 @@ pub fn apply_toolbar_edit<T: Clone + PartialEq>(slots: &[ToolSlot<T>], edit: &To
             out.retain(|slot| !slot.tools.is_empty());
             out
         }
+        ToolbarEdit::RemoveFrom { slot, index } => {
+            let mut out = slots.to_vec();
+            let Some(source) = out.iter_mut().find(|candidate| candidate.id == *slot) else { return out };
+            if *index < source.tools.len() {
+                source.tools.remove(*index);
+            }
+            out.retain(|slot| !slot.tools.is_empty());
+            out
+        }
+        ToolbarEdit::MoveFrom { slot, index, at } => {
+            if matches!(at, DropAt::Slot { slot: target, .. } if !slots.iter().any(|candidate| candidate.id == *target))
+                || matches!(at, DropAt::NewSlot { .. }) && slots.iter().any(|candidate| candidate.id == SlotId::MAX)
+            {
+                return slots.to_vec();
+            }
+            let mut out = slots.to_vec();
+            let Some(source) = out.iter_mut().find(|candidate| candidate.id == *slot) else { return out };
+            if *index >= source.tools.len() {
+                return out;
+            }
+            let tool = source.tools.remove(*index);
+            let destination = match *at {
+                DropAt::Slot { slot: target, index: to } if target == *slot && *index < to => DropAt::Slot { slot: target, index: to - 1 },
+                other => other,
+            };
+            insert(out, tool, destination)
+        }
     }
 }
 
 fn place<T: Clone + PartialEq>(slots: &[ToolSlot<T>], tool: RailTool<T>, at: DropAt) -> Vec<ToolSlot<T>> {
+    if matches!(at, DropAt::Slot { slot, .. } if !slots.iter().any(|candidate| candidate.id == slot))
+        || matches!(at, DropAt::NewSlot { .. }) && slots.iter().any(|candidate| candidate.id == SlotId::MAX)
+    {
+        return slots.to_vec();
+    }
     let mut out = slots.to_vec();
     let mut was: Option<(SlotId, usize)> = None;
     for slot in &mut out {
@@ -414,17 +472,31 @@ fn place<T: Clone + PartialEq>(slots: &[ToolSlot<T>], tool: RailTool<T>, at: Dro
             was = Some((slot.id, index));
         }
     }
+    let at = match at {
+        DropAt::Slot { slot, index } => {
+            let shift = was.is_some_and(|(from, old)| from == slot && old < index);
+            DropAt::Slot { slot, index: index.saturating_sub(usize::from(shift)) }
+        }
+        other => other,
+    };
+    insert(out, tool, at)
+}
+
+fn insert<T: Clone>(mut out: Vec<ToolSlot<T>>, tool: RailTool<T>, at: DropAt) -> Vec<ToolSlot<T>> {
+    let original = out.clone();
     match at {
         DropAt::Slot { slot, index } => {
             let Some(target) = out.iter_mut().find(|candidate| candidate.id == slot) else {
-                return slots.to_vec();
+                return original;
             };
-            let shift = was.is_some_and(|(from, old)| from == slot && old < index);
-            let index = (index - usize::from(shift)).min(target.tools.len());
+            let index = index.min(target.tools.len());
             target.tools.insert(index, tool);
         }
         DropAt::NewSlot { before } => {
-            let id = slots.iter().map(|slot| slot.id).max().map_or(0, |max| max + 1);
+            let id = match out.iter().map(|slot| slot.id).max() {
+                Some(max) => match max.checked_add(1) { Some(id) => id, None => return original },
+                None => 0,
+            };
             out.insert(before.min(out.len()), ToolSlot::new(id, vec![tool]));
         }
     }

@@ -46,6 +46,37 @@ fn press_key(frames: &mut Frames, show: &mut impl FnMut(&mut Ui), key: Key) {
     frames.frame(vec![key_press(key, Modifiers::NONE)], &mut *show);
 }
 
+#[trial]
+fn escape_unused_by_a_focused_control_reaches_the_window() {
+    let (host, mut show) = host_window();
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert_eq!(seen(&host).1, 1, "the focused button leaves Escape for the window");
+}
+
+#[trial]
+fn a_canvas_cannot_take_escape_before_an_unrelated_focused_control() {
+    let (host, mut base) = host_window();
+    let stolen = Rc::new(std::cell::Cell::new(false));
+    let canvas_seen = Rc::clone(&stolen);
+    let mut show = move |ui: &mut Ui| {
+        if crate::runtime::keys::with_canvas_window_intents(ui.ctx(), false, |intents| intents.take(Intent::Cancel)) {
+            canvas_seen.set(true);
+        }
+        base(ui);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(named_id("button")));
+    frames.idle(2, &mut show);
+    press_key(&mut frames, &mut show, Key::Escape);
+    assert!(!stolen.get());
+    assert_eq!(seen(&host).1, 1);
+}
+
 /// A window with a framework button and the host's own egui text field, with what the host saw.
 fn host_window() -> (Rc<RefCell<Host>>, impl FnMut(&mut Ui)) {
     let host = Rc::new(RefCell::new(Host { text: String::new(), rect: Rect::NOTHING, reached: Vec::new(), cancels: 0, start_drag: false }));

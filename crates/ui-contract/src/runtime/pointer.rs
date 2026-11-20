@@ -788,7 +788,11 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
                         let dragging: Vec<usize> = pressable
                             .iter()
                             .copied()
-                            .filter(|&index| index != winner.index && entry.shapes[index].sense.contains(craft_behavior::Sense::DRAG))
+                            .filter(|&index| {
+                                let shape = &entry.shapes[index];
+                                index != winner.index && shape.sense.contains(craft_behavior::Sense::DRAG)
+                                    && (!winner.drag_to_root || (shape.owner == root && shape.part.is_none()))
+                            })
                             .collect();
                         pick(&dragging, ResolveFor::Press)
                     })
@@ -839,7 +843,8 @@ fn winners_of(mut ranked: Vec<((u8, u32), Winner<Id>, Id, bool)>) -> PressWinner
             // shape that passes its drag, the next shape that drags takes it, in the same root or one below.
             (true, false) => {
                 let passes = winners.click.is_some_and(|(top, _)| top.sense.contains(craft_behavior::Sense::PASSES_DRAG));
-                if drags && (passes || !(clicks || root_clicks)) {
+                let root_target = winners.click.is_some_and(|(top, owner)| top.drag_to_root && (root != owner || winner.part.is_some()));
+                if drags && !root_target && (passes || !(clicks || root_clicks)) {
                     winners.drag = Some((winner, root));
                 }
                 break;

@@ -501,6 +501,25 @@ fn one_pointer_resolution_per_pass_whatever_the_number_of_roots() {
 const LINK: PartKey = PartKey::new("link");
 const SURFACE: PartKey = PartKey::new("surface");
 
+/// A clickable overlay can send its drag to the canvas root past a draggable field.
+#[trial]
+fn passed_drag_can_target_the_arena_root_past_a_field() {
+    let page = rect(100.0, 100.0, 400.0, 300.0);
+    let area = rect(150.0, 150.0, 60.0, 40.0);
+    let field = ProbePart::new(SURFACE, area, Sense::CLICK | Sense::DRAG);
+    let comment = ProbePart::new(LINK, area, Sense::CLICK | Sense::PASSES_DRAG).level(HitLevel::Edge, 0).drag_to_root();
+    let root = ProbeRoot::new("canvas", page, Sense::DRAG).arena().member(ProbeMember::new("parts", page, Sense::empty()).part(field).part(comment));
+    let (mut show_frame, log) = scene(vec![root]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    drag(&mut frames, area.center(), Vec2::new(40.0, 30.0), &mut show_frame);
+    assert_eq!(drags(&log.borrow().root_phases(0, None)), 1, "canvas takes the drag");
+    assert_eq!(drags(&log.borrow().member_phases(0, "parts", Some(SURFACE))), 0, "field does not drag");
+    log.borrow_mut().clear();
+    pointer::click(&mut frames, area.center(), &mut show_frame);
+    assert!(log.borrow().member_phases(0, "parts", Some(LINK)).iter().any(|phase| matches!(phase, PressPhase::Release { click: true, .. })));
+}
+
 /// L-19: a link on a page clicks, but a drag that starts on it belongs to the page under it (production's
 /// `Hit::declines_drag`). A press past slop on a click part that passes its drag gives the `DragStart` to the next
 /// shape below that drags, whether that shape is the same root's own part or a root shown below; the link sees no

@@ -96,6 +96,13 @@ pub(crate) struct PartExtras {
 }
 
 impl PartBuilder<'_> {
+    /// Send a passed drag to the enclosing arena root, retaining clicks on this part.
+    /// Declare `CLICK | PASSES_DRAG` as the part's sense.
+    pub fn drag_to_root(self) -> Self {
+        self.decl.drag_to_root = true;
+        self
+    }
+
     /// What the part senses; hover only by default.
     pub fn sense(self, sense: Sense) -> Self {
         self.decl.sense = sense;
