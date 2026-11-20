@@ -6,7 +6,7 @@ use craft_ui::runtime::env::{Env, EnvValue, with_env};
 use craft_ui::testing::memory::scoped;
 use craft_ui::testing::{Frames, trial};
 
-#[derive(Clone, Debug, PartialEq, EnvValue)]
+#[derive(Clone, Debug, PartialEq, EnvValue, craft_ui::contract::MemoProps)]
 #[env(root = Units("pt"))]
 struct Units(&'static str);
 

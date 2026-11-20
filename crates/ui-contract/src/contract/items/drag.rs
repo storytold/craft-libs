@@ -447,7 +447,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// does nothing and starts no sweep.
     pub(super) fn begin_toggle(&mut self, cx: &mut Cx<'_, C>, at: usize, (column, toggle, cell): (ColumnKey, ToggleColumn, Rect)) {
         if toggle.sweepable {
-            let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
+            let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
             self.drags.sweep = Some(Sweep { column: column.clone(), on: false, mods, crossed: vec![at], span: cell.x_range(), open: Vec::new() });
         }
         match self.flip_toggle(cx, at, column, toggle) {
@@ -467,7 +467,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let on = !self.source.toggled(at, &column);
-        let mods = crate::runtime::pointer::frame(&cx.core.ctx).mods;
+        let mods = crate::runtime::pointer::frame_raw(&cx.core.ctx).mods;
         self.emit_toggle(cx, at, &column, on, mods);
         if toggle.exclusive && on {
             for other in (0..self.source.len()).filter(|&other| other != at && self.source.toggled(other, &column)) {

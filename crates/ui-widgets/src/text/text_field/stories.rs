@@ -28,9 +28,8 @@ fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let placeholder = data.value("placeholder", String::from("Layer name")).clone();
     let out = FieldGroup::new("Text field states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
-        let first = row("Empty").show(ui, |ui, _| {
-            TextField::new("Name", Bind::bound(data.value("name", String::new()))).placeholder(placeholder.clone()).size(size).show(ui)
-        });
+        let first = row("Empty")
+            .show(ui, |ui, _| TextField::new("Name", data.bind("name", String::new())).placeholder(placeholder.clone()).size(size).show(ui));
         row("Filled").show(ui, |ui, _| {
             TextField::new("Layer", Bind::bound(&mut String::from("Background"))).placeholder(placeholder.clone()).size(size).show(ui);
         });
@@ -49,7 +48,7 @@ fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             TextField::new("Layer icon", Bind::bound(&mut String::from("Layers"))).leading(IconSpec::svg(IconId::new("layers"))).size(size).show(ui);
         });
         row("Multiline").show(ui, |ui, _| {
-            TextField::new("Notes", Bind::bound(data.value("notes", String::from("Shot list\nGolden hour, wide\nDetail of the hands"))))
+            TextField::new("Notes", data.bind("notes", String::from("Shot list\nGolden hour, wide\nDetail of the hands")))
                 .lines(3)
                 .size(size)
                 .show(ui);
@@ -67,35 +66,35 @@ fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TextField<'static, PlainText>, covers = [LongText], drive = Drive::Never)]
 fn text_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Name", Bind::bound(data.value("long", LONG.to_owned()))).show(ui).into()
+    TextField::new("Name", data.bind("long", LONG.to_owned())).show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [Mixed], drive = Drive::Never)]
 fn text_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Name", Bind::bound_mixed(data.value("mixed", Mixed::<String>::Mixed))).placeholder("Mixed").show(ui).into()
+    TextField::new("Name", data.bind_mixed("mixed", Mixed::<String>::Mixed)).placeholder("Mixed").show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [Invalid], drive = Drive::Never)]
 fn text_field_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_empty = |text: &String| if text.is_empty() { Validity::Refuse(Message::new("A name is required")) } else { Validity::Ok };
-    TextField::new("Name", Bind::bound(data.value("empty", String::new())).check(refuse_empty)).show(ui).into()
+    TextField::new("Name", data.bind("empty", String::new()).check(refuse_empty)).show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_read_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Name", Bind::bound(data.value("name", "Locked".to_owned()))).read_only(true).show(ui).into()
+    TextField::new("Name", data.bind("name", "Locked".to_owned())).read_only(true).show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Name", Bind::bound(data.value("name", "Off".to_owned()))).enabled(false).show(ui).into()
+    TextField::new("Name", data.bind("name", "Off".to_owned())).enabled(false).show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Type("query"))]
 fn text_field_search(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let placeholder = data.value("placeholder", String::from("Search")).clone();
-    TextField::search("Search", Bind::bound(data.value("query", String::new()))).placeholder(placeholder).size(size).show(ui).into()
+    TextField::search("Search", data.bind("query", String::new())).placeholder(placeholder).size(size).show(ui).into()
 }
 
 /// Completes the words that start with the text before the caret.
@@ -124,30 +123,25 @@ fn text_field_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_search_filled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::search("Search", Bind::bound(data.value("filled", "poster".to_owned()))).placeholder("Search").show(ui).into()
+    TextField::search("Search", data.bind("filled", "poster".to_owned())).placeholder("Search").show(ui).into()
 }
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_adorned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Font", Bind::bound(data.value("font", "Inter".to_owned())))
-        .leading(IconSpec::svg(IconId::new("search")))
-        .trailing_arrow()
-        .show(ui)
-        .into()
+    TextField::new("Font", data.bind("font", "Inter".to_owned())).leading(IconSpec::svg(IconId::new("search"))).trailing_arrow().show(ui).into()
 }
 
 /// Fields that ask for a width in characters over the field length: a short one, the field length, and a wide one
 /// (a watermark's text), one over the other so their ends show the difference.
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_width_chars(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut text = data.value("text", "CONFIDENTIAL".to_owned()).clone();
+    let (text, text_at) = data.value_at("text", "CONFIDENTIAL".to_owned());
     let shown = Stack::new().show(ui, |ui, _| {
-        let short = TextField::new("Short, 12 characters", Bind::bound(&mut text)).width_chars(12).show(ui);
-        TextField::new("Field length", Bind::bound(&mut text)).show(ui);
-        TextField::new("Wide, 40 characters", Bind::bound(&mut text)).width_chars(40).show(ui);
+        let short = TextField::new("Short, 12 characters", text_at.bind(&mut *text)).width_chars(12).show(ui);
+        TextField::new("Field length", text_at.bind(&mut *text)).show(ui);
+        TextField::new("Wide, 40 characters", text_at.bind(&mut *text)).width_chars(40).show(ui);
         short
     });
-    *data.value("text", String::new()) = text;
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }
 
@@ -157,34 +151,28 @@ const NOTES: &str = "Shot list\nGolden hour, wide\nDetail of the hands\nThe crow
 /// one bound caret shown under them: moving the caret in either moves it in the other.
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_filling(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut notes = data.value("notes", NOTES.to_owned()).clone();
-    let mut caret = *data.value("caret", 0usize);
+    let ((notes, notes_at), (caret, caret_at)) = data.pair_at(("notes", NOTES.to_owned()), ("caret", 0usize));
     let shown = Stack::new().show(ui, |ui, _| {
-        let capped = TextField::new("Notes", Bind::bound(&mut notes)).lines(2).max_lines(4).caret(Bind::bound(&mut caret)).show(ui);
-        TextField::new("Notes, filling", Bind::bound(&mut notes)).lines(2).caret(Bind::bound(&mut caret)).sizing(Sizing::Fill).show(ui);
+        let capped = TextField::new("Notes", notes_at.bind(&mut *notes)).lines(2).max_lines(4).caret(caret_at.bind(&mut *caret)).show(ui);
+        TextField::new("Notes, filling", notes_at.bind(&mut *notes)).lines(2).caret(caret_at.bind(&mut *caret)).sizing(Sizing::Fill).show(ui);
         Text::new(format!("Caret at byte {caret}")).shade(Shade::Muted).show(ui);
         capped
     });
-    *data.value("notes", String::new()) = notes;
-    *data.value("caret", 0usize) = caret;
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }
 
 /// A field whose Tab stays in it and is reported: the readout shows the direction of the last one.
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_tab_reports(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut cell = data.value("cell", "Revenue".to_owned()).clone();
-    let mut last = data.value("last", String::from("none")).clone();
+    let ((cell, cell_at), (last, _)) = data.pair_at(("cell", "Revenue".to_owned()), ("last", String::from("none")));
     let shown = Stack::new().show(ui, |ui, _| {
-        let field = TextField::new("Cell", Bind::bound(&mut cell)).tab_reports().show(ui);
+        let field = TextField::new("Cell", cell_at.bind(&mut *cell)).tab_reports().show(ui);
         if let Some(forward) = field.tab {
-            last = String::from(if forward { "Tab" } else { "Shift+Tab" });
+            *last = String::from(if forward { "Tab" } else { "Shift+Tab" });
         }
         Text::new(format!("Last key: {last}")).shade(Shade::Muted).show(ui);
         field
     });
-    *data.value("cell", String::new()) = cell;
-    *data.value("last", String::new()) = last;
     shown.inner.map(StoryOutput::from).unwrap_or_default()
 }
 

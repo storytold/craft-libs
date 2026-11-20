@@ -2,6 +2,7 @@
 
 mod mock;
 mod overview;
+mod panels;
 mod viewer;
 
 use craft_ui_gallery::testing::registered;

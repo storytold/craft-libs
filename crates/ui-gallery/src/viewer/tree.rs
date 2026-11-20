@@ -2,12 +2,12 @@
 
 use super::catalog::{ComponentInfo, fold_filter};
 use craft_behavior::{DisplayOrder, ItemSource};
-use craft_ui::contract::Level;
+use craft_ui::contract::{Level, Tracked};
 use craft_ui::list::OpenSet;
 use std::borrow::Cow;
 
 /// The key of a tree row.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, craft_ui::contract::PlainData)]
 #[non_exhaustive]
 pub enum TreeKey {
     /// A level group.
@@ -43,19 +43,28 @@ pub fn level_named(slug_text: &str) -> Option<Level> {
 }
 
 /// Opens the level of `selected` when the selection is not the one `seen` records, then records it, so a selection
-/// that moves into a closed level shows its row. The levels the user opened or closed otherwise stay as they are.
+/// that moves into a closed level shows its row. The levels the user opened or closed otherwise stay as they are. Each
+/// value is written only when it changes, so its readers' revisions move only then.
 pub fn open_level_of_selection(
-    open: &mut OpenSet<TreeKey>,
+    open: &mut Tracked<OpenSet<TreeKey>>,
     components: &[ComponentInfo],
     selected: Option<&'static str>,
-    seen: &mut Option<Option<&'static str>>,
+    seen: &mut Tracked<Option<Option<&'static str>>>,
 ) {
-    if *seen == Some(selected) {
+    if **seen == Some(selected) {
         return;
     }
-    *seen = Some(selected);
+    **seen = Some(selected);
     if let Some(component) = selected.and_then(|type_name| components.iter().find(|component| component.type_name == type_name)) {
-        open.set(&TreeKey::Level(component.level), true);
+        open_level(open, component.level);
+    }
+}
+
+/// Opens the group of `level`, writing `open` only when the group was closed.
+pub fn open_level(open: &mut Tracked<OpenSet<TreeKey>>, level: Level) {
+    let key = TreeKey::Level(level);
+    if !open.is_open(&key) {
+        open.set(&key, true);
     }
 }
 

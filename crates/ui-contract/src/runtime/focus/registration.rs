@@ -180,33 +180,6 @@ impl Group {
     }
 }
 
-/// What a component's part group joined: the enclosing body roving group and the pass that recorded it.
-#[derive(Clone, Copy)]
-struct PartJoin {
-    group: Id,
-    pass: u64,
-}
-
-fn part_join_slot(parts: Id) -> Id {
-    sub(parts, "body_group")
-}
-
-/// Records that the part group `parts` of component `id` joins the body roving group `group` in this pass: the
-/// component's focusable parts become members of `group` in reading order, so Tab visits the group once and
-/// arrows cross between the parts and the group's other members.
-pub(crate) fn join_part_group(ctx: &Context, group: Id, id: Id, parts: Id) {
-    let slot = part_join_slot(parts);
-    store::put(ctx, slot, PartJoin { group, pass: crate::runtime::pointer::pass_of(ctx) });
-    crate::runtime::memory::adopt::<PartJoin>(ctx, id, slot);
-}
-
-/// The body roving group the part group `parts` joined in this pass or the one before, else `None`: parts of a
-/// component that never joined stay in their own part group.
-pub(crate) fn part_group(ctx: &Context, parts: Id) -> Option<Id> {
-    let join = store::peek_clone::<PartJoin>(ctx, part_join_slot(parts))?;
-    (join.pass.saturating_add(1) >= crate::runtime::pointer::pass_of(ctx)).then_some(join.group)
-}
-
 /// The innermost open `KeepAnchor` layer opened from the stop `opener`, the collection its opener hands list keys
 /// to (the stop with the collection's key role that is registered inside the layer's focus scope) and the layer's
 /// policy. `None` while no such layer is open or it has no collection.

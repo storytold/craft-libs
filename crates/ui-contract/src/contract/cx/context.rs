@@ -167,6 +167,8 @@ pub struct CxCore<'a> {
     pub(crate) roving_arrival: Option<Id>,
     /// The member of the container's roving group that moves start from, set by `Cx::roving_lead`.
     pub(crate) roving_lead: Option<Id>,
+    /// The component joined the roving group of the body it is shown in this pass (`Cx::join_roving`).
+    pub(crate) roving_member: bool,
     /// The collection's selection (a `Selection<K>`) and lead as the item step holds them, for `Cx::collection_selection`.
     pub(crate) collection_selection: Option<Box<dyn std::any::Any>>,
     /// The events and visible range the item step left for `collection_response`.
@@ -236,13 +238,11 @@ impl<C: Component> Cx<'_, C> {
         crate::runtime::egui::output::open_url(&self.core.ctx, url, new_tab);
     }
 
-    /// Makes this component a member of the roving group of the body it is shown in: its stop joins the group and
-    /// Tab visits the group once. A component that never calls it keeps its own Tab stop.
+    /// Makes this component a member of the roving group of the body it is shown in: its stop and its focusable parts
+    /// join the group, and Tab visits the group once. Called from `update`: the stops register after it, in the same
+    /// pass. A component that does not call it in a pass keeps its own Tab stop in that pass.
     pub fn join_roving(&mut self) {
-        if let Some(group) = self.core.env.roving() {
-            crate::contract::steps::join_group(&self.core.ctx, group, self.core.id);
-            focus::registration::join_part_group(&self.core.ctx, group, self.core.id, crate::runtime::memory::sub(self.core.id, "roving"));
-        }
+        self.core.roving_member = true;
     }
 
     /// Runs `command` as this component's own activation would, for a command that is not the component's bound
