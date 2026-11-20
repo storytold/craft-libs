@@ -948,6 +948,9 @@ impl<'r> Builder<'r> {
                     let borderless = !t.bordered;
                     // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
+                    if t.rows.len() > craft_wordmodel::table::MAX_ROWS {
+                        model::dropped(model::Dropped::TableLayout);
+                    }
                     let rows: Vec<_> = t.rows.into_iter().take(craft_wordmodel::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless, extra: None, kept: None, wrap: None };
                     let col_widths = &t.col_widths;

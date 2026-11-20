@@ -115,6 +115,15 @@ mod tests {
     }
 
     #[test]
+    fn reports_missing_span_coverage_when_a_row_is_full() {
+        let first = Cell { rowspan: 2, ..Cell::default() };
+        let mut table = FTable { rows: vec![vec![first], vec![Cell::default(); 64]], ..FTable::default() };
+        begin_import();
+        table.insert_covered();
+        assert!(Dropped::TableLayout.reported());
+    }
+
+    #[test]
     fn insert_covered_is_bounded_on_hostile_rowspan() {
         // Many rows each carrying the maximum rowspan would be O(rows × rowspan) covered cells;
         // the work cap must keep insertion bounded (and quick) instead of exhausting memory.

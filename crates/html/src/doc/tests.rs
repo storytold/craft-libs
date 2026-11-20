@@ -2164,3 +2164,16 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+#[test]
+fn reports_table_rows_past_the_limit() {
+    let row = "<tr><td>x</td></tr>";
+    let at_limit = format!("<table>{}</table>", row.repeat(craft_wordmodel::table::MAX_ROWS));
+    craft_flow::begin_import();
+    let _ = parse(&at_limit);
+    assert!(!craft_flow::Dropped::TableLayout.reported());
+    let beyond = format!("<table>{}</table>", row.repeat(craft_wordmodel::table::MAX_ROWS + 1));
+    craft_flow::begin_import();
+    let _ = parse(&beyond);
+    assert!(craft_flow::Dropped::TableLayout.reported());
+}

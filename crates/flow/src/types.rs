@@ -66,6 +66,8 @@ pub enum Dropped {
     Spaces,
     /// Markdown table rows and columns past the table limits or the document's cell budget.
     TableCells,
+    /// Table rows or span coverage were omitted due to import limits.
+    TableLayout,
 }
 
 impl Dropped {
@@ -80,6 +82,7 @@ impl Dropped {
             Dropped::Spaces => {
                 "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
             }
+            Dropped::TableLayout => "import: table rows or span coverage exceed limits; table structure is incomplete".to_string(),
             Dropped::TableCells => format!(
                 "import: Markdown tables keep {} columns and {} rows at most, and {} cells in all; the rest are left out",
                 craft_wordmodel::table::MAX_COLS,
@@ -1010,6 +1013,7 @@ impl FTable {
                     for k in 1..rs {
                         work += 1;
                         if work > MAX_COVERED_WORK {
+                            dropped(Dropped::TableLayout);
                             return;
                         }
                         let Some(row) = self.rows.get_mut(r + k) else { break };
@@ -1031,6 +1035,8 @@ impl FTable {
                         }
                         if row.len() < 64 {
                             row.insert(at, Cell { colspan: span as u32, covered: true, synthetic_covered: true, ..Default::default() });
+                        } else {
+                            dropped(Dropped::TableLayout);
                         }
                     }
                 }
