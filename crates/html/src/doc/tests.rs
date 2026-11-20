@@ -2164,3 +2164,23 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+#[test]
+fn images_keep_enclosing_links_in_flow_and_html_export() {
+    let png = Arc::new(
+        craft_flow::base64_decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==").unwrap(),
+    );
+    let html = "<p><a href='#one'>before<img src='pixel.png' alt='pixel'>after</a><img src='pixel.png'></p>";
+    let flow = parse_with(html, &|_| Some(png.clone()));
+    let inlines = &paras(&flow)[0].inlines;
+    let images: Vec<_> = inlines.iter().filter_map(|inline| if let Inline::Image(img) = inline { Some(img) } else { None }).collect();
+    assert_eq!(images[0].link.as_deref(), Some("#one"));
+    assert!(images[1].link.is_none());
+    let linked_text = inlines.iter().find_map(|inline| if let Inline::Text(_, fmt) = inline { fmt.link.as_ref() } else { None }).unwrap();
+    assert!(Arc::ptr_eq(linked_text, images[0].link.as_ref().unwrap()));
+    let exported = inlines_html(inlines);
+    assert!(exported.contains("<a href=\"#one\"><img"));
+    let mut unsafe_image = images[0].clone();
+    unsafe_image.link = Some("javascript:alert(1)".into());
+    assert!(!inlines_html(&[Inline::Image(unsafe_image)]).contains("<a "));
+}

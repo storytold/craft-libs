@@ -1171,7 +1171,10 @@ impl<'r> Builder<'r> {
                     .and_then(|data| make_img(data, width, height, &alt));
                 let fmt = self.fmt();
                 match image {
-                    Some(image) => self.start_para().inlines.push(Inline::Image(image)),
+                    Some(mut image) => {
+                        image.link = fmt.link.clone();
+                        self.start_para().inlines.push(Inline::Image(image));
+                    }
                     None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
                     None => {}
                 }
