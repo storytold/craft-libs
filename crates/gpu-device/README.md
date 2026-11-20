@@ -44,9 +44,9 @@ Licensed under MIT OR Apache-2.0.
   `wait_timeout` and `wait_timeout_cancelable`, which are native only. On the browser backend,
   wgpu 30 panics on an uncaptured `GPUInternalError` before the handler `DeviceHealth::watch`
   installs runs, so such an error is not recorded. Validation and out-of-memory errors are.
-- An adapter that lacks `Request::required_features`, or whose `request_device` fails, adds a
-  `Notice::DeviceFailed`, and `open` tries the next one. When every adapter fails, the error lists
-  each failure.
+- An adapter that lacks `Request::required_features`, whose limits are lower than
+  `Request::limits`, or whose `request_device` fails, adds a `Notice::DeviceFailed`, and `open`
+  tries the next one. When every adapter fails, the error lists each failure.
 - A named adapter that is no longer listed, or can no longer draw to the surface, gives the
   automatic choice and `Notice::AdapterMissing`.
 - A driver that ends the process cannot be caught. `choose` and `ranked` never use an older
