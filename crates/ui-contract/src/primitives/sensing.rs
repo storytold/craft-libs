@@ -128,6 +128,8 @@ pub(crate) struct PartDecl {
     pub inactive: bool,
     /// The component holds a press on the part (`PartBuilder::held`).
     pub held: bool,
+    /// The hit area is the shape as declared, never grown to the pointer's target size (`PartBuilder::exact_hit`).
+    pub exact: bool,
 }
 
 impl PartDecl {
@@ -144,11 +146,17 @@ impl PartDecl {
             flags: Flags::default(),
             inactive: false,
             held: false,
+            exact: false,
         }
     }
 
     fn part_ref(&self) -> PartRef {
         PartRef { key: self.key, index: self.index }
+    }
+
+    /// The least size across the part's hit area, given the pointer's target size `target`.
+    fn min_across(&self, target: f32) -> f32 {
+        if self.exact { 0.0 } else { target }
     }
 }
 
@@ -311,7 +319,7 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
 }
 
 fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).min_across(part.min_across(target))
 }
 
 /// The root's own parts but the `over` ones, at position 0.
@@ -336,7 +344,9 @@ fn over_position(count: usize) -> u32 {
 }
 
 fn member_part_shape(member: &MemberDecl, part: &PartDecl, position: u32, target: f32) -> Shape<Id> {
-    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position).local(member.local).min_across(target)
+    Shape::new(part.shape.clone(), part.sense, member.id, Some(part.part_ref()), part.priority, position)
+        .local(member.local)
+        .min_across(part.min_across(target))
 }
 
 /// The member's root shape and its parts but the `over` ones, at its stack position.

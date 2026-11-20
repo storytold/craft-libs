@@ -771,8 +771,9 @@ impl BodyHooks<'_> {
         }
         // Every grip lies inside the frame, where a window has pixels and a layer's own rect takes the pointer: an edge
         // grip `handle` deep, a corner grip twice that along each of its edges, the edge grips between the corners.
-        // They stack above the body (`over`), so a root in the body never covers them (8.3). The top corners of a layer
-        // that keeps a band over its header (`top_band`) are only as tall as the band, so no grip lies over the header.
+        // They stack above the body (`over`), so a root in the body never covers them (8.3), and each takes exactly its
+        // rect (`exact_hit`), as the platform's hit test does for an exclusive grip. The top corners of a layer that
+        // keeps a band over its header (`top_band`) are only as tall as the band, so no grip lies over the header.
         let handle = grip_band(pcx.tokens);
         let corner = 2.0 * handle;
         let top = top_band(props, &ctx, pcx.id, pcx.tokens);
@@ -799,6 +800,7 @@ impl BodyHooks<'_> {
                 .priority(HitPriority::new(level, 0))
                 .cursor(cursor)
                 .pointer_only(reason)
+                .exact_hit()
                 .over();
             // The grips of a window its caller sizes are the app's (`window_resize`), never the platform's.
             if let Some(hit) = exclusive(WindowHit::Resize(edge_of(dx, dy))).filter(|_| !caller_sizes) {
