@@ -1987,6 +1987,17 @@ mod tests {
         assert_eq!(original.samples, round_trip.samples);
         assert_eq!(jpeg_decoder::Decoder::new(&jpg[..]).decode().expect("libjpeg accepts a trailing ZRL").len(), 64);
 
+        // Why: every sample rounds to 128, so a flipped amplitude bit on the only nonzero
+        // coefficient would still compare equal above. Compare the quantized coefficients the
+        // optimizer wrote against the ones it read, and require both decodes to be undamaged.
+        let (read, _, read_damaged) = crate::decode_coefficients(&jpg, &limits).expect("input coefficients");
+        let (written, _, written_damaged) = crate::decode_coefficients(&optimized, &limits).expect("output coefficients");
+        assert!(!read_damaged && !written_damaged, "neither decode may report damage");
+        assert_eq!(read.comps.len(), written.comps.len());
+        for (before, after) in read.comps.iter().zip(&written.comps) {
+            assert_eq!(before.coefs, after.coefs, "re-encoding must preserve every coefficient");
+        }
+
         // The redundant trailing ZRL becomes EOB in the input event stream the writer re-encodes.
         let dc = crate::Huffman::new(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0]).unwrap();
         let ac = crate::Huffman::new(&[1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], &[0xF0, 0xE1]).unwrap();
