@@ -126,7 +126,9 @@ pub struct CommentMessage {
     pub deletable: bool,
 }
 
-fn message_deletable() -> bool { true }
+fn message_deletable() -> bool {
+    true
+}
 
 /// A comment and its replies.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

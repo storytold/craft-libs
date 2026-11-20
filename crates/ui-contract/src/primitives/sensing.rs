@@ -320,7 +320,8 @@ fn rotate(state: &mut ArenaState, pass_nr: u64) {
 }
 
 fn own_part_shape(part: &PartDecl, root: Id, position: u32, target: f32) -> Shape<Id> {
-    let mut shape = Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).stacking(part.stacking).min_across(target);
+    let mut shape =
+        Shape::new(part.shape.clone(), part.sense, root, Some(part.part_ref()), part.priority, position).stacking(part.stacking).min_across(target);
     shape.drag_to_root = part.drag_to_root;
     shape
 }

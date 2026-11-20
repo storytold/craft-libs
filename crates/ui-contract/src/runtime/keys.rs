@@ -37,11 +37,11 @@ pub(crate) use intents::lent_taken;
 pub use intents::settle;
 #[doc(hidden)]
 pub use intents::take_submit;
-pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use intents::{
     Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_every_escape,
     take_window_cancel,
 };
+pub use intents::{with_canvas_window_intents, with_window_intents};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
 pub(crate) use route::{activated_member, begin, focus_in_dialog, layout_of, owner_at, pasted, pasted_text, queue_edit, routed_to, take_shortcuts};

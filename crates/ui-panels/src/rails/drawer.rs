@@ -494,7 +494,10 @@ fn insert<T: Clone>(mut out: Vec<ToolSlot<T>>, tool: RailTool<T>, at: DropAt) ->
         }
         DropAt::NewSlot { before } => {
             let id = match out.iter().map(|slot| slot.id).max() {
-                Some(max) => match max.checked_add(1) { Some(id) => id, None => return original },
+                Some(max) => match max.checked_add(1) {
+                    Some(id) => id,
+                    None => return original,
+                },
                 None => 0,
             };
             out.insert(before.min(out.len()), ToolSlot::new(id, vec![tool]));

@@ -27,7 +27,9 @@ fn a_locked_comment_still_offers_reply_actions() {
     item.messages.push(message("Bo", "Reply"));
     let mut state = CommentsPanelState::default();
     state.selected = Selection::single(ThreadId(1));
-    let mut fixture = Fixture::new(move |ui| { let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui); });
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui);
+    });
     fixture.settle();
     let more = fixture.by_label("More").expect("the reply menu");
     fixture.click(&more).settle();
@@ -40,7 +42,9 @@ fn a_locked_comment_still_offers_reply_actions() {
     item.messages.push(reply);
     let mut state = CommentsPanelState::default();
     state.selected = Selection::single(ThreadId(2));
-    let mut fixture = Fixture::new(move |ui| { let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui); });
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui);
+    });
     fixture.settle();
     let menus = fixture.by_role(Role::BUTTON);
     let reply_menu = menus.into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("More")).last().expect("the reply menu");

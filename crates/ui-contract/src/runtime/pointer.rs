@@ -790,7 +790,8 @@ fn find_under(ctx: &Context, viewport: ViewportId, at: Pos2, targets: PressTarge
                             .copied()
                             .filter(|&index| {
                                 let shape = &entry.shapes[index];
-                                index != winner.index && shape.sense.contains(craft_behavior::Sense::DRAG)
+                                index != winner.index
+                                    && shape.sense.contains(craft_behavior::Sense::DRAG)
                                     && (!winner.drag_to_root || (shape.owner == root && shape.part.is_none()))
                             })
                             .collect();

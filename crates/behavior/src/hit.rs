@@ -307,7 +307,14 @@ pub fn resolve_mapped<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFo
                 .then_with(|| distance(b).partial_cmp(&distance(a)).unwrap_or(Ordering::Equal))
                 .then(ia.cmp(ib))
         })
-        .map(|(index, shape)| Winner { index, owner: shape.owner, part: shape.part, sense: shape.sense, local: shape.local, drag_to_root: shape.drag_to_root })
+        .map(|(index, shape)| Winner {
+            index,
+            owner: shape.owner,
+            part: shape.part,
+            sense: shape.sense,
+            local: shape.local,
+            drag_to_root: shape.drag_to_root,
+        })
 }
 
 #[cfg(test)]

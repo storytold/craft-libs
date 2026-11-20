@@ -53,13 +53,11 @@ fn pad(draft: SignatureDraft) -> Rc<RefCell<Pad>> {
 fn clearing_a_scan_does_not_let_the_scan_restore_the_image() {
     let pad = pad(SignatureDraft { tab: SignatureTab::Scan, ..SignatureDraft::default() });
     let mut pending = true;
-    pad.borrow_mut().dialog = SignaturePadDialog::new(SignatureDraft { tab: SignatureTab::Scan, ..SignatureDraft::default() })
-        .scan(move |_, draft, event| {
-            match event {
-                ScanEvent::Clear => pending = false,
-                ScanEvent::Show(_) if pending => draft.image = Some(SignatureImage::new(5, 1, PHOTO.to_vec())),
-                ScanEvent::Show(_) => {}
-            }
+    pad.borrow_mut().dialog =
+        SignaturePadDialog::new(SignatureDraft { tab: SignatureTab::Scan, ..SignatureDraft::default() }).scan(move |_, draft, event| match event {
+            ScanEvent::Clear => pending = false,
+            ScanEvent::Show(_) if pending => draft.image = Some(SignatureImage::new(5, 1, PHOTO.to_vec())),
+            ScanEvent::Show(_) => {}
         });
     let shown = pad.clone();
     let mut fx = Fixture::new(move |ui| show(&shown, ui));

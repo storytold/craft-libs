@@ -292,9 +292,8 @@ fn offer_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents
     let focused = focus::focused_rec(ctx).map(|rec| rec.stop.id);
     let mut window = intents_of(ctx, None, rtl);
     // The focused stop's leftover Escape stays in its slot until taken.
-    let lent_cancel = focused
-        .filter(|id| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*id), &Intent::Cancel))
-        .map(|id| {
+    let lent_cancel =
+        focused.filter(|id| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*id), &Intent::Cancel)).map(|id| {
             window.items.push((Intent::Cancel, false));
             (id, window.items.len() - 1)
         });
