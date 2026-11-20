@@ -280,3 +280,243 @@ fn text_variable_decoration_uses_preference_and_falls_back_to_legacy_root_values
     let variable = craft_idml::model::TextVariableValues::from_el(&legacy);
     assert_eq!((variable.before.as_str(), variable.after.as_str()), ("of ", " pages"));
 }
+
+#[test]
+fn designmap_schema_elements_roundtrip_expected_attributes() {
+    use craft_idml::model::{
+        ConditionValues, KinsokuTableValues, MojikumiRow, MojikumiTableValues, NumberingListValues, TextDateKind, TextVariableKind,
+        TextVariableValues, default_languages, default_xref_text_variables,
+    };
+
+    let langs = default_languages();
+    assert_eq!(langs[0].attr("Self"), Some("Language/$ID/[No Language]"));
+    assert_eq!(langs[1].attr("Self"), Some("Language/$ID/English%3a USA"));
+    assert_eq!(langs[1].attr("Id"), Some("269"));
+
+    let num_list = NumberingListValues::default_list().to_el();
+    assert_eq!(num_list.attr("Self"), Some("NumberingList/$ID/[Default]"));
+    assert_eq!(num_list.attr("ContinueNumbersAcrossDocuments"), Some("false"));
+
+    let kinsoku = KinsokuTableValues {
+        name: "My:Kinsoku".into(),
+        cant_begin_line_chars: "。".into(),
+        cant_end_line_chars: "「".into(),
+        cant_be_separated_chars: "…".into(),
+        hanging_punctuation_chars: "、".into(),
+    }
+    .to_el();
+    assert_eq!(kinsoku.attr("Self"), Some("KinsokuTable/My%3aKinsoku"));
+    assert_eq!(kinsoku.attr("CantBeginLineChars"), Some("。"));
+
+    let mojikumi = MojikumiTableValues {
+        name: "Custom%1".into(),
+        based_on: "Base".into(),
+        overrides: vec![MojikumiRow {
+            target_class: 1,
+            side_class: 2,
+            after: true,
+            minimum: 0.0,
+            desired: 0.25,
+            maximum: 0.5,
+            priority: 3,
+            does_not_float: false,
+        }],
+    }
+    .to_el();
+    assert_eq!(mojikumi.attr("Self"), Some("MojikumiTable/Custom%251"));
+    assert_eq!(mojikumi.attr("BasedOnMojikumiSet"), Some("Base"));
+    let row = mojikumi.child("Properties").and_then(|p| p.child("OverrideMojikumiAkiList")).and_then(|l| l.child("OverrideMojikumiAkiType")).unwrap();
+    assert_eq!(row.attr("TargetMojikumiClass"), Some("1"));
+    assert_eq!(row.attr("SideIsAfterTarget"), Some("true"));
+
+    let cond = ConditionValues { self_id: None, name: Some("A:B".into()), indicator_rgb: Some([10, 20, 30]), visible: true }.to_el();
+    assert_eq!(cond.attr("Self"), Some("Condition/A%3aB"));
+    assert_eq!(cond.attr("IndicatorColor"), Some("10 20 30"));
+    assert_eq!(cond.attr("Visible"), Some("true"));
+
+    let xrefs = default_xref_text_variables();
+    assert_eq!(xrefs[0].attr("VariableType"), Some("XrefChapterNumberType"));
+    assert_eq!(xrefs[1].attr("VariableType"), Some("XrefPageNumberType"));
+
+    let tv = TextVariableValues {
+        self_id: None,
+        name: "Mod".into(),
+        before: "Updated ".into(),
+        after: "!".into(),
+        kind: TextVariableKind::Date { kind: TextDateKind::Modification, format: "yyyy-MM-dd".into() },
+    }
+    .to_el();
+    assert_eq!(tv.attr("VariableType"), Some("ModificationDateType"));
+    let pref = tv.child("DateVariablePreference").unwrap();
+    assert_eq!(pref.attr("TextBefore"), Some("Updated "));
+    assert_eq!(pref.attr("TextAfter"), Some("!"));
+    assert_eq!(pref.attr("Format"), Some("yyyy-MM-dd"));
+}
+
+#[test]
+fn designmap_layers_sections_and_hyperlinks_roundtrip_expected_attributes() {
+    use craft_idml::model::{
+        LayerColorValue, LayerValues, SectionValues, hyperlink_el, hyperlink_page_destination_el, hyperlink_page_item_source_el,
+        hyperlink_url_destination_el, root_color_group_el,
+    };
+
+    let layer = LayerValues {
+        self_id: "u1".into(),
+        name: "Layer 1".into(),
+        visible: true,
+        locked: false,
+        ignore_wrap: false,
+        show_guides: true,
+        lock_guides: false,
+        printable: true,
+        color: LayerColorValue::Rgb([128.0, 64.0, 0.0]),
+    }
+    .to_el();
+    assert_eq!(layer.attr("Self"), Some("u1"));
+    assert_eq!(layer.attr("UI"), Some("true"));
+    let list_items: Vec<_> =
+        layer.child("Properties").and_then(|p| p.child("LayerColor")).map(|lc| lc.elements().map(|e| e.deep_text()).collect()).unwrap();
+    assert_eq!(list_items, ["128", "64", "0"]);
+
+    let section = SectionValues {
+        self_id: "u2".into(),
+        length: 4,
+        name: "A".into(),
+        continue_numbering: false,
+        include_section_prefix: true,
+        page_number_start: Some(1),
+        marker: "M".into(),
+        page_start: "u3".into(),
+        section_prefix: "A".into(),
+        alternate_layout: Some(("Phone".into(), 4)),
+        page_number_style: "Arabic".into(),
+    }
+    .to_el();
+    assert_eq!(section.attr("PageNumberStart"), Some("1"));
+    assert_eq!(section.attr("AlternateLayout"), Some("Phone"));
+
+    let url_dest = hyperlink_url_destination_el("HyperlinkURLDestination/u1", "Site", "https://example.com");
+    assert_eq!(url_dest.attr("DestinationURL"), Some("https://example.com"));
+    let page_dest = hyperlink_page_destination_el("HyperlinkPageDestination/p1", "Page", "u3");
+    assert_eq!(page_dest.attr("ViewSetting"), Some("FitPage"));
+    let item_src = hyperlink_page_item_source_el("HyperlinkPageItemSource/i1k0", "Link", "u4");
+    assert_eq!(item_src.attr("SourcePageItem"), Some("u4"));
+    let link = hyperlink_el("u5", "Link", "HyperlinkPageItemSource/i1k0", "HyperlinkURLDestination/u1", true, 0x1_0000_0007);
+    assert_eq!(link.attr("DestinationUniqueKey"), Some("7"));
+
+    let cg = root_color_group_el(&["Color/Black".into(), "Color/Paper".into()], "u10");
+    assert_eq!(cg.attr("IsRootColorGroup"), Some("true"));
+    assert_eq!(cg.elements().count(), 2);
+}
+
+#[test]
+fn preferences_styles_spread_and_story_schema_helpers_roundtrip() {
+    use craft_idml::Node;
+    use craft_idml::model::{
+        CellStyleValues, EpubSplitValues, GuideValues, MarginPreference, StrokeValues, TableStyleValues, TextPreferenceValues, TocStyleEntryValues,
+        TocStyleValues, ViewPreferenceValues, object_style_effects_category_settings, pasteboard_preference_el, text_variable_instance_el,
+        tracked_change_el, transparency_preference_el,
+    };
+
+    let view = ViewPreferenceValues {
+        horizontal_units: "Points".into(),
+        vertical_units: "Points".into(),
+        ruler_origin: "SpreadOrigin".into(),
+        cursor_key_increment: 1.0,
+    }
+    .to_el();
+    assert_eq!(view.attr("HorizontalMeasurementUnits"), Some("Points"));
+    assert_eq!(view.attr("PointsPerInch"), Some("72"));
+
+    let text_pref =
+        TextPreferenceValues { superscript_size: 58.3, superscript_position: 33.3, subscript_size: 58.3, subscript_position: 33.3 }.to_el();
+    assert_eq!(text_pref.attr("SuperscriptSize"), Some("58.3"));
+
+    assert_eq!(pasteboard_preference_el(72.0, 36.0).attr("PasteboardMargins"), Some("72 36"));
+    assert_eq!(transparency_preference_el("CMYK").attr("BlendingSpace"), Some("CMYK"));
+
+    let epub = EpubSplitValues { break_document: true, paragraph_style: Some("ParagraphStyle/H1".into()) };
+    assert_eq!(EpubSplitValues::from_el(&epub.to_el()), epub);
+
+    let margin = MarginPreference::to_el(2, 12.0, 36.0, 36.0, 36.0, 36.0, &[0.0, 200.0, 212.0, 412.0]);
+    let parsed_margin = MarginPreference::from_el(&margin);
+    assert_eq!(parsed_margin.column_count(), Some(2.0));
+    assert_eq!(parsed_margin.column_positions(4), Some(vec![0.0, 200.0, 212.0, 412.0]));
+
+    let guide = GuideValues {
+        self_id: "u1g0".into(),
+        horizontal: true,
+        location: 100.0,
+        fit_to_page: true,
+        locked: false,
+        page_index: 0,
+        liquid: false,
+        item_layer: Some("u2".into()),
+    }
+    .to_el();
+    assert_eq!(guide.attr("Orientation"), Some("Horizontal"));
+    assert_eq!(guide.attr("ItemLayer"), Some("u2"));
+
+    let cell_style = CellStyleValues {
+        self_id: Some("CellStyle/Header".into()),
+        name: Some("Header".into()),
+        based_on: Some("$ID/[None]".into()),
+        fill: Some("Color/Black".into()),
+        fill_tint: Some(20.0),
+        insets: [Some(4.0), Some(6.0), Some(4.0), Some(6.0)],
+        edge_strokes: [
+            StrokeValues { weight: Some(1.0), color: Some("Color/Black".into()), ..StrokeValues::default() },
+            StrokeValues::default(),
+            StrokeValues::default(),
+            StrokeValues::default(),
+        ],
+        ..CellStyleValues::default()
+    };
+    let parsed_cell = CellStyleValues::from_el(&cell_style.to_el());
+    assert_eq!(parsed_cell.insets, cell_style.insets);
+    assert_eq!(parsed_cell.edge_strokes[0].weight, Some(1.0));
+
+    let mut table_style = TableStyleValues {
+        name: Some("Grid".into()),
+        based_on: Some("$ID/[No table style]".into()),
+        space_before: Some(6.0),
+        ..TableStyleValues::default()
+    };
+    table_style.column_strokes.next.kind = Some("Solid".into());
+    let table_el = table_style.to_el("TableStyle/Grid");
+    assert_eq!(table_el.attr("EndColumnLineStyle"), Some("Solid"));
+    assert_eq!(TableStyleValues::from_el(&table_el).column_strokes.next.kind.as_deref(), Some("Solid"));
+
+    let mut n = 0;
+    let toc = TocStyleValues {
+        self_id: Some("TOCStyle/Table of Contents".into()),
+        title: Some("Contents".into()),
+        title_style: Some("ParagraphStyle/Title".into()),
+        create_bookmarks: Some(true),
+        entries: vec![TocStyleEntryValues {
+            style: Some("Heading 1".into()),
+            level: Some(1),
+            page_number_position: Some("AfterEntry".into()),
+            separator: Some("\t".into()),
+            entry_style: Some("ParagraphStyle/TOC 1".into()),
+            page_number_style: None,
+            separator_style: None,
+            sort: Some(false),
+        }],
+    }
+    .to_el("Table of Contents", || {
+        n += 1;
+        format!("u{n}")
+    });
+    assert_eq!(toc.attr("CreateBookmarks"), Some("true"));
+    assert_eq!(toc.elements().count(), 1);
+
+    let obj_fx = object_style_effects_category_settings(true, false);
+    assert_eq!(obj_fx.attr("EnableDropShadow"), Some("true"));
+    assert_eq!(obj_fx.attr("EnableFeather"), Some("false"));
+
+    let tv = text_variable_instance_el("u9", "Chapter", "1", "dTextVariablenChapter");
+    assert_eq!(tv.attr("ResultText"), Some("1"));
+    let ch = tracked_change_el("u10", "InsertedText", vec![Node::El(craft_idml::El::new("Content"))]);
+    assert_eq!(ch.attr("ChangeType"), Some("InsertedText"));
+}

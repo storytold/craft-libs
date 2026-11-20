@@ -570,3 +570,17 @@ fn relative_target_urls_are_percent_decoded() {
     let clip = &p.sequence(imp.sequences[0]).unwrap().video_tracks[0].items[0];
     assert_eq!(media_key(p, clip.item), "/proj/media/Clip A.mov");
 }
+
+#[test]
+fn optional_report_limit_bounds_distinct_otio_diagnostics_without_changing_default() {
+    let children: Vec<_> = (0..10).map(|i| serde_json::json!({"OTIO_SCHEMA": format!("Unsupported{i}.1")})).collect();
+    let doc = serde_json::json!({"OTIO_SCHEMA":"Timeline.1", "tracks":{"OTIO_SCHEMA":"Stack.1", "children":[{"OTIO_SCHEMA":"Track.1", "kind":"Video", "children":children}]}}).to_string();
+    let opts = iopts(None);
+    let mut bounded = craft_timeline::Report::default();
+    assert!(craft_timeline::otio::import_with_report_limit(&doc, &opts, &mut bounded, Some(2)).is_ok());
+    assert_eq!(bounded.entries.len(), 3);
+    assert!(bounded.mentions("further diagnostics omitted"));
+    let mut unlimited = craft_timeline::Report::default();
+    assert!(craft_timeline::otio::import(&doc, &opts, &mut unlimited).is_ok());
+    assert_eq!(unlimited.entries.len(), 10);
+}
