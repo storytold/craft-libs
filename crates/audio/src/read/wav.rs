@@ -343,7 +343,8 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
                         ixml_time = ixml_time_reference(&small(IXML_MAX as u64));
                     }
                 }
-                b"ds64" => ds64_data = le_u64(&small(64), 8),
+                // The sizes come from the first `ds64` chunk that holds them.
+                b"ds64" if ds64_data.is_none() => ds64_data = le_u64(&small(64), 8),
                 _ => {}
             }
         }

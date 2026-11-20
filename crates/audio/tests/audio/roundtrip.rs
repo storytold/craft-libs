@@ -449,12 +449,56 @@ fn repair_wav_turns_a_file_past_4_gib_into_rf64() {
     assert_eq!((&file.head[..4], &file.head[12..16]), (&b"RF64"[..], &b"ds64"[..]));
     assert_eq!(file.head[at..at + 36], later[..]);
 
+    // In an RF64 file the ds64 chunk right after WAVE takes the sizes; a later ds64 chunk is left as it is.
+    let finished = wav_float_header(48_000, 2, frames).unwrap();
+    assert_eq!((&finished[..4], &finished[12..16]), (&b"RF64"[..], &b"ds64"[..]));
+    let mut stale = finished.clone();
+    stale[20..44].fill(0);
+    stale.splice(at..at, later.iter().copied());
+    let mut file = SparseWav { head: stale, len: len + 36, pos: 0 };
+    let r = craft_audio::repair_wav(&mut file).unwrap();
+    assert_eq!((r.frames, r.len), (frames, len + 33));
+    let field = |at: usize| u64::from_le_bytes(file.head[at..at + 8].try_into().unwrap());
+    assert_eq!((field(20), field(28), field(36)), (len + 25, frames * 8, frames));
+    assert_eq!(file.head[at..at + 36], later[..]);
+
     // A RIFF file with no JUNK chunk to turn into ds64 cannot grow past 4 GiB.
     let bare = craft_audio::pcm_wav_header(0, 2, 48_000, 16);
     assert_eq!(&bare[12..16], b"fmt ");
     let len = bare.len() as u64 + (1u64 << 32);
     let mut file = SparseWav { head: bare, len, pos: 0 };
     assert!(matches!(craft_audio::repair_wav(&mut file), Err(craft_audio::AudioError::TooLarge(_))));
+}
+
+#[test]
+fn repair_wav_writes_the_frame_count_into_the_first_fact_chunk() {
+    let mut file = wav_float_header(48_000, 2, 0).unwrap();
+    let fact = file.windows(4).position(|w| w == b"fact").unwrap() + 8;
+    let at = file.windows(4).position(|w| w == b"data").unwrap();
+    let later: Vec<u8> = [&b"fact"[..], &4u32.to_le_bytes(), &[0xCC; 4]].concat();
+    file.splice(at..at, later.iter().copied());
+    file.extend(std::iter::repeat_n(0, 100 * 8));
+    let mut file = std::io::Cursor::new(file);
+    assert_eq!(craft_audio::repair_wav(&mut file).unwrap().frames, 100);
+    let file = file.into_inner();
+    assert_eq!(file[fact..fact + 4], 100u32.to_le_bytes());
+    assert_eq!(file[at..at + 12], later[..]);
+}
+
+#[test]
+fn rf64_data_size_comes_from_the_ds64_chunk_after_wave() {
+    let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int16).with_force_rf64(true);
+    let wav = encode(&sine(48_000, 2, 300), &opts).unwrap();
+    assert_eq!(&wav[12..16], b"ds64");
+    // A later ds64 chunk that gives the data 4 bytes, one frame.
+    let mut body = [0u8; 28];
+    body[8..16].copy_from_slice(&4u64.to_le_bytes());
+    let later = [&b"ds64"[..], &28u32.to_le_bytes(), &body].concat();
+    let at = wav.windows(4).position(|w| w == b"data").unwrap();
+    let mut two = wav.clone();
+    two.splice(at..at, later);
+    let (info, buf) = decode(&two, Some("wav")).unwrap();
+    assert_eq!((info.frames, buf.frames()), (300, 300));
 }
 
 #[test]

@@ -314,10 +314,11 @@ fn layout<F: Read + Seek>(file: &mut F, len: u64) -> Result<Layout> {
                 let block_align = block_align.ok_or_else(|| AudioError::Malformed("WAV data chunk before its fmt chunk".into()))?;
                 return Ok(Layout { rf64, ds64, junk, fact, block_align, data: body });
             }
-            b"ds64" if rf64 && size >= 28 => ds64 = Some(body),
+            // The first `ds64` and `fact` chunks take the sizes; later ones are left as they are.
+            b"ds64" if rf64 && size >= 28 && ds64.is_none() => ds64 = Some(body),
             // A `ds64` id here in a RIFF file is a promotion that stopped before the RF64 id.
             b"JUNK" | b"ds64" if !rf64 && pos == 12 && size == 28 => (ds64, junk) = (Some(body), true),
-            b"fact" if size >= 4 => fact = Some(body),
+            b"fact" if size >= 4 && fact.is_none() => fact = Some(body),
             b"fmt " => block_align = Some(pcm_block_align(file, body, size)?),
             _ => {}
         }
