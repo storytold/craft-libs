@@ -11,12 +11,14 @@
 //!
 //! A page's object list (3000) holds shapes (3008), placeholders (3010, which add a 3011 atom: the
 //! type, the size, then the index) and lines (3014). A shape or placeholder has its geometry
-//! (3009): the shape code and its adjust value, the box as left, top, right and bottom in master
-//! units (576 per inch) measured from the slide's centre, then what is left of the angle after
-//! whole quarter-turns, in sixteenths of a degree. A line holds 3015: its start and end points, in
-//! the same units, and 3007: its arrowheads. Shapes and lines have a format (3005) with their fill,
-//! line width, dashes and colour, shadow, angle and flips ([`shape`]); a box turned by an odd number
-//! of quarter-turns is turned back. A shape that draws nothing but its text is a text box.
+//! (3009): the shape code (its low byte; the byte above orients the outline) and its adjust value,
+//! the box as left, top, right and bottom in master units (576 per inch) measured from the slide's
+//! centre, then what is left of the angle after whole quarter-turns, in sixteenths of a degree,
+//! counter-clockwise. A line holds 3015: its start and end points, in the same units, and 3007:
+//! its arrowheads. Shapes and lines have a format (3005) with their fill, line width, dashes and
+//! colour, and shadow with its offset ([`shape`]). The 24 shapes of the object model read as
+//! DrawingML presets, turned and flipped as drawn; a code no probe showed is a rectangle. A shape
+//! that draws nothing but its text is a text box.
 //!
 //! PowerPoint 95 numbers placeholders its own way: on the master 1 title, 2 body, 6 date, 7 slide
 //! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. A
@@ -24,9 +26,9 @@
 //! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
 //! does.
 //!
-//! Not read yet: shadow offsets (no probe could move one); groups and freeforms, which are
-//! skipped; pictures; notes; and the master's text styles, so the levels of the default master's
-//! styles stay as they are (the slide text carries its own formatting in full).
+//! Not read yet: groups and freeforms, which are skipped; pictures; notes; and the master's text
+//! styles, so the levels of the default master's styles stay as they are (the slide text carries
+//! its own formatting in full).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -233,7 +235,7 @@ struct Object {
     ph: Option<Placeholder>,
     xfrm: Xfrm,
     text: Option<TextBody>,
-    /// A shape's preset: `None` for a placeholder, or a shape code no probe showed.
+    /// A shape's preset (a rectangle for a shape code no probe showed): `None` for a placeholder.
     geom: Option<Geom>,
     /// How a shape or line is drawn (a placeholder's is left to its layout).
     look: Look,
@@ -269,8 +271,8 @@ fn line(r: &Rec, scheme: &Scheme, size: Size) -> Option<Object> {
         Some(f) => shape::look(&f, scheme),
         None => Look { line: shape::line_of(scheme[1], None), ..Look::none() },
     };
-    // A line has no inside to fill, and its direction is in its ends.
-    (look.fill, look.flip_h, look.flip_v) = (Fill::None, false, false);
+    // A line has no inside to fill.
+    look.fill = Fill::None;
     if let Some(heads) = r.child(rt::ARROWHEADS).filter(|_| look.line != Line::none()) {
         shape::arrowheads(&mut look.line, &heads);
     }
@@ -288,10 +290,15 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     let sides = [g.i32(12)?, g.i32(16)?, g.i32(20)?, g.i32(24)?];
     let mut xfrm = xfrm_of(sides, size);
     let format = r.child(rt::FORMAT);
-    // The angle the user set is the format's; the geometry's is what quarter-turns leave of it.
-    let drawn = g.i32(28).unwrap_or(0);
-    shape::orient(&mut xfrm, drawn, format.and_then(|f| f.i32(48)).unwrap_or(drawn));
     let placeholder = r.kind == rt::PLACEHOLDER;
+    // The shape code is the low byte; for codes of 0 and up the byte above it orients the outline.
+    let code = g.u8(0).map(|c| c as i8);
+    let drawn = g.i32(28).unwrap_or(0);
+    match code {
+        Some(c) if c >= 0 && !placeholder => shape::orient_drawn(&mut xfrm, g.u8(1).unwrap_or(0), drawn),
+        // The angle the user set is the format's; the geometry's is what quarter-turns leave of it.
+        _ => shape::orient(&mut xfrm, drawn, format.and_then(|f| f.i32(48)).unwrap_or(drawn)),
+    }
     let ph = r.child(rt::PLACEHOLDER_ATOM).filter(|_| placeholder).and_then(|a| {
         let size = match a.u8(1) {
             Some(1) => Some("half".into()),
@@ -303,25 +310,21 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
-        // The shape code is the low byte: the bits above it orient the outline as drawn (0x60 on a
-        // new trapezoid), which the format's angle and flips already say.
-        geom = g.u8(0).and_then(|c| shape::preset(c as i8, g.i32(4), xfrm.w, xfrm.h));
+        geom = code.map(|c| shape::geometry(c, g.i32(4), &mut xfrm));
         if let Some(f) = format {
             look = shape::look(&f, scheme);
         }
-        (xfrm.flip_h, xfrm.flip_v) = (look.flip_h, look.flip_v);
     }
     Some(Object { placeholder, ph, xfrm, text, geom, look, line: false })
 }
 
 /// An object as a shape: a placeholder of a known type; a text box when it draws nothing but its
-/// text, or has text and a shape code no probe showed; else a shape or line that draws something.
-/// One that draws nothing, or has an unknown code and no text, is left out. A placeholder of an
-/// unknown type keeps its text as a text box.
+/// text; else a shape or line that draws something. One that draws nothing is left out. A
+/// placeholder of an unknown type keeps its text as a text box.
 fn shape(p: &mut Presentation, o: Object) -> Option<Shape> {
     let Some(ph) = o.ph else {
         let text = o.text.filter(|t| !t.is_empty());
-        if text.is_some() && (!o.look.drawn() || o.geom.is_none()) {
+        if text.is_some() && !o.look.drawn() {
             let mut xfrm = o.xfrm;
             (xfrm.flip_h, xfrm.flip_v) = (false, false);
             return Some(Shape {

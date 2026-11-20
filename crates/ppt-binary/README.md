@@ -47,16 +47,19 @@ and text boxes, each with its box and its text: paragraphs with their level, ali
 character and the indents of the text's ruler, and runs with their font, size, bold, italic,
 underline and colour (an RGB or a colour scheme slot). The text is Windows-1252. The master's
 placeholders set where the default master's placeholders go, and its date, footer and slide number
-those of every layout. Shapes and lines read too: PowerPoint 95's twelve shapes (rectangle,
+those of every layout. Shapes and lines read too: all 24 of PowerPoint 95's shapes (rectangle,
 rounded rectangle, ellipse, diamond, the two triangles, parallelogram, trapezoid, hexagon,
-octagon, plus and five-point star) as DrawingML presets with their adjust values (the trapezoid,
-wide at the top in PowerPoint 95, as its own outline), each with its fill (or none), its line
-(or none) with its colour, its width (the six line styles, 1 to 10 pt) and its dots or dashes,
-its shadow and the shadow's colour, its angle and its horizontal and vertical flips; and lines
-from their start to their end, with their arrowheads. A shape turned by whole quarter-turns
-keeps its unturned box. A shape that draws nothing but text is a text box. Shadow offsets are
-not read yet (shadows fall 6 pt right and down, as in every file PowerPoint 95 wrote); groups and
-freeforms are skipped. Pictures, notes and the master's text styles come later.
+octagon, plus, five-point star, the arrow and the thick arrow in their four directions, home plate,
+cube, balloon and seal) as DrawingML presets with their adjust values (the trapezoid, wide at the
+top in PowerPoint 95, as its own outline, so its text stays upright), each with its fill (or
+none), its line (or none) with its colour, its width (the six line styles, 1 to 10 pt) and its
+dots or dashes, and its shadow with the shadow's colour, offset and transparency; and lines from
+their start to their end, with their arrowheads. A shape code no probe showed reads as a
+rectangle. PowerPoint 95 measures angles counter-clockwise, DrawingML clockwise, so each is
+negated. A shape's geometry holds its outline as drawn, quarter-turns and mirror included, so its
+angle and flips come from there (a box turned by an odd number of quarter-turns is turned back);
+the rectangle, rounded rectangle and ellipse take the angle the user set. A shape that draws
+nothing but text is a text box. Groups and freeforms are skipped. Pictures, notes and the master's text styles come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
