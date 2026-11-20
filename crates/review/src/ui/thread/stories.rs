@@ -19,6 +19,7 @@ fn thread() -> CommentThread {
         text: text.into(),
         reactions: Vec::new(),
         read: true,
+        deletable: true,
     };
     CommentThread {
         id: ThreadId(7),

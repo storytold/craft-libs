@@ -180,8 +180,8 @@ pub enum HandleRule {
     NoResize,
 }
 
-/// The knee of a callout stays at least this far from its box, in page units.
-pub const CALLOUT_KNEE_GAP: f64 = 12.0;
+/// The knee of a callout stays at least this far from its box, in canvas document units.
+pub const CALLOUT_KNEE_GAP: f64 = 12.0 * 96.0 / 72.0;
 
 /// A move of at most this many page units is a slip, not a move.
 pub const SLIP_MOVE: f64 = 2.0;

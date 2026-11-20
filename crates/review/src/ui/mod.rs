@@ -37,7 +37,7 @@ pub use presence::{
     FollowCommand, FollowFrame, FollowFrameOutput, PeopleBar, PeopleBarOutput, PresenceWords, RemoteCursor, RemoteCursors, paint_pointer,
 };
 pub use revisions::{RevisionsPanel, RevisionsPanelOutput, RevisionsWords};
-pub use signature::{SignaturePadDialog, SignaturePadResult, SignatureSettings, SignatureWords, paint_signature};
+pub use signature::{ScanEvent, SignaturePadDialog, SignaturePadResult, SignatureSettings, SignatureWords, paint_signature};
 pub use thread::{
     CommentComposer, CommentComposerOutput, CommentPin, CommentPins, CommentPinsOutput, ComposerClose, ComposerDraft, NOTE_POPUP_LIMITS, NoteDrafts,
     NotePopup, NotePopupMessage, NotePopupOutput, PinCluster, PinMove, REACTIONS, ThreadPopover, ThreadPopoverOutput, ThreadWords, cluster,

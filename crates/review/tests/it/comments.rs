@@ -16,7 +16,39 @@ use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Key, Modifiers, Rect};
 
 fn message(author: &str, text: &str) -> CommentMessage {
-    CommentMessage { author: author.into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true }
+    CommentMessage { author: author.into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true, deletable: true }
+}
+
+/// A locked comment does not prevent editing or deleting its separate reply.
+#[trial]
+fn a_locked_comment_still_offers_reply_actions() {
+    let mut item = thread(1, 1, "Locked comment");
+    item.locked = true;
+    item.messages.push(message("Bo", "Reply"));
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(1));
+    let mut fixture = Fixture::new(move |ui| { let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui); });
+    fixture.settle();
+    let more = fixture.by_label("More").expect("the reply menu");
+    fixture.click(&more).settle();
+    assert!(fixture.by_label("Edit").is_some(), "the reply can be edited");
+    assert!(fixture.by_label("Delete").is_some(), "the reply can be deleted");
+
+    let mut item = thread(2, 1, "Comment");
+    let mut reply = message("Bo", "Locked reply");
+    reply.deletable = false;
+    item.messages.push(reply);
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(2));
+    let mut fixture = Fixture::new(move |ui| { let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui); });
+    fixture.settle();
+    let menus = fixture.by_role(Role::BUTTON);
+    let reply_menu = menus.into_iter().filter(|target| fixture.tree().name_of(target.node) == Some("More")).last().expect("the reply menu");
+    fixture.click(&reply_menu).settle();
+    let edit = fixture.by_label("Edit").expect("editing the reply is offered");
+    let delete = fixture.by_label("Delete").expect("deletion is shown");
+    assert!(!fixture.tree().is_disabled_key(edit.node), "locked reply text is editable");
+    assert!(fixture.tree().is_disabled_key(delete.node), "a reply that cannot be deleted is disabled");
 }
 
 fn thread(id: u64, page: usize, text: &str) -> CommentThread {

@@ -229,13 +229,13 @@ pub(super) fn card_menu<H>(
 ) -> Option<CardMenu> {
     let ran = std::cell::Cell::new(None);
     Menu::new(words.more.clone()).id_salt(index).opened_by(button, Trigger::Click).show(ui, |ui, _| {
-        let row = |ui: &mut Ui, label: &Label, action: CardMenu| {
-            if MenuItem::new(label.as_str().to_owned()).show(ui).ran {
+        let row = |ui: &mut Ui, label: &Label, action: CardMenu, enabled: bool| {
+            if MenuItem::new(label.as_str().to_owned()).enabled(enabled).show(ui).ran {
                 ran.set(Some(action));
             }
         };
         if index == 0 {
-            row(ui, &words.edit, CardMenu::Edit);
+            row(ui, &words.edit, CardMenu::Edit, editable && !thread.locked);
             let _ = Menu::submenu_row(ui, words.set_status.clone(), |ui, _| {
                 for status in ReviewStatus::MENU {
                     if MenuItem::new(status_label(words, status).as_str().to_owned()).radio_mark(thread.status() == status).show(ui).ran {
@@ -244,15 +244,15 @@ pub(super) fn card_menu<H>(
                 }
             });
             Divider::horizontal().show(ui);
-            row(ui, &words.delete, CardMenu::Delete);
+            row(ui, &words.delete, CardMenu::Delete, editable && !thread.locked);
         } else {
             if editable {
-                row(ui, &words.edit, CardMenu::Edit);
+                row(ui, &words.edit, CardMenu::Edit, true);
             }
-            row(ui, &words.copy_text, CardMenu::Copy);
+            row(ui, &words.copy_text, CardMenu::Copy, true);
             if editable {
                 Divider::horizontal().show(ui);
-                row(ui, &words.delete, CardMenu::Delete);
+                row(ui, &words.delete, CardMenu::Delete, thread.messages.get(index).is_some_and(|message| message.deletable));
             }
         }
         if !host_rows.is_empty() {

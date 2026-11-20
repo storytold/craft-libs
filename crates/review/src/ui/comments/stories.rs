@@ -14,7 +14,7 @@ use crate::comments::{CommentAnchor, CommentMessage, CommentThread, ReviewStatus
 const NOW: i64 = 90_000;
 
 fn message(author: &str, text: &str, created: i64) -> CommentMessage {
-    CommentMessage { author: author.into(), created, modified: None, text: text.into(), reactions: Vec::new(), read: true }
+    CommentMessage { author: author.into(), created, modified: None, text: text.into(), reactions: Vec::new(), read: true, deletable: true }
 }
 
 fn reviewer(name: &str, status: ReviewStatus) -> ReviewerStatus {

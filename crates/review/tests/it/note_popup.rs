@@ -16,6 +16,22 @@ const SLACK: f32 = 1.5;
 const NOTE: [NotePopupMessage<'static>; 1] =
     [NotePopupMessage { id: 1, title: "Sticky Note", author: "Ana", text: "Check the margin.", modified: None, depth: 0, editable: true }];
 
+/// The title's close control reports the close to the host.
+#[trial]
+fn the_note_header_close_reports_to_the_host() {
+    let closed = Rc::new(Cell::new(false));
+    let result = closed.clone();
+    let mut drafts = NoteDrafts::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let out = NotePopup::new(1, "Note", Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 200.0)), &NOTE, &mut drafts).show(ui);
+        result.set(result.get() || out.closed);
+    });
+    fixture.room(vec2(1000.0, 800.0)).settle();
+    let close = fixture.by_label("Close").expect("the header has a close control");
+    fixture.click(&close).settle();
+    assert!(closed.get(), "closing reaches the host");
+}
+
 /// The host of one note pop-up: a button stands for the note's mark, and the pop-up sits at `rect`, which takes each
 /// reported placement.
 struct NoteHost {

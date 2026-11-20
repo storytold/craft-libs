@@ -739,7 +739,7 @@ impl<H: Value> CommentsPanel<'_, H> {
             }
             // The "..." buttons are the card drawn as the lead this pass.
             if let Some(thread) = lead.and_then(|selected| threads.iter().find(|thread| thread.id == selected)) {
-                let editable = !read_only && !thread.locked;
+                let editable = !read_only;
                 for (index, button) in &buttons {
                     let rows = host_rows.as_ref().map_or_else(Vec::new, |rows| rows(thread, *index));
                     if let Some(action) = card_menu(ui, &words, button, *index, thread, editable, &rows) {

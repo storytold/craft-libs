@@ -1,9 +1,9 @@
 //! Stories of the signature pad.
 
-use super::{DrawPad, SignaturePadDialog};
+use super::{DrawPad, ScanEvent, SignaturePadDialog};
 use crate::signature::{SignatureDraft, SignatureImage, SignatureTab};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, OsFile, Show as _, Validity, clicked};
+use craft_ui::contract::{Bind, Show as _, Validity, clicked};
 use craft_ui::dialog::StackDialog as _;
 use craft_ui::display::Text;
 use craft_ui::popover::DropVeil;
@@ -80,10 +80,12 @@ fn dialog(ui: &mut Ui, data: &mut StoryData, start: &Start) -> StoryOutput {
 }
 
 /// The app's Scan tab as a stub: a line of text, and a dropped photo stands in for a cleaned scan.
-fn scan_stub(ui: &mut Ui, draft: &mut SignatureDraft, dropped: Option<OsFile>) {
-    Text::new("The app's scan view: drop a photo of a signature on paper.").show(ui);
-    if dropped.is_some() {
-        draft.image = Some(ink_sample());
+fn scan_stub(ui: &mut Ui, draft: &mut SignatureDraft, event: ScanEvent) {
+    if let ScanEvent::Show(dropped) = event {
+        Text::new("The app's scan view: drop a photo of a signature on paper.").show(ui);
+        if dropped.is_some() {
+            draft.image = Some(ink_sample());
+        }
     }
 }
 
