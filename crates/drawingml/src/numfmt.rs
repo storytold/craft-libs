@@ -835,16 +835,11 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
         return "#".repeat(8);
     }
     let subs = toks.iter().find_map(|t| if let DTok::Frac(n) = t { Some((*n).min(3)) } else { None }).unwrap_or(0);
-    let shows_sec = toks.iter().any(|t| matches!(t, DTok::Sec(_) | DTok::Elapsed('s', _)));
     let exact = v * 86_400_000.0;
-    // Seconds that show are rounded once, to what shows (0.01 ms of slack
-    // absorbs the float error of the serial); without them the time is cut, not rounded.
-    let ms = if shows_sec || subs > 0 {
-        let unit = 10i64.pow(3 - subs as u32);
-        (((exact + 0.01) / unit as f64 + 0.5).floor() as i64) * unit
-    } else {
-        exact.floor() as i64
-    };
+    // Excel rounds to whole seconds even when seconds are not displayed; fractional-second
+    // tokens select a finer precision. Round once, with 0.01 ms of slack for serial float error.
+    let unit = 10i64.pow(3 - subs as u32);
+    let ms = (((exact + 0.01) / unit as f64 + 0.5).floor() as i64) * unit;
     let days = ms.div_euclid(86_400_000);
     // Rounding the time up can carry into the day after the last one Excel shows.
     if days > if date_1904 { 2_957_003 } else { 2_958_465 } {
@@ -1021,21 +1016,31 @@ mod tests {
     }
 
     #[test]
-    fn formats_without_seconds_do_not_round_across_day_or_minute_boundaries() {
+    fn formats_without_seconds_round_seconds_before_selecting_the_day_and_minute() {
+        // Independently observed in Excel with generated serial inputs in both date systems:
+        // 0.49 seconds before a boundary carries, 0.51 seconds before it does not.
         let midnight = 45_292.0;
-        let before_midnight = midnight - 0.0002 / 86_400.0;
-        let minute = midnight + 1.0 / 24.0;
-        let before_minute = minute - 0.0002 / 86_400.0;
+        let hour = midnight + 1.0 / 24.0;
         for date_1904 in [false, true] {
-            // Omitting seconds preserves the original day and minute, even less than a
-            // millisecond before the boundary. Showing seconds still rounds once.
             let render = |code: &str, value| format_dated(code, value, None, date_1904);
-            assert_eq!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight - 1.0));
-            assert_ne!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight));
-            assert_eq!(render("hh:mm", before_midnight), "23:59");
-            assert_eq!(render("hh:mm", before_minute), "00:59");
-            assert_eq!(render("m/d/yyyy hh:mm:ss.000", before_midnight), render("m/d/yyyy hh:mm:ss.000", midnight));
-            assert_eq!(render("hh:mm:ss.000", before_minute), render("hh:mm:ss.000", minute));
+            for seconds in [0.0002, 0.0006, 0.49] {
+                let before_midnight = midnight - seconds / 86_400.0;
+                let before_hour = hour - seconds / 86_400.0;
+                assert_eq!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight));
+                assert_eq!(render("hh:mm", before_midnight), "00:00");
+                assert_eq!(render("hh:mm", before_hour), "01:00");
+                assert_eq!(render("hh:mm:ss", before_hour), "01:00:00");
+            }
+            for seconds in [0.51, 1.0, 29.0] {
+                let before_midnight = midnight - seconds / 86_400.0;
+                let before_hour = hour - seconds / 86_400.0;
+                assert_eq!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight - 1.0));
+                assert_eq!(render("hh:mm", before_midnight), "23:59");
+                assert_eq!(render("hh:mm", before_hour), "00:59");
+            }
+            // Explicit fractional seconds retain their precision rather than rounding to seconds.
+            let before_hour = hour - 0.49 / 86_400.0;
+            assert_eq!(render("hh:mm:ss.000", before_hour), "00:59:59.510");
         }
     }
 
