@@ -367,8 +367,8 @@ fn a_groups_grip_lies_above_its_icons_and_its_drag_moves_the_group() {
         fixture.direction(direction).room(SCREEN).settle();
         let id = fixture.root_id().expect("the column shows");
         let grips = [0, 1].map(|group| fixture.part_rect(id, GRIP.at(group)).expect("each group has its grip"));
-        let icon = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
-        let (brushes, layers, swatches) = (icon("Brushes"), icon("Layers"), icon("Swatches"));
+        let icon_rect = |label: &str| fixture.by_label(label).expect("the panel's icon").rect;
+        let (brushes, layers, swatches) = (icon_rect("Brushes"), icon_rect("Layers"), icon_rect("Swatches"));
         assert!(grips[0].top() > 0.0, "{direction:?}: the first grip is under the bar: {grips:?}");
         assert!(grips[0].bottom() <= brushes.top(), "{direction:?}: the first grip is above its group's first icon");
         assert!(layers.bottom() <= grips[1].top(), "{direction:?}: the second grip is below the first group");
