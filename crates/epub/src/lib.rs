@@ -25,7 +25,10 @@ mod write;
 pub use read::{Epub, Item, Limits, Package, SpineItem, dir_of, parse_container, parse_package, resolve};
 pub use text::{contents_title, urn_uuid, valid_language_tag, w3cdtf};
 pub use toc::{Encrypted, MAX_TOC_ENTRIES, TocEntry, parse_encryption, parse_nav, parse_ncx};
-pub use write::{Book, Layout, MAX_RESOURCES, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, write, xhtml};
+pub use write::{
+    Book, Layout, MAX_PRESERVED_TITLE_CHARS, MAX_RESOURCES, MAX_TITLE_CHARS, Metadata, Nav, NavItem, NavKind, Resource, write,
+    write_preserving_title, xhtml,
+};
 
 /// The content of the first, stored `mimetype` entry.
 pub const MIMETYPE: &str = "application/epub+zip";

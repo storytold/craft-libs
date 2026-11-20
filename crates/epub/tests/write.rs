@@ -295,3 +295,21 @@ fn an_ncx_is_written_on_request_and_reads_back() {
     taken.resources[0].path = "TOC.ncx".into();
     assert!(matches!(write(&taken), Err(Error::Invalid(m)) if m.contains("used twice")));
 }
+
+#[test]
+fn preserving_title_keeps_long_unicode_in_package_and_navigation() {
+    let mut b = book();
+    b.ncx = true;
+    b.metadata.title = format!("{} & end", "é".repeat(MAX_TITLE_CHARS + 1));
+    let bytes = craft_epub::write_preserving_title(&b).unwrap();
+    let escaped = b.metadata.title.replace('&', "&amp;");
+    for name in ["OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx"] {
+        assert!(text(&bytes, name).contains(&escaped), "{name} loses the title");
+    }
+    assert_eq!(Epub::open(&bytes).unwrap().package.title, b.metadata.title);
+    b.metadata.title = "x".repeat(craft_epub::MAX_PRESERVED_TITLE_CHARS);
+    let at_limit = craft_epub::write_preserving_title(&b).unwrap();
+    assert_eq!(Epub::open(&at_limit).unwrap().package.title, b.metadata.title);
+    b.metadata.title.push('x');
+    assert!(craft_epub::write_preserving_title(&b).is_err());
+}

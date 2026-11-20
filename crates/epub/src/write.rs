@@ -13,6 +13,9 @@ use crate::{Error, MIMETYPE};
 /// document, so a huge one would multiply by the number of chapters or pages.
 pub const MAX_TITLE_CHARS: usize = 1024;
 
+/// Maximum title characters accepted by [`write_preserving_title`].
+pub const MAX_PRESERVED_TITLE_CHARS: usize = 65_536;
+
 /// Most resources one book may hold.
 pub const MAX_RESOURCES: usize = 100_000;
 
@@ -152,8 +155,8 @@ fn language(tag: &str) -> &str {
     if valid_language_tag(tag) { tag } else { "und" }
 }
 
-fn capped_title(title: &str) -> &str {
-    match title.char_indices().nth(MAX_TITLE_CHARS) {
+fn capped_title(title: &str, limit: usize) -> &str {
+    match title.char_indices().nth(limit) {
         Some((at, _)) => title.get(..at).unwrap_or(title),
         None => title,
     }
@@ -218,7 +221,7 @@ fn check(book: &Book) -> Result<(), Error> {
     Ok(())
 }
 
-fn package_document(book: &Book, modified: &str) -> String {
+fn package_document(book: &Book, modified: &str, title_limit: usize) -> String {
     let m = &book.metadata;
     let lang = language(&m.language);
     let fixed = matches!(book.layout, Layout::PrePaginated { .. });
@@ -226,7 +229,7 @@ fn package_document(book: &Book, modified: &str) -> String {
     let mut o = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"bookid\" xml:lang=\"{lang}\"{prefix}>\n<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n<dc:identifier id=\"bookid\">{}</dc:identifier>\n<dc:title>{}</dc:title>\n<dc:language>{lang}</dc:language>\n",
         esc(m.identifier.trim()),
-        esc(capped_title(&m.title))
+        esc(capped_title(&m.title, title_limit))
     );
     let mut dc = |name: &str, value: &str| {
         if !value.trim().is_empty() {
@@ -311,27 +314,27 @@ fn nested(items: &[NavItem], n: &Nesting) -> String {
 }
 
 /// The navigation's entries; with none, one to the first spine item, labelled with the title.
-fn nav_items<'b>(book: &'b Book) -> Cow<'b, [NavItem]> {
+fn nav_items<'b>(book: &'b Book, title_limit: usize) -> Cow<'b, [NavItem]> {
     if !book.nav.items.is_empty() {
         return Cow::Borrowed(&book.nav.items);
     }
     let path = book.spine.first().and_then(|id| book.resources.iter().find(|r| &r.id == id)).map(|r| href(&r.path)).unwrap_or_default();
-    Cow::Owned(vec![NavItem { href: path, label: capped_title(&book.metadata.title).to_string(), level: 1 }])
+    Cow::Owned(vec![NavItem { href: path, label: capped_title(&book.metadata.title, title_limit).to_string(), level: 1 }])
 }
 
-fn nav_document(book: &Book) -> String {
+fn nav_document(book: &Book, title_limit: usize) -> String {
     let kind = match book.nav.kind {
         NavKind::Toc => "toc",
         NavKind::PageList => "page-list",
     };
     let start = |_: usize, i: &NavItem| format!("<li><a href=\"{}\">{}</a>", esc_attr(&i.href), esc(&i.label));
-    let list = nested(&nav_items(book), &Nesting { start: &start, end: "</li>", sub_start: "<ol>", sub_end: "</ol>" });
+    let list = nested(&nav_items(book, title_limit), &Nesting { start: &start, end: "</li>", sub_start: "<ol>", sub_end: "</ol>" });
     let body = format!("<nav epub:type=\"{kind}\" id=\"toc\"><h1>{}</h1><ol>{list}</ol></nav>", esc(&book.nav.heading));
-    xhtml(&book.metadata.language, capped_title(&book.metadata.title), "", "", &body)
+    xhtml(&book.metadata.language, capped_title(&book.metadata.title, title_limit), "", "", &body)
 }
 
 /// The EPUB 2 table of contents (NCX): the same entries as nested `navPoint`s in reading order.
-fn ncx_document(book: &Book) -> String {
+fn ncx_document(book: &Book, title_limit: usize) -> String {
     let start = |k: usize, i: &NavItem| {
         let n = k + 1;
         format!(
@@ -340,7 +343,7 @@ fn ncx_document(book: &Book) -> String {
             esc_attr(&i.href)
         )
     };
-    let items = nav_items(book);
+    let items = nav_items(book, title_limit);
     let depth = {
         // Nesting depth, as `nested` nests: the most levels open at once.
         let (mut open, mut deepest): (Vec<u8>, usize) = (Vec::new(), 1);
@@ -358,7 +361,7 @@ fn ncx_document(book: &Book) -> String {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\" xml:lang=\"{}\">\n<head><meta name=\"dtb:uid\" content=\"{}\"/><meta name=\"dtb:depth\" content=\"{depth}\"/><meta name=\"dtb:totalPageCount\" content=\"0\"/><meta name=\"dtb:maxPageNumber\" content=\"0\"/></head>\n<docTitle><text>{}</text></docTitle>\n<navMap>{points}</navMap>\n</ncx>\n",
         language(&book.metadata.language),
         esc_attr(book.metadata.identifier.trim()),
-        esc(capped_title(&book.metadata.title))
+        esc(capped_title(&book.metadata.title, title_limit))
     )
 }
 
@@ -366,12 +369,25 @@ fn ncx_document(book: &Book) -> String {
 /// `OEBPS/` the package document, the navigation document, `toc.ncx` when [`Book::ncx`] asks for
 /// it, and the resources in their order.
 pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
+    write_with_title_limit(book, MAX_TITLE_CHARS)
+}
+
+/// Write a book without silently truncating its title. Titles longer than
+/// [`MAX_PRESERVED_TITLE_CHARS`] characters return an error.
+pub fn write_preserving_title(book: &Book) -> Result<Vec<u8>, Error> {
+    if book.metadata.title.chars().count() > MAX_PRESERVED_TITLE_CHARS {
+        return invalid(format!("title exceeds {MAX_PRESERVED_TITLE_CHARS} characters"));
+    }
+    write_with_title_limit(book, MAX_PRESERVED_TITLE_CHARS)
+}
+
+fn write_with_title_limit(book: &Book, title_limit: usize) -> Result<Vec<u8>, Error> {
     check(book)?;
     let modified =
         w3cdtf(&book.metadata.modified).ok_or_else(|| Error::Invalid(format!("`{}` is not a modification date", book.metadata.modified)))?;
-    let opf = package_document(book, &modified);
-    let nav = nav_document(book);
-    let ncx = book.ncx.then(|| ncx_document(book));
+    let opf = package_document(book, &modified, title_limit);
+    let nav = nav_document(book, title_limit);
+    let ncx = book.ncx.then(|| ncx_document(book, title_limit));
     let fail = |e: craft_zip::Error| Error::Invalid(e.to_string());
     let mut z = craft_zip::Writer::new();
     let mut own = vec![
