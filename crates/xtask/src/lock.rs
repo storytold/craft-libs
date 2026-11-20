@@ -112,7 +112,7 @@ fn record_owner(lock: &Path, label: &str) -> PathBuf {
     if let (Err(e), Err(w)) = (&removed, &written)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        eprintln!("lock: could not record the owner in {} ({e}; {w}): waiting runs may show a stale owner", owner_file.display());
+        crate::note(format_args!("lock: could not record the owner in {} ({e}; {w}): waiting runs may show a stale owner", owner_file.display()));
     }
     owner_file
 }
@@ -152,9 +152,9 @@ fn read_owner(path: &Path) -> Option<String> {
 /// before any wait.
 pub fn acquire(config: &LockConfig, cancel: Option<&Cancel>) -> Result<Held, Error> {
     acquire_with(config, cancel, || {
-        eprintln!("=== lock: waiting for another run to finish ({} at a time) ===", config.slots);
+        crate::note(format_args!("=== lock: waiting for another run to finish ({} at a time) ===", config.slots));
         for h in holders(config).unwrap_or_default() {
-            eprintln!("  running: {h}");
+            crate::note(format_args!("  running: {h}"));
         }
     })
 }
@@ -170,7 +170,7 @@ fn acquire_with(config: &LockConfig, cancel: Option<&Cancel>, on_wait: impl FnOn
             return Err(Error::Canceled { step: None });
         }
         if let Some(held) = try_acquire(config)? {
-            eprintln!("=== lock: waited {:.0} s for a slot ===", waiting.elapsed().as_secs_f64());
+            crate::note(format_args!("=== lock: waited {:.0} s for a slot ===", waiting.elapsed().as_secs_f64()));
             return Ok(held);
         }
     }
