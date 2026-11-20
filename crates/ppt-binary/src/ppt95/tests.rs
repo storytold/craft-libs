@@ -1609,42 +1609,65 @@ fn hostile_angles_never_panic() {
 
 /// The text of a drawn shape and of a freeform keeps its anchoring, wrap, spacing and justified
 /// alignment, as a text box's does.
-/// The text rectangle is measured from the edges of the box the geometry holds. A shape turned a
-/// quarter before its text was typed holds its box turned (as `rot90thentext` and
-/// `rot90arrowtext` showed), so its insets move to the unturned box's edges; a balloon's box is its
-/// body, so its text's bottom inset is measured from the body's bottom (as `balloontext` showed).
+/// PowerPoint 95 lays a shape's text out in the box the geometry holds, turned by the text's own
+/// angle (4003 +16): a shape turned a quarter before its text was typed holds its box turned and
+/// draws its text upright (`wrap-before`, `rot90arrowtext`), one turned on to 120° after that draws
+/// it at the 30° its geometry holds (`wrap-mix`), and one turned after its text was typed turns
+/// its text with it (`wrap-after`). The insets stay on the held box's edges, as PowerPoint lays
+/// out `upright` text. A balloon's box is its body, so the inset at its bottom is measured from
+/// the body (`balloontext`).
 #[test]
-fn text_insets_follow_the_unturned_box() {
-    // A text rectangle `insets` (left, top, right, bottom, in master units) inside `bx`.
-    let text_in = |[l, t, r, b]: [i32; 4], [il, it, ir, ib]: [i32; 4]| {
-        text(b"Hi", &[plain(3)], &[para_run(3, false, 0, 0, 0)], 1, [l + il, t + it, r - ir, b - ib], BODY)
+fn text_in_a_turned_box_keeps_its_own_angle() {
+    // A text rectangle `insets` (left, top, right, bottom, in master units) inside `bx`, drawn at
+    // `angle` (sixteenths of a degree, counter-clockwise).
+    let text_in = |[l, t, r, b]: [i32; 4], [il, it, ir, ib]: [i32; 4], angle: i32| {
+        let mut t = text(b"Hi", &[plain(3)], &[para_run(3, false, 0, 0, 0)], 1, [l + il, t + it, r - ir, b - ib], BODY);
+        let at = t.windows(4).position(|w| w == 4003u32.to_le_bytes()).unwrap() + 16 + 16;
+        t[at..at + 4].copy_from_slice(&angle.to_le_bytes());
+        t
     };
-    let shape = |code: i32, bx: [i32; 4], turn: i32, insets: [i32; 4]| {
-        container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, 1800, bx, 0), format(Format { turn, ..PLAIN }), text_in(bx, insets)])
+    let shape = |code: i32, bx: [i32; 4], drawn: i32, turn: i32, insets: [i32; 4]| {
+        container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, 1800, bx, drawn), format(Format { turn, ..PLAIN }), text_in(bx, insets, drawn)])
     };
-    let tall = [-288, -576, 288, 576];
+    let (tall, wide) = ([-288, -576, 288, 576], [-576, -288, 576, 288]);
     let p = deck_of(
         vec![
-            // A rectangle turned a quarter counter-clockwise, its box held turned.
-            shape(-3, tall, 1440, [66, 37, 66, 37]),
-            // An up arrow: a right arrow turned a quarter, its head at the turned box's top.
-            shape(9 | 0x1000, tall, 0, [209, 329, 208, 37]),
-            // Unturned: the insets stay where they are.
-            shape(-3, [-576, -288, 576, 288], 0, [66, 37, 66, 37]),
+            // A rectangle turned a quarter counter-clockwise before its text: its box held turned.
+            shape(-3, tall, 0, 1440, [66, 37, 66, 37]),
+            // The same turned on to 120°: the geometry holds the 30° left over.
+            shape(-3, tall, 480, 1920, [66, 37, 66, 37]),
+            // An up arrow: a right arrow turned a quarter, its head at the held box's top.
+            shape(9 | 0x1000, tall, 0, 0, [209, 329, 208, 37]),
+            // Turned after its text: the geometry holds the box unturned and the whole angle.
+            shape(-3, wide, 1440, 1440, [66, 37, 66, 37]),
             // A balloon in a 144 pt square: its body is the top 120 pt.
-            shape(13, [-576, -576, 576, 576], 0, [121, 91, 121, 307]),
+            shape(13, [-576, -576, 576, 576], 0, 0, [121, 91, 121, 307]),
         ],
         &[],
     );
-    let insets: Vec<_> = p.slides[0]
+    let got: Vec<_> = p.slides[0]
         .shapes
         .iter()
         .map(|s| {
             let b = &body_of(s).body;
-            (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap())
+            (s.xfrm.unwrap().rot, b.upright, b.rot, (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap()))
         })
         .collect();
-    assert_eq!(insets, [(4.625, 8.25, 4.625, 8.25), (4.625, 26.125, 41.125, 26.0), (8.25, 4.625, 8.25, 4.625), (15.125, 11.375, 15.125, 14.375)]);
+    assert_eq!(
+        got,
+        [
+            (270.0, Some(true), None, (8.25, 4.625, 8.25, 4.625)),
+            (240.0, Some(true), Some(330.0), (8.25, 4.625, 8.25, 4.625)),
+            (270.0, Some(true), None, (26.125, 41.125, 26.0, 4.625)),
+            (270.0, None, None, (8.25, 4.625, 8.25, 4.625)),
+            (0.0, None, None, (15.125, 11.375, 15.125, 14.375)),
+        ]
+    );
+    // A balloon turned a quarter counter-clockwise: its body is cut from the shape's bottom, the
+    // held box's right, where its tail is.
+    let p = deck_of(vec![shape(13 | 0x1000, [-576, -576, 576, 576], 0, 0, [91, 121, 307, 121])], &[]);
+    let b = &body_of(&p.slides[0].shapes[0]).body;
+    assert_eq!((b.upright, b.inset_l, b.inset_t, b.inset_r, b.inset_b), (Some(true), Some(11.375), Some(15.125), Some(14.375), Some(15.125)));
 }
 
 #[test]
@@ -2341,8 +2364,8 @@ fn check_media_sample(name: &str, p: &Presentation) {
     }
 }
 
-/// The text rectangles of the PowerPoint 95 samples with text in a turned shape or a balloon; false
-/// for any other sample.
+/// The text of the PowerPoint 95 samples with text in a turned shape or a balloon: its insets and
+/// whether it is drawn upright; false for any other sample.
 fn check_text_frame_sample(name: &str, shapes: &[Shape]) -> bool {
     // AddShape(n, 1440, 1440, 2880, 1440) in twips.
     let wide = (72.0, 72.0, 144.0, 72.0);
@@ -2350,23 +2373,33 @@ fn check_text_frame_sample(name: &str, shapes: &[Shape]) -> bool {
         let b = &body_of(s).body;
         (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap())
     };
+    let upright = |s: &Shape| (body_of(s).body.upright, body_of(s).body.rot);
     match name {
         // A rectangle with text, then the same turned 90° after its text was typed: PowerPoint 95
         // keeps the box unturned and the text turns with it (4003 +16), insets 66 × 37 units.
         "recttext" | "rot90text" => {
             assert_eq!((boxed(&shapes[0]), insets(&shapes[0])), (wide, (8.25, 4.625, 8.25, 4.625)), "{name}");
         }
-        // Turned 90° before its text was typed: the box and the text rectangle are held turned
-        // (and the text upright), so the insets move to the unturned box's edges, the turned
-        // box's left becoming the top.
+        // Turned 90° before its text was typed: the box and the text rectangle are held turned and
+        // the text is drawn upright, its insets on the held box's edges.
         "rot90thentext" => {
             let x = shapes[0].xfrm.unwrap();
             assert_eq!((x.rot, x.w, x.h), (270.0, 144.0, 72.0));
-            assert_eq!(insets(&shapes[0]), (4.625, 8.25, 4.625, 8.25));
+            assert_eq!((upright(&shapes[0]), insets(&shapes[0])), ((Some(true), None), (8.25, 4.625, 8.25, 4.625)));
         }
-        // An up arrow with text: a right arrow turned a quarter, whose head (the turned box's top,
-        // 329 units in) is the unturned box's right.
-        "rot90arrowtext" => assert_eq!(insets(&shapes[0]), (4.625, 26.125, 41.125, 26.0)),
+        // An up arrow with text: a right arrow turned a quarter, its head at the held box's top
+        // (329 units in), its text upright.
+        "rot90arrowtext" | "wrap-arrow" => {
+            assert_eq!((upright(&shapes[0]), insets(&shapes[0])), ((Some(true), None), (26.125, 41.125, 26.0, 4.625)), "{name}");
+        }
+        // Wrapping text (the Text Anchor dialog's word wrap): drawn upright in the held box when
+        // turned before it was typed, turned with the shape when turned after, and at the 30° the
+        // geometry holds when turned a quarter, typed, then turned on to 120° (`rotmix2` likewise).
+        // Turned 30°, typed, then on to 90° (`rotmix`), the geometry holds the box unturned and the
+        // whole angle, and the text turns with the shape.
+        "wrap-none" | "wrap-after" | "rotmix" | "rot30text" => assert_eq!(upright(&shapes[0]), (None, None), "{name}"),
+        "wrap-before" => assert_eq!(upright(&shapes[0]), (Some(true), None)),
+        "wrap-mix" | "rotmix2" => assert_eq!(upright(&shapes[0]), (Some(true), Some(330.0)), "{name}"),
         // A balloon's box is its body (the square's top 120 of 144 pt); its text's bottom edge,
         // 307 units above the square's, is 14.375 pt above the body's.
         "balloontext" => {

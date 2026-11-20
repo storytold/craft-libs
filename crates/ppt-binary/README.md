@@ -68,10 +68,13 @@ counter-clockwise, DrawingML clockwise, so each is negated. A shape's geometry h
 as drawn, quarter-turns and mirror included, so its angle and flips come from there (a box turned
 by an odd number of quarter-turns is turned back); the rectangle, rounded rectangle and ellipse
 take the angle the user set. A shape that draws nothing but text is a text box; a shape's text is
-read as a text box's is, its text rectangle measured from the edges of the shape's unturned box (a
-balloon's, its body). PowerPoint 95 keeps the text of a shape turned before it was typed upright;
-the text's own angle isn't read yet, so that text turns with its shape. Freeforms read as custom
-paths through their points, in their box, with
+read as a text box's is. PowerPoint 95 lays it out in the box the geometry holds, turned by the
+text's own angle, so the text of a shape turned before it was typed stays upright: such text is
+`upright`, at its own angle, with its insets on that box's edges (a balloon's measured from its
+body). A preset with a text rectangle of its own, such as an arrow's shaft, applies the insets
+inside that rectangle, where PowerPoint 95 measures them from the whole box, so such text can sit
+off from where PowerPoint 95 puts it. Freeforms read as custom paths through their points, in
+their box, with
 their format's fill, line and shadow, and open ones with their arrowheads. Groups read as groups
 of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip a
 group), nested up to 32 deep. Pictures read as picture shapes in their box, with their crop and

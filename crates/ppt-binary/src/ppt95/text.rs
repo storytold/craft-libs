@@ -147,6 +147,13 @@ pub(super) fn master_style(env: &Env, scheme: &Scheme, ty: usize, ruler: Option<
     Some(ls)
 }
 
+/// The angle a text container's text is drawn at (4003 +16), counter-clockwise in sixteenths of a
+/// degree: the geometry's own angle in every probe, whatever quarter-turns its box holds.
+pub(super) fn angle(container: &Rec) -> Option<i32> {
+    let body = container.children().find(|r| r.kind == rt::TEXT_BODY || r.kind == rt::MASTER_TEXT_BODY)?;
+    body.child(rt::TEXT_ATOM)?.i32(16)
+}
+
 /// The ruler slot a text container's body names.
 pub(super) fn ruler_slot(container: &Rec) -> Option<u32> {
     let body = container.children().find(|r| r.kind == rt::TEXT_BODY || r.kind == rt::MASTER_TEXT_BODY)?;

@@ -465,21 +465,29 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     });
     let container = r.child(rt::TEXT);
     let mut text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
-    // The text rectangle is measured from the edges of the box as the geometry holds it; the
-    // shape's are those of the unturned box.
-    if let Some(t) = text.as_mut() {
-        unturn_insets(&mut t.body, shape::quarter_turns(&xfrm, drawn));
+    // PowerPoint 95 lays a shape's text out in the box the geometry holds, turned by the text's own
+    // angle (4003 +16, the geometry's own angle in every probe): quarter-turns folded into that box
+    // don't turn the text. When the shape's box was turned back, the text is upright on the slide,
+    // at that angle, with its insets on the held box's edges by name, as PowerPoint lays out
+    // `upright` text (checked in PowerPoint 16 against PowerPoint 95's renderings).
+    let quarters = shape::quarter_turns(&xfrm, drawn);
+    if let Some(t) = text.as_mut().filter(|_| quarters != 0) {
+        let angle = container.and_then(|c| text::angle(&c)).unwrap_or(drawn);
+        t.body.upright = Some(true);
+        t.body.rot = Some(shape::clockwise(i64::from(angle))).filter(|r| *r != 0.0);
     }
     let ruler = container.and_then(|c| text::ruler_slot(&c));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
         let height = xfrm.h;
         geom = code.map(|c| shape::geometry(c, g.i32(4), &mut xfrm));
-        // A balloon's box is its body, above its tail: the text's bottom edge stays where it was.
-        if let Some(b) = text.as_mut().map(|t| &mut t.body)
-            && let Some(inset) = b.inset_b
-        {
-            b.inset_b = Some((inset - (height - xfrm.h)).max(0.0));
+        // A balloon's box is its body, above its tail: the text's edge there stays where it was. The
+        // cut is the shape's bottom, which is the held box's edge `quarters` on from the bottom.
+        if let Some(b) = text.as_mut().map(|t| &mut t.body).filter(|_| height != xfrm.h) {
+            let inset = [&mut b.inset_l, &mut b.inset_t, &mut b.inset_r, &mut b.inset_b].into_iter().nth((3 + quarters) % 4);
+            if let Some(inset) = inset {
+                *inset = inset.map(|v| (v - (height - xfrm.h)).max(0.0));
+            }
         }
         if let Some(f) = format {
             look = shape::look(&f, scheme);
@@ -490,15 +498,6 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         None => Kind::Shape,
     };
     Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind })
-}
-
-/// Insets measured from the edges of a box `quarters` quarter-turns clockwise from the shape's
-/// unturned one, as insets from the unturned box's edges. Left, top, right and bottom are in
-/// clockwise order, so the unturned box's edge `i` is the turned box's edge `i + quarters`.
-fn unturn_insets(b: &mut craft_pptx::text::BodyProps, quarters: usize) {
-    let turned = [b.inset_l, b.inset_t, b.inset_r, b.inset_b];
-    let edge = |i: usize| turned[(i + quarters) % 4];
-    [b.inset_l, b.inset_t, b.inset_r, b.inset_b] = [edge(0), edge(1), edge(2), edge(3)];
 }
 
 /// An object as a shape: a placeholder of a known type; a picture; a text box when it draws

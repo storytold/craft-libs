@@ -155,7 +155,7 @@ pub(super) fn quarter_turns(xfrm: &Xfrm, drawn: i32) -> usize {
 }
 
 /// A counter-clockwise angle in sixteenths of a degree as DrawingML's clockwise degrees, 0 to 360.
-fn clockwise(ccw: i64) -> f64 {
+pub(super) fn clockwise(ccw: i64) -> f64 {
     ((-ccw).rem_euclid(TURN) as f64) / 16.0
 }
 
