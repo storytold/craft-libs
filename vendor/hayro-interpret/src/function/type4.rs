@@ -71,7 +71,13 @@ impl Type4 {
             0,
         )?;
 
-        let mut out: SmallVec<_> = arg_stack.items().iter().map(|i| i.as_f32()).collect();
+        // PdfCraft patch (115): the top `/Range`-many values (see `Clamper::top_outputs`).
+        let mut out: SmallVec<_> = self
+            .clamper
+            .top_outputs(arg_stack.items())?
+            .iter()
+            .map(|i| i.as_f32())
+            .collect();
 
         self.clamper.clamp_output(&mut out);
 
@@ -1089,6 +1095,44 @@ mod tests {
         ));
         assert!(function_limits_eval(program).is_none());
     }
+    /// PdfCraft patch (115, storytold/pdfcraft#7514): `prog` run on `input` with one input of
+    /// domain [0 1] and `outputs` output ranges of [0 1].
+    fn ranged_eval(prog: &str, outputs: usize, input: f32) -> Option<Values> {
+        let type4 = Type4 {
+            program: parse_procedure(format!("{{{prog}}}").as_bytes()).unwrap(),
+            clamper: Clamper {
+                domain: smallvec![(0.0, 1.0)],
+                range: Some((0..outputs).map(|_| (0.0, 1.0)).collect()),
+            },
+        };
+        type4.eval(smallvec![input])
+    }
+
+    /// The outputs are the values on top of the stack, as many as `/Range` has pairs (ISO
+    /// 32000-2 §7.10.5.3). `0 exch 0 exch 0` leaves 0 0 t 0 for three outputs: the top three
+    /// are (0, t, 0); the bottom three, (0, 0, t), were taken.
+    #[test]
+    fn extra_values_below_the_outputs_are_ignored() {
+        assert_eq!(ranged_eval("0 exch 0 exch 0", 3, 0.6), Some(smallvec![0.0, 0.6, 0.0]));
+        assert_eq!(ranged_eval("pop 1 0 0 0 1 0", 3, 0.6), Some(smallvec![0.0, 1.0, 0.0]));
+        assert_eq!(ranged_eval("pop 0.2 0.5 0.8", 1, 0.6), Some(smallvec![0.8]));
+    }
+
+    #[test]
+    fn a_program_leaving_exactly_the_outputs_is_unchanged() {
+        assert_eq!(ranged_eval("pop 0 1 0", 3, 0.6), Some(smallvec![0.0, 1.0, 0.0]));
+        assert_eq!(ranged_eval("dup 0", 3, 0.6), Some(smallvec![0.6, 0.6, 0.0]));
+    }
+
+    /// Fewer values than `/Range` has pairs is the error ISO 32000-2 §7.10.5.3 calls it: the
+    /// evaluation fails, as any that cannot finish.
+    #[test]
+    fn a_program_leaving_too_few_values_fails() {
+        for prog in ["pop 0.5", "pop 1 0.5", "pop"] {
+            assert_eq!(ranged_eval(prog, 3, 0.6), None, "{prog}");
+        }
+    }
+
     #[test]
     fn function_limits_calculator_eval_depth_is_bounded() {
         let mut program = vec![PostScriptOp::Number(Number::from_i32(0))];
