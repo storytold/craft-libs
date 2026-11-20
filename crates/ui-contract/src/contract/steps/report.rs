@@ -176,7 +176,7 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         keys::register_node(ctx, id, folded.inner, None, focusable);
     }
     if let Some(facts) = core.text_access.take() {
-        crate::runtime::access::text::report_text(ctx, id, &facts);
+        crate::runtime::access::text::report_text(ctx, id, &facts, access.value.as_deref());
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);

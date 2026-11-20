@@ -618,7 +618,7 @@ impl Component for CropOverlay<'_> {
         let (lu, lv) = ((q[1] - q[0]).length(), (q[3] - q[0]).length());
         // A small frame keeps a movable middle: the reach inside is at most a quarter of the shortest side.
         let reach = cx.style.reach.min(lu.min(lv) / 4.0);
-        let body = if self.default_frame { CursorIcon::Crosshair } else { CursorIcon::Move };
+        let body = if self.default_frame { CursorIcon::Crosshair } else { CursorIcon::Grab };
         cx.part(FRAME.at(BoxPart::Inside.index()), HitShape::Polygon(q.to_vec()))
             .sense(Sense::DRAG | Sense::CLICK | Sense::CONTEXT_CLICK | Sense::TAKE_FOCUS)
             .priority(HitPriority::BODY)
@@ -757,6 +757,9 @@ impl Component for CropOverlay<'_> {
             .find(|part| cx.hover_pos(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some())
             .or_else(|| [TURN, OUTSIDE].into_iter().find_map(|key| cx.hover_pos(key)).map(|_| BoxPart::Outside));
         self.run_keys(cx, &space, &frame, live.drag.is_some());
+        if live.drag.as_ref().is_some_and(|drag| matches!(drag.kind, Kind::Move)) {
+            cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);
+        }
         self.report.scrolls_at = live.drag.as_ref().and_then(|drag| drag.scrolls_at(self.image_mode, self.auto_center));
         *cx.memory::<Live>() = live;
     }

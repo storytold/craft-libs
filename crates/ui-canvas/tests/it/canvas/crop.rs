@@ -117,6 +117,19 @@ struct Rig {
     rerun: Rc<Cell<bool>>,
 }
 
+#[trial]
+fn crop_body_shows_grab_and_grabbing_during_move() {
+    use craft_behavior::{Cursor, CursorIcon};
+    let mut rig = Rig::upright();
+    let at = rig.at(200.0, 150.0);
+    rig.move_to(at);
+    assert_eq!(craft_ui::runtime::cursor::current(&rig.frames.ctx), Some(Cursor::System(CursorIcon::Grab)));
+    rig.press(at);
+    rig.move_to(at + Vec2::new(30.0, 0.0));
+    assert_eq!(craft_ui::runtime::cursor::current(&rig.frames.ctx), Some(Cursor::System(CursorIcon::Grabbing)));
+    rig.release(at + Vec2::new(30.0, 0.0));
+}
+
 impl Rig {
     fn new(crop: CropBox, setup: Setup) -> Self {
         let (crop, setup, seen) = (Rc::new(RefCell::new(crop)), Rc::new(RefCell::new(setup)), Rc::new(RefCell::new(Seen::default())));
