@@ -25,7 +25,10 @@ fn quick_presses_count_clicks_with_their_own_modifiers() {
         });
     };
     let button = |pressed, modifiers| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
-    frames.frame(vec![pointer::moved(at), button(true, egui::Modifiers::SHIFT), button(false, egui::Modifiers::SHIFT), button(true, egui::Modifiers::NONE)], &mut show);
+    frames.frame(
+        vec![pointer::moved(at), button(true, egui::Modifiers::SHIFT), button(false, egui::Modifiers::SHIFT), button(true, egui::Modifiers::NONE)],
+        &mut show,
+    );
     frames.idle(1, &mut show);
     assert_eq!(counts, vec![1, 1], "a change in modifiers starts a new click sequence");
 }
@@ -38,7 +41,10 @@ fn a_press_uses_its_event_modifiers_when_the_frame_has_released_them() {
     frames.idle(2, &mut show);
     let at = area.center();
     frames.frame(vec![pointer::moved(at)], &mut show);
-    frames.frame(vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::SHIFT }], &mut show);
+    frames.frame(
+        vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::SHIFT }],
+        &mut show,
+    );
     assert!(log.borrow().last().root.press.mods.shift, "the press reads Shift even after the frame has released it");
 }
 

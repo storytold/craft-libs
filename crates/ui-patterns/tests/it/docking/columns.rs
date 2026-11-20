@@ -298,9 +298,10 @@ fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
         let seen = Rc::clone(&actions);
         let mut fixture = Fixture::new(move |ui| {
             let mut workspace = held.borrow().clone();
-            let out = DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithFooter, DockConfig::default().iconic_mode(IconicMode::Rail))
-                .rail_footer(10)
-                .show(ui);
+            let out =
+                DockArea::new("Rail dock", Bind::given(workspace.clone()), &mut RailWithFooter, DockConfig::default().iconic_mode(IconicMode::Rail))
+                    .rail_footer(10)
+                    .show(ui);
             for action in out.actions {
                 drop(workspace.apply(action.clone(), false, |_| Permissions::ALL));
                 seen.borrow_mut().push(action);
@@ -326,7 +327,10 @@ fn rail_footer_stays_clear_of_icons_on_either_dock_side() {
         assert!(last.bottom() <= after.top() && last.top() >= 0.0, "scrolling brings the last icon above the controls: {last:?}, {after:?}");
         let last = fixture.by_label("Panel 29").expect("the last icon can be clicked");
         fixture.click(&last).settle();
-        assert!(actions.borrow().iter().any(|action| matches!(action, Action::Activate { panel: 29, .. })), "the scrolled icon still activates its panel");
+        assert!(
+            actions.borrow().iter().any(|action| matches!(action, Action::Activate { panel: 29, .. })),
+            "the scrolled icon still activates its panel"
+        );
         let expanded = fixture.by_label("Rail controls").expect("the controls remain on the expanded rail").rect;
         assert!((expanded.center().x - footer.center().x).abs() < footer.width(), "the controls stay at the same dock edge when expanded");
     }

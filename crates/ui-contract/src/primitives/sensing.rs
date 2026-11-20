@@ -778,9 +778,8 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     let layer = ui.layer_id();
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     // One read of the pointer and one of the arena serve the joins, the outcome and the part results.
-    let (pointer_pos, target, sample) = pointer::with_frame(ctx, |frame, hover| {
-        (hover, frame.map_or(0.0, |frame| frame.target), frame.and_then(|frame| frame.sample))
-    });
+    let (pointer_pos, target, sample) =
+        pointer::with_frame(ctx, |frame, hover| (hover, frame.map_or(0.0, |frame| frame.target), frame.and_then(|frame| frame.sample)));
     let mut shapes = Vec::new();
     let mut joined = Vec::with_capacity(specs.len());
     let recording = crate::runtime::replay::recording(ctx);
