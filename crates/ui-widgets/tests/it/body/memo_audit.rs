@@ -9,8 +9,8 @@ use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{
     Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
 };
-use egui::{Color32, Pos2, Rect, Ui, Vec2};
 use craft_ui_test_kit::body::Slab;
+use egui::{Color32, Pos2, Rect, Ui, Vec2};
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
