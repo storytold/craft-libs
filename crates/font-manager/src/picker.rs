@@ -16,7 +16,7 @@ use craft_font_catalog::Catalog;
 use craft_host::Section;
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
-    Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
+    Access, Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
 use craft_ui::fonts::FontRef;
@@ -44,6 +44,8 @@ craft_ui::words! {
         clear_all: "fontPicker.clearAll" = "Clear All";
         sample: "fontPicker.sample" = "Sample";
         no_match: "fontPicker.noMatch" = "No fonts match";
+        /// The family field's label when the selection has several families.
+        mixed: "fontPicker.mixed" = "Mixed";
         /// The name of a row's star, with `{row}` for the row's label.
         favorite: template "fontPicker.favorite" = "Favorite {row}";
         list: "fontPicker.list" = "Fonts";
@@ -646,11 +648,21 @@ impl Component for FontPicker<'_> {
         let family = cx.value().cloned().unwrap_or_default();
         let mut options = TextOptions::new();
         options.select_on_focus = true;
+        options.mixed = cx.value().is_none();
+        if options.mixed {
+            options.placeholder = Some(cx.words::<FontPickerWords>().mixed.clone());
+        }
         cx.text(text_key(), placed.text, &codec, &family, &options);
     }
 
     fn bind(&mut self) -> Option<craft_ui::contract::BindMut<'_, String>> {
         Some(self.family.reborrow())
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if cx.value().is_none() && cx.text(&text_key()).is_none_or(|text| text.draft.as_deref().is_none_or(str::is_empty)) {
+            access.value(cx.words::<FontPickerWords>().mixed.as_str());
+        }
     }
 
     /// A changed draft filters the list: it opens on the matches, and closes when the draft ended (committed,

@@ -90,6 +90,20 @@ fn present(fx: &Fixture, text: &str) -> bool {
 }
 
 #[trial]
+fn mixed_family_is_named_until_a_font_is_chosen() {
+    let catalog = catalog_of(&[INTER_REGULAR]);
+    let mut family = craft_behavior::Mixed::<String>::Mixed;
+    let mut fx = Fixture::new(move |ui| {
+        FontPicker::new("Font family", Bind::bound_mixed(&mut family), &catalog).show(ui);
+    });
+    fx.in_room(Room::Window);
+    fx.settle();
+    let field = fx.by_role(craft_ui::runtime::access::Role::COMBO_BOX).into_iter().next().expect("the family field");
+    let label = fx.tree().value_of(field.node).filter(|value| !value.is_empty()).expect("the mixed family has an accessible label");
+    assert!(present(&fx, label), "the accessible mixed label is also visible");
+}
+
+#[trial]
 fn a_style_row_under_an_expanded_family_picks_family_and_style_once() {
     let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, INTER_SEMIBOLD]), vec![]);
     open(&mut fx);

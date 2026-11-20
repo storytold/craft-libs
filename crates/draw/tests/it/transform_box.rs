@@ -60,6 +60,7 @@ struct Config {
 /// What the host keeps of the box and what the passes reported.
 struct Host {
     state: BoxState,
+    shown: Option<BoxState>,
     before: Option<BoxState>,
     events: Vec<Seen>,
     applied: usize,
@@ -116,6 +117,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     let kept_config = Rc::clone(&shown_config);
     let host = Rc::new(RefCell::new(Host {
         state,
+        shown: None,
         before: None,
         events: Vec::new(),
         applied: 0,
@@ -187,6 +189,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         });
         if let Some((output, guide_edits)) = canvas.inner {
             let mut host = shown_host.borrow_mut();
+            host.shown = output.edit.shown.as_ref().and_then(|value| value.same()).map(|value| **value);
             host.guide_events += guide_edits;
             host.snapped = output.snapped.len();
             host.id = output.edit.response.id;
@@ -469,6 +472,22 @@ fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() 
     assert!(!events.contains(&Seen::Cancel), "the rounded write-back cancels nothing: {events:?}");
     assert!((first - 250.0).abs() < 0.01 && (second - 280.0).abs() < 0.01, "each move reaches the host: {first} {second}");
     assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
+}
+
+#[trial]
+fn transform_box_shows_each_drag_proposal_in_the_same_frame() {
+    let mut h = upright();
+    let start = h.screen(Point::new(300.0, 220.0));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    let mut previous = h.state();
+    for delta in [Vec2::new(30.0, 21.0), Vec2::new(60.0, 42.0)] {
+        frame(&mut h, vec![pointer::moved(start + delta)]);
+        let host = h.host.borrow();
+        assert_ne!(host.state, previous, "the drag changed the box");
+        assert_eq!(host.shown, Some(host.state), "the reported preview follows this frame's edit");
+        previous = host.state;
+    }
 }
 
 #[trial]
