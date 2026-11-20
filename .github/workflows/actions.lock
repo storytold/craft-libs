@@ -170,8 +170,3 @@ dependencies:
         commit: 'sha1-d65d611f0ef67eaa94039351be5afce61102dbb0'
         owner_id: 76897702
         repo_id: 1414429108
-    'swatinem/rust-cache@v2.9.3':
-        ref: 'v2.9.3'
-        commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
-        owner_id: 580492
-        repo_id: 298565987

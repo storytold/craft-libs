@@ -2,13 +2,15 @@
 
 use craft_host::target::Os;
 use craft_i18n::Direction;
-use craft_ui::contract::Show as _;
+use craft_ui::contract::{Lazy, Show as _};
 use craft_ui::menu::MenuItem;
 use craft_ui::menu::bar::{MenuBar, MenuHelp, MenuTitle};
 use craft_ui::menu::search::HelpEntry;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// A menu bar with File, Edit and Help.
 struct Rig {
@@ -263,4 +265,35 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     fixture.key(Key::F, Modifiers::ALT);
     fixture.settle();
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
+}
+
+/// A menu bar in a settled region with a content version underlines its mnemonics while Alt is held: the modifiers
+/// it paints by are a recorded read, so the frame Alt goes down runs the region, and so does the frame it comes up,
+/// though the version stays the same. In between the region settles again.
+#[trial]
+fn holding_alt_runs_the_settled_region_of_a_menu_bar() {
+    let runs = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&runs);
+    let mut fixture = Fixture::new(move |ui| {
+        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
+            counted.set(counted.get() + 1);
+            let titles = vec![MenuTitle::new("&File", |ui| {
+                MenuItem::new("&New").show(ui);
+            })];
+            MenuBar::new("Main menu", titles).show(ui);
+        });
+    });
+    fixture.os(Os::Linux);
+    fixture.settle();
+    let frame = |fixture: &mut Fixture| {
+        runs.set(0);
+        fixture.frame(Vec::new());
+        runs.get()
+    };
+    assert_eq!(frame(&mut fixture), 0, "the region settles");
+    fixture.hold(Modifiers::ALT);
+    assert_eq!(frame(&mut fixture), 1, "Alt going down runs the region, which underlines the mnemonics");
+    assert_eq!(frame(&mut fixture), 0, "with Alt held the region settles again");
+    fixture.hold(Modifiers::NONE);
+    assert_eq!(frame(&mut fixture), 1, "Alt coming up runs the region, which drops the underlines");
 }
