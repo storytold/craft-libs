@@ -151,12 +151,15 @@ impl Token {
     }
 }
 
+/// Whether `c` can start a Rust identifier: `_` or a character with the Unicode `XID_Start` property.
 fn is_ident_start(c: char) -> bool {
-    c == '_' || c.is_alphabetic()
+    c == '_' || unicode_ident::is_xid_start(c)
 }
 
+/// Whether `c` can continue a Rust identifier: a character with the Unicode `XID_Continue` property, which
+/// includes `_`, digits and combining marks such as U+0301.
 fn is_ident_continue(c: char) -> bool {
-    c == '_' || c.is_alphanumeric()
+    unicode_ident::is_xid_continue(c)
 }
 
 /// Split Rust source into tokens with 1-based line numbers.

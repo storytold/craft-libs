@@ -1406,6 +1406,17 @@ fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
 }
 
 #[test]
+fn guards_read_names_that_hold_combining_marks() {
+    // `t` with U+0301 (a nonspacing mark) and Devanagari `ka` with U+093E (a spacing mark) are each one
+    // identifier, as rustc reads them.
+    let time = "use std::time as t\u{301};\nuse std::time as \u{915}\u{93E};\nfn run() {\n    let a = t\u{301}::Instant::now();\n    let b = \u{915}\u{93E}::Instant::now();\n}\n";
+    assert_eq!(lines(&std_instant([("src/run.rs", time)])), vec![4, 5]);
+
+    let menu = "use muda::{PredefinedMenuItem as Ite\u{301}m};\nfn menu() {\n    let a = Ite\u{301}m::quit(None);\n}\n";
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", menu)])), vec![3]);
+}
+
+#[test]
 fn std_instant_reports_a_grouped_import_through_a_long_alias_of_std_time() {
     let source = r#"
 use std::time as standard_time_module_with_a_long_name;
