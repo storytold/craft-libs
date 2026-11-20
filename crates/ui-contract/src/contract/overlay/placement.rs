@@ -59,7 +59,7 @@ fn stored_opening(ctx: &Context, id: Id) -> Option<Opening> {
 /// The screen rect the popups opened in an env are contained in, and the popups opened from those: the menus of a menu
 /// bar stay below the bar ([`OverlayUi::contain_popups_below`](super::OverlayUi::contain_popups_below)). `None`, the
 /// root's, lets popups take the whole safe rect.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PopupRegion(pub Option<Rect>);
 

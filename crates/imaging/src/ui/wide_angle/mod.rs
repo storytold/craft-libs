@@ -58,7 +58,7 @@ use serde_json::Value;
 use crate::ui::live_preview::settings_hash;
 
 /// The tools of the strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum WideAngleTool {
     /// A.

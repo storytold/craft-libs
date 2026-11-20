@@ -103,7 +103,9 @@ pub(super) struct BodyHooks<'b> {
     scroll_bound: bool,
     moved: bool,
     last: BodyView,
-    /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
+    /// The content's extent. Step 4 reads the last pass's, kept with the offset it bounds (`ScrollState`): the moves
+    /// it applies act on the content that pass showed. A measuring run lays the content out for the extent it sets
+    /// (`measure_run`); from step 5 the real run takes what this pass's measuring run found.
     last_extent: (f32, f32),
     /// The height of a scroll strip (`ScrollIndicator::Strips`).
     strip: f32,
@@ -126,6 +128,9 @@ pub(super) struct BodyHooks<'b> {
     settle: Option<crate::layout::Columns>,
     unsettled: Option<crate::layout::Columns>,
     extent: Option<Vec2>,
+    /// The content extent a measuring run found that leaves another view than the one the run laid the content out
+    /// for: the run lays it out again at that view.
+    view_moves: Option<(f32, f32)>,
     view: Option<Rect>,
     save: Option<SaveKey>,
     layer: bool,
@@ -220,6 +225,7 @@ impl<'b> BodyHooks<'b> {
             settle: None,
             unsettled: None,
             extent: None,
+            view_moves: None,
             view: None,
             save: None,
             layer: false,

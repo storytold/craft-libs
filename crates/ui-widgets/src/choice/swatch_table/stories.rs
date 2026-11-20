@@ -1,7 +1,6 @@
 //! Stories of `SwatchTable`.
 
 use super::{SwatchArrangement, SwatchTable, SwatchTableOutput};
-use crate::contract::Bind;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::{Preview, Selection};
@@ -36,8 +35,7 @@ fn with_readout(data: &mut StoryData, shown: SwatchTableOutput) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn swatch_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
-    let shown =
-        SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(5usize)))).per_row(16).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(5usize))).per_row(16).show_all(ui);
     with_readout(data, shown)
 }
 
@@ -45,8 +43,7 @@ fn swatch_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
-    let shown =
-        SwatchTable::new("Color Table", &entries).multiple(true).selection(Bind::bound(data.value("selected", start))).per_row(16).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).multiple(true).selection(data.bind("selected", start)).per_row(16).show_all(ui);
     with_readout(data, shown)
 }
 
@@ -54,8 +51,7 @@ fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
 fn swatch_table_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().take(64).collect::<Vec<_>>();
-    let shown =
-        SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(5usize)))).per_row(16).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(5usize))).per_row(16).show_all(ui);
     let previewed = data.note("previewed", None::<usize>);
     match shown.preview {
         Preview::Shows(index) => *previewed = Some(index),
@@ -75,7 +71,7 @@ fn swatch_table_honeycomb(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().take(127).collect::<Vec<_>>();
     let shown = SwatchTable::new("Color Table", &entries)
         .arrangement(SwatchArrangement::Honeycomb)
-        .selection(Bind::bound(data.value("selected", Selection::single(5usize))))
+        .selection(data.bind("selected", Selection::single(5usize)))
         .show_all(ui);
     with_readout(data, shown)
 }
@@ -88,6 +84,6 @@ fn swatch_table_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [One], drive = Drive::Never)]
 fn swatch_table_one(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries().into_iter().take(1).collect::<Vec<_>>();
-    let shown = SwatchTable::new("Color Table", &entries).selection(Bind::bound(data.value("selected", Selection::single(0usize)))).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(0usize))).show_all(ui);
     with_readout(data, shown)
 }

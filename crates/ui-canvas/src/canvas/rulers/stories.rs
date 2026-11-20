@@ -3,7 +3,7 @@
 use super::{CORNER, Rulers};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_ruled_canvas};
 use crate::canvas::{Canvas, RulerText};
-use crate::contract::{Bind, Validity};
+use crate::contract::Validity;
 use crate::runtime::env::{Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use crate::testing::{pointer, stage};
@@ -81,37 +81,37 @@ fn rulers_canvas<'a>(room: Rect, pixels_per_point: f32, settings: Settings, rule
 #[story(Rulers<'static>, covers = [Default], drive = Drive::Custom(drag_corner))]
 fn zero_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
-    let zero = data.value("zero", Point::ZERO);
+    let (zero, zero_at) = data.value_at("zero", Point::ZERO);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
 #[story(Rulers<'static>, covers = [Open], drive = Drive::Custom(open_units_menu))]
 fn units_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
-    let zero = data.value("zero", Point::ZERO);
+    let (zero, zero_at) = data.value_at("zero", Point::ZERO);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero)).units(&UNITS));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero)).units(&UNITS));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
 #[story(Rulers<'static>, covers = [Mixed], drive = Drive::Custom(drag_corner))]
 fn zero_points_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
-    let zero = data.value("zero", Mixed::<Point>::Mixed);
+    let (zero, zero_at) = data.value_at("zero", Mixed::<Point>::Mixed);
     let room = stage(ui);
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound_mixed(&mut *zero)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind_mixed(&mut *zero)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }
 
 #[story(Rulers<'static>, covers = [Invalid], drive = Drive::Custom(drag_corner))]
 fn zero_point_left_of_the_document(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = settings(data);
-    let zero = data.value("zero", Point::new(LEAST_X - 1.0, 0.0));
+    let (zero, zero_at) = data.value_at("zero", Point::new(LEAST_X - 1.0, 0.0));
     let room = stage(ui);
     let inside =
         |zero: &Point| if zero.x < LEAST_X { Validity::Refuse(Message::new("The zero point is left of the document")) } else { Validity::Ok };
-    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", Bind::bound(&mut *zero).check(inside)));
+    let canvas = rulers_canvas(room, ui.pixels_per_point(), settings, Rulers::new("Rulers", zero_at.bind(&mut *zero).check(inside)));
     on_ruled_canvas(ui, room, canvas, Some(&StoryDocument::STANDARD))
 }

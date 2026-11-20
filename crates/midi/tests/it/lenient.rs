@@ -170,7 +170,7 @@ fn damaged_files_never_panic() {
 #[test]
 fn format_0_is_written_as_one_track_and_reads_back() {
     let note = |pitch, channel, start| Note { pitch, velocity: 100, release_velocity: 64, channel, start, length: 480 };
-    let track = |name: &str, n: Note| SmfTrack { name: name.into(), sequence: Sequence { notes: vec![n], ctrls: vec![] } };
+    let track = |name: &str, n: Note| SmfTrack { name: name.into(), sequence: Sequence { notes: vec![n], ..Default::default() } };
     let smf = Smf {
         format: 0,
         tracks: vec![track("A", note(60, 0, 0)), track("B", note(64, 1, 960))],

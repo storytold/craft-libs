@@ -1080,10 +1080,14 @@ Hit shapes, their priority and the arena's resolve rule (8.3).
   - `pub fn polyline_within(points: Vec<Pos2>, closed: bool, reach: f32) -> Self`. A chain of segments, closed when `closed`, hit within `reach` points: a tool whose measured reach differs from
   - `pub fn outside_polygon(within: Rect, polygon: Vec<Pos2>) -> Self`. The part of `within` outside `polygon`.
   - `pub fn bounds(&self) -> Rect`. The smallest rectangle around the shape.
+  - `pub fn translated(&self, by: Vec2) -> Self`. The shape moved by `by`.
+  - `pub fn snapped(&self, to: &HitShape, within: f32) -> Self`. The shape with each coordinate taken from `to`'s where the two lie within `within` points, when both are the
   - `pub fn hit(&self, point: Pos2) -> bool`. Whether `point` hits the shape.
 - `craft_behavior::hit::LINE_REACH`: `pub const LINE_REACH: f32`. How far from a line a point still hits it, in points.
 - `craft_behavior::hit::ResolveFor`: `pub enum ResolveFor { Press, Hover }`. What a resolution is for.
 - `craft_behavior::hit::Shape`: `pub struct Shape<O> { pub shape: HitShape, pub sense: Sense, pub owner: O, pub part: Option<PartRef>, pub priority: HitPriority, pub position: u32, pub local: bool, pub min_across: f32 }`. One registered shape of the shape record: a root's, a member's or a part's.
+  - `pub fn translated(&self, by: Vec2) -> Self`. The shape moved by `by`.
+  - `pub fn snapped(&self, to: &Shape<O>, within: f32) -> Self`. The shape with its geometry and least size across taken from `to`'s where they lie within `within` points
   - `pub const fn new(shape: HitShape, sense: Sense, owner: O, part: Option<PartRef>, priority: HitPriority, position: u32) -> Self`. A shape of `owner` at stack `position`.
   - `pub const fn min_across(mut self, across: f32) -> Self`. The hit area is at least `across` points wide and high.
   - `pub const fn local(mut self, local: bool) -> Self`. The shape lies in the body layer's space.
@@ -1772,6 +1776,7 @@ Wheel gesture values, as craft-behavior's copy of egui's types so the wheel spli
 The base of the craft UI library: runtime, style, fonts, primitives, the component contract, layout and the test
 
 - `craft_ui::bind_tracked!`: `macro_rules! bind_tracked`. Write-through bindings to fields of a [`Tracked`](crate::contract::Tracked) value: `bind_tracked!(doc => size)`
+- `craft_ui::stays!`: `macro_rules! stays`. Types with no place: they stay as they are at any place.
 - `craft_ui::testing_registered!`: `macro_rules! testing_registered`. Writes `pub fn registered()` for the invoking package: its library crate's registrations in the running binary.
 - `craft_ui::InstallError`: re-export of `craft_ui::runtime::install::InstallError`.
 - `craft_ui::InstallSpec`: re-export of `craft_ui::runtime::install::InstallSpec`.
@@ -1800,7 +1805,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `fn dress_inputs(&self) -> u64`. What `dress` reads of the collection, hashed: a kept measure of the items serves only while it is the same.
   - `fn ideal_width(&self, _item: Option<Vec2>, _rows: usize, _cx: &StyleCx<'_>) -> f32`. The width the collection asks for when it takes its width from its content, over its widest row: a grid of
   - `fn filtered<'s>(&self, _source: &'s dyn ItemSource<Self::Key>, _env: &crate::runtime::env::Env) -> Option<Box<dyn ItemSource<Self::Key> + 's>>`. A view of `source` for this pass, such as the rows a filter keeps; `None` shows `source` as it is.
-  - `fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r>`. Adjusts the item the closure built for a row, from the row's state.
+  - `fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r>`. Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
   - `fn rename_editor(&mut self, _ui: &mut Ui, _draft: Bind<'_, String>, _label: Rect, _name: &str) -> Option<EditResponse<String>>`. The rename editor at `label`: the label rect the renaming item reports (`ItemOutput::label_rect`), else its row.
   - `fn hosts_header(&self, _column: &ColumnKey) -> bool`. Whether the collection hosts a component in the header cell of `column`: the header then calls `header_cell`
   - `fn header_cell(&mut self, _ui: &mut PaintUi<'_>, _column: &ColumnKey, _key: HostedKey, _rect: Rect)`. Hosts a component in the header cell of `column`, in `rect`, measured and shown under `key` (the column's index
@@ -1922,12 +1927,16 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn kept() -> Self`. No caller value: the component keeps it in session memory under its id. Until something is stored, it reads
   - `pub fn saved(mut self, key: SaveKey) -> Self where T: Savable,`. A kept value that is also saved across runs under `key`. The `Savable` bound sits here; the pipeline reaches
   - `pub fn policy(mut self, policy: EditPolicy) -> Self`. When a write-through source is written.
-  - `pub fn check(mut self, check: impl Fn(&T) -> Validity<T> + 'a) -> Self`. The check on a value: `Fix` replaces it; `Warn`, `Refuse` and `Error` set the component's state, and `Refuse`
+  - `pub fn check(self, check: fn(&T) -> Validity<T>) -> Self where T: 'a,`. The check on a value: `Fix` replaces it; `Warn`, `Refuse` and `Error` set the component's state, and `Refuse`
+  - `pub fn check_with<I: MemoProps + 'a>(mut self, inputs: I, check: fn(&I, &T) -> Validity<T>) -> Self where T: 'a,`. The check `check` on a value, reading `inputs` beside it (a limit, the names already taken). The inputs are
   - `pub fn reset(mut self, default: T) -> Self`. The value a reset gesture restores, and the value a kept binding reads while nothing is stored.
   - `pub fn reborrowed(&mut self) -> Bind<'_, T>`. A binding with the same source, check, policy and reset that borrows this one, so a composite can hand its
   - `pub fn value(&self) -> Option<&T>`. The one value the binding holds before this pass's edits; `None` for a mixed or kept binding.
   - `pub fn reborrow(&mut self) -> BindMut<'_, T>`. The binding as the pipeline reads and writes it.
+- `craft_ui::contract::BindCheck`: `pub struct BindCheck<'c, T>`. A binding's check as props (`BindMut::check_of`): by the key of its inputs and its `fn`.
+  - `pub fn validity(&self, value: &T) -> Validity<T>`. The check's verdict on `value`.
 - `craft_ui::contract::BindMut`: `pub struct BindMut<'a, T>`. A reborrow of a [`Bind`] the pipeline reads at steps 4, 11, 15 and 17. `Component::bind` returns it, and returns the
+  - `pub fn check_of(&self) -> BindCheck<'_, T>`. The binding's check, as the inputs of a child's check (`Bind::check_with`): a composite hands its own check to
   - `pub fn read(&self, cx: &mut impl StageAccess) -> Option<Mixed<T>>`. The binding's value for code that runs no pipeline step: a given or write-through value, or the kept value
   - `pub fn write(&mut self, cx: &mut impl StageAccess, event: &EditEvent<T>) -> bool`. Writes `event` as the pipeline's apply step does: the check may replace the value (`Fix`) or refuse it
 - `craft_ui::contract::BodyCx`: `pub struct BodyCx<'a> { pub id: Id, pub env: EnvView<'a>, pub resolved: &'a Resolved<'a>, pub rect: Rect, pub memory: &'a mut MemoryStage }`. What a body closure and the header, footer and empty hooks read: a view over the pipeline's memory stage
@@ -2079,7 +2088,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn reset_part(&self) -> Option<PartRef>`. The part a reset aimed at, when it declared `own_reset`; `update` proposes the value with that part at its
   - `pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout`. Lays document `text` out `text.wrap` wide: the call `ContentPainterCx::layout` and `MeasureCx::layout_doc`
   - `pub fn open_url(&mut self, url: &str, new_tab: bool)`. Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set.
-  - `pub fn join_roving(&mut self)`. Makes this component a member of the roving group of the body it is shown in: its stop joins the group and
+  - `pub fn join_roving(&mut self)`. Makes this component a member of the roving group of the body it is shown in: its stop and its focusable parts
   - `pub fn fire(&mut self, command: impl Into<CommandRef>, source: FireSource) -> bool`. Runs `command` as this component's own activation would, for a command that is not the component's bound
   - `pub fn part_activated(&self, part: impl Into<PartRef>) -> Option<FireSource>`. Where an activation of `part` came from this pass: `Key` for a keyboard activation while `part` is the
   - `pub fn context_part(&self) -> Option<PartRef>`. The part this pass's context request was made at: the part under the pointer for a secondary click, the
@@ -2262,10 +2271,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::Lazy`: `pub struct Lazy`. A child of a scroll area that runs only while it is in view. Out of view its content does not run: it takes the
   - `pub fn new(key: impl Hash, estimate: f32) -> Lazy`. The child keyed `key` in its scroll area. `estimate` is how long it is along the axes the area scrolls, an
   - `pub fn reveal(mut self, reveal: bool) -> Lazy`. When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
-  - `pub fn settles(mut self, settles: bool) -> Lazy`. When `settles` holds, the child runs only when something it shows may have changed, inside a scroll area or
-  - `pub fn content(mut self, version: u64) -> Lazy`. The version of the app data a settling child shows that the framework does not track (a document's revision,
   - `pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R>`. Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
-  - `pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>>`. [`show`](Self::show) for a child that may leave its room to other content: `add` runs first and settles; when
 - `craft_ui::contract::LeadOnOpen`: `pub enum LeadOnOpen { Selected, First }`. Where the lead starts when the collection first shows rows.
 - `craft_ui::contract::LeadSource`: `pub enum LeadSource { Keys, Pointer }`. What moved the lead.
 - `craft_ui::contract::LeastWidth`: `pub enum LeastWidth { Popup, Dialog, DialogButton, DialogSideButton, Rail(std::num::NonZeroU8), WideDialog, SideMenu }`. A size role that sets the least width of a container's content or of a button.
@@ -2296,12 +2302,17 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::MemoKey`: `pub struct MemoKey`. A 128-bit hash of a memoized view's props (SipHash-1-3 with a 128-bit output, a fixed key). A collision has a chance
   - `pub fn new() -> MemoKey`. An empty key.
   - `pub fn of<P: MemoProps + ?Sized>(props: &P) -> u128`. The key of `props`.
+  - `pub fn changes_every_pass(&mut self)`. Feeds an input whose value a key cannot follow (a handle to state shared and written elsewhere, a context a
   - `pub fn write(&mut self, bytes: &[u8])`. Feeds `bytes`.
   - `pub fn write_u32(&mut self, value: u32)`. Feeds a length or an enum variant's index.
   - `pub fn bytes(&self) -> usize`. How many bytes fed the key: the view that takes the key adds them to the pass's key-byte count.
   - `pub fn finish(&self) -> u128`. The key of everything fed so far.
 - `craft_ui::contract::MemoProps`: `pub trait MemoProps`. Every input a memoized view reads, fed into a [`MemoKey`]. Two equal keys mean equal inputs.
   - `fn key(&self, key: &mut MemoKey)`. Feeds every input the view reads into `key`.
+  - `fn identity() -> TypeId where Self: Sized,`. The props type with its lifetimes erased (`Props<'a>` and `Props<'b>` are one type): a memoized view seeds its
+- `craft_ui::contract::MemoView`: `pub struct MemoView<P, R>`. A memoized view: its content is a `fn`, which captures nothing, and its props ([`MemoProps`]) are its only input
+  - `pub fn new(id: impl Hash, props: P, show: fn(&mut P, &mut Ui) -> R) -> MemoView<P, R>`. The view `id` showing `props` through `show`. The id is unique as a `Lazy` key is: among the memoized views and
+  - `pub fn show(self, ui: &mut Ui) -> Option<R>`. Runs the view in a child `Ui` placed in flow in `ui`, or adds its last run again. Returns what the run returned,
 - `craft_ui::contract::MenuKey`: re-export of `craft_ui::runtime::keys::MenuKey`.
 - `craft_ui::contract::MotionSpec`: re-export of `craft_ui::runtime::motion::MotionSpec`.
 - `craft_ui::contract::Mount`: `pub enum Mount { Inline, Pane(ShellPane), Layer(Overlay), FullWindow, Window { resize: Resize }, Viewport { fallback: Overlay, spec: Option<WindowSpec> } }`. Where a container lives.
@@ -2318,6 +2329,9 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub const fn all(mut self) -> Self`. The change reaches every descendant.
 - `craft_ui::contract::OsFile`: re-export of `craft_ui::runtime::drag::OsFile`.
 - `craft_ui::contract::OsFiles`: re-export of `craft_ui::runtime::drag::OsFiles`.
+- `craft_ui::contract::Outbox`: `pub struct Outbox<'a, E>`. The events a memoized view's run sends to the code around it, in the pass it runs: what its components reported (a
+  - `pub fn new(sent: &'a mut Vec<E>) -> Outbox<'a, E>`. An outbox whose events go into `sent`, after what it holds.
+  - `pub fn send(&mut self, event: E)`. Sends `event`.
 - `craft_ui::contract::Outcome`: `pub trait Outcome`. What `show` returns: the component's response and the type of value it edits.
   - `type Value`. The value type; `NoValue` for a component with none.
   - `fn response(&self) -> &Response`. The component's response.
@@ -2487,7 +2501,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::RowHeight`: `pub enum RowHeight { Control, Text }`. How tall a collection's rows are. Read-only display tables (a metadata table) take text rows; lists the user picks
   - `pub fn of(self, cx: &StyleCx<'_>) -> f32`. The height of one row under `cx`.
 - `craft_ui::contract::RowPressed`: `pub enum RowPressed { Row, Cell(ColumnKey), Part { was_lead: bool } }`. Where the collection holds a primary press on a row, within slop, or the press a part of the row holds.
-- `craft_ui::contract::RowState`: `pub struct RowState { pub selected: bool, pub lead: bool, pub drop_target: bool, pub dragging: bool, pub renaming: bool, pub emphasized: bool, pub current: bool, pub striped: bool, pub open: bool, pub hovered: bool, pub pointer_over: bool, pub pressed: Option<RowPressed>, pub menu_open: bool, pub sub_row: Option<usize>, pub continued: bool, pub last: bool, pub activated_by_key: bool }`. What an item reads of its place in the collection; the item step joins it to the item's flags at step 12.
+- `craft_ui::contract::RowState`: `pub struct RowState { pub selected: bool, pub lead: bool, pub drop_target: bool, pub dragging: bool, pub renaming: bool, pub emphasized: bool, pub current: bool, pub striped: bool, pub open: bool, pub hovered: bool, pub pointer_over: bool, pub pressed: Option<RowPressed>, pub menu_open: bool, pub sub_row: Option<usize>, pub continued: bool, pub last: bool, pub activated_by_key: bool }`. What an item reads of its place in the collection; the item step joins it to the item's flags at step 12. The
 - `craft_ui::contract::Sampler`: `pub trait Sampler: sealed::Host`. The canvas reach under a modal layer (15.5, 8.3): a control of a dialog keeps the canvas below it usable. It is
   - `fn pass_canvas_gesture(&mut self, canvas: Id, gesture: CanvasGesture)`. Lets `gesture` on `canvas` (the canvas component's id) through the modal layer, and the view navigation with it
   - `fn keep_view_open(&mut self, canvas: Id)`. Keeps the view of `canvas` (the canvas component's id) usable under the modal layer: the wheel scrolls and
@@ -2922,7 +2936,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::FocusRing`: `pub struct FocusRing`. The focus ring painter.
   - `pub fn visible(flags: Flags) -> bool`. Whether a part with `flags` shows its ring: only when it is the focused component or its active part, with
   - `pub fn shapes(look: &FocusLook, kind: FocusKind, shape: &PaintShape, pixels_per_point: f32) -> Vec<Shape>`. The shapes of the ring around `shape`, grown by `look.offset`. A halo adds a stroke twice as wide at a
-- `craft_ui::primitives::Glyph`: `pub trait Glyph: Sync`. A value glyph: an icon drawn from a value. It is `Sync` because container props that show one are kept with a
+- `craft_ui::primitives::Glyph`: `pub trait Glyph: Any + MemoProps + Sync`. A value glyph: an icon drawn from a value. It is `Sync` because container props that show one are kept with a
   - `fn directional(&self) -> bool`. Whether the glyph has a reading direction (an arrow) and so flips under right-to-left.
   - `fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, mirrored: bool)`. Paints the glyph into `rect` in `color`, with the strokes of `tokens`. `mirrored` is set when a directional
 - `craft_ui::primitives::GridAxis`: `pub struct GridAxis { pub minor: Vec<f64>, pub major: Vec<f64> }`. The lines of one axis: positions along it, in the grid's space.
@@ -2949,11 +2963,11 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub const fn bar(color: DataColor) -> Self`. A bar of `color` with the default thickness.
   - `pub const fn weighted_bar(color: DataColor, weight: f32) -> Self`. A bar of `color` `weight` points thick.
 - `craft_ui::primitives::IconSet`: re-export of `craft_ui::primitives::icon::IconSet` (defined outside these crates).
-- `craft_ui::primitives::IconSource`: `pub enum IconSource<'a> { Svg(IconId), Glyph(&'a dyn Glyph), Swatch(Option<Srgba>), Disc, Initial(char), Mark(craft_behavior::CursorBadge) }`. Where an icon's drawing comes from.
+- `craft_ui::primitives::IconSource`: `pub enum IconSource<'a> { Svg(IconId), Glyph(&'a(dyn Glyph + 'static)), Swatch(Option<Srgba>), Disc, Initial(char), Mark(craft_behavior::CursorBadge) }`. Where an icon's drawing comes from.
 - `craft_ui::primitives::IconSpec`: `pub struct IconSpec<'a> { pub source: IconSource<'a>, pub ink: Ink, pub color: Option<StyleColor>, pub mirror: Mirror, pub badge: Option<IconMark> }`. An icon to paint.
   - `pub fn svg(id: IconId) -> Self`. An icon of the SVG set or a tool icon, in the panel ink.
   - `pub fn mark(badge: craft_behavior::CursorBadge) -> IconSpec<'a>`. An icon whose glyph is the mark of the cursor `badge` (the plus or minus drawn at the cursor), painted by the
-  - `pub fn glyph(glyph: &'a dyn Glyph) -> Self`. An icon of `glyph` in the panel ink.
+  - `pub fn glyph(glyph: &'a(dyn Glyph + 'static)) -> Self`. An icon of `glyph` in the panel ink.
   - `pub fn swatch(color: Srgba) -> Self`. A swatch of `color`, painted as [`Draw::swatch_well`](super::Draw::swatch_well) paints a well.
   - `pub fn empty_swatch() -> Self`. The empty swatch of a colour the theme decides (a "Default" pasteboard colour): it keeps a swatch's place, so
   - `pub fn initial(name: &str) -> Self`. The first letter of `name` in capitals, in an outlined box, in the panel ink: the icon of something that has
@@ -3296,8 +3310,15 @@ Frosted backdrops: a bounded blurred composition of the layers under a surface, 
 
 Per-pass and per-frame services and the one egui adapter.
 
+- `craft_ui::runtime::Clip`: `pub struct Clip`. A clip rect a record holds: the clip of the code around the record becomes the replay's clip, a clip set inside it
+  - `pub fn new(clip: Rect) -> Self`. The record's clip for the clip rect `clip`.
+  - `pub fn rect(self) -> Rect`. The clip rect.
 - `craft_ui::runtime::InstallError`: re-export of `craft_ui::runtime::install::InstallError`.
 - `craft_ui::runtime::InstallSpec`: re-export of `craft_ui::runtime::install::InstallSpec`.
+- `craft_ui::runtime::RecordShift`: re-export of `craft_ui::runtime::egui::RecordShift` (defined outside these crates).
+- `craft_ui::runtime::Shift`: `pub trait Shift`. A value a record holds, at the place a replay adds the record (`RecordShift`): rects and points move with the record,
+  - `fn shifted(&self, by: &RecordShift) -> Self`. `self` at the place `by` names.
+  - `fn snapped(&self, to: &Self, within: f32) -> Self`. `self` with each coordinate `shifted` moves, and each distance a hit shape holds (`reach`, `min_across`), taken
 - `craft_ui::runtime::install`: re-export of `craft_ui::runtime::install::install`.
 
 ## `craft_ui::runtime::access`
@@ -3436,6 +3457,7 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
 - `craft_ui::runtime::commands::fire`: `pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -> bool`. Fires `command` from a surface that has no component of its own: a menu, the palette or automation. Scoped
 - `craft_ui::runtime::commands::holder`: `pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef>`. The command a key `chord` belongs to for a surface that takes it whatever has focus, such as a system menu item:
 - `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand>`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
+- `craft_ui::runtime::commands::resolver_in`: `pub fn resolver_in(ui: &egui::Ui) -> impl Fn(CommandRef) -> Option<Arc<ResolvedCommand>> + 'static`. A resolver for the commands as the context of `ui` shows them, as [`Commands::resolve_command`] does for a
 - `craft_ui::runtime::commands::Binding`: re-export of `craft_keymap::Binding` (outside these crates).
 - `craft_ui::runtime::commands::ChromeCommand`: `pub enum ChromeCommand { TogglePanels, TogglePanelsKeepTools }`. The `window` commands that hide the panels of the window they run in.
   - `pub const ALL: [ChromeCommand; 2]`. Both commands.
@@ -3732,8 +3754,9 @@ One-shot screenshot slots and the facts a screenshot is measured against.
   - `pub fn window(&self) -> &WindowKey`. The window's key; components in slots key their ids and memory by it.
   - `pub fn body_mode(&self) -> BodyMode`. The body mode of this pass.
   - `pub fn slot_visible(&self, key: SlotKey) -> bool`. Is the slot with this key shown on this pass?
-  - `pub fn reveal_rect(&self, edge: RevealEdge, rect: Rect)`. Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal
-  - `pub fn revealed_rects(&self) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
+  - `pub fn with_reveals_key(mut self, id: egui::Id) -> Self`. The same skeleton with its revealed rects registered under `id`, which stays the same across passes. Without
+  - `pub fn reveal_rect(&self, ctx: &egui::Context, edge: RevealEdge, rect: Rect)`. Registers `rect`, a revealed panel the body drew on this pass, as part of the revealed `edge`: the edge reveal
+  - `pub fn revealed_rects(&self, ctx: &egui::Context) -> Vec<(RevealEdge, Rect)>`. The rects registered with [`reveal_rect`](Self::reveal_rect) on this pass, in registration order.
   - `pub fn dialogs_shown(&self) -> u32`. How many times a container in this shell showed on this pass as a dialog (a layer with a dialog's focus scope,
   - `pub fn tabs_visible(&self) -> bool`. Whether the document tabs show: the host's flag in normal mode, never in body-only mode.
   - `pub fn revealed(&self) -> bool`. Are slots shown by a reveal (Tab or edge) on this pass? Only body-only mode reveals.
@@ -3909,6 +3932,7 @@ The frame plugin: the per-pass and per-frame steps, with the inputs the app sets
 - `craft_ui::runtime::frame::refuse`: `pub fn refuse(ctx: &Context)`. Records that the running pass refused its input (the text part refusing a Tab); the next `take_output` reports it
 - `craft_ui::runtime::frame::request_repaint_after`: `pub fn request_repaint_after(ctx: &Context, seconds: f64)`. Asks for one more pass of the viewport the running pass belongs to after `seconds` (a playback clock, a poll);
 - `craft_ui::runtime::frame::set_input`: `pub fn set_input(ctx: &Context, input: FrameInput)`. Before the pass: from eframe's `App::raw_input_hook`, or before `run_ui` in tests. A call during a pass,
+- `craft_ui::runtime::frame::stepped_clock`: `pub fn stepped_clock(ctx: &Context, step: f64) -> f64`. The pass clock in seconds rounded down to a multiple of `step`, for content that changes with time (a rescan every
 - `craft_ui::runtime::frame::take_output`: `pub fn take_output(ctx: &Context) -> FrameOutput`. Everything accumulated since the last call, across passes and discarded passes.
 
 ## `craft_ui::runtime::ime`
@@ -4106,8 +4130,9 @@ Background results (14): one result per key in runtime memory, produced by a job
 The pointer snapshot, press targets, the shape record and press cancels (8.1, 8.3).
 
 - `craft_ui::runtime::pointer::PointerFrame`: `pub struct PointerFrame { pub pos: Option<Pos2>, pub delta: Vec2, pub buttons: Buttons, pub press: Option<PressStart>, pub release: Option<PointerButton>, pub mods: Mods, pub time: f64, pub kind: PointerKind, pub sample: Option<PointerSample>, pub multi_touch: Option<MultiTouch>, pub scroll: Vec2, pub zoom: f32, pub rotation: f32, pub slop: f32, pub target: f32 }`. The pointer input of one pass of one viewport, egui-converted. Input enters a frame's first pass only (egui hands
-- `craft_ui::runtime::pointer::frame`: `pub fn frame(ctx: &Context) -> PointerFrame`. The running pass's pointer input.
+- `craft_ui::runtime::pointer::frame`: `pub fn frame(ctx: &Context) -> PointerFrame`. The running pass's pointer input. A tracked input (`runtime::inputs`): a memoized view that reads it runs when the
 - `craft_ui::runtime::pointer::hovers`: `pub fn hovers(ctx: &Context, id: Id) -> bool`. Whether a shape the component `id` registered shows hover in the running pass, by the pass's one resolution of
+- `craft_ui::runtime::pointer::mods`: `pub fn mods(ctx: &Context) -> Mods`. The modifiers held in the running pass, with the latched ones (`PointerFrame::mods`). A tracked input: a memoized
 - `craft_ui::runtime::pointer::shapes_at`: `pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)>`. Every shape of the last pass on the topmost layer at `at` (screen points) whose area contains it, as
 - `craft_ui::runtime::pointer::withhold_members`: `pub fn withhold_members(ctx: &Context, root: Id, withheld: bool)`. Whether the arena of `root` resolves the presses and hover of the next pass without its members' shapes. A canvas
 
@@ -4416,23 +4441,27 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::Fixture`: re-export of `craft_ui::testing::fixture::Fixture`.
 - `craft_ui::testing::Frames`: re-export of `craft_ui::testing::frames::Frames`.
 - `craft_ui::testing::Impure`: re-export of `craft_ui::testing::fixture::Impure`.
+- `craft_ui::testing::MemoRun`: re-export of `craft_ui::runtime::measure::MemoRun` (defined outside these crates).
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
-- `craft_ui::testing::Settle`: re-export of `craft_ui::runtime::measure::Settle` (defined outside these crates).
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
+- `craft_ui::testing::audit_replays`: `pub fn set(ctx: &Context, on: bool)`. Turns the audit on or off in `ctx`, in place of `CRAFT_UI_AUDIT_REPLAY`.
 - `craft_ui::testing::forget_measurements`: re-export of `craft_ui::runtime::layout_memory::forget_kept`.
+- `craft_ui::testing::in_audit_run`: `pub fn in_run(ctx: &Context) -> bool`. Whether the code running in `ctx` is a run of the audit: a test that counts its own runs of a view counts none in
 - `craft_ui::testing::install_spec`: re-export of `craft_ui::testing::windows::install_spec`.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
 - `craft_ui::testing::kept_measurement_leaves`: re-export of `craft_ui::runtime::layout_memory::kept_leaves`.
+- `craft_ui::testing::last_frame_memo_runs`: re-export of `craft_ui::runtime::measure::last_frame_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_measure_asks`: re-export of `craft_ui::runtime::measure::last_pass_measure_asks` (defined outside these crates).
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_memo_key_bytes`: re-export of `craft_ui::runtime::measure::last_pass_memo_key_bytes` (defined outside these crates).
+- `craft_ui::testing::last_pass_memo_runs`: re-export of `craft_ui::runtime::measure::last_pass_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_runs`: re-export of `craft_ui::runtime::measure::last_pass_runs` (defined outside these crates).
-- `craft_ui::testing::last_pass_settles`: re-export of `craft_ui::runtime::measure::last_pass_settles` (defined outside these crates).
 - `craft_ui::testing::last_pass_text_layouts`: re-export of `craft_ui::runtime::measure::last_pass_text_layouts` (defined outside these crates).
 - `craft_ui::testing::measured_contributions`: re-export of `craft_ui::runtime::measure::contributions` (defined outside these crates).
 - `craft_ui::testing::measuring_run`: re-export of `craft_ui::runtime::measure::run` (defined outside these crates).
 - `craft_ui::testing::measuring_runs`: re-export of `craft_ui::runtime::measure::body_runs` (defined outside these crates).
 - `craft_ui::testing::room_height`: `pub fn room_height(ui: &Ui) -> f32`. The height of the room `ui` offers a story whose root has no content height and fills it (a window, a full-window
+- `craft_ui::testing::row_builds`: re-export of `craft_ui::runtime::measure::row_builds` (defined outside these crates).
 - `craft_ui::testing::row_measures`: re-export of `craft_ui::runtime::measure::row_measures` (defined outside these crates).
 - `craft_ui::testing::shrink_least_runs`: re-export of `craft_ui::runtime::measure::least_runs` (defined outside these crates).
 - `craft_ui::testing::stage`: `pub fn stage(ui: &mut Ui) -> Rect`. Allocates the stage of a story of a canvas control or a root that fills both axes, and returns its rect: the width
@@ -4670,6 +4699,7 @@ The focus service's fixture: egui widgets for stops, the egui focus, and the eve
 - `craft_ui::testing::focus::is_focused`: `pub fn is_focused(ctx: &Context, id: Id) -> bool`. Whether the focus stop is the component `id`.
 - `craft_ui::testing::focus::key_release`: `pub fn key_release(key: Key, modifiers: Modifiers) -> Event`. A key release.
 - `craft_ui::testing::focus::named_id`: `pub fn named_id(name: &str) -> Id`. A globally unique id named by `name`.
+- `craft_ui::testing::focus::pass_stop_groups`: `pub fn pass_stop_groups(ctx: &Context) -> Vec<(Id, Option<Id>)>`. The stops the running pass registered so far, in order: each stop's component and the roving group it is in.
 - `craft_ui::testing::focus::pop_scope`: `pub fn pop_scope(ctx: &Context)`. Closes the innermost open scope.
 - `craft_ui::testing::focus::press_shape`: `pub fn press_shape(ui: &Ui, rect: Rect, sense: Sense, owner: Id)`. Registers a shape of `owner` at `rect` on the layer of `ui` that senses a press as `sense` says, as a
 - `craft_ui::testing::focus::primary_button`: `pub fn primary_button(pos: Pos2, pressed: bool) -> Event`. A primary button press or release at `pos`.
@@ -4786,6 +4816,8 @@ The layout services the trials check: bodies, measured blocks, the label column,
 - `craft_ui::testing::layout::peek_size`: `pub fn peek_size(ui: &Ui, key: &'static str) -> Option<Vec2>`. The size under `key` without a placement using it.
 - `craft_ui::testing::layout::read_size`: `pub fn read_size(ui: &Ui, key: &'static str) -> Option<Vec2>`. The size under `key` as a placement reads it.
 - `craft_ui::testing::layout::reordered_fonts`: `pub fn reordered_fonts() -> egui::FontDefinitions`. The test font definitions in another order.
+- `craft_ui::testing::layout::scroll_anchor`: `pub fn scroll_anchor(ctx: &egui::Context, area: Id) -> Option<Id>`. The child the scroll position of the scroll area `area` ([`scroll_area`]) is named by: the first child at or after
+- `craft_ui::testing::layout::scroll_area`: `pub fn scroll_area(ui: &Ui) -> Option<Id>`. The innermost scroll area `ui` lays content out for, as the area keys its scroll state.
 - `craft_ui::testing::layout::start_tween`: `pub fn start_tween(ui: &Ui, key: &'static str, from: Vec2, to: Vec2, duration: f64)`. Starts a size tween under `key`.
 - `craft_ui::testing::layout::wrapped_text`: `pub fn wrapped_text(ui: &mut Ui, text: &str)`. Shows `text` wrapped to the available width of a sizing slot, for `measure_slot` trials.
 
@@ -4805,7 +4837,7 @@ The memory services the trials check: a stage fixture that implements `Remember`
 - `craft_ui::testing::memory::global`: `pub fn global(name: &'static str, scope: impl Hash + Debug) -> Id`. The id of a runtime singleton named `name` under `scope`.
 - `craft_ui::testing::memory::put`: `pub fn put<T: std::any::Any + Clone + Send + Sync>(ctx: &Context, id: Id, value: T)`. Stores `value` in context data under `id`, as a slot's `Drop` may.
 - `craft_ui::testing::memory::records_written`: `pub fn records_written(ctx: &Context) -> usize`. How many slot records the stages' write-backs have written in `ctx` so far.
-- `craft_ui::testing::memory::register_fact`: `pub fn register_fact<T: Clone + Send + Sync + 'static>(ctx: &Context, fact: T)`. Registers `fact` for the next pass of the running viewport.
+- `craft_ui::testing::memory::register_fact`: `pub fn register_fact<T: Clone + PartialEq + Debug + crate::runtime::Shift + Send + Sync + 'static>(ctx: &Context, fact: T)`. Registers `fact` for the next pass of the running viewport.
 - `craft_ui::testing::memory::scoped`: `pub fn scoped<R>(ui: &mut Ui, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui`.
 - `craft_ui::testing::memory::scoped_by`: `pub fn scoped_by<R>(ui: &mut Ui, salt: impl std::hash::Hash + std::fmt::Debug, f: impl FnOnce(&mut Ui) -> R) -> R`. Runs `f` on a child `Ui` of `ui` with its own id scope named by `salt`.
 - `craft_ui::testing::memory::sub`: `pub fn sub(base: Id, tag: impl Hash + Debug) -> Id`. The runtime sub-id of `base` for `tag`.
@@ -4946,14 +4978,26 @@ Stories: named ways to show one registered type, and the data and output the run
   - `pub fn value<T: Value>(&mut self, name: &'static str, init: T) -> &mut T`. The value named `name` of type `T`, created from `init` on first use. A name used with two types names two
   - `pub fn present<T: Value>(&mut self, name: &'static str) -> Option<&mut T>`. The value named `name` of type `T` when a run has created it; never creates one, so asking does not make a
   - `pub fn note<T: Any>(&mut self, name: &'static str, init: T) -> &mut T`. The note named `name` of type `T`, created from `init` on first use: what the story keeps about what happened in
+  - `pub fn bind<T: Value>(&mut self, name: &'static str, init: T) -> crate::contract::Bind<'_, T>`. A binding of the value named `name` of type `T`, created from `init` on first use. Every view that binds a value
+  - `pub fn bind_mixed<T: Value>(&mut self, name: &'static str, init: Mixed<T>) -> crate::contract::Bind<'_, T>`. Like [`StoryData::bind`] for a value that may be mixed, as a multi-selection field shows it; an edit makes it
+  - `pub fn bind_ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> crate::contract::Bind<'_, T>`. Like [`StoryData::bind`] for a number the Properties editor keeps inside `range`.
+  - `pub fn value_at<T: Value>(&mut self, name: &'static str, init: T) -> (&mut T, ValueAt<'_>)`. The value named `name` of type `T`, created from `init` on first use, with where it lies ([`ValueAt`]): a
+  - `pub fn pair_at<A: Value, B: Value>(&mut self, a:(&'static str, A), b:(&'static str, B)) -> ((&mut A, ValueAt<'_>),(&mut B, ValueAt<'_>))`. Two values by name, each created from its init on first use and returned with where it lies, as
+  - `pub fn ranged_at<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> (&mut T, ValueAt<'_>)`. Like [`StoryData::value_at`] for a number the Properties editor keeps inside `range`.
+  - `pub fn choice_at<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> (&mut T, ValueAt<'_>)`. Like [`StoryData::value_at`] for a value that is one of `options`, which the Properties editor offers by label.
   - `pub fn ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> &mut T`. Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.
   - `pub fn choice<T: Value>(&mut self, name: &'static str, init: T, options: &[(&'static str, T)]) -> &mut T`. Like [`StoryData::value`] for a value that is one of `options`, which the Properties editor offers by label.
   - `pub fn restore(&mut self, before: &StorySnapshot)`. Puts every value that was there in `before` back to what it was then. A value added since stays.
+  - `pub fn settle(&mut self)`. Moves the [`revision`](Self::revision) when a value was added or changed since the last call. The accessors hand
+  - `pub fn revision(&self) -> Revision`. The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a
   - `pub fn changed_since(&self, before: &StorySnapshot) -> Vec<&'static str>`. The names of the values that differ from `before`; a value added since counts as changed.
   - `pub fn snapshot(&self) -> StorySnapshot`. A copy of every value.
 - `craft_ui::testing::story::StoryOutput`: `pub struct StoryOutput { pub id: Option<Id>, pub edits: Vec<EditKind>, pub clicked: bool, pub collection: Vec<CollectionKind>, pub visible: Option<Range<usize>>, pub value_text: Option<String>, pub readout: Option<String> }`. What a story showed, type-erased: the response id, the kinds of its edit events and of its collection events.
   - `pub fn readout(mut self, text: impl Into<String>) -> Self`. The same output with `text` as its readout.
 - `craft_ui::testing::story::StorySnapshot`: `pub struct StorySnapshot`. The values of a [`StoryData`] at one moment.
+- `craft_ui::testing::story::ValueAt`: `pub struct ValueAt<'a>`. Where a story value lies ([`StoryData::value_at`]): its data's source, its name and its place in memory, so a binding
+  - `pub fn bind<'b, F: Value>(self, part: &'b mut F) -> crate::contract::Bind<'b, F> where Self: 'b,`. A binding of `part`, the value itself or a field inside it.
+  - `pub fn bind_mixed<'b, F: Value>(self, part: &'b mut Mixed<F>) -> crate::contract::Bind<'b, F> where Self: 'b,`. Like [`ValueAt::bind`] for a field that may be mixed: an edit makes it concrete.
 - `craft_ui::testing::story::show_as_only_item`: `pub fn show_as_only_item<C>(ui: &mut Ui, row: C) -> C::Output where C: crate::contract::Component + crate::contract::Props + crate::contract::Show,`. Shows `row` as the only item of a collection: the item step gives an item its id and its place in the set, which
 
 ## `craft_ui::testing::style`

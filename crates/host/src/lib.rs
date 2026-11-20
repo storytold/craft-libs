@@ -30,6 +30,14 @@ pub struct Host {
     commands: Arc<dyn Commands>,
     jobs: Arc<dyn Jobs>,
     files: Arc<dyn Files>,
+    /// Unique per host built (`generation`).
+    generation: u64,
+}
+
+/// A generation no host built before has.
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Collects a [`Host`]'s services; each one defaults when not set.
@@ -47,6 +55,13 @@ impl Host {
     /// Starts a host for `app`; every service not set on the builder gets its default.
     pub fn builder(app: AppInfo) -> HostBuilder {
         HostBuilder { app, i18n: None, lang: None, settings: None, commands: None, jobs: None, files: None }
+    }
+
+    /// Which host this is: a host and its clones hold the same services and language, and one built anew
+    /// ([`HostBuilder::build`], [`Host::with_lang`], [`Host::with_files`]) gets a new generation. What the services
+    /// hold (settings sections, catalogs) changes inside them without changing the generation.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The app's name and version.
@@ -97,12 +112,12 @@ impl Host {
 
     /// A copy in another language; install it to switch the interface.
     pub fn with_lang(&self, lang: Lang) -> Host {
-        Host { lang, ..self.clone() }
+        Host { lang, generation: next_generation(), ..self.clone() }
     }
 
     /// A copy with another file service; install it to switch the pickers.
     pub fn with_files(&self, files: Arc<dyn Files>) -> Host {
-        Host { files, ..self.clone() }
+        Host { files, generation: next_generation(), ..self.clone() }
     }
 
     /// The stored value of section `S`, or `S::default()` when it is missing or does not fit `S`.
@@ -166,6 +181,7 @@ impl HostBuilder {
             commands: self.commands.unwrap_or_else(|| Arc::new(NoCommands)),
             jobs: self.jobs.unwrap_or_else(default_jobs),
             files: self.files.unwrap_or_else(|| Arc::new(NoPickFiles::default())),
+            generation: next_generation(),
         }
     }
 

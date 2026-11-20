@@ -17,7 +17,7 @@ use egui::{Context, Id, Pos2, Rect, Vec2};
 use std::hash::Hash;
 
 /// What a dock drag moves: one panel, or the whole group, floating window or column of a panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DragUnit<P> {
     /// The panel alone.
@@ -410,7 +410,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> DropTarget<GroupDrag<P>> for DockDro
 }
 
 /// The arrangement a dock drag started on: the dock area and the revision of the workspace it showed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct Arrangement {
     pub dock: Id,
@@ -418,7 +418,7 @@ pub struct Arrangement {
 }
 
 /// The env value a dock area puts into its body: the arrangement it shows. `None` outside a dock area.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, crate::contract::MemoProps)]
 struct InDock(Option<Arrangement>);
 
 impl EnvValue for InDock {

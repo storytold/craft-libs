@@ -26,7 +26,7 @@ fn inspector(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let shown = stack
             .show(ui, |ui, _| {
                 rows.each(ui, |ui, key, slot| {
-                    let open = Bind::bound(data.value(TITLES[usize::from(*key)], true));
+                    let open = data.bind(TITLES[usize::from(*key)], true);
                     Section::new(TITLES[usize::from(*key)])
                         .open(open)
                         .in_stack(slot)

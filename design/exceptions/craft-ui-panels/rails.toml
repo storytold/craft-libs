@@ -7,3 +7,11 @@ rule = "contract/memory"
 path = "crates/ui-panels/src/rails/tool/stories.rs"
 reason = "The story gives the rail the width of its chosen columns, as a dock column does."
 count = 1
+
+[[exception]]
+name = "tool-rail-trial-rooms"
+kind = "exempt"
+rule = "literal-size"
+path = "crates/ui-panels/src/rails/tool/trials.rs"
+reason = "Trial rooms, not looks."
+count = 1

@@ -9,7 +9,7 @@ use std::time::Duration;
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::RasterSource;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{FullWindowCanvas, FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::Job;
@@ -119,9 +119,9 @@ fn workspace_corrected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn lines(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let session = session();
     let pictures = pictures();
-    let view = data.value("view", FullWindowView::new());
+    let (view, view_at) = data.value_at("view", FullWindowView::new());
     let mut seen = None;
-    let canvas = FullWindowCanvas::new(Bind::bound(view), pictures.source()).controls(|ui, rect| {
+    let canvas = FullWindowCanvas::new(view_at.bind(view), pictures.source()).controls(|ui, rect| {
         seen = Some(
             ConstraintLines::new("Constraint lines", &session, &Bowed)
                 .picture([IMAGE.width, IMAGE.height], [IMAGE.width, IMAGE.height])
@@ -135,6 +135,6 @@ fn lines(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(WideAnglePanel<'static>, covers = [Default], drive = Drive::Never)]
 fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let session = session();
-    let preview = data.value("preview", true);
-    WideAnglePanel::new(&session, Bind::bound(preview)).show(ui).into()
+    let (preview, preview_at) = data.value_at("preview", true);
+    WideAnglePanel::new(&session, preview_at.bind(preview)).show(ui).into()
 }

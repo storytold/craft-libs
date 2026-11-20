@@ -4,6 +4,7 @@
 mod appkit;
 mod keytips;
 mod layout;
+mod memo;
 mod mnemonic;
 mod native;
 mod ribbon;

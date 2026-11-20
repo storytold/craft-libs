@@ -526,7 +526,7 @@ pub(crate) fn run<C: Component>(
     }
     if part.options.holds_drafts {
         // A window deactivation leaves the draft for the next Enter or a press elsewhere (L-52).
-        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost) {
+        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_raw(&ctx, |pointer| pointer.focus_lost) {
             state.end = None;
         }
         // A press the focus service held for this part keeps focus; the draft shows as its value would.

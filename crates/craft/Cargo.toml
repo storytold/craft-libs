@@ -221,6 +221,8 @@ craft-gpu-wgpu = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
 craft-sqlite = { workspace = true, optional = true }
+craft-audio-dsp = { workspace = true, optional = true }
+craft-sbs = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -324,6 +326,8 @@ audio-symphonia = ["audio", "craft-audio/symphonia"]
 audio-vmd-decode = ["audio", "craft-audio/vmd-decode"]
 audio-vorbis-decode = ["audio", "craft-audio/vorbis-decode"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
+
+audio-dsp = ["dep:craft-audio-dsp"]
 
 automation = ["dep:craft-automation", "keymap"]
 automation-agents = ["automation", "craft-automation/agents"]
@@ -746,6 +750,8 @@ review = ["dep:craft-review", "keymap", "pages"]
 rtf = ["dep:craft-rtf"]
 rtf-doc = ["rtf", "craft-rtf/doc"]
 rtf-outlook = ["rtf", "craft-rtf/outlook"]
+
+sbs = ["dep:craft-sbs"]
 
 score = ["dep:craft-score"]
 

@@ -33,9 +33,19 @@ fi
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 """
+# The Windows leg has its own block without the replay audit, which runs on Linux only.
+WINDOWS_TEST_SOURCE = """
+cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
+cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+cargo test --workspace --doc --all-features --locked
+cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
+"""
 TEST_SOURCE = """
 cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests
 cargo nextest run -p craft-aep -p craft-video --all-features --locked --profile ci --example stubicc --example h264_h264enc_bench
+if [ "$RUNNER_OS" = Linux ]; then
+  CRAFT_UI_AUDIT_REPLAY=1 cargo nextest run --workspace --all-features --locked --profile ci --lib --bins --tests -E 'package(craft-ui-contract) | package(craft-ui-widgets) | package(craft-ui-panels) | package(craft-ui-patterns) | package(craft-ui-shell) | package(craft-ui-gallery) | package(craft-menu)'
+fi
 cargo test --workspace --doc --all-features --locked
 cargo nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests
 """
@@ -43,7 +53,7 @@ WINDOWS_SETUP = """powershell.exe -NoProfile -Command '$ErrorActionPreference = 
 EXPECTED_SOURCE = {
     "lint-command": LINT_SOURCE,
     "command": TEST_SOURCE,
-    "windows-command": WINDOWS_SETUP + "\n" + TEST_SOURCE,
+    "windows-command": WINDOWS_SETUP + "\n" + WINDOWS_TEST_SOURCE,
 }
 
 
@@ -98,6 +108,10 @@ TESTS = [
     "test --workspace --doc --all-features --locked",
     "nextest run -p craft-image-codecs -p craft-text --locked --profile ci --lib --bins --tests",
 ]
+AUDIT = "nextest run --workspace --all-features --locked --profile ci --lib --bins --tests -E " + " | ".join(
+    f"package({name})" for name in ("craft-ui-contract", "craft-ui-widgets", "craft-ui-panels", "craft-ui-patterns",
+                                    "craft-ui-shell", "craft-ui-gallery", "craft-menu"))
+LINUX_TESTS = TESTS[:2] + [AUDIT] + TESTS[2:]
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -112,14 +126,14 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_linux_and_macos_run_one_feature_set_with_doctests(self):
-        for os_name in ("Linux", "macOS"):
+        for os_name, expected in (("Linux", LINUX_TESTS), ("macOS", TESTS)):
             with self.subTest(os=os_name):
                 result = commands(os_name)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.splitlines(), TESTS)
+                self.assertEqual(result.stdout.splitlines(), expected)
 
     def test_each_stage_failure_remains_fatal(self):
-        for name, stages in (("lint-command", COMMON), ("command", TESTS)):
+        for name, stages in (("lint-command", COMMON), ("command", LINUX_TESTS)):
             for index, command in enumerate(stages):
                 with self.subTest(block=name, command=command):
                     result = commands("Linux", command, name)
