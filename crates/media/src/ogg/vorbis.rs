@@ -28,9 +28,16 @@ impl VorbisModes {
     pub fn parse(identification: &[u8], setup: &[u8]) -> Option<VorbisModes> {
         let info = VorbisInfo::parse(identification)?;
         let [b0, b1] = [info.blocksize_0, info.blocksize_1];
-        // Vorbis I is version 0 (§4.2.2)
+        // Vorbis I is version 0, with channels and a sample rate (§4.2.2)
         let version = u32::from_le_bytes([identification[7], identification[8], identification[9], identification[10]]);
-        if version != 0 || info.channels == 0 || !(64..=8192).contains(&b0) || !(64..=8192).contains(&b1) || b0 > b1 || identification[29] & 1 == 0 {
+        if version != 0
+            || info.channels == 0
+            || info.sample_rate == 0
+            || !(64..=8192).contains(&b0)
+            || !(64..=8192).contains(&b1)
+            || b0 > b1
+            || identification[29] & 1 == 0
+        {
             return None;
         }
         let long = setup_modes(setup, info.channels)?;
@@ -119,6 +126,12 @@ impl VorbisTiming {
                 (Some(g), Some(c)) if stream.packets[j].eos && g < c.saturating_add(sum) => {
                     trimmed_end = Some(g);
                     c.saturating_add(sum)
+                }
+                // a page that returns no samples (only the priming packet) does not place the stream
+                (Some(g), None) if sum == 0 && !stream.packets[j].eos => {
+                    ends[i..=j].fill(g);
+                    i = j + 1;
+                    continue;
                 }
                 // the first page with audio: its granule places the stream, which may start before
                 // or after 0 (§A.2)
@@ -227,15 +240,17 @@ fn setup_modes(h: &[u8], channels: u8) -> Option<Vec<bool>> {
     for _ in 0..b.read(6)? + 1 {
         b.zero(16)?;
     }
-    for _ in 0..b.read(6)? + 1 {
+    let floors = b.read(6)? + 1;
+    for _ in 0..floors {
         floor(&mut b)?;
     }
-    for _ in 0..b.read(6)? + 1 {
+    let residues = b.read(6)? + 1;
+    for _ in 0..residues {
         residue(&mut b)?;
     }
     let mappings = b.read(6)? + 1;
     for _ in 0..mappings {
-        mapping(&mut b, channels)?;
+        mapping(&mut b, channels, floors, residues)?;
     }
     let count = b.read(6)? as usize + 1;
     let mut long = Vec::with_capacity(count.min(MAX_MODES));
@@ -256,8 +271,8 @@ fn codebook(b: &mut Bits<'_>) -> Option<()> {
     if b.read(24)? != 0x56_4342 {
         return None;
     }
-    // a codebook of no dimensions has no vectors to look up
-    let dims = b.read(16).filter(|&d| d > 0)?;
+    // a codebook of no dimensions is allowed and has no lookup values, as in the reference decoder
+    let dims = b.read(16)?;
     let entries = b.read(24)?;
     if b.read(1)? == 1 {
         // ordered: runs of entries per length, each count in ilog(entries left) bits
@@ -285,7 +300,11 @@ fn codebook(b: &mut Bits<'_>) -> Option<()> {
             b.skip(32 + 32)?;
             let width = u64::from(b.read(4)? + 1);
             b.skip(1)?;
-            let values = if kind == 1 { lookup1_values(entries, dims) } else { u64::from(entries) * u64::from(dims) };
+            let values = match (kind, dims) {
+                (_, 0) => 0,
+                (1, _) => lookup1_values(entries, dims),
+                _ => u64::from(entries) * u64::from(dims),
+            };
             b.skip(values.checked_mul(width)?)?;
         }
         _ => return None,
@@ -325,8 +344,9 @@ fn residue(b: &mut Bits<'_>) -> Option<()> {
     b.skip(books * 8)
 }
 
-/// Passes over one mapping configuration (§4.2.4, mappings).
-fn mapping(b: &mut Bits<'_>, channels: u8) -> Option<()> {
+/// Passes over one mapping configuration (§4.2.4, mappings), whose submaps name one of `floors`
+/// floors and one of `residues` residues.
+fn mapping(b: &mut Bits<'_>, channels: u8, floors: u32, residues: u32) -> Option<()> {
     b.zero(16)?;
     let submaps = if b.read(1)? == 1 { b.read(4)? + 1 } else { 1 };
     if b.read(1)? == 1 {
@@ -347,7 +367,13 @@ fn mapping(b: &mut Bits<'_>, channels: u8) -> Option<()> {
         }
     }
     // per submap: an unused time configuration, the floor and the residue
-    b.skip(u64::from(submaps) * 24)
+    for _ in 0..submaps {
+        b.skip(8)?;
+        if b.read(8)? >= floors || b.read(8)? >= residues {
+            return None;
+        }
+    }
+    Some(())
 }
 
 /// Passes over a floor 1 configuration (§7.2.2).
