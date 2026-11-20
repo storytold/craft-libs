@@ -223,8 +223,8 @@ fn panel_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(BrushSectionList<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn section_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let brush = data.value("brush", Brush::new(true));
-    let output = BrushSectionList::new("Brush settings sections", &brush.sections, Bind::bound(&mut brush.shown)).link_row().show(ui);
+    let (brush, brush_at) = data.value_at("brush", Brush::new(true));
+    let output = BrushSectionList::new("Brush settings sections", &brush.sections, brush_at.bind(&mut brush.shown)).link_row().show(ui);
     let events = output.events.clone();
     let facts = StoryOutput::from(output);
     for event in events {
@@ -240,20 +240,20 @@ fn angle_note(angle: TipAngle) -> String {
 
 #[story(TipEllipse<'static>, covers = [Default], drive = Drive::Drag(Grip::new(super::ellipse::ARROW)))]
 fn tip_ellipse(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("angle", ANGLE))).show(ui);
+    let shown = TipEllipse::new("Tip angle and roundness", data.bind("angle", ANGLE)).show(ui);
     let note = angle_note(*data.value("angle", ANGLE));
     StoryOutput::from(shown).readout(note)
 }
 
 #[story(TipEllipse<'static>, covers = [Mixed], drive = Drive::Never)]
 fn tip_ellipse_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TipEllipse::new("Tip angle and roundness", Bind::bound_mixed(data.value("mixed", Mixed::<TipAngle>::Mixed))).show(ui).into()
+    TipEllipse::new("Tip angle and roundness", data.bind_mixed("mixed", Mixed::<TipAngle>::Mixed)).show(ui).into()
 }
 
 #[story(TipEllipse<'static>, covers = [Invalid], drive = Drive::Never)]
 fn tip_ellipse_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_flat = |angle: &TipAngle| if angle.roundness < 0.5 { Validity::Refuse(Message::new("Too flat")) } else { Validity::Ok };
-    let shown = TipEllipse::new("Tip angle and roundness", Bind::bound(data.value("flat", ANGLE)).check(refuse_flat)).show(ui);
+    let shown = TipEllipse::new("Tip angle and roundness", data.bind("flat", ANGLE).check(refuse_flat)).show(ui);
     let note = angle_note(*data.value("flat", ANGLE));
     StoryOutput::from(shown).readout(note)
 }
@@ -263,12 +263,12 @@ fn tip_ellipse_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn dynamic_control_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<BrushSettingsStoryWords>();
     let controls = controls();
-    let (rows, size) = data.value("rows", ((ControlRow::new(Control::Fade), ControlRow::new(Control::PenPressure)), SIZE));
+    let ((rows, size), rows_at) = data.value_at("rows", ((ControlRow::new(Control::Fade), ControlRow::new(Control::PenPressure)), SIZE));
     let (fade, curve) = rows;
     Stack::new().show(ui, |ui, _| {
         fade.show(ui, &controls);
         curve.show(ui, &controls);
-        let _ = BrushSizeField::new("Size", Bind::bound(&mut *size), MAX_SIZE).restore(ORIGINAL).show(ui);
+        let _ = BrushSizeField::new("Size", rows_at.bind(&mut *size), MAX_SIZE).restore(ORIGINAL).show(ui);
     });
     let output = StoryOutput::default();
     if curve.curve_open { output.readout(words.curve_open.as_str().to_owned()) } else { output }
@@ -281,5 +281,5 @@ fn stroke_strip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(BrushSizeField<'static>, covers = [Default], drive = Drive::Never)]
 fn size_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    BrushSizeField::new("Size", Bind::bound(data.value("size", SIZE)), MAX_SIZE).restore(ORIGINAL).show(ui).into()
+    BrushSizeField::new("Size", data.bind("size", SIZE), MAX_SIZE).restore(ORIGINAL).show(ui).into()
 }

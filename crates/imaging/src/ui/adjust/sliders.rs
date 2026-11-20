@@ -5,8 +5,8 @@
 //! rows' edits are lifted onto the editor's value ([`Run`]), so one slider drag, one typed number or one reset is one
 //! gesture of the whole value.
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::ops::RangeInclusive;
 use std::sync::Arc;

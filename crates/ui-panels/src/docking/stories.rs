@@ -60,25 +60,25 @@ fn drag_handle(fixture: &mut Fixture) {
 
 #[story(SplitArea<'static, usize>, covers = [Default], drive = Drive::Custom(drag_handle))]
 fn columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", two_columns());
+    let (layout, layout_at) = data.value_at("dock", two_columns());
     let shown = layout.clone();
-    dock(ui, Bind::bound(layout), &shown)
+    dock(ui, layout_at.bind(layout), &shown)
 }
 
 #[story(SplitArea<'static, usize>, covers = [Mixed], drive = Drive::Custom(drag_handle))]
 fn layouts_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", Mixed::<Layout<usize>>::Mixed);
-    dock(ui, Bind::bound_mixed(layout), &two_columns())
+    let (layout, layout_at) = data.value_at("dock", Mixed::<Layout<usize>>::Mixed);
+    dock(ui, layout_at.bind_mixed(layout), &two_columns())
 }
 
 #[story(SplitArea<'static, usize>, covers = [Invalid], drive = Drive::Custom(drag_handle))]
 fn a_dock_of_one_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", Layout::new(Some(Node::tabs(vec![LAYERS], 0)), Vec::new()));
+    let (layout, layout_at) = data.value_at("dock", Layout::new(Some(Node::tabs(vec![LAYERS], 0)), Vec::new()));
     let shown = layout.clone();
     let needs_two = |layout: &Layout<usize>| {
         if layout.panels().len() < 2 { Validity::Refuse(Message::new("A dock needs two panels")) } else { Validity::Ok }
     };
-    dock(ui, Bind::bound(layout).check(needs_two), &shown)
+    dock(ui, layout_at.bind(layout).check(needs_two), &shown)
 }
 
 #[story(DockGroup<'static, usize>, covers = [Default])]
@@ -106,7 +106,7 @@ fn open_panel_menu(fixture: &mut Fixture) {
 fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
-    DockGroup::new(LAYERS, &panels, panels[0].key).menu(rows).show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, &panels, panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]
@@ -143,7 +143,7 @@ impl DockPanels<u32> for NumberedPanels {
 #[story(WindowMenuRows<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn window_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let layout = Layout::new(Some(Node::tabs(vec![1], 0)), Vec::new());
-    let menu = Menu::new("Window").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| {
+    let menu = Menu::new("Window").open(data.bind("open", true)).show(ui, |ui, _| {
         WindowMenuRows::new(&layout, &NumberedPanels, &[1, 2]).show(ui);
     });
     StoryOutput::from(menu.output)

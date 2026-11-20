@@ -968,6 +968,41 @@ fn a_thumbnails_frame_is_square_and_lies_outside_its_picture() {
     assert!(row.contains_rect(frame.rect), "the row holds the frame: {row:?} {frame:?}");
 }
 
+/// A row whose label comes from styled spans draws its match, and nothing else of the label, on the highlight, and the
+/// joined text names the row. A row that dropped the spans would draw the label as one plain span.
+#[trial]
+fn a_row_labelled_from_spans_highlights_only_its_match_and_is_named_by_the_joined_text() {
+    use craft_ui::primitives::Span;
+    const JOINED: &str = "over the harbour at dusk";
+    let mut fixture = Fixture::new(|ui| {
+        let keys = [0_usize];
+        let source = keyed(&keys, |key: &usize| *key).with_text(|_| std::borrow::Cow::Borrowed(JOINED));
+        let _ = List::new("Results").show_items(ui, &source, &mut |_, _| {
+            let spans = vec![Span::new("over the "), Span::new("harbour").highlight(), Span::new(" at dusk")];
+            ListRow::new(JOINED).label_spans(spans)
+        });
+    });
+    fixture.room(Vec2::new(300.0, 200.0));
+    fixture.settle();
+    assert!(fixture.by_label(JOINED).is_some(), "the joined text names the row");
+    let shapes = fixture.frame_shapes();
+    let galley = shapes
+        .iter()
+        .find_map(|shape| match shape {
+            egui::Shape::Text(shown) if shown.galley.text() == JOINED => Some(shown.galley.clone()),
+            _ => None,
+        })
+        .expect("the row draws its label whole");
+    let marked: Vec<&str> = galley
+        .job
+        .sections
+        .iter()
+        .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
+        .filter_map(|section| galley.job.text.get(section.byte_range.start.0..section.byte_range.end.0))
+        .collect();
+    assert_eq!(marked, ["harbour"], "only the match is drawn on the highlight");
+}
+
 /// What a double click on the second row of a list with `select` and `allow_empty`, nothing selected, reports, and the
 /// selection it leaves with a host that keeps every selection the list reports.
 fn double_clicked(
@@ -1112,4 +1147,58 @@ fn a_row_dragged_to_the_edge_scrolls_the_list_and_rests_without_frames() {
     assert_eq!(scrolled(&fixture), rest, "over the middle rows nothing scrolls");
     assert!(!fixture.repaint_requested(), "a drag held over the middle rows asks for no frame");
     fixture.release_at(Pos2::new(grab.x, list.center().y));
+}
+
+/// Auto rows place by their measure in the first frame. In a column sized from its content along the height, where
+/// each pass runs the list's measuring run and its real run, the first frame runs once, measures each row once, builds each row at most
+/// twice, and places the rows and the list where the settled list has them. A click that selects a row and a rename
+/// request change a state the row's size reads after the pass measured it: the frame shows the row, and the list
+/// around it, at the new size.
+#[trial]
+fn auto_rows_are_measured_once_per_pass_and_a_restated_row_takes_its_new_size_in_the_same_frame() {
+    use craft_ui::contract::{ShowContainer as _, Sizing};
+    use craft_ui::layout_components::Stack;
+    use craft_ui::list::ThumbSize;
+    use craft_ui::testing::pointer::{moved, press, release};
+    let mut fixture = Fixture::new(move |ui| {
+        Stack::new().sizing(Sizing::FillWidth).show(ui, |ui, _| {
+            let keys = [0_usize, 1, 2];
+            let source = keyed(&keys, |key: &usize| *key).with_text(|key| std::borrow::Cow::Borrowed(NAMES[*key]));
+            List::new("Artboards").id(list_id()).rename(true).show_items(ui, &source, &mut |key, icx| {
+                let size = if icx.row.selected || icx.row.renaming { ThumbSize::Large } else { ThumbSize::Medium };
+                ListRow::new(NAMES[*key]).thumb(size, |_, _| {})
+            });
+        });
+    });
+    fixture.room(Vec2::new(300.0, 400.0));
+    let list = |fixture: &Fixture| fixture.by_label("Artboards").expect("the list's node").rect;
+    let row = |fixture: &Fixture, at: usize| fixture.by_label(NAMES[at]).expect("the row's node").rect;
+    fixture.idle(1);
+    assert_eq!(fixture.passes(), 1, "the first frame runs once");
+    let runs = craft_ui::testing::last_pass_runs(fixture.ctx());
+    assert!(runs.iter().any(|(name, count)| name.contains("::List<") && *count >= 2), "the list has a measuring run and a real run: {runs:?}");
+    let measures = craft_ui::testing::row_measures(fixture.ctx());
+    assert!(measures.len() == NAMES.len() && measures.iter().all(|(_, count)| *count == 1), "each row is measured once: {measures:?}");
+    let builds = craft_ui::testing::row_builds(fixture.ctx());
+    assert!(builds.len() == NAMES.len() && builds.iter().all(|(_, count)| *count <= 2), "each row is built at most twice: {builds:?}");
+    let first = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    fixture.idle(3);
+    let settled = (list(&fixture), [row(&fixture, 0), row(&fixture, 1), row(&fixture, 2)]);
+    assert_eq!(first, settled, "the first frame places the rows and the list as the settled list does");
+
+    let at = settled.1[1].center();
+    fixture.frame(vec![moved(at)]);
+    fixture.frame(vec![press(at), release(at)]);
+    let clicked = (list(&fixture), row(&fixture, 1));
+    assert!(clicked.1.height() > settled.1[1].height(), "the selected row takes its taller size in the frame of the click");
+    fixture.idle(2);
+    assert_eq!(clicked, (list(&fixture), row(&fixture, 1)), "the frame of the click shows the list and the row at their settled sizes");
+
+    let below = row(&fixture, 1).top();
+    request_rename(fixture.ctx(), list_id(), &0_usize);
+    fixture.idle(1);
+    let renamed = (list(&fixture), row(&fixture, 1).top());
+    assert!(renamed.1 > below, "the renaming row takes its taller size in the frame the rename starts");
+    fixture.idle(2);
+    assert_eq!(renamed, (list(&fixture), row(&fixture, 1).top()), "the frame the rename starts shows the list and the rows settled");
 }

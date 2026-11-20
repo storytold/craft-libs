@@ -14,7 +14,7 @@ fn full() -> Value {
         "schema": "craft-design-theme", "schema_version": 1,
         "x_top": { "list": [1, 2, { "k": null }] },
         "id": "test.full", "name": "Full", "version": 3,
-        "variants": "both", "contrast_intent": "low",
+        "variants": "both", "contrast_intent": "low", "icon_pack": "craft.tabler",
         "seeds": {
             "neutral": "#535353", "accent": "#78ADF6", "x_seed": "kept",
             "status": { "good": "#85DC6A", "warn": "#E8B046", "bad": "#FF8080", "info": "#78ADF6", "x_status": 1 }
@@ -55,6 +55,7 @@ fn round_trip_keeps_values_and_unknown_keys() {
     let t = &file.theme;
     assert_eq!((t.id.as_str(), t.name.as_str(), t.version), ("test.full", "Full", 3));
     assert_eq!((t.variants, t.contrast_intent), (Variants::Both, ContrastIntent::Low));
+    assert_eq!(t.icon_pack.as_ref().map(IconPackId::as_str), Some("craft.tabler"));
     assert_eq!(t.seeds.accent, hex("#78adf6"));
     let shape = t.shape.unwrap();
     assert_eq!(shape.radius.unwrap().button, 999.0);
@@ -82,6 +83,7 @@ fn round_trip_keeps_values_and_unknown_keys() {
         ("/apps/photocraft/high_contrast/dark/text.normal", &json!("#ffffff")),
         ("/apps/x_app_entry", &orig["apps"]["x_app_entry"]),
         ("/version", &json!(3)),
+        ("/icon_pack", &json!("craft.tabler")),
         ("/shape/knob", &json!("tab")),
         ("/shape/wells", &json!("round")),
         ("/shape/radius/button", &json!("full")),
@@ -93,6 +95,54 @@ fn round_trip_keeps_values_and_unknown_keys() {
     let again = format::parse(text.as_bytes()).unwrap();
     assert_eq!(again.theme, file.theme);
     assert_eq!(format::write(&again).unwrap(), text, "writing is stable");
+}
+
+/// An app's own `shape` replaces the theme's for that app only (WordCraft's rounded-rectangle buttons under
+/// ArtCraft's capsules), and it is written back.
+#[test]
+fn an_apps_own_shape_replaces_the_themes_for_that_app() {
+    let mut v = full();
+    v["apps"]["photocraft"]["shape"] = json!({ "button_radius": 4 });
+    let file = parse_value(&v).unwrap();
+    let id = AppId::parse("photocraft").unwrap();
+    assert_eq!(file.theme.apps.get(&id).and_then(|app| app.shape).and_then(|shape| shape.button_radius), Some(4.0));
+    let appearance = super::semantic_tests::app(Mode::Light, Contrast::Standard);
+    let own = crate::resolve(&file.theme, appearance, Some(&id)).tokens.shape.radius.button;
+    let theirs = crate::resolve(&file.theme, appearance, None).tokens.shape.radius.button;
+    assert_eq!(own, 4.0, "the app's buttons take its own radius");
+    assert_ne!(theirs, 4.0, "other apps keep the theme's");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/apps/photocraft/shape/button_radius"), Some(&json!(4.0)));
+    let mut bad = full();
+    bad["apps"]["photocraft"]["shape"] = json!({ "button_radius": -1 });
+    assert!(!errors(&bad).is_empty(), "an app's shape is checked as a theme's");
+}
+
+/// A pack set on a file without one is written; clearing it removes the key and keeps the file's unknown keys; a
+/// value that is not a well-formed pack id is an error at its key.
+#[test]
+fn the_icon_pack_is_added_cleared_and_checked() {
+    let mut v = full();
+    v.as_object_mut().unwrap().remove("icon_pack");
+    let mut file = parse_value(&v).unwrap();
+    assert_eq!(file.theme.icon_pack, None);
+    file.theme.icon_pack = Some(IconPackId::parse("user.rounded").unwrap());
+    let added: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(added.pointer("/icon_pack"), Some(&json!("user.rounded")));
+
+    let mut file = parse_value(&full()).unwrap();
+    file.theme.icon_pack = None;
+    let cleared: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(cleared.pointer("/icon_pack"), None);
+    assert_eq!(cleared.pointer("/x_top"), full().pointer("/x_top"), "unknown keys stay");
+
+    for bad in [json!(3), json!("Bad Pack"), json!("x")] {
+        let mut v = full();
+        v["icon_pack"] = bad.clone();
+        let e = errors(&v);
+        assert_eq!(e.len(), 1, "{bad}: {e:?}");
+        assert!(e[0].starts_with("icon_pack: "), "{bad}: {e:?}");
+    }
 }
 
 /// A theme file with the given light-mode pins.

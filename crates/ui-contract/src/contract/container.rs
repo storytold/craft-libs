@@ -123,7 +123,7 @@ impl ShellPane {
 }
 
 /// The padding tier of a body.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Pad {
     /// No padding.
@@ -135,6 +135,9 @@ pub enum Pad {
     Regular,
     /// `space.pad.roomy`.
     Roomy,
+    /// A full-window page's margin around its content: two and a half roomy pads (40 pt in the compact set), as a
+    /// File page's body stands off the window and its side menu.
+    Page,
 }
 
 /// The edges a container's padding tier applies to.
@@ -168,6 +171,22 @@ pub enum Sizing {
     /// fills takes it, and the container with it. A content-sized mount, a row or a grid stops that.
     #[default]
     Content,
+    /// The width its content took last pass and the available height: a side menu beside a page, as wide as its
+    /// widest item and as tall as the row it stands in, with its footer at the bottom. Across the width it is
+    /// `Content`, down the height `Fill`.
+    FillHeight,
+}
+
+impl Sizing {
+    /// Whether the width follows the content: `Content` and `FillHeight`.
+    pub const fn content_width(self) -> bool {
+        matches!(self, Sizing::Content | Sizing::FillHeight)
+    }
+
+    /// Whether the height is the available height: `Fill` and `FillHeight`.
+    pub const fn fills_height(self) -> bool {
+        matches!(self, Sizing::Fill | Sizing::FillHeight)
+    }
 }
 
 /// A size role that sets the least width of a container's content or of a button.
@@ -184,6 +203,12 @@ pub enum LeastWidth {
     DialogSideButton,
     /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
     Rail(std::num::NonZeroU8),
+    /// `size.dialog.least` and `size.dialog.wrap` together: a wide dialog, as wide as a dialog's least content beside a
+    /// paragraph's line (an About dialog whose tabs hold credit tables).
+    WideDialog,
+    /// Five `size.rail.width`: a page's side menu (a File page's list of pages), wide enough that its rows read as a
+    /// band beside the page, not as buttons cut to their labels.
+    SideMenu,
 }
 
 impl LeastWidth {
@@ -195,6 +220,8 @@ impl LeastWidth {
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
             LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
+            LeastWidth::WideDialog => tokens.size.dialog.least + tokens.size.dialog.wrap,
+            LeastWidth::SideMenu => tokens.size.rail.width * 5.0,
         }
     }
 }
@@ -206,6 +233,8 @@ impl LeastWidth {
 pub enum WrapWidth {
     /// `size.dialog.wrap`: a dialog's paragraphs.
     Dialog,
+    /// `size.dock.column`: a page's column of settings beside a preview (a Print page), as wide as a dock column.
+    Column,
 }
 
 impl WrapWidth {
@@ -213,6 +242,7 @@ impl WrapWidth {
     pub fn points(self, tokens: &craft_theme::Tokens) -> f32 {
         match self {
             WrapWidth::Dialog => tokens.size.dialog.wrap,
+            WrapWidth::Column => tokens.size.dock.column,
         }
     }
 }
@@ -414,7 +444,8 @@ impl FooterRegion {
     }
 }
 
-/// Where a footer region sits.
+/// Where a footer region sits. In every place, `Container::body_end` fills the body's column under its content, so
+/// a notice it shows lies under the body and above the footer, or beside a footer in the end region.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FooterPlace {
@@ -426,12 +457,17 @@ pub enum FooterPlace {
     EndBottom,
     /// At the top of the end region, above its content; otherwise as `EndBottom`.
     EndTop,
+    /// In the body, at the cell where the body shows a [`FooterSlot`](crate::contract::FooterSlot): the footer takes no
+    /// band of its own, and the slot is as large as the footer measured. The container still runs the footer, so its
+    /// controls stay the container's (a dialog's buttons, their keys and their order); the body only chooses where
+    /// they stand. The body shows exactly one slot.
+    Body,
 }
 
 impl FooterPlace {
     /// Whether the footer sits in the end region.
     pub const fn in_end(self) -> bool {
-        !matches!(self, FooterPlace::Across)
+        matches!(self, FooterPlace::EndBottom | FooterPlace::EndTop)
     }
 }
 
@@ -533,6 +569,10 @@ pub enum ScrollIndicator {
     /// A strip with an arrow above the view and one below it while the content overflows along y, as a menu shows:
     /// resting the pointer on a strip scrolls toward it. The strips take their height from the view, never width.
     Strips,
+    /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
+    /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
+    /// only while the pointer is over the container or presses the bar.
+    Overlay,
 }
 
 /// A scrolling body.
@@ -563,6 +603,18 @@ impl Scroll {
     /// Whether the overflow along y shows as scroll strips.
     pub const fn has_strips(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Strips) && self.vertical_on()
+    }
+
+    /// Shows the overflow as a bar in the container's padding that takes no room from the content and shows only
+    /// under the pointer ([`ScrollIndicator::Overlay`]).
+    pub const fn overlay(mut self) -> Scroll {
+        self.indicator = ScrollIndicator::Overlay;
+        self
+    }
+
+    /// Whether the overflow shows as an overlay bar.
+    pub const fn has_overlay(&self) -> bool {
+        matches!(self.indicator, ScrollIndicator::Overlay)
     }
 
     /// Scrolls along y.
@@ -665,7 +717,7 @@ pub enum Gap {
 
 /// Set by a menu for its body: a horizontal divider takes `space.gap.inline` above and below its line, since the rows
 /// of a menu touch.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InMenu(pub bool);
 
@@ -738,14 +790,16 @@ pub struct ContainerProps {
     pub arena: bool,
     /// The container is its body's scroll owner without a scroll region, as a canvas with a view of its own is: the
     /// page and end moves and the reveals its children leave go to it (`Focus::take_scroll_moves`,
-    /// `Focus::take_reveal`). A container with a `scroll` region is one already.
+    /// `Focus::take_reveal`). A container with a `scroll` region is one already. The body is clipped to its body
+    /// region, the view, so what it shows never paints over the container's padding (a canvas's rulers).
     pub scroll_owner: bool,
     /// The container's value is a gate that disables its content while off.
     #[doc(hidden)]
     pub gates: bool,
     /// The body is shown through this transform on its own egui layer.
     pub transform: Option<CanvasTransform>,
-    /// Token-changing values for the body.
+    /// Another theme definition, mode, contrast or density for the container itself (its surface, header, rules,
+    /// scroll bars, pads and focus ring), everything it shows, and every layer opened from inside it.
     pub theme: Option<ThemeScope>,
     /// The container is an instance of this command scope.
     pub command_scope: Option<CommandScope>,
@@ -1018,7 +1072,7 @@ impl ContainerProps {
         self
     }
 
-    /// Token-changing values for the body.
+    /// Resolves the container, everything it shows and every layer opened from inside it through `theme`.
     pub fn theme(mut self, theme: ThemeScope) -> Self {
         self.theme = Some(theme);
         self

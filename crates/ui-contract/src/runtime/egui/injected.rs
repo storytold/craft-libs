@@ -729,8 +729,22 @@ pub(crate) fn end(ctx: &Context) {
 
 /// Whether nothing is queued and no step awaits its pass or its rest: the application may answer its waiters.
 pub(crate) fn idle(ctx: &Context) -> bool {
+    settled(ctx, None)
+}
+
+/// [`idle`] asked at the end of the running pass, after its UI: the step that pass carried counts as run, so the
+/// reply goes out with the pass that ran it and not one pass later. A pass egui will run again (`request_discard`)
+/// does not count: the pass that runs again draws what the step did. Outside a pass it is [`idle`].
+pub(crate) fn idle_at_pass_end(ctx: &Context) -> bool {
+    let ending = crate::runtime::frame::running(ctx).filter(|_| !ctx.will_discard()).map(|facts| facts.viewport);
+    settled(ctx, ending)
+}
+
+/// Settles the steps whose pass has run, `ending`'s running pass included, and says whether nothing is left.
+fn settled(ctx: &Context, ending: Option<ViewportId>) -> bool {
     let viewports: Vec<ViewportId> = Service::<Injected>::run(ctx, |injected| injected.lanes.keys().copied().collect());
-    let passes: Vec<(ViewportId, u64)> = viewports.into_iter().map(|viewport| (viewport, pass::pass_nr(ctx, viewport))).collect();
+    let passes: Vec<(ViewportId, u64)> =
+        viewports.into_iter().map(|viewport| (viewport, pass::pass_nr(ctx, viewport).saturating_add(u64::from(ending == Some(viewport))))).collect();
     Service::<Injected>::run(ctx, |injected| {
         injected.settle(&passes);
         injected.lanes.is_empty()

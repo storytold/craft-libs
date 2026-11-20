@@ -4,20 +4,26 @@ use super::{BoxBuf, Brand, Chapter, Edit, Handler, Result, WTrack, pack_language
 
 pub(super) const MATRIX: [i32; 9] = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x4000_0000];
 
-pub(super) fn write_ftyp(b: &mut BoxBuf, brand: Brand) {
+pub(super) fn write_ftyp(b: &mut BoxBuf, brand: Brand, compatible_brands: &[[u8; 4]]) {
     let m = b.start(b"ftyp");
-    match brand {
+    let base: &[[u8; 4]] = match brand {
         Brand::Mp4 => {
             b.bytes(b"isom");
             b.u32(0x200);
-            for c in [b"isom", b"iso2", b"avc1", b"mp41", b"mp42"] {
-                b.bytes(c);
-            }
+            &[*b"isom", *b"iso2", *b"avc1", *b"mp41", *b"mp42"]
         }
         Brand::Mov => {
             b.bytes(b"qt  ");
             b.u32(0x200);
-            b.bytes(b"qt  ");
+            &[*b"qt  "]
+        }
+    };
+    for c in base {
+        b.bytes(c);
+    }
+    for c in compatible_brands {
+        if !base.contains(c) {
+            b.bytes(c);
         }
     }
     b.end(m);

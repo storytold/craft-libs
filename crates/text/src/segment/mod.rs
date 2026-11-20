@@ -23,7 +23,7 @@
 mod complex;
 mod kinsoku;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::ops::Range;
 

@@ -291,8 +291,16 @@ impl<'a> Package<'a> {
         if rows.dropped > 0 {
             self.warn(format!("sheet \"{}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", entry.name, rows.dropped));
         }
-        let mut sheet =
-            SheetPart { part, root: root.unwrap_or_default(), rels, rows: rows.rows, dropped: rows.dropped, damaged, ..SheetPart::default() };
+        let mut sheet = SheetPart {
+            part,
+            root: root.unwrap_or_default(),
+            rels,
+            rows: rows.rows,
+            dropped: rows.dropped,
+            dropped_cells: rows.dropped_cells,
+            damaged,
+            ..SheetPart::default()
+        };
         sheet.lift();
         Ok(sheet)
     }

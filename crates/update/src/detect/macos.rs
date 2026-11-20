@@ -14,6 +14,7 @@ pub fn candidates(app: &App) -> Vec<PathBuf> {
     out
 }
 
+/// Finds the installed bundle of `app` among the standard Applications folders.
 pub fn detect(app: &App) -> Option<Installed> {
     candidates(app).iter().find_map(|p| read_bundle(app, p))
 }

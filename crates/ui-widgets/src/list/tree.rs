@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 /// The groups of a tree that are open, for an app whose source reports `ItemSource::open` from it. Every group is
 /// closed to begin with.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, crate::contract::PlainData)]
 pub struct OpenSet<K: Hash + Eq> {
     open: HashSet<K>,
 }

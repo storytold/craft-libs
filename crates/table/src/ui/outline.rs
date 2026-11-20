@@ -12,8 +12,8 @@ use egui::{CornerRadius, Pos2, Rect, Response, Vec2, pos2, vec2};
 
 use super::grid::{CellAt, CellRange, SheetGeometry, column_letters};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The band buttons' accessible names, English by default (Excel's).

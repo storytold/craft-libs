@@ -10,8 +10,8 @@ use crate::style::GlyphRole;
 use craft_behavior::fit::FitKeep;
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One align or distribute command. The commands are app commands: the app gates them with command state and takes
 /// them when they run, from a button, the menu or a chord.

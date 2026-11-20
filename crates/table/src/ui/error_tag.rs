@@ -16,8 +16,8 @@ use craft_ui::runtime::env::WordSet as _;
 use craft_ui::style::{ComponentStyle, FocusLook, IconLook, StyleCx, SurfaceLook};
 use egui::{Rect, Response, Vec2};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The tag's accessible name, English by default (Excel's).

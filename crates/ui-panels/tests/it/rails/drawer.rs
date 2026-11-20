@@ -4,7 +4,7 @@
 use craft_ui::rails::{DropAt, RailTool, ToolSlot, ToolbarEdit, apply_toolbar_edit};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
-use craft_ui::testing::{Fixture, stories, trial};
+use craft_ui::testing::{Fixture, Registry, trial};
 use egui::Vec2;
 
 const UNDO: u8 = 1;
@@ -74,7 +74,8 @@ fn closing_the_drawer_returns_the_focus_to_the_rails_edit_toolbar_button() {
 /// A tool already on the toolbar is dimmed and does not drag; a tool that is not on it drags to the rail.
 #[trial]
 fn only_a_tool_off_the_toolbar_drags() {
-    let entry = stories().into_iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
+    let registry = Registry::of(&[craft_ui::testing::register]);
+    let entry = registry.stories().iter().find(|entry| entry.story.name == "toolbar_drawer").expect("the drawer story");
     let mut fixture = Fixture::story(&entry.story);
     fixture.settle();
     let opener = fixture.by_label("Edit Toolbar").expect("the rail's Edit Toolbar button");

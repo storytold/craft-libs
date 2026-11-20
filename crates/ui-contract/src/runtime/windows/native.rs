@@ -48,6 +48,10 @@ pub enum WindowAction {
     SetOuterPosition(Pos2),
     /// Sizes the window's inner area in points.
     SetInnerSize(Vec2),
+    /// Restores a minimized window.
+    Restore,
+    /// Sets the smallest inner size the window can be given, in points.
+    SetMinInnerSize(Vec2),
     /// Changes the window's level.
     SetLevel(WindowLevel),
     /// Changes the window's title.
@@ -93,6 +97,8 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         | WindowAction::StartMove
         | WindowAction::SetOuterPosition(_)
         | WindowAction::SetInnerSize(_)
+        | WindowAction::Restore
+        | WindowAction::SetMinInnerSize(_)
         | WindowAction::SetLevel(_)
         | WindowAction::SetTitle(_) => commands,
         WindowAction::SetOpacity(_) => false,
@@ -129,6 +135,8 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size));
             PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(known.min, size)));
         }
+        WindowAction::Restore => viewports::command(ctx, viewport, egui::ViewportCommand::Minimized(false)),
+        WindowAction::SetMinInnerSize(size) => viewports::command(ctx, viewport, egui::ViewportCommand::MinInnerSize(size)),
         WindowAction::SetLevel(level) => {
             // A window opened by `show_viewport` gets its level with the next build of its viewport; any other (the
             // root) is told now.
@@ -144,6 +152,9 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             }
         }
         WindowAction::SetTitle(title) => {
+            // X11 rejects a title holding a NUL, so the host drops it before the compare: a title that differs only by
+            // NULs is the one already sent.
+            let title: String = title.chars().filter(|c| *c != '\0').collect();
             // `ViewportInfo::title` is empty on X11 and Wayland, so the host remembers what it set itself.
             let fresh = PerViewport::<SentTitle>::with(ctx, viewport, |sent| {
                 let fresh = sent.0.as_deref() != Some(title.as_str());
@@ -196,20 +207,11 @@ fn native_of(ctx: &Context, viewport: ViewportId) -> Option<NativeWindow> {
     found
 }
 
-/// Records that the app runs the move of `viewport`'s window from its move band, as the floating dock group does to
-/// dock its window, on every platform: the band's press starts the window's move gesture (Begin, Update, Commit or
-/// Cancel through `placement_changed`, as a layer's move reports), not the OS's move, and the Windows hit test leaves
-/// the band to the app. Runs in each pass of the component.
-#[doc(hidden)]
-pub fn keeps_app_drag(ctx: &Context, viewport: ViewportId) {
-    PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag = true);
-}
-
 /// Routes the Windows hit test of `viewport`'s window to its hit sink, once, when the OS window exists and the app
 /// draws its frame. A platform without the routing leaves the sink uninstalled, so the app moves and resizes the
 /// window itself.
 pub(super) fn route_hit_test(ctx: &Context, viewport: ViewportId) {
-    if hit_sink_installed(ctx, viewport) || PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag) {
+    if hit_sink_installed(ctx, viewport) || PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app) {
         return;
     }
     let Some(native) = native_of(ctx, viewport) else { return };

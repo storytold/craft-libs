@@ -8,7 +8,7 @@ use super::replace::is_plain_file;
 use super::replace::{mark_installed, unmark_unless_scheduled};
 use super::{App, OsString, Path, PathBuf, Paths, Version, install, version};
 #[cfg(windows)]
-use super::{Install, Release, Restart, process, update};
+use super::{Install, Release, Restart, process};
 
 /// The first argument of the Windows update helper: a copy of this program that finishes an
 /// update once the launcher has exited (see [`finish`]).

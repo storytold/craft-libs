@@ -18,8 +18,8 @@ use egui::{Color32, CornerRadius, Painter, Pos2, Rect, Response, Shape, Stroke, 
 use super::popover::compact_picker;
 use super::{ColorPicker, PickedColor, ScreenPickGesture};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// One of the wells, `WELL.at(0)` the primary and `WELL.at(1)` the secondary.
 const WELL: PartKey = PartKey::new("well");
@@ -564,7 +564,7 @@ fn outline(at: Rect, style: &SwatchPairStyle) -> PaintShape {
 
 /// The glyphs of the pair's buttons, drawn on a square grid of `GRID` units; they picture the pair, so they mirror
 /// with it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, craft_ui::contract::MemoProps)]
 enum PairGlyph {
     /// Default colours: a black square over a white one, as the wells stand.
     Defaults,

@@ -3,13 +3,15 @@
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Styled as _};
 use crate::primitives::{DocRun, DocText, Span, TextRun, Wrap};
 use crate::runtime::env::Label;
+use std::borrow::Cow;
+
 use crate::style::{ComponentStyle, StyleCx, TextLook, TypeRole};
 use craft_behavior::{Metrics, Proposal, Sense};
 use craft_theme::{Stateful, States, variant::Tone};
 use egui::{Response, Vec2};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// How strongly the text reads against its surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -76,15 +78,26 @@ pub struct Text {
     elide: Elide,
     /// The styled spans that replace the label's text; empty for plain text.
     spans: Vec<DocRun<'static>>,
-    /// The label's text is set in italics.
+    /// The interface spans that replace the label's text, in the type role, shade and tone of the text; empty for plain text.
+    styled: Vec<Span<'static>>,
+    /// Whether every span is italic, a value set apart from the words around it.
     italic: bool,
 }
 
 impl Text {
     /// `text`, which is also its accessible name, in body type and the normal shade.
     pub fn new(text: impl Into<Label>) -> Self {
-        Text { common: Common::new(), shade: Shade::Normal, tone: None, role: TypeRole::Body, elide: Elide::Off, spans: Vec::new(), italic: false }
-            .label(text)
+        Text {
+            common: Common::new(),
+            shade: Shade::Normal,
+            tone: None,
+            role: TypeRole::Body,
+            elide: Elide::Off,
+            spans: Vec::new(),
+            styled: Vec::new(),
+            italic: false,
+        }
+        .label(text)
     }
 
     /// Text of `spans`, each with its own font, size, colour and lines; the joined text is its accessible name. It wraps
@@ -97,10 +110,40 @@ impl Text {
         text
     }
 
-    /// Sets the text in italics: a value set apart from the words around it.
+    /// Interface text from styled `spans`; the joined text is its accessible name. The spans take the type role, shade
+    /// and tone of the text, as plain text does; each span adds its own emphasis (italic, strong, a flag underline).
+    pub fn styled(spans: Vec<Span<'static>>) -> Self {
+        let label: String = spans.iter().map(|span| span.text.as_ref()).collect();
+        let mut text = Text::new(label);
+        text.styled = spans;
+        text
+    }
+
+    /// Sets the text in italics: a value set apart from the words around it. The resolved label is what is set, so a
+    /// catalogue word shows in its own language.
     pub fn italic(mut self) -> Self {
         self.italic = true;
         self
+    }
+
+    fn widest_word(&self, cx: &MeasureCx<'_, Self>) -> f32 {
+        let role = cx.style.text.role;
+        self.word_runs(role, cx.resolved.label).iter().map(|word| cx.layout_at(word, f32::INFINITY).size().x).fold(0.0, f32::max)
+    }
+
+    fn ideal_plain(&self, cx: &MeasureCx<'_, Self>, run: &TextRun<'_>, band: f32, widest: Option<f32>) -> Vec2 {
+        let mut layout = cx.layout_at(run, band);
+        // A row can offer less than a word. Its shrink step will make room for the word.
+        if self.elide == Elide::Off && layout.galley.rows.len() > 1 {
+            let widest = widest.unwrap_or_else(|| self.widest_word(cx));
+            if widest > band {
+                layout = cx.layout_at(run, widest);
+            }
+        }
+        match cx.room {
+            Some(room) if layout.elided => Vec2::new(room, layout.size().y),
+            _ => layout.size(),
+        }
     }
 
     fn doc(&self) -> DocText<'_> {
@@ -108,7 +151,35 @@ impl Text {
         if self.elide == Elide::Off { doc } else { doc.elide() }
     }
 
+    /// The spans of the text: its styled spans when it has them, else `label` as one, each italic under `italic`.
+    fn spans_of<'a>(&self, label: &'a str) -> Vec<Span<'a>> {
+        let mut spans: Vec<Span<'a>> = if self.styled.is_empty() { vec![Span::new(label)] } else { self.styled.clone() };
+        if self.italic {
+            spans.iter_mut().for_each(|span| span.italic = true);
+        }
+        spans
+    }
+
+    /// The run of the whole text.
     fn run<'a>(&self, role: TypeRole, label: &'a str) -> TextRun<'a> {
+        let run = if self.styled.is_empty() && !self.italic { TextRun::new(label) } else { TextRun::spans(self.spans_of(label)) };
+        self.shaped(run, role)
+    }
+
+    /// One run per word of the text, each in the style of the span it is in, to find the narrowest the text can wrap to.
+    fn word_runs<'a>(&self, role: TypeRole, label: &'a str) -> Vec<TextRun<'a>> {
+        let mut runs = Vec::new();
+        for span in self.spans_of(label) {
+            for word in span.text.split_whitespace() {
+                let mut one = span.clone();
+                one.text = Cow::Owned(word.to_owned());
+                runs.push(self.shaped(TextRun::spans(vec![one]), role));
+            }
+        }
+        runs
+    }
+
+    fn shaped<'a>(&self, run: TextRun<'a>, role: TypeRole) -> TextRun<'a> {
         let wrap = match self.elide {
             Elide::Off => Wrap::Wrap,
             Elide::End => Wrap::Elide,
@@ -116,7 +187,6 @@ impl Text {
             Elide::Start => Wrap::ElideStart,
             Elide::Path => Wrap::ElidePath,
         };
-        let run = if self.italic { TextRun::spans(vec![Span::new(label).italic()]) } else { TextRun::new(label) };
         run.role(role).wrap(wrap)
     }
 }
@@ -153,34 +223,33 @@ impl Component for Text {
                 _ => layout.size(),
             };
         }
-        let role = cx.style.text.role;
-        // A line breaks between words, never inside one: a wrapped text is never narrower than its widest word.
-        let widest =
-            || cx.resolved.label.split_whitespace().map(|word| cx.layout_at(&self.run(role, word), f32::INFINITY).size().x).fold(0.0, f32::max);
-        if cx.proposal == Proposal::Min && self.elide == Elide::Off {
-            let widest = widest();
-            return Vec2::new(widest, cx.layout_at(&self.run(role, cx.resolved.label), widest).size().y);
-        }
-        // At its least an elided line is at its readable least.
+        let run = self.run(cx.style.text.role, cx.resolved.label);
         if cx.proposal == Proposal::Min {
-            let run = self.run(role, cx.resolved.label);
-            return Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y);
-        }
-        let band = wrap.unwrap_or(f32::INFINITY);
-        let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
-        // In a row the room is what the earlier siblings left, which can be less than a word; the row's shrink step
-        // then makes room for the word.
-        if self.elide == Elide::Off && layout.galley.rows.len() > 1 {
-            let widest = widest();
-            if widest > band {
-                layout = cx.layout_at(&self.run(role, cx.resolved.label), widest);
+            if self.elide == Elide::Off {
+                let widest = self.widest_word(cx);
+                return Vec2::new(widest, cx.layout_at(&run, widest).size().y);
             }
+            return cx.least(&run).size();
         }
-        // A cut line takes the whole room: its width must not follow where the last glyph happened to fit.
-        match cx.room {
-            Some(room) if layout.elided => Vec2::new(room, layout.size().y),
-            _ => layout.size(),
+        self.ideal_plain(cx, &run, wrap.unwrap_or(f32::INFINITY), None)
+    }
+
+    const PAIRED_MEASURE: bool = true;
+
+    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        if !self.spans.is_empty() {
+            return None;
         }
+        let band = ideal.column_room().unwrap_or(f32::INFINITY);
+        let _ = least.column_room();
+        let run = self.run(ideal.style.text.role, ideal.resolved.label);
+        if self.elide == Elide::Off {
+            let widest = self.widest_word(least);
+            let ideal_size = self.ideal_plain(ideal, &run, band, Some(widest));
+            return Some((ideal_size, Vec2::new(widest, least.layout_at(&run, widest).size().y)));
+        }
+        let ideal_size = self.ideal_plain(ideal, &run, band, None);
+        Some((ideal_size, least.least(&run).size()))
     }
 
     fn cut_first(&self) -> bool {

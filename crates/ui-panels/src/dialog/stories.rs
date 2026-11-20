@@ -1,13 +1,18 @@
 //! Stories of the dialog shells.
 
 use super::modal::ModalDragStrip;
-use super::{BlockingOverlay, Dialog, DialogFrame, DialogHost, StackDialog};
+use super::{BlockingOverlay, ButtonPlace, Dialog, DialogFrame, DialogHost, StackDialog};
 use crate::buttons::Button;
 use crate::choice::Checkbox;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::contract::{Bind, FooterSlot, Props as _, Show as _, ShowContainer as _, clicked};
+use crate::display::Text;
+use crate::layout::GridFit;
+use crate::layout_components::{Grid, Row};
+use crate::runtime::env::Label;
 use crate::runtime::focus::Initial;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use craft_behavior::ColumnWidth;
 use egui::Ui;
 
 /// What the story dialogs hold: two check boxes whose values the story keeps between passes.
@@ -116,7 +121,7 @@ fn dialog_with_side_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut checks = *data.value("checks", [true, false]);
     let shown: StoryOutput = Dialog::new("Grid options")
         .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
-        .side_buttons(true)
+        .button_place(ButtonPlace::Side)
         .buttons([
             FooterButton::new("OK", DialogRole::Accept),
             FooterButton::new("Cancel", DialogRole::Cancel),
@@ -126,6 +131,37 @@ fn dialog_with_side_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             Checkbox::new(Bind::given(true)).label("Preview").show(ui);
         })
         .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+/// The two columns of the body-buttons story: the grid choices, and the column the buttons head.
+const TWO_COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
+
+/// A dialog whose body keeps the cell its buttons stand in (`ButtonPlace::Body`): the buttons head the second column,
+/// over its controls, as Photoshop's Color Picker puts OK and Cancel over its second field group.
+#[story(FooterSlot, covers = [Default], drive = Drive::Never)]
+fn dialog_with_body_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let [snap, rulers] = &mut checks;
+    let shown: StoryOutput = Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .button_place(ButtonPlace::Body)
+        .buttons([
+            FooterButton::new("OK", DialogRole::Accept),
+            FooterButton::new("Cancel", DialogRole::Cancel),
+            FooterButton::new("Add to Swatches", DialogRole::Other).stays_open(true),
+        ])
+        .show(ui, |ui, _| {
+            Grid::new(TWO_COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
+                Text::new("Lines every 10 mm, in 4 subdivisions.").show(ui);
+                let _ = FooterSlot::new().show(ui);
+                // A labelled control in a grid takes a cell for its label: each check box is a row, one cell.
+                Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut *snap)).label("Snap to grid").show(ui));
+                Row::new().show(ui, |ui, _| Checkbox::new(Bind::bound(&mut *rulers)).label("Show rulers").show(ui));
+            });
+        })
         .into();
     *data.value("checks", [true, false]) = checks;
     shown
@@ -168,6 +204,31 @@ fn dialog_modeless(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .into();
     *data.value("checks", [true, false]) = checks;
     shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_with_refusal(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let mut checks = *data.value("checks", [true, false]);
+    let refused = *data.value("refused", true);
+    let shown: StoryOutput = Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .refusal(move || refused.then(|| Label::from("The grid is finer than the document allows.")))
+        .show(ui, |ui, _| body(ui, &mut checks))
+        .into();
+    *data.value("checks", [true, false]) = checks;
+    shown
+}
+
+#[story(Dialog<'static>, covers = [], drive = Drive::Never)]
+fn dialog_nudge(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    Dialog::new("Grid options")
+        .opened(Bind::bound(opener(ui, data, GRID_OPTIONS)))
+        .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+        .show(ui, |ui, _| {
+            Text::new("Press beside this dialog: it shakes, or its edge flashes twice with reduced motion.").show(ui);
+        })
+        .into()
 }
 
 #[story(DialogFrame<'static>, covers = [Default], drive = Drive::Custom(close_box))]

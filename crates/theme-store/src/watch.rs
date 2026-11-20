@@ -49,6 +49,15 @@ pub enum Op {
         /// Give the theme a new id when its id is already in the library, instead of failing.
         as_copy: bool,
     },
+    /// Replaces a library theme ([`Store::save_theme`]); the result is [`OpOutput::Saved`].
+    Save {
+        /// The library theme to replace.
+        id: ThemeId,
+        /// The new theme file's contents.
+        bytes: Arc<[u8]>,
+        /// The file's stamp when the app loaded it, or from its last save.
+        expected: FileStamp,
+    },
     /// Removes a library theme ([`Store::delete`]).
     Delete(ThemeId),
     /// A theme file for sharing ([`Store::export`]); the result is [`OpOutput::Exported`].
@@ -71,6 +80,8 @@ pub enum OpOutput {
     Exported(Arc<[u8]>),
     /// The stored id; for an import as copy, the new one.
     Imported(ThemeId),
+    /// The saved file's stamp: the `expected` stamp for the next save.
+    Saved(FileStamp),
 }
 
 /// The state of the suite folder at one generation. Snapshots never change; a new one replaces
@@ -694,6 +705,7 @@ impl Engine {
         let result = match op {
             Op::Update { base, change } => self.store.update(&base, change).map(|_| OpOutput::Done),
             Op::Import { bytes, as_copy } => self.store.import(&bytes, as_copy).map(|i| OpOutput::Imported(i.record.theme.id)),
+            Op::Save { id, bytes, expected } => self.store.save_theme(&id, &bytes, expected).map(|s| OpOutput::Saved(s.stamp)),
             Op::Delete(theme) => self.store.delete(&theme).map(|_| OpOutput::Done),
             Op::Export(theme) => self.store.export(&theme).map(OpOutput::Exported),
             Op::Rescan => {
@@ -903,4 +915,4 @@ impl Engine {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

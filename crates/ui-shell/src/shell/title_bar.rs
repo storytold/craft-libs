@@ -21,11 +21,13 @@ pub fn set_window_movable(ctx: &Context, movable: bool) {
 }
 
 // The bar, its title and its two ends.
-mod bar;
+pub(crate) mod bar;
 mod measure;
+pub(crate) mod page_band;
 mod style;
 mod title;
 
 pub use bar::{TitleBar, TitleBarOutput};
+pub(super) use page_band::{PageBand, room as page_band_room};
 pub use style::TitleBarStyle;
 pub use title::Title;

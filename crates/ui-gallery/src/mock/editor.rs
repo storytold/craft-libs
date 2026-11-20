@@ -212,7 +212,7 @@ fn pick(ui: &Ui, state: &mut MockState, tool: Tool, step: PickStep) {
 /// Makes `tool` the current tool and says so in the status bar.
 fn select(ui: &Ui, state: &mut MockState, tool: Tool) {
     state.tool = tool;
-    let name = commands::resolve(ui.ctx(), CommandRef::from(tool)).label;
+    let name = commands::resolve(ui.ctx(), CommandRef::from(tool)).label.clone();
     let text = Env::of(ui).words::<MockWords>().tool_status.fill(&[("tool", &*name)]);
     state.status = Some(StatusMessage::new(text));
 }
@@ -309,7 +309,7 @@ fn status_bar(ui: &mut Ui, state: &mut MockState) {
             Link::new(words.cpu_rendering.clone()).tone(Tone::Warn).show(ui);
         })
         .show(ui, |ui, _| {
-            chosen = StatusReadout::new(Bind::bound(&mut document.view), document.size, *status_item, &values).show(ui).item;
+            chosen = StatusReadout::new(craft_ui::contract::bind_tracked!(document.view), document.size, *status_item, &values).show(ui).item;
             Divider::vertical().show(ui);
             Text::new(words.color_mode.clone()).show(ui);
             Divider::vertical().show(ui);

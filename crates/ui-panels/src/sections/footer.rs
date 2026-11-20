@@ -25,8 +25,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of a footer bar. A bar of panel actions sits under a divider rule along its top edge, with the control
 /// padding above and under its buttons; other bars have no look of their own.
@@ -237,7 +237,7 @@ impl<P> Outcome for DropActionOutput<P> {
 }
 
 /// Whether an accepted drag is over the enclosing drop slot, which the slot's body reads to show its child enabled.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 struct Accepting(bool);
 
 impl EnvValue for Accepting {
@@ -484,7 +484,7 @@ impl FooterButton {
     }
 
     /// Whether the button can be activated.
-    pub(crate) const fn is_enabled(&self) -> bool {
+    pub const fn is_enabled(&self) -> bool {
         self.enabled
     }
 }
@@ -627,7 +627,7 @@ impl FooterBar {
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
-                let mut place = |ui: &mut Ui, shown: &mut Shown| {
+                let place = |ui: &mut Ui, shown: &mut Shown| {
                     for at in display_order(&roles, crate::runtime::windows::os_of(ui.ctx()) == Os::Windows, column) {
                         let button = &buttons[at];
                         let variant = match button.role {

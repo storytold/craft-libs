@@ -63,7 +63,7 @@ impl SurfaceSlot {
     }
 
     /// Paints the surface `kind` over `rect`.
-    pub(crate) fn paint(self, tokens: &UiTokens, kind: SurfaceKind, rect: Rect, direction: Direction) {
+    pub(crate) fn paint(&self, tokens: &UiTokens, kind: SurfaceKind, rect: Rect, direction: Direction) {
         let shapes = Surface::shapes(&surface_style(tokens, kind), None, rect, Corners::All, direction, self.painter.pixels_per_point());
         self.painter.set(self.slot, Shape::Vec(shapes));
     }

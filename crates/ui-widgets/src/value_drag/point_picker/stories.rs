@@ -38,12 +38,12 @@ fn point_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(PointPicker<'static>, covers = [], drive = Drive::Drag(Grip::new(PointPicker::WELL)))]
 fn point_picker_drag(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, RANGE).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, RANGE).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [Mixed], drive = Drive::Never)]
 fn point_picker_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed)), RANGE, RANGE).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind_mixed("mixed", Mixed::Mixed), RANGE, RANGE).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [Invalid], drive = Drive::Never)]
@@ -52,21 +52,21 @@ fn point_picker_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Some(x) if *x > CAP => Validity::Refuse(Message::new("Too far right")),
         _ => Validity::Ok,
     };
-    PointPicker::new(Bind::bound(data.value("over", Mixed::each(RIGHT))).check(refuse_right), RANGE, RANGE).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind("over", Mixed::each(RIGHT)).check(refuse_right), RANGE, RANGE).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
 fn point_picker_mixed_axis(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = [Mixed::Same(CENTER[0]), Mixed::Mixed];
-    PointPicker::new(Bind::bound(data.value("axis", value)), RANGE, RANGE).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind("axis", value), RANGE, RANGE).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
 fn point_picker_y_up(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, 100.0..=0.0).label("Blur center").show(ui).into()
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, 100.0..=0.0).label("Blur center").show(ui).into()
 }
 
 #[story(PointPicker<'static>, covers = [], drive = Drive::Never)]
 fn point_picker_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PointPicker::new(Bind::bound(data.value("point", Mixed::each(CENTER))), RANGE, RANGE).label("Blur center").enabled(false).show(ui).into()
+    PointPicker::new(data.bind("point", Mixed::each(CENTER)), RANGE, RANGE).label("Blur center").enabled(false).show(ui).into()
 }

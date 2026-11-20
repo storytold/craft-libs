@@ -24,13 +24,13 @@ use egui::{Response, Ui};
 use super::channels::finite_values;
 use super::picker::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::{
-    AreaMode, ColorArea, ColorPickerDialogWords, ColorRamp, ColorReadout, ColorStrip, ColorWarning, ColorWarningChip, ColorWheel, PairWell,
-    PickedColor, RampKind, SwatchPair, Well,
+    AreaMode, ColorArea, ColorPickerDialogWords, ColorRamp, ColorReadout, ColorStrip, ColorWarning, ColorWarningArrangement, ColorWarningChip,
+    ColorWheel, PairWell, PickedColor, RampKind, SwatchPair, Well,
 };
 use crate::{CmykModel, GrayModel, not_web_safe};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 craft_ui::words! {
     /// The Color panel's words.
@@ -621,7 +621,7 @@ impl Body<'_> {
         }
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             for warning in warnings.clone() {
-                if ColorWarningChip::new(&warning).beside(true).show(ui).clicked {
+                if ColorWarningChip::new(&warning).arrangement(ColorWarningArrangement::Beside).show(ui).clicked {
                     let picked = PickedColor { color: warning.nearest().with_alpha(color.a), model: None };
                     let name = self.words.title.as_str();
                     self.push(self.target, EditEvent::set(Mixed::Same(PickedColor { color, model: None }), picked, name.into(), None));
@@ -821,7 +821,7 @@ impl Body<'_> {
 const WEB_STEP: f64 = 51.0;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use craft_ui::testing::trial;
 
     use super::*;

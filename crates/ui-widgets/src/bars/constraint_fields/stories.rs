@@ -2,7 +2,7 @@
 
 use super::ConstraintFields;
 use crate::bars::{Bar, BarKind};
-use crate::contract::{Bind, Entry, ShowContainer as _};
+use crate::contract::{Entry, ShowContainer as _};
 use crate::runtime::env::{Env, UnitKind};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
@@ -21,10 +21,10 @@ fn bar(ui: &mut Ui, data: &mut StoryData, start: Constraint, units: bool, enable
         Entry::new(UnitKind::Percent, "Percent"),
     ];
     let unit = *data.value("unit", if units { UnitKind::Inches } else { UnitKind::Pixels });
-    let value = data.value("constraint", start);
+    let (value, value_at) = data.value_at("constraint", start);
     let mut picked = None;
     let shown = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-        let fields = ConstraintFields::new(Bind::bound(&mut *value)).enabled(enabled);
+        let fields = ConstraintFields::new(value_at.bind(&mut *value)).enabled(enabled);
         let fields = if units { fields.size_units(unit, &list, PIXELS_PER_INCH, PixelSize::new(1920, 1080)) } else { fields };
         picked = fields.show(ui).unit_picked;
     });

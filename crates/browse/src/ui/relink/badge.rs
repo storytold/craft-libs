@@ -22,7 +22,7 @@ const BANG_DROP: f32 = 0.09375;
 const BAN_RING: f32 = 0.55;
 
 /// A status badge drawn from the theme: a solid shape in the status colour with its mark in `text.on_status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::MemoProps)]
 enum StatusGlyph {
     /// A `status.bad.solid` disc with `?`.
     Missing,
@@ -34,10 +34,10 @@ enum StatusGlyph {
     Modified,
 }
 
-static MISSING: StatusGlyph = StatusGlyph::Missing;
-static UNREADABLE: StatusGlyph = StatusGlyph::Unreadable;
-static REFUSED: StatusGlyph = StatusGlyph::Refused;
-static MODIFIED: StatusGlyph = StatusGlyph::Modified;
+const MISSING: StatusGlyph = StatusGlyph::Missing;
+const UNREADABLE: StatusGlyph = StatusGlyph::Unreadable;
+const REFUSED: StatusGlyph = StatusGlyph::Refused;
+const MODIFIED: StatusGlyph = StatusGlyph::Modified;
 
 impl Glyph for StatusGlyph {
     fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, _: Color32, _: bool) {

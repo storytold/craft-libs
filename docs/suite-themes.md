@@ -37,6 +37,7 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
   "id": "user.navy", "name": "Navy", "version": 1,
   "variants": "both",
   "contrast_intent": "standard",
+  "icon_pack": "craft.carbon",
   "seeds": { "neutral": "#535353", "accent": "#78ADF6",
              "status": { "good": "#85DC6A", "warn": "#E8B046", "bad": "#FF8080", "info": "#78ADF6" } },
   "shape": null,
@@ -55,11 +56,12 @@ the app's pins (`apps.<id>`), then the theme's high-contrast pins, then the app'
 | `version` | no | the author's revision, default 1 |
 | `variants` | no | `"both"` (default), `"light"` or `"dark"` |
 | `contrast_intent` | no | `"standard"` (default) or `"low"`: the theme is meant to be soft, and pickers label it "Low contrast" |
+| `icon_pack` | no | the id of the icon pack the theme draws its icons from (same form as `id`); absent or `null` draws the suite's default set (Lucide). `craft.lucide`, `craft.phosphor`, `craft.carbon` and `craft.tabler` are the built-in sets, which fall back to Phosphor for icons they lack; other ids name packs in the suite library. A pack that is not installed draws the default icons; it is not a file error |
 | `seeds` | yes | `neutral`, `accent` and `status.good/warn/bad/info`, all required |
 | `shape` | no | `null`, or `{ "radius": { control, popup, window, panel, button, pill? }, "radius_offset": { control?, popup?, window? }, "edge": "flat" or {"bevel": {"width": 1}}, "knob": "round" or "tab", "wells": "square" or "round" }`; `knob` is the shape of a value track's thumb (default `"round"`; Classic's `"tab"` is an upright tab); `wells` is the shape of a colour well that stands on its own, SwatchPair's (default `"square"`; Adwaita, Breeze and Soft are `"round"`); a radius is a number or `"full"`; `radius` needs the first five keys when present and fixes the radii at every Size; `radius_offset` (numbers, negative allowed, missing keys 0) is added to the control, popup and window radii in force, so the theme keeps its own shape at every Size (Soft: control +1, popup +2, window +2, which makes 7/10/14 at Comfortable and 4/6/8 at Compact); a "full" radius and `panel`, `button` and `pill` are not offset, and a sum below 0 is 0; `pill` (switch, slider, progress and badge shapes, clamped to half the part's height) defaults to `"full"`, and Classic sets it to 0 |
 | `light`, `dark` | no | colour pins: dotted token path to `#RRGGBB`, `#RRGGBBAA` or a reference `"{token.path}"` (see References); surfaces (`surface.*` except `surface.scrim`) must be opaque. A `seeds` key holds that mode's seed overrides: `neutral`, `accent` and `status.good/warn/bad/info`, each optional; a field it names replaces the theme's `seeds` value in that mode and the rest fall through |
 | `high_contrast` | no | `{ "light": {...}, "dark": {...} }`, pins used only in high contrast; no `seeds` key (it is an error there and in `apps`) |
-| `apps` | no | per-app `{ light, dark, high_contrast }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's |
+| `apps` | no | per-app `{ light, dark, high_contrast, shape }`, applied over the theme's values for that app; its `high_contrast` pins apply after the theme's; its `shape` (as the theme's `shape`) replaces the theme's whole for that app, and `null` or no key keeps the theme's |
 
 - JSON, at most 256 KiB. `schema_version` is the format; `version` is the author's revision.
 - Paths are flat dotted strings (`"surface.panel"`), never nested objects.
@@ -227,6 +229,9 @@ Library operations take the same lock and bump `library_revision`:
 
 - **Import** validates the file and writes its original bytes to `library/<id>.json`, never
   replacing a file (`IdExists`); "import as copy" picks the first free `<id>-2`, `<id>-3` ...
+- **Save** replaces a library theme with new bytes when its file still has the stamp the caller
+  loaded it with; a file another app replaced since is `Changed` and stays as it is. Built-ins
+  are refused (`BuiltIn`).
 - **Delete** refuses built-ins and a theme in either suite slot (`InUse`).
 - **Export** returns a library theme's stored bytes, or a built-in written as a theme file.
 
@@ -242,8 +247,8 @@ use every 500 ms, compares bytes every 10 s, and lists the library only when `li
 changes or on `Op::Rescan`. Each change publishes a snapshot and calls `wake` once.
 
 Each frame the app compares `generation()` (one atomic load) with its cache key and rebuilds its
-styles only when it changed. Changes go through `request(Op)`: `Update`, `Import`, `Delete`,
-`Export`, `Rescan` and `AppTheme`; the result appears in `snapshot().result(id)`. `SuiteWatch::memory()`
+styles only when it changed. Changes go through `request(Op)`: `Update`, `Import`, `Save`,
+`Delete`, `Export`, `Rescan` and `AppTheme`; the result appears in `snapshot().result(id)`. `SuiteWatch::memory()`
 runs without a thread, applying each request before it returns.
 
 The lock file and revision protocol follow

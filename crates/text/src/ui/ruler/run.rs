@@ -1,13 +1,13 @@
 //! One pass of the ruler's input: the gestures on the items, the strip and the column borders, keys and the
 //! screen reader's requests.
 
-use super::items::{COLUMN, Item, STRIP, moved, place, without};
-use super::{ColumnBorder, ColumnDrag, RulerValues, SAME_POSITION, TabLeader, TabStop, TextRuler, dropped_off, snap_stop};
+use super::items::{COLUMN, GAP, Item, STRIP, gap_of_part, gap_part, moved, place, without};
+use super::{ColumnBorder, ColumnDrag, GapDrag, GapEdge, RulerValues, SAME_POSITION, TabLeader, TabStop, TextRuler, dropped_off, snap_stop};
 use crate::ui::length::{DocUnit, shown};
 use craft_behavior::{CancelReason, GesturePhase, Granularity, Intent, NavMove, PointerButton, PressPhase, RulerUnits, Ticks};
-use craft_ui::canvas::{INCH_SIXTEENTHS, RulerText, Rulers, TickRule, readout};
+use craft_ui::canvas::{RulerText, Rulers, TickRule, readout};
 use craft_ui::contract::{Cx, Edit as _, Focus as _, Pointer as _, Remember as _, WordSetCx as _};
-use craft_ui::runtime::env::{Label, UnitKind, Units};
+use craft_ui::runtime::env::{Label, Units};
 use egui::Pos2;
 
 /// How many snap steps a Shift nudge moves.
@@ -30,15 +30,12 @@ pub(super) struct Held {
     columns: Option<Vec<f32>>,
     /// Alt is held in a column border drag: the columns' widths show between the borders.
     pub(super) widths: bool,
-}
-
-/// The tick rule of a unit: Word's sixteenths for inches, the units' own decimal table otherwise.
-pub(super) fn rule(unit: DocUnit) -> TickRule<'static> {
-    if unit.kind == UnitKind::Inches { TickRule::Inches(&INCH_SIXTEENTHS) } else { TickRule::Metric }
+    /// The gap edge being dragged: its part index and the position it had when the drag began.
+    gap: Option<(u64, f32)>,
 }
 
 /// The ruler's units: ruler units per point, written as the unit's kind.
-pub(super) fn ruler_text(unit: DocUnit, units: &Units) -> RulerText {
+pub fn ruler_text(unit: DocUnit, units: &Units) -> RulerText {
     RulerText::new(RulerUnits::new(shown(units, unit, 1.0), Ticks::decimal(false)), unit.kind)
 }
 
@@ -46,9 +43,9 @@ pub(super) fn ruler_text(unit: DocUnit, units: &Units) -> RulerText {
 /// (1/16 in for inches), so it does not change with the zoom the ruler is shown at.
 const SNAP_ZOOM: f64 = 2.0;
 
-/// The distance a snapping drag moves by: the ruler's smallest tick at [`SNAP_ZOOM`], in points.
-pub(super) fn snap_step(text: &RulerText, unit: DocUnit) -> f32 {
-    let ticks = Rulers::ticks(&text.units, rule(unit), SNAP_ZOOM, 0.0..=0.0);
+/// The distance a snapping drag moves by: the ruler's smallest tick at `SNAP_ZOOM`, in points.
+pub fn snap_step(text: &RulerText, unit: DocUnit) -> f32 {
+    let ticks = Rulers::ticks(&text.units, TickRule::of_unit(unit.kind), SNAP_ZOOM, 0.0..=0.0);
     let gap = ticks.windows(2).find_map(|pair| match pair {
         [a, b] => Some(b.value - a.value),
         _ => None,
@@ -65,18 +62,24 @@ fn snap_within(position: f32, step: f32, bounds: (f32, f32), free: bool) -> f32 
     snapped.clamp(bounds.0, bounds.1)
 }
 
+/// How far one key step moves a part, points: `SAME_POSITION` when `fine`, ten snap `step`s when `large`, else one. The
+/// one key rule of every ruler.
+pub fn nudge_size(step: f32, fine: bool, large: bool) -> f32 {
+    if fine {
+        SAME_POSITION
+    } else if large {
+        LARGE_NUDGE * step
+    } else {
+        step
+    }
+}
+
 /// The moves and nudges taken from the focused part this pass: how far they move it, in points (positive: further
 /// from the start edge).
 fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) -> f32 {
     let mut by = 0.0;
     while let Some((mv, mods)) = cx.intents().take_move() {
-        let size = if mods.fine {
-            SAME_POSITION
-        } else if mods.extend {
-            LARGE_NUDGE * step
-        } else {
-            step
-        };
+        let size = nudge_size(step, mods.fine, mods.extend);
         match mv {
             NavMove::Forward | NavMove::Up => by += size * g.sign(),
             NavMove::Back | NavMove::Down => by -= size * g.sign(),
@@ -84,13 +87,7 @@ fn take_steps(cx: &mut Cx<'_, TextRuler<'_>>, g: &super::Geometry, step: f32) ->
         }
     }
     if let Some((direction, mods)) = cx.intents().take_nudge() {
-        let size = if mods.alt {
-            SAME_POSITION
-        } else if mods.shift {
-            LARGE_NUDGE * step
-        } else {
-            step
-        };
+        let size = nudge_size(step, mods.alt, mods.shift);
         by += direction.x * size * g.sign();
     }
     by
@@ -115,6 +112,7 @@ impl TextRuler<'_> {
         }
         self.run_strip(cx, &layout.g, step, &mut held, &text, &values);
         self.run_columns(cx, &layout.g, step, &mut held);
+        self.run_gaps(cx, &layout.g, step, &mut held);
         if self.kind.is_some() {
             let press = cx.part(super::items::SELECTOR).press;
             if let PressPhase::Release { start, click: true, .. } = press.phase {
@@ -260,7 +258,7 @@ impl TextRuler<'_> {
         let (lo, hi) = g.span();
         for (index, position) in self.columns.iter().copied().enumerate() {
             let press = cx.part(COLUMN.at(index as u64)).press;
-            let report = |phase: GesturePhase, position: f32| Some(ColumnDrag { phase, border: ColumnBorder { index, position } });
+            let report = |phase: GesturePhase, position: f32| Some(ColumnDrag { phase, border: ColumnBorder { index, position }, mods: press.mods });
             match press.phase {
                 PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary => {
                     held.columns = Some(self.columns.to_vec());
@@ -292,11 +290,58 @@ impl TextRuler<'_> {
             });
     }
 
+    /// The column gap edges: one gesture per drag (Begin, Update, Commit, or Cancel on Escape), snapped to the ruler's
+    /// step unless Alt is held. An edge stays on its side of the other edge of the gap and within the strip, and a
+    /// press released without a drag reports nothing.
+    fn run_gaps(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, step: f32, held: &mut Held) {
+        // Fixed gaps declared no edge parts.
+        if !self.gaps_draggable {
+            return;
+        }
+        let (lo, hi) = g.span();
+        for (index, gap) in self.gaps.iter().copied().enumerate() {
+            for edge in [GapEdge::End, GapEdge::Start] {
+                let id = gap_part(index, edge);
+                let press = cx.part(GAP.at(id)).press;
+                let (here, bounds) = match edge {
+                    GapEdge::End => (gap.0, (lo, gap.1.max(lo))),
+                    GapEdge::Start => (gap.1, (gap.0.min(hi), hi)),
+                };
+                let report =
+                    |phase: GesturePhase, position: f32| Some(GapDrag { phase, index: gap_of_part(id).0, edge: gap_of_part(id).1, position });
+                match press.phase {
+                    PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary => {
+                        held.gap = Some((id, here));
+                        self.report.gap = report(GesturePhase::Begin, here);
+                    }
+                    PressPhase::Drag { start, pos, .. } if matches!(held.gap, Some((held_id, _)) if held_id == id) => {
+                        let from = held.gap.map_or(here, |(_, from)| from);
+                        let to = from + (pos.x - start.origin.x) / g.scale * g.sign();
+                        let at = if to == from { from } else { snap_within(to, step, bounds, press.mods.alt) };
+                        self.report.gap = report(GesturePhase::Update, at);
+                    }
+                    PressPhase::Release { start, pos, click: false, .. } if matches!(held.gap, Some((held_id, _)) if held_id == id) => {
+                        let from = held.gap.map_or(here, |(_, from)| from);
+                        let to = from + (pos.x - start.origin.x) / g.scale * g.sign();
+                        let at = if to == from { from } else { snap_within(to, step, bounds, press.mods.alt) };
+                        self.report.gap = report(GesturePhase::Commit, at);
+                        held.gap = None;
+                    }
+                    PressPhase::Cancel { .. } if matches!(held.gap, Some((held_id, _)) if held_id == id) => {
+                        self.report.gap = report(GesturePhase::Cancel, here);
+                        held.gap = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// A key or the screen reader sets the table column border `index` to `to` points: one gesture of one commit.
     fn step_column(&mut self, cx: &mut Cx<'_, Self>, g: &super::Geometry, index: usize, to: f32) {
         let (lo, hi) = g.span();
         let border = ColumnBorder { index, position: snap_within(to, 0.0, (lo, hi), true) };
-        self.report.column = Some(ColumnDrag { phase: GesturePhase::Commit, border });
+        self.report.column = Some(ColumnDrag { phase: GesturePhase::Commit, border, mods: craft_keymap::Mods::NONE });
         cx.focus_part(COLUMN.at(index as u64));
     }
 

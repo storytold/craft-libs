@@ -8,9 +8,9 @@ use crate::contract::Props as _;
 use crate::contract::Show as _;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
-use crate::testing::{Fixture, trial};
+use crate::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
 use egui::{Rect, Vec2};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// The slots of the trials: one tool each, labelled Move, Brush, Pencil, Eraser and Clone Stamp.
@@ -108,6 +108,9 @@ fn in_a_short_room_the_rows_scroll_above_the_footer_that_stays_in_view() {
         let first = rect(&fixture, "Move");
         assert!(first.top() < foot.top(), "{height}: the first button is above the footer: {first:?}");
         assert!(rect(&fixture, "Clone Stamp").bottom() > foot.top(), "{height}: the last button starts out of view");
+        // The bar lies in the end padding, so the buttons keep the middle of the rail.
+        let rail = rect(&fixture, "Tools");
+        assert!(near(first.center().x, rail.center().x), "{height}: the buttons stay centred in a rail that scrolls: {first:?} in {rail:?}");
 
         fixture.frame(vec![moved(first.center())]);
         for _ in 0..10 {
@@ -144,6 +147,81 @@ fn the_tool_rail_shows_its_buttons_icons_in_its_glyph_role() {
     let (alone, tool) = (glyphs(false), glyphs(true));
     assert!(tool.side > alone.side, "a tool rail icon ({}) is larger than a lone one ({})", tool.side, alone.side);
     assert!(tool.color.off.rest != tool.color.off.hover, "a tool rail icon rests quieter than under the pointer");
+}
+
+/// What a rail scene saw: the footer's runs, the rail's reports and the Edit Toolbar response, per frame.
+#[derive(Default)]
+struct Seen {
+    current: u8,
+    footer_runs: usize,
+    selected: Vec<u8>,
+    edit_toolbar: Option<Rect>,
+}
+
+/// A rail with the Edit Toolbar button, a footer and a tool held in `Seen::current`.
+fn memo_rail() -> (Fixture, Rc<RefCell<Seen>>) {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let shared = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let slots = slots();
+        let last = LastUsed::default();
+        let current = shared.borrow().current;
+        let footer = &shared;
+        let out = ToolRail::new("Tools", &slots, &current, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |ui, _| {
+            footer.borrow_mut().footer_runs += 1;
+            Button::new("Foot").show(ui);
+        });
+        let mut seen = shared.borrow_mut();
+        seen.selected.extend(out.select);
+        seen.edit_toolbar = out.edit_toolbar.map(|response| response.rect);
+    });
+    fixture.room(Vec2::new(200.0, 600.0)).settle();
+    (fixture, seen)
+}
+
+/// How the slot grid took part in the last frame: (ran, replayed).
+fn grid_runs(fixture: &Fixture) -> (usize, usize) {
+    let runs = last_frame_memo_runs(fixture.ctx());
+    let of = |kind: MemoRun| runs.iter().filter(|(name, _, run)| name.contains("GridProps") && *run == kind).count();
+    (of(MemoRun::Ran), of(MemoRun::Replayed))
+}
+
+/// An idle rail replays its slot grid and still runs its footer; a tool change runs the grid once.
+#[trial]
+fn an_idle_tool_rail_replays_its_slots_and_a_tool_change_runs_them_once() {
+    let (mut fixture, seen) = memo_rail();
+    let before = seen.borrow().footer_runs;
+    fixture.frame(vec![]);
+    assert_eq!(grid_runs(&fixture), (0, 1), "an idle frame replays the grid");
+    assert!(seen.borrow().footer_runs > before, "the footer runs every pass, outside the view");
+    seen.borrow_mut().current = 1;
+    fixture.frame(vec![]);
+    assert_eq!(grid_runs(&fixture).0, 1, "a tool change runs the grid once: {:?}", last_frame_memo_runs(fixture.ctx()));
+    fixture.settle();
+    for _ in 0..3 {
+        fixture.frame(vec![]);
+    }
+    assert_eq!(grid_runs(&fixture), (0, 1), "then it replays");
+}
+
+/// The Edit Toolbar button's response is read back by id, so a replayed grid still reports it.
+#[trial]
+fn a_replayed_slot_grid_still_reports_the_edit_toolbar_response() {
+    let (mut fixture, seen) = memo_rail();
+    let shown = seen.borrow().edit_toolbar.expect("the button's response is reported after a run");
+    fixture.frame(vec![]);
+    assert_eq!(grid_runs(&fixture), (0, 1), "the grid replays");
+    assert_eq!(seen.borrow().edit_toolbar, Some(shown), "a replayed grid answers the same response");
+}
+
+/// A click on a slot's button selects its tool once, from the run the pointer engaged.
+#[trial]
+fn a_click_on_a_slot_selects_its_tool_once() {
+    let (mut fixture, seen) = memo_rail();
+    let brush = rect(&fixture, "Brush");
+    fixture.click_at(brush.center());
+    fixture.settle();
+    assert_eq!(seen.borrow().selected, [1], "the click selected the brush once");
 }
 
 fn near(a: f32, b: f32) -> bool {

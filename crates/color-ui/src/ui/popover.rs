@@ -11,11 +11,11 @@ use egui::{Response, Ui};
 
 use super::{ColorPicker, ColorPickerLayout, ColorPickerOutput, PickedColor, ScreenPickGesture};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The setup closure of the picker in the popover.
-type Setup<'a> = Box<dyn for<'b> FnOnce(ColorPicker<'b>) -> ColorPicker<'b> + 'a>;
+type Setup<'a> = Box<dyn for<'b> Fn(ColorPicker<'b>) -> ColorPicker<'b> + 'a>;
 
 /// The popover's own state while its well is shown.
 #[derive(Clone, Default)]
@@ -79,8 +79,8 @@ impl<'a> ColorPopover<'a> {
     }
 
     /// Sets up the picker in the popover (alpha, eyedropper, constraint, models): `setup` gets the Compact picker the
-    /// popover made.
-    pub fn picker(mut self, setup: impl for<'b> FnOnce(ColorPicker<'b>) -> ColorPicker<'b> + 'a) -> Self {
+    /// popover made, in each run of the popover's body, so the measuring run and the real run show the same picker.
+    pub fn picker(mut self, setup: impl for<'b> Fn(ColorPicker<'b>) -> ColorPicker<'b> + 'a) -> Self {
         self.setup = Some(Box::new(setup));
         self
     }
@@ -94,9 +94,9 @@ impl<'a> ColorPopover<'a> {
 
     /// Shows the well and, while open, the popover.
     pub fn show(self, ui: &mut Ui) -> ColorPopoverOutput {
-        let ColorPopover { label, mut value, mut setup, anchor } = self;
+        let ColorPopover { label, mut value, setup, anchor } = self;
         if let Some((opener, mut open)) = anchor {
-            let (events, screen_pick, shown) = popover(ui, &label, &mut value, &mut setup, &opener, open.reborrowed());
+            let (events, screen_pick, shown) = popover(ui, &label, &mut value, setup.as_ref(), &opener, open.reborrowed());
             return ColorPopoverOutput { response: opener, events, screen_pick, open: shown };
         }
         let shown = Stack::new().show(ui, |ui, cx| {
@@ -106,7 +106,7 @@ impl<'a> ColorPopover<'a> {
             if well.clicked {
                 state.open = !state.open;
             }
-            let (events, screen_pick, open) = popover(ui, &label, &mut value, &mut setup, &well.response, Bind::bound(&mut state.open));
+            let (events, screen_pick, open) = popover(ui, &label, &mut value, setup.as_ref(), &well.response, Bind::bound(&mut state.open));
             ColorPopoverOutput { response: well.response, events, screen_pick, open }
         });
         match shown.inner {
@@ -121,13 +121,13 @@ fn popover(
     ui: &mut Ui,
     label: &Label,
     value: &mut Bind<'_, PickedColor>,
-    setup: &mut Option<Setup<'_>>,
+    setup: Option<&Setup<'_>>,
     opener: &Response,
     open: Bind<'_, bool>,
 ) -> (EditEvents<PickedColor>, Option<ScreenPickGesture>, bool) {
     let shown = Popover::new(label.clone(), open).opened_by(opener).show(ui, |ui, _| {
-        let mut picker = compact_picker(label.clone(), value.reborrowed(), None).focus_on_open(true);
-        if let Some(setup) = setup.take() {
+        let mut picker = compact_picker(label.clone(), value.reborrowed(), None);
+        if let Some(setup) = setup {
             picker = setup(picker);
         }
         picker.show(ui)

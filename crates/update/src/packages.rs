@@ -119,7 +119,7 @@ pub fn version_of(p: &Package) -> Option<version::Version> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use craft_ui::testing::trial;
 
@@ -183,7 +183,7 @@ pub fn is_artcraft_remote(origin: &str, remotes: &str) -> bool {
 }
 
 #[cfg(test)]
-mod remote_url_tests {
+pub(crate) mod remote_url_tests {
     use super::*;
     use craft_ui::testing::trial;
 
@@ -222,9 +222,10 @@ pub(crate) fn oci_ref_available(reference: &str, expected: &version::Version, li
     Ok(false)
 }
 
-#[cfg(all(test, target_os = "linux", feature = "oci_migration"))]
-mod migration_tests {
-    use super::*;
+#[cfg(test)]
+#[cfg(all(target_os = "linux", feature = "oci_migration"))]
+pub(crate) mod migration_tests {
+    use super::{oci_ref_available, version};
     use craft_ui::testing::trial;
 
     #[trial]
@@ -255,7 +256,7 @@ pub fn remote_manages_flatpak(origin: &str, remotes: &str) -> bool {
 }
 
 #[cfg(test)]
-mod remote_ownership_tests {
+pub(crate) mod remote_ownership_tests {
     use super::*;
     use craft_ui::testing::trial;
 

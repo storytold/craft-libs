@@ -86,10 +86,10 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
 }
 
 #[cfg(test)]
-mod tests {
+#[cfg(unix)]
+pub(crate) mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[craft_ui::testing::trial]
     fn atomic_write_does_not_follow_a_temporary_file_symlink() {
         let dir = tempfile::tempdir().unwrap();

@@ -3,7 +3,7 @@
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Size};
-use craft_ui::canvas::{Canvas, HandTool, NavigationOptions, ToolHost, canvas_space, tool_pass};
+use craft_ui::canvas::{Canvas, HandTool, NavigationOptions, Rulers, ToolHost, canvas_space, tool_pass};
 use craft_ui::contract::{Bind, ShowContainer as _};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::testing::{Fixture, trial};
@@ -49,10 +49,13 @@ impl Document {
             }
             let given = *held.borrow();
             let mut hosted = None;
-            let shown = Canvas::new("Document").view(given).document(DOC).navigation(navigation).show_rulers(ruled.get()).show_at(
-                ui,
-                at.get(),
-                |ui, body| {
+            let mut zero = Point::ZERO;
+            let shown = Canvas::new("Document")
+                .view(given)
+                .document(DOC)
+                .navigation(navigation)
+                .with_rulers(ruled.get().then(|| Rulers::new("Rulers", Bind::bound(&mut zero))))
+                .show_at(ui, at.get(), |ui, body| {
                     if let Some(space) = canvas_space(&body.env) {
                         saw.borrow_mut().push((body.rect, space.view));
                     }
@@ -61,8 +64,7 @@ impl Document {
                     {
                         hosted = Some(ToolHost::new().run(ui, &pass, &mut hand));
                     }
-                },
-            );
+                });
             let next = hosted.and_then(|hosted| hosted.view).or(shown.output.view);
             if let Some(next) = next {
                 *held.borrow_mut() = next;
@@ -77,9 +79,10 @@ impl Document {
     }
 }
 
-/// `view.rect` lies in `body` past the rulers along the top and left edges, out to the body's far corner.
-fn inside_the_rulers(body: Rect, view: CanvasView) -> bool {
-    body.contains_rect(view.rect) && view.rect.min.x > body.min.x && view.rect.min.y > body.min.y && view.rect.max == body.max
+/// The body is the view, which lies in `canvas` past the rulers along the top and left edges, out to the canvas's far
+/// corner.
+fn inside_the_rulers(canvas: Rect, body: Rect, view: CanvasView) -> bool {
+    body == view.rect && canvas.contains_rect(body) && body.min.x > canvas.min.x && body.min.y > canvas.min.y && body.max == canvas.max
 }
 
 #[trial]
@@ -89,17 +92,17 @@ fn the_body_reads_this_passes_rect_inside_the_rulers_while_they_show() {
     document.rulers.set(true);
     document.fixture.frame(Vec::new());
     let (body, first) = *document.seen.borrow().first().expect("the body ran in the first pass");
-    assert!(inside_the_rulers(body, first), "the first pass's view lies inside the rulers: {:?} in {body:?}", first.rect);
+    assert!(inside_the_rulers(CANVAS, body, first), "the first pass's view lies inside the rulers: {:?} in {body:?}", first.rect);
 
     let wider = Rect::from_min_max(CANVAS.min, CANVAS.max + Vec2::new(200.0, 100.0));
     document.rect.set(wider);
     document.fixture.frame(Vec::new());
     let (body, after) = document.last_seen();
     assert_eq!(body.max, wider.max, "the canvas took its new rect");
-    assert!(inside_the_rulers(body, after), "the pass after a resize carries the new rect: {:?} in {body:?}", after.rect);
+    assert!(inside_the_rulers(wider, body, after), "the pass after a resize carries the new rect: {:?} in {body:?}", after.rect);
 
     document.rulers.set(false);
     document.fixture.frame(Vec::new());
     let (body, plain) = document.last_seen();
-    assert_eq!(plain.rect, body, "with the rulers off the view takes the canvas's whole rect");
+    assert_eq!((plain.rect, body), (wider, wider), "with the rulers off the view takes the canvas's whole rect");
 }

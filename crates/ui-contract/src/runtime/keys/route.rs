@@ -63,13 +63,16 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 let route = press_route(ctx, os, rec, press, driven.or(field_list));
                 apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
+            stamp(&mut routed, press.place);
         }
         // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
         // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
         let reads_egui = rec.stop.host || rec.stop.keys.owner == OwnerClass::Text;
         for (at, (typed, taken)) in batch.texts.iter().zip(&mut taken_texts).enumerate() {
+            // A claimed text (a claim's, or an Alt shortcut's that the keymap binds) is withdrawn and is no component's
+            // typing: its press is not the focused stop's to hold, so the shortcut it comes with still reaches the
+            // key stage from a text field or a list, as Alt+F7 or Alt+Q does from a word processor's page.
             if typed.claimed {
-                *taken = true;
                 continue;
             }
             let route = text_route(rec, driven, &typed.text);
@@ -80,6 +83,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             for (to, intent) in route {
                 push(&mut routed, Some(to), intent, false);
             }
+            stamp(&mut routed, typed.place);
         }
     } else {
         // With nothing focused, a plain Enter submits to the window, as an unfocused Escape cancels: a tool's pending
@@ -97,7 +101,8 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     }
     let focused = target.as_ref().map(|rec| rec.stop.id);
     let root = target.as_ref().filter(|rec| rec.stop.root != rec.stop.id && !rec.stop.text).map(|rec| rec.stop.root);
-    let menu = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx)).menu;
+    let record = focus::record(ctx, crate::runtime::egui::pass::current_viewport(ctx));
+    let (menu, menu_bar) = (record.menu, record.menu_bar);
     // The web sends a chord's key press and its clipboard event: the command reaches the component once.
     let mut clips = batch.clips.clone();
     clips.dedup();
@@ -129,10 +134,18 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
             None => {
                 // A capture's owner, else the claim's: the focused component's own, then its arena root's, then its
-                // menu level's.
+                // menu level's, then the registered menu bar's (keytips hold their letters with no focus).
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
-                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or_else(|| held(menu)).or(focused).map(|id| (id, *chord)));
+                claimed.extend(
+                    owner
+                        .or_else(|| held(focused))
+                        .or_else(|| held(root))
+                        .or_else(|| held(menu))
+                        .or_else(|| held(menu_bar))
+                        .or(focused)
+                        .map(|id| (id, *chord)),
+                );
             }
         }
     }
@@ -170,7 +183,15 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
 }
 
 pub(super) fn push(routed: &mut HashMap<Option<Id>, Routed>, target: Option<Id>, intent: Intent, horizontal: bool) {
-    routed.entry(target).or_default().items.push(Item { intent, horizontal });
+    routed.entry(target).or_default().items.push(Item { intent, horizontal, place: None });
+}
+
+/// Gives the intents routed so far without a place the place `place` of the press or text they came from: routing
+/// stamps each event's intents right after it pushed them, so only that event's are without one.
+fn stamp(routed: &mut HashMap<Option<Id>, Routed>, place: usize) {
+    for item in routed.values_mut().flat_map(|routed| routed.items.iter_mut()) {
+        item.place.get_or_insert(place);
+    }
 }
 
 /// Who owns the keys at the stop `target`, whose scope chain is `scopes`: its own class and the class of the layer
@@ -307,7 +328,7 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     if current(ctx, |stage| super::input::focused_claims(&record, stage)).contains(&chord) {
         return true;
     }
-    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false };
+    let press = Press { key: chord.key, mods: chord.mods, repeat: false, in_egui: None, release: None, text: None, canvas: false, place: 0 };
     let driven = Driven::of(ctx, &rec);
     let route = press_route(ctx, crate::runtime::windows::os_of(ctx), &rec, &press, driven.or_else(|| list_of_field(ctx, &rec)));
     let taken = !matches!(route, PressRoute::Free);
@@ -541,6 +562,11 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
         None if press.key == Key::Enter && !press.mods.cmd && !press.mods.ctrl => PressRoute::Intent(Intent::Submit),
         None if press.key == Key::Space && plain && stop.keys.activate.space() => PressRoute::Activate,
         None if press.key == Key::Tab && plain && stop.keys.keep == focus::KeepKeys::Tab => PressRoute::Intent(Intent::Tab),
+        // A document canvas's editor reads Shift+Tab itself (a word processor's outdent, the previous slot of an
+        // equation). No other stop that keeps Tab gets it as an intent.
+        None if press.key == Key::Tab && press.mods == Mods::SHIFT && stop.keys.keep == focus::KeepKeys::Tab && stop.keys.is_document_editor() => {
+            PressRoute::Intent(Intent::BackTab)
+        }
         None if stop.role.nudge => nudge_of(press.key, press.mods).map_or(PressRoute::Free, PressRoute::Nudge),
         None => PressRoute::Free,
     }
@@ -652,10 +678,15 @@ fn route_access(ctx: &Context, request: &Action, nodes: &HashMap<u64, Node>, rou
     }
 }
 
-/// The components the running pass's intents are routed to (keys, AccessKit requests, edits): a settling region that
+/// The components the running pass's intents are routed to (keys, AccessKit requests, edits): a memoized view that
 /// holds one runs, so the component takes them.
 pub(crate) fn routed_to(ctx: &Context) -> Vec<Id> {
-    current(ctx, |stage| stage.routed.keys().flatten().copied().collect())
+    let (mut routed, menu_keys) = current(ctx, |stage| (stage.routed.keys().flatten().copied().collect::<Vec<_>>(), !stage.menu.is_empty()));
+    // The menu keys of the pass go to the menu bar the last pass registered.
+    if menu_keys {
+        routed.extend(focus::menu_bar(ctx, crate::runtime::egui::pass::current_viewport(ctx)));
+    }
+    routed
 }
 
 /// The member whose `Activate` the group `root` reads this pass.

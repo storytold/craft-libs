@@ -15,10 +15,10 @@
 //! [`EditHistory`]: craft_behavior::EditHistory
 
 mod commands;
-mod lines;
-mod panel;
+pub(crate) mod lines;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tool;
 mod words;
@@ -58,7 +58,7 @@ use serde_json::Value;
 use crate::ui::live_preview::settings_hash;
 
 /// The tools of the strip.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum WideAngleTool {
     /// A.

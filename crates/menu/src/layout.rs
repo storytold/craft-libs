@@ -1,6 +1,6 @@
 //! The platform layouts of an app's menus. See the crate docs for what they do.
 
-use craft_host::target::{Os, Runtime};
+use craft_host::target::{Os, Runtime, ShellInfo};
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 
 use crate::model::{Builtin, Item, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Standard, tidy};
@@ -17,7 +17,7 @@ const CTRL_CMD_M: Chord = Chord::new(CTRL_CMD, Key::M);
 const CMD_COMMA: Chord = Chord::new(Mods::CMD, Key::Comma);
 
 /// The platform a layout is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Target {
     #[allow(missing_docs)]
@@ -34,7 +34,17 @@ impl Target {
     /// The platform this build runs on: `wasm32` builds are [`Target::Web`], and operating
     /// systems other than macOS and Windows are [`Target::Linux`].
     pub const fn current() -> Target {
-        match (Runtime::current(), Os::current()) {
+        Target::on(Runtime::current(), Os::current())
+    }
+
+    /// The platform of the shell a frame runs in, as [`Env`](craft_ui::runtime::env::Env) reports it: a test
+    /// or a browser can run on another operating system than the build's.
+    pub const fn of_shell(shell: &ShellInfo) -> Target {
+        Target::on(shell.runtime, shell.os)
+    }
+
+    const fn on(runtime: Runtime, os: Os) -> Target {
+        match (runtime, os) {
             (Runtime::Web, _) => Target::Web,
             (_, Os::Mac) => Target::Mac,
             (_, Os::Windows) => Target::Windows,

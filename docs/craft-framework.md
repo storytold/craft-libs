@@ -107,7 +107,7 @@ The gallery shows every registered story of every crate with a `ui` feature, und
 
 ```
 git switch craft-framework
-cargo run --profile gallery -p craft-ui-gallery
+cargo run --release -p craft-ui-gallery
 ```
 
 - The `gallery` profile is release optimisation with incremental builds; `cl build gallery` builds the debug gallery instead. Both are described in [development.md](development.md), with the story renderer (`cl render`), which writes one component's stories to PNG files without building the gallery.
@@ -151,7 +151,7 @@ An app with its own eframe `App` calls the hooks in `craft::ui::shell::embed`. `
 
 | What | Effect on the app's own egui code |
 | --- | --- |
-| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below), or nothing has the focus in a window that registered no focus stop: egui then moves its own focus into the app's widgets. A window with stops but no Tab entry (on the Mac, where Tab reaches only text fields by default) keeps the Tab from egui, which would otherwise focus framework controls the platform's rule skips. With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. With nothing focused, the canvas is the key target: a canvas that keeps Tab (`KeyUse::CANVAS.with_keep(KeepKeys::Tab)`) gets the press in egui's input, as when it is focused, and nothing toggles. |
+| Tab | Bare Tab moves framework focus and never reaches egui, unless the focused framework stop keeps Tab or an app's own widget has the focus (below), or nothing has the focus in a window that registered no focus stop: egui then moves its own focus into the app's widgets. A window with stops but no Tab entry (on the Mac, where Tab reaches only text fields by default) keeps the Tab from egui, which would otherwise focus framework controls the platform's rule skips. With `RootEnv::tab_toggles_chrome`, Tab toggles the chrome in a window that shows a document canvas, with nothing focused or the canvas focused, and arrives in `FrameOutput::chrome_toggles`. The canvas is a framework canvas, or the app's own egui canvas declared each pass with `ui::runtime::focus::host_canvas`. With nothing focused, the canvas is the key target: a canvas that keeps Tab (`KeyUse::CANVAS.with_keep(KeepKeys::Tab)`) gets the press in egui's input, as when it is focused, and nothing toggles. A focused canvas whose editor part keeps Tab reads Shift+Tab as `Intent::BackTab` (`EditorInput::BackTab`); no other stop gets it as an intent, and a text field keeps Shift+Tab as a focus move. |
 | F6 | F6 and Shift+F6 move between panes and never reach egui. They are the defaults of the commands `window.nextPane` and `window.previousPane` (`NavCommand`): a default chord that another command binds is that command's, and the overrides move or unbind them (`CommandInput::overrides`). An app whose own shortcut table keeps F6 unbinds them there. |
 | Escape | Plain Escape (Alt and Shift may be held) goes to the focused framework stop and its scopes; with no framework stop focused, it goes to the window as `Intent::Cancel`. It reaches egui only while an app's own widget has the focus (below). An Escape the runtime takes outside a captured framework press also ends egui's own drag in that pass, as egui's Escape does. |
 | F10, Alt+letter | Taken while a framework menu bar is registered: F10 (`window.focusMenuBar`, bound and yielded as F6 is) focuses the bar, Alt+letter opens a menu (not on macOS). |
@@ -179,7 +179,7 @@ Inside `craft-libs`, every local cargo command goes through `tools/cl`, which gi
 | Check the crate you changed | `cl check <crate>` |
 | Run its suite and trials | `cl test <crate>`, or `cl test <crate> -- <filter>` |
 | One component's stories as PNG files | `cl render <crate> <Component>` (`ui` for the library's own components) |
-| The gallery | `cl build gallery` (debug), or `cargo run --profile gallery -p craft-ui-gallery` |
+| The gallery | `cl build gallery` (debug), or `cargo run --release -p craft-ui-gallery` |
 
 Writing a component, its stories and its trials: [authoring.md](authoring.md). Moving an app's UI onto the framework: [porting.md](porting.md).
 
@@ -306,7 +306,7 @@ match event {
 
 **Interrupted gesture.** Besides Esc, other events end a gesture with `Cancel`; the `CancelReason` says which: `Refused`, `Dismissed`, `Escape`, `Blur`, `Removed`, `HostChanged`, `UndoDuringGesture`. For `HostChanged` and `UndoDuringGesture`, `reason.document_moved()` is true: the document changed under the gesture, so the app keeps it as it is, because a restore would also take back that change. The handler above covers all of them.
 
-**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`.
+**Error.** A failing service call returns a typed error, and the feature shows it in its own UI without an edit. File calls return `Result<_, FileError>`. A dismissed picker answers `Picked::Cancelled`, not an error; a picker that cannot open answers `Picked::Unavailable(cause)`; a save whose write failed answers `Picked::Failed(message)`.
 
 **Async job.** Work runs on the host's `Jobs`, never on a thread a feature starts. `JobQueue` adds priorities, one job per key, replacement and cancellation. Dropping a key sets the job's cancel flag, and a cancelled job's result is never delivered.
 
@@ -322,6 +322,8 @@ A pass shows the whole UI once. egui may repeat a pass within a frame (a discard
 Content runs in every pass, and its sizes come from this pass. Layouts also read some state earlier passes left, for example a scroll area's offset and its last view and extent (step 4 and the scroll bars read them) and the sizes layout memory keeps (`runtime::layout_memory`; a changed size asks for a discard pass). The one exception to running in every pass is out-of-view content.
 
 **Layout memory.** A record of layout memory holds a measure or a text. A body whose inputs did not change takes its kept measurement instead of running a measuring run. A text that a measuring run found for content outside the body (a value readout beside a story, for example) is kept with the measurement: `layout_memory::emit_text` hands it forward, `layout_memory::text` reads it, and a body that takes its kept measurement gives the text its measuring run found. A real run that finds another text marks the kept transcript as changed.
+
+**Memoized views.** A memoized view (`MemoView::new(id, props, show).show(ui)`) runs only when one of its inputs changed, and otherwise adds its last real run to the pass again: its paint, widgets, accessibility nodes, focus stops and the other per-pass registrations, and the value its run returned. Its content is a `fn` that captures nothing, and its props (`#[derive(MemoProps)]`) hold every app input it reads, so the compiler checks that the framework sees them; large app data goes in a `Tracked<T>`, which keys by revision. The view runs when its props key differs from its last run's, when its place or environment differs (room, clip, layer, scale, theme, density, language, the scope's inherited values), when a framework input it read moved (modifiers, pointer, keymap, focus, a bound value, a command state), when it is engaged (the pointer over it, focus in it, a press or drag in it, an intent routed to it), and while something in it still moves (an animation, a loading texture, a repaint asked in its run with `frame::request_repaint`, a wake time). Input elsewhere in the window and repaint requests outside every view run no view: what changed reaches a view through its props. Content outside every memoized view runs in every pass.
 
 **Out-of-view content.** Content inside a scroll area that is out of view this pass does not run. It keeps what it last showed: the extent it had in the last pass that showed it, which changes only in a pass that shows the content, and the stops it registered there. One mechanism (`runtime::lazy`, one store) serves every use:
 
@@ -353,7 +355,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 - `Context::set_layer_order`, which moves unlisted sublayers with their listed parent
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
-- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled memoized view replays its last run's records
 - `Event::SystemTheme` reports the OS's light or dark preference
 - `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 
@@ -492,7 +494,7 @@ The Text size setting scales the roles only (0.83x, 1x, 1.17x, 1.33x), rounded t
 
 ### 5.3 Iconography
 
-- **Sets.** Phosphor is the base set. The gallery's active set defaults to Lucide. A theme may supply an icon pack that replaces the base icons it covers; missing icons fall back to the base set.
+- **Sets.** Phosphor is the base set: it draws every icon. The suite's default set is Lucide, which falls back to Phosphor. A theme picks its set with `icon_pack` ([suite-themes.md](suite-themes.md)): a built-in set (`craft.lucide`, `craft.phosphor`, `craft.carbon`, `craft.tabler`) or a pack in the suite library that replaces the icons it covers. Missing icons fall back to the base set, a library pack's to the default set. The resolved tokens carry the set, so every icon drawn under a theme, a theme scope included, follows it.
 - **Strokes.** 1.25 pt at the small size, 1.5 pt at medium and large.
 
 ### 5.4 Dimensions
@@ -1123,7 +1125,7 @@ Control channel, screenshot queue, profiler and recorded actions for tests and s
 | `protocol` | JSON-lines wire format and parameter validators | exists |
 | `security` | Tokens, the authentication handshake (challenge or one-frame token) and transport limits | exists |
 | `server` | Loopback JSON-lines TCP transport (native): `listen`, `serve`, stopped by dropping its `Listening` | exists |
-| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file, the link host and the Agents page of Preferences | exists |
+| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file and the CLI's live client (re-exported from `craft-control`), the link host and the Agents page of Preferences | exists |
 | `client` | JSON-lines client for tests and command-line tools (native) | exists |
 | `synthetic` | Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.key`, `ui.type` | exists |
 | `dialogs` | `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` over a `DialogHost` | exists |
