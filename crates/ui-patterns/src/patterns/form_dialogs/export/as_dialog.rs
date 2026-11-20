@@ -721,7 +721,7 @@ impl Pass<'_> {
         let shown = {
             let presets = library.borrow();
             let names: Vec<String> = presets.items().iter().map(|item| item.name.clone()).collect();
-            let rows = PresetSource::new(names, PresetFns::new(name_rows));
+            let rows = PresetSource::new(names.as_slice(), PresetFns::new(name_rows));
             let current = presets.items().iter().find(|item| item.value == *options).map(|item| item.name.clone());
             let picker = PresetPicker::new(words.preset.clone(), Bind::given(current), &rows, Bind::bound(&mut held.picker)).field(PickerField::Name);
             NamedPresetRow::new(words.preset.clone(), picker)
@@ -961,6 +961,6 @@ fn choose<T: craft_behavior::Value>(ui: &mut Ui, name: &Label, salt: &str, entri
 }
 
 /// One preset row per name, keyed by it.
-fn name_rows(names: &Vec<String>, _: &Env) -> Vec<PresetRow<String>> {
+fn name_rows(names: &&[String], _: &Env) -> Vec<PresetRow<String>> {
     names.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 0)).collect()
 }

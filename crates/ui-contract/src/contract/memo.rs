@@ -1056,7 +1056,7 @@ impl MemoProps for craft_host::target::WindowKind {
 }
 
 /// Derived `Hash` (the layer's order and id).
-impl MemoProps for egui::LayerId {
+impl MemoProps for crate::runtime::egui::areas::LayerKey {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
     }

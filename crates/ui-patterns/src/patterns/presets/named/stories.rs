@@ -10,7 +10,7 @@ use egui::Ui;
 
 const TRACE: [&str; 6] = ["Default", "High Fidelity Photo", "Low Fidelity Photo", "3 Colors", "Sketched Art", "Line Art"];
 
-fn taken(names: &Vec<String>, name: &str) -> Option<PresetError> {
+fn taken<const N: usize>(names: &[&str; N], name: &str) -> Option<PresetError> {
     names.iter().any(|label| label.eq_ignore_ascii_case(name)).then_some(PresetError::NameTaken)
 }
 
@@ -37,7 +37,7 @@ fn contour_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NamedPresetRow::new("Contour", picker)
         .style(NamedPresetStyle::Buttons)
         .suggest_name("Contour 5")
-        .check_name(NameCheck::new((1..=4_u32).map(|n| format!("Contour {n}")).collect::<Vec<_>>(), taken))
+        .check_name(NameCheck::new(["Contour 1", "Contour 2", "Contour 3", "Contour 4"], taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)
@@ -55,7 +55,7 @@ fn trace_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NamedPresetRow::new("Trace preset", picker)
         .style(NamedPresetStyle::Menu)
         .suggest_name("Preset 7")
-        .check_name(NameCheck::new(TRACE.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>(), taken))
+        .check_name(NameCheck::new(TRACE, taken))
         .built_in(|_| true)
         .files(&files)
         .show(ui)

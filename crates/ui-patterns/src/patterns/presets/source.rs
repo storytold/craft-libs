@@ -9,6 +9,13 @@ use crate::runtime::env::Env;
 use egui::{Context, Id, Rect};
 use std::sync::Arc;
 
+/// Whether a drag of presets may drop at a place: the inputs, the drag, the preset under the pointer and the insert
+/// position.
+pub type AcceptsFn<I, K> = fn(&I, &ListDrag<K>, Option<&K>, usize) -> bool;
+
+/// The host's thumbnail painter: the inputs, the painter, the thumbnail's rect and the row.
+pub type ThumbFn<I, K> = fn(&I, &ContentPainterCx, Rect, ThumbInfo<'_, K>);
+
 /// The `fn`s of a [`PresetSource`]: how the rows are built from the inputs `I`, and what the host answers for a row.
 /// Each is a `fn`, which captures nothing, so the inputs are all a row can depend on.
 pub struct PresetFns<I, K> {
@@ -16,8 +23,8 @@ pub struct PresetFns<I, K> {
     can_rename: Option<fn(&I, &K) -> bool>,
     can_delete: Option<fn(&I, &K) -> bool>,
     can_move: Option<fn(&I, &K) -> bool>,
-    accepts: Option<fn(&I, &ListDrag<K>, Option<&K>, usize) -> bool>,
-    thumb: Option<fn(&I, &ContentPainterCx, Rect, ThumbInfo<'_, K>)>,
+    accepts: Option<AcceptsFn<I, K>>,
+    thumb: Option<ThumbFn<I, K>>,
 }
 
 impl<I, K> Clone for PresetFns<I, K> {
@@ -58,14 +65,14 @@ impl<I, K> PresetFns<I, K> {
     /// Refuses the reorder landings for which the test is false: it gets the drag, the row under the pointer (none
     /// over an empty browser) and the position before which the dragged rows would go.
     #[must_use]
-    pub fn accepts(mut self, test: fn(&I, &ListDrag<K>, Option<&K>, usize) -> bool) -> Self {
+    pub fn accepts(mut self, test: AcceptsFn<I, K>) -> Self {
         self.accepts = Some(test);
         self
     }
 
     /// Paints every preset's thumbnail (a swatch, a gradient ramp) in place of its row's own `preview`.
     #[must_use]
-    pub fn thumb(mut self, paint: fn(&I, &ContentPainterCx, Rect, ThumbInfo<'_, K>)) -> Self {
+    pub fn thumb(mut self, paint: ThumbFn<I, K>) -> Self {
         self.thumb = Some(paint);
         self
     }
@@ -104,7 +111,7 @@ impl<'a, K: Clone + PartialEq + Send + Sync + 'static> PresetSource<'a, K> {
         self.0.key(&mut key);
         crate::contract::MemoProps::key(&units, &mut key);
         let id = Id::NULL.with(("preset-rows", key.finish()));
-        derived(ctx, id, &RowsKey { source: self, units: &units }, || self.0.rows(env))
+        derived(ctx, id, &(self, &units), || self.0.rows(env))
     }
 
     /// Whether the row `key` may be renamed.
@@ -142,19 +149,6 @@ impl<'a, K: Clone + PartialEq + Send + Sync + 'static> PresetSource<'a, K> {
 impl<K> MemoProps for PresetSource<'_, K> {
     fn key(&self, key: &mut MemoKey) {
         self.0.key(key);
-    }
-}
-
-/// The key the kept rows are built from: the source and the scope's units, which carry its words and number format.
-struct RowsKey<'s, 'a, K> {
-    source: &'s PresetSource<'a, K>,
-    units: &'s crate::runtime::env::Units,
-}
-
-impl<K> MemoProps for RowsKey<'_, '_, K> {
-    fn key(&self, key: &mut MemoKey) {
-        self.source.key(key);
-        self.units.key(key);
     }
 }
 

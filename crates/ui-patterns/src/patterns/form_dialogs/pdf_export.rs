@@ -332,7 +332,7 @@ impl<'a> PdfExportDialog<'a> {
             // The preset row.
             let names: Vec<(String, String)> =
                 presets.iter().map(|preset| (preset.name.clone(), words.preset_name(&preset.name, &app).as_str().to_owned())).collect();
-            let rows = PresetSource::new(names, PresetFns::new(preset_rows));
+            let rows = PresetSource::new(names.as_slice(), PresetFns::new(preset_rows));
             let selected = live.preset.as_ref().and_then(|name| presets.iter().find(|preset| preset.name == *name));
             let modified = selected.is_some_and(|preset| {
                 let mut shown = work.clone();
@@ -500,6 +500,6 @@ impl<'a> PdfExportDialog<'a> {
 }
 
 /// One preset row per (name, shown name), keyed by the name.
-fn preset_rows(names: &Vec<(String, String)>, _: &Env) -> Vec<PresetRow<String>> {
+fn preset_rows(names: &&[(String, String)], _: &Env) -> Vec<PresetRow<String>> {
     names.iter().map(|(name, shown)| PresetRow::item(name.clone(), shown.clone(), 0)).collect()
 }

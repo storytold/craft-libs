@@ -32,6 +32,6 @@ pub use model::{
 pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};
 pub use picker::{PickerField, PickerHead, PresetPicker, PresetPickerOutput, PresetPickerStyle};
-pub use source::{PresetFns, PresetSource};
+pub use source::{AcceptsFn, PresetFns, PresetSource, ThumbFn};
 pub use state::{DefaultOpen, PresetState, PresetView, default_is_open};
 pub use words::PresetWords;
