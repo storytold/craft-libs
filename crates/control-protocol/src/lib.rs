@@ -106,7 +106,7 @@ pub fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usiz
 /// not a request, or `handle` returns `None` (app gone). `handle` gets `(method, params)` and
 /// returns the reply object (the request's `id` is added here).
 pub fn serve_lines<R: Read, W: Write>(read: R, out: W, token: &str, max_line: usize, handle: impl FnMut(String, Value) -> Option<Value>) {
-    serve(BufReader::new(read), out, token, max_line, |_| Ok(()), handle);
+    serve(BufReader::new(read), out, token, max_line, |_| Ok(()), |_| false, handle);
 }
 
 /// Serve one TCP connection as [`serve_lines`] does, but give the peer `first_request` from now
@@ -136,7 +136,15 @@ pub fn serve_tcp(
     }
     let timeout_error = Cell::new(None);
     let input = FirstRequestDeadline { socket: &stream, deadline, timeout_error: &timeout_error };
-    serve(BufReader::new(input), &stream, token, max_line, |input: &mut FirstRequestDeadline<'_>| input.admit(idle), handle);
+    serve(
+        BufReader::new(input),
+        &stream,
+        token,
+        max_line,
+        |input: &mut FirstRequestDeadline<'_>| input.admit(idle),
+        FirstRequestDeadline::expired,
+        handle,
+    );
     timeout_error.take().map_or(Ok(()), Err)
 }
 
@@ -161,11 +169,16 @@ impl FirstRequestDeadline<'_> {
     /// request admitted after the first-request deadline returns `TimedOut` instead, and the
     /// deadline stays in place.
     fn admit(&mut self, idle: Option<Duration>) -> std::io::Result<()> {
-        if self.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if self.expired() {
             return Err(std::io::ErrorKind::TimedOut.into());
         }
         self.deadline = None;
         self.set_timeout(idle)
+    }
+
+    /// Whether the first-request deadline has passed and no request was admitted before it.
+    fn expired(&self) -> bool {
+        self.deadline.is_some_and(|deadline| Instant::now() >= deadline)
     }
 }
 
@@ -185,13 +198,15 @@ impl Read for FirstRequestDeadline<'_> {
 
 /// The request loop of [`serve_lines`] and [`serve_tcp`]: `admit` runs once, on the input, after
 /// the first authenticated request and before it is dispatched; an error from it closes the
-/// connection.
+/// connection. Before the first request is admitted, a rejection closes the connection without a
+/// reply when `expired` returns true for the input.
 fn serve<R: Read, W: Write>(
     mut reader: BufReader<R>,
     mut out: W,
     token: &str,
     max_line: usize,
     mut admit: impl FnMut(&mut R) -> std::io::Result<()>,
+    expired: impl Fn(&R) -> bool,
     mut handle: impl FnMut(String, Value) -> Option<Value>,
 ) {
     let mut buf = Vec::new();
@@ -224,6 +239,9 @@ fn serve<R: Read, W: Write>(
                 }
             },
         };
+        if !admitted && expired(reader.get_ref()) {
+            return;
+        }
         let _ = writeln!(out, "{}", json!({"ok": false, "error": reject})).and_then(|()| out.flush());
         return;
     }
@@ -369,6 +387,23 @@ mod tests {
         assert_eq!(input.admit(None).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
         assert!(input.deadline.is_some());
         assert!(timeout_error.take().is_none());
+    }
+    #[test]
+    fn rejection_read_after_the_deadline_gets_no_reply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let _client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let timeout_error = Cell::new(None);
+        let mut input = FirstRequestDeadline { socket: &stream, deadline: Some(Instant::now()), timeout_error: &timeout_error };
+        assert!(input.expired());
+        input.deadline = None;
+        assert!(!input.expired());
+        let long = format!("{}\n", "x".repeat(100));
+        for line in [&b"{broken}\n"[..], &b"{\"method\":\"x\",\"token\":\"wrong\"}\n"[..], long.as_bytes()] {
+            let mut out = Vec::new();
+            serve(BufReader::new(line), &mut out, "secret", 64, |_| Ok(()), |_| true, |_, _| panic!("must not dispatch"));
+            assert!(out.is_empty());
+        }
     }
     #[test]
     fn tcp_peer_waits_idle_time_after_its_first_request() {
