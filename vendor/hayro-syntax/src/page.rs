@@ -1148,7 +1148,7 @@ mod page_tree_tests {
             for side in [0.0, 0.0001] {
                 let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, side, side])).unwrap();
                 let page = &pdf.pages()[0];
-                let expected = (LETTER.width() as f32, LETTER.height() as f32);
+                let expected = (super::LETTER.width() as f32, super::LETTER.height() as f32);
                 assert_eq!(page.base_dimensions(), expected, "unit={unit}, side={side}");
                 assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
             }

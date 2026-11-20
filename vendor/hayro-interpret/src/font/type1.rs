@@ -175,20 +175,6 @@ impl Type1Font {
             Kind::Type1(t) => t.code_to_ps_name(code),
         }
     }
-
-    fn char_code_to_unicode(&self, code: u8) -> Option<BfString> {
-        // PdfCraft patch (#3169, #3170): a name outside the glyph list still reads by the
-        // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
-        // numbers the glyph (`C39`, `c251`) says nothing about the character and reads as
-        // nothing: the code's StandardEncoding character would be a guess, wrong wherever the
-        // font's /Encoding puts the glyph elsewhere (review on #3239).
-        let name = match &self.1 {
-            Kind::Standard(s) => s.code_to_ps_name(code),
-            Kind::Cff(c) => c.code_to_ps_name(code),
-            Kind::Type1(t) => t.code_to_ps_name(code),
-        }?;
-        glyph_name_to_text(name)
-    }
 }
 
 impl CacheKey for Type1Font {
