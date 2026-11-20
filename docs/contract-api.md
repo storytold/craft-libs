@@ -2704,7 +2704,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::GridLook`: `pub struct GridLook`. What the lines of a grid read from the tokens: the line colour and width, and the dash and gap lengths.
   - `pub fn of(tokens: &UiTokens) -> Self`. The grid look of `tokens`.
 - `craft_ui::primitives::GridStroke`: `pub enum GridStroke { Solid, Dashed, Dots }`. How the lines of a grid are drawn.
-- `craft_ui::primitives::HAlign`: `pub enum HAlign { Start, Center, End }`. Where the lines of a multi-line run sit within the run's width.
+- `craft_ui::primitives::HAlign`: `pub enum HAlign { Start, Center, End }`. Horizontal placement in reading order: within a text run's width, or a text input's room.
 - `craft_ui::primitives::Handle`: `pub struct Handle`. The handle painter.
   - `pub fn shapes(look: &HandleLook, shape: HandleShape, center: Pos2, state: &StateSet) -> Vec<Shape>`. The shapes of a handle of `shape` centred on `center`, filled for `state`.
 - `craft_ui::primitives::HandleShape`: `pub enum HandleShape { Square, Circle, Diamond }`. The outline of a handle.
@@ -2797,7 +2797,7 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub const fn key(self) -> PartKey`. The part key.
 - `craft_ui::primitives::TextLayout`: `pub struct TextLayout { pub galley: Arc<Galley>, pub elided: bool, pub full: String, pub first_baseline: f32, pub runs: Vec<LayoutRun>, pub rotation: f32 }`. A laid-out run.
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
-- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab_inserts: bool, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool }`. How a text part behaves beyond its codec.
+- `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab_inserts: bool, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub submits: bool, pub mixed: bool, pub align: HAlign, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool }`. How a text part behaves beyond its codec.
   - `pub fn new() -> Self`. Options with every default.
 - `craft_ui::primitives::TextOutcome`: `pub struct TextOutcome<V> { pub rect: Rect, pub draft: Option<String>, pub value: Option<V>, pub layout: Option<super::TextLayout>, pub caret_visible: bool, pub invalid: bool, pub committed_tag: Option<u32>, pub composing: bool, pub completions: Vec<super::Completion> }`. A text part's result this pass.
   - `pub const fn new(rect: Rect) -> Self`. An outcome over `rect` with no draft or value.

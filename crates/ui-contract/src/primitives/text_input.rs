@@ -1,6 +1,6 @@
 //! The types of text parts and editors (18.2, 18.4): keys, options, completion and the own-caret editor state.
 
-use crate::primitives::TextLayout;
+use crate::primitives::{HAlign, TextLayout};
 use crate::runtime::env::{Label, Message};
 use crate::style::Ink;
 use craft_behavior::{PartKey, TextPos};
@@ -80,8 +80,8 @@ pub struct TextOptions {
     /// The value handed to the part is the start the codec parses against; committing empty text that the codec
     /// rejects leaves the value mixed.
     pub mixed: bool,
-    /// The text sits in the middle of the part instead of at its start (numbers).
-    pub centred: bool,
+    /// Where the text sits in its part, relative to the interface's reading direction.
+    pub align: HAlign,
     /// A plain Left or Right with the whole text selected starts from the end of the text, not from the selection's
     /// start: a field whose last digits are what the user edits (a timecode's frames).
     pub arrows_from_end: bool,
@@ -121,7 +121,7 @@ impl Default for TextOptions {
             select_on_focus: false,
             submits: false,
             mixed: false,
-            centred: false,
+            align: HAlign::Start,
             arrows_from_end: false,
             unparsed: None,
             own_menu: false,

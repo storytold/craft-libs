@@ -15,7 +15,7 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
     PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{TextOptions, TextRun};
+use crate::primitives::{HAlign, TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
@@ -208,7 +208,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             fixed_decimals: None,
             lengths: None,
             scale: 1.0,
-            options: TextOptions::default(),
+            options: TextOptions { align: HAlign::Center, role: TypeRole::Mono, ..TextOptions::default() },
             scrub: false,
             track: 0.0,
             picked: None,
@@ -238,6 +238,22 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     #[must_use]
     pub fn scrub_by_label(mut self) -> Self {
         self.scrub = true;
+        self
+    }
+
+    /// Where the value sits in its room: centred by default, or at its logical start or end. The unit keeps its
+    /// place at the reading end. The same alignment places the resting text and its editor, including the caret.
+    #[must_use]
+    pub fn align(mut self, align: HAlign) -> Self {
+        self.options.align = align;
+        self
+    }
+
+    /// The value's type role, including its face and size, in measurement, paint and editing. Defaults to
+    /// [`TypeRole::Mono`]; use [`TypeRole::Body`] for the interface's body text.
+    #[must_use]
+    pub fn role(mut self, role: TypeRole) -> Self {
+        self.options.role = role;
         self
     }
 
@@ -348,7 +364,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     }
 
     /// The unit, measured, then the chevrons: what sits after the text. The unit stands apart at the end of the value
-    /// area, so units line up in a column of fields and the number centres in the room before its unit. A
+    /// area, so units line up in a column of fields; the value's alignment applies within the room before its unit. A
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
@@ -375,6 +391,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
         place(rect, &style.field, &self.leading, &self.trailing, rtl)
+    }
+
+    /// Measure the same type role the text adapter paints and edits.
+    fn value_run<'s>(&self, text: &'s str) -> TextRun<'s> {
+        TextRun::new(text).role(self.options.role)
     }
 
     /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed
@@ -434,8 +455,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let content = content_sized(cx);
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        let sample = codec.sample(cx.value().unwrap_or(&blank));
-        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        let mut text = codec.samples(cx.value().unwrap_or(&blank)).map(|sample| cx.field_text(&self.value_run(&sample))).fold(Vec2::ZERO, Vec2::max);
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
@@ -465,8 +485,6 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             cx.label_part(*slot);
         }
         let text = placed.text;
-        self.options.centred = true;
-        self.options.mono = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {

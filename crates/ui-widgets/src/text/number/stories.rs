@@ -5,10 +5,11 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Va
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::Row;
+use crate::primitives::HAlign;
 use crate::runtime::env::{Env, Message, UnitKind};
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{Mixed, NumberCodec, Reader};
-use craft_theme::ControlSize;
+use craft_theme::{ControlSize, TypeRole};
 use egui::{Key, Modifiers, Ui};
 
 const SIZE: f64 = 12.5;
@@ -103,6 +104,40 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         row("Not a number").show(ui, |ui, _| {
             // Held outside the story data: NaN is never equal to itself, so the suite would read it as changed.
             NumberField::new("Not a number", Bind::bound(&mut Some(f64::NAN))).size(size).show(ui);
+        });
+        first.inner
+    });
+    out.inner.flatten().map(StoryOutput::from).unwrap_or_default()
+}
+
+/// The logical start, centre and end alignments in the monospace and UI body roles, over the same range.
+#[story(NumberField<'static>, covers = [], drive = Drive::Type("42"))]
+fn number_field_presentation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let out = FieldGroup::new("Number field presentation").show(ui, |ui, _| {
+        let first = row("Centred, mono")
+            .show(ui, |ui, _| NumberField::new("Centred, mono", Bind::bound(data.value("centred_mono", Some(SIZE)))).range(RANGE).show(ui).edit);
+        row("Started, mono").show(ui, |ui, _| {
+            NumberField::new("Started, mono", Bind::bound(data.value("started_mono", Some(SIZE)))).range(RANGE).align(HAlign::Start).show(ui);
+        });
+        row("Centred, proportional").show(ui, |ui, _| {
+            NumberField::new("Centred, proportional", Bind::bound(data.value("centred_ui", Some(SIZE)))).range(RANGE).role(TypeRole::Body).show(ui);
+        });
+        row("Started, proportional").show(ui, |ui, _| {
+            NumberField::new("Started, proportional", Bind::bound(data.value("started_ui", Some(SIZE))))
+                .range(RANGE)
+                .align(HAlign::Start)
+                .role(TypeRole::Body)
+                .show(ui);
+        });
+        row("Ended, mono").show(ui, |ui, _| {
+            NumberField::new("Ended, mono", Bind::bound(data.value("ended_mono", Some(SIZE)))).range(RANGE).align(HAlign::End).show(ui);
+        });
+        row("Ended, proportional").show(ui, |ui, _| {
+            NumberField::new("Ended, proportional", Bind::bound(data.value("ended_ui", Some(SIZE))))
+                .range(RANGE)
+                .align(HAlign::End)
+                .role(TypeRole::Body)
+                .show(ui);
         });
         first.inner
     });

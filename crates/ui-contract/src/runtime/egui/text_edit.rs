@@ -30,9 +30,8 @@ pub(crate) struct Edit<'a> {
     pub char_limit: Option<usize>,
     /// The bytes of `text` that are IME preedit, underlined.
     pub preedit: Option<Range<usize>>,
-    pub rtl: bool,
-    /// The text sits in the middle of the rect.
-    pub centred: bool,
+    /// Physical placement resolved by the text adapter, which owns the logical reading direction.
+    pub align: egui::Align2,
     /// Whether the caret is drawn in this pass.
     pub caret_visible: bool,
     /// The width of the preedit underline.
@@ -79,8 +78,7 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
         filter,
         char_limit,
         preedit,
-        rtl,
-        centred,
+        align,
         caret_visible,
         underline,
         galley,
@@ -190,13 +188,9 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner, as a painted run does.
-                    .align(match (centred, rtl) {
-                        _ if galley.is_some() => egui::Align2::LEFT_TOP,
-                        (true, _) => egui::Align2::CENTER_CENTER,
-                        (false, true) => egui::Align2::RIGHT_CENTER,
-                        (false, false) => egui::Align2::LEFT_CENTER,
-                    });
+                    // A pre-laid galley sits at the rect's corner. Other text uses the physical placement
+                    // the adapter resolved, without the runtime depending on its higher-level text types.
+                    .align(if galley.is_some() { egui::Align2::LEFT_TOP } else { align });
                 if let Some(hint) = hint_text.clone() {
                     edit = edit.hint_text(hint);
                 }
