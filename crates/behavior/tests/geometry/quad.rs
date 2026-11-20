@@ -308,3 +308,24 @@ fn a_side_drag_in_perspective_ignores_the_pointer_along_the_side() {
         assert!(within(&got, straight.quad.map(|c| (c.x, c.y)), 1e-9), "to {to:?}: {:?}", got.quad);
     }
 }
+
+/// Long drags on boxes in strong perspective (measured on the reference): the dragged corners slide along the line
+/// through the vanishing point, away from it, to second order in the drag; a side left within 1 px of level is levelled.
+#[test]
+fn a_long_edge_drag_in_perspective_slides_the_corners_along_the_vanishing_line() {
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_bottom = [(150.0, 125.0), (452.0, 125.0), (412.0, 327.0), (190.0, 327.0)];
+    let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        (narrow_top, 1, (422.0, 226.0), (522.0, 226.0), [(210.0, 69.51), (442.4, 79.27), (611.34, 390.69), (150.0, 382.49)], 0.2),
+        (narrow_top, 1, (422.0, 226.0), (382.0, 226.0), [(210.0, 147.2), (366.79, 149.51), (397.91, 306.0), (150.0, 304.8)], 0.2),
+        (narrow_bottom, 1, (432.0, 226.0), (532.0, 226.0), [(150.0, 91.56), (579.75, 89.25), (486.0, 357.74), (190.0, 360.44)], 0.1),
+        (parallel_sides, 2, (301.0, 307.0), (301.0, 387.0), [(90.2, 117.08), (511.8, 172.92), (492.01, 333.93), (68.2, 442.69)], 0.5),
+        // The top would tilt 0.7 px and the bottom 0.5 px: both stay level, each at its corners' mean.
+        (narrow_top, 1, (422.0, 226.0), (447.0, 226.0), [(210.0, 111.49), (406.09, 111.49), (488.34, 341.11), (150.0, 341.11)], 0.02),
+    ];
+    for (quad, edge, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "edge {edge} of {quad:?} to {to:?}: {:?}", got.quad);
+    }
+}

@@ -604,7 +604,8 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
 /// scales by `k`, and the right side keeps its px offset from the left one; the opposite edge's middle holds, and the
 /// dragged edge's middle follows the pointer along the drag's axis. Where the dragged edge and the opposite one meet
 /// (a box in perspective) the dragged edge turns about its middle onto the line through that point, its corners on the
-/// edges beside it. On a plain or turned rectangle the sides have no run along `u` and this is the frame
+/// edges beside it, then slide along it to second order ([`perspective_push`]); a side beside it left within 1 px of
+/// level is levelled ([`level_snap`]). On a plain or turned rectangle the sides have no run along `u` and this is the frame
 /// scaling below. `None` where the frame scaling applies instead: a factor at or past zero (the box flips there,
 /// as the frame scaling flips it), or a collapsed box.
 fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
@@ -661,15 +662,96 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     };
     let [q0, q1] = [g.quad0[d0], g.quad0[d1]];
     if let Some(v) = crossing(q0, q1 - q0, g.quad0[o0], g.quad0[o1] - g.quad0[o0]) {
-        let line = quad[d0].midpoint(quad[d1]) - v;
-        let c0 = crossing(quad[o0], quad[d0] - quad[o0], v, line);
-        let c1 = crossing(quad[o1], quad[d1] - quad[o1], v, line);
+        let offset = quad;
+        let mid = offset[d0].midpoint(offset[d1]);
+        let line = mid - v;
+        let c0 = crossing(offset[o0], offset[d0] - offset[o0], v, line);
+        let c1 = crossing(offset[o1], offset[d1] - offset[o1], v, line);
         if let (Some(c0), Some(c1)) = (c0, c1) {
             quad[d0] = c0;
             quad[d1] = c1;
+            if let Some(pushed) = perspective_push(g.quad0, offset, quad, edge, [d0, d1], v, mid) {
+                quad = pushed;
+            }
+            level_snap(&mut quad, &g.quad0, [(o0, d0), (o1, d1)]);
         }
     }
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+}
+
+/// The second order of an edge drag on a box in perspective (measured on the reference): the dragged corners slide
+/// along the line through the vanishing point, each to where it meets the line from one centre through the
+/// offset box's corner.
+///
+/// In the start box's unit square, `s` runs across the drag from the anchored edge (0) to the dragged one (1) and `t`
+/// along them from the side the drag's factor is measured on (the top for a left or right edge, the left side for a
+/// top or bottom one). `rho` is how much nearer the vanishing point that side is than the other (the ratio of the
+/// map's weights). The centre lies on the row `t = rho² / (1 + rho²)` of the box from the first step (`first`), at
+/// `1 / s = (1 + rho³) / (1 + rho²) · (1 - s_m)`, where `s_m` is the dragged edge's middle across the start box: with
+/// no drag it is the far point of that row and leaves the corners where they are.
+fn perspective_push(
+    start: [Point; 4],
+    offset: [Point; 4],
+    first: [Point; 4],
+    edge: u8,
+    dragged: [usize; 2],
+    v: Point,
+    mid: Point,
+) -> Option<[Point; 4]> {
+    // (s, t, w) of the drag's frame as (u, v, w) of the unit square.
+    let unit = |s: f64, t: f64, w: f64| match edge {
+        1 => [s, t, w],
+        3 => [w - s, t, w],
+        2 => [t, s, w],
+        _ => [t, w - s, w],
+    };
+    let apply = |h: &Homography, p: [f64; 3]| [0, 1, 2].map(|i| h.row(i).iter().zip(p).map(|(a, b)| a * b).sum::<f64>());
+    let h = Homography::unit_to_quad(start)?;
+    let rho = apply(&h, unit(0.5, 0.0, 1.0))[2] / apply(&h, unit(0.5, 1.0, 1.0))[2];
+    if !(rho.is_finite() && rho > 0.0) {
+        return None;
+    }
+    let at = h.inverse()?.apply(mid);
+    let across = match edge {
+        1 => at.x,
+        3 => 1.0 - at.x,
+        2 => at.y,
+        _ => 1.0 - at.y,
+    };
+    let r2 = rho * rho;
+    let (row, inv_s) = (r2 / (1.0 + r2), (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across));
+    let centre = apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s));
+    let homog = |p: Point| [p.x, p.y, 1.0];
+    let along = cross3(homog(v), homog(mid));
+    let mut out = first;
+    for i in dragged {
+        let p = cross3(cross3(centre, homog(offset[i])), along);
+        if p[2].abs() <= 1e-12 {
+            return None;
+        }
+        out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
+    }
+    out.iter().all(|c| c.is_finite()).then_some(out)
+}
+
+/// The reference levels a side beside the dragged edge that a drag in perspective leaves less than 1 px from level (or
+/// plumb), if it was level (or plumb) at the press: both its corners go to their mean.
+fn level_snap(quad: &mut [Point; 4], start: &[Point; 4], sides: [(usize, usize); 2]) {
+    for (a, b) in sides {
+        if start[a].y == start[b].y && (quad[b].y - quad[a].y).abs() < 1.0 {
+            let y = (quad[a].y + quad[b].y) / 2.0;
+            (quad[a].y, quad[b].y) = (y, y);
+        }
+        if start[a].x == start[b].x && (quad[b].x - quad[a].x).abs() < 1.0 {
+            let x = (quad[a].x + quad[b].x) / 2.0;
+            (quad[a].x, quad[b].x) = (x, x);
+        }
+    }
+}
+
+/// The cross product of two homogeneous points or lines: the line through two points, or where two lines meet.
+fn cross3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
 /// Where the line through `p` along `dp` crosses the one through `q` along `dq`; `None` for (nearly) parallel lines.
