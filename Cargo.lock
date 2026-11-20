@@ -1902,6 +1902,7 @@ dependencies = [
  "craft-smime",
  "craft-sniff",
  "craft-sourcemap",
+ "craft-sqlite",
  "craft-ssip",
  "craft-stencilcraft-document",
  "craft-stencilcraft-format",

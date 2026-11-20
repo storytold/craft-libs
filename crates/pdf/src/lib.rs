@@ -36,7 +36,6 @@ pub mod write_raster;
 
 /// Low-level, direct-to-output framing of new classic-xref PDF files.
 pub mod classic;
-
 /// PDF single-byte encodings (ISO 32000-2 Annex D), WinAnsi/Unicode CMap helpers, and Standard-14 metrics.
 #[cfg(feature = "fonts")]
 pub mod fonts;

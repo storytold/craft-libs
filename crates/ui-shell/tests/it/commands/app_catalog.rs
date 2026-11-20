@@ -2,9 +2,10 @@
 //! rules every app command follows, and a frame builds a keymap only for a catalog generation it has not built.
 // The catalog is given through `Frames::commands`, which keeps it for every later frame.
 
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, Tracked};
 use craft_ui::runtime::commands::{
-    AppCatalog, Binding, CommandDef, CommandInput, CommandKind, CommandRef, CommandState, EditCommands, FirePhase, Scope, keymap_builds,
+    AppCatalog, Binding, CommandDef, CommandInput, CommandKind, CommandRef, CommandState, CommandStates, EditCommands, FirePhase, Scope,
+    keymap_builds,
 };
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::take_output;
@@ -198,11 +199,9 @@ fn a_press_without_a_physical_key_fires_its_command_once() {
 fn an_app_catalogs_alternate_key_for_a_registry_command_runs_it() {
     let cut = CommandRef::from(EditCommands::Cut);
     let alternate = CommandDef::new(cut.clone(), "Cut", Scope::app()).with_default(Binding::parse("F2").expect("the trial's chord parses"));
-    let input = || {
-        CommandInput::new()
-            .catalog(AppCatalog::new(vec![alternate.clone()], 1).expect("the trial's catalog is valid"))
-            .state(cut.clone(), CommandState::new())
-    };
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(cut.clone(), CommandState::new());
+    let input = || CommandInput::new().catalog(AppCatalog::new(vec![alternate.clone()], 1).expect("the trial's catalog is valid")).states(&states);
     let mut show = |ui: &mut Ui| {
         AppShell::new(WindowKey::main()).show(ui, &mut ());
     };

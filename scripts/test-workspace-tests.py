@@ -212,6 +212,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn('os: \'["ubuntu-latest"]\'', source)
         self.assertIn('os: \'["windows-latest","macos-latest"]\'', source)
         self.assertIn("if: needs.platforms.outputs.platform == 'true'", source)
+        # Pushes to next run Linux only.
+        self.assertIn("&& github.ref != 'refs/heads/next'", source)
         # The macOS and Windows legs run the Linux leg's blocks, not copies of them.
         self.assertIn("      lint-command: &lint |\n", source)
         self.assertIn("      command: &command |\n", source)

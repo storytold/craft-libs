@@ -119,7 +119,8 @@ jobs:
   native-platforms:
     name: Workspace
     needs: platforms
-    if: needs.platforms.outputs.platform == 'true'
+    # Pushes to next run Linux only.
+    if: needs.platforms.outputs.platform == 'true' && github.ref != 'refs/heads/next'
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: '["windows-latest","macos-latest"]'
