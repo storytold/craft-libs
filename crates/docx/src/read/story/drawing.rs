@@ -311,7 +311,27 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None })
+        // Its outline (Picture Border): the `a:ln` of `pic:spPr`, read as a shape's is, with
+        // its dash and compound type.
+        let paint = shape_paint(pic.find("pic:spPr"), pic.find("pic:style"), &self.doc.settings.theme_colors, &self.theme_fills, None);
+        let ln = pic.find("pic:spPr").and_then(|s| s.child("a:ln"));
+        // An `a:ln` that names a width but omits its fill, with no style line reference
+        // either, is a solid line in the theme's dark colour (dk1) — that is how Office
+        // draws it. shape_paint leaves such a line colourless, so without this the border
+        // the file asks for is lost on import, and a save cannot restore it.
+        let stroke = paint.stroke.or_else(|| {
+            let ln = ln?;
+            let fills = ["a:solidFill", "a:gradFill", "a:pattFill", "a:blipFill", "a:noFill"];
+            if ln.attr("w").is_none() || ln.els().any(|c| fills.contains(&c.name.as_str())) {
+                return None;
+            }
+            Some(crate::read::drawing_color::slot(&self.doc.settings.theme_colors, 0))
+        });
+        let stroke_width = if stroke.is_some() { paint.stroke_width } else { 0.0 };
+        // Dash and compound type come with the paint: the picture's own `a:ln` states
+        // them, else the theme line its style references (shape_paint resolved both).
+        let (dash, compound) = if stroke.is_some() { (paint.dash.clone(), paint.compound) } else { Default::default() };
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None, stroke, stroke_width, dash, compound })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
@@ -534,7 +554,7 @@ impl Reader<'_> {
             part.body.auto_color = Some(rgb);
         }
         let mut extra = ShapeExtra {
-            dash: crate::read::shape_style::line_dash(ln),
+            dash: paint.dash.clone(),
             cap: craft_wordmodel::connector::LineCap::from_ooxml(ln.and_then(|e| e.attr("cap")).unwrap_or("flat")),
             outline_fill: paint.outline_fill,
             ..ShapeExtra::default()
