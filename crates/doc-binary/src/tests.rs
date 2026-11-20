@@ -1710,6 +1710,37 @@ fn bookmarks_at_a_hyperlink_results_end_and_in_other_fields() {
     assert!(matches!(p0.objects.last(), Some(craft_wordmodel::para::InlineObject::Field { .. })), "objects: {:?}", p0.objects);
 }
 
+/// #2286: a picture inside a hyperlink's result keeps its place in the link's text, inside the
+/// link, and a bookmark around it still encloses it.
+#[test]
+fn a_bookmark_around_a_linked_picture_encloses_it() {
+    let text = "\u{13}HYPERLINK http://x\u{14}a\u{1}b\u{15}\r";
+    let ccp = text.chars().count() as u32;
+    let (pic, b) = (cp_of(text, '\u{1}'), cp_of(text, 'b'));
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm"])), (22, plc(&[pic, ccp], &[0, 0, 0, 0])), (23, plc(&[b, ccp], &[0, 0]))],
+        data_stream: picf_with_png(16),
+        chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "a\u{FFFC}\u{FFFC}\u{FFFC}b");
+    let kinds: Vec<_> = p0
+        .objects
+        .iter()
+        .map(|o| match o {
+            craft_wordmodel::para::InlineObject::BookmarkStart { .. } => "start",
+            craft_wordmodel::para::InlineObject::BookmarkEnd { .. } => "end",
+            craft_wordmodel::para::InlineObject::Image { .. } => "image",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["start", "image", "end"]);
+    assert!(p0.runs.iter().all(|r| r.props.link.as_deref() == Some("http://x")), "runs: {:?}", p0.runs);
+}
+
 /// #2286: a hyperlink the walk never sees end still writes the boundaries kept in its result.
 #[test]
 fn an_unfinished_hyperlink_still_writes_its_bookmarks() {
