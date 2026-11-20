@@ -120,15 +120,22 @@ fn the_home_screen_places_navigation_to_the_left_of_recent_files() {
     fixture.room(egui::vec2(1100.0, 700.0)).settle();
     let rect = |label| fixture.by_label(label).expect(label).rect;
     let recent = rect("Recent");
-    assert!(rect("Photo app").bottom() < recent.top());
+    let new = rect("New…");
+    let open = rect("Open…");
+    assert!((new.width() - open.width()).abs() < 1.0);
+    assert!(open.top() - new.bottom() >= 6.0, "New and Open have room between them");
+    assert!(rect("Home").top() - open.bottom() >= 24.0, "the divider separates the actions from navigation");
+    assert!(recent.left() - new.right() >= 36.0, "the rail is separated from the content");
+    assert!(rect("Photo app").top() >= 54.0);
+    assert!(recent.top() - rect("Photo app").bottom() >= 32.0, "the title rule has space above and below");
     for label in ["Home", "Learn", "Website", "Discord", "GitHub"] {
         let navigation = rect(label);
         assert!(navigation.right() < recent.left(), "{label} {navigation:?} must be left of Recent {recent:?}");
     }
     assert!(rect("Home").bottom() < rect("Learn").top());
     assert!(rect("Website").top() > fixture.shown().center().y);
-    assert!(rect("Website").bottom() < rect("Discord").top());
-    assert!(rect("Discord").bottom() < rect("GitHub").top());
+    assert!(rect("Discord").top() - rect("Website").bottom() >= 6.0);
+    assert!(rect("GitHub").top() - rect("Discord").bottom() >= 6.0);
 }
 
 /// The Home surround can have the same colour as ordinary separators. The title and drop card still need visible ink.
@@ -154,13 +161,20 @@ fn the_home_title_and_drop_card_keep_their_outlines_visible() {
                 .drop_hint("Drop an image")
                 .show(ui);
         });
+        let tree = frames.tree();
+        let title =
+            tree.keys().into_iter().find(|key| tree.name_of(*key) == Some("Photo app")).and_then(|key| tree.bounds_of(key)).expect("the Home title");
         let mut paint = frames.take_paint().expect("the frame drew Home");
         paint.textures_delta.clear();
         let rule = paint
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                Shape::LineSegment { points, stroke } if (points[1].x - points[0].x) > 800.0 && points[0].y < 100.0 => Some(stroke),
+                Shape::LineSegment { points, stroke }
+                    if (points[1].x - points[0].x) > 800.0 && (title.bottom()..title.bottom() + 32.0).contains(&points[0].y) =>
+                {
+                    Some(stroke)
+                }
                 _ => None,
             })
             .expect("a full-width title rule");

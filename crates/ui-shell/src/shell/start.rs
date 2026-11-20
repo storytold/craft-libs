@@ -52,6 +52,8 @@ const HOME_RAIL_WIDTH: f32 = 170.0;
 const HOME_COMPACT_WIDTH: f32 = 520.0;
 const HOME_DROP_WIDTH: f32 = 540.0;
 const HOME_DROP_HEIGHT: f32 = 200.0;
+const HOME_DROP_ICON: f32 = 34.0;
+const HOME_DESKTOP_INSET: Vec2 = vec2(36.0, 54.0);
 const HOME_DROP_LOOK: CustomVariant = CustomVariant::new::<ButtonStyleKey>("craft_ui.home-drop", home_drop_look);
 
 /// The revealed part of a recent row that takes the file off the list.
@@ -395,7 +397,7 @@ impl StartScreen<'_> {
         let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
         // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
         // the sections.
-        let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool, drop_center: Option<f32>| {
+        let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool, drop_area: Option<(f32, bool)>| {
             let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
             let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
             let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
@@ -404,8 +406,8 @@ impl StartScreen<'_> {
             if !beside {
                 let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui, Sizing::Content));
             }
-            if let (true, Some(hint), Some(center)) = (files.is_empty(), page.drop_hint, drop_center) {
-                home_drop(&page, ui, hint, center);
+            if let (true, Some(hint), Some((center, wide))) = (files.is_empty(), page.drop_hint, drop_area) {
+                home_drop(&page, ui, hint, center, wide);
             } else {
                 recent_section(&page, ui, &view, &sort, current_view, &files);
             }
@@ -421,7 +423,7 @@ impl StartScreen<'_> {
         };
 
         if let Some(home) = home {
-            let response = home.show(ui, &page, links, |ui, cx, center| page_body(ui, cx, true, Some(center)));
+            let response = home.show(ui, &page, links, |ui, cx, center, wide| page_body(ui, cx, true, Some((center, wide))));
             return StartOutput { response, actions: actions.into_inner() };
         }
 
@@ -453,7 +455,7 @@ impl StartScreen<'_> {
 }
 
 impl HomeLayout<'_> {
-    fn show(&self, ui: &mut Ui, page: &Page<'_>, links: &[StartLink], mut sections: impl FnMut(&mut Ui, &mut BodyCx<'_>, f32)) -> Response {
+    fn show(&self, ui: &mut Ui, page: &Page<'_>, links: &[StartLink], mut sections: impl FnMut(&mut Ui, &mut BodyCx<'_>, f32, bool)) -> Response {
         // Keep the opening gesture on the fixed surface, outside the two independent scrolling regions.
         Stack::new()
             .fill()
@@ -465,44 +467,44 @@ impl HomeLayout<'_> {
                 let room = ui.available_rect_before_wrap();
                 let wide = room.width() >= HOME_BREAKPOINT;
                 let content = if wide {
-                    let (rail, content) = home_columns(room, page.env);
+                    let (rail, content) = home_columns(room, page.env.direction.is_rtl());
                     self.rail(ui, page, links, rail);
                     content
                 } else {
                     Rect::from_center_size(room.center(), vec2(room.width().min(HOME_COMPACT_WIDTH), room.height()))
                 };
-                let _ = Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(Gap::Section).scroll(Scroll::vertical()).show_at(
-                    ui,
-                    content,
-                    |ui, cx| {
+                let gap = if wide { Gap::CardRow } else { Gap::Section };
+                let _ =
+                    Stack::new().id_salt("home-page").fill().pad(Pad::Regular).gap(gap).scroll(Scroll::vertical()).show_at(ui, content, |ui, cx| {
                         let top = ui.available_rect_before_wrap().top();
                         if !wide {
                             let _ = Row::new().gap(Gap::Tight).fill_width().show(ui, |ui, _| new_and_open(page, ui, Sizing::FillWidth));
                         }
                         let _ = Text::new(self.title.clone()).role(TypeRole::Display).show(ui);
                         home_divider(ui);
-                        sections(ui, cx, top + content.height() / 2.0);
+                        sections(ui, cx, top + content.height() / 2.0, wide);
                         if !wide {
-                            home_links(ui, page, "home-nav", links);
-                            home_links(ui, page, "home-footer", self.footer_links);
+                            home_links(ui, page, "home-nav", links, Gap::Tight);
+                            home_links(ui, page, "home-footer", self.footer_links, Gap::Tight);
                         }
-                    },
-                );
+                    });
             })
             .output
     }
 
     fn rail(&self, ui: &mut Ui, page: &Page<'_>, links: &[StartLink], rect: Rect) {
-        let stack = || Stack::new().id_salt("home-rail").pad(Pad::Regular).gap(Gap::Tight);
+        let stack = || Stack::new().id_salt("home-rail").pad(Pad::Regular).gap(Gap::Section);
         let top = |ui: &mut Ui| {
-            new_and_open(page, ui, Sizing::FillWidth);
+            let _ = Stack::new().id_salt("home-actions").gap(Gap::Stack).fill_width().show(ui, |ui, _| {
+                new_and_open(page, ui, Sizing::FillWidth);
+            });
             home_divider(ui);
-            home_links(ui, page, "home-nav", links);
+            home_links(ui, page, "home-nav", links, Gap::Section);
         };
         let footer = |ui: &mut Ui| {
             if !self.footer_links.is_empty() {
                 home_divider(ui);
-                home_links(ui, page, "home-footer", self.footer_links);
+                home_links(ui, page, "home-footer", self.footer_links, Gap::Section);
             }
         };
         // A short window scrolls the entire rail so the fixed footer cannot crowd the opening buttons out.
@@ -526,9 +528,12 @@ impl HomeLayout<'_> {
     }
 }
 
-fn home_columns(room: Rect, env: &Env) -> (Rect, Rect) {
-    let gap = env.tokens.space.gap.section;
-    if env.direction.is_rtl() {
+fn home_columns(room: Rect, rtl: bool) -> (Rect, Rect) {
+    // Leave enough height for the two scroll regions on short windows.
+    let inset_y = HOME_DESKTOP_INSET.y.min((room.height() - HOME_DROP_HEIGHT).max(0.0) / 2.0);
+    let room = room.shrink2(vec2(HOME_DESKTOP_INSET.x, inset_y));
+    let gap = HOME_DESKTOP_INSET.x;
+    if rtl {
         let rail = Rect::from_min_max(pos2(room.right() - HOME_RAIL_WIDTH, room.top()), room.max);
         let content = Rect::from_min_max(room.min, pos2(rail.left() - gap, room.bottom()));
         (rail, content)
@@ -539,10 +544,9 @@ fn home_columns(room: Rect, env: &Env) -> (Rect, Rect) {
     }
 }
 
-fn home_links(ui: &mut Ui, page: &Page<'_>, id: &'static str, links: &[StartLink]) {
+fn home_links(ui: &mut Ui, page: &Page<'_>, id: &'static str, links: &[StartLink], gap: Gap) {
     if !links.is_empty() {
-        let _ =
-            Stack::new().id_salt(id).gap(Gap::Tight).label(page.words.start_links.clone()).fill_width().show(ui, |ui, _| link_items(ui, links, true));
+        let _ = Stack::new().id_salt(id).gap(gap).label(page.words.start_links.clone()).fill_width().show(ui, |ui, _| link_items(ui, links, true));
     }
 }
 
@@ -571,7 +575,7 @@ fn home_drop_look(tokens: &Tokens) -> VariantLook {
     look
 }
 
-fn home_drop(page: &Page<'_>, ui: &mut Ui, hint: &Label, center: f32) {
+fn home_drop(page: &Page<'_>, ui: &mut Ui, hint: &Label, center: f32, wide: bool) {
     let room = ui.available_rect_before_wrap();
     let width = HOME_DROP_WIDTH.min(room.width());
     let top = (center - HOME_DROP_HEIGHT / 2.0).max(room.top());
@@ -582,9 +586,14 @@ fn home_drop(page: &Page<'_>, ui: &mut Ui, hint: &Label, center: f32) {
         if clicked(&Button::new(hint.clone()).id_salt("drop").variant(Variant::Custom(HOME_DROP_LOOK)).show_at(ui, card)) {
             page.push(StartAction::Open);
         }
-        let side = page.env.tokens.size.icon.lg;
-        let icon_center = card.center() - vec2(0.0, side + page.env.tokens.space.gap.tight);
-        let icon = Rect::from_center_size(icon_center, Vec2::splat(side));
+        let tokens = &page.env.tokens;
+        let (side, offset) = if wide {
+            (HOME_DROP_ICON, (HOME_DROP_ICON + tokens.typography.label.line_height) / 2.0 + tokens.space.gap.stack)
+        } else {
+            let side = tokens.size.icon.lg;
+            (side, side + tokens.space.gap.tight)
+        };
+        let icon = Rect::from_center_size(card.center() - vec2(0.0, offset), Vec2::splat(side));
         let _ = Icon::new(IconSpec::svg(IconId::new("image"))).show_at(ui, icon);
     });
 }
