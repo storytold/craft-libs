@@ -37,7 +37,7 @@ pub use words::CanvasWords;
 pub use tool::tool_probe;
 pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRegion, ViewEase};
 pub use tool_groups::{PickStep, tool_pick};
-pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
+pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, ViewZoomStep, tool_pass};
 
 mod raster_source;
 pub use raster_source::{PixelRect, RasterSource};

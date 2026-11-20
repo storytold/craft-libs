@@ -535,13 +535,18 @@ impl CanvasTool for ZoomTool {
         }
         if !self.dragged {
             // A click steps from the view the press found.
-            match click_step(&start, anchor, out, size, &self.options, ppp) {
+            let next = click_step(&start, anchor, out, size, &self.options, ppp);
+            let stepped = next.is_some();
+            match next {
                 Some(next) if self.options.animated_zoom => {
                     let anchored = (!self.options.zoom_clicked_point_to_center).then(|| (start.to_doc(anchor), anchor));
                     cx.ease_view(next, anchored);
                 }
                 Some(next) => cx.set_view(next),
                 None => cx.set_view(start),
+            }
+            if stepped && !self.lent {
+                cx.zoom_step(out);
             }
             return;
         }

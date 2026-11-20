@@ -713,3 +713,89 @@ fn autoscroll_stops_at_the_shown_image_edge() {
     let shift = oblique.to_screen(centre) - rect.center();
     assert!((shift.x + 100.0).abs() < 1e-3 && shift.y.abs() < 1e-3, "along the screen's x, and the fitting axis stays: {shift:?}");
 }
+/// State owned by an app that opts into the extra Zoom option, separate from the shared navigation preferences.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ZoomBarState {
+    view: CanvasView,
+    options: NavigationOptions,
+    out: bool,
+    all_windows: bool,
+}
+
+fn zoom_bar_with_optional_all_windows(opt_in: bool) -> (Fixture, Rc<RefCell<ZoomBarState>>) {
+    let state = Rc::new(RefCell::new(ZoomBarState {
+        view: CanvasView::new(egui::Rect::ZERO, Point::new(1000.0, 750.0), 1.0),
+        options: NavigationOptions::default(),
+        out: false,
+        all_windows: false,
+    }));
+    let shown = Rc::clone(&state);
+    let mut fixture = Fixture::new(move |ui| {
+        let ZoomBarState { view, options, out, all_windows } = &mut *shown.borrow_mut();
+        let bar = craft_ui::canvas::NavigateBar::zoom(Bind::bound(view), Size::new(2000.0, 1500.0), options, Bind::bound(out));
+        let bar = if opt_in { bar.zoom_all_windows(Bind::bound(all_windows)) } else { bar };
+        bar.show(ui);
+    });
+    fixture.room(egui::vec2(1400.0, 180.0)).settle();
+    (fixture, state)
+}
+
+#[trial]
+fn zoom_all_windows_is_absent_from_the_existing_default_navigation_bar() {
+    let (fixture, state) = zoom_bar_with_optional_all_windows(false);
+    assert!(fixture.by_label("Zoom All Windows").is_none(), "existing consumers get no new control without opting in");
+    assert_eq!(fixture.by_role(Role::CHECK_BOX).len(), 2, "Resize and Scrubby remain the default Zoom checkboxes");
+    for label in ["Zoom In", "Zoom Out", "Resize Windows to Fit", "Scrubby Zoom", "Fit Screen", "Fill Screen"] {
+        assert!(fixture.by_label(label).is_some(), "the existing {label} control remains");
+    }
+    assert_eq!(state.borrow().options, NavigationOptions::default());
+    assert!(!state.borrow().all_windows);
+}
+
+#[trial]
+fn zoom_all_windows_sits_between_resize_and_scrubby_and_only_edits_its_app_binding() {
+    let (mut fixture, state) = zoom_bar_with_optional_all_windows(true);
+    let before = *state.borrow();
+    let resize = fixture.by_label("Resize Windows to Fit").expect("Resize checkbox");
+    let all = fixture.by_label("Zoom All Windows").expect("the app opted in");
+    let scrubby = fixture.by_label("Scrubby Zoom").expect("Scrubby checkbox");
+    assert_eq!(fixture.by_role(Role::CHECK_BOX).len(), 3);
+    assert!(resize.rect.right() <= all.rect.left() && all.rect.right() <= scrubby.rect.left(), "the extra checkbox is between the existing ones");
+    assert!(
+        resize.rect.top() <= all.rect.bottom()
+            && all.rect.top() <= resize.rect.bottom()
+            && all.rect.top() <= scrubby.rect.bottom()
+            && scrubby.rect.top() <= all.rect.bottom(),
+        "all three controls stay on the same row"
+    );
+    let room = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1400.0, 180.0));
+    assert!(
+        [resize.rect, all.rect, scrubby.rect].into_iter().all(|rect| room.contains_rect(rect)),
+        "all three complete controls fit inside the fixture's room"
+    );
+    assert_eq!(fixture.tree().toggled_of(all.node), Some(craft_behavior::Mixed::Same(false)));
+    fixture.click(&all).settle();
+    let all = fixture.by_label("Zoom All Windows").expect("the option remains after its click");
+    assert_eq!(fixture.tree().toggled_of(all.node), Some(craft_behavior::Mixed::Same(true)));
+    assert_eq!(
+        *state.borrow(),
+        ZoomBarState { all_windows: true, ..before },
+        "only the app's bound setting changes, not its view or navigation choices"
+    );
+    fixture.click(&all).settle();
+    assert_eq!(*state.borrow(), before, "a second click restores exactly the original app state");
+}
+
+#[trial]
+fn zoom_all_windows_shows_its_explanation_after_the_real_hover_delay() {
+    let (mut fixture, state) = zoom_bar_with_optional_all_windows(true);
+    let before = *state.borrow();
+    let all = fixture.by_label("Zoom All Windows").expect("the app opted in");
+    fixture.frame(vec![pointer::moved(all.center())]);
+    fixture.advance(craft_ui::contract::tooltip::DELAY).settle();
+    assert!(
+        fixture.texts().iter().any(|run| run.text == "Zoom all open document windows when using the Zoom Tool"),
+        "the hovered checkbox paints the exact explanation"
+    );
+    assert_eq!(*state.borrow(), before, "hovering changes no app setting or view");
+}
