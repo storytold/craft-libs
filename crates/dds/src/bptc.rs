@@ -658,10 +658,7 @@ const BC6H_MODES: [Bc6hMode; 14] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ANCHOR_2, ANCHOR_3_SECOND, ANCHOR_3_THIRD, B0, B1, B2, B3, BC6H_MODES, G0, G1, G2, G3, PARTITIONS_2, PARTITIONS_3, PB, R0, R1, R2, R3, bc6h,
-        bc6h_halves, bc7, half, srgb8,
-    };
+    use super::{B0, B1, B2, B3, BC6H_MODES, G0, G1, G2, G3, PB, R0, R1, R2, R3, bc6h, bc6h_halves, bc7, half, srgb8};
 
     /// Pack `(value, bits)` fields into a block from the lowest bit up.
     fn pack(fields: &[(u32, u32)]) -> [u8; 16] {
