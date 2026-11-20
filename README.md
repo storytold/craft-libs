@@ -372,11 +372,12 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   `color` and `write`; re-exports them for existing users.
 - [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
   reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
-  out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
-  whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
-  replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
-  copies of a valid input, and fails the test with the case that panicked or did not finish. Not
-  published.
+  out of range, and `std::time::Instant` in code the web build runs. Its `fonts` module makes test fonts
+  from font bytes the caller supplies: a face with a renamed family and a TrueType collection. Its
+  `deadline` module fails a test whose body runs past a limit, or whose condition does not hold in time;
+  a variable the caller names replaces each limit. Its `hostile` module runs a parser on every truncation
+  and on seeded damaged copies of a valid input, and fails the test with the case that panicked or did
+  not finish. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

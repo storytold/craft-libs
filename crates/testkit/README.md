@@ -78,6 +78,17 @@ fn no_std_instant_in_code_the_web_build_runs() {
 }
 ```
 
+## Test fonts
+
+The `fonts` module makes test fonts from font bytes the caller supplies. It reads no file and no environment variable, prints nothing, and builds for `wasm32-unknown-unknown`.
+
+- **`fonts::rename_family(bytes, from, to)`** returns a copy of one standalone face with the family name `from` replaced by `to`, which must have the same length in UTF-16 code units. It changes the family name records (name IDs 1, 16 and 21) whose value is `from`, and full names (ID 4) that are `from` or start with `from` and a space. At least one family record must hold `from`. It reads UTF-16BE and Macintosh Roman records, writes only ASCII names into Macintosh Roman records, leaves the PostScript name (ID 6), other names and other tables as they are, and writes the `name` table checksum and the `head` table's `checkSumAdjustment`.
+- **`fonts::collection(faces)`** returns a TrueType collection (TTC 1.0) holding standalone faces. Each face gets its own copy of every table, tables start on four-byte boundaries, offsets count from the start of the collection, `checkSumAdjustment` is zero, and every table checksum matches the bytes in the collection.
+
+Both return a `fonts::FontError` instead of panicking: names of different lengths, a name that no family record holds, a face shorter than its table directory, a table or name string out of range, a collection given as a face, or output past the 4 GiB a collection's offsets reach. The layouts come from the OpenType font file and `name` table chapters: <https://learn.microsoft.com/en-us/typography/opentype/spec/otff> and <https://learn.microsoft.com/en-us/typography/opentype/spec/name>.
+
+The tests that call the copies in VectorCraft, DesignCraft and WordCraft need each app's font database and its bundled fonts, so they stay in the apps. `tests/fonts.rs` tests the module on faces it assembles from bytes.
+
 ## deadline
 
 The `deadline` module is not built for `wasm32`.
@@ -224,6 +235,16 @@ Changes from `craft-media-testkit`'s `hammer`:
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
 
+### fonts
+
+| Module | Source | Path | Commit |
+|---|---|---|---|
+| `fonts` | storytold/vectorcraft, `rename` and `collection` | `crates/text/src/tests/sysfonts.rs` | `bada8e1710` |
+| `fonts` | storytold/vectorcraft, `renamed` | `crates/testkit/src/fonts.rs` | `bada8e1710` |
+| `fonts` | storytold/designcraft, the family renaming and `collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` | `8b169f8ee7` |
+| `fonts` | storytold/wordcraft, `renamed_to` and `collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` | `f8c66d0692` |
+| `fonts` | storytold/wordcraft, `renamed` | `crates/fonts/src/fontdb/user/tests.rs` | `f8c66d0692` |
+
 ### deadline
 
 | Code | Repository | Path | SHA |
@@ -251,6 +272,14 @@ Changes from `craft-media-testkit`'s `hammer`:
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+
+### fonts
+
+| Consumer | Guard | Replaces | State |
+|---|---|---|---|
+| VectorCraft | `fonts::rename_family`, `fonts::collection` | `crates/text/src/tests/sysfonts.rs` and `crates/testkit/src/fonts.rs` helpers | Not started |
+| DesignCraft | `fonts::rename_family`, `fonts::collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` helpers | Not started |
+| WordCraft | `fonts::rename_family`, `fonts::collection` | `crates/fonts/src/fontdb/tests/sysfonts.rs` and `crates/fonts/src/fontdb/user/tests.rs` helpers | Not started |
 
 ### deadline
 
