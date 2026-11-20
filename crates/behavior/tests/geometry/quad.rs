@@ -719,3 +719,35 @@ fn a_long_side_shrink_in_perspective_follows_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥ top drags on boxes whose top and bottom converge (measured on the reference): the box grows by slightly more than
+/// the pointer's factor, the more the sides differ.
+#[test]
+fn an_alt_top_drag_on_converging_edges_grows_its_factor_like_the_reference() {
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let cases = [
+        // Right side 82 of 202: was 4.8 px off.
+        (
+            [(150.0, 125.0), (452.0, 185.0), (452.0, 267.0), (150.0, 327.0)],
+            (301.0, 155.0),
+            (301.0, 95.0),
+            [(75.26, 15.41), (577.38, 181.7), (549.47, 322.16), (1.69, 385.72)],
+            0.2,
+        ),
+        // Left side 122 of 202: was 1.8 px off.
+        (
+            [(150.0, 165.0), (452.0, 125.0), (452.0, 327.0), (150.0, 287.0)],
+            (301.0, 145.0),
+            (301.0, 85.0),
+            [(2.68, 145.94), (562.41, 27.41), (609.37, 381.94), (29.54, 348.72)],
+            0.1,
+        ),
+    ];
+    for (quad, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let mean = p(quad.iter().map(|c| c.x).sum::<f64>() / 4.0, quad.iter().map(|c| c.y).sum::<f64>() / 4.0);
+        let start = BoxState::new(quad, mean);
+        let got = drag(&start, &start, BoxPart::Edge(0), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
+    }
+}
