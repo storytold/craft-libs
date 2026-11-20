@@ -226,12 +226,13 @@ impl ControlChannel {
 
     /// Answers the [`Reply::AfterInput`] waiters from the window host's input state: with
     /// `input cancelled` when the host withdrew queued input ([`TARGET_CHANGED`]), with success
-    /// once nothing is queued or in flight. Call it once per pass, after the pass that consumed the
-    /// input.
+    /// once nothing is queued or in flight. Call it once per pass, at the end of the pass (after its
+    /// UI ran): the step that pass consumed counts as run, so the reply goes out with that pass
+    /// ([`WindowHost::injected_idle_at_pass_end`]). Called between passes, it waits for the pass.
     pub fn poll_input(&mut self, host: &WindowHost) {
         if host.take_injected_withdrawn() {
             self.input_cancelled(TARGET_CHANGED);
-        } else if host.injected_idle() {
+        } else if host.injected_idle_at_pass_end() {
             self.input_processed();
         }
     }

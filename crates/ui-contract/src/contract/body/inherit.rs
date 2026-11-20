@@ -37,8 +37,8 @@ pub(super) fn register_instances(ctx: &Context, props: &ContainerProps, id: Id, 
 }
 
 impl BodyHooks<'_> {
-    /// What the container's regions inherit from the env: its enabled state, window and reorder commands, values, axis,
-    /// ink and theme.
+    /// What the container's regions inherit from the env: its enabled state, window and reorder commands, values, axis
+    /// and ink. The container's token scope is in the env already (step 1).
     pub(super) fn scope_regions<C: Container>(
         &self,
         scoped: &mut Scoped,
@@ -48,7 +48,7 @@ impl BodyHooks<'_> {
         values: &AppValues,
         real: bool,
     ) {
-        let (id, ctx) = (cx.core.id, &cx.core.ctx);
+        let id = cx.core.id;
         // A layer's content starts from its opener's scope with the layer-local fields fresh, in a measure under the
         // opener's env as in the run under the layer's.
         if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
@@ -88,9 +88,6 @@ impl BodyHooks<'_> {
             && scoped.commands.innermost(scope.name()) != Some(id)
         {
             scoped.inherited_mut().commands = scoped.commands.pushed(scope, id);
-        }
-        if let Some(theme) = &props.theme {
-            theme.apply(ctx, scoped);
         }
         // A container given its width (a resized dialog) leaves its paragraphs the room it has.
         if let Some(wrap) = props.wrap_width.filter(|_| !self.wide()) {

@@ -52,10 +52,6 @@ impl Decls {
         &self.parts
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.parts.is_empty()
-    }
-
     pub(crate) fn iter(&self) -> std::iter::Zip<std::slice::Iter<'_, PartDecl>, std::slice::Iter<'_, PartExtras>> {
         self.parts.iter().zip(&self.extras)
     }

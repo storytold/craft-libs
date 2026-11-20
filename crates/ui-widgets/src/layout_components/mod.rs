@@ -5,7 +5,7 @@ use crate::contract::{
     Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, Pad,
     Role, Scroll, Sizing, ThemeScope,
 };
-use crate::layout::{BodyLayout, RowAlign};
+use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
@@ -133,7 +133,8 @@ macro_rules! layout_component {
                 self
             }
 
-            /// The body and everything under it resolve their tokens through `theme`.
+            /// The container, everything it shows and every layer opened from inside it resolve their tokens through
+            /// `theme`.
             pub fn theme(mut self, theme: ThemeScope) -> Self {
                 self.props = self.props.theme(theme);
                 self
@@ -180,7 +181,7 @@ macro_rules! layout_component {
             }
 
             fn finish(self, cx: Cx<'_, Self>) -> Response {
-                cx.core.response
+                cx.response.clone()
             }
         }
 
@@ -319,5 +320,20 @@ impl Grid {
             hover: false,
             senses_surface: false,
         }
+    }
+
+    /// What the grid does when its columns do not fit beside each other: [`GridFit::Stack`] (the default) puts the
+    /// cells one under another; [`GridFit::Fixed`] keeps the columns and overflows the room. Leave a cell empty with
+    /// `layout::empty_cell`.
+    pub fn fit(mut self, fit: GridFit) -> Self {
+        self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).fit(fit);
+        self
+    }
+
+    /// Where a cell shorter than its row stands in it: [`CellAlign::Center`] (the default) in the row's middle,
+    /// [`CellAlign::Top`] at its top.
+    pub fn cells(mut self, cells: CellAlign) -> Self {
+        self.props.layout = std::mem::replace(&mut self.props.layout, BodyLayout::Stack).cells(cells);
+        self
     }
 }

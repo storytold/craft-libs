@@ -34,9 +34,7 @@ pub use hit::{CaptionRegions, HitSink, ResizeEdge, WindowHit};
 pub(crate) use hit::{hit_sink_installed, note_exclusive};
 use hit::{publish_regions, replay_caption_events};
 pub use host::{KeyEquivalent, WindowFacts, WindowHost};
-pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer};
-#[doc(hidden)]
-pub use native::keeps_app_drag;
+pub(crate) use host::{clear_source_pointer, note_moved_pointer, note_source_pointer, system_pointer};
 #[cfg(windows)]
 #[doc(hidden)]
 pub use native::route_root;
@@ -132,8 +130,9 @@ pub(crate) struct Record {
     /// The opacity the window was last set to; 1 is opaque.
     opacity: Option<f32>,
     /// The app runs the window's move from its move band (a dock window's title row, whose move docks the window), so a
-    /// press on the band must reach it and the operating system's move loop is not started from the hit test.
-    app_drag: bool,
+    /// press on the band must reach it and the operating system's move loop is not started from the hit test. Set from
+    /// the mount's `ViewportOpen::moved_by_app` before each of the window's passes, its first included.
+    moved_by_app: bool,
     /// While the app moves the window: the desktop pointer, at the pressed point of the window where the move last put
     /// it. The window's reported place lags the move.
     moved_pointer: Option<Pos2>,
@@ -179,9 +178,9 @@ pub(crate) fn take_sent(ctx: &Context) -> Vec<(ViewportId, WindowAction)> {
     shared(ctx, |shared| std::mem::take(&mut shared.sent))
 }
 
-/// Whether the app runs the move of `viewport`'s window ([`keeps_app_drag`]).
+/// Whether the app runs the move of `viewport`'s window (`Overlay::moved_by_app`).
 pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
-    PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag)
+    PerViewport::<Record>::with(ctx, viewport, |record| record.moved_by_app)
 }
 
 /// Called by `install`: keeps the shell, the app id, the OS services and the placement store.
@@ -230,6 +229,16 @@ pub(crate) fn set_input(ctx: &Context) {
     });
 }
 
+/// The least change of an inner size, in points, that counts as a resize: far under one physical pixel at any scale
+/// (a quarter point at 400 %), far over the float rounding of a size the platform reports again in points from its
+/// pixels as the window moves (290.4 coming back as 290.40002 at 125 %).
+const RESIZE_LEAST: f32 = 0.05;
+
+/// Whether a window's inner size changed from `before` to `now` by more than float rounding.
+fn size_changed(before: egui::Vec2, now: egui::Vec2) -> bool {
+    (before.x - now.x).abs() > RESIZE_LEAST || (before.y - now.y).abs() > RESIZE_LEAST
+}
+
 /// H4, in the input hook. The OS takes the button release of a move or resize it runs, so the press stays down in
 /// egui and every later press is lost. Two cases end it with a release of the primary button, in any chrome: a move
 /// or resize [`act`] handed the OS, when the input brings no release of its own (where the OS sends one, a second
@@ -258,7 +267,8 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         input.events.push(egui::Event::ModifiersChanged(modifiers));
     }
     let (released, handed_off) = PerViewport::<Record>::with(ctx, viewport, |record| {
-        let resized = record.resizable != Some(false) && matches!((record.last_inner_size, size), (Some(before), Some(now)) if before != now);
+        let resized =
+            record.resizable != Some(false) && matches!((record.last_inner_size, size), (Some(before), Some(now)) if size_changed(before, now));
         record.last_inner_size = size.or(record.last_inner_size);
         let handed_off = record.handoff.is_some_and(|handoff| handoff.released.is_none() && handoff.pass < pass) && held != Some(true);
         if handed_off {
@@ -411,8 +421,8 @@ pub fn logic(ctx: &Context) {
 /// AppKit's flag is set, after the window's UI has run. A window is told apart by its viewport: the key window is the one
 /// whose viewport has focus, so an unfocused viewport is left as it is. AppKit is only called when the flag changes.
 /// Only a macOS window with a full-size content view has a flag to set; elsewhere this does nothing. A window whose
-/// move the app runs ([`keeps_app_drag`]) keeps AppKit's own flag: AppKit moves it for the move's hand-off and resizes
-/// it from its edges only while it is movable.
+/// move the app runs (`Overlay::moved_by_app`) keeps AppKit's own flag: AppKit moves it for the move's hand-off and
+/// resizes it from its edges only while it is movable.
 fn sync_movable(ctx: &Context) {
     if !viewports::current(ctx).focus_reported {
         return;
@@ -420,7 +430,7 @@ fn sync_movable(ctx: &Context) {
     let movable = viewports::movable(ctx);
     let viewport = pass::current_viewport(ctx);
     PerViewport::<Record>::with(ctx, viewport, |record| {
-        if !record.app_drag && record.movable_applied != Some(movable) {
+        if !record.moved_by_app && record.movable_applied != Some(movable) {
             craft_window::mac::set_movable(movable, &mut record.movable_applied);
         }
     });

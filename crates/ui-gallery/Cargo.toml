@@ -34,7 +34,7 @@ test = false
 # One feature per domain crate whose stories the viewer links; `apps` is all of them and the default. A build
 # that needs one crate's stories only (the story renderer) turns the default off and names the crate.
 default = ["apps"]
-apps = ["automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text", "theme-store", "timeline", "dialogs", "font-manager", "update"]
+apps = ["automation", "browse", "color-ui", "draw", "imaging", "layers", "menu", "pages", "print", "review", "table", "text", "theme-editor", "theme-store", "timeline", "dialogs", "font-manager", "update"]
 automation = ["dep:craft-automation"]
 browse = ["dep:craft-browse"]
 color-ui = ["dep:craft-color-ui"]
@@ -47,6 +47,8 @@ print = ["dep:craft-print"]
 review = ["dep:craft-review"]
 table = ["dep:craft-table"]
 text = ["dep:craft-text"]
+# The theme panels are linked in every build (the Theme workspace uses them); the feature adds their stories.
+theme-editor = ["craft-theme-editor/screen-testing"]
 theme-store = ["dep:craft-theme-store"]
 timeline = ["dep:craft-timeline"]
 dialogs = ["dep:craft-dialogs"]
@@ -65,6 +67,7 @@ workspace = true
 craft-ui = { workspace = true, features = ["app", "testing"] }
 craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
+craft-theme-editor = { workspace = true }
 craft-window = { workspace = true }
 egui = { workspace = true }
 eframe = { version = "0.37", default-features = false }

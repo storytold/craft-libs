@@ -426,12 +426,17 @@ pub enum FooterPlace {
     EndBottom,
     /// At the top of the end region, above its content; otherwise as `EndBottom`.
     EndTop,
+    /// In the body, at the cell where the body shows a [`FooterSlot`](crate::contract::FooterSlot): the footer takes no
+    /// band of its own, and the slot is as large as the footer measured. The container still runs the footer, so its
+    /// controls stay the container's (a dialog's buttons, their keys and their order); the body only chooses where
+    /// they stand. The body shows exactly one slot.
+    Body,
 }
 
 impl FooterPlace {
     /// Whether the footer sits in the end region.
     pub const fn in_end(self) -> bool {
-        !matches!(self, FooterPlace::Across)
+        matches!(self, FooterPlace::EndBottom | FooterPlace::EndTop)
     }
 }
 
@@ -533,6 +538,10 @@ pub enum ScrollIndicator {
     /// A strip with an arrow above the view and one below it while the content overflows along y, as a menu shows:
     /// resting the pointer on a strip scrolls toward it. The strips take their height from the view, never width.
     Strips,
+    /// A bar that takes no room from the content, as a tool rail or an options bar shows its overflow: it lies in the
+    /// container's end padding (its bottom padding for x), over the content where the container has none, and shows
+    /// only while the pointer is over the container or presses the bar.
+    Overlay,
 }
 
 /// A scrolling body.
@@ -563,6 +572,18 @@ impl Scroll {
     /// Whether the overflow along y shows as scroll strips.
     pub const fn has_strips(&self) -> bool {
         matches!(self.indicator, ScrollIndicator::Strips) && self.vertical_on()
+    }
+
+    /// Shows the overflow as a bar in the container's padding that takes no room from the content and shows only
+    /// under the pointer ([`ScrollIndicator::Overlay`]).
+    pub const fn overlay(mut self) -> Scroll {
+        self.indicator = ScrollIndicator::Overlay;
+        self
+    }
+
+    /// Whether the overflow shows as an overlay bar.
+    pub const fn has_overlay(&self) -> bool {
+        matches!(self.indicator, ScrollIndicator::Overlay)
     }
 
     /// Scrolls along y.
@@ -745,7 +766,8 @@ pub struct ContainerProps {
     pub gates: bool,
     /// The body is shown through this transform on its own egui layer.
     pub transform: Option<CanvasTransform>,
-    /// Token-changing values for the body.
+    /// Another theme definition, mode, contrast or density for the container itself (its surface, header, rules,
+    /// scroll bars, pads and focus ring), everything it shows, and every layer opened from inside it.
     pub theme: Option<ThemeScope>,
     /// The container is an instance of this command scope.
     pub command_scope: Option<CommandScope>,
@@ -1018,7 +1040,7 @@ impl ContainerProps {
         self
     }
 
-    /// Token-changing values for the body.
+    /// Resolves the container, everything it shows and every layer opened from inside it through `theme`.
     pub fn theme(mut self, theme: ThemeScope) -> Self {
         self.theme = Some(theme);
         self

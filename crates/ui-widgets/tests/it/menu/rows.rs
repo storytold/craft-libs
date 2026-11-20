@@ -66,3 +66,42 @@ fn a_letter_no_row_takes_while_a_menu_is_open_does_not_reach_the_text_field_unde
     fixture.settle();
     assert_eq!(*text.borrow(), "hello", "the letter does not reach the field");
 }
+
+/// The fills painted as rects inside `row`, a row's highlight among them.
+fn fills_in(shapes: &[egui::Shape], row: egui::Rect) -> Vec<egui::Color32> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.fill.a() > 0 && row.expand(0.5).contains_rect(rect.rect) && rect.rect.height() > row.height() / 2.0 => {
+                Some(rect.fill)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A menu highlight switches rows in the frame that moves the pointer onto the next row
+/// itself: the row it reaches paints the full highlight and the row it left none, with no time passing in between, so the
+/// highlight never trails the pointer (photocraft#15477).
+#[trial]
+fn the_menu_highlight_moves_to_the_next_row_in_the_frame_the_pointer_reaches_it() {
+    let mut fixture = Fixture::new(|ui| {
+        let opener = Button::new("Open").show(ui);
+        Menu::new("Edit").opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+            MenuItem::new("Undo").show(ui);
+            MenuItem::new("Redo").show(ui);
+        });
+    });
+    fixture.settle();
+    let opener = fixture.by_label("Open").expect("the opener");
+    fixture.click(&opener).settle();
+    let (undo, redo) = (fixture.by_label("Undo").expect("the menu is open").rect, fixture.by_label("Redo").expect("the second row").rect);
+    fixture.frame(vec![pointer::moved(undo.center())]);
+    fixture.settle();
+    let shapes = fixture.frame_shapes();
+    let [lit] = fills_in(&shapes, undo)[..] else { panic!("the row under the pointer paints one highlight: {:?}", fills_in(&shapes, undo)) };
+    assert!(fills_in(&shapes, redo).is_empty(), "the other row paints no highlight");
+    let shapes = fixture.frame_shapes_with(vec![pointer::moved(redo.center())]);
+    assert_eq!(fills_in(&shapes, redo), [lit], "the row the pointer reached paints the full highlight at once");
+    assert!(fills_in(&shapes, undo).is_empty(), "the row the pointer left paints no highlight at once: {:?}", fills_in(&shapes, undo));
+}

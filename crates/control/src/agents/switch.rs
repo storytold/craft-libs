@@ -4,8 +4,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use craft_host::Wake;
-
 use super::agents_allowed;
 
 /// How often [`AgentSwitch::watch`] reads the launcher's app list.
@@ -38,9 +36,10 @@ pub struct AgentSwitch {
 }
 
 impl AgentSwitch {
-    /// Watches the launcher's list for `app_id`; a change logs `agents on/off` and calls `wake`.
+    /// Watches the launcher's list for `app_id`; a change logs `agents on/off` and calls `wake` (the
+    /// app asks for a frame there).
     /// Without the `AI-MCP` flag nothing is watched: the launcher's list means nothing then.
-    pub fn watch(app_id: &'static str, wake: Wake) -> Self {
+    pub fn watch(app_id: &'static str, wake: impl Fn() + Send + 'static) -> Self {
         let flag = mcp_flag();
         if !flag {
             return Self::fixed(false, false);
@@ -55,7 +54,7 @@ impl AgentSwitch {
 
     /// [`Self::watch`] with the flag given, `probe` asked once now and then every `poll`.
     #[doc(hidden)]
-    pub fn watch_with(mcp_flag: bool, probe: impl Fn() -> bool + Send + 'static, poll: Duration, wake: Wake) -> Self {
+    pub fn watch_with(mcp_flag: bool, probe: impl Fn() -> bool + Send + 'static, poll: Duration, wake: impl Fn() + Send + 'static) -> Self {
         let on = Arc::new(AtomicBool::new(probe()));
         let seen: Weak<AtomicBool> = Arc::downgrade(&on);
         let started = std::thread::Builder::new().name("launcher-agents".into()).spawn(move || {
@@ -65,13 +64,14 @@ impl AgentSwitch {
                 let Some(seen) = seen.upgrade() else { return };
                 if seen.swap(now, Ordering::Relaxed) != now {
                     log::info!("ArtCraft Launcher: agents {}", if now { "on" } else { "off" });
-                    wake.wake();
+                    wake();
                 }
             }
         });
-        // Without a thread the answer stays what it was at launch.
+        // Without a thread a later "off" in the launcher would never be seen: agents stay out.
         if let Err(e) = started {
-            log::warn!("couldn't watch the ArtCraft Launcher's agents switch: {e}");
+            log::warn!("couldn't watch the ArtCraft Launcher's agents switch, so agents stay off: {e}");
+            on.store(false, Ordering::Relaxed);
         }
         Self { mcp_flag, on }
     }

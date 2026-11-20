@@ -46,6 +46,45 @@ pub(crate) struct JpegMeta {
     pub held_coefficients: u64,
 }
 
+/// Validate a JPEG by decoding the 8-bit RGBA output used by renderers.
+///
+/// This deliberately uses the existing zune backend's default decode policy.
+/// Unlike general JPEG import it does not fall back to additional JPEG modes,
+/// apply orientation, or retain pixels. The caller supplies the admitted pixel count.
+pub fn validate_jpeg_rgba8(bytes: &[u8], max_pixels: u64) -> Result<(), CodecError> {
+    validate_jpeg_rgba8_with_panic_policy(bytes, max_pixels, cfg!(panic = "abort"))
+}
+
+fn validate_jpeg_rgba8_with_panic_policy(bytes: &[u8], max_pixels: u64, panic_aborts: bool) -> Result<(), CodecError> {
+    // The decoder can assert while upsampling these frames. On abort builds the
+    // unwind guard below cannot turn that assertion into an image omission.
+    if panic_aborts && first_component_subsampled(bytes) {
+        return Err(CodecError::malformed(F, "JPEG first component is subsampled below the frame maximum"));
+    }
+    let decode = || {
+        let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+        let mut decoder = zune_jpeg::JpegDecoder::new_with_options(std::io::Cursor::new(bytes), options);
+        decoder.decode_headers().map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))?;
+        let info = decoder.info().ok_or_else(|| CodecError::malformed(F, "missing frame dimensions"))?;
+        let pixels = u64::from(info.width) * u64::from(info.height);
+        if pixels == 0 {
+            return Err(CodecError::malformed(F, "empty frame"));
+        }
+        if pixels > max_pixels {
+            return Err(CodecError::LimitExceeded("JPEG exceeds the admitted pixel count".into()));
+        }
+        let length = usize::try_from(pixels * 4).map_err(|_| CodecError::LimitExceeded("JPEG RGBA output is too large".into()))?;
+        if decoder.output_colorspace() != Some(ColorSpace::RGBA) || decoder.output_buffer_size() != Some(length) {
+            return Err(CodecError::malformed(F, "unexpected RGBA output"));
+        }
+        let mut output = Vec::new();
+        output.try_reserve_exact(length).map_err(|_| CodecError::LimitExceeded("could not allocate JPEG RGBA output".into()))?;
+        output.resize(length, 0);
+        decoder.decode_into(&mut output).map_err(|error| CodecError::malformed(F, format_args!("{error:?}")))
+    };
+    std::panic::catch_unwind(decode).map_err(|_| CodecError::malformed(F, "JPEG decoder failed on this frame"))?
+}
+
 /// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
 pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
     let m = scan_metadata(b);
@@ -417,10 +456,17 @@ fn first_component_subsampled(b: &[u8]) -> bool {
         return false;
     }
     let mut i = 2;
-    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+    while let Some(&prefix) = b.get(i) {
+        // The decoder searches forward between segments. Stray bytes and
+        // stuffed FF 00 pairs must not hide a frame from the abort-build guard.
+        if prefix != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&m) = b.get(i + 1) else { return false };
         match m {
             0xFF => i += 1,
-            0x01 | 0xD0..=0xD8 => i += 2,
+            0x00 | 0x01 | 0xD0..=0xD8 => i += 2,
             0xD9 | 0xDA => return false,
             _ => {
                 let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
@@ -1314,23 +1360,59 @@ mod tests {
         (v * 65535.0 / 4095.0).round() as u16
     }
 
+    fn progressive_frame_header(comps: &[(u8, u8)]) -> Vec<u8> {
+        let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+        for (i, &(h, v)) in comps.iter().enumerate() {
+            s.extend([i as u8 + 1, (h << 4) | v, 0]);
+        }
+        s
+    }
+
     #[test]
     fn first_component_subsampling() {
-        let sof = |comps: &[(u8, u8)]| {
-            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
-            for (i, &(h, v)) in comps.iter().enumerate() {
-                s.extend([i as u8 + 1, (h << 4) | v, 0]);
-            }
-            s
-        };
-        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
-        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
-        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
-        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&progressive_frame_header(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&progressive_frame_header(&[])));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
         assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
         assert!(!first_component_subsampled(b"not a jpeg"));
+    }
+
+    #[test]
+    fn renderer_validation_refuses_unsafe_sampling_under_abort_policy() {
+        // The frame header alone exercises refusal before any pixel decode.
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        let refuses_sampling = |result| {
+            matches!(
+                result,
+                Err(CodecError::Malformed { format: Format::Jpeg, message })
+                if message == "JPEG first component is subsampled below the frame maximum"
+            )
+        };
+        assert!(refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, true)));
+        assert!(!refuses_sampling(validate_jpeg_rgba8_with_panic_policy(&header, 64, false)));
+
+        let mut ordinary = Vec::new();
+        jpeg_encoder::Encoder::new(&mut ordinary, 90).encode(&[128], 1, 1, jpeg_encoder::ColorType::Luma).unwrap();
+        validate_jpeg_rgba8_with_panic_policy(&ordinary, 1, true).unwrap();
+    }
+
+    #[test]
+    fn jpeg_sampling_guard_finds_frame_after_marker_padding() {
+        let header = progressive_frame_header(&[(1, 1), (1, 1), (1, 1), (2, 2)]);
+        // Exercise the shared header guard, without a pixel payload.
+        for split in [2, 8] {
+            let (before, after) = header.split_at(split);
+            for padding in [&[0][..], &[0x7F, 0][..], &[0xFF, 0][..], &[0xFF][..]] {
+                let padded = [before, padding, after].concat();
+                assert!(first_component_subsampled(&padded), "offset {split}, padding {padding:?}");
+                let got = validate_jpeg_rgba8_with_panic_policy(&padded, 64, true);
+                assert!(matches!(got, Err(CodecError::Malformed { message, .. }) if message.contains("frame maximum")));
+            }
+        }
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0, 0xFF]));
     }
 
     #[test]

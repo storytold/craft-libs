@@ -96,11 +96,11 @@ pub fn agents_allowed(mcp_flag: bool, launcher: bool, legacy: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
-    use craft_ui::testing::trial;
 
     // The saved names read back as the same choice, and nothing else reads as one.
-    #[trial]
+    #[test]
     fn when_app_closed_names_round_trip() {
         for choice in WhenAppClosed::ALL {
             assert_eq!(WhenAppClosed::parse(choice.name()), Some(choice));
@@ -113,7 +113,7 @@ mod tests {
     }
 
     // A folder setting is trimmed; empty or blank means no folder.
-    #[trial]
+    #[test]
     fn folder_preferences_are_trimmed() {
         assert_eq!(folder(""), None);
         assert_eq!(folder("   "), None);

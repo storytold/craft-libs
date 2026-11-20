@@ -32,7 +32,35 @@ pub enum BodyLayout {
     Grid {
         /// The width rule of each column.
         columns: Cow<'static, [ColumnWidth]>,
+        /// What the grid does when its columns do not fit beside each other.
+        fit: GridFit,
+        /// Where a cell shorter than its row stands in it.
+        cells: CellAlign,
     },
+}
+
+/// Where a `Grid` sets a cell that is shorter than its row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CellAlign {
+    /// In the row's middle: a form's label beside a taller control.
+    #[default]
+    Center,
+    /// At the row's top: panels of different heights side by side whose first lines stand level (the Color Picker's
+    /// field groups, its buttons beside its compare block).
+    Top,
+}
+
+/// What a `Grid` does when the least widths of its columns do not fit beside each other in its room.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GridFit {
+    /// The cells go one under another across the room, so no column is cut: a form that reflows in a narrow panel.
+    #[default]
+    Stack,
+    /// The columns stay beside each other at their least widths and the grid overflows its room: a component whose
+    /// arrangement is fixed (the Color Picker's channel groups), which a narrow room must not rearrange.
+    Fixed,
 }
 
 /// Where a `Row` places its block of children along the row.
@@ -65,7 +93,23 @@ impl BodyLayout {
 
     /// Children row-major over `columns`: a `'static` slice, or columns built in the pass.
     pub fn grid(columns: impl Into<Cow<'static, [ColumnWidth]>>) -> Self {
-        BodyLayout::Grid { columns: columns.into() }
+        BodyLayout::Grid { columns: columns.into(), fit: GridFit::Stack, cells: CellAlign::Center }
+    }
+
+    /// A `Grid` with `fit`; any other layout is unchanged.
+    pub fn fit(self, fit: GridFit) -> Self {
+        match self {
+            BodyLayout::Grid { columns, cells, .. } => BodyLayout::Grid { columns, fit, cells },
+            other => other,
+        }
+    }
+
+    /// A `Grid` with `cells`; any other layout is unchanged.
+    pub fn cells(self, cells: CellAlign) -> Self {
+        match self {
+            BodyLayout::Grid { columns, fit, .. } => BodyLayout::Grid { columns, fit, cells },
+            other => other,
+        }
     }
 
     /// A `Row` that wraps; any other layout is unchanged.
@@ -588,6 +632,11 @@ fn run_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layo
     .0
 }
 
+/// A child of `ui` with `layout`, built outside the generic sweeps that run a body in it.
+fn laid_out_child(ui: &mut Ui, layout: egui::Layout) -> Ui {
+    ui.new_child(egui::UiBuilder::new().layout(layout))
+}
+
 /// Whether a body given `axis` shares it among the children that fill it.
 fn shares_along(env: &Env, axis: Axis) -> bool {
     if axis == Axis::Y { !env.content.1 } else { !env.content.0 }
@@ -626,7 +675,7 @@ fn share_sweep<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, share: Option<f32>
 fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::Layout, body: &mut dyn FnMut(&mut Ui) -> R) -> (R, Rect) {
     let ctx = ui.ctx().clone();
     let in_child = |ui: &mut Ui, body: &mut dyn FnMut(&mut Ui) -> R| {
-        let mut child = ui.new_child(egui::UiBuilder::new().layout(layout));
+        let mut child = laid_out_child(ui, layout);
         let inner = body(&mut child);
         (inner, child.min_rect())
     };
@@ -637,7 +686,7 @@ fn measure_sharing<R>(ui: &mut Ui, env: &Env, id: Id, axis: Axis, layout: egui::
     let along = |size: Vec2| if axis == Axis::Y { size.y } else { size.x };
     let first = crate::contract::keeping_ids(&ctx, || {
         let (inner, rect, room) = {
-            let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+            let mut first = laid_out_child(ui, layout);
             let room = share_room(&first, axis);
             pass_state::with::<FillCounts, _>(&ctx, |counts| counts.0.insert(id, 0));
             let inner = share_sweep(&mut first, env, id, axis, None, body);
@@ -949,7 +998,7 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
             Some(_) => (above, (rect.height() - above - size.y).max(0.0)),
             None => {
                 let spare = (rect.height() - size.y).max(0.0);
-                (spare / 2.0, spare / 2.0)
+                if env.grid_top { (0.0, spare) } else { (spare / 2.0, spare / 2.0) }
             }
         };
         Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y + above), egui::pos2(rect.max.x, rect.max.y - below))
@@ -973,6 +1022,17 @@ pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
 /// next allocation of `ui`'s layout. Returns the rect taken and whether it is a cell.
 pub(crate) fn take_in_flow(ui: &mut Ui, size: Vec2) -> (Rect, bool) {
     take_in(ui, Env::of(ui).grid, size)
+}
+
+/// Leaves the next cell of the `Grid` body that encloses `ui` directly empty: the next child takes the cell after it.
+/// A row of a grid whose first column holds a control in some rows (a radio) leaves it empty in the others, so the
+/// cells after it stay in their columns. Outside a grid it does nothing.
+pub fn empty_cell(ui: &mut Ui) {
+    let env = Env::of(ui);
+    let grid = env.grid.filter(|body| pass_state::with::<Cursors, _>(ui.ctx(), |cursors| matches!(cursors.0.get(body), Some(Cursor::Grid(_)))));
+    if grid.is_some() {
+        take_in(ui, grid, Vec2::ZERO);
+    }
 }
 
 /// `take_in_flow`, with `grid` the body of `ui`'s env that places its children itself.
@@ -1102,9 +1162,17 @@ const STACKED: &[ColumnWidth] = &[ColumnWidth::fill(1.0)];
 /// as a probe, every leaf at its least and no column bounded, which gives each column its least, and then once more:
 /// each column keeps at least its least, a `Content` column measuring in the room the others leave at theirs. When
 /// the leasts do not fit beside each other, that last sweep lays the cells out one under another across the room
-/// instead, so no column is cut. The real run places the cells from the widths, leasts and layout the measuring run
-/// recorded.
-fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec2, mut body: impl FnMut(&mut Ui) -> R) -> R {
+/// instead, so no column is cut. A `GridFit::Fixed` grid sweeps its cells once at their own sizes in unbounded room,
+/// whatever the room and the probe, and overflows the room. The real run places the cells from the widths, leasts and
+/// layout the measuring run recorded.
+fn run_grid<R>(
+    ui: &mut Ui,
+    env: &Env,
+    id: Id,
+    (columns, fit, cells): (&[ColumnWidth], GridFit, CellAlign),
+    gap: Vec2,
+    mut body: impl FnMut(&mut Ui) -> R,
+) -> R {
     let ctx = ui.ctx().clone();
     let rtl = env.direction.is_rtl();
     let layout = child::column_layout(rtl);
@@ -1116,7 +1184,13 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         let cursor = make(Flow::new(ui.available_rect_before_wrap(), rtl));
         let count = columns.len();
         pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.insert(id, Cursor::Grid(cursor)));
-        let installed = Env::install_for(ui, scoped.derive_local(|scoped| scoped.grid = Some(id)));
+        let installed = Env::install_for(
+            ui,
+            scoped.derive_local(|scoped| {
+                scoped.grid = Some(id);
+                scoped.grid_top = cells == CellAlign::Top;
+            }),
+        );
         let (inner, unsettled) = ColumnGroup::grid(ui, id, count, seed, &mut body);
         Env::restore(&ctx, installed);
         let cursor = match pass_state::with::<Cursors, _>(&ctx, |cursors| cursors.0.remove(&id)) {
@@ -1135,7 +1209,51 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
         let stacked = this_pass(&ctx, false, sub(id, "stacked")).is_some_and(|stacked| stacked.x > 0.0);
         let columns = if stacked { STACKED } else { columns };
         let last = measured_tracks(&ctx, false, id, columns.len());
-        return child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| GridCursor::new(flow, columns, gap, &last)).0).0;
+        // A fixed grid lays its cells out over a room at least as wide as its columns, whatever room it was given.
+        let at = (fit == GridFit::Fixed).then(|| fixed_room(ui, &last.columns, gap.x, rtl));
+        return child::block(ui, at, layout, |ui| sweep(ui, env, None, columns, &|flow| GridCursor::new(flow, columns, gap, &last)).0).0;
+    }
+    // A fixed grid's columns are its cells' own widths, never their leasts, also inside a parent's probe for its least:
+    // a probe in unbounded room finds them, settled across the cells' column groups, and the grid lays its cells out
+    // over a room at least that wide, so it neither stacks nor squeezes them and its least width is its width. The room
+    // then clips or scrolls it.
+    if fit == GridFit::Fixed {
+        let natural = env.derive_local(|scoped| {
+            scoped.unbounded.0 = true;
+            scoped.least = false;
+        });
+        let mut probe = |ui: &mut Ui, seed: Option<Vec<Columns>>| {
+            crate::contract::keeping_ids(&ctx, || {
+                let found = layout_memory::probing(&ctx, || {
+                    let mut probe = laid_out_child(ui, layout);
+                    let (_, measured, _, unsettled) = sweep(&mut probe, &natural, seed, columns, &|flow| GridCursor::unbounded(flow, columns, gap));
+                    (measured.columns, unsettled)
+                });
+                (found, true)
+            })
+        };
+        let (mut widths, settled) = probe(ui, None);
+        if let Some(seed) = settled.clone() {
+            widths = probe(ui, Some(seed)).0;
+        }
+        let at = fixed_room(ui, &widths, gap.x, rtl);
+        let own = env.derive_local(|scoped| scoped.least = false);
+        let last = GridMeasure::default().with_least(widths.clone());
+        let (inner, measured, ..) =
+            child::block(ui, Some(at), layout, |ui| sweep(ui, &own, settled, columns, &|flow| GridCursor::new(flow, columns, gap, &last))).0;
+        let room = ui.available_rect_before_wrap().size();
+        for (i, width) in measured.columns.iter().enumerate() {
+            found(&ctx, true, column_id(id, i), room, Vec2::new(*width, 0.0));
+        }
+        for (i, width) in widths.iter().enumerate() {
+            found(&ctx, true, least_id(id, i), room, Vec2::new(*width, 0.0));
+        }
+        for (i, height) in measured.rows.iter().enumerate() {
+            found(&ctx, true, row_id(id, i), room, Vec2::new(0.0, *height));
+        }
+        found(&ctx, true, sub(id, "rows"), room, Vec2::new(measured.rows.len() as f32, 0.0));
+        found(&ctx, true, sub(id, "stacked"), room, Vec2::ZERO);
+        return inner;
     }
     // A measuring run under a body sized from its content gives each fill column the width its cells take, as a
     // content column: the room it would share is not the body's to claim.
@@ -1153,7 +1271,7 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
             let (out, kept) = layout_memory::draft(
                 &ctx,
                 || {
-                    let mut first = ui.new_child(egui::UiBuilder::new().layout(layout));
+                    let mut first = laid_out_child(ui, layout);
                     let (inner, measured, short, unsettled) =
                         sweep(&mut first, env, seed, columns, &|flow| cursor(columns, &none, flow).each_alone());
                     (inner, measured, first.min_rect(), short, unsettled)
@@ -1216,6 +1334,18 @@ fn run_grid<R>(ui: &mut Ui, env: &Env, id: Id, columns: &[ColumnWidth], gap: Vec
     let (inner, measured, ..) = child::block(ui, None, layout, |ui| sweep(ui, env, None, columns, &|flow| cursor(columns, &last, flow))).0;
     record(&measured, &last.least, stacked, ui.available_rect_before_wrap().size());
     inner
+}
+
+/// The room a fixed grid of columns `widths` lays its cells out over in `ui`: the room `ui` offers, widened to the
+/// columns and the gaps between them at the reading start.
+fn fixed_room(ui: &Ui, widths: &[f32], gap: f32, rtl: bool) -> Rect {
+    let room = ui.available_rect_before_wrap();
+    let width = room.width().max(widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32);
+    if rtl {
+        Rect::from_min_max(egui::pos2(room.max.x - width, room.min.y), room.max)
+    } else {
+        Rect::from_min_size(room.min, Vec2::new(width, room.height()))
+    }
 }
 
 /// What this pass's measuring run found under `id`. A measuring run itself reads nothing.
@@ -1333,106 +1463,138 @@ pub(crate) fn run_body_measured<R>(
     // Each sweep of a measuring run finds the body's first line and an unwrapped row's line afresh.
     let target = env.first_line.filter(|_| sizing);
     let row = (sizing && matches!(layout, BodyLayout::Row { wrap: false, .. })).then_some(id);
-    let mut body = |ui: &mut Ui| {
+    let body = |ui: &mut Ui| {
         open_sweep(&ctx, target, row);
         body(ui)
     };
+    // Each layout runs in its own function, so a body nested in bodies keeps only its own layout's frame on the stack.
+    let line = RowIn { id, gap, shared, sizing, rtl };
     match layout {
-        BodyLayout::Stack => {
-            // Each leaf shows at most the stack's room, never below its least.
-            let env = env.derive_local(|scoped| scoped.shrink = Some(Shrink::Fit));
-            let installed = Env::install_for(ui, env.clone());
-            // A held child of a column whose own room is unbounded keeps the width it measured at.
-            let inner = if env.content_column && flow_room(ui).x.is_finite() {
-                run_column(ui, &env, id, child::column_layout(rtl), body)
-            } else {
-                run_sharing(ui, &env, id, Axis::Y, child::column_layout(rtl), body)
-            };
-            Env::restore(&ctx, installed);
-            (inner, None)
-        }
-        BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => {
-            let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
-                let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
-                let installed = Env::install_for(
-                    ui,
-                    env.derive_local(|scoped| {
-                        scoped.grid = Some(id);
-                        scoped.row_line = Some(line);
-                        scoped.first_line = None;
-                    }),
-                );
-                let inner = run_spread(ui, id, gap.x, rtl, &mut body);
-                Env::restore(&ctx, installed);
-                record_line(ui, sizing, id, shared);
-                inner
-            });
-            inner
-        }
-        BodyLayout::Row { wrap: false, align: RowAlign::Start } => {
-            let room = ui.available_rect_before_wrap();
-            let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
-            let inner = run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
-                let installed = Env::install_for(
-                    ui,
-                    Env::of(ui).derive_local(|scoped| {
-                        scoped.row_room = Some(room.width());
-                        scoped.row_line = Some(line);
-                        scoped.first_line = None;
-                    }),
-                );
-                let inner = run_shrinking(ui, id, &mut body);
-                Env::restore(&ctx, installed);
-                record_line(ui, sizing, id, shared);
-                inner
-            });
-            (inner, None)
-        }
-        BodyLayout::Row { wrap, align } => {
-            let room = ui.available_rect_before_wrap();
-            let rect = match *align {
-                RowAlign::Start | RowAlign::SpaceBetween => None,
-                RowAlign::Center | RowAlign::End => {
-                    let last = this_pass(&ctx, sizing, id);
-                    // In a body that scrolls along x the band is the width its view shows, not the scroll region.
-                    let band = if Env::of(ui).unbounded.0 { shrink_room(ui) } else { room.width() };
-                    // Without a measuring run, or in a band without an end, the block is placed as `Start`.
-                    last.filter(|last| band.is_finite() && last.x > 0.0 && last.x < band).map(|last| {
-                        let spare = band - last.x;
-                        let lead = if *align == RowAlign::Center { spare / 2.0 } else { spare };
-                        Flow::new(room, rtl).take_start(lead).1.rect()
-                    })
-                }
-            };
-            // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
-            // first line.
-            let line = (!*wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
-            // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
-            // line of its own.
-            let block_layout = if *wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, *wrap) };
-            let (inner, took) = child::block(ui, rect, block_layout, |ui| {
-                let installed = Env::install_for(
-                    ui,
-                    env.derive_local(|scoped| {
-                        scoped.row_room = Some(room.width());
-                        scoped.row_line = line;
-                        if line.is_some() {
-                            scoped.first_line = None;
-                        }
-                    }),
-                );
-                let inner = if *wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
-                Env::restore(&ctx, installed);
-                if !*wrap {
-                    record_line(ui, sizing, id, shared);
-                }
-                inner
-            });
-            if *align != RowAlign::Start {
-                found(&ctx, sizing, id, room.size(), took.size());
-            }
-            (inner, (*align != RowAlign::Start).then(|| took.width()))
-        }
-        BodyLayout::Grid { columns } => (run_grid(ui, env, id, columns, gap, body), None),
+        BodyLayout::Stack => (run_stack(ui, env, &line, body), None),
+        BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => run_spread_row(ui, env, &line, body),
+        BodyLayout::Row { wrap: false, align: RowAlign::Start } => (run_start_row(ui, env, &line, body), None),
+        BodyLayout::Row { wrap, align } => run_row(ui, env, &line, (*wrap, *align), body),
+        BodyLayout::Grid { columns, fit, cells } => (run_grid(ui, env, id, (&columns[..], *fit, *cells), gap, body), None),
     }
+}
+
+/// What the layouts of `run_body_measured` read besides the env.
+#[derive(Clone, Copy)]
+struct RowIn {
+    id: Id,
+    gap: Vec2,
+    /// The line the body shares with its container's inline header or end region.
+    shared: Option<f32>,
+    sizing: bool,
+    rtl: bool,
+}
+
+/// A `Stack` body: each leaf shows at most the stack's room, never below its least.
+fn run_stack<R>(ui: &mut Ui, env: &Env, at: &RowIn, body: impl FnMut(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let env = env.derive_local(|scoped| scoped.shrink = Some(Shrink::Fit));
+    let installed = Env::install_for(ui, env.clone());
+    // A held child of a column whose own room is unbounded keeps the width it measured at.
+    let inner = if env.content_column && flow_room(ui).x.is_finite() {
+        run_column(ui, &env, at.id, child::column_layout(at.rtl), body)
+    } else {
+        run_sharing(ui, &env, at.id, Axis::Y, child::column_layout(at.rtl), body)
+    };
+    Env::restore(&ctx, installed);
+    inner
+}
+
+/// An unwrapped `Row` that spreads its children over its room.
+fn run_spread_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&mut Ui) -> R) -> (R, Option<f32>) {
+    let ctx = ui.ctx().clone();
+    let RowIn { id, gap, shared, sizing, rtl } = *at;
+    let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
+        let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
+        let installed = Env::install_for(
+            ui,
+            env.derive_local(|scoped| {
+                scoped.grid = Some(id);
+                scoped.grid_top = false;
+                scoped.row_line = Some(line);
+                scoped.first_line = None;
+            }),
+        );
+        let inner = run_spread(ui, id, gap.x, rtl, &mut body);
+        Env::restore(&ctx, installed);
+        record_line(ui, sizing, id, shared);
+        inner
+    });
+    inner
+}
+
+/// An unwrapped `Row` placed from its start, whose children share and shrink to its room.
+fn run_start_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, mut body: impl FnMut(&mut Ui) -> R) -> R {
+    let ctx = ui.ctx().clone();
+    let RowIn { id, shared, sizing, rtl, .. } = *at;
+    let room = ui.available_rect_before_wrap();
+    let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
+    run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
+        let installed = Env::install_for(
+            ui,
+            Env::of(ui).derive_local(|scoped| {
+                scoped.row_room = Some(room.width());
+                scoped.row_line = Some(line);
+                scoped.first_line = None;
+            }),
+        );
+        let inner = run_shrinking(ui, id, &mut body);
+        Env::restore(&ctx, installed);
+        record_line(ui, sizing, id, shared);
+        inner
+    })
+}
+
+/// A wrapped `Row`, or one that places its block at its center or end: the width its children take at the gap alone
+/// is what the body asks for.
+fn run_row<R>(ui: &mut Ui, env: &Env, at: &RowIn, (wrap, align): (bool, RowAlign), mut body: impl FnMut(&mut Ui) -> R) -> (R, Option<f32>) {
+    let ctx = ui.ctx().clone();
+    let RowIn { id, shared, sizing, rtl, .. } = *at;
+    let room = ui.available_rect_before_wrap();
+    let rect = match align {
+        RowAlign::Start | RowAlign::SpaceBetween => None,
+        RowAlign::Center | RowAlign::End => {
+            let last = this_pass(&ctx, sizing, id);
+            // In a body that scrolls along x the band is the width its view shows, not the scroll region.
+            let band = if Env::of(ui).unbounded.0 { shrink_room(ui) } else { room.width() };
+            // Without a measuring run, or in a band without an end, the block is placed as `Start`.
+            last.filter(|last| band.is_finite() && last.x > 0.0 && last.x < band).map(|last| {
+                let spare = band - last.x;
+                let lead = if align == RowAlign::Center { spare / 2.0 } else { spare };
+                Flow::new(room, rtl).take_start(lead).1.rect()
+            })
+        }
+    };
+    // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
+    // first line.
+    let line = (!wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
+    // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
+    // line of its own.
+    let block_layout = if wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, wrap) };
+    let (inner, took) = child::block(ui, rect, block_layout, |ui| {
+        let installed = Env::install_for(
+            ui,
+            env.derive_local(|scoped| {
+                scoped.row_room = Some(room.width());
+                scoped.row_line = line;
+                if line.is_some() {
+                    scoped.first_line = None;
+                }
+            }),
+        );
+        let inner = if wrap { body(ui) } else { run_shrinking(ui, id, &mut body) };
+        Env::restore(&ctx, installed);
+        if !wrap {
+            record_line(ui, sizing, id, shared);
+        }
+        inner
+    });
+    if align != RowAlign::Start {
+        found(&ctx, sizing, id, room.size(), took.size());
+    }
+    (inner, (align != RowAlign::Start).then(|| took.width()))
 }

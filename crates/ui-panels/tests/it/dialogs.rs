@@ -321,3 +321,47 @@ fn each_open_of_a_dialog_has_its_own_serial() {
     assert_eq!(again, id, "the reopened dialog has the same id");
     assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
 }
+
+/// A dialog with a text field and a number field before any other control, holding `name` and `radius`.
+fn first_field_dialog(name: Rc<RefCell<String>>, radius: Rc<Cell<Option<f64>>>, number_first: bool) -> Fixture {
+    use craft_ui::contract::Bind;
+    use craft_ui::text::{NumberField, TextField};
+    Fixture::new(move |ui| {
+        let mut open = true;
+        Dialog::new("New Layer")
+            .opened(Bind::bound(&mut open))
+            .buttons([FooterButton::new("OK", DialogRole::Accept), FooterButton::new("Cancel", DialogRole::Cancel)])
+            .show(ui, |ui, _| {
+                let mut text = name.borrow().clone();
+                let mut value = radius.get();
+                if number_first {
+                    NumberField::new("Radius", Bind::bound(&mut value)).show(ui);
+                    TextField::new("Name", Bind::bound(&mut text)).show(ui);
+                } else {
+                    TextField::new("Name", Bind::bound(&mut text)).show(ui);
+                    NumberField::new("Radius", Bind::bound(&mut value)).show(ui);
+                }
+                *name.borrow_mut() = text;
+                radius.set(value);
+            });
+    })
+}
+
+/// photocraft#15540: a dialog that opens with its first field focused selects that field's whole text, so typing
+/// right away replaces the value, for a text field (New Layer's name) and a number field (Gaussian Blur's Radius).
+#[trial]
+fn typing_in_a_freshly_opened_dialog_replaces_its_first_field() {
+    let mut typed_into = Vec::new();
+    for number_first in [false, true] {
+        let name = Rc::new(RefCell::new("Layer 1".to_owned()));
+        let radius = Rc::new(Cell::new(Some(1.0)));
+        let mut fixture = first_field_dialog(name.clone(), radius.clone(), number_first);
+        fixture.settle();
+        assert!(fixture.focused().is_some(), "the first field has the focus (number first: {number_first})");
+        fixture.type_text("7");
+        fixture.idle(2);
+        typed_into.push(fixture.focused().and_then(|id| fixture.tree().value(id).map(str::to_owned)));
+    }
+    // Typing replaced the first field's text: the text field first, then the number field first.
+    assert_eq!(typed_into, [Some("7".to_owned()), Some("7".to_owned())]);
+}
