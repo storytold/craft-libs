@@ -56,6 +56,10 @@ pub(crate) fn loda<'a>(b: &'a [u8], p: &Profile, limits: &Limits, warn: &mut Vec
     } else {
         count
     };
+    let table_bytes = count.checked_add(1)?.checked_mul(p.word())?;
+    if offsets_at.checked_add(table_bytes)? > b.len() {
+        return None;
+    }
     let mut offsets = Vec::with_capacity(count + 1);
     let mut ro = Rd::at(b, offsets_at);
     for _ in 0..=count {

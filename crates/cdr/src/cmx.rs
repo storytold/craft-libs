@@ -240,7 +240,12 @@ impl Tables {
         for e in entries(first(b"rdot"), budget)? {
             let mut r = Rd::new(field(e, 1).unwrap_or_default());
             let n = r.u16().map_or(0, usize::from);
-            t.dashes.push((0..n).map_while(|_| r.u16()).collect());
+            let mut pattern: Vec<u16> = (0..n).map_while(|_| r.u16()).collect();
+            // A pattern of zero lengths draws as a solid line, as in a `.cdr` outline (R48).
+            if pattern.iter().all(|x| *x == 0) {
+                pattern.clear();
+            }
+            t.dashes.push(pattern);
         }
         for e in entries(first(b"rotl"), budget)? {
             t.outlines.push(field(e, 1).and_then(|f| {
@@ -284,8 +289,7 @@ impl Tables {
         if flags & 4 != 0 {
             let stored = usize::from(dash).checked_sub(1).and_then(|i| self.dashes.get(i));
             match stored {
-                // A pattern of zero lengths draws as a solid line, as in a `.cdr` outline (R48).
-                Some(d) if d.iter().all(|x| *x == 0) => {}
+                Some(d) if d.is_empty() => {}
                 Some(d) if budget.take_dashes(d.len()) => dashes = d.iter().map(|x| f64::from(*x)).collect(),
                 Some(_) => push(warn, Warning::TooDeep),
                 None => push(warn, Warning::Damaged),
