@@ -130,7 +130,8 @@ impl PathEdit {
     ///   the point at `t` (clamped to 0.05..=0.95, 0.5 when not finite) moves exactly `by`, the
     ///   nearer handle more; smooth end knots stay smooth.
     /// - `Convert`: `None` a corner with retracted handles; `Some(out)` a smooth knot with the out
-    ///   handle at `out` and the in handle mirrored.
+    ///   handle at `out` and the in handle mirrored; `Some(out)` with `alone` moves only the out
+    ///   handle to `out`, the in handle stays where it is and the knot becomes a corner.
     /// - `MoveCurvature`: `MoveAnchors`, then [`EditSubpath::reflow`] on every subpath touched.
     /// - `InsertCurvature`: [`EditSubpath::insert_at`] (the new knot made smooth, on a straight
     ///   segment too, as Photoshop's Curvature Pen adds a smooth point), the new knot moved by
@@ -218,15 +219,19 @@ impl PathEdit {
                 k.in_ctrl = in_ctrl.unwrap_or(k.anchor - (*out - k.anchor));
                 k.smooth = in_ctrl.is_none();
             }
-            PathEdit::Convert { knot, out, .. } => {
+            PathEdit::Convert { knot, out, alone, .. } => {
                 if !knot_ok(path, *knot) {
                     return false;
                 }
                 let k = &mut path.subpaths[knot.subpath].knots[knot.knot];
-                *k = match out {
-                    Some(o) => Knot::smooth(k.anchor, *o),
-                    None => Knot::corner(k.anchor),
-                };
+                match out {
+                    Some(o) if *alone => {
+                        k.out_ctrl = *o;
+                        k.smooth = false;
+                    }
+                    Some(o) => *k = Knot::smooth(k.anchor, *o),
+                    None => *k = Knot::corner(k.anchor),
+                }
             }
             PathEdit::InsertCurvature { segment, t, by, .. } => {
                 let Some(sp) = path.subpaths.get_mut(segment.subpath) else { return false };
