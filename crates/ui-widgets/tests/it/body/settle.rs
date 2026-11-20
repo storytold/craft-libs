@@ -6,10 +6,10 @@ use crate::values::kit::{AT, INITIAL, Scrub, Seen};
 use craft_theme::{Contrast, Mode, Size};
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Radio, RadioGroup};
-use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowContainer as _, Sizing, Tracked};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
-use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Commands as _};
+use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, CommandStates, Commands as _};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
@@ -36,6 +36,9 @@ struct Scene {
     versions: [Cell<Option<u64>>; 2],
     repaints: Cell<bool>,
     app_repaints: Cell<bool>,
+    /// Whether the editor's binding is given: the scene applies each edit to the value itself and, as an app's content
+    /// version covers its data, moves the reader's version (when it has one).
+    given: Cell<bool>,
     /// Whether the scene shows only what is outside the settling children.
     bare: Cell<bool>,
     runs: [Cell<usize>; 2],
@@ -53,6 +56,7 @@ impl Scene {
             versions: Default::default(),
             repaints: Cell::new(false),
             app_repaints: Cell::new(false),
+            given: Cell::new(false),
             bare: Cell::new(false),
             runs: Default::default(),
             buttons: [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))],
@@ -106,7 +110,18 @@ impl Scene {
     }
 
     fn editor(&self, ui: &mut Ui) {
-        Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("editor").show_at(ui, AT);
+        if !self.given.get() {
+            Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("editor").show_at(ui, AT);
+            return;
+        }
+        let shown = *self.value.borrow();
+        let edit = Scrub::new(Bind::given(shown)).id_salt("editor").show_at(ui, AT);
+        if let Some(value) = edit.events.landed() {
+            *self.value.borrow_mut() = *value;
+            if let Some(version) = self.versions[0].get() {
+                self.versions[0].set(Some(version + 1));
+            }
+        }
     }
 
     /// The runs of each child in one frame with `events`.
@@ -228,6 +243,33 @@ fn an_edit_runs_the_settled_child_that_read_the_value() {
             assert!(*shows, "the reader shows the dragged value (editor first: {editor_first}): {frames:?}");
             let expected = if editor_first { 1 } else { 2 };
             assert_eq!(*passes, expected, "passes per drag frame (editor first: {editor_first}): {frames:?}");
+        }
+    }
+}
+
+/// A drag of a control on a given binding, outside both children: the app applies each edit to its data and moves the
+/// content version of the child that shows it. That child runs and shows the dragged value (in the same frame when the
+/// editor comes first in the pass, in the next one otherwise); a child with an unchanged content version stays settled;
+/// a child with no content version runs, since the edit may have changed app data the framework does not track.
+#[trial]
+fn a_given_edit_runs_the_versioned_child_whose_version_moved_and_the_unversioned_ones() {
+    for (editor_first, other_version) in [(true, Some(1)), (false, Some(1)), (true, None)] {
+        let scene = Scene::new(editor_first, false);
+        scene.given.set(true);
+        scene.versions[0].set(Some(1));
+        scene.versions[1].set(other_version);
+        let frames = drag(&scene);
+        let case = format!("editor first: {editor_first}, other's version: {other_version:?}: {frames:?}");
+        for (passes, [reader, other], shows) in &frames[1..] {
+            assert!(*reader > 0, "the child whose version moved runs ({case})");
+            if editor_first {
+                assert!(*shows, "it shows the dragged value in the same frame ({case})");
+            }
+            match other_version {
+                Some(_) => assert_eq!(*other, 0, "the child whose version did not move stays settled ({case})"),
+                None => assert!(*other > 0, "the child with no content version runs ({case})"),
+            }
+            assert_eq!(*passes, 1, "a given edit asks for no rerun ({case})");
         }
     }
 }
@@ -381,7 +423,11 @@ fn an_app_command_state_runs_the_settled_child_that_shows_it() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert!(!scene.disabled(&mut frames, 0), "Shown starts enabled");
-    let disable = |enabled: bool| CommandInput::new().state(Shown::Visible, CommandState::new().enabled(enabled));
+    let mut states = Tracked::new(CommandStates::new());
+    let mut disable = |enabled: bool| {
+        states.set(Shown::Visible, CommandState::new().enabled(enabled));
+        CommandInput::new().states(&states)
+    };
     frames.commands(disable(false));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the child that shows Shown runs: {reader}, {beside}");
@@ -425,7 +471,9 @@ fn a_command_read_in_a_measured_body_settles_and_runs_when_its_state_changes() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert_eq!(scene.frame(&mut frames).1, [0, 0], "the child holding the measured body settles");
-    frames.commands(CommandInput::new().state(Shown::Measured, CommandState::new().enabled(false)));
+    let mut states = Tracked::new(CommandStates::new());
+    states.set(Shown::Measured, CommandState::new().enabled(false));
+    frames.commands(CommandInput::new().states(&states));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the child that shows Measured runs: {reader}, {beside}");
     assert!(scene.disabled(&mut frames, 3), "it shows Measured disabled in the frame the app disables it");

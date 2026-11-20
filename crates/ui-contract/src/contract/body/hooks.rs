@@ -518,20 +518,27 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.scroll_input(props, cx);
         }
         // A reveal queued for the body moves its offset against the view this pass shows, on top of a move
-        // `scroll_input` queued; the next pass takes the offset at step 4, as it takes the scroll bar's, clamps it to the
-        // extent it knows and places by it. The part of the rect the view shows goes on to the scroll owner around.
+        // `scroll_input` queued, within the offsets the content allows; the next pass takes the offset at step 4, as it
+        // takes the scroll bar's, and places by it. A reveal that moves nothing queues no jump, so it costs no pass. The
+        // part of the rect the moved view shows goes on to the scroll owner around.
         if let Some((scroll, view)) = scroll.zip(self.view)
             && let Some(rect) = crate::contract::take_reveal(&cx.core.ctx, cx.core.id)
         {
             let view = self.shown_view(scroll, view);
-            let (by, shown) = crate::contract::steps::reveal_move(rect, view);
+            let (by, _) = crate::contract::steps::reveal_move(rect, view);
             let rtl = cx.core.env.direction().is_rtl();
             let id = cx.core.id;
-            let mut offset = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let from = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            let mut offset = from;
             offset.y += f64::from(by.y);
             offset.x += f64::from(if rtl { -by.x } else { by.x });
-            super::scroll::queue_jump(&cx.core.ctx, id, offset);
-            crate::contract::Focus::reveal(cx, shown);
+            let offset = self.clamped(scroll, view.size(), offset);
+            if offset != from {
+                super::scroll::queue_jump(&cx.core.ctx, id, offset);
+            }
+            let moved = Vec2::new((offset.x - from.x) as f32, (offset.y - from.y) as f32);
+            let moved = Vec2::new(if rtl { -moved.x } else { moved.x }, moved.y);
+            crate::contract::Focus::reveal(cx, rect.translate(-moved).intersect(view));
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
         if props.collapse.is_some() && cx.activation().is_some_and(|activation| activation.by_key) {
@@ -920,6 +927,8 @@ struct BodyRun<'r> {
     env: &'r Env,
     /// While the body opens or closes, it shows only the part of its last height that the presence reaches.
     reveal_clip: Option<Rect>,
+    /// The body shows through a view of its own (`ContainerProps::scroll_owner`): its region is its clip.
+    view_clip: bool,
 }
 
 /// The region a scrolling body's content runs in, and what its run reads after the content.
@@ -952,6 +961,9 @@ fn body_ui(run: &BodyRun<'_>, parent: &mut Ui, at: Rect) -> Ui {
     style::set_item_spacing(&mut body_ui, run.gap);
     if let Some(clip) = run.reveal_clip {
         body_ui.set_clip_rect(clip.intersect(body_ui.clip_rect()));
+    }
+    if run.view_clip {
+        body_ui.set_clip_rect(at.intersect(body_ui.clip_rect()));
     }
     body_ui
 }
@@ -1250,6 +1262,7 @@ impl BodyHooks<'_> {
             columns: LabelColumns::of(props, !self.wide() && !self.held(props, env)),
             env: body_env,
             reveal_clip,
+            view_clip: props.scroll_owner && props.transform.is_none(),
         };
         let body_rect = plan.body_rect;
         let share = plan.share(false);

@@ -42,6 +42,15 @@ pub struct UiTokens {
     key: u64,
 }
 
+/// Two sets are equal when their content keys are: equal sets share a key.
+impl PartialEq for UiTokens {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for UiTokens {}
+
 impl UiTokens {
     /// A token set resolved under `contrast` and `density`, with no theme values for token groups, drawing the default
     /// icon set.

@@ -96,3 +96,104 @@ pub fn decode_jpeg_inks(bytes: &[u8], limits: &Limits) -> Result<Image, CodecErr
     }
     Image::from_u8(w, h, ChannelLayout::Cmyk, data)
 }
+
+/// The bytes after an `ICC_PROFILE` APP2 segment's length: its name, then the segment's number and
+/// the count of segments.
+const ICC_SEGMENT: &[u8; 12] = b"ICC_PROFILE\0";
+
+/// JPEG `bytes` carrying `icc` in place of the ICC profile they carry, if any: every
+/// `ICC_PROFILE` APP2 segment before the scan taken out, `icc` written as numbered APP2 segments
+/// after the leading application segments, and the other segments and the scan as they are. `None`
+/// for bytes whose segments before the scan can't be read, an empty `icc`, and one longer than 255
+/// segments hold.
+pub fn jpeg_with_icc(bytes: &[u8], icc: &[u8]) -> Option<Vec<u8>> {
+    // A segment's length counts itself (2 bytes) and the name, number and count (14).
+    const CHUNK: usize = 0xFFFF - 2 - ICC_SEGMENT.len() - 2;
+    let chunks: Vec<&[u8]> = icc.chunks(CHUNK).collect();
+    let count = u8::try_from(chunks.len()).ok().filter(|n| *n > 0)?;
+    let mut segments = Vec::with_capacity(icc.len() + 18 * chunks.len());
+    for (i, chunk) in chunks.iter().enumerate() {
+        let len = u16::try_from(chunk.len() + 2 + ICC_SEGMENT.len() + 2).ok()?;
+        segments.extend_from_slice(&[0xFF, 0xE2]);
+        segments.extend_from_slice(&len.to_be_bytes());
+        segments.extend_from_slice(ICC_SEGMENT);
+        segments.extend_from_slice(&[u8::try_from(i + 1).ok()?, count]);
+        segments.extend_from_slice(chunk);
+    }
+    with_icc_segments(bytes, &segments)
+}
+
+/// JPEG `bytes` without the ICC profile they carry: every `ICC_PROFILE` APP2 segment before the
+/// scan taken out, and the other segments and the scan as they are. `None` for bytes whose
+/// segments before the scan can't be read.
+pub fn jpeg_without_icc(bytes: &[u8]) -> Option<Vec<u8>> {
+    with_icc_segments(bytes, &[])
+}
+
+/// JPEG `bytes` with every `ICC_PROFILE` APP2 segment before the scan taken out and `segments`
+/// written after the leading application segments; `None` when the bytes don't start a JPEG or
+/// their segments before the scan can't be read.
+fn with_icc_segments(bytes: &[u8], segments: &[u8]) -> Option<Vec<u8>> {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() + segments.len());
+    out.extend_from_slice(&[0xFF, 0xD8]);
+    let mut icc_segments = Some(segments);
+    let mut at = 2;
+    // The segments before the scan (SOS), each with its length; a marker without one ends them.
+    // Fill bytes (0xFF) before a marker are left out.
+    loop {
+        while bytes.get(at..at + 2) == Some(&[0xFF, 0xFF]) {
+            at += 1;
+        }
+        let (Some(&0xFF), Some(&marker)) = (bytes.get(at), bytes.get(at + 1)) else { return None };
+        let app = (0xE0..=0xEF).contains(&marker);
+        if !app && let Some(s) = icc_segments.take() {
+            out.extend_from_slice(s);
+        }
+        if matches!(marker, 0xDA | 0xD8 | 0xD9 | 0x01 | 0xD0..=0xD7) {
+            break;
+        }
+        let len = usize::from(u16::from_be_bytes(bytes.get(at + 2..at + 4)?.try_into().ok()?));
+        let segment = bytes.get(at..(at + 2).checked_add(len)?).filter(|_| len >= 2)?;
+        if !(marker == 0xE2 && segment.get(4..16) == Some(ICC_SEGMENT.as_slice())) {
+            out.extend_from_slice(segment);
+        }
+        at += segment.len();
+    }
+    out.extend_from_slice(bytes.get(at..)?);
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{jpeg_icc_profile, jpeg_with_icc, jpeg_without_icc};
+
+    fn minimal_jpeg() -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        jpeg.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        jpeg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00]); // APP0
+        jpeg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 8, 0, 1, 0, 1, 1, 1, 0x11, 0]); // SOF0
+        jpeg.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 1, 1, 0, 0, 63, 0]); // SOS
+        jpeg.extend_from_slice(&[0x00, 0xFF, 0xD9]); // scan + EOI
+        jpeg
+    }
+
+    #[test]
+    fn replaces_and_strips_jpeg_icc_segments() {
+        let base = minimal_jpeg();
+        let icc_a = vec![0x11; 70_000];
+        let with_a = jpeg_with_icc(&base, &icc_a).unwrap();
+        assert_eq!(jpeg_icc_profile(&with_a), Some(icc_a));
+
+        let icc_b = b"short-profile";
+        let with_b = jpeg_with_icc(&with_a, icc_b).unwrap();
+        assert_eq!(jpeg_icc_profile(&with_b), Some(icc_b.to_vec()));
+
+        let stripped = jpeg_without_icc(&with_b).unwrap();
+        assert_eq!(jpeg_icc_profile(&stripped), None);
+        assert_eq!(stripped, base);
+        assert_eq!(jpeg_with_icc(&base, &[]), None);
+    }
+}
