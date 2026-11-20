@@ -10,8 +10,9 @@ The crate is native only and is a dependency of an app's `xtask` package only.
 | `assets` | always | `Policy`, `RowMode`, `check`, `run`, `list_files`, `read_document`, `is_asset`, `ASSET_EXT`: the asset attribution check against the document, folders and extensions the app supplies |
 | `lock` | `lock` | `LockConfig`, `try_acquire`, `acquire`, `holders`: 1 to 64 slots held across processes through file locks in a directory the app chooses |
 | `report` | `report` | `write` and `to_json`: the per-step JSON report (schema 1), replaced atomically through `craft-atomic` |
+| `pins` | `pins` | `run`, `check`, `run_target_features`, `host_target`: the version, source and features of pinned dependencies, and packages the app forbids, read from `cargo metadata` within size limits |
 
-No feature is on by default. `report` adds `serde_json` and `craft-atomic`.
+No feature is on by default. `report` adds `serde_json` and `craft-atomic`, and `pins` adds `serde_json`.
 
 ## Use
 
@@ -175,6 +176,56 @@ cancel while waiting) runs no step and writes no report. The report looks like t
 so a reader never sees a partial report, and a failed write leaves the previous report in place.
 Machine, GPU, corpus and skip details stay in the app's own report.
 
+## Pins
+
+`cargo xtask pdf-deps` checks that pinned dependencies resolve to the pinned version and source, with
+the allowed features, and that packages the app forbids are not in the graph. The app enables the
+`pins` feature, keeps its own table and passes it with a function that builds its `cargo` command:
+
+```rust
+use craft_xtask::pins::{FeatureRule, Forbidden, Name, Pin, Policy, Scope};
+
+const REV: &str = "9f75d3dc19b4b514c4f3d4847ed1ec1b0e86b4ef";
+
+Some("pdf-deps") => {
+    let source = craft_xtask::pins::git_source("https://github.com/storytold/craft-libs", REV);
+    let pins = [Pin { name: "craft-pdf", version: "0.1.0", source: &source, features: FeatureRule::Exactly(&["read"]) }];
+    let forbidden = [Forbidden { name: Name::Exact("krilla"), scope: Scope::Active }];
+    craft_xtask::pins::run(cargo, &Policy { pins: &pins, forbidden: &forbidden }, &Default::default())
+        .map_err(|e| e.to_string())
+}
+```
+
+- `run` runs `cargo metadata --locked --format-version 1` and passes the JSON to `check`.
+- Each `Pin` name has exactly one package, with the pinned `version` and `source`. `git_source(url, rev)`
+  gives the source Cargo writes for a git dependency pinned to a full commit hash, and `CRATES_IO` the
+  source for crates.io.
+- `FeatureRule::Contains` requires the listed features and allows others. `FeatureRule::Exactly`
+  allows the listed features only. Both read the package's node in `resolve.nodes`.
+- `Scope::Active` rejects a forbidden package that has a resolved node, development dependencies
+  included. `Scope::ProductionFrom(root)` rejects a forbidden package reached from `root` over normal
+  or build edges; one reached only through development edges is allowed. `Name::Family("hayro")`
+  matches `hayro` and every `hayro-*` name.
+- Packages the policy does not name are allowed, and an empty policy accepts any metadata.
+- JSON that does not parse, or lacks a field a rule needs (`resolve.nodes`, a package `id`, a node's
+  `features` or `deps`, an edge's `dep_kinds`), is an error.
+- Cargo merges every target's features into one metadata result. `run_target_features` runs
+  `cargo tree --target <target>` from a root package and checks that each line for one package has
+  exactly the given features; `host_target` reads the host target from `rustc -vV`.
+- `Limits` bounds each command's output. More standard output than the limit stops the command and
+  returns an error. Standard error is read to its end, and its first `stderr_bytes` are kept for the
+  error message:
+
+  | Limit | Default |
+  |---|---|
+  | `metadata_bytes`: the `cargo metadata` JSON, also for JSON passed to `check` | 64 MiB |
+  | `tree_bytes`: one `cargo tree` output | 64 MiB |
+  | `version_bytes`: the `rustc -vV` output | 64 KiB |
+  | `stderr_bytes`: standard error kept for a message | 64 KiB |
+
+- `pins::Error` tells apart a command that could not start, could not be read, exited without
+  success or printed too much; output that is not valid; and a `Violation` of the policy.
+
 ## Origin
 
 | Part | Source |
@@ -189,6 +240,11 @@ Machine, GPU, corpus and skip details stay in the app's own report.
 | `assets`: folder-only extensions and the tests in `assets::tests::gridcraft` | GridCraft `xtask/src/assets.rs` at [f204433](https://github.com/storytold/gridcraft/blob/f2044337c7e195bdf6bec1b3914937a3dd386749/xtask/src/assets.rs) |
 | `assets`: first-cell rows, folder patterns, forbidden extensions and names, the license column and the tests in `assets::tests::lightcraft` | LightCraft `xtask/src/assets.rs` at [25ffe3e](https://github.com/storytold/lightcraft/blob/25ffe3e5d4ac754829b99dd7368d94185adbf8d5/xtask/src/assets.rs) |
 | `assets`: the policy checks, the cell parser, bad-entry and near-row reports, the size limits, UTF-8 names, skipped folders and the regular-file test | written here |
+| `pins`: exact feature sets, the production walk over normal and build edges, the per-target `cargo tree` feature check, and their five tests | DeckCraft `xtask/src/pdf_deps.rs` at `aa3a1baa01` |
+| `pins`: one package per name with an exact version and source, and its three tests | VectorCraft `xtask/src/pdf_deps.rs` at `34627134fa` |
+| `pins`: required features that allow others, and its five tests | DesignCraft `xtask/src/pdf_deps.rs` at `18246dddd2` |
+| `pins`: packages forbidden when resolved, and its five tests | EffectCraft `xtask/src/pdf_deps.rs` at `f31a6b0aef` |
+| `pins`: the output size limits, an empty feature list in `cargo tree`, and the errors for missing fields, features that are not strings, edges without a kind and packages without a name | written here |
 
 ## Migration
 
@@ -198,6 +254,7 @@ No app uses this crate yet.
 |---|---|
 | DesignCraft | Planned: `cmd_ci`, `root`, `cargo`, `run`, `cmd_test` and `cmd_doctest` move to `runner`, with `TestMode::PreferNextest`. The step list, `TEST_TARGETS` and the i18n report stay in the app. |
 | LightCraft | Planned: `ci_lock.rs` moves to `lock`, with `LIGHTCRAFT_CI_LOCK` and `LIGHTCRAFT_CI_SLOTS` read by the app. The machine, GPU, corpus and skip report stays in the app. |
+| DeckCraft, DesignCraft, EffectCraft, VectorCraft | Planned: `xtask/src/pdf_deps.rs` moves to `pins`. Each app keeps its `pdf-deps` command and its table, and runs `cargo xtask pdf-deps` before and after the switch. |
 | VectorCraft, DesignCraft, CADCraft, DeckCraft, WordCraft, GridCraft, LightCraft | Planned: `xtask/src/assets.rs` moves to `assets`, each with its own document, folders and row mode; LightCraft with `RowMode::Patterns`, its forbidden extensions and names, and `license_column: Some(4)`. The `cargo xtask assets` output stays in the app. |
 
 Maintainers: the craft-libs maintainers, until a responsible maintainer or team is agreed in the
