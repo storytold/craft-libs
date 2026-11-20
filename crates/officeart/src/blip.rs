@@ -135,9 +135,14 @@ pub fn parse<'a>(rec: &Rec<'a>) -> Option<Blip<'a>> {
     Some(blip).filter(|b| !b.data.is_empty())
 }
 
-impl Blip<'_> {
-    /// The picture's bytes: a compressed metafile inflated (to at most its uncompressed size and
-    /// [`MAX_INFLATED`]), a stored one cut to its uncompressed size, a bitmap file as it is; a DIB
+impl<'a> Blip<'a> {
+    /// The saved bytes as they are: a bitmap file, a DIB, or a metafile's (deflated or not).
+    pub fn raw(&self) -> &'a [u8] {
+        self.data
+    }
+
+    /// The picture's bytes: a metafile inflated or stored, cut to its uncompressed size and at most
+    /// [`MAX_INFLATED`] bytes, or a bitmap file as it is; a DIB
     /// stays a DIB ([`dib`] makes it a file). At most `limit` bytes, all charged to `work` before
     /// they are made. Inflating is charged the compressed bytes it reads and the size it may
     /// produce; what it didn't produce is given back when it succeeds, and kept when it fails, so
@@ -157,7 +162,8 @@ impl Blip<'_> {
             out
         } else {
             let stored = self.data.get(..size.map_or(self.data.len(), |s| s.min(self.data.len())))?;
-            if stored.len() > limit || !work.charge(stored.len(), "picture") {
+            let most = if self.header.is_some() { cap } else { limit };
+            if stored.len() > most || !work.charge(stored.len(), "picture") {
                 return None;
             }
             stored.to_vec()

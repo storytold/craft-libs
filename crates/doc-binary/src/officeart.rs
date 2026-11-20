@@ -8,26 +8,17 @@
 
 use std::collections::HashMap;
 
+use craft_officeart::blip::Format;
 use craft_officeart::dib::{self, Dib};
-use craft_officeart::props::entries;
-use craft_officeart::record::{Records, u32_at};
+use craft_officeart::record::{MAX_DEPTH, MAX_RECORDS, Records, u32_at};
 use craft_wordmodel::props::Rgb;
 
 pub(crate) use craft_officeart::blip::{Decode, fbse_record};
 pub(crate) use craft_officeart::record::Rec;
 pub(crate) use craft_officeart::rt;
 
-/// Deepest container nesting walked (groups inside groups…).
-const MAX_DEPTH: usize = 12;
-/// Most records walked in one drawing tree or BLIP store.
-const MAX_RECORDS: usize = 200_000;
-/// Most BLIP store entries kept.
-const MAX_BSE: usize = 10_000;
 /// Most drawings (main document, headers) read from `OfficeArtContent`.
 const MAX_DRAWINGS: usize = 8;
-/// Largest decompressed metafile (bytes).
-const MAX_METAFILE: usize = 64 << 20;
-
 /// The record at the start of `buf` and the bytes it spans (header included). A body longer
 /// than `buf` is cut to what is there.
 pub(crate) fn record(buf: &[u8]) -> Option<(Rec<'_>, usize)> {
@@ -77,59 +68,24 @@ pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize, work: &mut Deco
 /// document's decode budget: inflating a metafile or decoding a DIB is charged to it before
 /// it runs, whether it succeeds or not, and nothing is decoded once it is spent.
 pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
-    // Each type has two instance values; the odd one carries a second 16-byte UID.
-    let uids = if rec.instance & 1 == 1 { 32 } else { 16 };
-    match rec.kind {
-        rt::BLIP_PNG | rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK | rt::BLIP_DIB | rt::BLIP_TIFF => {
-            let data = rec.data.get(uids + 1..)?; // + tag byte
-            if data.is_empty() || data.len() > limit {
-                return None;
-            }
-            match rec.kind {
-                rt::BLIP_PNG => Some(Blip { bytes: data.to_vec(), ext: "png", placeholder: false }),
-                rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK => Some(Blip { bytes: data.to_vec(), ext: "jpeg", placeholder: false }),
-                rt::BLIP_TIFF => Some(Blip { bytes: data.to_vec(), ext: "tiff", placeholder: false }),
-                _ => match dib::to_png(data, limit, work)? {
-                    Dib::Png(bytes) => Some(Blip { bytes, ext: "png", placeholder: false }),
-                    // Kept as a BMP, which renders as a grey placeholder.
-                    Dib::Bmp(bytes) => Some(Blip { bytes, ext: "bmp", placeholder: true }),
-                },
-            }
-        }
-        rt::BLIP_EMF | rt::BLIP_WMF | rt::BLIP_PICT => {
-            // OfficeArtMetafileHeader: cbSize, rcBounds, ptSize, cbSave, compression, filter.
-            let hdr = rec.data.get(uids..uids + 34)?;
-            let cb_size = u32_at(hdr, 0)? as usize;
-            let cb_save = u32_at(hdr, 28)? as usize;
-            let compression = *hdr.get(32)?;
-            let raw = rec.data.get(uids + 34..)?;
-            let raw = raw.get(..cb_save.min(raw.len()))?;
-            let cap = limit.min(MAX_METAFILE);
-            let bytes = if compression == 0 {
-                let want = if cb_size > 0 { cb_size.min(cap) } else { cap };
-                // The compressed stream is read whole whatever it inflates to: a record that
-                // claims to inflate to nothing still costs its input (#3871).
-                if !work.charge(want.max(raw.len()), "metafile") {
-                    return None;
-                }
-                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(raw, want).ok()?
-            } else {
-                if raw.len() > cap {
-                    return None;
-                }
-                raw.to_vec()
+    let b = craft_officeart::blip::parse(rec)?;
+    let (ext, placeholder) = match b.format {
+        Format::Dib => {
+            return match dib::to_png(b.raw(), limit, work)? {
+                Dib::Png(bytes) => Some(Blip { bytes, ext: "png", placeholder: false }),
+                // Kept as a BMP, which renders as a grey placeholder.
+                Dib::Bmp(bytes) => Some(Blip { bytes, ext: "bmp", placeholder: true }),
             };
-            if bytes.is_empty() {
-                return None;
-            }
-            match rec.kind {
-                rt::BLIP_EMF => Some(Blip { bytes, ext: "emf", placeholder: false }),
-                rt::BLIP_WMF => Some(Blip { bytes, ext: "wmf", placeholder: false }),
-                _ => Some(Blip { bytes, ext: "pict", placeholder: true }),
-            }
         }
-        _ => None,
-    }
+        Format::Png => ("png", false),
+        Format::Jpeg => ("jpeg", false),
+        Format::Tiff => ("tiff", false),
+        Format::Emf => ("emf", false),
+        Format::Wmf => ("wmf", false),
+        // The format cannot be drawn: kept as a placeholder of the right size.
+        Format::Pict => ("pict", true),
+    };
+    Some(Blip { bytes: b.bytes(limit, work)?, ext, placeholder })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -168,52 +124,35 @@ pub(crate) struct Props {
 }
 
 impl Props {
-    /// Apply one property table (`OfficeArtFOPT` or a secondary/tertiary one): `count` 6-byte
-    /// entries, then the complex data of the entries flagged complex, in order.
-    pub(crate) fn apply(&mut self, body: &[u8], count: u16) {
-        // The complex data is looked for after the entries the table holds whole.
-        for e in entries(body, (count as usize).min(body.len() / 6)) {
-            let (pid, op) = (e.pid, e.op);
-            if e.is_complex {
-                if pid == 0x0381
-                    && let Some(data) = e.complex
-                {
-                    let units: Vec<u16> = data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).take(4096).collect();
-                    self.alt = String::from_utf16_lossy(&units);
-                }
-                continue;
-            }
-            let fixed = |v: u32| (v as i32) as f32 / 65_536.0;
-            match pid {
-                0x0004 => self.rot = fixed(op),
-                0x0100..=0x0103 => {
-                    // cropFromTop, cropFromBottom, cropFromLeft, cropFromRight.
-                    let slot = [1, 3, 0, 2][(pid - 0x0100) as usize];
-                    let v = fixed(op);
-                    self.crop[slot] = if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 };
-                }
-                0x0104 => self.pib = Some(op),
-                0x0181 => self.fill_color = color(op),
-                // fFilled (bit 4) is valid when fUsefFilled (bit 20) is set.
-                0x01BF if op & (1 << 20) != 0 => self.filled = Some(op & (1 << 4) != 0),
-                0x01BF => {}
-                0x01C0 => self.line_color = color(op),
-                0x01CB => self.line_width = Some(op),
-                0x01D0 | 0x01D1 => self.arrowhead |= op != 0,
-                // fLine (bit 3) is valid when fUsefLine (bit 19) is set.
-                0x01FF if op & (1 << 19) != 0 => self.line = Some(op & (1 << 3) != 0),
-                0x01FF => {}
-                0x0384..=0x0387 => self.wrap_dist[(pid - 0x0384) as usize] = Some(op),
-                0x038F => self.posh = Some(op),
-                0x0390 => self.posrelh = Some(op),
-                0x0391 => self.posv = Some(op),
-                0x0392 => self.posrelv = Some(op),
-                // Group Shape Boolean Properties: fLayoutInCell (bit 15) is valid when
-                // fUsefLayoutInCell (bit 31) is set.
-                0x03BF if op & (1 << 31) != 0 => self.layout_in_cell = Some(op & (1 << 15) != 0),
-                _ => {}
+    /// The properties of a shape's merged tables (its primary table first, then its secondary and
+    /// tertiary ones; boolean words merged flag by flag).
+    pub(crate) fn from_set(p: &craft_officeart::props::Props) -> Props {
+        let fixed = |v: u32| (v as i32) as f32 / 65_536.0;
+        let mut out = Props { pib: p.get(0x0104), ..Props::default() };
+        if let Some(v) = p.get(0x0004) {
+            out.rot = fixed(v);
+        }
+        // cropFromTop, cropFromBottom, cropFromLeft, cropFromRight.
+        for (pid, slot) in [(0x0100, 1), (0x0101, 3), (0x0102, 0), (0x0103, 2)] {
+            if let Some(v) = p.get(pid).map(fixed) {
+                out.crop[slot] = if v.is_finite() { v.clamp(0.0, 0.99) } else { 0.0 };
             }
         }
+        out.fill_color = p.get(0x0181).and_then(color);
+        // fFilled (bit 4) and fLine (bit 3), when their fUse bits are set.
+        out.filled = p.flag(0x01BF, 4);
+        out.line_color = p.get(0x01C0).and_then(color);
+        out.line_width = p.get(0x01CB);
+        out.arrowhead = [0x01D0, 0x01D1].iter().any(|&id| p.get(id).is_some_and(|v| v != 0));
+        out.line = p.flag(0x01FF, 3);
+        for (i, d) in out.wrap_dist.iter_mut().enumerate() {
+            *d = p.get(0x0384 + i as u16);
+        }
+        (out.posh, out.posrelh, out.posv, out.posrelv) = (p.get(0x038F), p.get(0x0390), p.get(0x0391), p.get(0x0392));
+        // Group Shape Boolean Properties: fLayoutInCell (bit 15), when its fUse bit is set.
+        out.layout_in_cell = p.flag(0x03BF, 15);
+        out.alt = p.string(0x0381).unwrap_or_default();
+        out
     }
 }
 
@@ -276,6 +215,9 @@ impl Node {
 /// Parse one `OfficeArtSpContainer`.
 pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
     let mut sp = Sp::default();
+    // Property tables in specificity order: primary (the last one first), then secondary and
+    // tertiary.
+    let (mut primary, mut others) = (vec![], vec![]);
     for rec in children(body, budget) {
         match rec.kind {
             rt::FSP => {
@@ -283,7 +225,8 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
                 sp.spid = u32_at(rec.data, 0).unwrap_or(0);
                 sp.flags = u32_at(rec.data, 4).unwrap_or(0);
             }
-            rt::FOPT | rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => sp.props.apply(rec.data, rec.instance),
+            rt::FOPT => primary.push(rec),
+            rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => others.push(rec),
             rt::FSPGR | rt::CHILD_ANCHOR => {
                 let r = [0, 4, 8, 12].map(|o| i32_at(rec.data, o));
                 if let [Some(l), Some(t), Some(r), Some(b)] = r {
@@ -298,6 +241,11 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
             _ => {}
         }
     }
+    let mut props = craft_officeart::props::Props::default();
+    for t in primary.iter().rev().chain(&others) {
+        props.add_table(t);
+    }
+    sp.props = Props::from_set(&props);
     sp
 }
 
@@ -344,7 +292,12 @@ pub(crate) fn content(blob: &[u8]) -> Content<'_> {
     if dgg.kind == rt::DGG_CONTAINER {
         for rec in children(dgg.data, &mut budget) {
             if rec.kind == rt::BSTORE_CONTAINER {
-                out.bstore = children(rec.data, &mut budget).into_iter().filter(|r| r.kind == rt::FBSE).map(|r| r.data).take(MAX_BSE).collect();
+                out.bstore = children(rec.data, &mut budget)
+                    .into_iter()
+                    .filter(|r| r.kind == rt::FBSE)
+                    .map(|r| r.data)
+                    .take(craft_officeart::blip::MAX_ENTRIES)
+                    .collect();
             }
         }
     }
