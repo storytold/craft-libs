@@ -47,7 +47,7 @@ fn drag_out_of_the_top_ruler(fixture: &mut Fixture) {
     let Some(canvas) = fixture.by_role(Role::CANVAS).first().map(|target| target.rect) else { return };
     // Inside the top strip, clear of the corner.
     let from = egui::pos2(canvas.center().x, canvas.min.y + 4.0);
-    fixture.drag_at(from, Vec2::new(0.0, 120.0));
+    fixture.drag_at(from, Vec2::new(0.0, canvas.height() / 4.0));
 }
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_out_of_the_top_ruler))]
