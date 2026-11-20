@@ -614,6 +614,17 @@ mod nested {
         ("src/bin/tool/main.rs", local),
     ]);
     assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("build.rs", 2), ("src/bin/tool/main.rs", 2)]);
+    // A folder named `src` above the package, as in a path `rust_sources` returns, does not change that.
+    let found = predefined_quit([
+        ("/home/dev/src/app/src/bin/tool.rs", "mod helper;\n"),
+        ("/home/dev/src/app/src/bin/helper.rs", local),
+        ("/home/dev/src/app/src/lib.rs", "#[path = \"../build.rs\"]\nmod build;\n"),
+        ("/home/dev/src/app/build.rs", local),
+    ]);
+    assert_eq!(
+        found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(),
+        vec![("/home/dev/src/app/src/bin/helper.rs", 2), ("/home/dev/src/app/build.rs", 2)]
+    );
     // A `tests` folder inside a test's module folder holds modules, so a declared file there is not a root.
     assert!(
         predefined_quit([
