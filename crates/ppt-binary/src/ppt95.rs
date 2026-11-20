@@ -7,8 +7,8 @@
 //!
 //! Read so far: the slide size, the masters with their colour schemes and backgrounds, and the
 //! slides in order with their master, layout type and background, holding their placeholders, text
-//! boxes, shapes, lines, freeforms and groups, with the text and its character and paragraph
-//! formatting ([`text`]).
+//! boxes, shapes, lines, freeforms and groups, with the text, its character and paragraph
+//! formatting (spacing and justified alignment included) and its anchoring ([`text`]).
 //!
 //! A page's object list (3000) holds shapes (3008), placeholders (3010, which add a 3011 atom: the
 //! type, the size, then the index), lines (3014), freeforms (3016) and groups (3001). A shape or
@@ -41,8 +41,11 @@
 //! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
 //! does.
 //!
-//! Not read yet: pictures; notes; and the master's text styles, so the levels of the default
-//! master's styles stay as they are (the slide text carries its own formatting in full).
+//! The master's text styles (the Environment's 4052 atoms, one per text type) become the master's
+//! title, body and other styles. Slide text carries its own formatting in full, so these matter
+//! for text added later.
+//!
+//! Not read yet: pictures and notes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -258,6 +261,8 @@ struct Object {
     ph: Option<Placeholder>,
     xfrm: Xfrm,
     text: Option<TextBody>,
+    /// The ruler slot its text names.
+    ruler: Option<u32>,
     /// A shape's preset (a rectangle for a shape code no probe showed): `None` for a placeholder.
     geom: Option<Geom>,
     /// How a shape or line is drawn (a placeholder's is left to its layout).
@@ -319,7 +324,16 @@ impl Reader<'_> {
             return None;
         }
         let members = self.list(&r.child(rt::LIST)?, depth + 1);
-        Some(Object { placeholder: false, ph: None, xfrm: Xfrm::default(), text: None, geom: None, look: Look::none(), kind: Kind::Group(members) })
+        Some(Object {
+            placeholder: false,
+            ph: None,
+            xfrm: Xfrm::default(),
+            text: None,
+            ruler: None,
+            geom: None,
+            look: Look::none(),
+            kind: Kind::Group(members),
+        })
     }
 }
 
@@ -348,7 +362,7 @@ fn line(r: &Rec, scheme: &Scheme, size: Size) -> Option<Object> {
         shape::arrowheads(&mut look.line, &heads);
     }
     let geom = Some(Geom::Preset { name: "line".into(), adj: vec![] });
-    Some(Object { placeholder: false, ph: None, xfrm, text: None, geom, look, kind: Kind::Line })
+    Some(Object { placeholder: false, ph: None, xfrm, text: None, ruler: None, geom, look, kind: Kind::Line })
 }
 
 /// A freeform: its points as a path in its box, drawn as its format says (1 pt in the scheme's
@@ -371,8 +385,10 @@ fn freeform(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         shape::arrowheads(&mut look.line, &heads);
     }
     let geom = Some(shape::freeform_path(&points, sides, closed));
-    let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), true));
-    Some(Object { placeholder: false, ph: None, xfrm: xfrm_of(sides, size), text, geom, look, kind: Kind::Freeform })
+    let container = r.child(rt::TEXT);
+    let text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), true));
+    let ruler = container.and_then(|c| text::ruler_slot(&c));
+    Some(Object { placeholder: false, ph: None, xfrm: xfrm_of(sides, size), text, ruler, geom, look, kind: Kind::Freeform })
 }
 
 /// A 3035 atom's points: a u16 count, then x and y as i32s. No more than the record holds, nor
@@ -409,7 +425,9 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         };
         Some(Placeholder { kind: ph_type(a.u8(0)?)?, idx: a.u32(4).unwrap_or(0), size, ..Default::default() })
     });
-    let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    let container = r.child(rt::TEXT);
+    let text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    let ruler = container.and_then(|c| text::ruler_slot(&c));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
         geom = code.map(|c| shape::geometry(c, g.i32(4), &mut xfrm));
@@ -417,7 +435,7 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
             look = shape::look(&f, scheme);
         }
     }
-    Some(Object { placeholder, ph, xfrm, text, geom, look, kind: Kind::Shape })
+    Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind: Kind::Shape })
 }
 
 /// An object as a shape: a placeholder of a known type; a text box when it draws nothing but its
@@ -540,10 +558,17 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
         // The master's placeholders set where new slides' placeholders go: the first of each
         // family places the default master's. Its other objects are the master's own shapes.
         let mut placed: Vec<PhType> = vec![];
+        // The rulers of the master's title and body, which give their styles' margins.
+        let (mut title_ruler, mut body_ruler) = (None, None);
         for o in Reader::page(&env, &scheme, size, &m.rec) {
             if o.placeholder {
                 if let Some(kind) = o.ph.as_ref().map(|ph| ph.kind).filter(|k| !placed.iter().any(|d| same_family(*d, *k))) {
                     placed.push(kind);
+                    match kind {
+                        PhType::Title => title_ruler = o.ruler,
+                        PhType::Body => body_ruler = o.ruler,
+                        _ => {}
+                    }
                     let text = o.text;
                     place_placeholder(&mut master, kind, o.xfrm, || text.and_then(|t| t.paragraphs.into_iter().next()));
                 }
@@ -551,6 +576,19 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
             }
             if let Some(s) = shape(&mut p, o) {
                 master.shapes.push(s);
+            }
+        }
+        // The master's text styles replace the defaults' first five levels.
+        for (style, ty, ruler) in [
+            (&mut master.title_style, text::TITLE, title_ruler),
+            (&mut master.body_style, text::BODY, body_ruler),
+            (&mut master.other_style, text::OTHER, None),
+        ] {
+            let Some(read) = text::master_style(&env, &scheme, ty, ruler) else { continue };
+            for level in 0..5u8 {
+                if let Some(l) = read.level(level) {
+                    style.set(level, l.clone());
+                }
             }
         }
         p.masters.push(Arc::new(master));

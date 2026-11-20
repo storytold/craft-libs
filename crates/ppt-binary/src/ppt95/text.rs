@@ -7,13 +7,17 @@
 //! Windows-1252 bytes, `\r` between paragraphs), then three 2028 containers, each holding a 2030
 //! atom of fixed-size entries: character runs (tag 0x2f, 44 bytes), paragraph runs (0x30, 72
 //! bytes) and one entry for the whole text (0x31, not read). Each set of runs covers the text and
-//! one more character, the last paragraph's end.
+//! one more character, the last paragraph's end. The text atom's +4 flags hold word wrap (bit 2),
+//! and its +8 byte the anchoring: bits 4–5 top, middle or bottom, bit 1 clear for centred across.
 //!
 //! The Environment (1010) holds the fonts (2005) and the rulers (4016) as lists of slots: each
 //! slot is what comes before a 2017 record, and an empty slot holds a 2018. A run's font and a
-//! text's ruler are slot numbers.
+//! text's ruler are slot numbers. It also holds the master's text styles: a 1028 container of
+//! 4052 atoms, one per text type (0 title, 1 body, 2 notes, 4 other), each five levels of
+//! character formatting (24 bytes from +16) and five of paragraph formatting (52 bytes from
+//! +160), laid out as in the runs. Slide text carries its formatting in full, as copies of these.
 
-use craft_pptx::text::{Align, Anchor, BodyProps, Bullet, ParaProps, RunKind};
+use craft_pptx::text::{Align, Anchor, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing};
 use craft_pptx::{ColorRef, Fill, Paragraph, Rgba, Run, RunProps, TextBody};
 
 use super::{MU, RGB_GIVEN, Rec};
@@ -36,6 +40,8 @@ mod rt {
     pub const RUNS: u32 = 4064;
     pub const MASTER_TEXT_BODY: u32 = 4068;
     pub const RULER: u32 = 4069;
+    pub const STYLES: u32 = 1028;
+    pub const STYLE: u32 = 4052;
 }
 
 /// The fourth words telling a text's atoms apart.
@@ -47,6 +53,21 @@ mod tag {
 
 const CHAR_RUN: usize = 44;
 const PARA_RUN: usize = 72;
+/// Where a character run's formatting starts (its font), and a paragraph run's (its bullet flag).
+const CHAR_AT: usize = 20;
+const PARA_AT: usize = 20;
+/// A master style's levels: character formatting from +16, 24 bytes each, and paragraph
+/// formatting from +160, 52 bytes each.
+const STYLE_CHARS: usize = 16;
+const STYLE_CHAR: usize = 24;
+const STYLE_PARAS: usize = 160;
+const STYLE_PARA: usize = 52;
+/// The master styles read: text types 0 to 8.
+const STYLE_TYPES: usize = 9;
+/// The text types whose styles the master's title, body and other styles take.
+pub(super) const TITLE: usize = 0;
+pub(super) const BODY: usize = 1;
+pub(super) const OTHER: usize = 4;
 /// Characters read from one text at most: far beyond what PowerPoint 95 puts in a shape, so a
 /// huge character atom can't make a huge text body.
 pub(super) const MAX_CHARS: usize = 1 << 20;
@@ -63,6 +84,8 @@ type Ruler = [(i32, i32); LEVELS];
 pub(super) struct Env {
     fonts: Vec<Option<String>>,
     rulers: Vec<Option<Ruler>>,
+    /// The master's text styles by text type: each level's character and paragraph formatting.
+    styles: Vec<Option<[(CharRun, ParaRun); LEVELS]>>,
 }
 
 impl Env {
@@ -77,8 +100,38 @@ impl Env {
             .unwrap_or_default();
         let rulers =
             environment.child(rt::RULERS).map(|list| slots(&list, rt::RULER, |r| r.child(rt::RULER_ATOM).map(|a| ruler(&a)))).unwrap_or_default();
-        Env { fonts, rulers }
+        let styles = environment
+            .child(rt::STYLES)
+            .map(|list| list.children().filter(|r| r.kind == rt::STYLE).take(STYLE_TYPES).map(|r| style(&r)).collect())
+            .unwrap_or_default();
+        Env { fonts, rulers, styles }
     }
+}
+
+/// A master style atom's five levels, when the atom holds them all.
+fn style(r: &Rec) -> Option<[(CharRun, ParaRun); LEVELS]> {
+    let b = r.data.get(..STYLE_PARAS + LEVELS * STYLE_PARA)?;
+    Some(std::array::from_fn(|i| (char_run(b, STYLE_CHARS + i * STYLE_CHAR, 0), para_run(b, STYLE_PARAS + i * STYLE_PARA, 0))))
+}
+
+/// The master's style for text type `ty` as a list style. `ruler` is the ruler slot of the
+/// master's placeholder holding that text, which gives each level's margins. `None` when the
+/// file has no such style.
+pub(super) fn master_style(env: &Env, scheme: &Scheme, ty: usize, ruler: Option<u32>) -> Option<ListStyle> {
+    let levels = env.styles.get(ty)?.as_ref()?;
+    let ruler = ruler.and_then(|i| env.rulers.get(i as usize)).copied().flatten();
+    let mut ls = ListStyle::default();
+    for (i, (c, p)) in (0u8..).zip(levels) {
+        let para = para_props(Some(p), ruler.as_ref().and_then(|r| r.get(usize::from(i))));
+        ls.set(i, LevelStyle { para, run: run_props(c, env, scheme) });
+    }
+    Some(ls)
+}
+
+/// The ruler slot a text container's body names.
+pub(super) fn ruler_slot(container: &Rec) -> Option<u32> {
+    let body = container.children().find(|r| r.kind == rt::TEXT_BODY || r.kind == rt::MASTER_TEXT_BODY)?;
+    body.child(rt::RULER_REF)?.u32(0)
 }
 
 /// A slot list's entries of `kind`, read by `read`: an entry is the slot of the 2017 records
@@ -116,6 +169,7 @@ fn ruler(a: &Rec) -> Ruler {
 }
 
 /// A character run: its length and the formatting it gives in full.
+#[derive(Clone, Copy)]
 struct CharRun {
     len: u32,
     font: u16,
@@ -125,12 +179,44 @@ struct CharRun {
 }
 
 /// A paragraph run.
+#[derive(Clone, Copy)]
 struct ParaRun {
     len: u32,
     bullet: bool,
     bullet_char: u8,
     align: u8,
     level: u8,
+    /// Line spacing, space before and after: a percentage of a line, or minus a size in points.
+    line: Option<i32>,
+    before: Option<i32>,
+    after: Option<i32>,
+}
+
+/// A character run's formatting from `at` (its font): font, size, style bits, then the colour.
+fn char_run(e: &[u8], at: usize, len: u32) -> CharRun {
+    CharRun {
+        len,
+        font: u16_at(e, at),
+        size: u16_at(e, at + 4),
+        style: u16_at(e, at + 8),
+        color: [0, 1, 2, 3].map(|k| e.get(at + 10 + k).copied().unwrap_or(0)),
+    }
+}
+
+/// A paragraph run's formatting from `at` (its bullet flag): the bullet character at +6, the
+/// level at +24, the alignment at +28, then line spacing, space before and space after.
+fn para_run(e: &[u8], at: usize, len: u32) -> ParaRun {
+    let i32_at = |k: usize| crate::record::u32_at(e, at + k).map(|v| v as i32);
+    ParaRun {
+        len,
+        bullet: e.get(at).is_some_and(|&b| b != 0),
+        bullet_char: e.get(at + 6).copied().unwrap_or(0),
+        level: e.get(at + 24).copied().unwrap_or(0),
+        align: e.get(at + 28).copied().unwrap_or(0),
+        line: i32_at(32),
+        before: i32_at(36),
+        after: i32_at(40),
+    }
 }
 
 fn u16_at(b: &[u8], at: usize) -> u16 {
@@ -190,30 +276,39 @@ pub(super) fn text_body(container: &Rec, env: &Env, scheme: &Scheme, shape: Opti
         .map(|r| entries(&r, tag::CHAR_RUNS, CHAR_RUN, total))
         .unwrap_or_default()
         .into_iter()
-        .map(|e| CharRun {
-            len: u32_at(e, 0),
-            font: u16_at(e, 20),
-            size: u16_at(e, 24),
-            style: u16_at(e, 28),
-            color: [e.get(30), e.get(31), e.get(32), e.get(33)].map(|b| b.copied().unwrap_or(0)),
-        })
+        .map(|e| char_run(e, CHAR_AT, u32_at(e, 0)))
         .collect();
     let para_runs: Vec<ParaRun> = runs
         .map(|r| entries(&r, tag::PARA_RUNS, PARA_RUN, total))
         .unwrap_or_default()
         .into_iter()
-        .map(|e| ParaRun {
-            len: u32_at(e, 0),
-            bullet: e.get(20).is_some_and(|&b| b != 0),
-            bullet_char: e.get(26).copied().unwrap_or(0),
-            align: e.get(48).copied().unwrap_or(0),
-            level: e.get(44).copied().unwrap_or(0),
-        })
+        .map(|e| para_run(e, PARA_AT, u32_at(e, 0)))
         .collect();
     let ruler = body.child(rt::RULER_REF).and_then(|r| r.u32(0)).and_then(|i| env.rulers.get(i as usize)).copied().flatten();
 
     let mut props = BodyProps::default();
-    if let (Some(atom), Some([l, t, r, b])) = (body.child(rt::TEXT_ATOM), shape) {
+    if text_box {
+        props.anchor = Some(Anchor::Top);
+        props.wrap = Some(true);
+    }
+    let atom = body.child(rt::TEXT_ATOM);
+    if let Some(flags) = atom.and_then(|a| a.u8(4)) {
+        props.wrap = Some(flags & 4 != 0);
+    }
+    if let Some(a) = atom.and_then(|a| a.u8(8)) {
+        // Bits 4–5: top, middle or bottom; bit 1 clear: centred across. Bit 0 is always set.
+        let anchor = match (a >> 4) & 3 {
+            0 => Some(Anchor::Top),
+            1 => Some(Anchor::Middle),
+            2 => Some(Anchor::Bottom),
+            _ => None,
+        };
+        if anchor.is_some() {
+            props.anchor = anchor;
+            props.anchor_ctr = Some(a & 2 == 0);
+        }
+    }
+    if let (Some(atom), Some([l, t, r, b])) = (atom, shape) {
         // The text rectangle, inside the shape's box.
         let inset = |from: i32, to: Option<i32>, sign: f64| {
             to.map(|to| (f64::from(to) - f64::from(from)) * sign / MU).filter(|v| v.is_finite() && (0.0..=1000.0).contains(v))
@@ -222,10 +317,6 @@ pub(super) fn text_body(container: &Rec, env: &Env, scheme: &Scheme, shape: Opti
         props.inset_t = inset(t, atom.i32(24), 1.0);
         props.inset_r = inset(r, atom.i32(28), -1.0);
         props.inset_b = inset(b, atom.i32(32), -1.0);
-    }
-    if text_box {
-        props.anchor = Some(Anchor::Top);
-        props.wrap = Some(true);
     }
     Some(TextBody { body: props, paragraphs: paragraphs(&chars, &char_runs, &para_runs, ruler.as_ref(), env, scheme), ..Default::default() })
 }
@@ -288,7 +379,14 @@ fn run_props(r: &CharRun, env: &Env, scheme: &Scheme) -> RunProps {
     }
 }
 
-/// A paragraph run's alignment and bullet, and the margins its level has in the text's ruler.
+/// A paragraph run's spacing: a percentage of a line when positive, else minus a size in points.
+/// Bounded, so a hostile value can't push text off any page.
+fn spacing(v: i32) -> Spacing {
+    if v >= 0 { Spacing::Pct((f64::from(v) / 100.0).min(100.0)) } else { Spacing::Pts((-f64::from(v)).min(4000.0)) }
+}
+
+/// A paragraph run's alignment, spacing and bullet, and the margins its level has in the text's
+/// ruler.
 fn para_props(r: Option<&ParaRun>, level: Option<&(i32, i32)>) -> ParaProps {
     let mut p = ParaProps::default();
     if let Some(r) = r {
@@ -296,8 +394,12 @@ fn para_props(r: Option<&ParaRun>, level: Option<&(i32, i32)>) -> ParaProps {
             0 => Some(Align::Left),
             1 => Some(Align::Center),
             2 => Some(Align::Right),
+            3 => Some(Align::Justify),
             _ => None,
         };
+        p.line_spacing = r.line.map(spacing);
+        p.space_before = r.before.map(spacing);
+        p.space_after = r.after.map(spacing);
         p.bullet = Some(if r.bullet {
             let c = if r.bullet_char >= 0x20 { craft_codepage::cp1252(r.bullet_char) } else { '•' };
             Bullet::Char { char: c.to_string() }

@@ -43,26 +43,29 @@ master wearing the file's colour scheme, and its background when that isn't the 
 its slides in order with their master, layout type and, when a slide doesn't follow the master's,
 its own background: a solid colour, or none when the slide's background has no fill. Slides hold
 their placeholders (title, body, centred title, subtitle, and the date, footer and slide number)
-and text boxes, each with its box and its text: paragraphs with their level, alignment, bullet
-character and the indents of the text's ruler, and runs with their font, size, bold, italic,
-underline and colour (an RGB or a colour scheme slot). The text is Windows-1252. The master's
-placeholders set where the default master's placeholders go, and its date, footer and slide number
-those of every layout. Shapes and lines read too: all 24 of PowerPoint 95's shapes (rectangle,
-rounded rectangle, ellipse, diamond, the two triangles, parallelogram, trapezoid, hexagon,
-octagon, plus, five-point star, the arrow and the thick arrow in their four directions, home plate,
-cube, balloon and seal) as DrawingML presets with their adjust values (the trapezoid, wide at the
-top in PowerPoint 95, as its own outline, so its text stays upright), each with its fill (or
-none), its line (or none) with its colour, its width (the six line styles, 1 to 10 pt) and its
-dots or dashes, and its shadow with the shadow's colour, offset and transparency; and lines from
-their start to their end, with their arrowheads. A shape code no probe showed reads as a
-rectangle. PowerPoint 95 measures angles counter-clockwise, DrawingML clockwise, so each is
-negated. A shape's geometry holds its outline as drawn, quarter-turns and mirror included, so its
-angle and flips come from there (a box turned by an odd number of quarter-turns is turned back);
-the rectangle, rounded rectangle and ellipse take the angle the user set. A shape that draws
-nothing but text is a text box. Freeforms read as custom paths through their points, in their
-box, with their format's fill, line and shadow, and open ones with their arrowheads. Groups read as
-groups of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip
-a group), nested up to 32 deep. Pictures, notes and the master's text styles come later.
+and text boxes, each with its box and its text: the text's anchoring (top, middle or bottom, and
+whether it's centred across) and word wrap, paragraphs with their level, alignment (justified
+included), line spacing, space before and after (in lines or points), bullet character and the
+indents of the text's ruler, and runs with their font, size, bold, italic, underline and colour
+(an RGB or a colour scheme slot). The text is Windows-1252. The master's placeholders set where the
+default master's placeholders go, and its date, footer and slide number those of every layout. The
+master's text styles become its title, body and other styles, level by level. Shapes and lines
+read too: all 24 of PowerPoint 95's shapes (rectangle, rounded rectangle, ellipse, diamond, the
+two triangles, parallelogram, trapezoid, hexagon, octagon, plus, five-point star, the arrow and
+the thick arrow in their four directions, home plate, cube, balloon and seal) as DrawingML presets
+with their adjust values (the trapezoid, wide at the top in PowerPoint 95, as its own outline, so
+its text stays upright), each with its fill (or none), its line (or none) with its colour, its
+width (the six line styles, 1 to 10 pt) and its dots or dashes, and its shadow with the shadow's
+colour, offset and transparency; and lines from their start to their end, with their arrowheads.
+A shape code no probe showed reads as a rectangle. PowerPoint 95 measures angles
+counter-clockwise, DrawingML clockwise, so each is negated. A shape's geometry holds its outline
+as drawn, quarter-turns and mirror included, so its angle and flips come from there (a box turned
+by an odd number of quarter-turns is turned back); the rectangle, rounded rectangle and ellipse
+take the angle the user set. A shape that draws nothing but text is a text box; a shape's text is
+read as a text box's is. Freeforms read as custom paths through their points, in their box, with
+their format's fill, line and shadow, and open ones with their arrowheads. Groups read as groups
+of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip a
+group), nested up to 32 deep. Pictures and notes come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that

@@ -2,7 +2,7 @@
 //! by PowerPoint), and an optional check over real ones named by `CRAFT_PPT95_SAMPLES`.
 #![allow(clippy::unwrap_used)]
 
-use craft_pptx::text::{Align, Bullet};
+use craft_pptx::text::{Align, Anchor, Bullet, ListStyle, Spacing};
 use craft_pptx::{Background, ColorRef, Fill, Geom, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
 
 use super::rt;
@@ -137,6 +137,11 @@ const WIDE_RULER: [(i32, i32); 5] = [(576, 288), (828, 648), (1044, 900), (1260,
 /// The Environment: fonts Times New Roman, Arial, Courier New and "Café" by slot, and the rulers:
 /// the body's, a plain one, an empty slot and a wide one.
 fn environment() -> Vec<u8> {
+    environment_with(&[])
+}
+
+/// The Environment, with `styles` (the master's text styles' container) when given.
+fn environment_with(styles: &[Vec<u8>]) -> Vec<u8> {
     let fonts = container(
         2005,
         0x19,
@@ -148,7 +153,58 @@ fn environment() -> Vec<u8> {
         0x18,
         &[ruler(BODY_RULER), slot_end(0), ruler(plain), slot_end(1), rec(2018, 0, 0, &[]), slot_end(2), ruler(WIDE_RULER), slot_end(3)],
     );
-    container(1010, 0x15, &[rulers, fonts, container(2005, 0x1A, &[])])
+    let mut kids = vec![rulers, fonts, container(2005, 0x1A, &[])];
+    kids.extend_from_slice(styles);
+    container(1010, 0x15, &kids)
+}
+
+/// One level of a master style: font slot, size, style bits, colour; bullet, bullet character,
+/// alignment, line spacing, space before and after.
+#[derive(Clone, Copy)]
+struct Level {
+    font: u16,
+    size: u16,
+    style: u16,
+    color: [u8; 4],
+    bullet: bool,
+    bullet_char: u8,
+    align: u8,
+    spacing: [i32; 3],
+}
+
+const LEVEL: Level = Level { font: 0, size: 24, style: 0, color: [0, 0, 0, 1], bullet: false, bullet_char: 0x95, align: 0, spacing: [100, 0, 0] };
+
+/// A master style atom (4052): five levels of character formatting from +16 (24 bytes each), then
+/// five of paragraph formatting from +160 (52 bytes each), with the anchoring at +8.
+fn style_atom(levels: [Level; 5], anchor: u8) -> Vec<u8> {
+    let mut b = vec![0u8; 472];
+    b[8] = anchor;
+    b[12] = 0x1F;
+    for (i, l) in levels.iter().enumerate() {
+        let c = 16 + i * 24;
+        b[c..c + 2].copy_from_slice(&l.font.to_le_bytes());
+        b[c + 2] = 2;
+        b[c + 4..c + 6].copy_from_slice(&l.size.to_le_bytes());
+        b[c + 8..c + 10].copy_from_slice(&l.style.to_le_bytes());
+        b[c + 10..c + 14].copy_from_slice(&l.color);
+        let p = 160 + i * 52;
+        b[p] = u8::from(l.bullet);
+        b[p + 6] = l.bullet_char;
+        b[p + 12] = 100;
+        b[p + 24] = i as u8;
+        b[p + 28] = l.align;
+        for (k, v) in l.spacing.iter().enumerate() {
+            b[p + 32 + k * 4..p + 36 + k * 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    rec(4052, 0, 0, &b)
+}
+
+/// The master's text styles (1028): a 1029 atom, then the style atoms in text-type order.
+fn styles(atoms: &[Vec<u8>]) -> Vec<u8> {
+    let mut kids = vec![rec(1029, 0, 0, &[1, 1, 1, 1, 1, 0, 0, 0, 0, 0x0C])];
+    kids.extend_from_slice(atoms);
+    container(1028, 0x2A, &kids)
 }
 
 /// A character run: length, font slot, size in points, style bits (1 bold, 2 italic,
@@ -169,10 +225,19 @@ fn plain(len: u32) -> Vec<u8> {
     char_run(len, 0, 24, 0, [0, 0, 0, 1])
 }
 
-/// A paragraph run: length, bullet on, bullet character, alignment (0 left, 1 centre, 2 right)
-/// and level (0-based).
+/// A paragraph run: length, bullet on, bullet character, alignment (0 left, 1 centre, 2 right,
+/// 3 justified) and level (0-based), single spaced with no space before or after.
 fn para_run(len: u32, bullet: bool, bullet_char: u8, align: u8, level: u8) -> Vec<u8> {
+    spaced_run(len, bullet, bullet_char, align, level, [100, 0, 0])
+}
+
+/// A paragraph run with its line spacing, space before and space after: a percentage of a line,
+/// or minus a size in points.
+fn spaced_run(len: u32, bullet: bool, bullet_char: u8, align: u8, level: u8, spacing: [i32; 3]) -> Vec<u8> {
     let mut b = vec![0u8; 72];
+    for (k, v) in spacing.iter().enumerate() {
+        b[52 + k * 4..56 + k * 4].copy_from_slice(&v.to_le_bytes());
+    }
     b[0..4].copy_from_slice(&len.to_le_bytes());
     b[4..8].copy_from_slice(&0x0FE3u32.to_le_bytes());
     b[20] = u8::from(bullet);
@@ -190,7 +255,23 @@ const MASTER_BODY: u32 = 4068;
 /// A text container: header, then the body with its text atom (the text rectangle `rect`), ruler
 /// slot and runs. The run tables are 2028 containers each holding one 2030 atom of entries.
 fn text(chars: &[u8], char_runs: &[Vec<u8>], para_runs: &[Vec<u8>], ruler: u32, rect: [i32; 4], body: u32) -> Vec<u8> {
-    let mut atom = le32(&[4, 5, 3, 0xFFFF_8000, 0]);
+    text_flagged(chars, char_runs, para_runs, ruler, rect, body, 5, 3)
+}
+
+/// A text container whose text atom has the flags `flags` at +4 (bit 2 word wrap) and the
+/// anchoring `anchor` at +8.
+#[allow(clippy::too_many_arguments)]
+fn text_flagged(
+    chars: &[u8],
+    char_runs: &[Vec<u8>],
+    para_runs: &[Vec<u8>],
+    ruler: u32,
+    rect: [i32; 4],
+    body: u32,
+    flags: u32,
+    anchor: u32,
+) -> Vec<u8> {
+    let mut atom = le32(&[4, flags, anchor, 0xFFFF_8000, 0]);
     atom.extend(rect.iter().flat_map(|v| v.to_le_bytes()));
     let table = |tag: u32, entries: &[u8]| container(2028, tag, &[rec(2030, 0, tag, entries)]);
     let runs = container(
@@ -262,6 +343,10 @@ fn document_atom(w: u32, h: u32, slides: u32) -> Vec<u8> {
 
 /// A `PowerPoint Document` stream: root 3 holding the Document and a type-10 atom.
 fn stream_of(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>]) -> Vec<u8> {
+    stream_with(atom, slides, masters, environment())
+}
+
+fn stream_with(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>], environment: Vec<u8>) -> Vec<u8> {
     let list = |tag: u32, items: &[Vec<u8>]| {
         let mut kids = vec![rec(2001, 0, 0, &le32(&[items.len() as u32]))];
         kids.extend_from_slice(items);
@@ -270,7 +355,7 @@ fn stream_of(atom: Vec<u8>, slides: &[Vec<u8>], masters: &[Vec<u8>]) -> Vec<u8> 
     let document = container(
         rt::DOCUMENT,
         0,
-        &[atom, environment(), list(0xA, slides), list(0xB, masters), list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])],
+        &[atom, environment, list(0xA, slides), list(0xB, masters), list(0xC, &[]), container(1026, 0x64, &[]), rec(1002, 0, 0, &[])],
     );
     container(rt::ROOT, 0, &[document, rec(10, 0, 0, &le32(&[1, 0x100]))])
 }
@@ -559,11 +644,122 @@ fn character_runs_keep_their_formatting() {
 
 #[test]
 fn paragraphs_keep_their_alignment() {
-    let runs = [para_run(2, false, 0, 0, 0), para_run(2, false, 0, 1, 0), para_run(2, false, 0, 2, 0), para_run(2, false, 0, 9, 0)];
-    let body = text(b"L\rC\rR\rX", &[plain(8)], &runs, 1, [0; 4], BODY);
+    let runs = [
+        para_run(2, false, 0, 0, 0),
+        para_run(2, false, 0, 1, 0),
+        para_run(2, false, 0, 2, 0),
+        para_run(2, false, 0, 3, 0),
+        para_run(2, false, 0, 9, 0),
+    ];
+    let body = text(b"L\rC\rR\rJ\rX", &[plain(10)], &runs, 1, [0; 4], BODY);
     let p = deck_of(vec![shape_95([0, 0, 1000, 1000], Some(body))], &[]);
     let aligns: Vec<_> = body_of(&p.slides[0].shapes[0]).paragraphs.iter().map(|p| p.props.align).collect();
-    assert_eq!(aligns, [Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+    assert_eq!(aligns, [Some(Align::Left), Some(Align::Center), Some(Align::Right), Some(Align::Justify), None]);
+}
+
+/// Line spacing, space before and space after: a percentage of a line when positive, minus a
+/// size in points when negative; hostile sizes are bounded.
+#[test]
+fn paragraphs_keep_their_spacing() {
+    let runs = [
+        spaced_run(2, false, 0, 0, 0, [150, 50, 0]),
+        spaced_run(2, false, 0, 0, 0, [-36, -12, -6]),
+        spaced_run(2, false, 0, 0, 0, [i32::MAX, i32::MIN, -1]),
+    ];
+    let body = text(b"A\rB\rC", &[plain(6)], &runs, 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([0, 0, 1000, 1000], Some(body))], &[]);
+    let got: Vec<_> =
+        body_of(&p.slides[0].shapes[0]).paragraphs.iter().map(|p| (p.props.line_spacing, p.props.space_before, p.props.space_after)).collect();
+    assert_eq!(
+        got,
+        [
+            (Some(Spacing::Pct(1.5)), Some(Spacing::Pct(0.5)), Some(Spacing::Pct(0.0))),
+            (Some(Spacing::Pts(36.0)), Some(Spacing::Pts(12.0)), Some(Spacing::Pts(6.0))),
+            (Some(Spacing::Pct(100.0)), Some(Spacing::Pts(4000.0)), Some(Spacing::Pts(1.0))),
+        ]
+    );
+}
+
+/// The text atom's +8 anchoring: bits 4–5 top, middle or bottom, bit 1 clear for centred
+/// across; an unknown vertical code leaves the anchoring alone. Its +4 bit 2 is word wrap.
+#[test]
+fn text_keeps_its_anchoring_and_wrap() {
+    let bx = [0, 0, 1000, 1000];
+    let anchored = |flags: u32, anchor: u32, placeholder: bool| {
+        let t = text_flagged(b"A", &[plain(2)], &[para_run(2, false, 0, 0, 0)], 1, [0; 4], BODY, flags, anchor);
+        let o = if placeholder { placeholder_95(0x0D, 0, 1, bx, Some(t)) } else { shape_95(bx, Some(t)) };
+        let b = body_of(&deck_of(vec![o], &[]).slides[0].shapes[0]).body.clone();
+        (b.anchor, b.anchor_ctr, b.wrap)
+    };
+    assert_eq!(anchored(5, 0x03, false), (Some(Anchor::Top), Some(false), Some(true)));
+    assert_eq!(anchored(5, 0x13, false), (Some(Anchor::Middle), Some(false), Some(true)));
+    assert_eq!(anchored(5, 0x23, false), (Some(Anchor::Bottom), Some(false), Some(true)));
+    assert_eq!(anchored(5, 0x01, false), (Some(Anchor::Top), Some(true), Some(true)));
+    assert_eq!(anchored(5, 0x11, true), (Some(Anchor::Middle), Some(true), Some(true)));
+    assert_eq!(anchored(5, 0x21, true), (Some(Anchor::Bottom), Some(true), Some(true)));
+    assert_eq!(anchored(1, 0x03, false), (Some(Anchor::Top), Some(false), Some(false)), "no word wrap");
+    // An unknown code: a text box keeps its top anchoring, a placeholder its master's.
+    assert_eq!(anchored(5, 0xF3, false), (Some(Anchor::Top), None, Some(true)));
+    assert_eq!(anchored(4, 0xF3, true), (None, None, Some(true)));
+}
+
+/// The master's text styles (the Environment's 4052 atoms, by text type) become its title, body
+/// and other styles: each level's font, size, bold, colour, bullet, alignment and spacing, with
+/// the margins of the ruler its placeholder names.
+#[test]
+fn the_masters_text_styles_are_read() {
+    let title = Level { font: 1, size: 44, style: 1, color: [0, 0, 0, 3], align: 1, ..LEVEL };
+    let body: [Level; 5] = std::array::from_fn(|i| Level {
+        size: [32, 28, 24, 20, 20][i],
+        bullet: true,
+        bullet_char: if i % 2 == 1 { 0x96 } else { 0x95 },
+        spacing: [100, 20, 0],
+        ..LEVEL
+    });
+    let notes = Level { size: 12, ..LEVEL };
+    let other = Level { color: [0xFF, 0, 0, 0xFE], align: 3, spacing: [150, -12, -6], ..LEVEL };
+    let atoms = [style_atom([title; 5], 0x13), style_atom(body, 3), style_atom([notes; 5], 3), style_atom([notes; 5], 3), style_atom([other; 5], 3)];
+    let master_objects = [
+        placeholder_95(1, 0, 0, [-2448, -1776, 2448, -1056], Some(text(b"T", &[plain(2)], &[para_run(2, false, 0, 1, 0)], 1, [0; 4], MASTER_BODY))),
+        placeholder_95(2, 0, 1, [-2448, -912, 2448, 1680], Some(text(b"B", &[plain(2)], &[para_run(2, true, 0x95, 0, 0)], 0, [0; 4], MASTER_BODY))),
+    ];
+    let mut scheme = DEFAULT;
+    scheme[3] = 0x112233;
+    let stream = |env: Vec<u8>| stream_with(document_atom(5760, 4320, 0), &[], &[master_with(MASTER, scheme, [0; 4], &master_objects)], env);
+    let p = import(&stream(environment_with(&[styles(&atoms)]))).unwrap();
+    let m = &p.masters[0];
+
+    let t = m.title_style.level(0).unwrap();
+    assert_eq!((t.run.font.as_deref(), t.run.size, t.run.bold), (Some("Arial"), Some(44.0), Some(true)));
+    assert_eq!(t.run.fill, Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0x11, 0x22, 0x33)))), "slot 3 of the master's scheme");
+    assert_eq!((t.para.align, t.para.bullet.clone()), (Some(Align::Center), Some(Bullet::None)));
+    // The plain ruler (slot 1) the master title names: no margin at level 1.
+    assert_eq!((t.para.margin_left, t.para.indent), (Some(0.0), Some(0.0)));
+
+    let sizes: Vec<_> = (0..5).map(|l| m.body_style.level(l).unwrap().run.size).collect();
+    assert_eq!(sizes, [Some(32.0), Some(28.0), Some(24.0), Some(20.0), Some(20.0)]);
+    let b = m.body_style.level(1).unwrap();
+    assert_eq!(b.para.bullet, Some(Bullet::Char { char: "–".into() }));
+    assert_eq!((b.para.line_spacing, b.para.space_before), (Some(Spacing::Pct(1.0)), Some(Spacing::Pct(0.2))));
+    // The body ruler (slot 0) the master body names: level 2 at 468 units, first line at 288.
+    assert_eq!((b.para.margin_left, b.para.indent), (Some(58.5), Some(-22.5)));
+
+    let o = m.other_style.level(0).unwrap();
+    assert_eq!((o.run.size, o.run.fill.clone()), (Some(24.0), Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0xFF, 0, 0))))));
+    assert_eq!((o.para.align, o.para.line_spacing, o.para.space_after), (Some(Align::Justify), Some(Spacing::Pct(1.5)), Some(Spacing::Pts(6.0))));
+    assert_eq!(o.para.margin_left, None, "other text has no master placeholder, so no ruler");
+
+    // Without styles, or with a truncated atom, the defaults' styles stay as they are.
+    let plain_master = import(&stream(environment())).unwrap();
+    let defaults = |p: &Presentation| -> [ListStyle; 3] {
+        let m = &p.masters[0];
+        [m.title_style.clone(), m.body_style.clone(), m.other_style.clone()]
+    };
+    assert_ne!(defaults(&p), defaults(&plain_master));
+    let mut cut = style_atom([title; 5], 0x13);
+    cut.truncate(16 + 400);
+    let cut = import(&stream(environment_with(&[styles(&[cut])]))).unwrap();
+    assert_eq!(defaults(&cut), defaults(&plain_master));
 }
 
 /// A shape with text and no format of its own is a text box with no fill or line; one without text
@@ -691,8 +887,13 @@ fn hostile_text_never_panics() {
         BODY,
     );
     s.objects = vec![shape_95(bx, Some(two)), placeholder_95(0x0C, 0, 0, bx, Some(simple_text(b"T", bx, BODY)))];
-    let objects = [placeholder_95(6, 0, 2, bx, Some(simple_text(b"*", bx, MASTER_BODY)))];
-    let stream = stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)]);
+    let objects = [
+        placeholder_95(6, 0, 2, bx, Some(simple_text(b"*", bx, MASTER_BODY))),
+        placeholder_95(2, 0, 1, bx, Some(text(b"B", &[plain(2)], &[spaced_run(2, true, 0x95, 3, 0, [150, -12, 20])], 0, [0; 4], MASTER_BODY))),
+    ];
+    let level = Level { spacing: [150, -36, 20], align: 3, ..LEVEL };
+    let env = environment_with(&[styles(&[style_atom([level; 5], 0x13), style_atom([level; 5], 0x21)])]);
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &objects)], env);
     for at in (0..stream.len() - 4).step_by(4) {
         for v in [0u32, 1, 0x7FFF_FFFF, 0xFFFF_FFFF] {
             let mut d = stream.clone();
@@ -1270,6 +1471,34 @@ fn hostile_angles_never_panic() {
     }
 }
 
+/// The text of a drawn shape and of a freeform keeps its anchoring, wrap, spacing and justified
+/// alignment, as a text box's does.
+#[test]
+fn drawn_shapes_text_keeps_its_anchoring_and_spacing() {
+    let bx = [-576, -576, 576, 576];
+    let t = || text_flagged(b"A", &[plain(2)], &[spaced_run(2, false, 0, 3, 0, [150, -12, 50])], 1, bx, BODY, 1, 0x13);
+    let ellipse = container(rt::SHAPE, 0x13, &[coded_geometry(2, 0, bx, 0), format(PLAIN), t()]);
+    let square = [(-576, -576), (576, -576), (576, 576), (-576, 576)];
+    let freeform =
+        container(rt::FREEFORM, 0x13, &[freeform_atom(bx, 4, true), rec(rt::ARROWHEADS, 0, 0, &[0, 0]), format(PLAIN), points_atom(4, &square), t()]);
+    let p = deck_of(vec![ellipse, freeform], &[]);
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(shapes.len(), 2);
+    for s in shapes {
+        assert!(!s.text_box, "{}", s.name);
+        let b = body_of(s);
+        assert_eq!((b.body.anchor, b.body.anchor_ctr, b.body.wrap), (Some(Anchor::Middle), Some(false), Some(false)), "{}", s.name);
+        let para = &b.paragraphs[0].props;
+        assert_eq!(para.align, Some(Align::Justify), "{}", s.name);
+        assert_eq!(
+            (para.line_spacing, para.space_before, para.space_after),
+            (Some(Spacing::Pct(1.5)), Some(Spacing::Pts(12.0)), Some(Spacing::Pct(0.5))),
+            "{}",
+            s.name
+        );
+    }
+}
+
 /// A freeform's 3017 atom: its box twice, the point count, and the closed flag in the low byte
 /// of the last word, with something else above it.
 fn freeform_atom(bx: [i32; 4], count: u32, closed: bool) -> Vec<u8> {
@@ -1551,6 +1780,59 @@ fn check_sample(name: &str, p: &Presentation) {
         }
         "align" => assert_eq!(paras(0, 0).iter().map(|p| p.props.align).collect::<Vec<_>>(), [Some(Align::Left), Some(Align::Right)]),
         "twopara" => assert_eq!(body_of(&shapes(0)[0]).text(), "One\nTwo"),
+        _ => check_text_extras(name, p),
+    }
+}
+
+/// The round 8 samples: spacing, justified text, anchoring, word wrap and the master's styles.
+fn check_text_extras(name: &str, p: &Presentation) {
+    let m = &p.masters[0];
+    let shapes = |i: usize| &p.slides[i].shapes;
+    let paras = |i: usize, j: usize| &body_of(&shapes(i)[j]).paragraphs;
+    match name {
+        "ls15" | "ls2" | "lspts" | "sb1" | "sbpts" | "sa05" | "sapts" => {
+            let p = &paras(0, 0)[0].props;
+            let want = match name {
+                "ls15" => (Spacing::Pct(1.5), Spacing::Pct(0.5), Spacing::Pct(0.0)),
+                "ls2" => (Spacing::Pct(2.0), Spacing::Pct(0.5), Spacing::Pct(0.0)),
+                "lspts" => (Spacing::Pts(36.0), Spacing::Pct(0.5), Spacing::Pct(0.0)),
+                "sb1" => (Spacing::Pct(1.0), Spacing::Pct(1.0), Spacing::Pct(0.0)),
+                "sbpts" => (Spacing::Pct(1.0), Spacing::Pts(12.0), Spacing::Pct(0.0)),
+                "sa05" => (Spacing::Pct(1.0), Spacing::Pct(0.5), Spacing::Pct(0.5)),
+                _ => (Spacing::Pct(1.0), Spacing::Pct(0.5), Spacing::Pts(6.0)),
+            };
+            assert_eq!((p.line_spacing, p.space_before, p.space_after), (Some(want.0), Some(want.1), Some(want.2)), "{name}");
+        }
+        "justify" => assert!(paras(0, 0).iter().all(|p| p.props.align == Some(Align::Justify))),
+        "atop" | "amid" | "abot" | "atopc" | "amidc" | "abotc" | "btop" | "bmid" | "bbot" | "bmidc" => {
+            let s = if name.starts_with('a') { &shapes(0)[0] } else { &shapes(1)[1] };
+            let b = &body_of(s).body;
+            let v = if name.contains("mid") {
+                Anchor::Middle
+            } else if name.contains("bot") {
+                Anchor::Bottom
+            } else {
+                Anchor::Top
+            };
+            assert_eq!((b.anchor, b.anchor_ctr), (Some(v), Some(name.ends_with('c'))), "{name}");
+        }
+        "anowrap" => assert_eq!(body_of(&shapes(0)[0]).body.wrap, Some(false)),
+        "gmbase" | "gmtitle" | "gmtleft" | "gmbsize" | "gmbjust" | "gmbspace" => {
+            let (t, b) = (m.title_style.level(0).unwrap(), m.body_style.level(1).unwrap());
+            let title = if name == "gmtitle" { (Some(54.0), Some(true)) } else { (Some(44.0), Some(false)) };
+            assert_eq!((t.run.size, t.run.bold), title, "{name}");
+            assert_eq!(t.para.align, Some(if name == "gmtleft" { Align::Left } else { Align::Center }), "{name}");
+            assert_eq!(b.run.size, Some(if name == "gmbsize" { 36.0 } else { 28.0 }), "{name}");
+            assert_eq!(b.para.bullet, Some(Bullet::Char { char: "–".into() }), "{name}");
+            assert_eq!(b.para.align, Some(if name == "gmbjust" { Align::Justify } else { Align::Left }), "{name}");
+            let spacing = if name == "gmbspace" { (Spacing::Pct(1.5), Spacing::Pts(6.0)) } else { (Spacing::Pct(1.0), Spacing::Pct(0.0)) };
+            assert_eq!((b.para.line_spacing, b.para.space_after), (Some(spacing.0), Some(spacing.1)), "{name}");
+            assert_eq!(b.para.space_before, Some(Spacing::Pct(0.2)), "{name}");
+            // The slide's body carries the same formatting as the master's level.
+            let level2 = &paras(1, 1)[1];
+            assert_eq!((level2.level, level2.runs[0].props.size), (1, b.run.size), "{name}");
+            assert_eq!(level2.props.line_spacing, b.para.line_spacing, "{name}");
+        }
         "textbox" => {
             let s = &shapes(0)[0];
             assert_eq!((body_of(s).text(), s.text_box, s.ph.is_none()), ("Box".into(), true, true));
