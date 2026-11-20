@@ -236,6 +236,10 @@ fn finish(
     mut notices: Vec<Notice>,
 ) -> Opened {
     let caps = Capabilities::of_device(&device);
+    // wgpu's fallback adapter can be a software one that the listing did not show.
+    if candidate.is_software() {
+        notices.retain(|n| *n != Notice::NoSoftwareAdapter);
+    }
     if candidate.is_software() && !asked_for(preference, &candidate) {
         notices.push(Notice::SoftwareOnly);
     }
@@ -316,6 +320,17 @@ mod tests {
         desc.backends = wgpu::Backends::NOOP;
         let none = Instance::new(desc);
         assert_eq!(pollster::block_on(open_async(&none, None, &Preference::Auto, &Request::default())).unwrap_err(), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn a_software_device_drops_the_no_software_notice() {
+        let instance = noop(None);
+        let opened = open(&instance, None, &Preference::Software, &Request::default()).unwrap();
+        assert!(opened.candidate.is_software());
+        // as when the listing showed no software adapter and wgpu's fallback adapter opened
+        let notices = vec![Notice::NoSoftwareAdapter];
+        let again = finish(opened.adapter, opened.device, opened.queue, opened.candidate, &Preference::Software, notices);
+        assert!(again.notices.is_empty(), "{:?}", again.notices);
     }
 
     #[test]
