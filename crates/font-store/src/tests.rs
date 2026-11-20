@@ -564,20 +564,185 @@ fn host_index_read() -> Index {
 // read a host's index too.
 #[test]
 fn a_host_index_is_never_curated_and_cant_shadow_another_source() {
-    let mut v = host_index();
+    let v = host_index();
     let index = Index::from_host_bytes(v.to_string().as_bytes(), "page.1").unwrap();
     let source = &index.sources()[0];
     // The file's `curated: true` and its ID `fonts-host` are not kept.
     assert_eq!((source.id.as_str(), source.curated, source.user_url.as_deref()), ("host:page.1", false, None));
     let sans = index.family("Test Sans").unwrap();
     assert_eq!((sans.source.as_str(), sans.is_curated()), ("host:page.1", false));
+    let dir = sans.dir().to_string();
+    assert!(dir.starts_with("host-page-1-") && dir.ends_with("/test-sans"), "{dir}");
+    let face = index.find_face("Test Sans", "Bold").unwrap();
+    assert_eq!(index.file_urls(face.family, face.file), ["https://fonts.host.example/files/ofl/testsans/TestSans-Bold.ttf"]);
+    // Gzipped, the same.
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut gz, v.to_string().as_bytes()).unwrap();
+    let zipped = Index::from_host_bytes(&gz.finish().unwrap(), "page.1").unwrap();
+    assert_eq!(zipped.sources()[0].id, "host:page.1");
+    // An ID that spells a user's (`user:<host>/<id>`) is not a valid declared ID, for a host's index
+    // or a user's.
+    let mut user_like = v.clone();
+    user_like["source"] = json!("user:fonts.host.example/index");
+    user_like["source_info"]["id"] = json!("user:fonts.host.example/index");
+    let bytes = user_like.to_string().into_bytes();
+    assert!(matches!(Index::from_host_bytes(&bytes, "page.1"), Err(IndexError::Invalid(_))));
+    assert!(Index::from_user_bytes(&bytes, "https://fonts.host.example/index.json").is_err());
+    // One that merely looks like one, with no colon, is accepted and the source is still `host:<id>`.
+    user_like["source"] = json!("user-fonts.host.example/index");
+    user_like["source_info"]["id"] = json!("user-fonts.host.example/index");
+    let user_like = Index::from_host_bytes(user_like.to_string().as_bytes(), "page.1").unwrap();
+    assert_eq!((user_like.sources()[0].id.as_str(), user_like.sources()[0].user_url.as_deref()), ("host:page.1", None));
     // A host's index that declares a built-in source's ID is still its own source.
-    v["source"] = json!(GOOGLE_FONTS);
-    v["source_info"]["id"] = json!(GOOGLE_FONTS);
-    let merged = Index::merge([index_of(&fixture().index).unwrap(), Index::from_host_bytes(v.to_string().as_bytes(), "page.1").unwrap()]);
+    let mut google = v.clone();
+    google["source"] = json!(GOOGLE_FONTS);
+    google["source_info"]["id"] = json!(GOOGLE_FONTS);
+    let merged = Index::merge([index_of(&fixture().index).unwrap(), Index::from_host_bytes(google.to_string().as_bytes(), "page.1").unwrap()]);
     assert_eq!(merged.sources().iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), [GOOGLE_FONTS, "host:page.1"]);
     assert!(merged.problems().is_empty());
+    assert!(merged.family("Test Sans").unwrap().is_curated(), "lookups prefer the built-in source");
     assert!(!merged.family_from("host:page.1", "Test Sans").unwrap().is_curated());
+    // One face at a time is an index too.
+    let mut one = v.clone();
+    one["families"] = json!([v["families"][0]]);
+    one["families"][0]["files"] = json!([v["families"][0]["files"][0]]);
+    assert_eq!(Index::from_host_bytes(one.to_string().as_bytes(), "one").unwrap().families()[0].files.len(), 1);
+}
+
+#[test]
+fn a_host_index_is_refused_whole_by_the_rules_of_a_users() {
+    let good = host_index();
+    let with = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut v = good.clone();
+        edit(&mut v);
+        v.to_string().into_bytes()
+    };
+    let refused = [
+        with(&|v| v["families"][0]["files"][1]["sha256"] = json!("0".repeat(63))),
+        with(&|v| v["families"][0]["files"][1]["sha256"] = json!("A".repeat(64))),
+        with(&|v| v["source_info"]["file_urls"] = json!(["http://fonts.host.example/files/{path}"])),
+        with(&|v| v["source_info"]["file_urls"] = json!(["https://fonts.host.example/files/"])),
+        with(&|v| v["families"][1]["files"][0]["path"] = json!("../outside/Evil.ttf")),
+        with(&|v| v["families"][1]["files"][0]["path"] = json!("/etc/Evil.ttf")),
+        with(&|v| v["families"][1]["files"][0]["path"] = json!("a\\b/Evil.ttf")),
+        with(&|v| v["families"][1]["files"][0]["size"] = json!(0)),
+        with(&|v| v["version"] = json!("2.0")),
+        // A collection is held to the rules first, then left out.
+        with(&|v| v["families"][1]["files"][0]["path"] = json!("../outside/Evil.ttc")),
+        with(&|v| {
+            v["families"][1]["files"][0]["path"] = json!("ofl/testvar/Var.otc");
+            v["families"][1]["files"][0]["sha256"] = json!("0".repeat(63));
+        }),
+        with(&|v| {
+            let mut copy = v["families"][0].clone();
+            copy["files"] = json!([{"path": "ofl/other/x.ttc", "size": 5, "sha256": "0".repeat(64), "weight": 400, "style": "normal", "width": 100.0, "postscript": []}]);
+            v["families"].as_array_mut().unwrap().push(copy);
+        }),
+        b"not json".to_vec(),
+    ];
+    for bytes in &refused {
+        assert!(Index::from_host_bytes(bytes, "page").is_err(), "{}", String::from_utf8_lossy(bytes));
+        // The rules are a user's: the same bytes are refused there too.
+        assert!(Index::from_user_bytes(bytes, "https://fonts.host.example/index.json").is_err());
+    }
+    let ok = good.to_string().into_bytes();
+    assert!(Index::from_host_bytes(&ok, "page").is_ok());
+    // The host's own name for the index is checked.
+    for id in ["", ".hidden", "a/b", "a b", "a:b", "é", &"x".repeat(65)] {
+        assert!(matches!(Index::from_host_bytes(&ok, id), Err(IndexError::Invalid(_))), "{id:?}");
+    }
+    assert!(Index::from_host_bytes(&ok, &"x".repeat(64)).is_ok());
+}
+
+/// Sets the limit on an index's files for this thread until dropped (then back to `MAX_FILES`), even if the test panics.
+struct FileLimit;
+
+impl FileLimit {
+    fn set(limit: usize) -> Self {
+        crate::source::TEST_MAX_FILES.set(limit);
+        FileLimit
+    }
+}
+
+impl Drop for FileLimit {
+    fn drop(&mut self) {
+        crate::source::TEST_MAX_FILES.set(crate::source::MAX_FILES);
+    }
+}
+
+// Invariant: a host's index leaves out a collection file, and a family with no other file, with a
+// warning, since `verify_face` refuses every collection; the rest of the index loads, and a
+// user's index keeps the collection (breaks if: the host check is dropped, or refuses the index).
+#[test]
+fn a_host_index_leaves_out_collections_with_a_warning() {
+    let user = |bytes: &[u8]| Index::from_user_bytes(bytes, "https://fonts.host.example/index.json").unwrap();
+    for path in ["ofl/testsans/TestSans-Bold.ttc", "ofl/testsans/TestSans-Bold.OTC"] {
+        let mut v = host_index();
+        let kept = v["families"][0]["files"].as_array().unwrap().len();
+        v["families"][0]["files"][1]["path"] = json!(path);
+        let bytes = v.to_string().into_bytes();
+        let index = Index::from_host_bytes(&bytes, "page").unwrap();
+        assert_eq!(index.family("Test Sans").unwrap().files.len(), kept - 1, "{path}");
+        assert!(index.family("Test Var").is_some());
+        let warnings = &index.sources()[0].warnings;
+        assert!(
+            warnings.len() == 1 && warnings[0].starts_with("Test Sans has a file left out:") && warnings[0].contains("collection"),
+            "{warnings:?}"
+        );
+        assert_eq!(user(&bytes).family("Test Sans").unwrap().files.len(), kept, "{path}");
+    }
+    // Two collections of three files: the warning says files.
+    let mut v = host_index();
+    v["families"][0]["files"][1]["path"] = json!("ofl/testsans/A.ttc");
+    v["families"][0]["files"][2]["path"] = json!("ofl/testsans/B.ttc");
+    let index = Index::from_host_bytes(v.to_string().as_bytes(), "page").unwrap();
+    assert!(index.sources()[0].warnings[0].starts_with("Test Sans has files left out:"), "{:?}", index.sources()[0].warnings);
+    // A family with only collections is left out whole.
+    let mut v = host_index();
+    v["families"][1]["files"][0]["path"] = json!("ofl/testvar/TestVar[wght].ttc");
+    let bytes = v.to_string().into_bytes();
+    let index = Index::from_host_bytes(&bytes, "page").unwrap();
+    assert!(index.family("Test Var").is_none() && index.family("Test Sans").is_some());
+    assert!(index.sources()[0].warnings.iter().any(|w| w.starts_with("Test Var is left out:") && w.contains("collection")));
+    assert!(user(&bytes).family("Test Var").is_some());
+    // The warning names the first three collections and counts the rest.
+    let many = |n: usize| {
+        let mut v = host_index();
+        let mut fam = v["families"][0].clone();
+        fam["family"] = json!("Test Many");
+        let file = fam["files"][0].clone();
+        fam["files"] = json!(
+            (0..n)
+                .map(|i| {
+                    let mut f = file.clone();
+                    f["path"] = json!(format!("ofl/testmany/Many-{i}.ttc"));
+                    f
+                })
+                .collect::<Vec<_>>()
+        );
+        v["families"].as_array_mut().unwrap().push(fam);
+        v.to_string().into_bytes()
+    };
+    let index = Index::from_host_bytes(&many(4), "page").unwrap();
+    let warning = index.sources()[0].warnings.iter().find(|w| w.contains("Test Many")).unwrap();
+    assert!(warning.starts_with("Test Many is left out:"), "{warning}");
+    assert_eq!(warning.matches(".ttc").count(), 3, "{warning}");
+    assert!(warning.contains("Many-0.ttc") && warning.contains("Many-2.ttc") && warning.ends_with(" and 1 more)"), "{warning}");
+    // Exactly three are all named, with no count of the rest.
+    let index = Index::from_host_bytes(&many(3), "page").unwrap();
+    let warning = index.sources()[0].warnings.iter().find(|w| w.contains("Test Many")).unwrap();
+    assert!(warning.ends_with("Many-2.ttc`)") && !warning.contains("more"), "{warning}");
+    // Every file counts toward the limit, collections too: the user's rule, exactly.
+    let base: usize = host_index_read().families().iter().map(|f| f.files.len()).sum();
+    let limit = base + 8;
+    let _reset = FileLimit::set(limit);
+    let user = |bytes: &[u8]| Index::from_user_bytes(bytes, "https://fonts.host.example/index.json");
+    let over = many(limit - base + 1);
+    assert!(matches!(Index::from_host_bytes(&over, "page"), Err(IndexError::Invalid(m)) if m == "too many files"));
+    assert!(matches!(user(&over), Err(IndexError::Invalid(m)) if m == "too many files"));
+    let at = many(limit - base);
+    Index::from_host_bytes(&at, "page").unwrap();
+    user(&at).unwrap();
 }
 
 /// The Test Sans family of [`host_index`] and its `style` file's entry, made to describe `bytes`

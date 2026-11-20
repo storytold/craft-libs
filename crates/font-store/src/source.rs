@@ -12,10 +12,22 @@ use crate::index::{
 pub(crate) const MAX_STR: usize = 1024;
 const MAX_LIST: usize = 4096;
 const MAX_FAMILIES: usize = 50_000;
-const MAX_FILES: usize = 200_000;
+pub(crate) const MAX_FILES: usize = 200_000;
 const MAX_SEGMENT: usize = 64;
 const MAX_FILE_NAME: usize = 200;
 const MAX_TEMPLATES: usize = 8;
+
+// The limit a test has set for its own thread, so that it is reachable.
+#[cfg(test)]
+thread_local!(pub(crate) static TEST_MAX_FILES: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_FILES) });
+
+/// The most files an index lists; a test can lower the limit for its own thread.
+fn max_files() -> usize {
+    #[cfg(test)]
+    return TEST_MAX_FILES.get();
+    #[cfg(not(test))]
+    MAX_FILES
+}
 
 /// Where an index file comes from.
 #[derive(Clone, Copy, Debug)]
@@ -341,6 +353,7 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
         check_str("script", &s.id)?;
     }
     let slug = if outside.is_some() { user_slug(&id) } else { slug(&id) };
+    let host = matches!(origin, Origin::Host { .. });
     let ctx = Ctx {
         declared: &declared,
         id: &id,
@@ -364,15 +377,47 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
             continue;
         }
         check_family(&mut fam, &ctx)?;
-        total = total.saturating_add(fam.files.len());
-        if total > MAX_FILES {
-            return invalid("too many files");
-        }
         if !names.insert(fam.family.to_lowercase()) {
             return invalid(format!("family `{}` is listed twice", fam.family));
         }
         if !dirs.insert(fam.dir.clone()) {
             return invalid(format!("folder `{}` holds more than one family", fam.dir));
+        }
+        // Every file counts, collections included, so a host's index meets the user rule exactly.
+        total = total.saturating_add(fam.files.len());
+        if total > max_files() {
+            return invalid("too many files");
+        }
+        // `verify_face` refuses every collection, so one listed in a host's index can only fail
+        // later: it is left out, by its extension, once the rules above have held the whole
+        // family (a collection named `.ttf` is refused when it is fetched).
+        if host {
+            let is_collection = |path: &str| {
+                let tail = path.len().checked_sub(4).and_then(|i| path.as_bytes().get(i..));
+                tail.is_some_and(|t| t.eq_ignore_ascii_case(b".ttc") || t.eq_ignore_ascii_case(b".otc"))
+            };
+            let count = fam.files.iter().filter(|f| is_collection(&f.path)).count();
+            if count > 0 {
+                let shown = fam
+                    .files
+                    .iter()
+                    .filter(|f| is_collection(&f.path))
+                    .take(3)
+                    .map(|f| format!("`{}`", short(&f.path)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                fam.files.retain(|f| !is_collection(&f.path));
+                let what = match (fam.files.is_empty(), count) {
+                    (true, _) => "is left out",
+                    (false, 1) => "has a file left out",
+                    (false, _) => "has files left out",
+                };
+                let more = if count > 3 { format!(" and {} more", count - 3) } else { String::new() };
+                warnings.push(format!("{} {what}: a host's index can't list font collections ({shown}{more})", short(&fam.family)));
+                if fam.files.is_empty() {
+                    continue;
+                }
+            }
         }
         families.push(fam);
     }
