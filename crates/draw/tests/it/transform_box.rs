@@ -52,6 +52,7 @@ struct Config {
     /// The host keeps the box in f32, as a text layer keeps its box, and gives it back with its centre as the pivot.
     f32_host: bool,
     centre_mark: bool,
+    crossed: bool,
     line: Option<LineLook>,
     /// Snap targets beside the guides at [`SNAP_XS`].
     targets: Vec<SnapTarget>,
@@ -99,6 +100,7 @@ fn defaults() -> Config {
         rulers: None,
         f32_host: false,
         centre_mark: false,
+        crossed: false,
         line: None,
         targets: Vec::new(),
         twice: false,
@@ -177,6 +179,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
+                    .crossed(config.crossed)
             };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
@@ -671,6 +674,52 @@ fn the_centre_mark_takes_no_press() {
             hovered.push(h.host.borrow().hovered);
         }
         assert_eq!(hovered[0], hovered[1], "inside moves {inside_moves}: the mark changes nothing a press there takes");
+    }
+}
+
+/// Every two-point stroke among `shapes`, nested ones included, as its ends.
+fn segments(shapes: &[egui::Shape], out: &mut Vec<(egui::Pos2, egui::Pos2)>) {
+    for shape in shapes {
+        match shape {
+            egui::Shape::Vec(inner) => segments(inner, out),
+            egui::Shape::LineSegment { points: [a, b], .. } => out.push((*a, *b)),
+            egui::Shape::Path(path) if path.points.len() == 2 => out.push((path.points[0], path.points[1])),
+            _ => {}
+        }
+    }
+}
+
+/// A crossed box draws both diagonals, corner to corner, as a rotated one does along its turned corners; a plain box
+/// draws none. The diagonals take no press: the middle of the box is the inside's either way.
+#[trial]
+fn a_crossed_box_draws_its_diagonals_and_a_plain_one_none() {
+    let turned = {
+        let mut state = BoxState::from_rect(RECT);
+        let centre = Point::new((RECT.x0 + RECT.x1) / 2.0, (RECT.y0 + RECT.y1) / 2.0);
+        let turn = craft_behavior::kurbo::Affine::rotate_about(0.3, centre);
+        state.quad = state.quad.map(|corner| turn * corner);
+        state
+    };
+    for state in [BoxState::from_rect(RECT), turned] {
+        let mut hovered = Vec::new();
+        for crossed in [false, true] {
+            let mut h = harness(state, |config| {
+                config.reference_point = false;
+                config.crossed = crossed;
+            });
+            let mut found = Vec::new();
+            segments(&h.fixture.frame_shapes(), &mut found);
+            let corner = |i: usize| h.screen(state.quad[i]);
+            let joins = |a: egui::Pos2, b: egui::Pos2| {
+                found.iter().any(|&(p, q)| ((p - a).length() < 0.5 && (q - b).length() < 0.5) || ((p - b).length() < 0.5 && (q - a).length() < 0.5))
+            };
+            for (a, b) in [(0, 2), (1, 3)] {
+                assert_eq!(joins(corner(a), corner(b)), crossed, "crossed {crossed}: the diagonal from corner {a} to corner {b}");
+            }
+            hover(&mut h, state.quad[0].midpoint(state.quad[2]));
+            hovered.push(h.host.borrow().hovered);
+        }
+        assert_eq!(hovered[0], hovered[1], "the cross changes nothing a press at the middle takes");
     }
 }
 
