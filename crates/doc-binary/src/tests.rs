@@ -1340,6 +1340,84 @@ fn tc80_flags_are_read_only_from_whole_tc80s() {
     assert_eq!(crate::table::decode(&t_def_table_tcgrf(&[0, 1440, 2880], &[])).overrides(), 0);
 }
 
+/// `TCGRF.textFlow` (bits 2-4): 1 = `tbRl`, 3 = `btLr`, 4 = `lrTbV`, 5 = `tbRlV`.
+const TCGRF_FLOW_TBRL: u16 = 1 << 2;
+const TCGRF_FLOW_BTLR: u16 = 3 << 2;
+const TCGRF_FLOW_LRTBV: u16 = 4 << 2;
+const TCGRF_FLOW_TBRLV: u16 = 5 << 2;
+
+/// A turned cell's direction is in the `textFlow` of its TC80 (a table made in Word 16 and
+/// saved as `.doc` and `.docx`: the `.docx` has `w:textDirection` `btLr` / `tbRl` on exactly
+/// the cells whose TC80 has 3 / 1). A one-row table: up, down, horizontal, down with
+/// vertical glyphs, and horizontal with vertical glyphs.
+#[test]
+fn text_direction_kept_in_tc80s_is_read() {
+    use craft_wordmodel::props::TextDirection;
+    let edges = [0i16, 1440, 2880, 4320, 5760, 7200];
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp = [
+        grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]),
+        t_def_table_tcgrf(&edges, &[TCGRF_FLOW_BTLR | TCGRF_VALIGN_CENTER, TCGRF_FLOW_TBRL, 0, TCGRF_FLOW_TBRLV, TCGRF_FLOW_LRTBV]),
+        // sprmTTextFlow stating cell 2 horizontal outright.
+        vec![0x29, 0x76, 2, 3, 0, 0],
+    ]
+    .concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, in_tbl.clone()), // "a"
+            (2, 0, in_tbl.clone()), // "b"
+            (4, 0, in_tbl.clone()), // "c"
+            (6, 0, in_tbl.clone()), // "d"
+            (8, 0, in_tbl),         // "e"
+            (10, 0, ttp),           // row end
+            (11, 0, Vec::new()),    // "tail"
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let cells = &tbl.rows[0].cells;
+    assert_eq!(cells.len(), 5);
+    let dir: Vec<TextDirection> = cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(dir, [TextDirection::Up, TextDirection::Down, TextDirection::Horizontal, TextDirection::Down, TextDirection::Horizontal]);
+    let set: Vec<bool> = cells.iter().map(|c| c.props.text_direction_set).collect();
+    assert_eq!(set, [false, false, true, false, false], "a horizontal TC80 states nothing; an explicit sprmTTextFlow does");
+    assert_eq!(cells[0].props.valign, Some(craft_wordmodel::props::VAlign::Center), "the other TCGRF bits still read");
+}
+
+/// Word also writes `sprmTTextFlow` (0x7629: itcFirst, itcLim, then the text flow as a u16)
+/// for each turned cell range, with the same value as the TC80. An explicit one wins over the
+/// TC80, before or after the `sprmTDefTable`, and covers cells the TC80s do not reach.
+#[test]
+fn an_explicit_text_flow_overrides_the_tc80() {
+    use craft_wordmodel::props::TextDirection;
+    let def = t_def_table_tcgrf(&[0, 1440, 2880, 4320], &[TCGRF_FLOW_BTLR, TCGRF_FLOW_BTLR]);
+    // Cell 0 back to horizontal, cell 2 (no TC80 here) down.
+    let flow0 = [0x29u8, 0x76, 0, 1, 0, 0];
+    let flow2 = [0x29u8, 0x76, 2, 3, 1, 0];
+    for papx in [[&flow0[..], &flow2, &def].concat(), [&def[..], &flow0, &flow2].concat()] {
+        let row = crate::table::decode(&papx);
+        assert_eq!(row.text_flow_of(0), Some(TextDirection::Horizontal));
+        assert_eq!(row.text_flow_of(1), Some(TextDirection::Up));
+        assert_eq!(row.text_flow_of(2), Some(TextDirection::Down));
+    }
+    // A cell range past the row's cells is cut at the column limit, and an empty one sets nothing.
+    let row = crate::table::decode(&[0x29u8, 0x76, 3, 3, 3, 0, 0x29, 0x76, 60, 255, 3, 0]);
+    assert_eq!(row.text_flow_of(3), None);
+    assert_eq!(row.text_flow_of(62), Some(TextDirection::Up));
+    assert_eq!(row.text_flow_of(63), None);
+}
+
 #[test]
 fn table_assembled_from_marks() {
     // A 2×2 table: "a\x07 b\x07|ttp  c\x07 d\x07|ttp" then a normal paragraph.
