@@ -46,8 +46,8 @@ No third-party implementation was consulted.
   one picture share its bytes.
 - The AutoFilter range (AutoFilterInfo with the `_FilterDatabase` name); not its criteria.
 
-Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 200,000 records
-read from a drawing and containers nested at most 12 deep, 4096 stored pictures, 256 MiB of
+Limits for these: 256 MiB of drawing records for the workbook and for each sheet, 200,000 drawing
+records read from all the sheets together, drawing containers nested at most 12 deep, 4096 stored pictures, 256 MiB of
 picture bytes in all, inflated or copied (a metafile at most 64 MiB), 65,536 pictures, comments and
 conditional formats per sheet. A damaged comment, object or conditional-format record is
 skipped with a warning.

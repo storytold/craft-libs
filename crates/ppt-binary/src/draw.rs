@@ -3,7 +3,7 @@
 //! anchor and client records (placeholder, text).
 
 use crate::doc::rt;
-use craft_officeart::record::{MAX_DEPTH, MAX_RECORDS};
+use craft_officeart::record::MAX_DEPTH;
 
 use crate::record::Rec;
 
@@ -54,19 +54,19 @@ pub struct Drawing<'a> {
     pub background: Option<RawShape<'a>>,
 }
 
-/// Read the drawing of a slide, master or notes container.
-pub fn drawing<'a>(container: &Rec<'a>) -> Drawing<'a> {
+/// Read the drawing of a slide, master or notes container, reading at most `budget` records more
+/// (one budget for the whole presentation, [`craft_officeart::record::MAX_RECORDS`] to start with).
+pub fn drawing<'a>(container: &Rec<'a>, budget: &mut usize) -> Drawing<'a> {
     let mut out = Drawing { shapes: vec![], background: None };
     let Some(dg) = container.child(rt::DRAWING).and_then(|d| d.child(rt::DG_CONTAINER)) else { return out };
-    let mut budget = MAX_RECORDS;
     // The background is the container's own shape (`OfficeArtDgContainer.shape`, [MS-ODRAW]
     // 2.2.13), not one found by its fBackground flag.
     if let Some(bg) = dg.child(rt::SP_CONTAINER) {
-        out.background = Some(shape(&bg, &mut budget));
+        out.background = Some(shape(&bg, budget));
     }
     if let Some(top) = dg.child(rt::SPGR_CONTAINER) {
         // The first shape of the top group is the patriarch, standing for the drawing itself.
-        out.shapes = group_children(&top, 0, &mut budget).into_iter().filter(|s| !s.patriarch).collect();
+        out.shapes = group_children(&top, 0, budget).into_iter().filter(|s| !s.patriarch).collect();
     }
     out
 }
@@ -198,6 +198,7 @@ mod tests {
     use super::*;
     use crate::record::build::*;
     use craft_officeart::props::MAX_PROPS;
+    use craft_officeart::record::MAX_RECORDS;
 
     pub fn fopt(entries: &[(u16, u32)], complex: &[u8]) -> Vec<u8> {
         let mut b = vec![];
@@ -277,20 +278,24 @@ mod tests {
         };
         let read = |levels: usize| {
             let slide = slide_of(vec![nested(levels)]);
-            depth(&super::drawing(&Rec::at(&slide, 0).unwrap()).shapes[0])
+            depth(&super::drawing(&Rec::at(&slide, 0).unwrap(), &mut MAX_RECORDS.clone()).shapes[0])
         };
         let limit = craft_officeart::record::MAX_DEPTH;
         assert_eq!(read(limit), limit);
         assert_eq!(read(limit + 8), limit, "the groups past the limit are left out");
     }
 
-    /// A drawing reads at most [`MAX_RECORDS`] records, however many shapes it holds.
+    /// A presentation's drawings read at most [`MAX_RECORDS`] records together, however many shapes
+    /// each holds: a slide after the budget is spent reads none.
     #[test]
-    fn a_drawing_reads_at_most_max_records() {
-        let shapes = vec![container(rt::SP_CONTAINER, 0, &[]); MAX_RECORDS + 5];
+    fn drawings_read_at_most_max_records_together() {
+        let shapes = vec![container(rt::SP_CONTAINER, 0, &[]); MAX_RECORDS / 2 + 5];
         let slide = slide_of(shapes);
-        let d = super::drawing(&Rec::at(&slide, 0).unwrap());
-        assert!(d.shapes.len() < MAX_RECORDS, "{}", d.shapes.len());
+        let mut budget = MAX_RECORDS;
+        let first = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.len();
+        let second = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.len();
+        assert!(first > MAX_RECORDS / 2 && second < MAX_RECORDS / 2, "{first} then {second}");
+        assert!(super::drawing(&Rec::at(&slide, 0).unwrap(), &mut budget).shapes.is_empty());
     }
 
     #[test]
@@ -321,7 +326,7 @@ mod tests {
         );
         let drawing = container(rt::DRAWING, 0, &[container(rt::DG_CONTAINER, 0, &[container(rt::SPGR_CONTAINER, 0, &[patriarch, title, group])])]);
         let slide = container(rt::SLIDE, 0, &[drawing]);
-        let d = super::drawing(&Rec::at(&slide, 0).unwrap());
+        let d = super::drawing(&Rec::at(&slide, 0).unwrap(), &mut MAX_RECORDS.clone());
         assert_eq!(d.shapes.len(), 2);
         let t = &d.shapes[0];
         assert_eq!(t.placeholder.unwrap().kind, 0x0D);
