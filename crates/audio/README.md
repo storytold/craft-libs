@@ -214,9 +214,11 @@ packet. Opus with empty `extradata` and 1 or 2 channels (RTP, MPEG-TS) needs no 
 To seek: position your demuxer at the packet that starts `preroll()` frames or more before the
 target, call `reset()`, decode from there, and drop the output before the target.
 
-The codec modules are also usable on their own. `aac::Decoder` and `opus::Decoder` return the
-codec's channel order; `aac::wav_order(channel_config)` and `opus::wav_order(channels)` map it to
-WAV order. `ac3::Decoder` and `mpa::Decoder` output WAV order.
+The codec modules are also usable on their own. `aac::Decoder`, `opus::Decoder` and
+`vorbis::decoder::Decoder` return the codec's channel order; `aac::wav_order(channel_config)`,
+`opus::wav_order(channels)` and `vorbis::wav_order(channels)` map it to WAV order, and
+`vorbis::layout(channels)` gives the speakers of the result. `ac3::Decoder` and `mpa::Decoder`
+output WAV order.
 
 ### Encode a file
 
