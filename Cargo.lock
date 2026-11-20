@@ -3276,6 +3276,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sqlite"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ssip"
 version = "0.1.0"
 
