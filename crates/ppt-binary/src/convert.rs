@@ -679,6 +679,38 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// A shaded fill's colours from its `fillShadeColors` ([MS-ODRAW] §2.3.7.27: an `IMsoArray` of `MSOSHADECOLOR`, a
+    /// colour then a 16.16 position from 0, the first colour, to 1, the last, in ascending order), when the array is
+    /// whole and well formed: else `None`, and the fill's own two colours make the shade. The fill's opacity runs from
+    /// `fillOpacity` at the first colour to `fillBackOpacity` at the last, as it does over those two.
+    fn shade_colors(&self, props: &Props, scope: &Scope) -> Option<Vec<(ColorRef, f64)>> {
+        // `nElems`, `nElemsAlloc`, `cbElem`, then the elements.
+        let bytes = props.complex(prop::FILL_SHADE_COLORS)?;
+        let count = usize::from(crate::record::u16_at(bytes, 0)?);
+        // [MS-ODRAW] `IMsoArray`: `nElemsAlloc` is at least `nElems`.
+        let allocated = usize::from(crate::record::u16_at(bytes, 2)?);
+        if crate::record::u16_at(bytes, 4)? != 8 || allocated < count || !(2..=MAX_SHADE_COLORS).contains(&count) {
+            return None;
+        }
+        // Every element the array states: a clipped array would lose its last colours.
+        let entries = bytes.get(6..6 + count * 8)?.as_chunks::<8>().0;
+        let alpha = |id| props.fixed(id).map_or(1.0, |a| a.clamp(0.0, 1.0));
+        let (first, last) = (alpha(prop::FILL_OPACITY), alpha(prop::FILL_BACK_OPACITY));
+        let mut shade = Vec::with_capacity(entries.len());
+        let mut before = 0.0;
+        for [r, g, b, flags, p0, p1, p2, p3] in entries.iter().copied() {
+            let pos = f64::from(i32::from_le_bytes([p0, p1, p2, p3])) / 65536.0;
+            if !(before..=1.0).contains(&pos) {
+                return None;
+            }
+            before = pos;
+            let color = ColorRef::rgb(self.color(u32::from_le_bytes([r, g, b, flags]), props, scope, 0));
+            let a = first + (last - first) * pos;
+            shade.push((if a < 1.0 { color.with(ColorTransform::Alpha((a * 100_000.0) as i32)) } else { color }, pos));
+        }
+        Some(shade)
+    }
+
     fn fill(&mut self, props: &Props<'a>, scope: &Scope, background: bool) -> Option<Fill> {
         if !background && !props.flag(prop::FILL_BOOLS, 4).unwrap_or(true) {
             return None;
@@ -702,7 +734,8 @@ impl<'a> Ctx<'a> {
             t @ 4..=8 => {
                 use craft_pptx::style::{Gradient, GradientShape};
                 let focus = props.get(prop::FILL_FOCUS).map_or(0, |v| v as i32).clamp(-100, 100);
-                let stops = gradient_stops(focus, &fg, &bg);
+                let shade = self.shade_colors(props, scope).unwrap_or_else(|| vec![(fg.clone(), 0.0), (bg.clone(), 1.0)]);
+                let stops = gradient_stops(focus, &shade);
                 let shape = if matches!(t, 5 | 6) {
                     // Position 0 is the centre (the focus rectangle), 1 the shape's edge.
                     GradientShape::Path { path: if t == 5 { "rect".into() } else { "shape".into() }, focus: [0.5, 0.5, 0.5, 0.5] }
@@ -1056,16 +1089,28 @@ fn text_shadow(scheme: &Scheme) -> Shadow {
     }
 }
 
-/// A shaded fill's stops ([MS-ODRAW] `fillFocus`: the position of the last colour, the back
-/// colour). Focus 0 starts at the back colour and ends at the fill colour, ±100 the other way; in
-/// between, the back colour sits at that point with the fill colour at both ends.
-fn gradient_stops(focus: i32, fg: &ColorRef, bg: &ColorRef) -> Vec<craft_pptx::style::GradientStop> {
+/// `fillShadeColors` entries kept: a longer array is not read, and the fill's two colours make the shade. A mirrored
+/// shade doubles its stops.
+const MAX_SHADE_COLORS: usize = 256;
+
+/// A shaded fill's stops from its colours `shade`, each at its position from the start (0) to the end (1): the fill
+/// colour and the back colour, or the `fillShadeColors` entries. [MS-ODRAW] `fillFocus` places the last colour: focus
+/// ±100 keeps the shade as it is and 0 reverses it, ending at the first colour; in between, the last colour sits at
+/// that point with the first at both ends, the shade and then the shade mirrored.
+fn gradient_stops(focus: i32, shade: &[(ColorRef, f64)]) -> Vec<craft_pptx::style::GradientStop> {
     use craft_pptx::style::GradientStop;
     let stop = |pos: f64, c: &ColorRef| GradientStop { pos, color: c.clone() };
     match focus {
-        0 => vec![stop(0.0, bg), stop(1.0, fg)],
-        100 | -100 => vec![stop(0.0, fg), stop(1.0, bg)],
-        f => vec![stop(0.0, fg), stop(f64::from(f.abs()) / 100.0, bg), stop(1.0, fg)],
+        100 | -100 => shade.iter().map(|(c, p)| stop(*p, c)).collect(),
+        0 => shade.iter().rev().map(|(c, p)| stop(1.0 - p, c)).collect(),
+        f => {
+            let at = f64::from(f.abs()) / 100.0;
+            let there = shade.iter().map(|(c, p)| stop(p * at, c));
+            // The last colour's mirrored stop is its own stop only when it ends the shade, at 1.
+            let shared = usize::from(shade.last().is_some_and(|(_, p)| *p >= 1.0));
+            let back = shade.iter().rev().skip(shared).map(|(c, p)| stop(1.0 - p * (1.0 - at), c));
+            there.chain(back).collect()
+        }
     }
 }
 
@@ -1182,15 +1227,34 @@ mod tests {
 
     use super::*;
 
+    /// A shade of more than two colours ([MS-ODRAW] `fillShadeColors`) goes where `fillFocus` puts it, as two colours
+    /// do: as it is at 100, reversed at 0, and at 50 to its last colour in the middle and mirrored back.
+    #[test]
+    fn a_shade_of_three_colours_follows_the_focus() {
+        let [red, green, blue] = [(255, 0, 0), (0, 255, 0), (0, 0, 255)].map(|(r, g, b)| ColorRef::rgb(Rgba::rgb(r, g, b)));
+        let shade = [(red.clone(), 0.0), (green.clone(), 0.25), (blue.clone(), 1.0)];
+        let at = |stops: Vec<craft_pptx::style::GradientStop>| stops.into_iter().map(|s| (s.pos, s.color)).collect::<Vec<_>>();
+        assert_eq!(at(gradient_stops(100, &shade)), [(0.0, red.clone()), (0.25, green.clone()), (1.0, blue.clone())]);
+        assert_eq!(at(gradient_stops(0, &shade)), [(0.0, blue.clone()), (0.75, green.clone()), (1.0, red.clone())]);
+        assert_eq!(
+            at(gradient_stops(50, &shade)),
+            [(0.0, red.clone()), (0.125, green.clone()), (0.5, blue.clone()), (0.875, green), (1.0, red.clone())]
+        );
+        // A shade that ends before 1 keeps its last colour on both sides of the mirror.
+        let short = [(red.clone(), 0.0), (blue.clone(), 0.5)];
+        assert_eq!(at(gradient_stops(50, &short)), [(0.0, red.clone()), (0.25, blue.clone()), (0.75, blue), (1.0, red)]);
+    }
+
     /// [MS-ODRAW] `fillFocus` is where the back colour sits; LibreOffice draws 0° from the top
     /// (storytold/deckcraft#1137 review: the linear gradient's colours were reversed, the radial one inside out).
     #[test]
     fn shaded_fills_put_the_back_colour_at_the_focus() {
         let (fg, bg) = (ColorRef::rgb(Rgba::rgb(255, 0, 0)), ColorRef::rgb(Rgba::rgb(0, 0, 255)));
         let at = |stops: &[craft_pptx::style::GradientStop]| stops.iter().map(|s| (s.pos, s.color == fg)).collect::<Vec<_>>();
-        assert_eq!(at(&gradient_stops(0, &fg, &bg)), [(0.0, false), (1.0, true)]);
-        assert_eq!(at(&gradient_stops(100, &fg, &bg)), [(0.0, true), (1.0, false)]);
-        assert_eq!(at(&gradient_stops(-50, &fg, &bg)), [(0.0, true), (0.5, false), (1.0, true)]);
+        let two = [(fg.clone(), 0.0), (bg.clone(), 1.0)];
+        assert_eq!(at(&gradient_stops(0, &two)), [(0.0, false), (1.0, true)]);
+        assert_eq!(at(&gradient_stops(100, &two)), [(0.0, true), (1.0, false)]);
+        assert_eq!(at(&gradient_stops(-50, &two)), [(0.0, true), (0.5, false), (1.0, true)]);
         // 0° and -180° start at the top, -90° on the left, -270° on the right, -315° at the
         // bottom right (DrawingML: 90° runs top to bottom, 0° left to right).
         for (a, dm) in [(0.0, 90.0), (-90.0, 0.0), (-180.0, 90.0), (-270.0, 180.0), (-315.0, 225.0), (-45.0, 315.0)] {
