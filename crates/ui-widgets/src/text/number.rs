@@ -24,6 +24,7 @@ use craft_behavior::{
 };
 use craft_theme::{Rgba, Stateful, States};
 use egui::{CornerRadius, Rect, Vec2};
+use std::borrow::Cow;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -293,6 +294,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         value.and_then(NumberValue::number).map(|stored| self.to_shown(stored))
     }
 
+    /// Whether the field uses the dash for a missing or invalid value.
+    fn shows_blank(&self, shown: Option<&V>) -> bool {
+        shown.is_none() || non_finite(shown) || (self.status_zoom && shown.and_then(NumberValue::number).is_none())
+    }
+
     /// The field's codec: the one set, else the env's locale and the spellings of the unit kind (a length field
     /// reads every length spelling).
     fn number_codec(&self, units: &Units) -> NumberCodec {
@@ -456,8 +462,15 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let content = content_sized(cx);
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
-        let sample = codec.sample(cx.value().unwrap_or(&blank));
-        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        let shown = cx.value();
+        let no_zoom_value = self.status_zoom && self.shows_blank(shown);
+        let (sample, role) = if no_zoom_value {
+            // Text editors draw their hint in the proportional face.
+            (Cow::Borrowed(BLANK), self.options.role)
+        } else {
+            (codec.sample(shown.unwrap_or(&blank)), TypeRole::Mono)
+        };
+        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(role));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
@@ -492,7 +505,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
-            if shown.is_none() || non_finite(shown) {
+            if self.shows_blank(shown) {
                 self.options.placeholder = Some(BLANK.into());
             } else if self.automatic {
                 self.options.placeholder = Some(cx.words::<TextWords>().automatic.clone());

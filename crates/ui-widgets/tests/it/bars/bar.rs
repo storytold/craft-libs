@@ -359,6 +359,31 @@ fn the_status_zoom_shows_its_complete_value_and_percent() {
 }
 
 #[trial]
+fn the_status_zoom_shows_the_complete_dash_without_a_view() {
+    use craft_behavior::Mixed;
+    use craft_ui::runtime::env::Scale;
+
+    let mut fixture = Fixture::new(|ui| {
+        let mut values = StatusValues::default();
+        values.document_sizes = Some((1024, 4096));
+        Bar::new("Status", BarKind::Status).show(ui, |ui, _| {
+            StatusReadout::new(Bind::given(Mixed::<CanvasView>::Mixed), Size::new(2000.0, 1500.0), StatusItem::DocumentSizes, &values).show(ui);
+        });
+    });
+    fixture.scale(Scale::new(1.25)).room(Vec2::new(600.0, 80.0)).settle();
+
+    let zoom = fixture.by_label("Zoom").expect("the status zoom field");
+    assert!(fixture.tree().is_disabled_key(zoom.node));
+    let dash = fixture.texts().iter().find(|text| text.text == "—" && zoom.rect.contains(text.rect.center())).expect("a dash inside the zoom field");
+    assert!(
+        !dash.elided && dash.rect.min.x + SLACK >= dash.clip.min.x && dash.rect.max.x <= dash.clip.max.x + SLACK,
+        "the empty zoom dash is clipped: {:?} outside {:?}",
+        dash.rect,
+        dash.clip,
+    );
+}
+
+#[trial]
 fn the_status_zoom_still_scrubs_and_applies_edited_text() {
     use egui::{Event, Key, Modifiers};
 
