@@ -878,3 +878,35 @@ fn frame_reports_the_marker_and_precision() {
     assert_eq!(frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), kind(0xC1, 12));
     assert_eq!(frame(&[0xFF, 0xD8]), None);
 }
+
+#[test]
+fn reduced_decoding_scales_dimensions_and_samples() {
+    let mut rgb = Vec::with_capacity(32 * 24 * 3);
+    for _ in 0..32 * 24 {
+        rgb.extend_from_slice(&[200, 100, 50]);
+    }
+    let mut encoded = Vec::new();
+    jpeg_encoder::Encoder::new(&mut encoded, 95).encode(&rgb, 32, 24, jpeg_encoder::ColorType::Rgb).unwrap();
+
+    let limits = Limits::default();
+    assert!(reduced_estimate(&encoded, &limits, 0).is_err());
+    assert!(reduced_estimate(&encoded, &limits, 4).is_err());
+    assert!(decode_reduced(&encoded, &limits, None, 0).is_err());
+    assert!(decode_reduced(&encoded, &limits, None, 4).is_err());
+
+    for shrink in 1..=MAX_SHRINK {
+        let (ew, eh, est_bytes) = reduced_estimate(&encoded, &limits, shrink).unwrap();
+        let dec = decode_reduced(&encoded, &limits, None, shrink).unwrap();
+        assert_eq!((dec.width, dec.height), (32u32.div_ceil(1 << shrink), 24u32.div_ceil(1 << shrink)));
+        assert_eq!((dec.width, dec.height), (ew, eh));
+        assert!(est_bytes > 0);
+        assert_eq!(dec.components, 3);
+        let Samples::U8(samples) = dec.samples else { panic!("expected U8") };
+        assert_eq!(samples.len(), (ew * eh * 3) as usize);
+        for px in samples.as_chunks::<3>().0 {
+            assert!((px[0] as i32 - 200).abs() <= 5, "r={}", px[0]);
+            assert!((px[1] as i32 - 100).abs() <= 5, "g={}", px[1]);
+            assert!((px[2] as i32 - 50).abs() <= 5, "b={}", px[2]);
+        }
+    }
+}
