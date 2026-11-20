@@ -18,7 +18,7 @@ encode = ["dep:jixel"]
 [dependencies]
 jxl-oxide = { workspace = true, optional = true }
 # Bounds the Brotli-compressed metadata boxes before jxl-oxide inflates them (see brob.rs).
-brotli-decompressor = { version = "5", optional = true }
+brotli-decompressor = { version = "6", optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
