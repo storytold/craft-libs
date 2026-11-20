@@ -629,14 +629,14 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     } else {
         Sense::HOVER | spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense).intersection(Sense::FOCUS)
     };
-    // A root outside its clip gets an empty response rect at its corner, never an inverted one.
-    let shown = spec.rect.intersect(clip);
-    let response = response::widget(ui, spec.id, Rect::from_min_max(shown.min, shown.max.max(shown.min)), sense);
+    // The response rect is the root's whole rect and egui's hit test uses its part inside the clip (`interact_rect`),
+    // as for any egui widget: a root the clip cuts reports and reveals where it is, not where it shows.
+    let response = response::widget(ui, spec.id, spec.rect, sense);
     // Each edge or handle part that reaches outside the root rect gets its own widget, resolved as the root.
     let mut widgets = vec![spec.id, sub(spec.id, "transform")];
     for part in spec.own.iter().filter(|part| reaches_out(spec.rect, part)) {
         let id = sub(spec.id, ("edge", part.key, part.index));
-        response::widget(ui, id, part.shape.bounds().intersect(clip), part.sense);
+        response::widget(ui, id, part.shape.bounds(), part.sense);
         crate::runtime::egui::access::hide(ctx, id);
         widgets.push(id);
     }
@@ -723,7 +723,7 @@ pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls
     let widgets: Vec<Id> = over_parts(decls)
         .map(|part| {
             let widget = over_widget(id, part);
-            response::widget(ui, widget, part.shape.bounds().intersect(clip), part.sense);
+            response::widget(ui, widget, part.shape.bounds(), part.sense);
             crate::runtime::egui::access::hide(ctx, widget);
             widget
         })
@@ -771,7 +771,7 @@ pub(crate) fn widen_root(ctx: &Context, id: Id, hidden: bool) {
 /// record or press lifecycle, only its egui widget and its entry in the widget record.
 pub(crate) fn sense_none(ui: &Ui, id: Id, rect: Rect) -> RootResult {
     let ctx = ui.ctx();
-    let response = response::widget(ui, id, rect.intersect(ui.clip_rect()), Sense::empty());
+    let response = response::widget(ui, id, rect, Sense::empty());
     pointer::record_widgets(ctx, ui.layer_id(), id, &[id, sub(id, "transform")], false);
     RootResult { response, parts: PartResults::new(), press: PressState::IDLE, activation: false, activated_member: None, sense: Sense::empty() }
 }

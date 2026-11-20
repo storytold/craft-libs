@@ -125,14 +125,14 @@ impl Opener {
     }
 }
 
-/// Whether a secondary-button release lands inside `response`'s rect in this pass: the secondary click a
+/// Whether a secondary-button release lands inside `response`'s rect, where its clip shows it, in this pass: the secondary click a
 /// `Trigger::Press` opener opens on.
 pub(super) fn secondary_release_in(response: &Response) -> bool {
     pointer::with_pass_raw(&response.ctx, |pass| {
         pass.frame.as_ref().is_some_and(|frame| {
             frame.release == Some(PointerButton::Secondary)
                 && frame.pos.is_some_and(|pos| {
-                    response.rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
+                    response.interact_rect.contains(areas::layer_map(&response.ctx, response.layer_id).map_or(pos, |map| map.to_layer(pos)))
                 })
         })
     })

@@ -121,6 +121,21 @@ fn a_root_widget_senses_what_its_members_sense_in_the_same_pass() {
     assert_eq!(clicks(&frames), [Some(true); 2], "the widgets click again in the frame the member comes back");
 }
 
+/// A root its clip cuts registers its whole rect as its egui widget's rect, and the part inside the clip as the rect
+/// egui's hit test uses, as egui's own widgets do: its response reports and reveals where the root is.
+#[trial]
+fn a_root_cut_by_its_clip_keeps_its_whole_rect_and_senses_inside_the_clip() {
+    let (whole, clip) = (rect(100.0, 100.0, 200.0, 100.0), rect(0.0, 0.0, 400.0, 150.0));
+    let mut show_frame = move |ui: &mut Ui| {
+        ui.set_clip_rect(clip);
+        show(ui, &[ProbeRoot::new("cut", whole, Sense::CLICK)]);
+    };
+    let mut frames = Frames::new();
+    frames.idle(1, &mut show_frame);
+    let widget = frames.ctx.widget_rect_last_pass(ProbeRoot::id("cut")).expect("the root's widget");
+    assert_eq!((widget.rect, widget.interact_rect), (whole, whole.intersect(clip)), "the whole rect, sensed inside the clip");
+}
+
 /// Skeleton: `frames_pointer::button_on_canvas_click_and_slop_drag` and `..._on_zoomed_canvas_...`.
 fn member_on_canvas(transform: Option<CanvasTransform>) {
     let (mut show_frame, log) = scene(vec![canvas(transform)]);
