@@ -373,13 +373,14 @@ impl Scoped {
         self.inherited_mut().values.set(InBar(false));
     }
 
-    /// Ends the layout room of the enclosing body: its flow grid and content column.
+    /// Ends the layout room of the enclosing body: its flow grid and content column. The axes the body sizes from its
+    /// content stay (`content`): like `cell_fills` and `least`, they say what a child that fills takes there, its
+    /// measured size or the room, and the scope key holds them.
     pub(crate) fn start_room(&mut self) {
         self.grid = None;
         self.grid_top = false;
         self.content_column = false;
         self.given_column = false;
-        self.content = (false, false);
         self.row_room = None;
         self.row_line = None;
         self.first_line = None;
@@ -401,7 +402,7 @@ impl Scoped {
             use crate::contract::{MemoKey, MemoProps as _};
             let mut key = MemoKey::of_view(&self.ctx);
             key.feed_hash(&(self.enabled, self.read_only, self.size, self.glyphs, self.ink, self.surface, self.wheel));
-            key.feed_hash(&(self.direction, self.text_direction, self.ids_stable, self.cell_fills, self.least, self.unbounded));
+            key.feed_hash(&(self.direction, self.text_direction, self.ids_stable, self.cell_fills, self.least, self.unbounded, self.content));
             key.feed_hash(&(self.arena, self.roving, self.item, self.row, self.scroll_owner.map(|owner| (owner.id, owner.view))));
             self.transform.map(|transform| (transform.scale, transform.offset)).key(&mut key);
             self.footer_slot.map(|slot| (slot.owner, slot.size)).key(&mut key);

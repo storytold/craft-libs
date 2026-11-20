@@ -6,7 +6,7 @@ use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Text;
-use craft_ui::layout_components::Stack;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::{frame, inspect};
@@ -1082,4 +1082,49 @@ fn a_view_replayed_for_frames_keeps_the_layout_memory_it_kept() {
     let after_replays = measured_frame(&mut frames, 2);
     assert_eq!(runs_of(&frames, "Measured"), [MemoRun::Ran], "a new prop runs the view");
     assert_eq!(after_replays, after_a_run, "the replays kept the stack's measurements alive");
+}
+
+#[derive(MemoProps)]
+struct Centred {
+    label: String,
+}
+
+/// A row that fills its width, around one button.
+fn centred(props: &mut Centred, ui: &mut Ui) {
+    Row::new().fill_width().show(ui, |ui, _| {
+        Button::new(props.label.clone()).show(ui);
+    });
+}
+
+/// A memoized view in a column that takes its width from its content (beside a sibling that fills a row) lays out its
+/// fill-width row as the same content outside a view does: the column stays as narrow as its button, and the sibling
+/// takes the rest of the row.
+#[trial]
+fn a_view_in_a_content_sized_column_lays_out_its_fill_width_row_as_outside_a_view() {
+    let shown = |memo: bool| {
+        let mut frames = Frames::new();
+        let mut rects = (Rect::NOTHING, Rect::NOTHING);
+        for _ in 0..WARM {
+            frames.frame(vec![], |ui| {
+                in_region(ui, OUTSIDE.union(region(0)), |ui| {
+                    Row::new().fill().show(ui, |ui, _| {
+                        let column = Stack::new().show(ui, |ui, _| {
+                            let mut props = Centred { label: "Open".to_owned() };
+                            if memo {
+                                MemoView::new("centred", props, centred).show(ui);
+                            } else {
+                                centred(&mut props, ui);
+                            }
+                        });
+                        let rest = Stack::new().fill().show(ui, |ui, _| Button::new("Rest").show(ui));
+                        rects = (column.output.rect, rest.output.rect);
+                    });
+                });
+            });
+        }
+        rects
+    };
+    let (outside, inside) = (shown(false), shown(true));
+    assert!(outside.0.width() < outside.1.width(), "the column outside a view is as narrow as its button: {outside:?}");
+    assert_eq!(inside, outside, "the view's column and its sibling lie as without the view");
 }
