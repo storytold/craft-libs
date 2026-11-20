@@ -343,7 +343,7 @@ impl<'a> Notice<'a> {
         self.actions
             .iter()
             .map(|action| match &action.command {
-                Some(command) => cx.resolve_command(command.clone()).map_or(Label::Empty, |resolved| Label::from(resolved.label)),
+                Some(command) => cx.resolve_command(command.clone()).map_or(Label::Empty, |resolved| Label::from(resolved.label.clone())),
                 None => action.label.clone(),
             })
             .collect()

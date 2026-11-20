@@ -236,7 +236,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         let seg = &b[i + 4..i + 2 + len];
         match marker {
-            0xE0 if seg.len() >= 12 && seg.starts_with(b"JFIF\0") => {
+            0xE0 if seg.len() >= 12 && seg.starts_with(b"JFIF\0") && jfif_dpi.is_none() => {
                 let unit = seg[7];
                 let x = u16::from_be_bytes([seg[8], seg[9]]) as f32;
                 let y = u16::from_be_bytes([seg[10], seg[11]]) as f32;
@@ -278,9 +278,10 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     }
     m.held_coefficients = sof.map_or(0, |(marker, seg)| held_coefficients(marker, seg, scan_components));
     m.dpi = photoshop_resolution(&photoshop)
-        .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
-        .or_else(|| m.exif.as_deref().and_then(exif_resolution))
-        .or(jfif_dpi);
+        .filter(|&d| crate::resolution_probe::usable(d))
+        .or_else(|| m.xmp.as_deref().and_then(xmp_resolution).filter(|&d| crate::resolution_probe::usable(d)))
+        .or_else(|| m.exif.as_deref().and_then(exif_resolution).filter(|&d| crate::resolution_probe::usable(d)))
+        .or_else(|| jfif_dpi.filter(|&d| crate::resolution_probe::usable(d)));
     m.photoshop = Some(photoshop).filter(|p| !p.is_empty());
     if !icc_parts.is_empty() {
         icc_parts.sort_by_key(|p| p.0);

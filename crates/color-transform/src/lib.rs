@@ -18,4 +18,6 @@ pub mod oklab;
 mod space;
 pub mod tonemap;
 
-pub use space::{BRADFORD, D50, D65, DISPLAY_P3, Mat3, REC601_525, REC601_625, REC2020, RgbSpace, SRGB, Xy, bradford, bradford_xyz};
+pub use space::{
+    ADOBE_RGB, BRADFORD, D50, D65, DISPLAY_P3, Mat3, PROPHOTO, REC601_525, REC601_625, REC2020, RgbSpace, SRGB, Xy, bradford, bradford_xyz,
+};
