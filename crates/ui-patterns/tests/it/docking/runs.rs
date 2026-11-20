@@ -13,7 +13,7 @@ use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_runs, last_pass_runs, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -495,4 +495,18 @@ fn one_workspace_edit_reads_the_specs_once() {
     fixture.frame(Vec::new());
     assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "the next pass builds nothing");
     assert_eq!(spec_reads(), 0, "and reads no spec");
+}
+
+/// The key bytes of an idle pass of a dock whose single group holds `tabs` panels.
+fn idle_key_bytes(tabs: usize) -> usize {
+    let MemoDock { mut fixture, .. } = memo_dock(Layout::new(Some(Node::tabs((0..tabs).collect(), 0)), Vec::new()), None);
+    fixture.frame(Vec::new());
+    assert_eq!(last_pass_derived_builds(fixture.ctx()), Vec::new(), "an idle pass builds no derived value");
+    last_pass_memo_key_bytes(fixture.ctx())
+}
+
+/// An idle dock feeds the same key bytes whatever the number of its panels.
+#[trial]
+fn a_docks_idle_key_bytes_do_not_grow_with_its_panels() {
+    assert_eq!(idle_key_bytes(4), idle_key_bytes(32), "the tab row's key follows the dock's revisions, not its titles");
 }

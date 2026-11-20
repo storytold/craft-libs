@@ -9,7 +9,7 @@ use craft_host::target::Os;
 use craft_keymap::Overrides;
 use craft_menu::{CommandRef, MenuBar, MenuBarUi, Row, Target, from_items};
 use craft_ui::contract::Tracked;
-use craft_ui::testing::{Fixture, MemoRun, audit_replays, last_frame_derived_builds, last_frame_memo_runs, trial};
+use craft_ui::testing::{Fixture, MemoRun, audit_replays, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes, trial};
 use egui::{Event, Key, Modifiers};
 
 fn model(title: &str) -> Tracked<MenuBar> {
@@ -142,4 +142,20 @@ fn a_keymap_change_builds_the_labels_once() {
     assert_eq!(label_builds(&fixture), 1, "a new keymap builds the labels once");
     fixture.frame(vec![]);
     assert_eq!(label_builds(&fixture), 0, "and the next frame none");
+}
+
+/// The key bytes of an idle pass of a bar whose File menu has `rows` rows.
+fn idle_key_bytes(rows: usize) -> usize {
+    let items: Vec<Row> = (0..rows).map(|row| Row::new(&["File"], CommandRef::new(format!("file.row{row}")), format!("Row {row}"))).collect();
+    let bar = Rc::new(RefCell::new(Tracked::new(from_items(&["File"], &items))));
+    let mut fixture = fixture(&bar);
+    fixture.frame(vec![]);
+    assert_eq!(label_builds(&fixture), 0, "an idle bar builds no labels");
+    last_pass_memo_key_bytes(fixture.ctx())
+}
+
+/// An idle bar feeds the same key bytes whatever its model's size.
+#[trial]
+fn a_menu_bars_idle_key_bytes_do_not_grow_with_its_rows() {
+    assert_eq!(idle_key_bytes(20), idle_key_bytes(2_000), "the key follows the model's revision, not its rows");
 }

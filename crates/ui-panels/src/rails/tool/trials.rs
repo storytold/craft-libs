@@ -14,7 +14,7 @@ use crate::runtime::env::ThemeScope;
 use crate::testing::pointer::secondary;
 use crate::testing::pointer::{moved, wheel};
 use crate::testing::relations::{above, grows_with};
-use crate::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, trial};
+use crate::testing::{Fixture, MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes, trial};
 use egui::{Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -284,4 +284,26 @@ fn an_open_flyout_builds_no_derived_values() {
         fixture.frame(vec![]);
         assert!(last_frame_derived_builds(fixture.ctx()).iter().all(|(_, builds)| *builds == 0), "no derived value is built per pass");
     }
+}
+
+/// The key bytes of an idle pass of a rail of `count` slots, a quarter of whose tools are hidden and half remembered.
+fn idle_key_bytes(count: u8) -> usize {
+    let slots: Vec<ToolSlot<u8>> = (0..count).map(|id| ToolSlot::new(u32::from(id), tools(&[id]))).collect();
+    let hidden: Vec<u8> = (0..count / 4).collect();
+    let mut last = LastUsed::default();
+    for id in 0..count / 2 {
+        last.set(u32::from(id), id);
+    }
+    let mut fixture = Fixture::new(move |ui| {
+        ToolRail::new("Tools", &slots, &0, &last).hidden(&hidden).show_rail(ui, |_, _| {});
+    });
+    fixture.room(Vec2::new(120.0, 400.0)).settle().idle(1);
+    assert_eq!(last_frame_derived_builds(fixture.ctx()), Vec::new(), "an idle rail builds no derived value");
+    last_pass_memo_key_bytes(fixture.ctx())
+}
+
+/// An idle rail feeds the same key bytes whatever its number of slots, with hidden and remembered tools in proportion.
+#[trial]
+fn a_tool_rails_idle_key_bytes_do_not_grow_with_its_slots() {
+    assert_eq!(idle_key_bytes(10), idle_key_bytes(100), "the key follows revisions, not the slots, the hidden or the remembered tools");
 }
