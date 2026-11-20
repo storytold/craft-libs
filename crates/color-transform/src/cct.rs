@@ -241,14 +241,23 @@ mod tests {
         }
     }
 
-    /// Warm, strongly green illuminants (e.g. 2000–3500 K with high positive tint) push the
-    /// source white's Bradford blue cone response to `<= 0`. Unlike unchecked division, which
-    /// inverts the blue channel, `bradford` / `wb_matrix` returns the identity matrix there.
+    /// Pins the current behavior for warm, strongly green illuminants (e.g. 2000–3500 K with high
+    /// positive tint) where the source white's Bradford blue cone response is `<= 0.0`. The
+    /// checked Bradford path currently returns `Mat3::IDENTITY` there (so `wb_matrix` is
+    /// `REC2020.from_xyz() * REC2020.to_xyz()`, i.e. identity within `f64` rounding) rather than
+    /// inverting blue; final `#587` process-version policy for this region remains open.
     #[test]
     fn warm_green_wb_with_non_positive_cone_response_returns_identity() {
         for (t, tint) in [(2000.0, 30.0), (2500.0, 60.0), (3000.0, 100.0), (3500.0, 125.0)] {
             let src = temp_tint_to_xy(t, tint);
-            assert_eq!(wb_matrix(&REC2020, src), Mat3::IDENTITY, "{t} K tint {tint}");
+            assert_eq!(crate::bradford(src, REC2020.white), Mat3::IDENTITY, "{t} K tint {tint}");
+            let m = wb_matrix(&REC2020, src);
+            for i in 0..3 {
+                for j in 0..3 {
+                    let want = if i == j { 1.0 } else { 0.0 };
+                    assert!((m.0[i][j] - want).abs() < 1e-12, "{t} K tint {tint} [{i}][{j}] = {}", m.0[i][j]);
+                }
+            }
         }
     }
 }
