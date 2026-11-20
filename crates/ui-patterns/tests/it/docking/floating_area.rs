@@ -252,7 +252,7 @@ fn a_floating_windows_group_starts_under_the_chrome_the_area_sizes_windows_by() 
 fn dragged_from(from: Pos2, by: Vec2) -> Rect {
     let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))));
     press_and_move(&mut bed.fixture, from, by);
-    bed.workspace.borrow().layout.floating[0].rect
+    bed.workspace.borrow().layout().floating[0].rect
 }
 
 /// A floating window's title row is a drag bar, shorter than the panel header of the tab strip under it, as
@@ -304,8 +304,8 @@ fn a_click_on_a_floating_windows_bar_neither_moves_nor_docks_it_and_a_drag_moves
     bed.fixture.frame(vec![press(at)]);
     bed.fixture.frame(vec![release(at)]);
     bed.fixture.settle();
-    assert_eq!(bed.workspace.borrow().layout.floating.first().map(|window| window.rect), Some(WINDOW_AT), "a click moves nothing");
-    assert_eq!(bed.workspace.borrow().layout.floating.len(), 1, "and docks nothing");
+    assert_eq!(bed.workspace.borrow().layout().floating.first().map(|window| window.rect), Some(WINDOW_AT), "a click moves nothing");
+    assert_eq!(bed.workspace.borrow().layout().floating.len(), 1, "and docks nothing");
     let by = Vec2::new(-40.0, 30.0);
     let rect = dragged_from(at, by);
     assert!((rect.min - (WINDOW_AT.min + by)).length() <= SLACK, "a drag moves the window: {rect:?}");
@@ -481,7 +481,7 @@ fn strip_band(icon: Rect) -> Pos2 {
 fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_columns_step() {
     let mut bed = bed(collapsed_at(WINDOW_AT));
     let sizes = IconicSizes::of(bed.fixture.ctx());
-    let height = sizes.icons_height(&bed.workspace.borrow().layout.floating[0].column);
+    let height = sizes.icons_height(&bed.workspace.borrow().layout().floating[0].column);
     let named = |bed: &Bed| bed.fixture.texts().iter().any(|run| run.text == title(WINDOW));
     let height = height + bed.chrome.get();
     let strip = strip_window(&bed);
@@ -496,7 +496,7 @@ fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_col
         bed.fixture.frame(vec![release(side + by)]);
         bed.fixture.settle();
         side += by;
-        let window = bed.workspace.borrow().layout.floating[0].clone();
+        let window = bed.workspace.borrow().layout().floating[0].clone();
         let shown = strip_window(&bed);
         let kept = window.column.iconic_width;
         assert!(window.column.iconic && kept.is_some_and(|kept| (kept - width).abs() <= SLACK), "{width}: the column keeps the width: {window:?}");
@@ -510,12 +510,14 @@ fn a_collapsed_windows_sides_resize_its_width_and_show_names_from_the_docked_col
     }
     let resized = strip_window(&bed);
     for iconic in [false, true] {
-        bed.workspace.borrow_mut().apply(Action::set_iconic(WINDOW, iconic), false, |_| Permissions::ALL).expect("the column toggles");
+        Arc::make_mut(&mut bed.workspace.borrow_mut())
+            .apply(Action::set_iconic(WINDOW, iconic), false, |_| Permissions::ALL)
+            .expect("the column toggles");
         bed.fixture.settle();
     }
     let again = strip_window(&bed);
     assert!((again.width() - resized.width()).abs() <= SLACK, "collapsed again, the strip keeps its width: {resized:?}, then {again:?}");
-    assert_eq!(bed.workspace.borrow().layout.floating[0].rect, WINDOW_AT, "the expanded rect is unchanged");
+    assert_eq!(bed.workspace.borrow().layout().floating[0].rect, WINDOW_AT, "the expanded rect is unchanged");
 }
 
 /// A floating collapsed column opens its flyouts towards the room of the float area, away from the edge it keeps to.

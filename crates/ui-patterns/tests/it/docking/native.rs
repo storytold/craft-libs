@@ -680,7 +680,7 @@ fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() 
         dock.windows.child_info(info(true, *at));
         commands
     };
-    dock.workspace.apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
+    Arc::make_mut(&mut dock.workspace).apply(Action::set_iconic(1, true), false, |_| Permissions::ALL).expect("the column collapses");
     for _ in 0..3 {
         follow(&mut dock, &mut at, vec![]);
     }
@@ -709,7 +709,7 @@ fn a_collapsed_native_palette_on_macos_is_resized_by_appkit_in_its_width_only() 
     for _ in 0..3 {
         sent.extend(follow(&mut dock, &mut at, vec![]));
     }
-    let palette = &dock.workspace.layout.floating[0];
+    let palette = &dock.workspace.layout().floating[0];
     assert!(palette.column.iconic_width.is_some_and(|kept| (kept - width).abs() <= 0.5), "the column keeps the width: {:?}", palette.column);
     let recorded = palette.native.clone().expect("the model records the window");
     assert_eq!(Vec2::from(recorded.normal.size), FLOAT_AT.size(), "the model keeps the expanded size");
