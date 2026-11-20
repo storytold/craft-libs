@@ -155,8 +155,11 @@ impl Anlv {
                     let f = f.to_ascii_lowercase();
                     f.starts_with("symbol") || f.starts_with("wingdings")
                 });
-            let c: String =
-                if symbol_font { self.before.iter().map(|&c| crate::list::bullet_char(0xF000 | u16::from(c))).collect() } else { text8(&self.before) };
+            let c: String = if symbol_font {
+                self.before.iter().map(|&c| crate::list::bullet_char(0xF000 | u16::from(c))).collect()
+            } else {
+                text8(&self.before)
+            };
             (NumFormat::Bullet, if c.is_empty() { "\u{2022}".to_owned() } else { c })
         } else {
             let mut t = String::new();
