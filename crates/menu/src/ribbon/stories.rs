@@ -83,7 +83,7 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         ribbon = ribbon.context_menu(&mut rows);
     }
     if setup.app_icons {
-        ribbon = ribbon.look(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3)).launcher_icon(IconId::new("chevron_down"));
+        ribbon = ribbon.look(RibbonLook::new(32, 17).arrow(10).row(20).tabs(3).body()).launcher_icon(IconId::new("chevron_down"));
     }
     let direction = if setup.rtl { Direction::Rtl } else { Env::of(ui).direction };
     let out = with_env(
