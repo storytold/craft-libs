@@ -411,10 +411,14 @@ fn run_props(r: &CharRun, env: &Env, scheme: &Scheme) -> RunProps {
     }
 }
 
+/// The most points of spacing DrawingML holds (its `spcPts` reaches 158400 hundredths), as the
+/// writer clamps it, so an imported value survives export.
+const MAX_SPACING_PTS: f64 = 1584.0;
+
 /// A paragraph run's spacing: a percentage of a line when positive, else minus a size in points.
 /// Bounded, so a hostile value can't push text off any page.
 fn spacing(v: i32) -> Spacing {
-    if v >= 0 { Spacing::Pct((f64::from(v) / 100.0).min(100.0)) } else { Spacing::Pts((-f64::from(v)).min(4000.0)) }
+    if v >= 0 { Spacing::Pct((f64::from(v) / 100.0).min(100.0)) } else { Spacing::Pts((-f64::from(v)).min(MAX_SPACING_PTS)) }
 }
 
 /// A paragraph run's alignment, spacing and bullet, and the margins its level has in the text's
