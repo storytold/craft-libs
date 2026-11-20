@@ -168,7 +168,9 @@ impl PaintUi<'_> {
             let mut control = placed.control;
             let mut prepared = None;
             if child.fills() != Some(craft_behavior::Axis::Y) {
-                let ideal = if self.fade.is_none() {
+                // The minimum measure above may have changed the child's enabled state. In that
+                // case `under` can differ from what the child inherits when it is shown.
+                let ideal = if self.fade.is_none() && under.enabled == self.enabled {
                     let (ideal, kept) = run::measure_under_prepared(&mut child, &*self.ui, id, craft_behavior::Proposal::Ideal, &under);
                     prepared = kept;
                     ideal

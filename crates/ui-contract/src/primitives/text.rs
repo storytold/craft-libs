@@ -231,6 +231,7 @@ pub(crate) fn line_baseline(ctx: &Context, env: &TextEnv<'_>, role: TypeRole, ce
 struct LayoutKey {
     run: TextRun<'static>,
     tokens: u64,
+    token_values: Arc<craft_theme::Tokens>,
     direction: Direction,
     ink: Color32,
     fonts: StackFacts,
@@ -242,6 +243,7 @@ struct LayoutKey {
 struct LayoutQuery<'a> {
     run: &'a TextRun<'a>,
     tokens: u64,
+    token_values: &'a Arc<craft_theme::Tokens>,
     direction: Direction,
     ink: Color32,
     fonts: StackFacts,
@@ -296,6 +298,7 @@ impl LayoutQuery<'_> {
     fn matches(&self, key: &LayoutKey) -> bool {
         key.run == *self.run
             && key.tokens == self.tokens
+            && (Arc::ptr_eq(&key.token_values, self.token_values) || key.token_values.as_ref() == self.token_values.as_ref())
             && key.direction == self.direction
             && key.ink == self.ink
             && key.fonts == self.fonts
@@ -331,6 +334,7 @@ impl LayoutQuery<'_> {
                 rotation: self.run.rotation,
             },
             tokens: self.tokens,
+            token_values: Arc::clone(self.token_values),
             direction: self.direction,
             ink: self.ink,
             fonts: self.fonts,
@@ -377,10 +381,11 @@ impl TextMemo {
 
 impl TextRun<'_> {
     /// All inputs read by `job`, the cutting and row-alignment steps.
-    fn layout_key<'a>(&'a self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> LayoutQuery<'a> {
+    fn layout_key<'a>(&'a self, ctx: &Context, env: &'a TextEnv<'_>, max_width: f32) -> LayoutQuery<'a> {
         LayoutQuery {
             run: self,
             tokens: env.tokens.key(),
+            token_values: env.tokens.tokens(),
             direction: env.direction,
             ink: env.ink,
             fonts: env.fonts,
@@ -1041,9 +1046,16 @@ mod memo_tests {
             let fonts = TextEnv { fonts: StackFacts { line_ratio: 1.25, ..env.fonts }, ..env };
             let _ = run.layout(ctx, &fonts, 80.0);
             let mut changed_tokens = (**tokens.tokens()).clone();
+            let equal_tokens = UiTokens::new(Arc::new(changed_tokens.clone()), Contrast::Standard, Size::Compact);
+            let equal_env = TextEnv { tokens: &equal_tokens, ..env };
+            let equal_key = run.layout_key(ctx, &equal_env, 80.0);
+            with_memo(ctx, |memo| assert!(memo.get(&equal_key).is_some(), "equal token values from distinct Arcs may reuse the entry"));
             changed_tokens.color.text.muted = craft_theme::Rgba([12, 34, 56, 255]);
             let changed_tokens = UiTokens::new(Arc::new(changed_tokens), Contrast::Standard, Size::Compact);
             let styled = TextEnv { tokens: &changed_tokens, ..env };
+            let mut collision = run.layout_key(ctx, &styled, 80.0);
+            collision.tokens = tokens.key();
+            with_memo(ctx, |memo| assert!(memo.get(&collision).is_none(), "a token-hash collision must not reuse a different token set"));
             let _ = run.layout(ctx, &styled, 80.0);
             let before = with_memo(ctx, |memo| memo.order.len());
             assert_eq!(before, 25);

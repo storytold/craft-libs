@@ -97,3 +97,81 @@ fn adjacent_leaf_reuses_steps_only_while_its_style_key_is_unchanged() {
     assert_eq!(reused, 0, "a changed style key uses the ordinary path");
     assert_eq!(changed, 40.0, "the shown child receives its changed style");
 }
+
+#[derive(Component)]
+struct EnablesOnMinimum {
+    #[common]
+    common: Common,
+    seen: Rc<Cell<Option<bool>>>,
+}
+
+impl Component for EnablesOnMinimum {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: EnablesOnMinimumStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        if cx.proposal == Proposal::Min {
+            self.common = Common::new();
+        }
+        Vec2::new(10.0, 20.0)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, _: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        self.seen.set(Some(cx.core.resolved.enabled));
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[derive(Component)]
+struct EnabledOwner {
+    #[common]
+    common: Common,
+    seen: Rc<Cell<Option<bool>>>,
+}
+
+impl Component for EnabledOwner {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: EnabledOwnerStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(200.0, 50.0))
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let child = EnablesOnMinimum { common: Common::new(), seen: self.seen.clone() }.enabled(false);
+        ui.labelled("child", cx.rect, "Caption".into(), SideLabel::new(), child);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn labelled_child_enabling_itself_in_minimum_measure_uses_the_current_enabled_state() {
+    let seen = Rc::new(Cell::new(None));
+    let output = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        EnabledOwner { common: Common::new(), seen: output.clone() }.id_salt("owner").show(ui);
+    });
+    fixture.frame(Vec::new());
+    assert_eq!(seen.get(), Some(true), "the shown child uses its enabled state after the minimum measure");
+    assert_eq!(last_pass_prepared_leaves(fixture.ctx()), 0, "different inherited enabled states use the ordinary path");
+}
