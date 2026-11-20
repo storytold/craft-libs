@@ -291,3 +291,46 @@ fn the_document_scroll_arrows_take_no_keyboard_focus() {
         assert!(!on_arrow, "Tab {step} stopped on a scroll bar part: {:?}", fixture.focused_stop());
     }
 }
+
+/// Document scroll bars over a document larger than the window, at 100%, with or without the document chrome.
+fn large_document_scrollbars(chrome: bool) -> (Fixture, Rc<Cell<CanvasView>>) {
+    let large = Size::new(4000.0, 3000.0);
+    let view = Rc::new(Cell::new(CanvasView::new(DOCUMENT_WINDOW, Point::new(2000.0, 1500.0), 1.0)));
+    let observed = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut next = observed.get();
+        Canvas::new("Document").document(large).view(next).show_at(ui, DOCUMENT_WINDOW, |_, body| {
+            if let Some(space) = canvas_space(&body.env) {
+                next = space.view;
+            }
+        });
+        let doc = DocRect::from_origin_size(Point::ZERO, large);
+        let bars = CanvasScrollbars::new("Scroll bars", Bind::bound(&mut next), doc);
+        let bars = if chrome { bars.document_chrome() } else { bars };
+        let _ = bars.show_at(ui, DOCUMENT_WINDOW);
+        observed.set(next);
+    });
+    fixture.room(vec2(760.0, 560.0)).settle();
+    (fixture, view)
+}
+
+/// photocraft#16006: a drag on a thumb moves the view on every pointer move until the release, not only on the first.
+#[trial]
+fn a_thumb_drag_follows_every_pointer_move() {
+    for chrome in [false, true] {
+        let (mut fixture, view) = large_document_scrollbars(chrome);
+        let track = fixture.by_label("Horizontal scroll bar").expect("the horizontal track").rect;
+        let start = pos2(track.center().x, track.center().y);
+        let before = view.get().center;
+        fixture.frame(vec![pointer::moved(start)]).frame(vec![pointer::press(start)]);
+        let mut seen = vec![view.get().center.x];
+        for step in 1..=10 {
+            fixture.frame(vec![pointer::moved(start + vec2(20.0 * step as f32, 0.0))]);
+            seen.push(view.get().center.x);
+        }
+        fixture.frame(vec![pointer::release(start + vec2(200.0, 0.0))]).settle();
+        let moves = seen.windows(2).filter(|pair| pair[1] > pair[0]).count();
+        assert!(moves >= 9, "chrome {chrome}: the view follows each of the ten moves: {seen:?} from {before:?}");
+        assert_eq!(view.get().center.y, before.y, "chrome {chrome}: a horizontal drag keeps the vertical position");
+    }
+}
