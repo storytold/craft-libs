@@ -31,6 +31,9 @@
 //! infallible allocation ends the process. Rows are generated on several threads only with the
 //! `parallel` feature.
 //!
+//! The `png`, `tiff`, `hdr` and `exr` features add the `decode` module, which turns those files'
+//! bytes into planes without reducing 16-bit or float samples to 8 bits.
+//!
 //! [`normal`] makes tangent-space normal maps from a height plane, and [`packing`] packs
 //! occlusion, roughness and metallic into one RGBA image. Both read a [`ScalarSource`] one row at
 //! a time, so a tiled surface is read in place instead of copied into a float plane.
@@ -45,6 +48,8 @@ use std::sync::Arc;
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+#[cfg(any(feature = "png", feature = "tiff", feature = "hdr", feature = "exr"))]
+pub mod decode;
 pub mod normal;
 pub mod packing;
 mod source;

@@ -381,8 +381,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
 - [`craft-texture`](crates/texture/README.md): linear float image planes, gray or RGBA, with
-  nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
-  bounded by `Limits`. From MaterialCraft.
+  nearest and bilinear sampling that repeats or clamps, resizing and display conversion, and
+  (optional features) PNG, TIFF, Radiance HDR and OpenEXR decoding that keeps 16-bit and float
+  samples. Sizes are bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
 - [`craft-ai`](crates/ai/README.md) *(spec)*: AI provider abstraction — BYO API keys (OpenAI-compatible) and one-click curated local models with capability probing, resumable checksummed downloads, and document segmentation that protects markup while translating prose;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.

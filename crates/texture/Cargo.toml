@@ -11,11 +11,19 @@ repository.workspace = true
 default = []
 dds = ["dep:dds", "dep:bytemuck"]
 parallel = ["dep:rayon"]
+png = ["dep:craft-image-codecs"]
+tiff = ["dep:craft-image-codecs"]
+hdr = ["dep:craft-hdr"]
+exr = ["dep:craft-exr", "craft-exr/decode"]
+decode = ["png", "tiff", "hdr", "exr"]
 
 [lints]
 workspace = true
 
 [dependencies]
+craft-exr = { workspace = true, optional = true }
+craft-hdr = { workspace = true, optional = true }
+craft-image-codecs = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
@@ -24,6 +32,7 @@ dds = { version = "0.2.0", default-features = false, optional = true }
 bytemuck = { workspace = true, optional = true }
 
 [dev-dependencies]
+png-encoder = { package = "png", version = "0.18" }
 half = "2"
 dds = { version = "0.2.0", default-features = false }
 bytemuck = { workspace = true }
