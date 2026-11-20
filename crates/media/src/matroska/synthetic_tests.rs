@@ -228,6 +228,90 @@ fn synthetic_file() {
     assert_seek_builds_an_index(&bytes);
 }
 
+/// An in-memory [`crate::matroska::IndexStore`] that counts what it is asked for one key on one
+/// thread (other tests open files, the same one too, while it is registered; theirs are kept but
+/// not counted).
+struct CountingStore {
+    key: String,
+    thread: std::thread::ThreadId,
+    kept: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+    loads: std::sync::atomic::AtomicUsize,
+    saves: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::matroska::IndexStore for CountingStore {
+    fn load(&self, key: &str) -> Option<Vec<u8>> {
+        if key == self.key && std::thread::current().id() == self.thread {
+            self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.kept.lock().unwrap().get(key).cloned()
+    }
+    fn save(&self, key: &str, index: &[u8]) {
+        if key == self.key && std::thread::current().id() == self.thread {
+            self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.kept.lock().unwrap().insert(key.to_owned(), index.to_vec());
+    }
+}
+
+/// The parts of an open file the scan builds or reads after the clusters.
+fn scanned(f: &MkvFile) -> String {
+    let tracks: Vec<_> = f.tracks.iter().map(|t| (t.number, t.samples.clone(), t.keyframes().to_vec())).collect();
+    format!("{:?} {:?} {:?} {:?} {:?} {:?} {:?} {}", f.clusters, tracks, f.cues, f.chapters, f.tags, f.attachments, f.first_cluster, f.indexed)
+}
+
+/// A file's sample tables are saved to the registered store after a scan and taken from it at the
+/// next open, which then gives the same file (its Chapters and Attachments before the clusters,
+/// its Tags after them, in an unknown-size Segment). Tables that do not fit the file are not used:
+/// it is scanned again (and saved again).
+#[test]
+fn an_index_store_keeps_the_scan() {
+    let bytes = synthetic();
+    let plain = OpenOptions { index: true, verify_crc: false, index_limit: None };
+    let reference = open_with(&bytes[..], &plain).unwrap();
+    let key = crate::matroska::index_store::key_of(&bytes[..]).unwrap();
+    let store = std::sync::Arc::new(CountingStore {
+        key: key.clone(),
+        thread: std::thread::current().id(),
+        kept: std::sync::Mutex::default(),
+        loads: std::sync::atomic::AtomicUsize::new(0),
+        saves: std::sync::atomic::AtomicUsize::new(0),
+    });
+    crate::matroska::set_index_store(Some(store.clone()));
+    let counts = || (store.loads.load(std::sync::atomic::Ordering::SeqCst), store.saves.load(std::sync::atomic::Ordering::SeqCst));
+    // Scanned and saved.
+    let first = open_with(&bytes[..], &plain).unwrap();
+    assert_eq!(counts(), (1, 1));
+    // Taken from the store: the same file.
+    let second = open_with(&bytes[..], &plain).unwrap();
+    assert_eq!(counts(), (2, 1));
+    assert_eq!(scanned(&first), scanned(&reference));
+    assert_eq!(scanned(&second), scanned(&reference));
+    assert_eq!(second.info.title.as_deref(), Some("Synthetic"));
+    // A Demuxer opens through the store too (the packets are read through one).
+    assert_synthetic_packets(&second, &bytes);
+    assert_eq!(counts(), (3, 1));
+    let demuxer = Demuxer::new(&bytes[..]).unwrap();
+    assert_eq!(scanned(demuxer.file()), scanned(&reference));
+    assert_eq!(counts(), (4, 1));
+    // Saved clusters that are not Clusters in the file: scanned again, and saved again.
+    {
+        let mut kept = store.kept.lock().unwrap();
+        let saved = kept.get_mut(&key).unwrap();
+        // The first saved cluster's offset (after the magic, the length and the cluster count).
+        let at = 8 + 8 + 8;
+        let offset = u64::from_le_bytes(saved[at..at + 8].try_into().unwrap());
+        saved[at..at + 8].copy_from_slice(&(offset - 1).to_le_bytes());
+    }
+    let third = open_with(&bytes[..], &plain).unwrap();
+    assert_eq!(scanned(&third), scanned(&reference));
+    assert_eq!(counts(), (5, 2));
+    // With CRC checks or an index limit the store is not used.
+    let _ = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
+    assert_eq!(counts(), (5, 2));
+    crate::matroska::set_index_store(None);
+}
+
 /// One video track and one cluster at timestamp `ts` holding `content`.
 fn one_cluster(ts: u64, content: &[u8]) -> Vec<u8> {
     one_cluster_scaled(1_000_000, ts, content)
