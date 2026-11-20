@@ -74,7 +74,7 @@ impl ButtonStyle {
         let mut style = ButtonStyle::of(cx);
         let ink = cx.ink_on(DataColor::new(cx.color(tint).egui()));
         style.text = TextLook::new(TypeRole::Label, Stateful::new(ink));
-        style.icon = IconLook::new(cx.control().icon, Stateful::new(ink));
+        style.icon = IconLook::new(super::small_icon(cx, cx.control().icon), Stateful::new(ink));
         style
     }
 }

@@ -31,7 +31,8 @@ use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
 use craft_behavior::fit::{FitItem, fit_items};
 use craft_behavior::{
-    Flow, HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, SelectionChange, Sense,
+    Flow, HitLevel, HitPriority, IconId, Insets, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection,
+    SelectionChange, Sense,
 };
 use egui::{Id, Pos2, Rect, Response, Vec2};
 use std::cell::RefCell;
@@ -102,6 +103,12 @@ impl<K> Outcome for TabStripOutput<K> {
     }
 }
 
+/// The room before the first tab of a strip: a regular pad for a ribbon strip, whose first label stands where the old
+/// ribbon put it; none for the others.
+fn strip_lead(kind: TabKind, tokens: &crate::style::UiTokens) -> f32 {
+    if kind == TabKind::Ribbon { tokens.space.pad.regular } else { 0.0 }
+}
+
 /// The look of a strip: it has none of its own; its row is as high as its tabs.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
@@ -114,6 +121,9 @@ pub struct TabStripStyle {
     underline: StyleColor,
     /// The underline's distance from the row's bottom edge: half its stroke, so the stroke lies inside the row.
     underline_inset: f32,
+    /// How far in from each side of the shown tab the underline starts: the tab's padding less half the stroke, so
+    /// it runs just past the label at both ends, as the old ribbon drew it.
+    underline_side: f32,
 }
 
 /// Where the fit put one end item: its position in `TabStrip::trailing`, its distance from the start edge, its width
@@ -455,6 +465,7 @@ pub struct TabStrip<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + '
     #[collection]
     items: CollectionProps,
     /// The kind of strip: its fit rule and overflow menu, and the kind its tabs take.
+    #[style_key]
     kind: TabKind,
     /// The strip's taller form with the body type.
     #[prop(flag)]
@@ -674,7 +685,8 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         };
         let start = cx.anim("underline_start", start, spec::MOVE);
         let width = cx.anim("underline_width", width, spec::MOVE);
-        let rect = Flow::new(cx.core.content_rect, cx.flow.is_rtl()).span(start, width);
+        let side = cx.style.underline_side.min(width / 2.0).max(0.0);
+        let rect = Flow::new(cx.core.content_rect, cx.flow.is_rtl()).span(start + side, width - 2.0 * side);
         let y = rect.bottom() - cx.style.underline_inset;
         ui.draw().stroke(&PaintShape::Path(vec![Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)]), StrokeWidth::Thick, cx.style.underline);
     }
@@ -711,13 +723,18 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Component f
     type Style = TabStripStyle;
     type Output = TabStripOutput<K>;
 
-    fn style(cx: &StyleCx<'_>, _: TabStripStyleKey<K>) -> TabStripStyle {
+    fn style(cx: &StyleCx<'_>, key: TabStripStyleKey<K>) -> TabStripStyle {
         let tokens = cx.tokens;
+        let ribbon = key.kind == TabKind::Ribbon;
+        // A ribbon strip starts a regular pad in from its start edge, so its first label stands where the old
+        // ribbon's did; its underline runs under the label, not the tab's padding.
+        let (lead, side) = (strip_lead(key.kind, tokens), if ribbon { super::tab::ribbon_pad(tokens) - tokens.stroke.thick / 2.0 } else { 0.0 });
         TabStripStyle {
-            metrics: Metrics::new(),
+            metrics: Metrics::new().padding(Insets::new(lead, 0.0, 0.0, 0.0)),
             line: tokens.typography.body.line_height,
             underline: cx.color(tokens.color.accent.solid),
             underline_inset: tokens.stroke.thick / 2.0,
+            underline_side: side,
         }
     }
 
@@ -913,6 +930,9 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
     }
 
     fn item_layout(&self, source: &dyn ItemSource<K>, width: f32, cx: &StyleCx<'_>) -> StripLayout {
+        // The tabs and end items share the room the strip lead leaves (`strip_lead`), so the strip is no wider than
+        // the room it was given.
+        let width = (width - strip_lead(self.kind, cx.tokens)).max(0.0);
         let count = source.len();
         *self.texts.borrow_mut() = (0..count).map(|at| (source.key(at), source.text(at).map(|text| text.into_owned()).unwrap_or_default())).collect();
         let selected = self.shown.as_ref().and_then(|key| source.index_of(key)).unwrap_or(usize::MAX);

@@ -78,6 +78,12 @@ const MARK: &str = "*";
 
 const CLOSE_REASON: &str = "The Close command closes the focused tab";
 
+/// The padding on each side of a ribbon tab's label: the strip insets its sliding underline by it, so the underline
+/// runs under the label.
+pub(super) fn ribbon_pad(tokens: &UiTokens) -> f32 {
+    tokens.space.gap.item + tokens.space.gap.tight
+}
+
 /// The sizes a tab takes from its kind and the tokens.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Sizes {
@@ -92,6 +98,8 @@ struct Sizes {
     /// The height of the selected tab's indicator bar.
     indicator: f32,
     text_only: bool,
+    /// Whether the label stands in the middle of the tab's height: a ribbon tab, whose strip is a bar.
+    middle: bool,
 }
 
 /// The look of a tab.
@@ -251,7 +259,7 @@ impl<'a> Tab<'a> {
         let label_width = label_natural.min((band.width() - mark_width - detail_gap - detail_natural).max(0.0));
         let detail_width = detail_natural.min((band.width() - mark_width - label_width - detail_gap).max(0.0));
         let line = |rect: Rect, height: f32| {
-            let top = if sizes.text_only { content.top() } else { content.center().y - height / 2.0 };
+            let top = if sizes.text_only && !sizes.middle { content.top() } else { content.center().y - height / 2.0 };
             Rect::from_x_y_ranges(rect.x_range(), top..=top + height)
         };
         let (label, rest) = flow.take_start(label_width);
@@ -299,7 +307,11 @@ impl Component for Tab<'_> {
         };
         let idle_role = if ribbon { TypeRole::Body } else { role };
         let line = |role: TypeRole| tokens.typography.get(role).line_height;
-        let height = if text_only {
+        // A ribbon tab is a bar's tab, its label in the middle of the old ribbon's 28-point strip (compact sizes) and
+        // padded by an item and a tight gap on each side (10 points in the compact sizes, as the old ribbon padded them).
+        let height = if ribbon {
+            size.bar.tab + space.gap.tight
+        } else if text_only {
             line(role) + space.gap.tight + stroke.thick
         } else if key.large {
             size.bar.title
@@ -308,7 +320,13 @@ impl Component for Tab<'_> {
         } else {
             size.bar.tab
         };
-        let pad_x = if text_only { 0.0 } else { 2.0 * space.pad.control };
+        let pad_x = if ribbon {
+            ribbon_pad(tokens)
+        } else if text_only {
+            0.0
+        } else {
+            2.0 * space.pad.control
+        };
         let panel = colors.surface.panel;
         let hover = c(colors.state.hover);
         let fill = if ribbon {
@@ -332,12 +350,13 @@ impl Component for Tab<'_> {
             gap: space.gap.inline,
             icon: size.icon.sm,
             close_box: size.icon.md,
-            tail: if text_only { space.gap.section } else { 0.0 },
+            tail: if text_only && !ribbon { space.gap.section } else { 0.0 },
             label_line: line(role),
             detail_line: line(TypeRole::Caption),
             underline_gap: space.gap.tight,
             indicator: stroke.thick,
             text_only,
+            middle: ribbon,
         };
         TabStyle {
             surface,

@@ -414,7 +414,10 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
     let (first, third) = (tab_rect(fixture.tree(), RIBBON[0]), tab_rect(fixture.tree(), RIBBON[2]));
     let row = first.union(third);
     let rest = underline(&fixture.frame_shapes(), row).expect("the shown tab's underline");
-    assert!((rest.0 - first.left()).abs() < 0.5 && (rest.1 - first.right()).abs() < 0.5, "at rest it spans the first tab: {rest:?} {first:?}");
+    // It runs under the first tab label, inset from both sides of the tab by the same amount (the tab padding less
+    // half the stroke), as the old ribbon drew it.
+    let inset = rest.0 - first.left();
+    assert!(inset > 0.5 && (first.right() - rest.1 - inset).abs() < 0.5, "at rest it lies under the first tab label: {rest:?} {first:?}");
 
     fixture.frame(vec![pointer::moved(row.center())]).idle(1);
     fixture.frame(vec![pointer::wheel_lines(-2.0)]);
@@ -441,7 +444,7 @@ fn the_ribbon_underline_retargets_from_its_shown_position_mid_motion() {
         assert!((last - at).abs() < distance / 2.0, "the underline does not jump: {last} then {at}");
         last = at;
     }
-    assert!((last - first.left()).abs() < 0.5, "the underline comes to rest under the first tab: {last} {first:?}");
+    assert!((last - rest.0).abs() < 0.5, "the underline comes to rest under the first tab: {last} {rest:?}");
 }
 
 /// What a ribbon strip of the six tabs with two end items shows in a room `room` wide: the tabs on the strip with their

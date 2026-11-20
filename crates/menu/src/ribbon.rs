@@ -29,7 +29,7 @@ use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::tabs::{StripEnd, Tab, TabKind, TabRole, TabStrip, TabStripOutput};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2, vec2};
 
-pub use craft_ui::buttons::GroupLevel;
+pub use craft_ui::buttons::{GroupLevel, RibbonIcons};
 pub use gallery::{Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput};
 use group::BodyHeight;
 pub use group::RibbonGroup;
@@ -69,12 +69,25 @@ pub struct Ribbon<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> {
     minimised: Option<Bind<'a, bool>>,
     /// The body of the context menu: the rows for the request that opened it.
     context_menu: Option<ContextMenuBody<'a>>,
+    /// The icon sides of the groups' buttons.
+    icons: RibbonIcons,
+    /// The icon of every group's dialog launcher.
+    launcher: IconId,
 }
 
 impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     /// A ribbon named `label` over `tabs`, showing the tab `shown` binds.
     pub fn new(label: impl Into<Label>, tabs: &'a [RibbonTab<T>], shown: Bind<'a, T>) -> Self {
-        Ribbon { label: label.into(), tabs, shown, trailing: &[], minimised: None, context_menu: None }
+        Ribbon {
+            label: label.into(),
+            tabs,
+            shown,
+            trailing: &[],
+            minimised: None,
+            context_menu: None,
+            icons: RibbonIcons::default(),
+            launcher: IconId::new("maximize_2"),
+        }
     }
 
     /// The rows of the ribbon's context menu. The ribbon opens its menu on a context request and runs `body` inside
@@ -99,6 +112,19 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
     }
 
     /// The key of the tab shown: the binding's, else the first tab's.
+    /// The icon sides of the groups' buttons (`RibbonIcons`): an app whose ribbon icons are larger than its other
+    /// controls' sets them here. The framework's sides by default.
+    pub fn icons(mut self, icons: RibbonIcons) -> Self {
+        self.icons = icons;
+        self
+    }
+
+    /// The icon of every group's dialog launcher: an app's own glyph in place of the framework's.
+    pub fn launcher_icon(mut self, icon: IconId) -> Self {
+        self.launcher = icon;
+        self
+    }
+
     fn current(&mut self) -> Option<T> {
         let bound = self.shown.reborrow().get().and_then(|value| value.same().cloned());
         bound.or_else(|| self.tabs.first().map(|tab| tab.key.clone()))
@@ -116,6 +142,8 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
         let id = ui.scope_id().with(self.label.as_str());
         let tabs = self.tabs;
         let trailing = self.trailing;
+        let icons = self.icons;
+        let launcher = self.launcher.clone();
         let strip_label = self.label.clone();
         let label_of = |key: &T| tabs.iter().find(|tab| tab.key == *key).map_or(Label::Empty, |tab| tab.label.clone());
         let role_of = |key: &T| tabs.iter().find(|tab| tab.key == *key).map_or(TabRole::Standard, |tab| tab.role);
@@ -133,7 +161,7 @@ impl<'a, T: Clone + Eq + Hash + Send + Sync + Debug + 'static> Ribbon<'a, T> {
                 strip.show_items(ui, &source, &mut |key: &T, _| Tab::new(label_of(key)).role(role_of(key)))
             });
             let region = match (&current, minimised) {
-                (Some(key), false) => Some(show_row(ui, id, tabs, key, &mut body)),
+                (Some(key), false) => Some(show_row(ui, id, tabs, key, (icons, &launcher), &mut body)),
                 _ => None,
             };
             (strip, region)
@@ -251,6 +279,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
     base: Id,
     tabs: &[RibbonTab<T>],
     key: &T,
+    (icons, launcher): (RibbonIcons, &IconId),
     body: &mut impl FnMut(&mut RibbonRow<'_>, &T),
 ) -> RegionOutput {
     let place = tabs.iter().position(|tab| tab.key == *key).unwrap_or(0) as f32;
@@ -266,6 +295,7 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
             let chevron = cx.style::<Region>().map_or(0.0, |style| style.chevron);
             let least = cx.style::<Region>().map_or(0.0, |style| style.body);
             let title_line = cx.style::<Region>().map_or(0.0, |style| style.title);
+            let start = cx.style::<Region>().map_or(0.0, |style| style.start);
             // The row moves through the slide container's own offset, which places its body on a layer of its own.
             let shown = Region::slide(lead)
                 .show(ui, |ui, _| {
@@ -273,7 +303,18 @@ fn show_row<T: Clone + Eq + Hash + Send + Sync + Debug + 'static>(
                     let slot = base.with("ribbon.body");
                     let last = with_session(ui.ctx(), slot, |kept: &mut BodyHeight| kept.0);
                     let row = Row::new().scroll(Scroll::horizontal()).fill_width().show(ui, |ui, _| {
-                        let mut row = RibbonRow { ui, base, groups: Vec::new(), body: last.max(least), title_line, tallest: 0.0 };
+                        // The groups start a regular pad in from the row's start edge, as the old ribbon's did.
+                        craft_ui::layout::place_in_flow(ui, Vec2::new(start, 0.0));
+                        let mut row = RibbonRow {
+                            ui,
+                            base,
+                            groups: Vec::new(),
+                            body: last.max(least),
+                            title_line,
+                            tallest: 0.0,
+                            icons,
+                            launcher: launcher.clone(),
+                        };
                         body(&mut row, key);
                         (row.groups, row.tallest)
                     });
@@ -374,6 +415,10 @@ pub struct RibbonRow<'a> {
     title_line: f32,
     /// The tallest open group content of this run, every level the row measured included.
     tallest: f32,
+    /// The icon sides of the groups' buttons (`Ribbon::icons`).
+    icons: RibbonIcons,
+    /// The icon of every group's dialog launcher (`Ribbon::launcher_icon`).
+    launcher: IconId,
 }
 
 /// What the ribbon reports for a pass.
@@ -416,6 +461,8 @@ struct RegionStyle {
     /// The height of a group's title line, directly under its body: one line of the caption role
     /// (`typography.caption.line_height`), which the dialog launcher's square also takes.
     title: f32,
+    /// The room before the first group (`space.pad.regular`), as the old ribbon kept it.
+    start: f32,
 }
 
 /// What a row region reports.
@@ -475,7 +522,14 @@ impl Component for Region {
     fn style(cx: &StyleCx<'_>, _: RegionStyleKey) -> RegionStyle {
         let body = 3.0 * cx.control().height + 2.0 * cx.tokens.space.gap.row;
         let title = cx.tokens.typography.caption.line_height;
-        RegionStyle { metrics: Metrics::new(), slide: cx.tokens.motion.slide as f32, chevron: cx.tokens.size.hit.target, body, title }
+        RegionStyle {
+            metrics: Metrics::new(),
+            slide: cx.tokens.motion.slide as f32,
+            chevron: cx.tokens.size.hit.target,
+            body,
+            title,
+            start: cx.tokens.space.pad.regular,
+        }
     }
 
     fn sense(&self) -> Sense {

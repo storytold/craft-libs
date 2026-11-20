@@ -1,7 +1,7 @@
 //! What a push or toggle button shows: a leading icon (or spinner), a label and a trailing icon, centred in the
 //! button unless it aligns them to an edge, and the look parts the buttons share.
 
-use super::{ControlPlace, GroupLevel};
+use super::{ControlPlace, GroupLevel, RibbonIcons};
 use crate::contract::{Component, Cx, MeasureCx, PaintUi, Styled as _};
 use crate::list::ThumbAspect;
 use crate::primitives::{HAlign, IconSpec, TextLayout, TextRun};
@@ -32,7 +32,7 @@ impl FaceLook {
         let control = cx.control();
         FaceLook {
             gap: control.gap,
-            stacked_icon: stacked_side(cx.tokens, control.icon),
+            stacked_icon: stacked_side(cx.tokens, control.icon, cx.env::<ControlPlace>(), cx.env::<RibbonIcons>()),
             divide_gap: cx.tokens.space.gap.tight,
             stacked_top: stacked_lines(cx.env::<ControlPlace>()) > 0,
         }
@@ -46,10 +46,11 @@ fn stacked_lines(place: ControlPlace) -> usize {
     if place == ControlPlace::Ribbon { 2 } else { 0 }
 }
 
-/// The side of a stacked face's leading icon: the large icon, or the control's own icon when that is larger. The
-/// style and the measure both take it from here, so the painted icon is the measured one.
-pub(super) fn stacked_side(tokens: &UiTokens, control_icon: f32) -> f32 {
-    tokens.size.icon.lg.max(control_icon)
+/// The side of a stacked face's leading icon: the ribbon's large side where one is set (`RibbonIcons`), else the
+/// large icon, or the control's own icon when that is larger. The style and the measure both take it from here, so
+/// the painted icon is the measured one.
+pub(super) fn stacked_side(tokens: &UiTokens, control_icon: f32, place: ControlPlace, icons: RibbonIcons) -> f32 {
+    if place == ControlPlace::Ribbon && icons.large > 0 { f32::from(icons.large) } else { tokens.size.icon.lg.max(control_icon) }
 }
 
 /// The most characters a stacked label keeps on one line, as the ribbon's large buttons always kept them: a longer
@@ -59,7 +60,7 @@ const ONE_LINE_CHARS: usize = 10;
 /// The label and icon looks of the instance's variant: the variant's text colours at the control's icon side.
 pub(super) fn ink(cx: &StyleCx<'_>) -> (TextLook, IconLook) {
     let color = cx.variant_look().text;
-    (TextLook::new(TypeRole::Label, color.clone()), IconLook::new(cx.control().icon, color))
+    (TextLook::new(TypeRole::Label, color.clone()), IconLook::new(super::small_icon(cx, cx.control().icon), color))
 }
 
 /// How a button lays out its icon and label.
@@ -346,6 +347,7 @@ pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
         GlyphRole::PanelRail => (cx.glyph(), Some(text.faint)),
         _ => (cx.glyph(), None),
     };
+    let side = super::small_icon(cx, side);
     let mut ink = off.text.clone();
     if let Some(rest) = rest {
         ink.off.rest = cx.color(rest);
@@ -372,6 +374,13 @@ pub(crate) fn focus(cx: &StyleCx<'_>) -> FocusLook {
     cx.focus_look()
 }
 
+/// The side of a non-stacked icon as a measure takes it: the side the style paints (`small_icon`), the ribbon's small
+/// side where one is set, else the control's icon.
+pub(crate) fn measured_icon<C: Component>(cx: &MeasureCx<'_, C>) -> f32 {
+    let small = cx.env.get::<RibbonIcons>().small;
+    if small > 0 && cx.env.get::<ControlPlace>() == ControlPlace::Ribbon { f32::from(small) } else { cx.icon() }
+}
+
 /// The size of the face: its parts and the gaps between them.
 /// The label elides in the room the icons and gaps leave, so a squeezed face is as wide as its room; at its least
 /// the label is at its readable least. The group level comes from the env (`GroupLevel` is a style value, so the
@@ -379,7 +388,8 @@ pub(crate) fn focus(cx: &StyleCx<'_>) -> FocusLook {
 pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) -> Vec2 {
     let spec = &spec.at(cx.env.get::<GroupLevel>());
     if spec.arrangement == Arrangement::Stacked {
-        let (side, lead_side) = (cx.icon(), stacked_side(cx.tokens, cx.icon()));
+        let side = measured_icon(cx);
+        let lead_side = stacked_side(cx.tokens, cx.icon(), cx.env.get::<ControlPlace>(), cx.env.get::<RibbonIcons>());
         let lines = spec.lines();
         let sizes = stacked_sizes(cx, spec, &lines, cx.room.unwrap_or(f32::INFINITY), side);
         let size = stack(spec, (lead_side, side), cx.gap(), &sizes, Rect::ZERO, false, false).size;
@@ -392,7 +402,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         let icon = if spec.leads() { lead_side + cx.gap() } else { 0.0 };
         return Vec2::new(size.x, size.y.max(icon + keep as f32 * line.max(if spec.trail.is_some() { side } else { 0.0 })));
     }
-    let icon = cx.icon();
+    let icon = measured_icon(cx);
     let fixed = spec.icons_width(icon, icon) + cx.gap() * spec.gaps() as f32;
     let text = if spec.label.is_empty() {
         Vec2::ZERO

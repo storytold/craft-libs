@@ -70,6 +70,33 @@ pub(crate) fn placed<'a>(cx: &crate::style::StyleCx<'a>) -> crate::style::StyleC
     }
 }
 
+/// The icon sides of the buttons in a ribbon (`ControlPlace::Ribbon`), in points: `large` for a stacked button's
+/// leading icon, `small` for every other button's icon and an icon-only button's glyph. A side of 0 keeps the
+/// framework's: `size.icon.lg` (or the control's icon, when larger) for a stacked icon, the control's icon or glyph
+/// for the rest. An app whose ribbon draws its icons larger than its other controls sets it on the ribbon
+/// (`Ribbon::icons`); outside a ribbon it changes nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, EnvValue)]
+#[env(style)]
+pub struct RibbonIcons {
+    /// A stacked button's leading icon.
+    pub large: u8,
+    /// Every other button's icon and glyph.
+    pub small: u8,
+}
+
+impl RibbonIcons {
+    /// Stacked icons `large` points square and the others `small`; 0 keeps the framework's side.
+    pub const fn new(large: u8, small: u8) -> Self {
+        RibbonIcons { large, small }
+    }
+}
+
+/// The side of a non-stacked button's icon or glyph in `cx`: the ribbon's small side where one is set, else `side`.
+pub(crate) fn small_icon(cx: &crate::style::StyleCx<'_>, side: f32) -> f32 {
+    let small = cx.env::<RibbonIcons>().small;
+    if small > 0 && cx.env::<ControlPlace>() == ControlPlace::Ribbon { f32::from(small) } else { side }
+}
+
 /// Whether a button styled in `cx` is a ribbon's flat button: the ghost variant in a ribbon (`ControlPlace::Ribbon`).
 pub(crate) fn flat_in_ribbon(cx: &crate::style::StyleCx<'_>) -> bool {
     cx.variant == craft_theme::Variant::GHOST && cx.env::<ControlPlace>() == ControlPlace::Ribbon

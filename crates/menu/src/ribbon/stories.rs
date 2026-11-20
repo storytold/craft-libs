@@ -10,7 +10,7 @@ use craft_ui::tabs::StripEnd;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Event, Modifiers, PointerButton, Ui};
 
-use super::{Ribbon, RibbonGroup, RibbonMenuRequest, RibbonRow, RibbonTab};
+use super::{Ribbon, RibbonGroup, RibbonIcons, RibbonMenuRequest, RibbonRow, RibbonTab};
 
 /// The group titles of each tab.
 const GROUPS: [[&str; 4]; 3] =
@@ -40,6 +40,8 @@ struct Setup {
     rtl: bool,
     /// The ribbon has a context menu.
     menu: bool,
+    /// The groups draw their icons at the sides an app sets (`Ribbon::icons`), with the app's launcher glyph.
+    app_icons: bool,
 }
 
 /// The rows of the stories' context menu: a request on a control adds it, any other customises.
@@ -80,6 +82,9 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
     if setup.menu {
         ribbon = ribbon.context_menu(&mut rows);
     }
+    if setup.app_icons {
+        ribbon = ribbon.icons(RibbonIcons::new(32, 17)).launcher_icon(IconId::new("chevron_down"));
+    }
     let direction = if setup.rtl { Direction::Rtl } else { Env::of(ui).direction };
     let out = with_env(
         ui,
@@ -103,6 +108,11 @@ fn show(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
 #[story(Ribbon<'static, usize>, covers = [Default], drive = Drive::Never)]
 fn ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     show(ui, data, Setup::default())
+}
+
+#[story(Ribbon<'static, usize>, covers = [], drive = Drive::Never)]
+fn ribbon_app_icons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    show(ui, data, Setup { app_icons: true, ..Setup::default() })
 }
 
 #[story(Ribbon<'static, usize>, covers = [], drive = Drive::Never)]

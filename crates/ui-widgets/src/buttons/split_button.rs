@@ -189,7 +189,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
         let face = face::measure(cx, &self.spec(cx.resolved.label, &chevron));
         match self.arrangement {
             Arrangement::Stacked => face,
-            _ => Vec2::new(face.x + cx.icon(), face.y),
+            _ => Vec2::new(face.x + face::measured_icon(cx), face.y),
         }
     }
 
@@ -205,7 +205,7 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
                 let y = face::stacked_divide(cx, &self.spec(cx.resolved.label, &chevron), look, side, cx.content_rect);
                 Rect::from_min_max(egui::pos2(rect.left(), y.clamp(rect.top(), rect.bottom())), rect.max)
             }
-            _ => Flow::new(rect, cx.flow.is_rtl()).take_end(cx.icon()).0,
+            _ => Flow::new(rect, cx.flow.is_rtl()).take_end(cx.style.icon.side).0,
         };
         let part = cx
             .part(ARROW, arrow)
