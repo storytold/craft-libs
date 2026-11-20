@@ -1865,6 +1865,7 @@ dependencies = [
  "chrono",
  "craft-cfb",
  "craft-codepage",
+ "craft-officeart",
  "craft-wordmodel",
  "image",
  "log",
@@ -2764,6 +2765,7 @@ name = "craft-officeart"
 version = "0.1.0"
 dependencies = [
  "image",
+ "log",
  "miniz_oxide 0.8.9",
 ]
 

@@ -177,6 +177,55 @@ fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A decode budget charged before the work is done: bytes of inflating and pixel decoding left,
+/// and how many attempts it has refused (only the first few are logged).
+pub struct Decode {
+    pub left: usize,
+    refused: usize,
+}
+
+impl Decode {
+    pub fn new(left: usize) -> Self {
+        Decode { left, refused: 0 }
+    }
+
+    /// Take `cost` off the budget; `false` (and a log line) when it doesn't fit.
+    pub fn charge(&mut self, cost: usize, what: &str) -> bool {
+        match self.left.checked_sub(cost) {
+            Some(left) if cost > 0 => {
+                self.left = left;
+                true
+            }
+            _ => {
+                if self.refused < 10 {
+                    log::warn!(
+                        "officeart: a {what} needing {cost} bytes of decode work is over the decode budget ({} left) and was not decoded",
+                        self.left
+                    );
+                }
+                self.refused = self.refused.saturating_add(1);
+                false
+            }
+        }
+    }
+}
+
+/// The BLIP record of an `OfficeArtFBSE` body: embedded after it, or in the delay stream, where
+/// its (`foDelay`, record length) location is returned too (entries can share one record,
+/// whatever sizes their FBSEs claim: the record's own header is what counts).
+pub fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Option<(usize, usize)>)> {
+    // btWin32, btMacOS, rgbUid[16], tag, size, cRef, foDelay, unused, cbName, unused×2.
+    let fo_delay = u32_at(fbse, 28)? as usize;
+    let cb_name = *fbse.get(33)? as usize;
+    let at = 36usize.checked_add(cb_name)?;
+    if let Some(rec) = Rec::at(fbse, at) {
+        return Some((rec, None));
+    }
+    // Not embedded: the record sits in the delay stream.
+    let rec = Rec::at(delay, fo_delay)?;
+    Some((rec, Some((fo_delay, rec.span()))))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

@@ -1,16 +1,21 @@
 //! OfficeArt (Escher) drawing records, as Word 97-2003 stores them ([MS-ODRAW], public Microsoft
-//! Open Specifications): the record header, the BLIP store and its pictures, shape containers with
-//! their property tables, and the `OfficeArtContent` of the Table stream ([MS-DOC] §2.9.172).
+//! Open Specifications): the BLIP store and its pictures, shape containers with their property
+//! tables, and the `OfficeArtContent` of the Table stream ([MS-DOC] §2.9.172). The record framing,
+//! the property-table walk, the decode budget and DIB conversion are `craft-officeart`'s.
 //!
 //! Everything here walks hostile bytes: record lengths are clamped to their parent, nesting depth
 //! and record counts are capped, and decompressed metafiles are size-limited.
 
 use std::collections::HashMap;
-use std::io::Write;
 
-use image::ImageEncoder;
-
+use craft_officeart::dib::{self, Dib};
+use craft_officeart::props::entries;
+use craft_officeart::record::{Records, u32_at};
 use craft_wordmodel::props::Rgb;
+
+pub(crate) use craft_officeart::blip::{Decode, fbse_record};
+pub(crate) use craft_officeart::record::Rec;
+pub(crate) use craft_officeart::rt;
 
 /// Deepest container nesting walked (groups inside groups…).
 const MAX_DEPTH: usize = 12;
@@ -22,75 +27,25 @@ const MAX_BSE: usize = 10_000;
 const MAX_DRAWINGS: usize = 8;
 /// Largest decompressed metafile (bytes).
 const MAX_METAFILE: usize = 64 << 20;
-/// Largest DIB converted to PNG, per side (pixels).
-const MAX_DIB_SIDE: u32 = 16_384;
-
-/// Record types ([MS-ODRAW] §2.2, §2.3).
-pub(crate) mod rt {
-    pub(crate) const DGG_CONTAINER: u16 = 0xF000;
-    pub(crate) const BSTORE_CONTAINER: u16 = 0xF001;
-    pub(crate) const DG_CONTAINER: u16 = 0xF002;
-    pub(crate) const SPGR_CONTAINER: u16 = 0xF003;
-    pub(crate) const SP_CONTAINER: u16 = 0xF004;
-    pub(crate) const FBSE: u16 = 0xF007;
-    pub(crate) const FSPGR: u16 = 0xF009;
-    pub(crate) const FSP: u16 = 0xF00A;
-    pub(crate) const FOPT: u16 = 0xF00B;
-    pub(crate) const CLIENT_TEXTBOX: u16 = 0xF00D;
-    pub(crate) const CHILD_ANCHOR: u16 = 0xF00F;
-    pub(crate) const SECONDARY_FOPT: u16 = 0xF121;
-    pub(crate) const TERTIARY_FOPT: u16 = 0xF122;
-    pub(crate) const BLIP_EMF: u16 = 0xF01A;
-    pub(crate) const BLIP_WMF: u16 = 0xF01B;
-    pub(crate) const BLIP_PICT: u16 = 0xF01C;
-    pub(crate) const BLIP_JPEG: u16 = 0xF01D;
-    pub(crate) const BLIP_PNG: u16 = 0xF01E;
-    pub(crate) const BLIP_DIB: u16 = 0xF01F;
-    pub(crate) const BLIP_TIFF: u16 = 0xF029;
-    pub(crate) const BLIP_JPEG_CMYK: u16 = 0xF02A;
-}
-
-/// One record: header fields and its body (clamped to what the parent holds).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Rec<'a> {
-    pub(crate) inst: u16,
-    pub(crate) typ: u16,
-    pub(crate) body: &'a [u8],
-}
 
 /// The record at the start of `buf` and the bytes it spans (header included). A body longer
 /// than `buf` is cut to what is there.
 pub(crate) fn record(buf: &[u8]) -> Option<(Rec<'_>, usize)> {
-    let h = buf.get(0..8)?;
-    let ver_inst = u16::from_le_bytes([h[0], h[1]]);
-    let typ = u16::from_le_bytes([h[2], h[3]]);
-    let len = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
-    let rest = buf.get(8..)?;
-    let len = len.min(rest.len());
-    let body = rest.get(..len)?;
-    Some((Rec { inst: ver_inst >> 4, typ, body }, 8 + len))
+    let rec = Rec::at(buf, 0)?;
+    Some((rec, rec.span()))
 }
 
 /// The sibling records of a container body, at most `budget` of them (the budget is shared
 /// across a whole walk, so a deep or wide tree cannot multiply the work).
 pub(crate) fn children<'a>(body: &'a [u8], budget: &mut usize) -> Vec<Rec<'a>> {
     let mut out = Vec::new();
-    let mut at = 0usize;
+    let mut recs = Records::new(body);
     while *budget > 0 {
-        let Some((rec, used)) = body.get(at..).and_then(record) else { break };
+        let Some(rec) = recs.next() else { break };
         *budget -= 1;
         out.push(rec);
-        at = at.saturating_add(used);
     }
     out
-}
-
-fn u16_at(b: &[u8], at: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(at..at.checked_add(2)?)?.try_into().ok()?))
-}
-
-fn u32_at(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(at..at.checked_add(4)?)?.try_into().ok()?))
 }
 
 fn i32_at(b: &[u8], at: usize) -> Option<i32> {
@@ -118,81 +73,36 @@ pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize, work: &mut Deco
     blip(&rec, limit, work)
 }
 
-/// The document's decode budget: bytes of inflating and pixel decoding left, and how many
-/// attempts it has refused (only the first few are logged).
-pub(crate) struct Decode {
-    pub(crate) left: usize,
-    refused: usize,
-}
-
-impl Decode {
-    pub(crate) fn new(left: usize) -> Self {
-        Decode { left, refused: 0 }
-    }
-
-    /// Take `cost` off the budget; `false` (and a log line) when it doesn't fit.
-    fn charge(&mut self, cost: usize, what: &str) -> bool {
-        match self.left.checked_sub(cost) {
-            Some(left) if cost > 0 => {
-                self.left = left;
-                true
-            }
-            _ => {
-                if self.refused < 10 {
-                    log::warn!(
-                        "docbin: a {what} needing {cost} bytes of decode work is over the decode budget ({} left) and was not decoded",
-                        self.left
-                    );
-                }
-                self.refused = self.refused.saturating_add(1);
-                false
-            }
-        }
-    }
-}
-
-/// The BLIP record of an `OfficeArtFBSE`: embedded after it, or in the delay stream, where
-/// its (`foDelay`, record length) location is returned too (entries can share one record,
-/// whatever sizes their FBSEs claim: the record's own header is what counts).
-pub(crate) fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Option<(usize, usize)>)> {
-    // btWin32, btMacOS, rgbUid[16], tag, size, cRef, foDelay, unused, cbName, unused×2.
-    let fo_delay = u32_at(fbse, 28)? as usize;
-    let cb_name = *fbse.get(33)? as usize;
-    let at = 36usize.checked_add(cb_name)?;
-    if let Some((rec, _)) = fbse.get(at..).and_then(record) {
-        return Some((rec, None));
-    }
-    // Not embedded: the record sits in the delay stream.
-    let (rec, used) = record(delay.get(fo_delay..)?)?;
-    Some((rec, Some((fo_delay, used))))
-}
-
 /// Decode one `OfficeArtBlip*` record ([MS-ODRAW] §2.2.23-§2.2.31). `work` is the
 /// document's decode budget: inflating a metafile or decoding a DIB is charged to it before
 /// it runs, whether it succeeds or not, and nothing is decoded once it is spent.
 pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
     // Each type has two instance values; the odd one carries a second 16-byte UID.
-    let uids = if rec.inst & 1 == 1 { 32 } else { 16 };
-    match rec.typ {
+    let uids = if rec.instance & 1 == 1 { 32 } else { 16 };
+    match rec.kind {
         rt::BLIP_PNG | rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK | rt::BLIP_DIB | rt::BLIP_TIFF => {
-            let data = rec.body.get(uids + 1..)?; // + tag byte
+            let data = rec.data.get(uids + 1..)?; // + tag byte
             if data.is_empty() || data.len() > limit {
                 return None;
             }
-            match rec.typ {
+            match rec.kind {
                 rt::BLIP_PNG => Some(Blip { bytes: data.to_vec(), ext: "png", placeholder: false }),
                 rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK => Some(Blip { bytes: data.to_vec(), ext: "jpeg", placeholder: false }),
                 rt::BLIP_TIFF => Some(Blip { bytes: data.to_vec(), ext: "tiff", placeholder: false }),
-                _ => dib_to_png(data, limit, work),
+                _ => match dib::to_png(data, limit, work)? {
+                    Dib::Png(bytes) => Some(Blip { bytes, ext: "png", placeholder: false }),
+                    // Kept as a BMP, which renders as a grey placeholder.
+                    Dib::Bmp(bytes) => Some(Blip { bytes, ext: "bmp", placeholder: true }),
+                },
             }
         }
         rt::BLIP_EMF | rt::BLIP_WMF | rt::BLIP_PICT => {
             // OfficeArtMetafileHeader: cbSize, rcBounds, ptSize, cbSave, compression, filter.
-            let hdr = rec.body.get(uids..uids + 34)?;
+            let hdr = rec.data.get(uids..uids + 34)?;
             let cb_size = u32_at(hdr, 0)? as usize;
             let cb_save = u32_at(hdr, 28)? as usize;
             let compression = *hdr.get(32)?;
-            let raw = rec.body.get(uids + 34..)?;
+            let raw = rec.data.get(uids + 34..)?;
             let raw = raw.get(..cb_save.min(raw.len()))?;
             let cap = limit.min(MAX_METAFILE);
             let bytes = if compression == 0 {
@@ -212,102 +122,13 @@ pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut Decode) -> Option<Blip> {
             if bytes.is_empty() {
                 return None;
             }
-            match rec.typ {
+            match rec.kind {
                 rt::BLIP_EMF => Some(Blip { bytes, ext: "emf", placeholder: false }),
                 rt::BLIP_WMF => Some(Blip { bytes, ext: "wmf", placeholder: false }),
                 _ => Some(Blip { bytes, ext: "pict", placeholder: true }),
             }
         }
         _ => None,
-    }
-}
-
-/// A device-independent bitmap (BITMAPINFOHEADER + palette + pixels) as a PNG: the DIB gets
-/// the 14-byte BMP file header it lacks, is decoded with size limits and re-encoded. When the
-/// bitmap can't be decoded, or its declared pixels (4 bytes each) don't fit in `work`, the
-/// BMP bytes are kept (and render as a grey placeholder).
-fn dib_to_png(dib: &[u8], limit: usize, work: &mut Decode) -> Option<Blip> {
-    let header = u32_at(dib, 0)? as usize;
-    if !(12..=124).contains(&header) {
-        return None;
-    }
-    let (bits, used, compression) =
-        if header == 12 { (u16_at(dib, 10)? as usize, 0, 0) } else { (u16_at(dib, 14)? as usize, u32_at(dib, 32)? as usize, u32_at(dib, 16)?) };
-    let entry = if header == 12 { 3 } else { 4 };
-    let colors = if used > 0 {
-        used.min(256)
-    } else if bits <= 8 {
-        1usize << bits
-    } else {
-        0
-    };
-    // BI_BITFIELDS masks follow a 40-byte header.
-    let masks = if header == 40 && (compression == 3 || compression == 6) { if compression == 3 { 12 } else { 16 } } else { 0 };
-    let off_bits = 14usize.checked_add(header)?.checked_add(colors * entry)?.checked_add(masks)?;
-    let file_size = 14usize.checked_add(dib.len()).filter(|&size| size <= limit)?;
-    // The declared size is what decoding allocates, however small the (RLE) data is.
-    let (w, h) = if header == 12 {
-        (u64::from(u16_at(dib, 4)?), u64::from(u16_at(dib, 6)?))
-    } else {
-        (u64::from(u32_at(dib, 4)?), u64::from((u32_at(dib, 8)? as i32).unsigned_abs()))
-    };
-    let cost = w.saturating_mul(h).saturating_mul(4).try_into().unwrap_or(usize::MAX);
-    // Copying the DIB into a BMP is work too, however few pixels it declares: it is charged
-    // before the copy is made (#3871). A bitmap whose pixels don't fit still keeps its BMP
-    // bytes as a placeholder, if the copy fits.
-    let decode = work.charge(cost.max(dib.len()), "bitmap");
-    if !decode && !work.charge(dib.len(), "bitmap") {
-        return None;
-    }
-    let mut bmp = Vec::with_capacity(file_size);
-    bmp.extend_from_slice(b"BM");
-    bmp.extend_from_slice(&u32::try_from(file_size).ok()?.to_le_bytes());
-    bmp.extend_from_slice(&[0, 0, 0, 0]);
-    bmp.extend_from_slice(&u32::try_from(off_bits).ok()?.to_le_bytes());
-    bmp.extend_from_slice(dib);
-    let placeholder = |bmp| Some(Blip { bytes: bmp, ext: "bmp", placeholder: true });
-    if !decode {
-        return placeholder(bmp);
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bmp));
-    reader.set_format(image::ImageFormat::Bmp);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DIB_SIDE);
-    limits.max_image_height = Some(MAX_DIB_SIDE);
-    limits.max_alloc = Some((256 << 20).min(limit as u64));
-    reader.limits(limits);
-    let mut png = PictureWriter { bytes: Vec::new(), limit };
-    match reader.decode() {
-        Ok(img)
-            if image::codecs::png::PngEncoder::new(&mut png).write_image(img.as_bytes(), img.width(), img.height(), img.color().into()).is_ok() =>
-        {
-            Some(Blip { bytes: png.bytes, ext: "png", placeholder: false })
-        }
-        _ => placeholder(bmp),
-    }
-}
-
-/// Cap encoded bytes while the PNG encoder writes, before the buffer can grow.
-struct PictureWriter {
-    bytes: Vec<u8>,
-    limit: usize,
-}
-
-impl Write for PictureWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let Some(end) = self.bytes.len().checked_add(buf.len()).filter(|&end| end <= self.limit) else {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "picture exceeds remaining media budget"));
-        };
-        if end > self.bytes.capacity() {
-            let new_capacity = self.bytes.capacity().saturating_mul(2).max(end).min(self.limit);
-            self.bytes.try_reserve_exact(new_capacity - self.bytes.len()).map_err(std::io::Error::other)?;
-        }
-        self.bytes.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 
@@ -350,22 +171,15 @@ impl Props {
     /// Apply one property table (`OfficeArtFOPT` or a secondary/tertiary one): `count` 6-byte
     /// entries, then the complex data of the entries flagged complex, in order.
     pub(crate) fn apply(&mut self, body: &[u8], count: u16) {
-        let n = (count as usize).min(body.len() / 6);
-        let mut complex_at = n * 6;
-        for i in 0..n {
-            let Some(opid) = u16_at(body, i * 6) else { break };
-            let Some(op) = u32_at(body, i * 6 + 2) else { break };
-            let pid = opid & 0x3FFF;
-            if opid & 0x8000 != 0 {
-                let start = complex_at;
-                complex_at = complex_at.saturating_add(op as usize);
-                if pid == 0x0381 {
-                    let end = complex_at.min(body.len());
-                    if let Some(data) = body.get(start..end) {
-                        let units: Vec<u16> =
-                            data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).take(4096).collect();
-                        self.alt = String::from_utf16_lossy(&units);
-                    }
+        // The complex data is looked for after the entries the table holds whole.
+        for e in entries(body, (count as usize).min(body.len() / 6)) {
+            let (pid, op) = (e.pid, e.op);
+            if e.is_complex {
+                if pid == 0x0381
+                    && let Some(data) = e.complex
+                {
+                    let units: Vec<u16> = data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).take(4096).collect();
+                    self.alt = String::from_utf16_lossy(&units);
                 }
                 continue;
             }
@@ -463,17 +277,17 @@ impl Node {
 pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
     let mut sp = Sp::default();
     for rec in children(body, budget) {
-        match rec.typ {
+        match rec.kind {
             rt::FSP => {
-                sp.spt = rec.inst;
-                sp.spid = u32_at(rec.body, 0).unwrap_or(0);
-                sp.flags = u32_at(rec.body, 4).unwrap_or(0);
+                sp.spt = rec.instance;
+                sp.spid = u32_at(rec.data, 0).unwrap_or(0);
+                sp.flags = u32_at(rec.data, 4).unwrap_or(0);
             }
-            rt::FOPT | rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => sp.props.apply(rec.body, rec.inst),
+            rt::FOPT | rt::SECONDARY_FOPT | rt::TERTIARY_FOPT => sp.props.apply(rec.data, rec.instance),
             rt::FSPGR | rt::CHILD_ANCHOR => {
-                let r = [0, 4, 8, 12].map(|o| i32_at(rec.body, o));
+                let r = [0, 4, 8, 12].map(|o| i32_at(rec.data, o));
                 if let [Some(l), Some(t), Some(r), Some(b)] = r {
-                    if rec.typ == rt::FSPGR {
+                    if rec.kind == rt::FSPGR {
                         sp.group_space = Some([l, t, r, b]);
                     } else {
                         sp.child = Some([l, t, r, b]);
@@ -491,7 +305,7 @@ pub(crate) fn shape(body: &[u8], budget: &mut usize) -> Sp {
 fn group(body: &[u8], depth: usize, budget: &mut usize) -> Option<Node> {
     let recs = children(body, budget);
     let mut it = recs.iter();
-    let head = it.find(|r| r.typ == rt::SP_CONTAINER).map(|r| shape(r.body, budget))?;
+    let head = it.find(|r| r.kind == rt::SP_CONTAINER).map(|r| shape(r.data, budget))?;
     let mut members = Vec::new();
     for rec in it {
         if let Some(n) = node(rec, depth + 1, budget) {
@@ -504,9 +318,9 @@ fn group(body: &[u8], depth: usize, budget: &mut usize) -> Option<Node> {
 /// A shape or group record as a node (`None` for other records, deleted shapes or past the
 /// depth cap).
 fn node(rec: &Rec, depth: usize, budget: &mut usize) -> Option<Node> {
-    match rec.typ {
-        rt::SP_CONTAINER => Some(shape(rec.body, budget)).filter(|s| !s.deleted()).map(Node::Shape),
-        rt::SPGR_CONTAINER if depth < MAX_DEPTH => group(rec.body, depth, budget),
+    match rec.kind {
+        rt::SP_CONTAINER => Some(shape(rec.data, budget)).filter(|s| !s.deleted()).map(Node::Shape),
+        rt::SPGR_CONTAINER if depth < MAX_DEPTH => group(rec.data, depth, budget),
         _ => None,
     }
 }
@@ -527,10 +341,10 @@ pub(crate) fn content(blob: &[u8]) -> Content<'_> {
     let mut out = Content::default();
     let mut budget = MAX_RECORDS;
     let Some((dgg, mut at)) = record(blob) else { return out };
-    if dgg.typ == rt::DGG_CONTAINER {
-        for rec in children(dgg.body, &mut budget) {
-            if rec.typ == rt::BSTORE_CONTAINER {
-                out.bstore = children(rec.body, &mut budget).into_iter().filter(|r| r.typ == rt::FBSE).map(|r| r.body).take(MAX_BSE).collect();
+    if dgg.kind == rt::DGG_CONTAINER {
+        for rec in children(dgg.data, &mut budget) {
+            if rec.kind == rt::BSTORE_CONTAINER {
+                out.bstore = children(rec.data, &mut budget).into_iter().filter(|r| r.kind == rt::FBSE).map(|r| r.data).take(MAX_BSE).collect();
             }
         }
     }
@@ -538,16 +352,16 @@ pub(crate) fn content(blob: &[u8]) -> Content<'_> {
         let Some(&label) = blob.get(at) else { break };
         let Some((dg, used)) = blob.get(at + 1..).and_then(record) else { break };
         at = at.saturating_add(1 + used);
-        if dg.typ != rt::DG_CONTAINER {
+        if dg.kind != rt::DG_CONTAINER {
             continue;
         }
         let into = if label == 0 { &mut out.main } else { &mut out.header };
-        for rec in children(dg.body, &mut budget) {
-            if rec.typ != rt::SPGR_CONTAINER {
+        for rec in children(dg.data, &mut budget) {
+            if rec.kind != rt::SPGR_CONTAINER {
                 continue;
             }
             // The top group: its first shape is the patriarch; the members are the drawing's shapes.
-            if let Some(Node::Group(_, members)) = group(rec.body, 0, &mut budget) {
+            if let Some(Node::Group(_, members)) = group(rec.data, 0, &mut budget) {
                 for n in members {
                     into.entry(n.sp().spid).or_insert(n);
                 }
