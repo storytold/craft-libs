@@ -27,7 +27,7 @@ use super::view::PageSource;
 use craft_behavior::{CopyKeys, EditEvent, IconId, MiddleButton, Selection, SelectionChange, SelectionModel as _, keyed};
 use craft_ui::contract::{
     Bind, CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, IdSource, NoValue, OsFiles, Outcome, PendingDrop, Props as _,
-    ReorderMove, ReorderRule, Show as _, ShowCollection as _,
+    ReorderMove, ReorderRule, Show as _, ShowCollection as _, Sizing,
 };
 use craft_ui::list::{ThumbAspect, ToggleState};
 use craft_ui::primitives::textures::{Priority, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
@@ -465,6 +465,9 @@ impl<'a> PageThumbnails<'a> {
             .picks_beside_current(picks_beside_current)
             .groups(&groups)
             .tail(&tail);
+        if !organize {
+            grid = grid.card_columns(1).sizing(Sizing::Content);
+        }
         if let Some(page) = reveal {
             grid = grid.reveal(page);
         }

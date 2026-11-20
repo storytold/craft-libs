@@ -52,6 +52,20 @@ fn zoomed_grid_requests_a_picture_at_the_drawn_size() {
     assert!(side > craft_ui::primitives::textures::ThumbnailOptions::new().max_side as f32, "the zoomed page requested only {side} pixels");
 }
 
+/// A wide side panel keeps its page strip in one vertical column.
+#[trial]
+fn a_wide_thumbnail_strip_keeps_pages_in_one_column() {
+    let pages = DemoPages::new(3);
+    let mut picked = Selection::default();
+    let mut fixture = Fixture::new(move |ui| {
+        PageThumbnails::new("Pages", &pages, &mut picked, 0, PAPER).show(ui);
+    });
+    fixture.room(vec2(500.0, 800.0)).settle();
+    let first = fixture.by_label("Page 1").expect("first page").rect;
+    let second = fixture.by_label("Page 2").expect("second page").rect;
+    assert!(second.top() >= first.bottom(), "the strip stays in page order vertically: {first:?}, {second:?}");
+}
+
 /// A click on the New Slide row asks for a new page and goes to no page.
 #[trial]
 fn the_new_slide_row_asks_for_a_new_page() {
