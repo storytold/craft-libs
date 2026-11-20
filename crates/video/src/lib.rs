@@ -67,7 +67,7 @@ mod track;
     feature = "ffv1",
     feature = "vp8-decode"
 ))]
-pub use track::TrackDecoder;
+pub use track::{TrackDecoder, TrackDecoderOptions};
 
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;

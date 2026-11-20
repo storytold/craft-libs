@@ -317,7 +317,7 @@ pub enum GlyphDrawMode {
     Fill,
     /// Draw using a stroke.
     Stroke(StrokeProps),
-    /// PdfCraft patch (#3116): text that shapes a clip; report it without painting a glyph.
+    /// PdfCraft patch: text that shapes a clip; report it without painting a glyph.
     Clip,
     /// Invisible text (for text extraction but not visual rendering).
     Invisible,

@@ -1627,6 +1627,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ber"
 version = "0.1.0"
 
@@ -1794,11 +1798,13 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color-transform",
  "craft-develop-model",
  "craft-render-parity",
  "proptest",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2089,6 +2095,7 @@ dependencies = [
  "craft-dxf",
  "craft-eps",
  "craft-file-formats",
+ "craft-image-codecs",
  "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
@@ -2566,6 +2573,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
 ]
@@ -3162,6 +3170,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sbs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-mime",
+ "craft-xml",
+ "flate2",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
@@ -3272,6 +3292,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-sqlite"
+version = "0.1.0"
 
 [[package]]
 name = "craft-ssip"
@@ -3502,6 +3526,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]

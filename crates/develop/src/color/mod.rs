@@ -1,3 +1,3 @@
 //! Colour helpers for the develop pipeline.
 
-pub mod spline;
+pub use craft_color_transform::curve as spline;
