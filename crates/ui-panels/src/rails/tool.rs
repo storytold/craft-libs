@@ -316,8 +316,9 @@ impl<'a, T: Value + MemoProps + PlainData + 'static> ToolRail<'a, T> {
         let draw = self.prepare(ui, width, footer);
         // The last-used tools after this pass: derived while the slots, the remembered and hidden tools and the current tool are as they were.
         let key = (draw.slots.revision(), draw.last_used.revision(), draw.hidden.map(Tracked::revision), draw.current);
-        let last =
-            crate::runtime::derived::derived(ui.ctx(), ui.scope_id().with("remembered"), &key, || remembered(draw.slots, draw.current, draw.last_used));
+        let last = crate::runtime::derived::derived(ui.ctx(), ui.scope_id().with("remembered"), &key, || {
+            remembered(draw.slots, draw.current, draw.last_used)
+        });
         let last = last.as_ref().clone();
         let (mut events, mut edit_toolbar) = (Vec::new(), None);
         let shown = self.show(ui, |ui, _| edit_toolbar = draw.run(ui, &mut events));
