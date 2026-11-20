@@ -349,11 +349,14 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
 }
 
+/// Each pass's stops, each with the roving group it registered in.
+type StopGroups = Rc<std::cell::RefCell<Vec<Vec<(egui::Id, Option<egui::Id>)>>>>;
+
 /// A tool bar's buttons are members of its roving group from the first pass that shows them: that pass registers the
 /// stops in the groups every later pass registers them in.
 #[trial]
 fn a_tool_bar_is_one_roving_group_from_its_first_pass() {
-    let seen: Rc<std::cell::RefCell<Vec<Vec<(egui::Id, Option<egui::Id>)>>>> = Rc::default();
+    let seen: StopGroups = Rc::default();
     let passes = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         Button::new("Before").show(ui);

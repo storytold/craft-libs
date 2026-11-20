@@ -96,7 +96,7 @@ impl crate::runtime::Shift for DropMark {
                     _ => *line,
                 },
             },
-            _ => self.clone(),
+            _ => *self,
         }
     }
 }

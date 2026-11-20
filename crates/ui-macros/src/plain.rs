@@ -18,6 +18,7 @@ use crate::util::ui_crate;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
+use syn::parse::Parser as _;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 use syn::{Data, DeriveInput};
@@ -96,7 +97,8 @@ pub(crate) fn field_checks(
         };
         syn::visit::Visit::visit_type(if is_escaped { &mut named_escaped } else { &mut named }, &field.ty);
     }
-    let mut bounds = Vec::new();
+    // Each type parameter takes the derive's bound beside its own, in one place: a second place for it is a lint in
+    // the type's crate (`clippy::multiple_bound_locations`).
     for param in generics.type_params_mut() {
         let escaped = match param_escape {
             Some(param_escape) => param_escaped(param, param_escape)?,
@@ -106,15 +108,13 @@ pub(crate) fn field_checks(
         param.attrs.clear();
         let ident = &param.ident;
         let only_escaped = named_escaped.0.contains(ident) && !named.0.contains(ident);
-        bounds.push(match (param_escape, escape.and_then(|escape| escape.bound.as_ref())) {
-            (Some(ParamEscape { bound, .. }), _) if escaped => quote!(#ident: #bound),
-            (_, Some(bound)) if only_escaped => quote!(#ident: #bound),
-            _ => quote!(#ident: #trait_path),
-        });
-    }
-    let where_clause = generics.make_where_clause();
-    for bound in bounds {
-        where_clause.predicates.push(syn::parse2(bound)?);
+        let bound = match (param_escape, escape.and_then(|escape| escape.bound.as_ref())) {
+            (Some(ParamEscape { bound, .. }), _) if escaped => quote!(#bound),
+            (_, Some(bound)) if only_escaped => quote!(#bound),
+            _ => quote!(#trait_path),
+        };
+        let bounds = syn::punctuated::Punctuated::<syn::TypeParamBound, syn::Token![+]>::parse_terminated.parse2(bound)?;
+        param.bounds.extend(bounds);
     }
     let ident = &input.ident;
     let (_, type_generics, _) = input.generics.split_for_impl();
