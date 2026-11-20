@@ -266,7 +266,7 @@ fn stacked_sizes<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>, lines
         .enumerate()
         .map(|(i, run)| {
             if cx.proposal == Proposal::Min {
-                Vec2::new(cx.least_width(run), cx.layout_at(run, f32::INFINITY).size().y)
+                cx.least(run).size()
             } else {
                 cx.layout_at(run, line_room(spec, i + 1 == count, room, side, cx.gap())).size()
             }
