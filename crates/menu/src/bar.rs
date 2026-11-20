@@ -61,6 +61,10 @@ impl craft_ui::runtime::Shift for MenuBarOutput {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         MenuBarOutput { titles: by.rect(self.titles) }
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        MenuBarOutput { titles: craft_ui::runtime::Shift::snapped(&self.titles, &to.titles, within) }
+    }
 }
 
 /// What the bar did in a frame, from [`MenuBarUi::show`].

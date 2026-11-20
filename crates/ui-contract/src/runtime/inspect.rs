@@ -177,6 +177,19 @@ impl crate::runtime::Shift for Arc<Recorded> {
         let hits = self.hits.iter().map(|hit| HitArea { rect: by.rect(hit.rect), ..hit.clone() });
         Arc::new(Recorded { elements: elements.collect(), hits: hits.collect() })
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        if self.elements.len() != to.elements.len() || self.hits.len() != to.hits.len() {
+            return Arc::clone(self);
+        }
+        let elements = self.elements.iter().zip(&to.elements).map(|(element, to)| Element {
+            rect: element.rect.snapped(&to.rect, within),
+            content: element.content.snapped(&to.content, within),
+            ..element.clone()
+        });
+        let hits = self.hits.iter().zip(&to.hits).map(|(hit, to)| HitArea { rect: hit.rect.snapped(&to.rect, within), ..hit.clone() });
+        Arc::new(Recorded { elements: elements.collect(), hits: hits.collect() })
+    }
 }
 
 impl Recorded {

@@ -80,6 +80,25 @@ impl crate::runtime::Shift for DropMark {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         self.mapped(|point| by.pos(point))
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        let pos = |value: Pos2, to: Pos2| crate::runtime::Shift::snapped(&value, &to, within);
+        let rect = |value: Rect, to: Rect| Rect::from_min_max(pos(value.min, to.min), pos(value.max, to.max));
+        match (self, to) {
+            (DropMark::Line { from, to: end }, DropMark::Line { from: to_from, to: to_end }) => {
+                DropMark::Line { from: pos(*from, *to_from), to: pos(*end, *to_end) }
+            }
+            (DropMark::Into(target), DropMark::Into(to_target)) => DropMark::Into(rect(*target, *to_target)),
+            (DropMark::Region { area, line }, DropMark::Region { area: to_area, line: to_line }) => DropMark::Region {
+                area: rect(*area, *to_area),
+                line: match (line, to_line) {
+                    (Some([a, b]), Some([to_a, to_b])) => Some([pos(*a, *to_a), pos(*b, *to_b)]),
+                    _ => *line,
+                },
+            },
+            _ => self.clone(),
+        }
+    }
 }
 
 impl DropMark {

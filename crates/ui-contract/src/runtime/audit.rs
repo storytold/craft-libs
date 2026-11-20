@@ -18,7 +18,13 @@ use crate::runtime::shift::Shift;
 use egui::{Context, Id, RecordShift, Rect};
 use std::collections::HashSet;
 
-/// Whether two outputs of a memoized view are equal: both of its output type, and `==`.
+/// How far apart, in points, the audit lets a coordinate or float of a replay and of the real run lie
+/// (`Shift::snapped`, `PassRecords::first_difference`): a record moved by a whole pixel from positions off the float
+/// grid differs from the run at the new place by rounding only, far less than this; ids, counts, colours and text
+/// compare exactly.
+pub(crate) const WITHIN: f32 = 1.0 / 256.0;
+
+/// Whether two outputs of a memoized view are equal: both of its output type, and `==` within `WITHIN`.
 pub(crate) type SameOutput = fn(&Output, &Output, &RecordShift) -> bool;
 
 /// The audit's switch for one context and the views it named.
@@ -53,7 +59,10 @@ pub(crate) fn runs(ctx: &Context) -> bool {
 
 /// Whether the kept output `kept`, as a replay at the place `shift` names returns it, equals `run`'s, as `R`.
 pub(crate) fn same<R: PartialEq + Shift + 'static>(kept: &Output, run: &Output, shift: &RecordShift) -> bool {
-    kept.downcast_ref::<R>().map(|kept| kept.shifted(shift)).as_ref() == run.downcast_ref::<R>()
+    match (kept.downcast_ref::<R>(), run.downcast_ref::<R>()) {
+        (Some(kept), Some(run)) => kept.shifted(shift).snapped(run, WITHIN) == *run,
+        _ => false,
+    }
 }
 
 /// What a view's kept run, or its audit run, added and returned.
@@ -67,7 +76,7 @@ pub(crate) struct Shown<'a> {
 /// and panics on a difference.
 pub(crate) fn compare(name: &'static str, id: Id, (kept, shift): (Shown<'_>, &RecordShift), run: Shown<'_>, same: Option<SameOutput>) {
     let mut found = Vec::new();
-    let kept_rect = shift.rect(kept.rect);
+    let kept_rect = shift.rect(kept.rect).snapped(&run.rect, WITHIN);
     if kept_rect != run.rect {
         found.push(format!("rect: left {:?} / right {:?}", kept_rect, run.rect));
     }

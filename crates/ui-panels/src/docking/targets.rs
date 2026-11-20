@@ -198,6 +198,10 @@ impl<P: Clone> crate::runtime::Shift for DockSpot<P> {
     fn shifted(&self, _: &egui::RecordShift) -> Self {
         self.clone()
     }
+
+    fn snapped(&self, _: &Self, _: f32) -> Self {
+        self.clone()
+    }
 }
 
 /// Where a drop would land. A group is named by an anchor: any panel in it.

@@ -13,6 +13,18 @@ pub trait Shift {
     /// `self` at the place `by` names.
     #[must_use]
     fn shifted(&self, by: &RecordShift) -> Self;
+
+    /// `self` with each coordinate `shifted` moves, and each float it holds, taken from `to` where the two lie within
+    /// `within` points; everything else stays. The replay audit compares a moved record with a real run this way
+    /// (`==` after it): positions off the float grid moved by a whole pixel differ from the same positions computed at
+    /// the new place by rounding only.
+    #[must_use]
+    fn snapped(&self, to: &Self, within: f32) -> Self;
+}
+
+/// `value`, or `to` when the two lie within `within` of each other.
+pub fn snap(value: f32, to: f32, within: f32) -> f32 {
+    if (value - to).abs() <= within { to } else { value }
 }
 
 /// A clip rect a record holds: the clip of the code around the record becomes the replay's clip, a clip set inside it
@@ -37,17 +49,49 @@ impl Shift for Clip {
     fn shifted(&self, by: &RecordShift) -> Self {
         Clip::new(by.clip(self.0))
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        Clip(self.0.snapped(&to.0, within))
+    }
 }
 
 impl Shift for Rect {
     fn shifted(&self, by: &RecordShift) -> Self {
         by.rect(*self)
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        Rect::from_min_max(self.min.snapped(&to.min, within), self.max.snapped(&to.max, within))
+    }
 }
 
 impl Shift for Pos2 {
     fn shifted(&self, by: &RecordShift) -> Self {
         by.pos(*self)
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        Pos2::new(snap(self.x, to.x, within), snap(self.y, to.y, within))
+    }
+}
+
+impl Shift for f32 {
+    fn shifted(&self, _: &RecordShift) -> Self {
+        *self
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        snap(*self, *to, within)
+    }
+}
+
+impl Shift for f64 {
+    fn shifted(&self, _: &RecordShift) -> Self {
+        *self
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        if (self - to).abs() <= f64::from(within) { *to } else { *self }
     }
 }
 
@@ -61,17 +105,38 @@ macro_rules! stays {
             fn shifted(&self, _: &$crate::runtime::RecordShift) -> Self {
                 self.clone()
             }
+
+            #[allow(clippy::clone_on_copy)]
+            fn snapped(&self, _: &Self, _: f32) -> Self {
+                self.clone()
+            }
         })*
     };
 }
 
 // A scalar is a length or a count; a coordinate is a `Pos2` or a `Rect`.
 stays!(craft_behavior::PartRef, craft_behavior::Sense);
-stays!((), bool, u8, u16, u32, u64, usize, i32, i64, f32, f64, String, Arc<str>, &'static str, egui::Id, egui::LayerId);
+stays!((), bool, u8, u16, u32, u64, usize, i32, i64, String, Arc<str>, &'static str, egui::Id, egui::LayerId);
 
 impl<T: Shift> Shift for Option<T> {
     fn shifted(&self, by: &RecordShift) -> Self {
         self.as_ref().map(|value| value.shifted(by))
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        match (self, to) {
+            (Some(value), Some(to)) => Some(value.snapped(to, within)),
+            _ => self.as_ref().map(|value| value.snapped(value, within)),
+        }
+    }
+}
+
+/// `values`, each taken from the item of `to` at its index by `snapped` when both hold as many.
+fn snapped_items<'a, T: Shift + 'a>(values: impl ExactSizeIterator<Item = &'a T>, to: impl ExactSizeIterator<Item = &'a T>, within: f32) -> Vec<T> {
+    if values.len() == to.len() {
+        values.zip(to).map(|(value, to)| value.snapped(to, within)).collect()
+    } else {
+        values.map(|value| value.snapped(value, within)).collect()
     }
 }
 
@@ -79,11 +144,19 @@ impl<T: Shift> Shift for Vec<T> {
     fn shifted(&self, by: &RecordShift) -> Self {
         self.iter().map(|value| value.shifted(by)).collect()
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        snapped_items(self.iter(), to.iter(), within)
+    }
 }
 
 impl<T: Shift, const N: usize> Shift for SmallVec<[T; N]> {
     fn shifted(&self, by: &RecordShift) -> Self {
         self.iter().map(|value| value.shifted(by)).collect()
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        snapped_items(self.iter(), to.iter(), within).into_iter().collect()
     }
 }
 
@@ -93,6 +166,10 @@ macro_rules! tuples {
             fn shifted(&self, by: &RecordShift) -> Self {
                 ($(self.$index.shifted(by),)+)
             }
+
+            fn snapped(&self, to: &Self, within: f32) -> Self {
+                ($(self.$index.snapped(&to.$index, within),)+)
+            }
         })*
     };
 }
@@ -101,6 +178,10 @@ impl Shift for craft_behavior::HitShape {
     fn shifted(&self, by: &RecordShift) -> Self {
         self.translated(by.offset)
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        self.snapped(to, within)
+    }
 }
 
 /// A hit shape in a body layer's space (`local`) moves too: a record holding a transformed body never moves, as the
@@ -108,6 +189,10 @@ impl Shift for craft_behavior::HitShape {
 impl<O: Clone> Shift for craft_behavior::Shape<O> {
     fn shifted(&self, by: &RecordShift) -> Self {
         self.translated(by.offset)
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        self.snapped(to, within)
     }
 }
 
@@ -119,6 +204,12 @@ where
     fn shifted(&self, by: &RecordShift) -> Self {
         let mut taker = self.clone();
         taker.rect = by.rect(self.rect);
+        taker
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        let mut taker = self.clone();
+        taker.rect = self.rect.snapped(&to.rect, within);
         taker
     }
 }

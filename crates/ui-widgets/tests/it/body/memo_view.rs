@@ -877,7 +877,7 @@ fn a_view_replayed_at_a_moved_place_equals_a_run_there() {
     assert_eq!(replayed.revealed, ran.revealed, "as the run there does");
     let (replayed, ran) = (replayed.records.expect("records"), ran.records.expect("records"));
     assert!(!replayed.widgets().is_empty(), "the region placed widgets");
-    let diff = replayed.first_difference(&ran);
+    let diff = replayed.first_difference(&ran, 0.0);
     assert!(diff.is_none(), "the moved replay differs from the run there: {}", diff.expect("a difference"));
 }
 

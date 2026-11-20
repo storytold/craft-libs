@@ -415,11 +415,19 @@ impl crate::runtime::Shift for PartDecl {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         PartDecl { shape: self.shape.shifted(by), ..self.clone() }
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        PartDecl { shape: self.shape.snapped(&to.shape, within), ..self.clone() }
+    }
 }
 
 impl crate::runtime::Shift for MemberDecl {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         MemberDecl { rect: by.rect(self.rect), parts: self.parts.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        MemberDecl { rect: self.rect.snapped(&to.rect, within), parts: self.parts.snapped(&to.parts, within), ..self.clone() }
     }
 }
 
@@ -427,11 +435,19 @@ impl crate::runtime::Shift for RootInfo {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         RootInfo { rect: by.rect(self.rect), ..*self }
     }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        RootInfo { rect: self.rect.snapped(&to.rect, within), ..*self }
+    }
 }
 
 impl crate::runtime::Shift for RootRegistration {
     fn shifted(&self, by: &egui::RecordShift) -> Self {
         RootRegistration { info: self.info.shifted(by), own: self.own.shifted(by), ..self.clone() }
+    }
+
+    fn snapped(&self, to: &Self, within: f32) -> Self {
+        RootRegistration { info: self.info.snapped(&to.info, within), own: self.own.snapped(&to.own, within), ..self.clone() }
     }
 }
 

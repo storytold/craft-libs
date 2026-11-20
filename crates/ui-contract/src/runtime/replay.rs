@@ -37,6 +37,9 @@ trait Noted: Send + Sync {
     fn shifted(&self, shift: &RecordShift) -> Entry;
     fn as_any(&self) -> &dyn Any;
     fn same(&self, other: &dyn Noted) -> bool;
+    /// `same`, with each argument's coordinates and floats compared within `within` points (`Shift::snapped`).
+    #[cfg(feature = "testing")]
+    fn same_within(&self, other: &dyn Noted, within: f32) -> bool;
     fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
@@ -69,6 +72,11 @@ where
     fn same(&self, other: &dyn Noted) -> bool {
         // `F` is capture-free, so its type names the call: the same type is the same call.
         other.as_any().downcast_ref::<Self>().is_some_and(|other| other.args == self.args)
+    }
+
+    #[cfg(feature = "testing")]
+    fn same_within(&self, other: &dyn Noted, within: f32) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some_and(|other| self.args.snapped(&other.args, within) == other.args)
     }
 
     fn describe(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -261,8 +269,9 @@ impl Record {
     /// differs (paint, widget rects and AccessKit nodes; focus registrations; the journal), each with its first
     /// difference.
     pub(crate) fn differences(&self, run: &Record, shift: &RecordShift) -> Vec<String> {
+        let within = crate::runtime::audit::WITHIN;
         let mut found = Vec::new();
-        match self.egui.shifted(shift).first_difference(&run.egui) {
+        match self.egui.shifted(shift).first_difference(&run.egui, within) {
             // The display names a widget by its rect only; the difference may be in its sense, state or interact rect.
             Some(egui::PassRecordsDiff::Widget { index, left, right }) => found.push(format!("widget rect {index}: left {left:?} / right {right:?}")),
             // The display names a node by its bounds only; the difference may be in any other property.
@@ -277,8 +286,11 @@ impl Record {
         }
         let shifted: Vec<Entry> = self.journal.iter().map(|entry| entry.0.shifted(shift)).collect();
         let (left, right) = (&shifted, &run.journal);
-        if let Some(index) =
-            left.iter().zip(right).position(|(a, b)| a != b).or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))
+        if let Some(index) = left
+            .iter()
+            .zip(right)
+            .position(|(a, b)| !a.0.same_within(&*b.0, within))
+            .or_else(|| (left.len() != right.len()).then(|| left.len().min(right.len())))
         {
             found.push(format!("journal entry {index}: left {:?} / right {:?}", left.get(index), right.get(index)));
         }
