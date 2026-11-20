@@ -1799,6 +1799,7 @@ dependencies = [
  "proptest",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

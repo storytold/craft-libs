@@ -20,3 +20,4 @@ rayon = { workspace = true }
 [dev-dependencies]
 craft-render-parity = { workspace = true }
 proptest = { workspace = true }
+serde_json = { workspace = true }
