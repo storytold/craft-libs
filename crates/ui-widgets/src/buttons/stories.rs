@@ -1,7 +1,7 @@
 //! Stories of the buttons.
 
 use super::{Arrangement, Button, ControlPlace, GroupLevel, IconButton, Link, SplitButton, SplitMenu, ToggleButton};
-use crate::contract::{Bind, BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
+use crate::contract::{BodyCx, Entry, LeastWidth, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
 use crate::display::{Picture, Shade, Text};
 use crate::layout_components::{Grid, Row, Stack};
 use crate::list::ThumbAspect;
@@ -247,8 +247,8 @@ fn button_in_side_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        ToggleButton::new("Snap to grid", Bind::bound(data.value("snap", false))).id_salt("snap").show(ui);
-        ToggleButton::new("Guides", Bind::bound(data.value("on", true))).icon(IconId::new("eye")).id_salt("guides").show(ui);
+        ToggleButton::new("Snap to grid", data.bind("snap", false)).id_salt("snap").show(ui);
+        ToggleButton::new("Guides", data.bind("on", true)).icon(IconId::new("eye")).id_salt("guides").show(ui);
     });
     shown.into()
 }
@@ -258,19 +258,15 @@ fn toggle_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let disabled = *data.value("disabled", false);
     let label = data.value("label", String::from("Snap to grid")).clone();
-    ToggleButton::new(label, Bind::bound(data.value("on", false))).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
+    ToggleButton::new(label, data.bind("on", false)).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
 }
 
 /// A stacked toggle, off and on.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never, title = "Stacked")]
 fn toggle_button_stacked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        ToggleButton::new("Gridlines", Bind::bound(data.value("grid", false)))
-            .icon(IconId::new("eye"))
-            .arrangement(Arrangement::Stacked)
-            .id_salt("grid")
-            .show(ui);
-        ToggleButton::new("Show rulers", Bind::bound(data.value("rulers", true)))
+        ToggleButton::new("Gridlines", data.bind("grid", false)).icon(IconId::new("eye")).arrangement(Arrangement::Stacked).id_salt("grid").show(ui);
+        ToggleButton::new("Show rulers", data.bind("rulers", true))
             .icon(IconId::new("eye"))
             .arrangement(Arrangement::Stacked)
             .id_salt("rulers")
@@ -297,12 +293,12 @@ fn toggle_button_stacked_in_ribbon(ui: &mut Ui, data: &mut StoryData) -> StoryOu
                     .arrangement(Arrangement::Stacked)
                     .id_salt("page number")
                     .show(ui);
-                ToggleButton::new("Track\nChanges", Bind::bound(data.value("track", false)))
+                ToggleButton::new("Track\nChanges", data.bind("track", false))
                     .icon(IconId::new("eye"))
                     .arrangement(Arrangement::Stacked)
                     .id_salt("track")
                     .show(ui);
-                ToggleButton::new("Select", Bind::bound(data.value("select", true)))
+                ToggleButton::new("Select", data.bind("select", true))
                     .icon(IconId::new("eye"))
                     .arrangement(Arrangement::Stacked)
                     .id_salt("select")
@@ -324,7 +320,7 @@ fn click_and_stay(fixture: &mut Fixture) {
 /// A toggle clicked with the pointer still over it: the output's `hover` is over and clicked until the pointer leaves.
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Custom(click_and_stay), title = "Clicked under the pointer")]
 fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let shown = ToggleButton::new("Snap to grid", Bind::bound(data.value("snap_hover", false))).icon(IconId::new("eye")).show(ui);
+    let shown = ToggleButton::new("Snap to grid", data.bind("snap_hover", false)).icon(IconId::new("eye")).show(ui);
     // The hold is the component's own state, which a measuring run does not carry: the story words it in its readout,
     // not in its data, which the purity probe compares.
     let clicked = shown.hover.clicked;
@@ -333,13 +329,13 @@ fn toggle_button_clicked_under_pointer(ui: &mut Ui, data: &mut StoryData) -> Sto
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
 fn toggle_button_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ToggleButton::new("Snap to grid", Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind_mixed("mixed", Mixed::Mixed)).show(ui).into()
 }
 
 #[story(ToggleButton<'static>, covers = [Invalid], drive = Drive::Never)]
 fn toggle_button_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_on = |on: &bool| if *on { Validity::Refuse(Message::new("Snapping is not available here")) } else { Validity::Ok };
-    ToggleButton::new("Snap to grid", Bind::bound(data.value("invalid", true)).check(refuse_on)).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind("invalid", true).check(refuse_on)).show(ui).into()
 }
 
 fn presets() -> [Entry<u8>; 4] {

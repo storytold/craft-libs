@@ -2,15 +2,13 @@
 
 use craft_host::target::Os;
 use craft_i18n::Direction;
-use craft_ui::contract::{Lazy, Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::menu::MenuItem;
 use craft_ui::menu::bar::{MenuBar, MenuHelp, MenuTitle};
 use craft_ui::menu::search::HelpEntry;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
-use std::cell::Cell;
-use std::rc::Rc;
 
 /// A menu bar with File, Edit and Help.
 struct Rig {
@@ -241,22 +239,31 @@ fn a_row_whose_label_changed_since_the_menu_last_opened_takes_its_new_letter() {
     assert_eq!(runs.get(), 1, "O runs the row that reads Open");
 }
 
-/// A menu bar that settles (in a title bar slot with a content version) still takes its keys while it replays its
-/// last run: F10 takes the focus to the bar, and Alt with a title's marked letter opens that menu.
+/// A view of a menu bar with a File menu.
+#[derive(craft_ui::contract::MemoProps)]
+struct MainMenu {}
+
+fn main_menu(_: &mut MainMenu, ui: &mut egui::Ui) {
+    let titles = vec![MenuTitle::new("&File", |ui| {
+        MenuItem::new("&New").show(ui);
+    })];
+    MenuBar::new("Main menu", titles).show(ui);
+}
+
+/// A menu bar in a memoized view still takes its keys while the view replays its last run: F10 takes the focus to the
+/// bar, and Alt with a title's marked letter opens that menu.
 #[trial]
 fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
-    use craft_ui::contract::Lazy;
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs};
     let mut fixture = Fixture::new(|ui| {
-        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
-            let titles = vec![MenuTitle::new("&File", |ui| {
-                MenuItem::new("&New").show(ui);
-            })];
-            MenuBar::new("Main menu", titles).show(ui);
-        });
+        MemoView::new("title", MainMenu {}, main_menu).show(ui);
     });
     fixture.os(Os::Linux);
     fixture.settle().idle(2);
     assert!(fixture.focused_stop().is_none(), "nothing holds the focus at the start");
+    let runs = last_frame_memo_runs(fixture.ctx());
+    assert!(runs.iter().all(|(_, _, run)| *run == MemoRun::Replayed) && !runs.is_empty(), "the bar's view replays: {runs:?}");
     fixture.key(Key::F10, Modifiers::NONE);
     fixture.settle();
     assert!(fixture.focused_stop().is_some(), "F10 takes the focus to the bar");
@@ -267,19 +274,26 @@ fn a_settled_menu_bar_takes_its_mnemonics_and_f10() {
     assert!(fixture.by_label("New").is_some(), "Alt+F opens File");
 }
 
+/// A view beside the menu bar that reads nothing the menu changes.
+#[derive(craft_ui::contract::MemoProps)]
+struct Status {}
+
+fn status(_: &mut Status, ui: &mut egui::Ui) {
+    craft_ui::display::Text::new("Ready").show(ui);
+}
+
 #[trial]
 fn switching_sibling_submenus_paints_only_the_new_submenu() {
     use craft_behavior::MotionMode;
+    use craft_ui::contract::MemoView;
     use craft_ui::menu::Menu;
     use craft_ui::runtime::env::Scale;
-    use craft_ui::testing::pointer;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs, pointer};
     use egui::Shape;
 
     for motion in [MotionMode::Full, MotionMode::Off] {
-        let runs = Rc::new(Cell::new(0));
-        let counted = Rc::clone(&runs);
         let mut fixture = Fixture::new(move |ui| {
-            Lazy::new("status", 0.0).settles(true).content(1).show(ui, |_| counted.set(counted.get() + 1));
+            MemoView::new("status", Status {}, status).show(ui);
             let titles = vec![MenuTitle::new("Filter", |ui| {
                 Menu::submenu_row(ui, "Blur", |ui, _| {
                     MenuItem::new("Gaussian Blur").show(ui);
@@ -300,9 +314,10 @@ fn switching_sibling_submenus_paints_only_the_new_submenu() {
         assert!(fixture.texts().iter().any(|run| run.text == "Gaussian Blur"), "the first submenu starts open");
 
         for (next, previous, shown, hidden) in [(sharpen, blur, "Unsharp Mask", "Gaussian Blur"), (blur, sharpen, "Gaussian Blur", "Unsharp Mask")] {
-            runs.set(0);
             let shapes = fixture.frame_shapes_with(vec![pointer::moved(next.center())]);
-            assert_eq!(runs.get(), 0, "switching submenus leaves unrelated regions settled");
+            let ran =
+                last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(name, _, run)| name.contains("Status") && *run == MemoRun::Ran).count();
+            assert_eq!(ran, 0, "switching submenus leaves an unrelated view replaying");
             let painted = |label: &str| fixture.texts().iter().any(|run| run.text == label);
             assert!(painted(shown), "the switch frame paints {shown}");
             assert!(!painted(hidden), "the switch frame no longer paints {hidden}");
@@ -337,33 +352,26 @@ fn switching_sibling_submenus_paints_only_the_new_submenu() {
     }
 }
 
-/// A menu bar in a settled region with a content version underlines its mnemonics while Alt is held: the modifiers
-/// it paints by are a recorded read, so the frame Alt goes down runs the region, and so does the frame it comes up,
-/// though the version stays the same. In between the region settles again.
+/// A menu bar in a memoized view underlines its mnemonics while Alt is held: the modifiers it paints by are a tracked
+/// input, so the frame Alt goes down runs the view, and so does the frame it comes up, though its props stay the same.
+/// In between the view replays again.
 #[trial]
-fn holding_alt_runs_the_settled_region_of_a_menu_bar() {
-    let runs = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&runs);
-    let mut fixture = Fixture::new(move |ui| {
-        Lazy::new("title", 0.0).settles(true).content(1).show(ui, |ui| {
-            counted.set(counted.get() + 1);
-            let titles = vec![MenuTitle::new("&File", |ui| {
-                MenuItem::new("&New").show(ui);
-            })];
-            MenuBar::new("Main menu", titles).show(ui);
-        });
+fn holding_alt_runs_the_memoized_view_of_a_menu_bar() {
+    use craft_ui::contract::MemoView;
+    use craft_ui::testing::{MemoRun, last_frame_memo_runs};
+    let mut fixture = Fixture::new(|ui| {
+        MemoView::new("title", MainMenu {}, main_menu).show(ui);
     });
     fixture.os(Os::Linux);
     fixture.settle();
     let frame = |fixture: &mut Fixture| {
-        runs.set(0);
         fixture.frame(Vec::new());
-        runs.get()
+        last_frame_memo_runs(fixture.ctx()).iter().filter(|(_, _, run)| *run == MemoRun::Ran).count()
     };
-    assert_eq!(frame(&mut fixture), 0, "the region settles");
+    assert_eq!(frame(&mut fixture), 0, "the view replays");
     fixture.hold(Modifiers::ALT);
-    assert_eq!(frame(&mut fixture), 1, "Alt going down runs the region, which underlines the mnemonics");
-    assert_eq!(frame(&mut fixture), 0, "with Alt held the region settles again");
+    assert!(frame(&mut fixture) > 0, "Alt going down runs the view, which underlines the mnemonics");
+    assert_eq!(frame(&mut fixture), 0, "with Alt held the view replays again");
     fixture.hold(Modifiers::NONE);
-    assert_eq!(frame(&mut fixture), 1, "Alt coming up runs the region, which drops the underlines");
+    assert!(frame(&mut fixture) > 0, "Alt coming up runs the view, which drops the underlines");
 }

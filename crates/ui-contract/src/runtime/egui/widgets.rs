@@ -41,12 +41,20 @@ pub(crate) fn above(ctx: &Context, below: Id, skip: &[Id]) -> Vec<Rect> {
     found
 }
 
+/// The sense of the widget `id` in the last finished pass, whose widget rects egui's hit test reads for the running
+/// pass's press targets. Hover only when that pass did not show `id`.
+pub(crate) fn sensed_last_pass(ctx: &Context, id: Id) -> egui::Sense {
+    ctx.widget_rect_last_pass(id).map_or(egui::Sense::hover(), |widget| widget.sense)
+}
+
 /// An egui widget the runtime makes for a purpose no component registers (a scrim that absorbs presses).
 #[cfg(feature = "testing")]
 pub(crate) fn note_widget(ctx: &Context, id: Id) {
     noted::with(ctx, |pass| {
         pass.widgets.insert(id);
     });
+    // A replayed run notes it again, as it adds the widget again.
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_widget(ctx, id));
 }
 
 #[cfg(not(feature = "testing"))]
@@ -58,6 +66,8 @@ pub(crate) fn note_node(ctx: &Context, id: Id) {
     noted::with(ctx, |pass| {
         pass.nodes.insert(super::access::node_key(id));
     });
+    // A replayed run notes it again, as it adds the node again.
+    crate::runtime::replay::journal(ctx, || id, |ctx, &id| note_node(ctx, id));
 }
 
 #[cfg(not(feature = "testing"))]
@@ -76,6 +86,12 @@ pub(crate) struct ScrollRegion {
 #[cfg(feature = "suite")]
 pub(crate) fn note_scroll_region(ctx: &Context, view: Rect, content: Rect) {
     noted::with(ctx, |pass| pass.scrolls.push(ScrollRegion { view, content }));
+    // The view cuts what lies outside it, as a clip does: a replay cut by the clip around it cuts the view too.
+    crate::runtime::replay::journal(
+        ctx,
+        || (crate::runtime::Clip::new(view), content),
+        |ctx, &(view, content)| note_scroll_region(ctx, view.rect(), content),
+    );
 }
 
 #[cfg(not(feature = "suite"))]

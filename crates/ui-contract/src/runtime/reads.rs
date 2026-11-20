@@ -15,8 +15,12 @@ use std::sync::Arc;
 /// lives. A given value has none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BindKey {
-    /// A write-through place: its address and the type stored there.
+    /// A write-through place: its address and the type stored there. An address names the place in its pass only:
+    /// a record kept for a later pass keeps no such read.
     Place(usize, TypeId),
+    /// A field of a `Tracked` value (`bind_tracked!`) or a story value: the value's source id, the field's offset in
+    /// it, its size and its type.
+    Tracked(u64, usize, usize, TypeId),
     /// Session memory under this component id.
     Kept(Id),
     /// The saved tier under the key with this hash.
@@ -27,8 +31,20 @@ pub(crate) enum BindKey {
     Command(u32, Option<Id>),
     /// A command the focused stop answers for (an edit it takes): the command's number.
     FocusedEdit(u32),
-    /// The modifiers held, with the latched ones (`Cx::modifiers`).
-    Modifiers,
+}
+
+impl BindKey {
+    /// Whether an edit of `self` changes the value a reader of `read` read: the same value, or, within one source, a
+    /// value whose span overlaps the edited one's. A whole story value's edit changes each field of it a story binds
+    /// (`StoryData::value_at`), and a field's edit changes the whole value the Properties editor reads.
+    pub(crate) fn reaches(self, read: BindKey) -> bool {
+        match (self, read) {
+            (BindKey::Tracked(source, offset, size, _), BindKey::Tracked(read_source, at, read_size, _)) if size > 0 && read_size > 0 => {
+                source == read_source && (at.wrapping_sub(offset) < size || offset.wrapping_sub(at) < read_size)
+            }
+            _ => self == read,
+        }
+    }
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.
@@ -38,6 +54,8 @@ pub(crate) struct Sample {
     pub room: Option<f32>,
     pub took: Vec2,
 }
+
+crate::stays!(Read);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Read {
@@ -98,7 +116,11 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
     } else {
         let read = Read { key, reader, measuring, runs, samples };
         crate::runtime::replay::note_read(ctx, key);
-        crate::runtime::replay::journal(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        // The reads are a set to what reads them: a run that measures a component again (a kept transcript's check)
+        // reads nothing new. A place's address names it in this pass only: a replay in a later pass notes no such read.
+        if !matches!(key, BindKey::Place(..)) {
+            crate::runtime::replay::journal_distinct(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        }
         with(ctx, |reads| reads.reads.push(read));
     }
 }
@@ -146,11 +168,11 @@ pub(crate) struct EarlierReads {
     pub samples: Vec<Sample>,
 }
 
-/// The reads of `key` made so far in this pass, as `editor`'s edit of it sees them.
+/// The reads `key` reaches (`BindKey::reaches`) made so far in this pass, as `editor`'s edit of it sees them.
 pub(crate) fn earlier(ctx: &Context, key: BindKey, editor: Id) -> EarlierReads {
     with(ctx, |reads| {
         let mut earlier = EarlierReads::default();
-        for read in reads.reads.iter().filter(|read| read.key == key) {
+        for read in reads.reads.iter().filter(|read| key.reaches(read.key)) {
             if read.reader != editor {
                 earlier.other = true;
                 continue;

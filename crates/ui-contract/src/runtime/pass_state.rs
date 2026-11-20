@@ -116,7 +116,7 @@ pass_state! {
         #[cfg(feature = "testing")]
         type_runs: crate::runtime::measure::TypeRuns,
         #[cfg(feature = "testing")]
-        settle_log: crate::runtime::measure::SettleLog,
+        memo_log: crate::runtime::measure::MemoLog,
         #[cfg(feature = "testing")]
         pass_totals: crate::runtime::measure::PassTotals,
     }

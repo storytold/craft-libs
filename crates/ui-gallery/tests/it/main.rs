@@ -2,6 +2,7 @@
 
 pub(crate) mod mock;
 pub(crate) mod overview;
+pub(crate) mod panels;
 pub(crate) mod registry;
 pub(crate) mod viewer;
 

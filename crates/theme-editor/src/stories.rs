@@ -3,7 +3,6 @@
 use super::{AppLayerEditor, Pick, Problems, ThemeSubject, ThemeWorkspace, TokenBrowser, TokenDetail};
 use craft_theme::report::ContrastReport;
 use craft_theme::{AppId, AppSizes, Appearance, Contrast, Explained, Mode, Size, TextSize, builtins};
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -25,7 +24,7 @@ fn explained() -> (&'static Explained, &'static ContrastReport) {
 
 #[story(TokenBrowser<'static>, covers = [])]
 fn token_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TokenBrowser::new(explained().0, Bind::bound(data.value("pick", None::<Pick>))).show(ui);
+    TokenBrowser::new(explained().0, data.bind("pick", None::<Pick>)).show(ui);
     StoryOutput::default()
 }
 
@@ -44,7 +43,7 @@ fn wordcraft_explained() -> &'static Explained {
 // The browser over the app layer: WordCraft's accent and chrome pins show as the roles' values.
 #[story(TokenBrowser<'static>, covers = [])]
 fn token_browser_with_wordcraft_pins(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TokenBrowser::new(wordcraft_explained(), Bind::bound(data.value("pins_pick", None::<Pick>))).show(ui);
+    TokenBrowser::new(wordcraft_explained(), data.bind("pins_pick", None::<Pick>)).show(ui);
     StoryOutput::default()
 }
 
@@ -77,6 +76,6 @@ fn picked_size() -> &'static Pick {
 // The first size is picked, so the override editor and its controls show.
 #[story(AppLayerEditor<'static>, covers = [], drive = Drive::Activate)]
 fn app_layer_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AppLayerEditor::new(Bind::bound(data.value("sizes", AppSizes::default())), explained().0).pick(picked_size()).show(ui);
+    AppLayerEditor::new(data.bind("sizes", AppSizes::default()), explained().0).pick(picked_size()).show(ui);
     StoryOutput::default()
 }

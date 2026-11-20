@@ -18,7 +18,7 @@ fn a_cjk_title_shows_its_english_letter_and_alt_with_the_letter_opens_it() {
         _ => None,
     };
     let mut fixture = Fixture::new(move |ui| {
-        MenuBarUi::new(&bar).english(&english).show(ui);
+        MenuBarUi::new(&bar).english(english).show(ui);
     });
     // A Mac bar has no letters.
     fixture.os(Os::Linux);

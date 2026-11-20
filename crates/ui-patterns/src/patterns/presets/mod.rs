@@ -25,8 +25,8 @@ pub use files::{PresetExport, PresetFileEvent, PresetFileFailure, PresetFileRequ
 pub use footer::{PresetFooter, PresetFooterEvent, PresetFooterOptions, PresetFooterOutput};
 pub use manager::{HostedPresetManager, PresetManager, PresetManagerOutput, PresetManagerTaken};
 pub use model::{
-    CellShape, GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetKind, PresetLibrary, PresetRow, PresetTiles,
-    Preview, PreviewPaint, ThumbInfo, children_end, has_captions, nest_allowed,
+    CellShape, GroupPath, PresetChange, PresetError, PresetGroup, PresetId, PresetItem, PresetKey, PresetKind, PresetLibrary, PresetNames, PresetRow,
+    PresetTiles, Preview, PreviewPaint, ThumbInfo, children_end, has_captions, nest_allowed,
 };
 pub use named::{NameCheck, NamedPresetCommands, NamedPresetEvent, NamedPresetOutput, NamedPresetRow, NamedPresetStyle};
 pub use panel_menu::{PresetCommands, PresetMenuAction, PresetPanelMenu};

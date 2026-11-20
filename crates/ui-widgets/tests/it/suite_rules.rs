@@ -1,7 +1,7 @@
 //! The suite's own rules: which states a type must show, and the runs a drag drive makes.
 
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::story::{Story, StoryData, StoryOutput};
 use craft_ui::testing::suite::{measure_pure_case, required_states, values_case};
 use craft_ui::testing::{Drive, Grip, Probe, Registration, Required, trial};
@@ -28,8 +28,8 @@ fn a_field_that_carries_a_value_needs_an_invalid_story() {
 
 fn four_thumbs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let thumbs = [Thumb::new("First"), Thumb::new("Second"), Thumb::new("Third"), Thumb::new("Fourth")];
-    let value = data.value("levels", Mixed::each([30.0, 60.0, 190.0, 220.0]));
-    ThumbRow::new(Bind::bound(value), 0.0..=255.0).thumbs(thumbs).label("Levels").show(ui).into()
+    let (value, value_at) = data.value_at("levels", Mixed::each([30.0, 60.0, 190.0, 220.0]));
+    ThumbRow::new(value_at.bind(value), 0.0..=255.0).thumbs(thumbs).label("Levels").show(ui).into()
 }
 
 #[trial]

@@ -1,13 +1,14 @@
-//! `Lazy`: a child of a scroll area that runs only while it is in view, and a child that runs only when something it
-//! shows changed (`runtime::lazy`).
+//! `Lazy`: a child of a scroll area that runs only while it is in view, and the runner a memoized view shares with it
+//! (`runtime::lazy`).
 
-use crate::layout::{flow_region, take_in_flow};
+use crate::layout::{flow_region, take_cell, take_in_flow};
 use crate::runtime::egui::alloc;
-use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::Env;
 use crate::runtime::focus;
 use crate::runtime::layout_memory;
-use crate::runtime::lazy::{self, Decision, Place};
+use crate::runtime::lazy::{self, Decision, Key, Place};
+#[cfg(feature = "testing")]
+use crate::runtime::measure::{MemoRun, count_memo_run};
 use crate::runtime::memory::sub;
 use crate::runtime::replay;
 use egui::{Pos2, Rect, Ui, UiBuilder, Vec2};
@@ -29,15 +30,14 @@ use std::hash::Hash;
 /// `Lazy::new(key, estimate).show(ui, |ui| ..)` around each large child (a card, a section of a panel) in the scroll
 /// body.
 ///
-/// A settling child ([`Lazy::settles`]) also keeps what its last run painted and registered, and while it is settled
-/// it adds that again in place of running, in view or not.
+/// A memoized view (`MemoView`) is a `Lazy` child keyed by its props: it also keeps what its last run painted and
+/// registered, and while its key and the framework inputs it read are unchanged it adds that again in place of running,
+/// in view or not.
 #[must_use]
 pub struct Lazy {
     key: u64,
     estimate: f32,
     reveal: bool,
-    settles: bool,
-    content: Option<u64>,
 }
 
 impl Lazy {
@@ -47,7 +47,7 @@ impl Lazy {
         use std::hash::Hasher;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
-        Lazy { key: hasher.finish(), estimate, reveal: false, settles: false, content: None }
+        Lazy { key: hasher.finish(), estimate, reveal: false }
     }
 
     /// When `reveal` holds, the scroll area glides until the child starts at the view's start (as far as the
@@ -58,71 +58,18 @@ impl Lazy {
         self
     }
 
-    /// When `settles` holds, the child runs only when something it shows may have changed, inside a scroll area or
-    /// not. Otherwise it repaints its last run and registers again what that run registered (its stops, hit shapes,
-    /// widgets and accessibility nodes), as if it ran. It runs in a frame where any of these holds:
-    /// - the pointer is over it or was in its last run, a press started on it, or it holds focus or held it;
-    /// - an animation in it is not at its end, something in it asked for a repaint, or a wake time it asked for came;
-    /// - a bound value it read was written;
-    /// - its place, room, clip or scale differs from its last run, or its environment does: the theme, density, language
-    ///   or the window's active state;
-    /// - its [`content`](Self::content) version differs from its last run;
-    /// - the app asked for a repaint outside every settling child (`frame::request_repaint`): the framework cannot see
-    ///   which children show that app data, so every child runs then;
-    /// - for a child with no content version: the frame or the one before had input other than pointer motion or an edit
-    ///   of a given value, either of which may have changed app data it shows;
-    /// - its last run showed an overlay or painted on another layer.
-    ///
-    /// A bound value is known by where it lives, so a settled reader needs a binding that stays in place between
-    /// frames: a value copied into a local each frame and bound there is a new place each frame, and an edit of it
-    /// does not reach the reader until the next frame it runs.
-    pub fn settles(mut self, settles: bool) -> Lazy {
-        self.settles = settles;
-        self
-    }
-
-    /// The version of the app data a settling child shows that the framework does not track (a document's revision,
-    /// a job's progress): the child runs when it differs from the version of its last run. A child with a version
-    /// does not run for input that reaches other parts of the window or for an edit of a given value elsewhere: what
-    /// either changes in the data it shows moves the version, or reaches it as a command or app repaint request.
-    pub fn content(mut self, version: u64) -> Lazy {
-        self.content = Some(version);
-        self
-    }
-
     /// Runs `add` in a child `Ui` placed in flow in `ui`, or takes the remembered extent there; `None` when it did not
     /// run.
     pub fn show<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-        self.run(ui, |ui, _| add(ui))
+        match self.run_keyed(ui, "Lazy", Key::None, |ui, _| add(ui)) {
+            Shown::Ran(out) => Some(out),
+            Shown::Replayed(..) | Shown::OutOfView => None,
+        }
     }
 
-    /// [`show`](Self::show) for a child that may leave its room to other content: `add` runs first and settles; when
-    /// it returns `None`, `otherwise` runs in the same child `Ui` and the run is not kept, so a settling child runs
-    /// again in the next pass rather than replay it. A dock group's host view is one: where the host leaves the group
-    /// to the dock, the dock's group shows in its place and settles by its own rules. `None` when the child did not
-    /// run: it replayed a run of `add`, or was out of view.
-    ///
-    /// `add` runs in a `Ui` that takes room in the child only when it returns `Some`: an `add` that leaves its room
-    /// leaves the child as it found it, so `otherwise` takes the same place whether it runs or replays, and the child's
-    /// extent does not change between them (a change would cost the frame a discard pass).
-    pub fn show_or<T, U>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> Option<T>, otherwise: impl FnOnce(&mut Ui) -> U) -> Option<Result<T, U>> {
-        self.run(ui, |ui, run| {
-            let mut first = alloc::child(ui, UiBuilder::new().max_rect(flow_region(ui)).layout(*ui.layout()));
-            match add(&mut first) {
-                Some(shown) => {
-                    alloc::advance_past(ui, first.min_rect());
-                    Ok(shown)
-                }
-                None => {
-                    drop(first);
-                    run.unkept(ui.ctx());
-                    Err(otherwise(ui))
-                }
-            }
-        })
-    }
-
-    fn run<R>(self, ui: &mut Ui, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Option<R> {
+    /// The one runner of a `Lazy` child and a memoized view (`MemoView`), named `name` in the count trials: runs `add`,
+    /// replays the kept run of a memoized view keyed `key`, or takes the extent of a child out of view.
+    pub(super) fn run_keyed<R>(self, ui: &mut Ui, name: &'static str, key: Key, add: impl FnOnce(&mut Ui, &mut Run) -> R) -> Shown<R> {
         let ctx = ui.ctx().clone();
         let view = Env::of(ui).view().lazy_view();
         let id = match view {
@@ -139,10 +86,9 @@ impl Lazy {
         // A run around this one that is replayed later keeps the child's entry.
         replay::journal(&ctx, || (owner, id), |ctx, &(owner, id)| lazy::keep(ctx, owner, id));
         if let Some(view) = view {
-            let at = |size: Vec2| {
-                let x = if rtl { available.max.x - size.x } else { available.min.x };
-                Rect::from_min_size(Pos2::new(x, available.min.y), size)
-            };
+            // A run around this child decides it by the scroll view: it replays only while the view is the same.
+            replay::note_input(&ctx, crate::runtime::inputs::Input::Scroll);
+            let at = |size: Vec2| Rect::from_min_size(at_start(available, rtl, size), size);
             let estimate = view.estimate(self.estimate);
             if self.reveal {
                 crate::contract::queue_child_reveal(&ctx, view.owner, id);
@@ -154,7 +100,9 @@ impl Lazy {
                     lazy::replay(&ctx, id);
                     lazy::place(&ctx, &view, id, took);
                 }
-                return None;
+                #[cfg(feature = "testing")]
+                count_memo_run(&ctx, name, id, MemoRun::OutOfView, real);
+                return Shown::OutOfView;
             }
         }
         let layout = *ui.layout();
@@ -164,25 +112,47 @@ impl Lazy {
             layer: ui.layer_id(),
             layout,
             pixels_per_point: ctx.pixels_per_point(),
+            atlas: ctx.fonts(|fonts| fonts.atlas_generation()),
             env: Env::of(ui).key,
         };
-        if self.settles
-            && let Some(size) = lazy::settled(&ctx, owner, id, sizing, real.then_some(place), self.content)
+        let memo = matches!(key, Key::Memo(_));
+        if real && memo {
+            crate::runtime::memory::claim_id(&ctx, id, "two memoized views share an id in one pass");
+        }
+        let settled = if memo { lazy::settled(&ctx, owner, id, sizing.then_some(available), real.then_some(place), view, key) } else { None };
+        // The replay audit runs a view that would replay for real in place of the replay, and compares the two.
+        let audited = settled.as_ref().filter(|_| audits(&ctx, real)).map(|(_, _, shift)| *shift);
+        if let Some((size, ran_at, shift)) = settled
+            && audited.is_none()
         {
-            let (took, _) = take_in_flow(ui, size);
-            if real {
+            // A real replay is where the run's content went, moved with the room.
+            let rect = if real { ran_at } else { Rect::from_min_size(at_start(available, rtl, size), size) };
+            let took = place_view(ui, rect);
+            let kept = if real {
                 layout_memory::backstop(&ctx, id, size);
-                lazy::replay_settled(&ctx, id);
+                let kept = lazy::replay_settled(&ctx, id, &shift);
                 if let Some(view) = view {
                     lazy::place(&ctx, &view, id, took);
                 }
-            }
-            return None;
+                kept
+            } else {
+                lazy::kept_output(&ctx, id)
+            };
+            #[cfg(feature = "testing")]
+            count_memo_run(&ctx, name, id, MemoRun::Replayed, real);
+            return Shown::Replayed(kept, shift);
         }
         let mark = focus::mark(&ctx);
-        let mut run = Run { recording: self.settles && real, kept: true, layer: place.layer };
+        let mut run = Run {
+            recording: memo && real,
+            output: None,
+            #[cfg(feature = "testing")]
+            same_output: None,
+        };
+        let edits = if run.recording { lazy::edits(&ctx) } else { 0 };
+        let seen = if run.recording { crate::runtime::inputs::seen(&ctx) } else { Default::default() };
         if run.recording {
-            replay::open(&ctx);
+            open_record(&ctx, audited.is_some());
         }
         let mut child = alloc::child(ui, UiBuilder::new().max_rect(available).layout(layout).scope_id(id));
         // Its extent in the body around it comes from its content's measure, so a change inside reaches that body.
@@ -191,16 +161,26 @@ impl Lazy {
         // The child `Ui` writes its widget rect when it drops: the record holds it as written.
         drop(child);
         let record = run.recording.then(|| replay::close(&ctx, place.layer));
-        if !run.kept {
-            lazy::forget(&ctx, id);
+        if let Some(shift) = audited {
+            return place_audit_run(ui, Audited { name, id, view, rect, record: record.as_ref(), shift }, out, &run);
+        }
+        #[cfg(feature = "testing")]
+        if let Some(record) = &record
+            && crate::runtime::audit::on(&ctx)
+        {
+            crate::runtime::audit::name_callback(&ctx, name, record);
         }
         if real {
             layout_memory::backstop(&ctx, id, rect.size());
         }
-        alloc::advance_past(ui, rect);
-        if view.is_some() || self.settles {
+        if memo {
+            place_view(ui, rect);
+        } else {
+            alloc::advance_past(ui, rect);
+        }
+        if view.is_some() || memo {
             let registered = real.then(|| record.as_ref().map_or_else(|| focus::transcript(&ctx, mark), |record| record.focus.clone()));
-            lazy::shown(&ctx, owner, id, rect.size(), sizing, registered);
+            lazy::shown(&ctx, owner, id, sizing, lazy::Measured { size: rect.size(), key, room: available }, registered);
         }
         if let Some(view) = view
             && real
@@ -208,27 +188,108 @@ impl Lazy {
             lazy::place(&ctx, &view, id, rect);
         }
         if let Some(record) = record {
-            lazy::ran(&ctx, id, record, place, rect, self.content);
+            // The key from before the run: a run that wrote through its props moved the key, so the view runs once more,
+            // from the written value, before it replays.
+            lazy::ran(&ctx, id, record, place, rect, lazy::Ran { key, edits, seen, view, output: run.output.take() });
         }
-        Some(out)
+        #[cfg(feature = "testing")]
+        if memo {
+            count_memo_run(&ctx, name, id, MemoRun::Ran, real);
+        }
+        // The name is read by the count trials only.
+        let _ = name;
+        Shown::Ran(out)
     }
 }
 
-/// The run of a child: whether it records what it adds for a replay, and whether it is kept.
-struct Run {
+/// Places the audit run of a view that would have replayed, as a replay places it, and compares the run with the kept
+/// run replayed at the place `shift` names (`runtime::audit`). It keeps the kept run: every later pass compares with
+/// what a replay adds.
+fn place_audit_run<R>(ui: &mut Ui, audited: Audited<'_>, out: R, run: &Run) -> Shown<R> {
+    let Audited { name, id, view, rect, record, shift } = audited;
+    let ctx = ui.ctx().clone();
+    layout_memory::backstop(&ctx, id, rect.size());
+    place_view(ui, rect);
+    if let Some(view) = view {
+        lazy::place(&ctx, &view, id, rect);
+    }
+    #[cfg(feature = "testing")]
+    {
+        if let Some(record) = record {
+            lazy::audit(&ctx, name, id, crate::runtime::audit::Shown { record, rect, output: run.output.as_ref() }, run.same_output, &shift);
+        }
+        count_memo_run(&ctx, name, id, MemoRun::Replayed, true);
+    }
+    let _ = (name, record, run, shift);
+    Shown::Ran(out)
+}
+
+/// What the runner hands its audit step.
+struct Audited<'a> {
+    name: &'static str,
+    id: egui::Id,
+    view: Option<lazy::View>,
+    rect: Rect,
+    record: Option<&'a replay::Record>,
+    /// Where the replay would have added the kept run.
+    shift: egui::RecordShift,
+}
+
+/// Whether the replay audit runs a child that would replay in a pass whose runs are `real` (test builds only). A pass
+/// egui will discard paints nothing, so a run there is no shown run to compare with: the child replays.
+fn audits(ctx: &egui::Context, real: bool) -> bool {
+    #[cfg(feature = "testing")]
+    return real && !ctx.will_discard() && crate::runtime::audit::runs(ctx);
+    #[cfg(not(feature = "testing"))]
+    {
+        let _ = (ctx, real);
+        false
+    }
+}
+
+/// Opens the record around a recording run, an audit run's when `audited`.
+fn open_record(ctx: &egui::Context, audited: bool) {
+    #[cfg(feature = "testing")]
+    if audited {
+        replay::open_audit(ctx);
+        return;
+    }
+    let _ = audited;
+    replay::open(ctx);
+}
+
+/// Where content of `size` starts in `region`: at its start edge, the right one in a right-to-left layout.
+fn at_start(region: Rect, rtl: bool, size: Vec2) -> Pos2 {
+    Pos2::new(if rtl { region.max.x - size.x } else { region.min.x }, region.min.y)
+}
+
+/// Places a memoized view's extent `rect` in flow in `ui`, as its run and its replay both do, and returns `rect`: in the
+/// `Grid` or spread `Row` body that encloses `ui` directly the view takes the next cell at its extent, as its content
+/// starts a layout room of its own and takes none; elsewhere the flow moves past `rect`.
+fn place_view(ui: &mut Ui, rect: Rect) -> Rect {
+    if take_cell(ui, rect.size()).is_none() {
+        alloc::advance_past(ui, rect);
+    }
+    rect
+}
+
+/// What a child came to in a pass.
+pub(super) enum Shown<R> {
+    /// It ran and returned this.
+    Ran(R),
+    /// It took the extent of its kept run, and added that run again in a real run; with what a memoized view's run
+    /// returned, as the run left it, and the shift the replay moved the run by (none in a measuring run).
+    Replayed(Option<lazy::Output>, egui::RecordShift),
+    /// It is out of view in its scroll area.
+    OutOfView,
+}
+
+/// The run of a child: whether it records what it adds for a replay.
+pub(super) struct Run {
     recording: bool,
-    kept: bool,
-    layer: Layer,
-}
-
-impl Run {
-    /// Ends the run's record here and keeps it from settling: what the child adds from here on is not what it settles
-    /// on.
-    fn unkept(&mut self, ctx: &egui::Context) {
-        if self.recording {
-            replay::close(ctx, self.layer);
-            self.recording = false;
-        }
-        self.kept = false;
-    }
+    /// What a memoized view's run returned, which its replays return.
+    pub(super) output: Option<lazy::Output>,
+    /// Whether two outputs of a memoized view are equal, for the replay audit.
+    #[cfg(feature = "testing")]
+    pub(super) same_output: Option<crate::runtime::audit::SameOutput>,
 }

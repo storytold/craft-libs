@@ -17,7 +17,7 @@ const CTRL_CMD_M: Chord = Chord::new(CTRL_CMD, Key::M);
 const CMD_COMMA: Chord = Chord::new(Mods::CMD, Key::Comma);
 
 /// The platform a layout is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Target {
     #[allow(missing_docs)]

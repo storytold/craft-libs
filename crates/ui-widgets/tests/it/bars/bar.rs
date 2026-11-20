@@ -237,9 +237,9 @@ fn filling_bar(room: f32, column: f32, fields: Sizing, pages: usize) -> Filling 
             Block::new(Vec2::new(column, 20.0)).show(ui);
             let mut shown = empty;
             let bar = Bar::new("Filters", BarKind::Tool).show(ui, |ui, _| {
-                shown.fields[0] = TextField::search("Name", Bind::bound(&mut name)).sizing(fields).show(ui).response.rect;
-                shown.fields[1] = TextField::search("Kind", Bind::bound(&mut kind)).sizing(fields).show(ui).response.rect;
-                shown.button = Button::new("Apply").show(ui).rect;
+                shown.fields[0] = TextField::search("Name", Bind::bound(&mut name)).sizing(fields).show(ui).response.interact_rect;
+                shown.fields[1] = TextField::search("Kind", Bind::bound(&mut kind)).sizing(fields).show(ui).response.interact_rect;
+                shown.button = Button::new("Apply").show(ui).interact_rect;
             });
             shown.bar = bar.output.response.rect;
             out.set(shown);
@@ -264,7 +264,7 @@ fn filling_bar_members_keep_their_natural_width_and_the_bar_scrolls() {
     let (lead, trail) = (held.fields[0].min.x - held.bar.min.x, held.bar.max.x - held.button.max.x);
     assert!((lead - trail).abs() < 1.0, "the button reaches the bar's end, as the first field its start: {dump}");
     // Narrowed, the members keep their widths and the bar scrolls. A member's shown rect is the part the bar's view
-    // shows, so the bar is paged toward its end: on some page each field shows at least its natural width and the
+    // shows (its interact rect), so the bar is paged toward its end: on some page each field shows at least its natural width and the
     // button shows whole, and on no page do two members overlap.
     let button = held.button.width();
     let (mut widest, mut button_whole) = ([0.0_f32; 2], Vec::new());
@@ -447,4 +447,64 @@ fn a_labelled_check_box_in_a_row_in_a_bar_lays_out_under_rtl() {
         assert!(rect.is_finite() && bar.contains_rect(rect), "{rect:?} lies outside the bar {bar:?}");
     }
     assert!(label.max.x <= alpha.min.x + SLACK, "the check box {label:?} follows Alpha {alpha:?} from the right");
+}
+
+/// Each pass's stops, each with the roving group it registered in.
+type StopGroups = Rc<std::cell::RefCell<Vec<Vec<(egui::Id, Option<egui::Id>)>>>>;
+
+/// A tool bar's buttons are members of its roving group from the first pass that shows them: that pass registers the
+/// stops in the groups every later pass registers them in.
+#[trial]
+fn a_tool_bar_is_one_roving_group_from_its_first_pass() {
+    let seen: StopGroups = Rc::default();
+    let passes = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        Button::new("Before").show(ui);
+        Bar::new("Tools", BarKind::Tool).show(ui, |ui, _| {
+            IconButton::new(IconId::new("brush")).label("Brush").show(ui);
+            IconButton::new(IconId::new("eraser")).label("Eraser").show(ui);
+        });
+        passes.borrow_mut().push(craft_ui::testing::focus::pass_stop_groups(ui.ctx()));
+    });
+    fixture.settle();
+    let seen = seen.borrow();
+    let (first, settled) = (seen.first().expect("a pass ran"), seen.last().expect("a pass ran"));
+    let grouped = settled.iter().filter(|(_, group)| group.is_some()).count();
+    assert!(grouped >= 2, "the tools are in the bar's roving group: {settled:?}");
+    assert_eq!(first, settled, "the first pass registers the stops as a settled pass does");
+}
+
+/// A tool bar's tools report their place in the set from the pass's members: in the first frame, and in the frame a
+/// tool joins the bar.
+#[trial]
+fn a_tool_bar_reports_set_positions_from_its_first_pass() {
+    const TOOLS: [&str; 4] = ["Brush", "Eraser", "Smudge", "Blur"];
+    let count = Rc::new(Cell::new(3_usize));
+    let ids: Rc<std::cell::RefCell<Vec<egui::Id>>> = Rc::default();
+    let (shown, seen) = (count.clone(), ids.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = Vec::new();
+        Bar::new("Tools", BarKind::Tool).show(ui, |ui, _| {
+            for name in &TOOLS[..shown.get()] {
+                // The bar's body runs in its measuring run and its real run: each tool once.
+                let id = IconButton::new(IconId::new("brush")).label(*name).show(ui).id;
+                if !now.contains(&id) {
+                    now.push(id);
+                }
+            }
+        });
+        *seen.borrow_mut() = now;
+    });
+    let places = |fixture: &Fixture| -> Vec<(usize, usize)> {
+        ids.borrow().iter().map(|id| fixture.tree().position(*id).expect("a tool's place in the set")).collect()
+    };
+    fixture.idle(1);
+    let first = places(&fixture);
+    let size = first[0].1;
+    assert!(size >= 3, "the set holds the three tools: {first:?}");
+    assert!(first.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1 && pair[1].1 == size), "the tools follow each other in one set: {first:?}");
+    count.set(4);
+    fixture.idle(1);
+    let joined = places(&fixture);
+    assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
 }

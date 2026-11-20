@@ -14,7 +14,7 @@ use craft_imaging::ui::transform_preview::{
 };
 use craft_imaging::ui::warp::WarpMesh;
 use craft_ui::canvas::{Canvas, PixelRect};
-use craft_ui::contract::{Lazy, Show as _, ShowContainer as _};
+use craft_ui::contract::{MemoProps, MemoView, PlainData, Show as _, ShowContainer as _, Tracked};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
 
@@ -385,15 +385,38 @@ type PaintedPreview = (Rc<PreviewTextures>, f32);
 /// The texture and size a painted preview showed.
 type ShownPreview = (egui::TextureId, [f32; 2]);
 
+/// What the next frames paint: the previews, each at its scale, and the display every one is converted for.
+#[derive(Default, PlainData)]
+struct Painting {
+    #[plain_data(assume = "the previews' textures are a cache: what they show follows their pixels, which do not change")]
+    previews: Vec<PaintedPreview>,
+    #[plain_data(assume = "a display is replaced, never changed: its key follows its conversion")]
+    display: Option<PreviewDisplay>,
+}
+
+/// What each painted preview shows: the texture and uv extent `PreviewTextures::pick` gives.
+fn picks(ui: &egui::Ui, painting: &Painting) -> Vec<Option<ShownPreview>> {
+    let display = painting.display.as_ref();
+    painting.previews.iter().map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display)).collect()
+}
+
+/// A memoized view of the painting.
+#[derive(MemoProps)]
+struct Previews<'a> {
+    painting: &'a Tracked<Painting>,
+}
+
+fn previews(props: &mut Previews<'_>, ui: &mut egui::Ui) -> Vec<Option<ShownPreview>> {
+    picks(ui, props.painting)
+}
+
 /// Previews painted every frame of a fixture whose host runs jobs only when a trial says (upstream's 5 × 3 white
 /// image).
 struct Mips {
     fixture: Fixture,
     jobs: Arc<ManualJobs>,
-    /// The previews the next frames paint, each at its scale.
-    painted: Rc<RefCell<Vec<PaintedPreview>>>,
-    /// The display every painted preview is converted for.
-    display: Rc<RefCell<Option<PreviewDisplay>>>,
+    /// What the next frames paint.
+    painting: Rc<RefCell<Tracked<Painting>>>,
     /// What each painted preview showed in the last frame.
     shown: Rc<RefCell<Vec<Option<ShownPreview>>>>,
     /// The previews' uploads in the last frame, read in the frame.
@@ -409,51 +432,50 @@ impl Mips {
         Self::with(false)
     }
 
-    /// The previews painted inside a settling region (`Lazy::settles`), which replays its last run while nothing the
-    /// framework tracks changed for it.
-    fn settling() -> Self {
+    /// The previews painted inside a memoized view, which replays its last run while its painting is unchanged and no
+    /// texture it shows is loading.
+    fn memoized() -> Self {
         Self::with(true)
     }
 
-    fn with(settles: bool) -> Self {
+    fn with(memoized: bool) -> Self {
         let jobs = Arc::new(ManualJobs::new());
-        let painted = Rc::new(RefCell::new(Vec::<(Rc<PreviewTextures>, f32)>::new()));
-        let display = Rc::new(RefCell::new(None::<PreviewDisplay>));
+        let painting = Rc::new(RefCell::new(Tracked::new(Painting::default())));
         let shown = Rc::new(RefCell::new(Vec::new()));
         let uploads = Rc::new(Cell::new(0));
-        let (paint, converted, seen, counted) = (Rc::clone(&painted), Rc::clone(&display), Rc::clone(&shown), Rc::clone(&uploads));
+        let (paint, seen, counted) = (Rc::clone(&painting), Rc::clone(&shown), Rc::clone(&uploads));
         let mut fixture = Fixture::new(move |ui| {
-            let run = |ui: &mut egui::Ui| {
-                let display = converted.borrow();
-                let picks = paint
-                    .borrow()
-                    .iter()
-                    .map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display.as_ref()))
-                    .collect();
-                *seen.borrow_mut() = picks;
-            };
-            if settles {
-                Lazy::new("previews", 0.0).settles(true).show(ui, run);
+            let painting = paint.borrow();
+            let shows = if memoized {
+                MemoView::new("previews", Previews { painting: &painting }, previews).show(ui).unwrap_or_default()
             } else {
-                run(ui);
-            }
+                picks(ui, &painting)
+            };
+            *seen.borrow_mut() = shows;
             counted.set(PreviewTextures::statistics(ui.ctx()).uploads);
         });
         fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build()));
         fixture.settle();
-        Mips { fixture, jobs, painted, display, shown, uploads }
+        Mips { fixture, jobs, painting, shown, uploads }
     }
 
-    /// One frame painting `previews`.
-    /// A change of the previews or their scales arrives with input, as a drag's does.
+    /// One frame painting `previews`; a change of the previews or their scales is an edit of the painting.
     fn paint(&mut self, previews: &[(&Rc<PreviewTextures>, f32)]) {
         let next: Vec<_> = previews.iter().map(|(textures, scale)| (Rc::clone(textures), *scale)).collect();
         let changed = {
-            let painted = self.painted.borrow();
+            let painting = self.painting.borrow();
+            let painted = &painting.previews;
             painted.len() != next.len() || painted.iter().zip(&next).any(|(a, b)| !Rc::ptr_eq(&a.0, &b.0) || a.1 != b.1)
         };
-        *self.painted.borrow_mut() = next;
-        self.fixture.frame(if changed { vec![egui::Event::WindowFocused(true)] } else { Vec::new() });
+        if changed {
+            self.painting.borrow_mut().edit(|painting| painting.previews = next);
+        }
+        self.fixture.frame(Vec::new());
+    }
+
+    /// Converts every painted preview for `display` from the next frame on.
+    fn display(&mut self, display: PreviewDisplay) {
+        self.painting.borrow_mut().edit(|painting| painting.display = Some(display));
     }
 
     /// The texture and uv extent the `at`th preview showed.
@@ -471,12 +493,12 @@ fn near_uv(uv: [f32; 2], want: [f32; 2]) -> bool {
 }
 
 /// P91 (#13382): the frame that first needs a mip level builds none on the UI thread; level 0 stands in, the frames
-/// while its job waits do no work for it, and the landing frame uploads it once. In a settling region the frame
-/// after the job lands runs the region again with no other input and shows the level.
+/// while its job waits do no work for it, and the landing frame uploads it once. In a memoized view the frame after
+/// the job lands runs the view again with no other input and shows the level.
 #[trial]
 fn a_mip_level_first_needed_mid_drag_is_built_off_the_ui_thread() {
-    for settles in [false, true] {
-        mips_first_needed_mid_drag(if settles { Mips::settling() } else { Mips::new() });
+    for memoized in [false, true] {
+        mips_first_needed_mid_drag(if memoized { Mips::memoized() } else { Mips::new() });
     }
 }
 
@@ -531,7 +553,7 @@ fn a_level_with_nothing_finer_uploaded_for_the_display_is_built_at_once() {
     assert_eq!(mips.jobs.waiting(), 0, "a first frame at level 1 builds it in the frame");
     assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]), "level 1 shows at once");
     mips.paint(&[(&t, 1.0)]);
-    *mips.display.borrow_mut() = Some(PreviewDisplay::new(7, ColorImage::clone));
+    mips.display(PreviewDisplay::new(7, ColorImage::clone));
     mips.paint(&[(&t, 0.3)]);
     assert_eq!(mips.jobs.waiting(), 0, "nothing is uploaded for the new display, so level 1 is built in the frame");
     assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]));

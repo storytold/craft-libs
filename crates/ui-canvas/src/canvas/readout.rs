@@ -6,7 +6,7 @@ use egui::{Context, Pos2};
 
 /// The one Show Transformation Values gate: while it holds `false` in the root env, [`readout`] and the tool host's
 /// paint of a tool's readout rows paint nothing. [`hud`] is never gated.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps)]
 pub struct ShowReadouts(pub bool);
 
 impl EnvValue for ShowReadouts {

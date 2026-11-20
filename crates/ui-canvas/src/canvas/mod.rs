@@ -589,7 +589,7 @@ impl<'a> Canvas<'a> {
             let Some(pointer) = input.pos.filter(|_| run.mark().is_some()) else { break 'pass false };
             let step = run.step(pointer, crate::runtime::frame::clock(&ctx));
             crate::runtime::cursor::request(&ctx, run.cursor(Some(pointer)).into(), CursorPriority::Drag);
-            crate::runtime::frame::request_own_repaint(&ctx);
+            crate::runtime::frame::request_repaint(&ctx);
             Autoscroll::scroll(view, step, size).is_some()
         };
         (moved, swallowing || run.swallowing())
