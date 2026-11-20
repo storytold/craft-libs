@@ -26,7 +26,7 @@ pub struct LayerStyleDraft {
     pub blend_if_channel: usize,
     /// The Preview check box: whether the host shows the draft on the canvas. On by default.
     pub preview: bool,
-    /// The shadow drag in progress, from its press to its release.
+    /// The shadow or Satin drag in progress, from its press to its release.
     pub shadow_drag: Option<ShadowDrag>,
     /// The Gradient Overlay offset drag in progress, from its press to its release.
     pub gradient_drag: Option<GradientOffsetDrag>,
@@ -237,6 +237,48 @@ impl LayerStyleDraft {
             self.shadow_drag = Some(ShadowDrag::begin(angle, distance));
         }
         let Some((angle, distance)) = self.shadow_drag.and_then(|drag| drag.moved(total)) else {
+            return false;
+        };
+        let before = self.style.clone();
+        self.set_param(id, "angle", StyleValue::Number(angle));
+        self.set_param(id, "distance", StyleValue::Number(distance));
+        self.style != before
+    }
+
+    /// Whether a drag on the image moves the selected Satin's angle and distance.
+    pub fn drags_satin(&self) -> bool {
+        self.selected_kind() == Some(EffectKind::Satin)
+    }
+
+    /// Whether a drag on the image edits the selected page: a shadow's, a Satin's or a Gradient
+    /// Overlay's. The host passes the canvas gesture through the dialog on these pages.
+    pub fn drags_on_canvas(&self) -> bool {
+        self.drags_shadow() || self.drags_satin() || self.drags_gradient()
+    }
+
+    /// A drag on the image with a Satin page selected, as [`drag_shadow`](Self::drag_shadow) is for
+    /// a shadow: `defaults` are the Satin's spec defaults, `start` is the press (it records the
+    /// angle and distance shown) and `total` the pointer's movement since, in document pixels. The
+    /// values follow [`ShadowDrag::satin_moved`]. A Satin has no Use Global Light, so only this
+    /// instance changes. The drag shares [`shadow_drag`](Self::shadow_drag), which the host clears
+    /// on release. Returns whether the style changed; does nothing on other pages.
+    pub fn drag_satin(&mut self, defaults: &StyleParams, start: bool, total: [f64; 2]) -> bool {
+        let LayerStylePage::Effect(id) = self.page else {
+            return false;
+        };
+        if !self.drags_satin() {
+            return false;
+        }
+        let Some(instance) = self.style.effect(id) else {
+            return false;
+        };
+        let shown = instance.params.over(defaults);
+        let shown_angle = shown.number("angle").unwrap_or(19.0);
+        let shown_distance = shown.number("distance").unwrap_or(11.0);
+        if start || self.shadow_drag.is_none() {
+            self.shadow_drag = Some(ShadowDrag::begin(shown_angle, shown_distance));
+        }
+        let Some((angle, distance)) = self.shadow_drag.and_then(|drag| drag.satin_moved(total, shown_angle)) else {
             return false;
         };
         let before = self.style.clone();

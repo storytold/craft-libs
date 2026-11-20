@@ -33,6 +33,33 @@ impl ShadowDrag {
         let angle = if d >= 0.5 { oy.atan2(-ox).to_degrees().round() } else { self.start_angle };
         Some((angle, d.round().clamp(0.0, 30000.0)))
     }
+
+    /// The Satin's `(angle, distance)` after the pointer moved `total` document pixels since the
+    /// press: the start offset plus `total`, as for a shadow, but the distance is its length
+    /// **truncated** to a whole pixel and clamped to 1..=250, and the angle `atan2(oy, −ox)`
+    /// truncated toward zero to a whole degree (−116.57 gives −116). A new offset at (0, 0), float
+    /// noise aside, keeps `shown_angle`, the angle the page shows; a quarter pixel still has a
+    /// direction. No travel gives the start values back unchanged, fractions included. `None` when
+    /// the result is not finite.
+    pub fn satin_moved(self, total: [f64; 2], shown_angle: f64) -> Option<(f64, f64)> {
+        if total == [0.0, 0.0] {
+            return Some((self.start_angle, self.start_distance));
+        }
+        let a = self.start_angle.to_radians();
+        let (ox, oy) = (-a.cos() * self.start_distance + total[0], a.sin() * self.start_distance + total[1]);
+        let d = ox.hypot(oy);
+        if !d.is_finite() {
+            return None;
+        }
+        let angle = if d > 1e-6 {
+            let deg = oy.atan2(-ox).to_degrees();
+            // Float noise a hair under a whole degree (145.999…) must not lose that degree.
+            (deg + 1e-9 * deg.signum()).trunc()
+        } else {
+            shown_angle
+        };
+        Some((angle, d.trunc().clamp(1.0, 250.0)))
+    }
 }
 
 /// The largest offset a Gradient Overlay drag writes, in layer sizes, either way.
