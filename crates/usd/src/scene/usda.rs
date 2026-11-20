@@ -346,8 +346,19 @@ impl Parser<'_, '_> {
             if !self.lx.eat(b'=')? {
                 continue;
             }
+            let scalar_external = matches!(key.as_str(), "references" | "payload") && matches!(self.lx.peek()?, Tok::Asset(_));
             let mut acc = Acc::default();
             self.value(&mut acc, 0)?;
+            if scalar_external {
+                // The target and layer offset belong to this external arc, not the next metadata
+                // entry. External targets must not become references to same-named local prims.
+                if matches!(self.lx.peek()?, Tok::Path(_)) {
+                    self.value(&mut acc, 0)?;
+                }
+                if self.lx.eat(b'(')? {
+                    self.skip_block(b'(', b')')?;
+                }
+            }
             if keep && KEPT_METADATA.contains(&key.as_str()) {
                 out.push((key, acc));
             }
