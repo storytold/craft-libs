@@ -755,6 +755,26 @@ fn entry_for(index: &Index, style: &str, bytes: &[u8]) -> (Family, FontFile) {
     (face.family.clone(), file)
 }
 
+// Invariant: a collection is refused by `verify_face` even when its size and sha256 are the
+// entry's (breaks if: the `ttcf` check is dropped, so the error becomes `NotAFont` instead of `Collection`).
+#[test]
+fn a_collection_is_refused_by_verify_face() {
+    let index = host_index_read();
+    let mut bytes = b"ttcf".to_vec();
+    bytes.extend_from_slice(&[0, 2, 0, 0, 0, 0, 0, 0]);
+    let (family, file) = entry_for(&index, "Bold", &bytes);
+    assert_eq!(verify_face(&family, &file, &bytes), Err(VerifyError::Collection));
+    // Its message reaches users, so it names no function.
+    assert!(!VerifyError::Collection.to_string().contains("verify_face"));
+    // The size and sha256 are checked first.
+    let (_, mut other) = entry_for(&index, "Bold", &bytes);
+    other.size += 1;
+    assert!(matches!(verify_face(&family, &other, &bytes), Err(VerifyError::Size { .. })));
+    let (_, mut wrong) = entry_for(&index, "Bold", &bytes);
+    wrong.sha256 = "0".repeat(64);
+    assert_eq!(verify_face(&family, &wrong, &bytes), Err(VerifyError::Sha256));
+}
+
 // Invariant: a file with the index's sha256 is still refused when it is not the family or the
 // PostScript name its entry says (breaks if: the family check or the
 // PostScript check is dropped or loosened to accept a lookalike). Either
@@ -858,6 +878,37 @@ fn without_postscript_names_a_style_is_one_of_the_files_readings() {
     let bytes = font_as(&Spec { weight: 300, width_class: 3, italic: true, postscript: "TestSans-Regular", ..spec() });
     let (family, file) = entry_for(&index, "Regular", &bytes);
     assert_eq!(verify_face(&family, &file, &bytes), Ok(()));
+}
+
+// Invariant: a style error names only the attributes compared and failed, not one an axis
+// exempts (breaks if: the message lists the weight, width and italic flag whatever differs).
+#[test]
+fn a_style_error_names_only_what_was_compared_and_failed() {
+    let index = host_index_read();
+    let check = |spec: Spec<'_>, edit: &dyn Fn(&mut FontFile)| {
+        let bytes = font_as(&spec);
+        let (family, mut file) = entry_for(&index, "Regular", &bytes);
+        file.postscript.clear();
+        edit(&mut file);
+        verify_face(&family, &file, &bytes)
+    };
+    let spec = Spec::default;
+    // A `wdth` axis exempts the width: only the weight is named.
+    let axes: &[(&[u8; 4], f32, f32, f32)] = &[(b"wdth", 50.0, 100.0, 200.0)];
+    let width_axis = |f: &mut FontFile| {
+        (f.weight, f.width) = (100, 75.0);
+        f.axes = vec![Axis { tag: "wdth".into(), min: 50.0, max: 200.0 }];
+    };
+    let Err(VerifyError::Style { expected, found }) = check(Spec { weight: 400, axes, ..spec() }, &width_axis) else { panic!("not a style") };
+    assert_eq!((expected.as_str(), found.as_str()), ("weight 100", "weight 400"));
+    // Both attributes differ: both are named.
+    let Err(VerifyError::Style { expected, found }) = check(Spec { width_class: 3, ..spec() }, &|f| (f.weight, f.width) = (700, 100.0)) else {
+        panic!("not a style")
+    };
+    assert_eq!((expected.as_str(), found.as_str()), ("weight 700, width 100%", "weight 400, width 75%"));
+    // An italic entry for an upright file: the readings agree, so each is said once.
+    let Err(VerifyError::Style { expected, found }) = check(spec(), &|f| f.style = "italic".into()) else { panic!("not a style") };
+    assert_eq!((expected.as_str(), found.as_str()), ("italic", "upright"));
 }
 
 // Invariant: a file is variable exactly when its entry lists axes, with at least each axis's

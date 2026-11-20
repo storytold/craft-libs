@@ -41,9 +41,10 @@ pub enum VerifyError {
     /// The font isn't the style the entry claims.
     #[error("the file is {found}, not {expected}")]
     Style {
-        /// What the entry claims: `weight 700, upright, width 100%`.
+        /// What the entry claims, of the attributes that differ: `weight 700, width 100%`; or
+        /// `a variable font` or `a static font` when the file is not the kind the entry lists.
         expected: String,
-        /// What the file is.
+        /// What the file is, of the same attributes, or `a static font` or `a variable font`.
         found: String,
     },
     /// The file has no variation axis the entry claims, or not its whole range.
@@ -62,8 +63,8 @@ pub enum VerifyError {
         /// The file's, or `(none)`.
         found: String,
     },
-    /// The file is a collection, which `verify_face` doesn't check and so refuses.
-    #[error("the file is a font collection, which verify_face doesn't check")]
+    /// The file is a collection, which an entry can't name a face of.
+    #[error("the file is a font collection, and an index entry can't name one of its faces")]
     Collection,
 }
 
@@ -139,7 +140,8 @@ fn names(font: &FontRef<'_>, id: u16) -> Vec<String> {
 
 /// [`verify_font`] for one font, then that the font really is what `family`'s index entry says,
 /// whatever the index's author made of it. The host supplies the index and the sha256 together,
-/// so this catches an index that honestly describes the wrong file; it is not a security
+/// so this catches an index that describes the wrong file by its family, axes or PostScript name,
+/// and, with no PostScript names listed, by its weight, width or italic flag. It is not a security
 /// boundary.
 ///
 /// The bytes must be the entry's size and sha256 and one font with a `name` table and outlines
@@ -246,21 +248,28 @@ fn check_style(file: &FontFile, font: &FontRef<'_>) -> Result<(), VerifyError> {
         None => vec![mac_italic],
     };
 
-    let describe = |weights: &[u16], widths: &[f32], italics: &[bool]| {
-        let join = |v: Vec<String>| v.join(" or ");
-        format!(
-            "weight {}, {}, width {}%",
-            join(weights.iter().map(u16::to_string).collect()),
-            join(italics.iter().map(|&i| if i { "italic" } else { "upright" }.to_string()).collect()),
-            join(widths.iter().map(f32::to_string).collect()),
-        )
-    };
-    let differs = (!covers("wght") && !weights.contains(&file.weight))
-        || (!covers("wdth") && !widths.iter().any(|w| (w - file.width).abs() <= WIDTH_TOLERANCE))
-        || (!covers("ital") && !italics.contains(&file.is_italic()));
-    if differs {
-        let expected = describe(&[file.weight], &[file.width], &[file.is_italic()]);
-        return Err(VerifyError::Style { expected, found: describe(&weights, &widths, &italics) });
+    // Only the attributes compared and failed are named: one an axis exempts is not blamed.
+    let join = |v: Vec<String>| v.join(" or ");
+    let (mut expected, mut found) = (Vec::new(), Vec::new());
+    if !covers("wght") && !weights.contains(&file.weight) {
+        expected.push(format!("weight {}", file.weight));
+        found.push(format!("weight {}", join(weights.iter().map(u16::to_string).collect())));
+    }
+    if !covers("wdth") && !widths.iter().any(|w| (w - file.width).abs() <= WIDTH_TOLERANCE) {
+        expected.push(format!("width {}%", file.width));
+        found.push(format!("width {}%", join(widths.iter().map(f32::to_string).collect())));
+    }
+    if !covers("ital") && !italics.contains(&file.is_italic()) {
+        let word = |i: bool| if i { "italic" } else { "upright" };
+        expected.push(word(file.is_italic()).to_string());
+        found.push({
+            let mut words: Vec<String> = italics.iter().map(|&i| word(i).to_string()).collect();
+            words.dedup();
+            join(words)
+        });
+    }
+    if !expected.is_empty() {
+        return Err(VerifyError::Style { expected: expected.join(", "), found: found.join(", ") });
     }
     Ok(())
 }

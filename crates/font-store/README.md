@@ -102,11 +102,11 @@ When every file has passed, the store takes `.lock`, moves the files into the fa
 
 `verify_font(file, bytes)` checks a file against its entry: its size, its sha256, then that every face in it parses and has outlines. A file with the index's sha256 is the file the index lists, so it can only be the wrong font if the index itself is wrong.
 
-`verify_face(family, file, bytes)` is for a build that takes a host's index (RFC-0034 §3): it checks that the file is what the entry says. The host supplies the index and the sha256 together, so this catches an index that honestly describes the wrong file; it is not a security boundary. It passes exactly when the bytes are the entry's size and sha256 and one font with a `name` table and outlines, and:
+`verify_face(family, file, bytes)` is for a build that takes a host's index (RFC-0034 §3): it checks that the file is what the entry says. The host supplies the index and the sha256 together, so this catches an index that describes the wrong file by its family, axes or PostScript name, and, when the entry lists no PostScript names, by its weight, width or italic flag; with PostScript names listed, the PostScript name is the style's identity and those three are not compared. It is not a security boundary. It passes exactly when the bytes are the entry's size and sha256 and one font with a `name` table and outlines, and:
 
 | Attribute | The file passes when |
 |---|---|
-| File | it is not a collection: `verify_face` doesn't check collections and refuses them (`VerifyError::Collection`). |
+| File | it is not a collection: an entry can't name a face of one, so a collection is refused (`VerifyError::Collection`), and a host's index leaves out a `.ttc` or `.otc` file. |
 | Family | the entry's family, squashed (case, spaces and punctuation ignored), equals the squashed text of any non-empty name ID 16 or ID 1 record (a family with no letters or digits must match exactly) (`VerifyError::Family`). |
 | Axes | it is variable exactly when the entry lists axes, each range at least the entry's (`VerifyError::Axis`, `VerifyError::Style`). |
 | PostScript | when the entry lists any names, the font's ID 6 is one of them, exactly (`VerifyError::PostScript`); the PostScript name is then the style's identity (generators, `craft-font-index` among them, write the font's own ID 6 as the `postscript` name), and weight, width and italic are not compared. |
