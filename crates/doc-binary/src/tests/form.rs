@@ -262,6 +262,27 @@ fn form_data_sprms_follow_the_chpx_then_the_piece_prm() {
     assert_eq!(crate::form_sprms(&on, PrmRef::Grpprl { index: 0, grpprl: Some(&off) }, &spent), (true, Some(10)));
 }
 
+/// A Prm0 with isprm 0x47 is `sprmCFData` ([MS-DOC] Prm0): it turns the flag on for a CHPX that
+/// gives only the location.
+#[test]
+fn a_prm0_turns_form_data_on() {
+    use crate::piece::PrmRef;
+    let work = crate::Work::new(1 << 20);
+    let located = grpprl(&[(0x6A03, &10u32.to_le_bytes())]);
+    assert_eq!(crate::form_sprms(&located, PrmRef::None, &work), (false, Some(10)));
+    assert_eq!(crate::form_sprms(&located, PrmRef::Sprm0 { isprm: 0x47, val: 1 }, &work), (true, Some(10)));
+}
+
+/// A Prm0 `sprmCFData` with val 0 turns off the flag the CHPX set, since the Prm applies after
+/// the CHPX.
+#[test]
+fn a_prm0_turns_the_chpx_form_data_off() {
+    use crate::piece::PrmRef;
+    let work = crate::Work::new(1 << 20);
+    let on = grpprl(&[(0x0806, &[1]), (0x6A03, &10u32.to_le_bytes())]);
+    assert_eq!(crate::form_sprms(&on, PrmRef::Sprm0 { isprm: 0x47, val: 0 }, &work), (false, Some(10)));
+}
+
 /// The bytes the decoder may read are charged before decoding, even when the record turns out
 /// unreadable, so markers repeating one record stop once the budget is spent.
 #[test]
