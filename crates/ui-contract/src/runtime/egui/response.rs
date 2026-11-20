@@ -31,10 +31,12 @@ pub(crate) fn to_egui(sense: Sense) -> egui::Sense {
     mapped
 }
 
-/// A root's egui widget over `rect`, clipped by the caller. egui gives a widget of a disabled `Ui` no focus stop and
-/// drops the focus it holds; the sense the pipeline passes decides whether the root is a stop (a disabled control with
-/// a reason is), so the stop and the focus are kept here.
+/// A root's egui widget over `rect`; egui clips its interact rect. egui gives a widget of a disabled `Ui` no focus stop
+/// and drops the focus it holds; the sense the pipeline passes decides whether the root is a stop (a disabled control
+/// with a reason is), so the stop and the focus are kept here. A rect that is not a number is at no place
+/// (`Rect::NOTHING`): egui takes no such rect, and nothing can hit it.
 pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
+    let rect = if rect.any_nan() { Rect::NOTHING } else { rect };
     let ctx = ui.ctx();
     let held = ctx.memory(|memory| memory.has_focus(id));
     let response = ui.interact(rect, id, to_egui(sense));
