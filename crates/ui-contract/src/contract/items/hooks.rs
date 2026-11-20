@@ -441,7 +441,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.context_key(cx, &layout, at, lead_at);
         self.delete_key(cx, &props, lead_at);
         self.toggle_by_access(cx, &layout, at);
-        self.node_by_access(comp, cx, &layout, at);
+        self.node_by_access(comp, cx, &props, &layout, at);
         self.reorder_and_rename(comp, cx, &props, lead_at);
         self.requested_rename(comp, cx, &props, &layout);
         self.requested_reveal(comp, &layout);

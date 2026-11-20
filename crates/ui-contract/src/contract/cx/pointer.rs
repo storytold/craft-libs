@@ -58,9 +58,8 @@ pub trait Pointer {
     /// pass, when it was the topmost accepting target under the pointer last pass and accepts now.
     fn drop_target<P: Send + Sync + 'static, T: DropTarget<P>>(&mut self, target: &T) -> Option<T::Drop>;
     /// Registers `target` over the whole window of the running viewport for this pass, in `update`; a target over a
-    /// component beats it wherever that accepts. The payload is read without a pointer position, so files hovered
-    /// before the pointer has a position reach it. OS file drops (`OsFiles`) land on it wherever no other target
-    /// takes them.
+    /// component beats it wherever that accepts. By default the payload is read without a pointer position; a target
+    /// that requires one waits for it so the target at that position can take the drop.
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop>;
     /// The operation of a drop of this component's payload, in the pass after the drop; `None` while dragging, when the
     /// drag was cancelled and when no target took it.
@@ -157,6 +156,9 @@ impl Pointer for CxCore<'_> {
     }
 
     fn window_drop_target<P: Send + Sync + 'static, T: WindowDropTarget<P>>(&mut self, target: &T) -> Option<T::Drop> {
+        if target.requires_pointer() && self.dragging::<P>().is_none() {
+            return None;
+        }
         let payload = drag::active::<P>(&self.ctx).filter(|_| !drag::moves_viewport(&self.ctx))?;
         let op = drag::current_operation(&self.ctx, craft_behavior::CopyKeys::Alt);
         let drop = target.accept(&payload, op)?;

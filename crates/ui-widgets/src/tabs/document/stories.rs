@@ -23,7 +23,7 @@ fn document_tabs(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// Hover text on a tab cut to fit, which shows its full name then the text, and on a short tab, which shows the text
-/// alone. Document tabs keep whole titles, so the cut one is the shown tab, named longer than the strip is wide.
+/// alone. The long title is cut to fit the strip.
 #[story(DocumentTabs<'static, usize>, covers = [], drive = Drive::Never)]
 fn document_tabs_with_tooltips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     const LONG: &str = "Quarterly report for the board of directors, final revision with every appendix, the audit letter, the \

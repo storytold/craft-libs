@@ -14,6 +14,13 @@ use std::rc::Rc;
 
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
+#[trial]
+fn document_tabs_shrink_before_overflow() {
+    let fit = TabKind::Document.fit_mode().fit(&[100.0, 100.0, 100.0], 0, 240.0, 50.0, 20.0);
+    assert!(fit.overflow.is_empty(), "tabs that can shrink into the strip remain visible");
+    assert!(fit.shown.iter().all(|(_, width)| *width < 100.0));
+}
+
 /// An arrow moves the focus to the next tab without showing it; Enter shows it.
 #[trial]
 fn an_arrow_moves_the_focus_and_enter_shows_the_tab() {

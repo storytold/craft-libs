@@ -422,7 +422,7 @@ pub(crate) fn run<C: Component>(
     let ink = if enabled { ink } else { crate::style::rgba_color(crate::runtime::env::Env::of(ui).tokens.color.text.disabled) };
     let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
-    let select_all = std::mem::take(&mut state.select_all);
+    let select_all = (std::mem::take(&mut state.select_all) || decl.options.select_all) && !crate::runtime::ime::composing(&ctx, widget);
     if select_all {
         let len = state.draft.as_deref().unwrap_or(&decl.shown).chars().count();
         adapter::select(&ctx, widget, 0, len);

@@ -18,6 +18,45 @@ use std::rc::Rc;
 
 type Log = Rc<RefCell<Vec<StartAction>>>;
 
+#[trial]
+fn recent_files_follow_the_supplied_list_when_cleared() {
+    let files = Rc::new(RefCell::new(vec![
+        RecentFile::new("/tmp/first", "First document"),
+        RecentFile::new("/tmp/second", "Second document"),
+        RecentFile::new("/tmp/third", "Third document"),
+    ]));
+    let supplied = files.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut view, mut sort) = (RecentView::List, RecentSort::Opened);
+        let current = supplied.borrow().clone();
+        let out = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &current)
+            .drop_hint("Drop files here")
+            .section(StartPlace::BeforeRecent, |ui, _| { Text::new("Welcome").show(ui); })
+            .show(ui);
+        for action in out.actions {
+            match action {
+                StartAction::RemoveRecent(path) => supplied.borrow_mut().retain(|file| file.path != path),
+                StartAction::ClearRecent => supplied.borrow_mut().clear(),
+                _ => {}
+            }
+        }
+    });
+    fixture.room(egui::Vec2::new(1100.0, 700.0)).settle();
+    let row = fixture.by_label("Second document, /tmp").expect("the recent row");
+    fixture.frame(vec![moved(row.center())]).idle(2);
+    let remove = fixture.by_label("Remove Second document from Recent").expect("the remove button");
+    fixture.click(&remove).idle(2);
+    assert_eq!(files.borrow().len(), 2);
+    let row = fixture.by_label("First document, /tmp").expect("the recent row");
+    let at = row.center();
+    fixture.frame(vec![moved(at)]).frame(vec![secondary(at, true)]).frame(vec![secondary(at, false)]).idle(2);
+    let clear = fixture.by_label("Clear Recent Files").expect("the recent menu");
+    fixture.click(&clear).idle(3);
+    assert!(files.borrow().is_empty());
+    assert!(fixture.by_label("First document, /tmp").is_none(), "removed files no longer appear");
+    assert!(fixture.by_label("Drop files here").is_some(), "the empty hint appears");
+}
+
 /// A start screen of two recent files and a link in a room wide enough for the rail; every action it reports goes to
 /// the log.
 fn screen() -> (Fixture, Log) {
