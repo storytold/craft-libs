@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{ipv4_pkt, udp};
 use craft_pcap::decode;
-use support::{ipv4_pkt, udp};
 
 #[test]
 fn incomplete_ipv4_base_headers_explain_why_decoding_stopped() {

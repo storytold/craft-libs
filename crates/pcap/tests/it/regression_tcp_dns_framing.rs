@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{dns_query, dns_response, ipv4_pkt, tcp};
 use craft_pcap::{Decoded, decode};
-use support::{dns_query, dns_response, ipv4_pkt, tcp};
 
 fn decoded(payload: &[u8]) -> Decoded {
     decode(101, &ipv4_pkt(6, [192, 0, 2, 1], [192, 0, 2, 2], &tcp(53, 51000, 0x18, payload)))

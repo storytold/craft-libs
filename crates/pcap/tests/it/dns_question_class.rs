@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{dns_query, eth, ipv4_pkt, pcap, udp};
 use craft_pcap::{decode, summarize};
-use support::{dns_query, eth, ipv4_pkt, pcap, udp};
 
 fn packet(message: &[u8]) -> Vec<u8> {
     eth(0x0800, &ipv4_pkt(17, [192, 0, 2, 1], [192, 0, 2, 2], &udp(51000, 53, message)))

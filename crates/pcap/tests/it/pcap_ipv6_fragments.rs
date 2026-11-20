@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{eth, udp};
 use craft_pcap::decode;
-use support::{eth, udp};
 
 fn packet(offset: u16, next: u8, payload: &[u8]) -> Vec<u8> {
     let mut ip = vec![0u8; 40];

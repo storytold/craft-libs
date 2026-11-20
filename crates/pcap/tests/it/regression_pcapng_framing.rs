@@ -1,8 +1,5 @@
-#[path = "support/mod.rs"]
-mod support;
-
+use super::support::{block, pcapng, sample_frames};
 use craft_pcap::summarize;
-use support::{block, pcapng, sample_frames};
 
 #[test]
 fn mismatched_block_footers_stop_the_capture_with_a_warning() {
