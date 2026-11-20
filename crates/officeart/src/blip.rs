@@ -182,12 +182,12 @@ pub struct Picture {
 
 /// A BLIP as a picture file within `limit` bytes and `work`: a DIB decoded and made a PNG (or kept
 /// as a BMP when it can't be decoded or its pixels don't fit), and a WMF with the placeable header
-/// the BLIP leaves out put back, so it keeps its size. `None` for a Macintosh PICT, which has no
-/// decoder here.
+/// the BLIP leaves out put back, so it keeps its size. A Macintosh PICT is kept as it is (inflated),
+/// as `image/pict`: no reader here draws it, but an app shows a picture it can't decode as a
+/// placeholder in its box, and a save keeps it.
 pub fn picture(blip: &Blip, limit: usize, work: &mut Decode) -> Option<Picture> {
     let (ext, content_type) = blip.format.file();
     let data = match blip.format {
-        Format::Pict => return None,
         Format::Dib => {
             return match dib::to_png(blip.raw(), limit, work)? {
                 dib::Dib::Png(data) => Some(Picture { ext: "png", content_type: "image/png", data }),

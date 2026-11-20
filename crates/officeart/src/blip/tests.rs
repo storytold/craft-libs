@@ -242,3 +242,11 @@ fn the_store_holds_at_most_max_entries() {
     assert!(store.take(MAX_ENTRIES - 1).is_some());
     assert!(store.take(MAX_ENTRIES).is_none());
 }
+
+/// A Macintosh PICT is kept, inflated, as `image/pict`.
+#[test]
+fn a_pict_is_kept_as_it_is() {
+    let pict = b"\x00\x00 a PICT".to_vec();
+    let p = picture_of(&metafile(rt::BLIP_PICT, 0x542, pict.len(), &pict, true), usize::MAX).unwrap();
+    assert_eq!((p.ext, p.content_type, p.data), ("pict", "image/pict", pict));
+}
