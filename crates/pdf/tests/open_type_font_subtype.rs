@@ -83,7 +83,7 @@ fn true_type() -> Vec<u8> {
     be16(&mut mac, 262);
     be16(&mut mac, 0);
     let mut ids = [0u8; 256];
-    for c in [b'A', b'g', b'W'] {
+    for c in *b"AgW" {
         ids[usize::from(c)] = 1;
     }
     mac.extend(ids);
