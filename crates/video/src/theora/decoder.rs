@@ -28,6 +28,13 @@ pub struct Decoder {
     frame_index: u64,
 }
 
+fn alloc_plane_buffer(len: usize) -> Result<Vec<u8>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| Error::OutOfMemory)?;
+    v.resize(len, 0);
+    Ok(v)
+}
+
 impl Decoder {
     /// Initialize decoder from the three mandatory header packets: Identification, Comment, Setup.
     pub fn from_headers(id_packet: &[u8], comment_packet: &[u8], setup_packet: &[u8]) -> Result<Self> {
@@ -76,13 +83,13 @@ impl Decoder {
         let (y_pw, y_ph, _, _, _, _, _, _) = geom.planes[0];
         let (c_pw, c_ph, _, _, _, _, _, _) = geom.planes[1];
 
-        let ref_golden_y = vec![0u8; y_pw * y_ph];
-        let ref_golden_cb = vec![0u8; c_pw * c_ph];
-        let ref_golden_cr = vec![0u8; c_pw * c_ph];
+        let ref_golden_y = alloc_plane_buffer(y_pw * y_ph)?;
+        let ref_golden_cb = alloc_plane_buffer(c_pw * c_ph)?;
+        let ref_golden_cr = alloc_plane_buffer(c_pw * c_ph)?;
 
-        let ref_prev_y = vec![0u8; y_pw * y_ph];
-        let ref_prev_cb = vec![0u8; c_pw * c_ph];
-        let ref_prev_cr = vec![0u8; c_pw * c_ph];
+        let ref_prev_y = alloc_plane_buffer(y_pw * y_ph)?;
+        let ref_prev_cb = alloc_plane_buffer(c_pw * c_ph)?;
+        let ref_prev_cr = alloc_plane_buffer(c_pw * c_ph)?;
 
         Ok(Self {
             info: id.info,
@@ -451,9 +458,9 @@ impl Decoder {
         undo_dc_prediction(&self.geom, &bcoded, &mb_modes, &mut coeffs);
 
         // 8. Block Reconstruction (Section 7.9)
-        let mut rec_y = vec![0u8; y_pw * y_ph];
-        let mut rec_cb = vec![0u8; c_pw * c_ph];
-        let mut rec_cr = vec![0u8; c_pw * c_ph];
+        let mut rec_y = alloc_plane_buffer(y_pw * y_ph)?;
+        let mut rec_cb = alloc_plane_buffer(c_pw * c_ph)?;
+        let mut rec_cr = alloc_plane_buffer(c_pw * c_ph)?;
 
         let qi0 = qis[0];
 

@@ -179,6 +179,40 @@ fn test_theora_video_frame_conversion() {
     let mut bad_pic = pic.clone();
     bad_pic.y.clear();
     assert!(VideoFrame::try_from(bad_pic).is_err());
+
+    // Zero stride fails with FrameError without panicking
+    let mut bad_stride = pic.clone();
+    bad_stride.y_stride = 0;
+    assert!(VideoFrame::try_from(bad_stride).is_err());
+
+    // Oversized dimensions fail with FrameError without panicking
+    let mut bad_dims = pic.clone();
+    bad_dims.pic_width = u32::MAX;
+    bad_dims.pic_height = u32::MAX;
+    assert!(VideoFrame::try_from(bad_dims).is_err());
+
+    // Crop bounds exceeding frame dimensions fail with FrameError
+    let mut bad_crop = pic.clone();
+    bad_crop.pic_x = 30;
+    bad_crop.pic_width = 10;
+    assert!(VideoFrame::try_from(bad_crop).is_err());
+
+    // Misaligned crop offsets (odd coordinates) preserve all chroma samples via S444 conversion
+    let mut odd_pic = test_picture(32, 32);
+    odd_pic.pic_x = 1;
+    odd_pic.pic_y = 1;
+    odd_pic.pic_width = 2;
+    odd_pic.pic_height = 2;
+    odd_pic.u[0] = 50;
+    odd_pic.u[1] = 150;
+    let vf_odd = VideoFrame::try_from(odd_pic).expect("convert odd crop");
+    assert_eq!(vf_odd.subsampling(), craft_video::frame::Subsampling::S444);
+    assert_eq!(vf_odd.width(), 2);
+    assert_eq!(vf_odd.height(), 2);
+    // Row 1 of VideoFrame corresponds to bottom row py=1 (cy=0)
+    let u_bottom = vf_odd.planes()[1].row_u8(1).expect("u row 1");
+    assert_eq!(u_bottom[0], 50);
+    assert_eq!(u_bottom[1], 150);
 }
 
 #[test]
@@ -473,7 +507,7 @@ fn test_theora_encoder_picture_strides() {
 }
 
 #[test]
-fn test_theora_encoder_overflowing_stride_rejected() {
+fn test_theora_encoder_invalid_input_rejected() {
     let cfg = EncoderConfig {
         width: 32,
         height: 32,
@@ -489,8 +523,25 @@ fn test_theora_encoder_overflowing_stride_rejected() {
         keyframe_distance: 64,
     };
     let mut enc = Encoder::new(cfg).expect("encoder");
+
+    // Overflowing stride
     let mut pic = test_picture(32, 32);
     pic.y_stride = usize::MAX;
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Zero stride
+    let mut pic = test_picture(32, 32);
+    pic.y_stride = 0;
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Truncated/missing active samples
+    let mut pic = test_picture(32, 32);
+    pic.y.clear();
+    assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
+
+    // Dimension mismatch
+    let mut pic = test_picture(32, 32);
+    pic.width = 64;
     assert!(matches!(enc.encode_frame(&pic, true), Err(Error::DimensionMismatch(_))));
 }
 
