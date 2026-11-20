@@ -4,7 +4,7 @@
 use craft_behavior::{GESTURE_GAP, kurbo};
 use craft_pages::layout::{Fit, LayoutOptions, PageDisplay};
 use craft_pages::ui::fixtures::{DemoPages, PAPER};
-use craft_pages::ui::{GoTo, PageBody, PagePreview, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
+use craft_pages::ui::{GoTo, PageBody, PagePreview, PageRevision, PageSource, PageView, PageViewState, PlacedPage, ReadingState, ReadingView};
 use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, ToolAction, ToolContext, ToolHost, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Role, Show as _};
 use craft_ui::primitives::textures::{Revision, TextureState, ThumbRender, ThumbRequest, ThumbSource};
@@ -23,6 +23,53 @@ fn state_with(change: impl FnOnce(&mut PageViewState)) -> PageViewState {
 }
 
 type LayoutRig = (Fixture, Rc<RefCell<PageViewState>>, Rc<RefCell<Out>>);
+
+struct RevisionPages {
+    pictures: DemoPages,
+    revision: Rc<Cell<u64>>,
+}
+
+impl ThumbSource<usize> for RevisionPages {
+    fn revision(&self, key: &usize, request: &ThumbRequest) -> Revision {
+        Revision::of(&(self.pictures.revision(key, request), self.revision.get()))
+    }
+
+    fn render(&self, key: &usize, request: &ThumbRequest) -> ThumbRender {
+        self.pictures.render(key, request)
+    }
+}
+
+impl PageSource for RevisionPages {
+    fn page_count(&self) -> usize {
+        self.pictures.page_count()
+    }
+
+    fn page_size(&self, page: usize) -> kurbo::Size {
+        self.pictures.page_size(page)
+    }
+
+    fn page_revision(&self, _: usize) -> Option<PageRevision> {
+        Some(PageRevision { document: 0, page: self.revision.get() })
+    }
+}
+
+#[trial]
+fn placed_page_reports_only_the_revision_of_a_ready_picture() {
+    let revision = Rc::new(Cell::new(1));
+    let source = RevisionPages { pictures: DemoPages::new(1), revision: revision.clone() };
+    let Rig { mut fixture, out, .. } = rig_over(source, PageViewState::default(), NavigationOptions::default(), false);
+    fixture.settle();
+    assert_eq!(out.borrow().pages[0].picture_revision, Some(PageRevision { document: 0, page: 1 }));
+    revision.set(2);
+    fixture.idle(1);
+    let pages = out.borrow();
+    let page = &pages.pages[0];
+    if !matches!(page.picture, TextureState::Ready(_)) {
+        assert_eq!(page.picture_revision, None, "a stale stand-in is not the new revision");
+    } else {
+        assert_eq!(page.picture_revision, Some(PageRevision { document: 0, page: 2 }));
+    }
+}
 
 /// What a trial reads of the last pass.
 #[derive(Clone, Debug)]

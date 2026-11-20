@@ -76,6 +76,7 @@ pub fn demo_placed(count: usize, origin: Pos2) -> Vec<PlacedPage> {
                 scale: 1.0,
                 band: (0.0, height),
                 picture: TextureState::Missing,
+                picture_revision: None,
             }
         })
         .collect()

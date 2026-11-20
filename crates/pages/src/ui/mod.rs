@@ -58,4 +58,4 @@ pub use thumbnails::{
     ORGANIZE_ZOOM, PageThumbnails, PageThumbnailsOutput, THUMBNAIL_ZOOM, ThumbnailArrangement, ThumbnailEvent, ThumbnailMarks, ThumbnailSection,
     ThumbnailWords, moved_page,
 };
-pub use view::{GoTo, PageBody, PageSource, PageView, PageViewOutput, PageViewState, PageViewWords, PlacedPage};
+pub use view::{GoTo, PageBody, PageRevision, PageSource, PageView, PageViewOutput, PageViewState, PageViewWords, PlacedPage};

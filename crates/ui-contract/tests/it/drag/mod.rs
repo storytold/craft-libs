@@ -227,6 +227,70 @@ struct FileList<'a> {
     landed: &'a RefCell<Landed>,
 }
 
+#[derive(Component)]
+struct RowOnly<'a> {
+    #[common]
+    common: Common,
+    landed: &'a RefCell<Landed>,
+}
+
+impl Component for RowOnly<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: RowOnlyStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> Vec2 {
+        LIST.size()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(row) = cx.drop_target(&OnRow) {
+            self.landed.borrow_mut().rows.push(row);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+#[trial]
+fn file_drop_without_pointer_waits_for_its_target() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        RowOnly { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.hover_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    assert!(landed.borrow().rows.is_empty(), "the position is not known yet");
+    frames.frame(vec![moved(LIST.center())], &mut show);
+    frames.idle(2, &mut show);
+    assert_eq!(landed.borrow().rows.len(), 1, "the drop reaches the row once its position arrives");
+    assert!(landed.borrow().window.is_empty(), "the row takes the drop");
+}
+
+#[trial]
+fn window_file_drop_without_hover_or_pointer_does_not_wait_for_pointer() {
+    let landed = RefCell::new(Landed::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+    };
+    frames.idle(2, &mut show);
+    frames.drop_files(&["a.png"]);
+    frames.frame(vec![], &mut show);
+    frames.idle(3, &mut show);
+    assert_eq!(landed.borrow().window.len(), 1, "the window receives the drop without a pointer");
+}
+
 impl Component for FileList<'_> {
     const ROLE: Role = Role::GROUP;
     type Style = PlainStyle;

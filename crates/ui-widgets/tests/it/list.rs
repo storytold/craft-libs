@@ -34,6 +34,26 @@ fn rig(draft: fn(&usize) -> Option<String>) -> (Fixture, Events) {
     (fixture, seen)
 }
 
+#[trial]
+fn list_row_declares_and_accepts_access_click() {
+    use craft_ui::testing::access::Declared;
+    use craft_ui::testing::focus::AccessActionKind;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys = [0_usize, 1, 2];
+        let source = keyed(&keys, |key: &usize| *key);
+        let out = List::options("Artboards").show_items(ui, &source, &mut |key, _| ListRow::new(NAMES[*key]).option());
+        held.borrow_mut().extend(out.events);
+    });
+    fixture.settle();
+    let row = fixture.by_label(NAMES[1]).expect("the row");
+    assert!(fixture.tree().declares_key(row.node, Declared::Click), "the row offers Click to automation");
+    seen.borrow_mut().clear();
+    fixture.access(AccessActionKind::Click, &row).settle();
+    assert!(seen.borrow().iter().any(|event| matches!(event, CollectionEvent::Selection(_))), "Click selects the row");
+}
+
 /// The rects of the three rows of a list shown with `rows`.
 fn row_rects(rows: RowHeight) -> Vec<egui::Rect> {
     let mut fixture = Fixture::new(move |ui| {

@@ -137,6 +137,7 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// How many shown units make one stored unit, read from the env in measure and parts; 1 for a plain field.
     scale: f64,
     options: TextOptions,
+    positive_only: bool,
     scrub: bool,
     /// The popup slider's track length, read from the tokens in parts: a drag on its chevron moves the value as far
     /// as a drag on the slider would.
@@ -193,6 +194,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             lengths: None,
             scale: 1.0,
             options: TextOptions::default(),
+            positive_only: false,
             scrub: false,
             track: 0.0,
             picked: None,
@@ -215,6 +217,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     pub(super) fn zoom_typing(mut self) -> Self {
         self.options.tab_rewrites = true;
         self.options.holds_drafts = true;
+        self.positive_only = true;
         self
     }
 
@@ -309,6 +312,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             snap: self.snap_typed,
             decimals: self.commit_decimals,
             mixed,
+            positive_only: self.positive_only,
             names,
             scale: self.scale,
             value: PhantomData,
