@@ -362,24 +362,25 @@ fn markup_that_is_not_xml_is_an_error() {
     }
 }
 
-/// Attributes are the one thing a node count does not see: 1,025 elements of 1,024 attributes
-/// each are 1,025 nodes and 1,049,600 `(String, String)` pairs, about 50 MB of headers from
-/// 5 MB of input.
+/// The attribute allowance spans the retained tree, independently of the per-element limit.
+/// Streaming out completed elements releases their attributes from that allowance.
 #[test]
 fn attributes_are_bounded_over_the_whole_tree() {
-    let el = format!("<c{}/>", " a=\"\"".repeat(1024));
-    let doc = format!("<r>{}</r>", el.repeat(1025));
-    let limits = Limits { max_attrs_total: 1024 * 1024, ..Limits::DEFAULT };
+    let el = format!("<c{}/>", " a=\"\"".repeat(32));
+    let doc = format!("<r>{}</r>", el.repeat(33));
+    let limits = Limits { max_attrs: 32, max_attrs_total: 32 * 32, ..Limits::DEFAULT };
     let opts = Options::default().with_limits(limits);
     let err = opts.parse(doc.as_bytes()).unwrap_err();
-    assert_eq!(err, Error::TooManyAttrsTotal(1024 * 1024));
+    assert_eq!(err, Error::TooManyAttrsTotal(32 * 32));
     assert!(err.is_limit());
     // exactly at the limit is accepted
-    let fits = format!("<r>{}</r>", el.repeat(1024));
-    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(1024));
-    // the default stops a document that is nothing but attributes
-    let hostile = format!("<r>{}</r>", el.repeat(4000));
-    assert_eq!(parse(hostile.as_bytes()), Err(Error::TooManyAttrsTotal(4_000_000)));
+    let fits = format!("<r>{}</r>", el.repeat(32));
+    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(32));
+    // The root's attribute adds exactly one to the same whole-tree allowance.
+    let one_over = format!("<r a=\"\">{}</r>", el.repeat(32));
+    assert_eq!(opts.parse(one_over.as_bytes()), Err(Error::TooManyAttrsTotal(32 * 32)));
+    // The default allowance stays pinned without building a production-sized tree.
+    assert_eq!(Limits::DEFAULT.max_attrs_total, 4_000_000);
     // streamed elements take their attributes with them: any number of rows, as long as the
     // ones held at once fit
     let mut rows = 0;
@@ -387,9 +388,9 @@ fn attributes_are_bounded_over_the_whole_tree() {
         rows += c.attrs.len();
         Ok::<(), Error>(())
     });
-    assert_eq!((rows, root.map(|r| r.children.len())), (1025 * 1024, Ok(0)));
-    let tight = Options::default().with_limits(Limits { max_attrs_total: 1023, ..Limits::DEFAULT });
-    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(1023)));
+    assert_eq!((rows, root.map(|r| r.children.len())), (33 * 32, Ok(0)));
+    let tight = Options::default().with_limits(Limits { max_attrs: 32, max_attrs_total: 31, ..Limits::DEFAULT });
+    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(31)));
 }
 
 /// An internal subset is found wherever it hides, and looking for it is linear in the input.
