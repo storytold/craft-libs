@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use craft_wordmodel::props::LineSpacing;
 use craft_wordmodel::props::VAlign;
-use craft_wordmodel::{Align, Document};
+use craft_wordmodel::{Align, Document, Rgb};
 
 use craft_flow::{
     self as model, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, Spacing, base64_encode, data_uri, make_img, mime_of,

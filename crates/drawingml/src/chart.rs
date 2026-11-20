@@ -344,6 +344,26 @@ impl ErrorBars {
     }
 }
 
+/// A chart's data table (`c:dTable`), independent of the chart legend.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChartDataTable {
+    pub show_keys: bool,
+    pub horizontal_border: bool,
+    pub vertical_border: bool,
+    pub outline: bool,
+}
+
+impl Default for ChartDataTable {
+    fn default() -> Self {
+        Self { show_keys: true, horizontal_border: true, vertical_border: true, outline: true }
+    }
+}
+
+fn is_zero_u16(v: &u16) -> bool {
+    *v == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Chart {
@@ -354,6 +374,10 @@ pub struct Chart {
     pub legend: Option<String>,
     /// `c:legend/c:overlay`: the legend is drawn over the plot instead of shrinking it.
     pub legend_overlay: bool,
+    /// `c:legend/c:legendEntry`: entries whose text has its own size, weight or colour, over
+    /// the legend's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub legend_entries: Vec<LegendEntry>,
     /// Text size in points of the axis labels and legend (from their `c:txPr`, else the chart's);
     /// `None`: the file gives none.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -419,6 +443,15 @@ pub struct Chart {
     /// A histogram's bin width (`cx:binSize`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bin_size: Option<f64>,
+    /// A chart's data table (`c:dTable`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_table: Option<ChartDataTable>,
+    /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
+    #[serde(skip_serializing_if = "is_zero_u16")]
+    pub first_slice_angle: u16,
+    /// A PivotChart's PivotTable reference (`c:pivotSource/c:name`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot_source: Option<String>,
     /// Original chart XML part kept for round-trip of unmodelled options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
@@ -429,6 +462,21 @@ pub struct Chart {
     /// The PPTX writer clears this before comparing modelled state. Native saves keep it too.
     #[serde(skip_serializing_if = "ChartKept::is_empty")]
     pub kept: ChartKept,
+}
+
+/// One legend entry's own text (`c:legendEntry/c:txPr`): what it sets wins over the legend's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LegendEntry {
+    /// The entry's place in the legend, from 0 (`c:idx`).
+    pub idx: u32,
+    /// Text size in points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorRef>,
 }
 
 /// One relationship of a chart part, with the target string as it was written.
@@ -483,6 +531,7 @@ impl Default for Chart {
             series: vec![],
             legend: Some("b".into()),
             legend_overlay: false,
+            legend_entries: vec![],
             text_size: None,
             title_size: None,
             data_labels: false,
@@ -517,6 +566,9 @@ impl Default for Chart {
             up_down_bars: false,
             bin_count: None,
             bin_size: None,
+            data_table: None,
+            first_slice_angle: 0,
+            pivot_source: None,
             raw: None,
             verbatim: false,
             kept: ChartKept::default(),

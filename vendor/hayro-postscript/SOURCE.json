@@ -8,7 +8,8 @@
   "upstream_revision": "a2354aebaf86f5ab13e5fd6b6b0521306488bf9d",
   "upstream_directory": "hayro-postscript",
   "local_patches": [
-    "Skip runs of `<<` and `>>` in a loop in `object::read` instead of recursing once per delimiter, so a long run cannot overflow the stack."
+    "Skip runs of `<<` and `>>` in a loop in `object::read` instead of recursing once per delimiter, so a long run cannot overflow the stack.",
+    "Keep the low eight bits of a literal string's `\\ddd` escape in `string::literal::decode_into` (ISO 32000-2 §7.3.4.2), instead of dropping an escape above `\\377`."
   ],
   "files": [
     {
@@ -99,7 +100,7 @@
       "path": "src/string.rs",
       "source_sha256": "1c47947beb5ce7c56036d5b115a47e703a5a276cb9f3faf5e9b2a4304e4a518f",
       "source_git_blob": null,
-      "sha256": "1c47947beb5ce7c56036d5b115a47e703a5a276cb9f3faf5e9b2a4304e4a518f"
+      "sha256": "42bb4c6a7291165f3841333032f582c74145109443f9161065afc6881d2e9f2b"
     },
     {
       "path": "src/string/ascii_85.rs",
@@ -117,7 +118,7 @@
       "path": "src/string/literal.rs",
       "source_sha256": "8633efbb282227512ef506d020ea69d4ef47c549ae9248e7b0d4fcefd2aaf933",
       "source_git_blob": null,
-      "sha256": "8633efbb282227512ef506d020ea69d4ef47c549ae9248e7b0d4fcefd2aaf933"
+      "sha256": "0feae923df7807fe671bc3d320bdcf5e1a65cb7b652aa9245b0b918376c1daf9"
     }
   ]
 }

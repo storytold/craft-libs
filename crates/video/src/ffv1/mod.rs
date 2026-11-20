@@ -17,7 +17,7 @@
 
 mod rc;
 
-use crate::budget::{DECODE_MEMORY_BUDGET, PictureShape};
+use crate::budget::DECODE_MEMORY_BUDGET;
 use rc::{Decoder as Rac, Encoder as RacEnc, Transitions};
 
 const CONTEXT_SIZE: usize = 32;
@@ -457,28 +457,30 @@ fn set_index_count(p: &Params) -> usize {
     2 + usize::from(p.extra_plane)
 }
 
+// Output u16 samples, an encoder's temporary i32 planes, and the full bordered i32
+// slice working copy. Explicit padding matters for 1-pixel-wide/tall hostile frames.
+fn plane_store_bytes(w: u64, h: u64) -> Option<u64> {
+    let samples = w.checked_mul(h)?.checked_mul(6)?;
+    let border = w.checked_add(3)?.checked_mul(h.checked_add(2)?)?.checked_mul(4)?;
+    samples.checked_add(border)
+}
+
 fn check_frame_size(p: &Params, w: u32, h: u32) -> Result<()> {
     if w == 0 || h == 0 {
         return Err(Error::Invalid("empty frame"));
     }
-    let shape = PictureShape {
-        width: u64::from(w),
-        height: u64::from(h),
-        shift_x: u32::from(p.shift.0.min(1)),
-        shift_y: u32::from(p.shift.1.min(1)),
-        chroma_planes: if p.chroma_planes { 2 } else { 0 },
-        bytes_per_sample: 2,
-    };
-    // The decoded planes and, while a slice decodes, its bordered `i32` copy (2 x the samples at most).
-    if !shape.fits(5, DECODE_MEMORY_BUDGET) {
-        return Err(Error::Unsupported("frame size above the memory budget"));
+    let mut bytes = 0u64;
+    for plane in 0..p.plane_count() {
+        let (pw, ph) = plane_dims(w as usize, h as usize, p.colorspace, p.shift, plane, p.chroma_planes);
+        let plane_bytes = plane_store_bytes(pw as u64, ph as u64).ok_or(Error::Unsupported("frame size above the memory budget"))?;
+        bytes = bytes.checked_add(plane_bytes).ok_or(Error::Unsupported("frame size above the memory budget"))?;
     }
-    if p.shift.0 > 1 || p.shift.1 > 1 {
-        // Subsampling beyond 2:1 is legal FFV1 (e.g. 4:1:1) but the budget model above is for 2:1.
-        let extra = (w as u64).checked_mul(h as u64).ok_or(Error::Invalid("frame too large"))?;
-        if extra > 1 << 28 {
-            return Err(Error::Unsupported("frame size above the memory budget"));
-        }
+    // Retained initial contexts, up to three active context classes, and the packet's slice spans.
+    let initial: u64 = p.initial_states.iter().filter_map(Option::as_ref).map(|v| v.len() as u64 * CONTEXT_SIZE as u64).sum();
+    let contexts = 3 * MAX_CONTEXTS * CONTEXT_SIZE as u64;
+    let spans = u64::from(p.num_h) * u64::from(p.num_v) * (2 * std::mem::size_of::<usize>()) as u64;
+    if bytes.checked_add(initial + contexts + spans).is_none_or(|total| total > DECODE_MEMORY_BUDGET) {
+        return Err(Error::Unsupported("frame size above the memory budget"));
     }
     Ok(())
 }
@@ -749,6 +751,7 @@ impl Encoder {
             ec: cfg.slice_crc,
             intra: true,
         };
+        check_frame_size(&params, template.width, template.height)?;
         // Every slice boundary must be a multiple of the chroma subsampling, so the decoder accepts it.
         for i in 0..=cfg.slices_h as usize {
             if params.chroma_planes && (i * template.width as usize / cfg.slices_h as usize) & ((1 << shift.0) - 1) != 0 && i != cfg.slices_h as usize
@@ -904,7 +907,8 @@ impl Encoder {
         }
         let swapped = rct_swapped(p);
         let off = 1i32 << p.bits;
-        let mut planes = vec![Vec::with_capacity(rect.w * rect.h); p.plane_count()];
+        // Cloning an empty Vec drops its capacity, causing geometric growth beyond the budget.
+        let mut planes: Vec<Vec<i32>> = (0..p.plane_count()).map(|_| Vec::with_capacity(rect.w * rect.h)).collect();
         for y in 0..rect.h {
             for x in 0..rect.w {
                 let at = (rect.y + y) * fw + rect.x + x;
@@ -925,5 +929,71 @@ impl Encoder {
             }
         }
         planes
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn thin_frame_headers_are_refused_before_pixel_allocation() {
+        let small = Frame { width: 1, height: 1, colorspace: Colorspace::YCbCr, bit_depth: 8, chroma_shift: (0, 0), planes: vec![vec![]] };
+        let config = Encoder::new(&small, EncoderConfig::default()).unwrap().config_record();
+        let axis = (DECODE_MEMORY_BUDGET / 10) as u32;
+        // The old 10*w*h bound accepted both; the bordered i32 planes exceed it.
+        for (width, height) in [(1, axis), (axis, 1)] {
+            assert!(Decoder::new(&config, width, height).is_err());
+            let huge = Frame { width, height, ..small.clone() };
+            assert!(Encoder::new(&huge, EncoderConfig::default()).is_err());
+        }
+        assert!(Decoder::new(&config, 1, 100).is_ok());
+        assert!(Decoder::new(&config, 100, 1).is_ok());
+    }
+
+    #[test]
+    fn transparency_plane_is_included_in_the_memory_budget() {
+        let frame = Frame {
+            width: 1,
+            height: (DECODE_MEMORY_BUDGET / 75) as u32,
+            colorspace: Colorspace::Rgb,
+            bit_depth: 8,
+            chroma_shift: (0, 0),
+            planes: vec![vec![]; 3],
+        };
+        assert!(Encoder::new(&frame, EncoderConfig::default()).is_ok());
+        let with_alpha = Frame { planes: vec![vec![]; 4], ..frame };
+        assert!(Encoder::new(&with_alpha, EncoderConfig::default()).is_err());
+    }
+
+    #[test]
+    fn rgb_slice_planes_keep_the_budgeted_capacity() {
+        // Non-power-of-two lengths expose geometric growth of cloned empty Vecs.
+        for plane_count in [3, 4] {
+            let frame = Frame {
+                width: 3,
+                height: 5,
+                colorspace: Colorspace::Rgb,
+                bit_depth: 8,
+                chroma_shift: (0, 0),
+                planes: vec![vec![0; 15]; plane_count],
+            };
+            let encoder = Encoder::new(&frame, EncoderConfig::default()).unwrap();
+            let rect = slice_rect(&encoder.params, 3, 5, 0, 0, 1, 1).unwrap();
+            let planes = encoder.slice_values(&frame, rect);
+            assert_eq!(planes.len(), plane_count);
+            for plane in planes {
+                assert_eq!(plane.len(), 15);
+                assert_eq!(plane.capacity(), 15);
+            }
+        }
+    }
+
+    #[test]
+    fn plane_budget_counts_borders_and_detects_overflow() {
+        assert_eq!(plane_store_bytes(1, 100), Some(600 + 4 * 102 * 4));
+        assert_eq!(plane_store_bytes(100, 1), Some(600 + 103 * 3 * 4));
+        assert!(plane_store_bytes(u64::MAX, 1).is_none());
+        assert!(plane_store_bytes(1, u64::MAX).is_none());
     }
 }
