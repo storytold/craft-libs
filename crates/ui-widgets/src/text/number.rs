@@ -116,9 +116,12 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// The range typed, stepped and scrubbed values stay in.
     #[prop]
     range: Option<RangeInclusive<f64>>,
-    /// What one arrow press, one wheel notch and one point of scrub change; the default is 1.
+    /// What one arrow press, one wheel notch and one point of scrub change unless overridden. The default is 1.
     #[prop(quantity = "step")]
     step: Option<f64>,
+    /// The change per point of scrub, in shown units. An omitted, non-positive or non-finite rate uses the field step.
+    #[prop(quantity = "step")]
+    scrub_step: Option<f64>,
     /// Where an arrow press, a Page key and a wheel notch go from the current value, for values on a ladder (the zoom
     /// ladder); the step is ignored for them. The range still holds the result.
     #[prop(func = "Fn(f64, i32) -> f64")]
@@ -203,6 +206,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             unit_kind: None,
             range: None,
             step: None,
+            scrub_step: None,
             stepper: None,
             unit: None,
             unit_placement: UnitPlacement::Inside,
@@ -543,11 +547,12 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         proposed == host || (proposed.named() == host.named() && at_precision(proposed) == at_precision(host))
     }
 
-    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves a step a point;
+    /// A drag on the body of a field not in edit, or on its side label with `scrub_by_label`, moves by the scrub step per point;
     /// a drag on the popup slider's chevron moves the value as far as the same drag on the slider.
     fn scrub(&self) -> Option<Scrub<V>> {
         let rule = self.rule();
-        let drag = ValueDrag::relative(rule.step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
+        let step = self.scrub_step.filter(|step| step.is_finite() && *step > 0.0).unwrap_or(rule.step);
+        let drag = ValueDrag::relative(step, rule.bounds()).warp(true).hide_cursor(true).coarse(LARGE_STEPS).fine(1.0 / LARGE_STEPS);
         // Rounded to the field's decimals, so a scrubbed value carries no float noise. The step is not a grid
         // here: an Alt drag moves by a share of it.
         let decimals = self.decimals();
