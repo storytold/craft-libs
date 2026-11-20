@@ -283,7 +283,7 @@ pub(super) fn metrics(cx: &StyleCx<'_>, parts: &VariantParts) -> Metrics {
     // (`ControlPlace::Ribbon`): its sides take the control's padding, as a ribbon's controls sit close.
     let side = if super::flat_in_ribbon(cx) { control.pad_x } else { control.pad_x.max(round + control.gap) };
     // A ribbon look's row height (`RibbonLook::row`) stands in for the control's.
-    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, row_height(cx, control.height))).gap(control.gap)
+    Metrics::new().padding(Insets::horizontal(side)).min_size(Vec2::new(0.0, super::row_height(cx, control.height))).gap(control.gap)
 }
 
 /// The metrics of a stacked face: `metrics`, with the control's gap above and below the stack, so its height is the
@@ -336,12 +336,6 @@ pub(super) fn on_surface(cx: &StyleCx<'_>, off: &VariantParts, on: &VariantParts
     look
 }
 
-/// The height of a non-stacked button in `cx`: a ribbon look's row height (`RibbonLook::row`), else `height`.
-pub(super) fn row_height(cx: &StyleCx<'_>, height: f32) -> f32 {
-    let look = cx.env::<RibbonLook>();
-    if look.row > 0 && cx.env::<ControlPlace>() == ControlPlace::Ribbon { f32::from(look.row) } else { height }
-}
-
 /// The look of a button that shows only its icon: an icon button, or a toggle button that is `icon_only`.
 pub(super) struct IconFace {
     pub surface: SurfaceLook,
@@ -369,7 +363,7 @@ pub(super) fn icon_face(cx: &StyleCx<'_>) -> IconFace {
     }
     IconFace {
         surface: on_surface(cx, &off, &on).radius(UiTokens::corner(cx.tokens.shape.radius.control)),
-        metrics: Metrics::new().min_size(Vec2::splat(row_height(cx, cx.control().height))),
+        metrics: Metrics::new().min_size(Vec2::splat(super::row_height(cx, cx.control().height))),
         glyph: IconLook::new(side, ink.on(on.text.off)),
     }
 }

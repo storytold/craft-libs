@@ -121,6 +121,13 @@ impl RibbonLook {
     }
 }
 
+/// The height of a one-line control in `cx` (a non-stacked button, a check box): a ribbon look's row height
+/// (`RibbonLook::row`) in a ribbon, else `height`.
+pub(crate) fn row_height(cx: &crate::style::StyleCx<'_>, height: f32) -> f32 {
+    let look = cx.env::<RibbonLook>();
+    if look.row > 0 && cx.env::<ControlPlace>() == ControlPlace::Ribbon { f32::from(look.row) } else { height }
+}
+
 /// The side of a non-stacked button's icon or glyph in `cx`: the ribbon's small side where one is set, else `side`.
 pub(crate) fn small_icon(cx: &crate::style::StyleCx<'_>, side: f32) -> f32 {
     let small = cx.env::<RibbonLook>().small;
