@@ -168,7 +168,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             canvas = canvas.snap(snap);
         }
         if let Some(ruler) = config.rulers {
-            canvas = canvas.rulers(ruler, ruler, Point::ZERO);
+            canvas = canvas.rulers(ruler, ruler);
         }
         let canvas = canvas.show(ui, |ui, body| {
             let mut guide_edits = 0;

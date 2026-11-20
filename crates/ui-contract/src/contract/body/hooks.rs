@@ -932,6 +932,8 @@ struct BodyRun<'r> {
     env: &'r Env,
     /// While the body opens or closes, it shows only the part of its last height that the presence reaches.
     reveal_clip: Option<Rect>,
+    /// The body shows through a view of its own (`ContainerProps::scroll_owner`): its region is its clip.
+    view_clip: bool,
 }
 
 /// The region a scrolling body's content runs in, and what its run reads after the content.
@@ -964,6 +966,9 @@ fn body_ui(run: &BodyRun<'_>, parent: &mut Ui, at: Rect) -> Ui {
     style::set_item_spacing(&mut body_ui, run.gap);
     if let Some(clip) = run.reveal_clip {
         body_ui.set_clip_rect(clip.intersect(body_ui.clip_rect()));
+    }
+    if run.view_clip {
+        body_ui.set_clip_rect(at.intersect(body_ui.clip_rect()));
     }
     body_ui
 }
@@ -1263,6 +1268,7 @@ impl BodyHooks<'_> {
             columns: LabelColumns::of(props, !self.wide() && !self.held(props, env)),
             env: body_env,
             reveal_clip,
+            view_clip: props.scroll_owner && props.transform.is_none(),
         };
         let body_rect = plan.body_rect;
         let share = plan.share(false);

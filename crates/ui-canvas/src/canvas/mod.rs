@@ -30,7 +30,7 @@ pub use crop::{CropOverlay, CropOverlayOutput, CropScope, CropShield, CropStyle,
 pub use frame_step::{FRAME_STEP_MAX, frame_step};
 pub(crate) use march::{MARCH_SECONDS, MARCH_TICK, march_shift};
 pub use readout::{ShowReadouts, hud, readout};
-pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned};
+pub use space::{CanvasSpace, RulerText, canvas_space, pixel_aligned, ruler_guide};
 pub use words::CanvasWords;
 
 #[doc(hidden)]
@@ -127,6 +127,8 @@ pub(crate) const BACKGROUND: PartKey = PartKey::new("background");
 
 /// The editor part a canvas with [`Canvas::editor`] registers.
 const EDITOR: PartKey = PartKey::new("editor");
+/// The key the canvas shows its rulers under.
+const RULERS: &str = "rulers";
 
 /// The areas the active tool claims over the canvas controls ([`Canvas::tool_regions`]): `TOOL_REGION.at(i)` is the
 /// region at `i`.
@@ -198,9 +200,13 @@ pub struct Canvas<'a> {
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
     #[prop]
     navigation: NavigationOptions,
-    /// Whether the rulers show along the top and left edges (View > Rulers): the view lies inside them.
-    #[prop]
-    show_rulers: bool,
+    /// The rulers along the top and left edges (View > Rulers), which the canvas shows itself: the view lies inside
+    /// them ([`with_rulers`](Self::with_rulers)).
+    strips: Option<Rulers<'a>>,
+    /// Whether the strips show; the rulers' own output of this pass is [`CanvasOutput::rulers`].
+    strips_shown: bool,
+    /// What the rulers reported in this pass, from the paint step.
+    ruler_output: Option<RulersOutput>,
     /// Whether the canvas leaves Page Up, Page Down, Home, End and the arrows to its body: it applies no page keys
     /// and gives no tool or session control the arrows, and its body reads them in [`CanvasSpace::keys`]. For a
     /// body that pages its document itself (a page view).
@@ -215,6 +221,8 @@ pub struct Canvas<'a> {
     editor_input: Arc<[EditorInput]>,
     /// The rulers' units and zero point, published to the body in its [`CanvasSpace`].
     rulers: Option<CanvasRulers>,
+    /// The zero point of the rulers given to `with_rulers`, which the space publishes in `rulers`.
+    ruler_zero: Point,
     /// The snapping of the coordinates the pointer sets on this canvas (View > Snap To), as data over the document's
     /// targets: the rulers snap their zero point with it, the guides snap a guide with it and the tool host hands it to
     /// the tool ([`ToolContext::snap`]). The canvas sets its tolerance each pass from the view it shows. Without it
@@ -295,13 +303,16 @@ impl<'a> Canvas<'a> {
             layer_bounds: None,
             queued: &[],
             navigation: NavigationOptions::default(),
-            show_rulers: false,
+            strips: None,
+            strips_shown: false,
+            ruler_output: None,
             keys_to_body: false,
             editor: None,
             editor_input: Arc::from([]),
             pasteboard: PasteboardColor::Default,
             precise_cursors: false,
             rulers: None,
+            ruler_zero: Point::ZERO,
             snap: None,
             settled: None,
             context_key: false,
@@ -319,7 +330,7 @@ impl<'a> Canvas<'a> {
     /// (`Bind::given`, or a plain [`CanvasView`]) is only read: the app copies what a tool changed from
     /// [`ToolHostResponse::view`] (or [`CanvasOutput::view`] without a tool host) every pass.
     ///
-    /// The canvas sets the view's rect to its own rect, inside the rulers while they show ([`show_rulers`](Self::show_rulers)),
+    /// The canvas sets the view's rect to its own rect, inside the rulers while they show ([`with_rulers`](Self::with_rulers)),
     /// so the body and the reported view carry this pass's rect. A view whose rect has no area (`CanvasView::new(Rect::NOTHING, ..)`,
     /// a document never shown) opens fitted: Fit on Screen in the first pass the canvas has area and a document. A
     /// canvas with no area (a minimized window) leaves the view as it is, so a restore does not refit.
@@ -404,11 +415,6 @@ impl<'a> Canvas<'a> {
         self.document.map(|target| target.document)
     }
 
-    /// The rect the view lies in: the canvas's own, inside the rulers while they show.
-    fn view_rect(&self, rect: Rect, style: &CanvasStyle) -> Rect {
-        if self.show_rulers { Rect::from_min_max(rect.min + style.rulers, rect.max) } else { rect }
-    }
-
     /// The view of this pass from the app's `given` view: this pass's rect, the first fit, the wheel, a middle-button
     /// pan, the view commands, the Overscroll clamp, and the zoom ease.
     fn settle(&self, cx: &mut Cx<'_, Self>, given: CanvasView) -> Settled {
@@ -418,7 +424,7 @@ impl<'a> Canvas<'a> {
         let pixels_per_point = cx.env.scale().0;
         let size = self.document_size().unwrap_or(Size::ZERO);
         let mut view = given;
-        let area = self.view_rect(cx.content_rect, cx.style);
+        let area = cx.content_rect;
         if area.width() > 0.0 && area.height() > 0.0 {
             let never_shown = !(view.rect.width() > 0.0 && view.rect.height() > 0.0);
             view.rect = area;
@@ -589,13 +595,25 @@ impl<'a> Canvas<'a> {
         (moved, swallowing || run.swallowing())
     }
 
-    /// Measures the document's axes in `x` and `y`, counted from `zero` (document units). The rulers, the guides and
-    /// the measures of the body read the units and the zero from the canvas's [`CanvasSpace`], so the app states them
-    /// once. A canvas that publishes none measures in pixels from the document's origin. Whether the strips show, and
-    /// so where the view lies, is [`show_rulers`](Self::show_rulers).
+    /// Shows `rulers` along the top and left edges of the canvas, which the view lies inside (View > Rulers); none shows
+    /// no strips. The canvas hands them its space and snap, and the body (guides) reads the guide a drag out of them
+    /// places with [`ruler_guide`]. What they report comes back in [`CanvasOutput::rulers`].
     #[must_use]
-    pub fn rulers(mut self, x: RulerText, y: RulerText, zero: Point) -> Self {
-        self.rulers = Some(CanvasRulers::new(x, y, zero));
+    pub fn with_rulers(mut self, rulers: Option<Rulers<'a>>) -> Self {
+        self.ruler_zero = rulers.as_ref().map_or(Point::ZERO, Rulers::zero);
+        self.strips_shown = rulers.is_some();
+        self.strips = rulers;
+        self
+    }
+
+    /// Measures the document's axes in `x` and `y`, counted from the zero point of the [`Rulers`] given to
+    /// [`with_rulers`](Self::with_rulers) (the document's origin without them). The rulers, the guides and the
+    /// measures of the body read the units and the zero from the canvas's [`CanvasSpace`], so the app states the zero
+    /// once. A canvas that publishes none measures in pixels from the document's origin. Whether the strips show, and
+    /// so where the view lies, is [`with_rulers`](Self::with_rulers).
+    #[must_use]
+    pub fn rulers(mut self, x: RulerText, y: RulerText) -> Self {
+        self.rulers = Some(CanvasRulers::new(x, y, Point::ZERO));
         self
     }
 
@@ -613,7 +631,7 @@ impl<'a> Canvas<'a> {
         let space = space
             .with_keys(keys)
             .with_document(self.document_size())
-            .with_rulers(self.rulers)
+            .with_rulers(self.rulers.map(|rulers| CanvasRulers::new(rulers.x, rulers.y, self.ruler_zero)))
             .with_pasteboard(self.pasteboard)
             .with_background(background)
             .with_precise(self.precise_cursors != caps_lock)
@@ -700,6 +718,8 @@ pub struct CanvasOutput {
     pub view: Option<CanvasView>,
     /// The mark of a running middle-button autoscroll, for captures.
     pub autoscroll: Option<Pos2>,
+    /// What the rulers given to [`Canvas::with_rulers`] reported in this pass.
+    pub rulers: Option<RulersOutput>,
 }
 
 impl CanvasOutput {
@@ -818,9 +838,19 @@ impl Component for Canvas<'_> {
         WheelNotch::Points(WheelNavigation::LINE)
     }
 
-    /// Reserves the slot the picture paints into, under every canvas control of the body (`CanvasSpace::paint_picture`).
+    /// The rulers' strips lie outside the view the body is clipped to.
+    fn padding(&self, _rect: Rect, style: &CanvasStyle) -> craft_behavior::Insets {
+        if self.strips_shown { craft_behavior::Insets::new(style.rulers.x, 0.0, style.rulers.y, 0.0) } else { style.metrics().padding }
+    }
+
+    /// Reserves the slot the picture paints into, under every canvas control of the body (`CanvasSpace::paint_picture`),
+    /// and shows the rulers over the canvas's rect.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         self.picture = Some(ui.reserve_slot(cx.content_rect));
+        if let Some(rulers) = self.strips.take() {
+            let pass = self.tool_pass(cx);
+            self.ruler_output = Some(ui.child(RULERS, cx.rect, rulers.on_canvas(pass.space, pass.snap)));
+        }
     }
 
     /// The mark of a running middle-button autoscroll, over the body's picture and controls, clipped to the canvas.
@@ -860,6 +890,7 @@ impl Component for Canvas<'_> {
         let pass = self.tool_pass(cx);
         space::publish(values, pass.space);
         snap::publish(values, pass.snap.clone());
+        space::publish_ruler_guide(values, self.ruler_output.as_ref().and_then(|output| output.guide));
         tool_host::publish(values, (!measure::active(&cx.response.ctx)).then_some(pass));
     }
 
@@ -899,7 +930,7 @@ impl Component for Canvas<'_> {
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
         let autoscroll = self.settled.and_then(|settled| settled.mark);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, autoscroll }
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, autoscroll, rulers: self.ruler_output }
     }
 }
 
