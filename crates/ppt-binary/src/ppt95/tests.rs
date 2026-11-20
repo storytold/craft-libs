@@ -305,6 +305,10 @@ fn hostile_powerpoint_95_streams_never_panic() {
     let many = vec![empty; super::MAX_SLIDES + 5];
     let p = import(&stream_of(document_atom(5760, 4320, 0), &many, &[])).unwrap();
     assert_eq!(p.slides.len(), super::MAX_SLIDES);
+    // Many masters stop at their own, lower limit: each is a copy of the default master.
+    let masters = vec![master(MASTER, DEFAULT, [0, 0, 0, 0]); super::MAX_MASTERS + 5];
+    let p = import(&stream_of(document_atom(5760, 4320, 0), &[], &masters)).unwrap();
+    assert_eq!(p.masters.len(), super::MAX_MASTERS);
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in

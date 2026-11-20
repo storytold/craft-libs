@@ -40,6 +40,9 @@ const NO_INSTANCE: u32 = 0xFFFF;
 /// Slides, and masters, read at most: beyond any real presentation, so a file of empty slide
 /// records can't make an unbounded presentation.
 const MAX_SLIDES: usize = 1 << 16;
+/// Masters read at most. Each becomes a copy of the caller's default master with its layouts, so
+/// the cap is lower than for slides; PowerPoint 95 writes one.
+const MAX_MASTERS: usize = 256;
 /// The fill colour's fourth byte when the colour is the RGB given, not a scheme slot.
 const RGB_GIVEN: u8 = 0xFE;
 
@@ -184,7 +187,7 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
         for r in list.children() {
             match r.kind {
                 rt::SLIDE if slides.len() < MAX_SLIDES => slides.push(page(r)),
-                rt::MAIN_MASTER if masters.len() < MAX_SLIDES => masters.push(page(r)),
+                rt::MAIN_MASTER if masters.len() < MAX_MASTERS => masters.push(page(r)),
                 _ => {}
             }
         }
