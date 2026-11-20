@@ -161,6 +161,9 @@ const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     ("crates/ui-patterns/src/patterns/presets/model/library.rs", "MemoProps"),
     // Settled fact: a name check keys by its inputs and its `fn` behind `dyn NameChecker`, as `Bind::check_with` does.
     ("crates/ui-patterns/src/patterns/presets/named.rs", "MemoProps"),
+    // Settled fact: `PresetSource` erases its inputs behind a trait object; it keys on those inputs (themselves
+    // `MemoProps`) and on the addresses of its capture-free `fn`s, which stand for the code that reads them.
+    ("crates/ui-patterns/src/patterns/presets/source.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
