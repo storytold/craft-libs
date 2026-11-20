@@ -52,7 +52,7 @@ impl<'a, K: Hash + PartialEq> Pages<'a, K> {
                 size
             });
             let size = kept.unwrap_or_else(|| {
-                replay::open(&ctx);
+                replay::open_in_pass(&ctx);
                 let size = measure::run(&ctx, || {
                     // What the hidden page measures joins no transcript around it: the run that shows the pages does
                     // not show it, so nothing there checks it.

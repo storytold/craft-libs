@@ -15,8 +15,11 @@ use std::sync::Arc;
 /// lives. A given value has none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum BindKey {
-    /// A write-through place: its address and the type stored there.
+    /// A write-through place: its address and the type stored there. An address names the place in its pass only:
+    /// a record kept for a later pass keeps no such read.
     Place(usize, TypeId),
+    /// A field of a `Tracked` value (`bind_tracked!`): the value's source id, the field's offset in it and its type.
+    Tracked(u64, usize, TypeId),
     /// Session memory under this component id.
     Kept(Id),
     /// The saved tier under the key with this hash.
@@ -97,8 +100,10 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
         let read = Read { key, reader, measuring, runs, samples };
         crate::runtime::replay::note_read(ctx, key);
         // The reads are a set to what reads them: a run that measures a component again (a kept transcript's check)
-        // reads nothing new.
-        crate::runtime::replay::journal_distinct(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        // reads nothing new. A place's address names it in this pass only: a replay in a later pass notes no such read.
+        if !matches!(key, BindKey::Place(..)) {
+            crate::runtime::replay::journal_distinct(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
+        }
         with(ctx, |reads| reads.reads.push(read));
     }
 }

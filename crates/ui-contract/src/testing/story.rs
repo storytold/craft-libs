@@ -244,6 +244,27 @@ pub struct StoryData {
     written: Tracked<()>,
     /// The values as the last [`StoryData::settle`] found them.
     settled: Option<StorySnapshot>,
+    /// The revision after the last [`StoryData::settle`]: a write through a binding ([`StoryData::bind`]) moved it
+    /// since, and settle moves it no further for that write.
+    settled_at: Option<Revision>,
+}
+
+/// A story value as the Properties editor binds it ([`StoryData::__slot`]).
+#[doc(hidden)]
+pub struct Slot<'a> {
+    pub value: &'a mut dyn Shown,
+    pub how: Option<&'a Edit>,
+    pub count: &'a std::cell::Cell<u64>,
+    pub source: u64,
+    pub offset: usize,
+}
+
+impl Slot<'_> {
+    /// A binding of the value as `T`, as [`StoryData::bind`] makes it; `None` when the value is not a `T`.
+    pub fn bind<T: Value>(&mut self) -> Option<crate::contract::Bind<'_, T>> {
+        let value = self.value.any_mut().downcast_mut::<T>()?;
+        Some(crate::contract::Bind::__tracked(value, self.count, self.source, self.offset))
+    }
 }
 
 /// How the Properties editor edits a value, beyond what its type says.
@@ -339,6 +360,47 @@ impl StoryData {
         }
     }
 
+    /// A binding of the value named `name` of type `T`, created from `init` on first use. Every view that binds a value
+    /// shows and edits one value: the story's view, and the Properties editor in the same pass. The binding names
+    /// the value by this data's source, so a reader that replays sees an edit made later in its pass, and an edit
+    /// moves the [`revision`](Self::revision) at the write.
+    #[allow(clippy::unreachable, reason = "the slot key holds the type, so the downcast cannot fail")]
+    pub fn bind<T: Value>(&mut self, name: &'static str, init: T) -> crate::contract::Bind<'_, T> {
+        let StoryData { values, written, .. } = self;
+        let slot = values.entry((name, TypeId::of::<T>())).or_insert_with(|| Box::new(init));
+        let (_, count, source) = written.__split_for_bind();
+        match slot.any_mut().downcast_mut::<T>() {
+            Some(value) => crate::contract::Bind::__tracked(value, count, source, slot_offset(name)),
+            None => unreachable!("a slot's value has the type its key names"),
+        }
+    }
+
+    /// Like [`StoryData::bind`] for a number the Properties editor keeps inside `range`.
+    pub fn bind_ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> crate::contract::Bind<'_, T> {
+        self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
+        self.bind(name, init)
+    }
+
+    /// Called by the Properties editor only: the value under `key` with what binds it as [`StoryData::bind`] does (the
+    /// write count, the source and the value's place in the data).
+    #[doc(hidden)]
+    pub fn __slot(&mut self, key: (&'static str, TypeId)) -> Option<Slot<'_>> {
+        let StoryData { values, how, written, .. } = self;
+        let value = values.get_mut(&key)?.as_mut();
+        let (_, count, source) = written.__split_for_bind();
+        Some(Slot { value, how: how.get(&key), count, source, offset: slot_offset(key.0) })
+    }
+
+    /// Called by the Properties editor only: it wrote the value under `key` outside a binding (an assignment after a
+    /// picked choice or an edited number). The revision moves, and a view that read the value earlier in the pass
+    /// runs again.
+    #[doc(hidden)]
+    pub fn __wrote(&mut self, ctx: &egui::Context, key: (&'static str, TypeId)) {
+        *self.written = ();
+        let read = crate::runtime::reads::BindKey::Tracked(self.written.source(), slot_offset(key.0), key.1);
+        crate::runtime::inspect::edited(ctx, read, Id::NULL);
+    }
+
     /// Like [`StoryData::value`] for a number the Properties editor keeps inside `range`.
     pub fn ranged<T: Value>(&mut self, name: &'static str, init: T, range: RangeInclusive<f64>) -> &mut T {
         self.how.entry((name, TypeId::of::<T>())).or_insert(Edit::Range(range));
@@ -371,9 +433,12 @@ impl StoryData {
             last.values.len() == self.values.len() && last.values.iter().all(|(key, was)| self.values.get(key).is_some_and(|now| now.same(&**was)))
         });
         if !same {
-            *self.written = ();
+            if self.settled_at.is_none_or(|at| at == self.written.revision()) {
+                *self.written = ();
+            }
             self.settled = Some(self.snapshot());
         }
+        self.settled_at = Some(self.written.revision());
     }
 
     /// The revision of the values: unique to this data, and moved by every [`settle`](Self::settle) that finds a
@@ -615,4 +680,13 @@ where
     let shown = row.id(id).show(ui);
     crate::runtime::env::Env::restore(ui.ctx(), installed);
     shown
+}
+
+/// A story value's place in its data, by its name: with the data's source and the value's type it names the value in
+/// every pass (`BindKey::Tracked`).
+fn slot_offset(name: &str) -> usize {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    hasher.finish() as usize
 }

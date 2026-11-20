@@ -109,6 +109,9 @@ struct Open {
     focus: focus::Mark,
     egui: egui::PassMark,
     facts: Facts,
+    /// The record is kept for a later pass (a memoized view's), not used only within its pass (a measure-only child's):
+    /// it keeps no read of a place by address, which names the place in this pass only.
+    kept: bool,
     /// The record is around a run of the replay audit (`runtime::audit`).
     #[cfg(feature = "testing")]
     audit: bool,
@@ -123,6 +126,7 @@ impl Open {
             focus: focus::mark(ctx),
             egui: ctx.pass_mark(),
             facts: Facts { blocked: crate::runtime::access::scope::depth(ctx) > 0, ..Facts::default() },
+            kept: true,
             #[cfg(feature = "testing")]
             audit: false,
         }
@@ -183,6 +187,12 @@ pub(crate) fn open(ctx: &Context) {
     push(ctx, Open::empty(ctx));
 }
 
+/// Opens a record used only within its pass, around a measuring run of a measure-only child, which `close` ends: it
+/// keeps the places the run read by address too.
+pub(crate) fn open_in_pass(ctx: &Context) {
+    push(ctx, Open { kept: false, ..Open::empty(ctx) });
+}
+
 fn push(ctx: &Context, open: Open) {
     pass_state::with::<Recorder, _>(ctx, |recorder| recorder.open.push(Open { from: recorder.journal.len(), ..open }));
     OPEN.fetch_add(1, Ordering::AcqRel);
@@ -219,7 +229,8 @@ pub(crate) fn close(ctx: &Context, layer: Layer) -> Record {
             outer.facts.owners.extend(open.facts.owners.iter().copied());
             outer.facts.layout_keeps.extend(open.facts.layout_keeps.iter().copied());
             outer.facts.wake = min_wake(outer.facts.wake, open.facts.wake);
-            outer.facts.reads.extend(open.facts.reads.iter().copied());
+            let kept = outer.kept;
+            outer.facts.reads.extend(open.facts.reads.iter().copied().filter(|key| !kept || !matches!(key, BindKey::Place(..))));
             outer.facts.inputs.extend(open.facts.inputs);
             outer.facts.instances.extend(open.facts.instances.iter().copied());
         } else {
@@ -386,9 +397,15 @@ where
 
 /// Notes that the running code read the value `key`.
 pub(crate) fn note_read(ctx: &Context, key: BindKey) {
-    with_open(ctx, |facts| {
-        facts.reads.insert(key);
-    });
+    if OPEN.load(Ordering::Acquire) > 0 && frame::running(ctx).is_some() {
+        pass_state::with::<Recorder, _>(ctx, |recorder| {
+            if let Some(open) = recorder.open.last_mut()
+                && (!open.kept || !matches!(key, BindKey::Place(..)))
+            {
+                open.facts.reads.insert(key);
+            }
+        });
+    }
 }
 
 /// Notes that the running code read the framework input `input`.

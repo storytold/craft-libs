@@ -305,13 +305,13 @@ impl<T: PlainData> Tracked<T> {
         f(&mut **self)
     }
 
-    /// Called by craft-ui's `bind_tracked!` only: the value without moving the revision, and the write count. The
-    /// macro borrows each bound field from the value through a field path and gives the binding the count, which it
-    /// moves on every write that changes the field. A direct call can write any part of the value without moving the
+    /// Called by craft-ui's `bind_tracked!` only: the value without moving the revision, the write count and the
+    /// source id. The macro borrows each bound field from the value through a field path and gives the binding the
+    /// count, which it moves on every write that changes the field, and the source, which names the field's reads. A direct call can write any part of the value without moving the
     /// revision, so readers keyed by it would miss the write; design-lint rejects direct calls in UI crates.
     #[doc(hidden)]
-    pub fn __split_for_bind(&mut self) -> (&mut T, &Cell<u64>) {
-        (&mut self.value, Cell::from_mut(&mut self.revision.count))
+    pub fn __split_for_bind(&mut self) -> (&mut T, &Cell<u64>, u64) {
+        (&mut self.value, Cell::from_mut(&mut self.revision.count), self.revision.source)
     }
 
     /// The value, leaving the tracking.

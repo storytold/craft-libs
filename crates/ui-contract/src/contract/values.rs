@@ -145,9 +145,17 @@ enum Source<'a, T> {
     MutMixed(&'a mut Mixed<T>),
     /// Write-through to a field of a `Tracked` (`bind_tracked!`), whose write count moves only when an edit changes
     /// the field.
-    Tracked { value: &'a mut T, count: &'a Cell<u64> },
+    Tracked { value: &'a mut T, count: &'a Cell<u64>, at: TrackedAt },
     /// No caller value: session memory under the component id, or the saved tier.
     Kept,
+}
+
+/// Where a `bind_tracked!` binding's field is: the source id of the `Tracked` that holds it and the field's offset in
+/// bytes from the start of that value. It names the field in every pass, wherever the value lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct TrackedAt {
+    source: u64,
+    offset: usize,
 }
 
 /// The binding of a value component: a value the app owns, the check on it and the value a reset restores. The same
@@ -177,11 +185,12 @@ impl<'a, T: Value> Bind<'a, T> {
         Self::from_source(Source::MutMixed(v))
     }
 
-    /// Called by [`bind_tracked!`](crate::bind_tracked) only: edits write through to `value`, and an edit that
-    /// changes it moves `count`, the write count of the `Tracked` that holds it.
+    /// Called by [`bind_tracked!`](crate::bind_tracked) only: edits write through to `value`, a field `offset` bytes
+    /// into the value of the `Tracked` with source id `source`, and an edit that changes it moves `count`, that
+    /// `Tracked`'s write count.
     #[doc(hidden)]
-    pub fn __tracked(value: &'a mut T, count: &'a Cell<u64>) -> Self {
-        Self::from_source(Source::Tracked { value, count })
+    pub fn __tracked(value: &'a mut T, count: &'a Cell<u64>, source: u64, offset: usize) -> Self {
+        Self::from_source(Source::Tracked { value, count, at: TrackedAt { source, offset } })
     }
 
     /// No caller value: the component keeps it in session memory under its id. Until something is stored, it reads
@@ -250,7 +259,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => Source::Given(value.clone()),
             Source::Mut(value) => Source::Mut(&mut **value),
             Source::MutMixed(value) => Source::MutMixed(&mut **value),
-            Source::Tracked { value, count } => Source::Tracked { value: &mut **value, count },
+            Source::Tracked { value, count, at } => Source::Tracked { value: &mut **value, count, at: *at },
             Source::Kept => Source::Kept,
         };
         let check = self.check.as_deref().map(|check| Box::new(check) as Box<Check<'_, T>>);
@@ -285,7 +294,7 @@ impl<'a, T: Value> Bind<'a, T> {
             Source::Given(value) => SourceMut::Given(value),
             Source::Mut(value) => SourceMut::Mut(&mut **value),
             Source::MutMixed(value) => SourceMut::MutMixed(&mut **value),
-            Source::Tracked { value, count } => SourceMut::Tracked { value: &mut **value, count },
+            Source::Tracked { value, count, at } => SourceMut::Tracked { value: &mut **value, count, at: *at },
             Source::Kept => SourceMut::Kept,
         };
         BindMut { source, policy: self.policy, check: self.check.as_deref(), save: self.save.as_ref(), reset: self.reset.as_ref() }
@@ -333,7 +342,7 @@ impl<T> MemoProps for CheckFn<T> {
 /// A binding in a memoized view's props: by what the view reads through it. A given value keys by value; a
 /// write-through source by its value and its address, the place the framework knows its reads by (a large value is
 /// bound through `bind_tracked!` or held as `&Tracked<T>` instead: its value is hashed for each key); a `Tracked` field
-/// (`bind_tracked!`) by its address and the write count of its `Tracked`; a kept value by the writes the context counts
+/// (`bind_tracked!`) by its `Tracked`'s source, the field's place in the value and the write count; a kept value by the writes the context counts
 /// outside a component's edit: of its saved value (`set_saved_value`, `forget_saved`), or of session memory
 /// (`forget`). The framework tracks the component's own reads and edits. The policy, the reset value, the save key and
 /// the check's inputs and `fn` (`check_with`) feed too.
@@ -356,9 +365,10 @@ impl<T: Value + MemoProps> MemoProps for Bind<'_, T> {
                 Mixed::<T>::key(value, key);
                 std::ptr::from_ref::<Mixed<T>>(value).addr().key(key);
             }
-            Source::Tracked { value, count } => {
+            Source::Tracked { count, at, .. } => {
                 key.write_u32(3);
-                address(value).key(key);
+                at.source.key(key);
+                at.offset.key(key);
                 count.get().key(key);
             }
             Source::Kept => {
@@ -388,7 +398,7 @@ enum SourceMut<'a, T> {
     Given(&'a Mixed<T>),
     Mut(&'a mut T),
     MutMixed(&'a mut Mixed<T>),
-    Tracked { value: &'a mut T, count: &'a Cell<u64> },
+    Tracked { value: &'a mut T, count: &'a Cell<u64>, at: TrackedAt },
     Kept,
 }
 
@@ -422,7 +432,7 @@ impl<T: Value> BindMut<'_, T> {
             SourceMut::Given(_) => None,
             SourceMut::Mut(value) => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
             SourceMut::MutMixed(value) => Some(BindKey::Place(std::ptr::from_ref::<Mixed<T>>(value) as usize, TypeId::of::<Mixed<T>>())),
-            SourceMut::Tracked { value, .. } => Some(BindKey::Place(std::ptr::from_ref::<T>(value) as usize, TypeId::of::<T>())),
+            SourceMut::Tracked { at, .. } => Some(BindKey::Tracked(at.source, at.offset, TypeId::of::<T>())),
             SourceMut::Kept => Some(match self.save {
                 Some(save) => BindKey::Saved(Id::NULL.with(&save.key)),
                 None => BindKey::Kept(id),
@@ -564,7 +574,7 @@ impl<T: Value> BindMut<'_, T> {
         match &mut self.source {
             SourceMut::Mut(value) => event.apply(&mut **value),
             SourceMut::MutMixed(value) => event.apply_mixed(&mut **value),
-            SourceMut::Tracked { value, count } => {
+            SourceMut::Tracked { value, count, .. } => {
                 // A gesture's start and a cancel with nothing to restore never write.
                 if matches!(event, EditEvent::Begin { .. } | EditEvent::Cancel { before: None, .. }) {
                     return Applied::Unchanged;
@@ -790,15 +800,23 @@ pub(crate) enum Checked {
 #[macro_export]
 macro_rules! bind_tracked {
     ($tracked:expr => $first:tt $(. $rest:tt)*) => {{
-        let (model, count) = $tracked.__split_for_bind();
-        $crate::contract::Bind::__tracked(&mut model.$first $(.$rest)*, count)
+        let (model, count, source) = $tracked.__split_for_bind();
+        let base = ::std::ptr::from_ref(&*model).addr();
+        let field = &mut model.$first $(.$rest)*;
+        let offset = ::std::ptr::from_ref(&*field).addr() - base;
+        $crate::contract::Bind::__tracked(field, count, source, offset)
     }};
     ($tracked:expr => $($first:tt $(. $rest:tt)*),+ $(,)?) => {{
-        let (model, count) = $tracked.__split_for_bind();
-        ($($crate::contract::Bind::__tracked(&mut model.$first $(.$rest)*, count),)+)
+        let (model, count, source) = $tracked.__split_for_bind();
+        let base = ::std::ptr::from_ref(&*model).addr();
+        ($({
+            let field = &mut model.$first $(.$rest)*;
+            let offset = ::std::ptr::from_ref(&*field).addr() - base;
+            $crate::contract::Bind::__tracked(field, count, source, offset)
+        },)+)
     }};
     ($tracked:expr) => {{
-        let (model, count) = $tracked.__split_for_bind();
-        $crate::contract::Bind::__tracked(model, count)
+        let (model, count, source) = $tracked.__split_for_bind();
+        $crate::contract::Bind::__tracked(model, count, source, 0)
     }};
 }

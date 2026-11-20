@@ -7,7 +7,7 @@ use crate::values::kit::{AT, INITIAL, Scrub, Seen};
 use craft_theme::{Contrast, Mode, Size};
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Radio, RadioGroup};
-use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Sizing, Tracked, bind_tracked};
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Commands as _};
@@ -80,10 +80,11 @@ fn other(props: &mut Other, ui: &mut Ui) {
     }
 }
 
-/// Two memoized views, `reader` and `other`, and a scrub outside them bound to the value the reader's own scrub shows.
+/// Two memoized views, `reader` and `other`, and a scrub outside them bound to the value the reader's own scrub shows:
+/// state two parts show and edit, so it is `Tracked` and both bind it by its source.
 /// The scrub that edits comes before the views in the pass when `editor_first`, else after them.
 struct Scene {
-    value: RefCell<f32>,
+    value: RefCell<Tracked<f32>>,
     room: Cell<Vec2>,
     editor_first: bool,
     spinner: bool,
@@ -92,7 +93,7 @@ struct Scene {
 
 impl Scene {
     fn new(editor_first: bool, spinner: bool) -> Scene {
-        Scene { value: RefCell::new(INITIAL), room: Cell::new(ROOM), editor_first, spinner, repaints: Cell::new(false) }
+        Scene { value: RefCell::new(Tracked::new(INITIAL)), room: Cell::new(ROOM), editor_first, spinner, repaints: Cell::new(false) }
     }
 
     fn show(&self, ui: &mut Ui) {
@@ -100,7 +101,9 @@ impl Scene {
             self.editor(ui);
         }
         in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
-            MemoView::new("reader", Reader { value: Bind::bound(&mut *self.value.borrow_mut()) }, reader).show(ui);
+            let mut value = self.value.borrow_mut();
+            MemoView::new("reader", Reader { value: bind_tracked!(value) }, reader).show(ui);
+            drop(value);
             MemoView::new("other", Other { repaints: self.repaints.get(), spinner: self.spinner }, other).show(ui);
         });
         if !self.editor_first {
@@ -109,7 +112,8 @@ impl Scene {
     }
 
     fn editor(&self, ui: &mut Ui) {
-        Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("editor").show_at(ui, AT);
+        let mut value = self.value.borrow_mut();
+        Scrub::new(bind_tracked!(value)).id_salt("editor").show_at(ui, AT);
     }
 
     /// The runs of each view in one frame with `events`.
@@ -189,7 +193,7 @@ fn drag(scene: &Scene) -> Vec<(usize, [usize; 2], bool)> {
     for step in 0..=4 {
         let event = if step == 0 { press(from) } else { moved(from + Vec2::new(10.0 * step as f32 + 10.0, 0.0)) };
         let passes = frames.frame(vec![event], |ui| scene.show(ui));
-        let shows = SEEN.with(|seen| seen.shown.get()) == Some(*scene.value.borrow());
+        let shows = SEEN.with(|seen| seen.shown.get()) == Some(**scene.value.borrow());
         seen.push((passes, [runs_of(&frames.ctx, "Reader"), runs_of(&frames.ctx, "Other")], shows));
     }
     scene.frame(&mut frames, vec![release(from + Vec2::new(50.0, 0.0))]);

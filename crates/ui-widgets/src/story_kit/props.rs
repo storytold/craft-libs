@@ -11,7 +11,7 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
 use crate::pickers::Select;
-use crate::testing::story::{Edit, Shown, StoryData};
+use crate::testing::story::{Edit, Slot, StoryData};
 use crate::text::{NumberField, TextField};
 use egui::{Response, Ui};
 use std::any::Any;
@@ -58,46 +58,57 @@ fn label_of(name: &str) -> String {
     chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
 }
 
-/// The editable form of `data`'s values, one row each, sorted by name; returns the form's response.
+/// The editable form of `data`'s values, one row each, sorted by name; returns the form's response. A value an editor
+/// changes is one the story's view binds too (`StoryData::bind`): a story view that read it earlier in the pass runs
+/// again.
 pub fn story_props(ui: &mut Ui, data: &mut StoryData) -> Response {
     let mut keys: Vec<_> = data.values.keys().copied().collect();
     keys.sort_by_key(|(name, _)| *name);
+    let ctx = ui.ctx().clone();
     FieldGroup::new("Properties")
         .show(ui, |ui, _| {
             for key in keys.iter().copied() {
                 let label = label_of(key.0);
-                let how = data.how.get(&key);
-                let Some(value) = data.values.get_mut(&key) else { continue };
-                Field::new(label.clone()).show(ui, |ui, _| row(ui, &label, value.as_mut(), how));
+                let Some(mut slot) = data.__slot(key) else { continue };
+                let mut wrote = false;
+                Field::new(label.clone()).show(ui, |ui, _| row(ui, &label, &mut slot, &mut wrote));
+                if wrote {
+                    data.__wrote(&ctx, key);
+                }
             }
         })
         .output
 }
 
-fn row(ui: &mut Ui, label: &str, value: &mut dyn Shown, how: Option<&Edit>) -> Response {
+/// The editor of one value; `wrote` is set when it assigned the value outside its binding.
+fn row(ui: &mut Ui, label: &str, slot: &mut Slot<'_>, wrote: &mut bool) -> Response {
+    let how = slot.how;
     if let Some(Edit::Choice(options)) = how {
         let entries: Vec<_> = options.iter().enumerate().map(|(at, (name, _))| Entry::new(at, *name)).collect();
-        let mut at = options.iter().position(|(_, option)| option.same(&*value)).unwrap_or(usize::MAX);
+        let mut at = options.iter().position(|(_, option)| option.same(&*slot.value)).unwrap_or(usize::MAX);
         let shown = Select::new(label.to_owned(), Bind::bound(&mut at), &entries).show(ui);
-        if let Some((_, picked)) = options.get(at) {
-            value.assign(&**picked);
+        if let Some((_, picked)) = options.get(at)
+            && !picked.same(&*slot.value)
+        {
+            slot.value.assign(&**picked);
+            *wrote = true;
         }
         return shown.response;
     }
-    let any = value.any_mut();
-    if let Some(on) = any.downcast_mut::<bool>() {
-        return Checkbox::new(Bind::bound(on)).label(label.to_owned()).show(ui).response;
+    if let Some(on) = slot.bind::<bool>() {
+        return Checkbox::new(on).label(label.to_owned()).show(ui).response;
     }
-    if let Some(text) = any.downcast_mut::<String>() {
-        return TextField::new(label.to_owned(), Bind::bound(text)).show(ui).response;
+    if let Some(text) = slot.bind::<String>() {
+        return TextField::new(label.to_owned(), text).show(ui).response;
     }
-    if let Some(number) = any.downcast_mut::<Option<f64>>() {
-        let mut field = NumberField::new(label.to_owned(), Bind::bound(number));
+    if let Some(number) = slot.bind::<Option<f64>>() {
+        let mut field = NumberField::new(label.to_owned(), number);
         if let Some(Edit::Range(range)) = how {
             field = field.range(range.clone());
         }
         return field.show(ui).response.clone();
     }
+    let any = slot.value.any_mut();
     if let Some(current) = number_of(&*any) {
         let mut number = Some(current);
         let mut field = NumberField::new(label.to_owned(), Bind::bound(&mut number));
@@ -110,6 +121,7 @@ fn row(ui: &mut Ui, label: &str, value: &mut dyn Shown, how: Option<&Edit>) -> R
         let shown = field.show(ui).response.clone();
         if let Some(edited) = number.filter(|edited| *edited != current) {
             set_number(any, edited);
+            *wrote = true;
         }
         return shown;
     }
