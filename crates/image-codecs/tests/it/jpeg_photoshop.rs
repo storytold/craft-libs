@@ -3,8 +3,9 @@
 //! resource blocks verbatim). A block too large for one segment is split over consecutive
 //! APP13 segments, each carrying the identifier again: that split matches how `scan_metadata`
 //! concatenates the segments back, not Photoshop's own continuation format, whose follow-up
-//! segments repeat neither the identifier nor `8BIM` (exiv2 bug #533). No resources means no
-//! segment.
+//! segments repeat neither the identifier nor `8BIM` (exiv2 bug #533). A block past the 16 MiB
+//! bound `scan_metadata` reads is left out whole, like metadata too large for its EXIF/XMP
+//! segment. No resources means no segment.
 
 use crate::common;
 use common::*;
@@ -193,4 +194,26 @@ fn hand_formed_split_app13_segments_decode_back_joined() {
     assert_eq!(payloads[1].len(), 14 + (resources.len() - split));
     let back = decode(&bytes).unwrap();
     assert_eq!(back.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
+}
+
+/// `scan_metadata` stops collecting APP13 payloads at 16 MiB (jpeg.rs `1 << 24`), so a larger
+/// block would be read back silently truncated. Such a block is left out whole, the way
+/// metadata too large for its one EXIF/XMP segment is left out; the bound itself is written
+/// and comes back exact — 8192 full 2048-byte chunks fit inside it.
+#[test]
+fn resources_past_the_scanner_bound_are_left_out_whole() {
+    for (len, written) in [(1usize << 24, true), ((1usize << 24) + 1, false)] {
+        let mut img = synth(9, 7, ChannelLayout::Rgb, SampleType::U8, 5, 0.3);
+        let mut resources = resource(1073, &vec![0x5A; len - 12]);
+        if resources.len() != len {
+            resources.pop(); // reach the odd length exactly, past `resource`'s even padding
+        }
+        assert_eq!(resources.len(), len);
+        img.meta.photoshop_resources = Some(resources.clone());
+        let bytes = encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        assert_eq!(!app13_payloads(&bytes).is_empty(), written, "{len} resource bytes");
+        let back = decode(&bytes).unwrap();
+        let want = if written { Some(resources.as_slice()) } else { None };
+        assert_eq!(back.meta.photoshop_resources.as_deref(), want, "{len} resource bytes");
+    }
 }
