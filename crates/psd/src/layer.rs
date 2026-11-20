@@ -8,7 +8,7 @@ use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
 use crate::io::{Reader, Sink, WriteExt, append_with, decode_legacy_name, read_pascal, write_pascal};
 use crate::source::Stored;
-use crate::tagged::{BlockData, SectionDivider, SectionType, TaggedBlock, read_blocks, uses_long_length, write_blocks};
+use crate::tagged::{BlockData, SectionDivider, SectionType, TaggedBlock, read_record_blocks, uses_long_length, write_blocks};
 
 /// Channel id of the transparency mask.
 pub const CHANNEL_TRANSPARENCY: i16 = -1;
@@ -651,7 +651,7 @@ impl LayerRecord {
         let br_len = x.u32()?;
         let blending_ranges = BlendingRanges { data: x.bytes_u64(u64::from(br_len))?.to_vec() };
         let name = read_pascal(&mut x, 4)?;
-        let (blocks, extra_trailing) = read_blocks(&mut x, version)?;
+        let (blocks, extra_trailing) = read_record_blocks(&mut x, version)?;
         Ok((LayerRecord { rect, channels, blend_mode, opacity, clipping, flags, filler, mask, blending_ranges, name, blocks, extra_trailing }, lens))
     }
 
