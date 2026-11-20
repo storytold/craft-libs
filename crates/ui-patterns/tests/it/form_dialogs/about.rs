@@ -40,7 +40,7 @@ fn hosted_about_can_leave_enter_with_a_focused_control_without_changing_the_defa
                 .enter_requires_no_focus(opt_in),
         );
         fixture.idle(30);
-        let checkbox = fixture.by_role(Role::CHECKBOX).first().copied().expect("the app tab's checkbox");
+        let checkbox = fixture.by_role(Role::CHECK_BOX).first().copied().expect("the app tab's checkbox");
         assert_eq!(access::name(fixture.tree(), checkbox.node), Some("Keep details visible"));
         for _ in 0..8 {
             if access::focused_key(fixture.tree()) == checkbox.node {
