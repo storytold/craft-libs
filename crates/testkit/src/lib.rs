@@ -25,6 +25,10 @@
 //! truncation of it and those copies, one after another on a worker thread with a time limit for
 //! each, and fails the test with the case that panicked or did not finish.
 //!
+//! With the `corpus` feature, `corpus` (native only) parses pinned-corpus manifests and checks a
+//! corpus folder against them: `corpus::Manifest`, `corpus::verify` and the test gate
+//! `corpus::pinned`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -35,6 +39,8 @@
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
 
+#[cfg(all(feature = "corpus", not(target_arch = "wasm32")))]
+pub mod corpus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
 pub mod guards;
