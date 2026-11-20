@@ -12,12 +12,15 @@ use craft_behavior::{
     GESTURE_GAP, PointerButton, PointerEvent, Wheel, WheelEase, WheelFocus, WheelGesture, WheelPhase, WheelSource, WheelTaker, WheelUnit,
 };
 use craft_keymap::Mods;
-use egui::{Context, Id, Pos2, Rect, Vec2};
+use egui::{Context, Id, IdMap, Pos2, Rect, Vec2};
 
 #[derive(Default)]
 pub(crate) struct State {
     this: Vec<WheelTaker<Id>>,
     last: Vec<WheelTaker<Id>>,
+    /// The overlay containing each taker, recorded with the same pass as its geometry.
+    this_layers: IdMap<Option<Id>>,
+    last_layers: IdMap<Option<Id>>,
     /// The last-pressed gated control while the pointer has stayed inside it since.
     armed: Option<Id>,
     shares: Vec<(Id, Wheel)>,
@@ -152,7 +155,11 @@ pub(crate) fn register(ctx: &Context, taker: WheelTaker<Id>) {
         return;
     }
     crate::runtime::replay::journal(ctx, || move |ctx: &Context| register(ctx, taker));
-    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| state.this.push(taker));
+    let layer = crate::runtime::overlay::drawing_parent(ctx);
+    PerViewport::<State>::with(ctx, pass::current_viewport(ctx), |state| {
+        state.this_layers.insert(taker.owner, layer);
+        state.this.push(taker);
+    });
 }
 
 /// The innermost scroll region of last pass whose view meets `rect`: where a reveal request or a page move goes from
@@ -199,8 +206,12 @@ pub(crate) fn begin(ctx: &Context) {
         .map(|at| pointer::press_winner(ctx, at, pass_pointer.press_targets).map(|(winner, _)| winner.owner));
     // A modal layer holds the wheel, except over the canvas it keeps open and inside its own family.
     let blocked = hover.is_some_and(|at| !sampler::wheel_allowed(ctx, at));
+    let modal_family = crate::runtime::overlay::top_modal_in(ctx, viewport)
+        .filter(|_| !hover.is_some_and(|at| hole.as_ref().is_some_and(|hole| hole.answers(at))))
+        .map(|modal| crate::runtime::overlay::family(ctx, modal.id));
     let wake = PerViewport::<State>::with(ctx, viewport, |state| {
         state.last = std::mem::take(&mut state.this);
+        state.last_layers = std::mem::take(&mut state.this_layers);
         state.shares.clear();
         if let Some(winner) = pressed_on {
             state.armed = winner.filter(|id| state.last.iter().any(|taker| taker.gated && taker.owner == *id));
@@ -246,7 +257,18 @@ pub(crate) fn begin(ctx: &Context) {
                     .at(at);
                 let focus = WheelFocus::new(focused).app_field(app_field).by_position(by_position);
                 let swipe = state.open_gesture(source, now);
-                let shares = split(&state.last, at, share, focus, state.armed, &mut state.gesture, now);
+                // A point over a modal admits its own wheel takers, not a canvas below the modal.
+                let eligible: Vec<_> = state
+                    .last
+                    .iter()
+                    .copied()
+                    .filter(|taker| {
+                        modal_family.as_ref().is_none_or(|family| {
+                            state.last_layers.get(&taker.owner).and_then(|layer| *layer).is_some_and(|layer| family.contains(&layer))
+                        })
+                    })
+                    .collect();
+                let shares = split(&eligible, at, share, focus, state.armed, &mut state.gesture, now);
                 // A momentum run resumes its swipe only on the swipe's owner; any split drops the ended swipe.
                 if swipe.is_some() && state.gesture.owner != swipe {
                     (state.gathered, state.moved) = (Vec2::ZERO, false);

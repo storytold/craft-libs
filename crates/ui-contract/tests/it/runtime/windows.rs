@@ -331,6 +331,64 @@ fn a_window_an_app_modal_in_another_window_blocks_takes_no_wheel() {
     }
 }
 
+#[trial]
+fn wheel_over_a_modal_never_reaches_a_view_under_it_during_a_drag() {
+    use craft_behavior::{Sense, WheelTaker};
+    use craft_ui::testing::wheel::{register, take};
+    let windows = Windows::new();
+    let view = egui::Id::new("dragging view");
+    let modal_view = egui::Id::new("modal view");
+    let taken = Cell::new(None);
+    let modal_taken = Cell::new(None);
+    let open = Cell::new(false);
+    let scrolls = Cell::new(false);
+    let modal_rect = Cell::new(Rect::NOTHING);
+    let seen = RefCell::new(Seen::default());
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            Probe::new(&seen).size(Vec2::splat(800.0)).sense(Sense::DRAG).show(ui);
+            register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::splat(800.0))).vertical(true).scrolls(true));
+            if let Some(scroll) = take(ui.ctx(), view) {
+                taken.set(Some(scroll));
+            }
+            if open.get() {
+                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+                let modal = Modal { common: Common::new(), props }.id_salt("modal").show(ui, |ui, _| {
+                    if scrolls.get() {
+                        register(ui.ctx(), WheelTaker::new(modal_view, modal_rect.get()).vertical(true).scrolls(true));
+                        if let Some(scroll) = take(ui.ctx(), modal_view) {
+                            modal_taken.set(Some(scroll));
+                        }
+                    }
+                });
+                modal_rect.set(modal.output.rect);
+            }
+        })
+    };
+    let at = Pos2::new(30.0, 30.0);
+    for _ in 0..4 {
+        frame(vec![moved(at)]);
+    }
+    frame(vec![press(at)]);
+    frame(vec![moved(Pos2::new(100.0, 30.0))]);
+    assert!(windows.ctx.dragged_id().is_some(), "the drag is held before the modal opens");
+    open.set(true);
+    for _ in 0..4 {
+        frame(vec![]);
+    }
+    let over_modal = modal_rect.get().center();
+    frame(vec![moved(over_modal)]);
+    frame(vec![wheel(-30.0)]);
+    assert!(taken.get().is_none(), "wheel over the modal reached the view underneath: {:?}", taken.get());
+    scrolls.set(true);
+    for _ in 0..3 {
+        frame(vec![]);
+    }
+    frame(vec![wheel(-30.0)]);
+    assert!(modal_taken.get().is_some(), "the modal's own scroll region takes the wheel");
+    assert!(taken.get().is_none(), "the background stays still when the modal scrolls");
+}
+
 /// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window
 /// forward with it, in the pass the main window gains focus; a pass without a focus change sends nothing.
 #[trial]
