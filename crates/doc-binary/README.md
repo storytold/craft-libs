@@ -35,3 +35,11 @@ Streams (1 GiB each, refused by `craft-cfb` before anything is allocated), parag
 property counts, table nesting and drawing records are capped; the constants are in the source
 next to what they bound, and each has a test. Hostile input gives an error or a best-effort
 document, never a panic.
+
+## Right-to-left text
+
+Paragraphs, runs, tables and sections keep their direction. Physical paragraph indents and
+alignment are converted to logical sides using the paragraph's own or inherited direction;
+logical sprms take precedence. Adjacent table rows of different directions remain separate
+tables. Kashida justification values become justified alignment and Thai distribution becomes
+distributed alignment; drawing kashida elongation is the consuming application's responsibility.
