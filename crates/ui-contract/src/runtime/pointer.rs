@@ -39,6 +39,8 @@ pub struct PointerFrame {
     pub buttons: Buttons,
     /// The primary press of the pass.
     pub press: Option<PressStart>,
+    /// Modifiers carried by `press`, including the app's latched modifiers. A pass has at most one press.
+    pub press_mods: Option<Mods>,
     /// The button released in the pass.
     pub release: Option<PointerButton>,
     /// The modifiers held, with the ones the app latches for the user (a Modifier Keys panel) added: the app holds
@@ -163,6 +165,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
     // modifiers from its own (event-free) input and counts no press twice.
     let mods = with_latched(read.mods, latched);
+    let press_mods = read.press_mods.map(|mods| with_latched(mods, latched));
     // A drag that started in another window reaches this one through the desktop pointer (8.4).
     if read.pos.is_none() {
         read.pos = drag::cross_window_pointer(ctx, viewport);
@@ -175,8 +178,9 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         let mut events = read.events.clone();
         for event in &mut events {
             if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
-                *clicks = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
-                memory.last_press = Some((*pos, *time, *clicks, mods));
+                let press_mods = press_mods.unwrap_or(mods);
+                *clicks = count_clicks(memory.last_press, *pos, *time, press_mods, hit.slop);
+                memory.last_press = Some((*pos, *time, *clicks, press_mods));
             }
         }
         if read.primary_pressed || other_pressed {
@@ -195,6 +199,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         delta: read.delta,
         buttons: read.buttons,
         press,
+        press_mods,
         release: read.release,
         mods,
         time: read.time,
@@ -289,6 +294,7 @@ pub fn frame(ctx: &Context) -> PointerFrame {
         delta: Vec2::ZERO,
         buttons: Buttons::empty(),
         press: None,
+        press_mods: None,
         release: None,
         mods: Mods::NONE,
         time: 0.0,

@@ -517,10 +517,21 @@ impl PassRead {
     }
 
     /// The modifiers, sample and hover position the part and press results read.
-    fn inputs(&self) -> (Mods, Option<PointerSample>, Option<Pos2>) {
+    fn inputs(&self, phase: Option<PressPhase>) -> (Mods, Option<PointerSample>, Option<Pos2>) {
         let frame = self.pointer.frame.as_ref();
-        (frame.map_or(Mods::NONE, |frame| frame.mods), frame.and_then(|frame| frame.sample), self.pointer.hover)
+        (phase_mods(frame, phase), frame.and_then(|frame| frame.sample), self.pointer.hover)
     }
+}
+
+/// A new press reads its event's modifiers; held and moving gestures read the current modifiers.
+fn phase_mods(frame: Option<&pointer::PointerFrame>, phase: Option<PressPhase>) -> Mods {
+    let Some(frame) = frame else { return Mods::NONE };
+    if let Some(PressPhase::Down { start, .. }) = phase
+        && frame.press.is_some_and(|press| press.button == start.button)
+    {
+        return frame.press_mods.unwrap_or(frame.mods);
+    }
+    frame.mods
 }
 
 /// Steps the press machine of the root `id` before its measuring run, from what last pass registered: the root rect,
@@ -560,7 +571,7 @@ pub(crate) fn part_press(ctx: &Context, owner: Id, part: PartRef) -> PartPress {
     let (outcome, known) = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
         (state.outcome.filter(|outcome| outcome.pass == read.pass_nr), known_in(state, owner))
     });
-    let (mods, sample, at) = read.inputs();
+    let (mods, sample, at) = read.inputs(outcome.and_then(|outcome| outcome.phase));
     match outcome {
         Some(outcome) => part_press_in(&outcome, &known, (mods, sample, at), owner, part),
         None => PartPress { press: PressState::new(PressPhase::Idle).mods(mods).sample(sample), hovered: false, hover_pos: None },
@@ -664,7 +675,7 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
         Some(_) => (false, None),
         None => (false, None),
     };
-    let inputs = read.inputs();
+    let inputs = read.inputs(outcome.phase);
     RootResult {
         response,
         parts: part_results_in(&outcome, &known, inputs, spec.id, spec.own),
@@ -767,8 +778,8 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     let layer = ui.layer_id();
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     // One read of the pointer and one of the arena serve the joins, the outcome and the part results.
-    let (pointer_pos, target, mods, sample) = pointer::with_frame(ctx, |frame, hover| {
-        (hover, frame.map_or(0.0, |frame| frame.target), frame.map_or(Mods::NONE, |frame| frame.mods), frame.and_then(|frame| frame.sample))
+    let (pointer_pos, target, sample) = pointer::with_frame(ctx, |frame, hover| {
+        (hover, frame.map_or(0.0, |frame| frame.target), frame.and_then(|frame| frame.sample))
     });
     let mut shapes = Vec::new();
     let mut joined = Vec::with_capacity(specs.len());
@@ -797,6 +808,7 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     if recording {
         journal_join(ctx, arena, &recorded);
     }
+    let mods = pointer::with_frame(ctx, |frame, _| phase_mods(frame, outcome.phase));
     pointer::record_shapes(ctx, layer, arena.0, ui.clip_rect(), shapes);
     specs
         .iter()
