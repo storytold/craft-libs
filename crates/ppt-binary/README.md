@@ -27,15 +27,19 @@ assert!(craft_ppt_binary::import(b"not a .ppt", &craft_pptx::Plain).is_err());
 - Damaged files read as far as they can: a broken edit chain falls back to a scan of the edits,
   and unknown or damaged records are skipped. Sizes, counts, nesting and picture decoding are
   bounded.
-- Password-protected files are refused (`PptError::Encrypted`), as are PowerPoint 4.0 and earlier
-  files (`PptError::TooOld`).
+- Password-protected files are refused (`PptError::Encrypted`). Formats older than PowerPoint 95
+  aren't read: a compound file whose current user record has neither of [MS-PPT]'s tokens and
+  that has no edit record is refused as too old (`PptError::TooOld`), and a file that isn't a
+  compound file is `PptError::NotPpt`. No file from an earlier PowerPoint was tried.
 
 ## PowerPoint 95
 
 PowerPoint 95 (7.0) files use the same compound file and many of the same record numbers, but a
 16-byte record header and a single record tree with no edit chain. A file whose `PowerPoint
 Document` stream starts with that tree is read on its own path; anything else takes the
-PowerPoint 97 path. What was learned of the format came from files PowerPoint 95 itself wrote,
+PowerPoint 97 path. The tree's Document must hold its DocumentAtom, which counts the slides;
+`import_checked` names the slides that count says a cut-short file is missing ("slide 3"). What
+was learned of the format came from files PowerPoint 95 itself wrote,
 one feature per file, and the public [MS-PPT] numbering where the records keep it.
 
 So far a PowerPoint 95 file imports with its slide size, its masters (each the caller's default
@@ -64,7 +68,10 @@ counter-clockwise, DrawingML clockwise, so each is negated. A shape's geometry h
 as drawn, quarter-turns and mirror included, so its angle and flips come from there (a box turned
 by an odd number of quarter-turns is turned back); the rectangle, rounded rectangle and ellipse
 take the angle the user set. A shape that draws nothing but text is a text box; a shape's text is
-read as a text box's is. Freeforms read as custom paths through their points, in their box, with
+read as a text box's is, its text rectangle measured from the edges of the shape's unturned box (a
+balloon's, its body). PowerPoint 95 keeps the text of a shape turned before it was typed upright;
+the text's own angle isn't read yet, so that text turns with its shape. Freeforms read as custom
+paths through their points, in their box, with
 their format's fill, line and shadow, and open ones with their arrowheads. Groups read as groups
 of their members, which keep their places on the slide (PowerPoint 95 can't turn or flip a
 group), nested up to 32 deep. Pictures read as picture shapes in their box, with their crop and

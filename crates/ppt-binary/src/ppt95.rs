@@ -112,6 +112,8 @@ const NO_INSTANCE: u32 = 0xFFFF;
 /// Slides, and masters, read at most: beyond any real presentation, so a file of empty slide
 /// records can't make an unbounded presentation.
 const MAX_SLIDES: usize = 1 << 16;
+/// Where the DocumentAtom holds the number of slides.
+const SLIDE_COUNT: usize = 32;
 /// Masters read at most. Each becomes a copy of the caller's default master with its layouts, so
 /// the cap is lower than for slides; PowerPoint 95 writes one.
 const MAX_MASTERS: usize = 256;
@@ -200,11 +202,23 @@ impl<'a> Iterator for Records<'a> {
 }
 
 /// The Document container of a PowerPoint 95 `PowerPoint Document` stream: the stream starts with
-/// a type-3 record whose first child is a Document (1000) with no instance. `None` for anything
-/// else, PowerPoint 97 files included (their 8-byte headers don't read this way).
+/// a type-3 record whose first child is a Document (1000) with no instance, holding a DocumentAtom
+/// (1001) long enough for its slide count. `None` for anything else, PowerPoint 97 files included
+/// (their 8-byte headers don't read this way).
 pub fn document(stream: &[u8]) -> Option<Rec<'_>> {
     let root = Rec::at(stream, 0).filter(|r| r.kind == rt::ROOT)?;
-    root.children().next().filter(|d| d.kind == rt::DOCUMENT && d.instance == NO_INSTANCE)
+    let document = root.children().next().filter(|d| d.kind == rt::DOCUMENT && d.instance == NO_INSTANCE)?;
+    document.child(rt::DOCUMENT_ATOM)?.u32(SLIDE_COUNT)?;
+    Some(document)
+}
+
+/// The slides the DocumentAtom counts but the file doesn't hold, by position ("slide 3"): what a
+/// truncated file lost. Empty for a whole file.
+pub fn lost(document: &Rec, p: &Presentation) -> Vec<String> {
+    let count = document.child(rt::DOCUMENT_ATOM).and_then(|a| a.u32(SLIDE_COUNT)).map_or(0, |c| c as usize);
+    let read = p.slides.len();
+    // At most as many as could have been read, so a damaged count can't make a huge list.
+    (read + 1..=count.min(read + MAX_SLIDES)).map(|n| format!("slide {n}")).collect()
 }
 
 /// What a slide or master says about itself.
@@ -450,11 +464,23 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         Some(Placeholder { kind: ph_type(a.u8(0)?)?, idx: a.u32(4).unwrap_or(0), size, ..Default::default() })
     });
     let container = r.child(rt::TEXT);
-    let text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    let mut text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    // The text rectangle is measured from the edges of the box as the geometry holds it; the
+    // shape's are those of the unturned box.
+    if let Some(t) = text.as_mut() {
+        unturn_insets(&mut t.body, shape::quarter_turns(&xfrm, drawn));
+    }
     let ruler = container.and_then(|c| text::ruler_slot(&c));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
+        let height = xfrm.h;
         geom = code.map(|c| shape::geometry(c, g.i32(4), &mut xfrm));
+        // A balloon's box is its body, above its tail: the text's bottom edge stays where it was.
+        if let Some(b) = text.as_mut().map(|t| &mut t.body)
+            && let Some(inset) = b.inset_b
+        {
+            b.inset_b = Some((inset - (height - xfrm.h)).max(0.0));
+        }
         if let Some(f) = format {
             look = shape::look(&f, scheme);
         }
@@ -464,6 +490,15 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         None => Kind::Shape,
     };
     Some(Object { placeholder, ph, xfrm, text, ruler, geom, look, kind })
+}
+
+/// Insets measured from the edges of a box `quarters` quarter-turns clockwise from the shape's
+/// unturned one, as insets from the unturned box's edges. Left, top, right and bottom are in
+/// clockwise order, so the unturned box's edge `i` is the turned box's edge `i + quarters`.
+fn unturn_insets(b: &mut craft_pptx::text::BodyProps, quarters: usize) {
+    let turned = [b.inset_l, b.inset_t, b.inset_r, b.inset_b];
+    let edge = |i: usize| turned[(i + quarters) % 4];
+    [b.inset_l, b.inset_t, b.inset_r, b.inset_b] = [edge(0), edge(1), edge(2), edge(3)];
 }
 
 /// An object as a shape: a placeholder of a known type; a picture; a text box when it draws

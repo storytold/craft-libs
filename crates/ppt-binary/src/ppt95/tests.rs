@@ -429,11 +429,20 @@ fn other_framings_keep_the_powerpoint_97_path() {
     let f = build(&[("PowerPoint Document", &not95), ("Current User", &unknown_token)]);
     let e = crate::import(&f, &AppDefaults).unwrap_err();
     assert!(matches!(e, crate::PptError::TooOld));
-    assert_eq!(e.to_string(), "the presentation was made by PowerPoint 4.0 or earlier");
+    assert_eq!(e.to_string(), "the presentation is in a PowerPoint format older than PowerPoint 95");
     // The Document must be the root's first child, with no instance.
     let mut wrong_instance = stream_of(document_atom(5760, 4320, 0), &[], &[]);
     wrong_instance[20..24].copy_from_slice(&0u32.to_le_bytes());
     assert!(super::document(&wrong_instance).is_none());
+    // ...and hold a DocumentAtom with its slide count: an empty Document is not this path's, and
+    // without the PowerPoint 97 records it is damaged.
+    let empty = container(rt::ROOT, 0, &[container(rt::DOCUMENT, 0, &[])]);
+    assert!(super::document(&empty).is_none());
+    assert!(matches!(import(&empty), Err(crate::PptError::Damaged(_))));
+    // An atom too short to hold the count.
+    assert!(super::document(&stream_of(rec(rt::DOCUMENT_ATOM, 4, 0, &[0; 32]), &[], &[])).is_none());
+    // A document with no slides is still one.
+    assert_eq!(import(&stream_of(document_atom(5760, 4320, 0), &[], &[])).unwrap().slides.len(), 0);
 
     let p = crate::import(&crate::tests::file(), &AppDefaults).unwrap();
     assert_eq!(p.slides.len(), 1);
@@ -595,7 +604,7 @@ fn title_and_subtitle_placeholders_keep_their_text() {
     let title = placeholder_95(0x0F, 0, 0, [-2448, -720, 2448, 0], Some(simple_text(b"Title text", [-2448, -720, 2448, 0], BODY)));
     let sub = placeholder_95(0x10, 1, 1, [-2016, 288, 2016, 1392], Some(simple_text(b"Sub text", [-2016, 288, 2016, 1392], BODY)));
     let p = deck_of(vec![title, sub], &[]);
-    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
+    let shapes = &p.slides[0].shapes;
     assert_eq!(texts(&p), ["Title text", "Sub text"]);
     let ph: Vec<_> = shapes.iter().map(|s| s.ph.clone().unwrap()).collect();
     assert_eq!((ph[0].kind, ph[0].idx, ph[0].size.as_deref()), (PhType::CtrTitle, 0, None));
@@ -654,6 +663,32 @@ fn a_bulleted_body_keeps_levels_bullets_and_margins() {
 
 /// Character runs: bold, italic and underline bits, the font by slot, the size, and an RGB or a
 /// scheme slot of the slide's scheme as the colour.
+/// A run of no characters is skipped: it neither formats the text nor uses up the runs read, so a
+/// run after it still formats the text.
+#[test]
+fn zero_length_runs_are_skipped() {
+    let runs = [plain(0), plain(0), plain(0), plain(0), char_run(4, 1, 40, 1, [0, 0, 0, 1])];
+    let body = text(b"abc", &runs, &[para_run(0, false, 0, 2, 0), para_run(4, false, 0, 1, 0)], 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([-2362, -1613, -518, -1325], Some(body))], &[]);
+    let para = &body_of(&p.slides[0].shapes[0]).paragraphs[0];
+    let r = &para.runs[0].props;
+    assert_eq!((para.runs[0].text.as_str(), r.font.as_deref(), r.size, r.bold), ("abc", Some("Arial"), Some(40.0), Some(true)));
+    assert_eq!(para.props.align, Some(Align::Center));
+}
+
+/// The font table is the first font list holding a face: a list whose only face is cut short
+/// gives way to a later one.
+#[test]
+fn the_font_table_is_the_first_list_with_a_face() {
+    let cut = container(4022, 9, &[rec(4023, 0, 0, &[0; 8])]);
+    let lists = [container(2005, 0x19, &[cut, slot_end(0)]), container(2005, 0x19, &[font(b"Arial"), slot_end(0)])];
+    let mut s = SlideSpec::new(0x100, 16);
+    s.objects = vec![shape_95([-2362, -1613, -518, -1325], Some(simple_text(b"Hi", [-2362, -1613, -518, -1325], BODY)))];
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])], container(1010, 0x15, &lists), &[]);
+    let p = import(&stream).unwrap();
+    assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].runs[0].props.font.as_deref(), Some("Arial"));
+}
+
 #[test]
 fn character_runs_keep_their_formatting() {
     let runs = [
@@ -930,7 +965,7 @@ fn hostile_text_never_panics() {
     let t = one(text(b"Hi", &[plain(1000)], &[para_run(u32::MAX, true, 0, 7, 200)], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "Hi");
     assert_eq!(t.paragraphs[0].level, 4, "the level is capped at PowerPoint 95's fifth");
-    // Many zero-length runs: no more are read than the text has characters (plus its end).
+    // Many zero-length runs: skipped, and the text is all there.
     let many = vec![plain(0); 100_000];
     let t = one(text(b"abc", &many, &vec![para_run(0, false, 0, 0, 0); 50_000], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "abc");
@@ -1100,7 +1135,7 @@ fn shape_codes_are_presets_with_their_adjust_values() {
         (8, 0, "star5", &[]),
     ];
     let p = deck_of(cases.iter().map(|(code, adj, ..)| autoshape(*code, *adj, sq, 0, PLAIN)).collect(), &[]);
-    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
+    let shapes = &p.slides[0].shapes;
     assert_eq!(shapes.len(), 12);
     for (s, (code, _, name, adj)) in shapes.iter().zip(cases) {
         assert_eq!(preset_of(s), (name, adj), "code {code}");
@@ -1349,6 +1384,7 @@ fn orientation_bits_turn_and_mirror() {
         let shapes =
             cases.iter().map(|&(bits, turn, flips, ..)| drawn_shape(code | (bits << 8) as i32, 10800, tall, 0, Format { turn, flips, ..PLAIN }));
         let p = deck_of(shapes.collect(), &[]);
+        assert_eq!(p.slides[0].shapes.len(), cases.len(), "code {code}");
         for (s, (bits, _, _, rot, flip_h, bx)) in p.slides[0].shapes.iter().zip(cases) {
             let x = s.xfrm.unwrap();
             assert_eq!((x.rot, x.flip_h, x.flip_v, boxed(s)), (rot, flip_h, false, bx), "code {code} bits {bits:#x}");
@@ -1457,6 +1493,7 @@ fn shadows_keep_their_offset_and_transparency() {
     let p = deck_of(vec![on([48, 48], false), on([24, 80], false), on([-40, -16], true), on([i32::MIN, i32::MAX], false), on([0, 0], false)], &[]);
     let got: Vec<_> = p.slides[0].shapes.iter().map(|s| s.effects.as_ref().and_then(|e| e.outer_shadow.clone()).unwrap()).collect();
     let want = [(6.0, 6.0), (3.0, 10.0), (-5.0, -2.0), (-720.0, 720.0), (0.0, 0.0)];
+    assert_eq!(got.len(), want.len());
     for (sh, (dx, dy)) in got.iter().zip(want) {
         let (x, y) = (sh.dist * sh.dir.to_radians().cos(), sh.dist * sh.dir.to_radians().sin());
         assert!((x - dx).abs() < 1e-9 && (y - dy).abs() < 1e-9, "{dx}, {dy}: {} at {}", sh.dist, sh.dir);
@@ -1555,6 +1592,44 @@ fn hostile_angles_never_panic() {
 
 /// The text of a drawn shape and of a freeform keeps its anchoring, wrap, spacing and justified
 /// alignment, as a text box's does.
+/// The text rectangle is measured from the edges of the box the geometry holds. A shape turned a
+/// quarter before its text was typed holds its box turned (as `rot90thentext` and
+/// `rot90arrowtext` showed), so its insets move to the unturned box's edges; a balloon's box is its
+/// body, so its text's bottom inset is measured from the body's bottom (as `balloontext` showed).
+#[test]
+fn text_insets_follow_the_unturned_box() {
+    // A text rectangle `insets` (left, top, right, bottom, in master units) inside `bx`.
+    let text_in = |[l, t, r, b]: [i32; 4], [il, it, ir, ib]: [i32; 4]| {
+        text(b"Hi", &[plain(3)], &[para_run(3, false, 0, 0, 0)], 1, [l + il, t + it, r - ir, b - ib], BODY)
+    };
+    let shape = |code: i32, bx: [i32; 4], turn: i32, insets: [i32; 4]| {
+        container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, 1800, bx, 0), format(Format { turn, ..PLAIN }), text_in(bx, insets)])
+    };
+    let tall = [-288, -576, 288, 576];
+    let p = deck_of(
+        vec![
+            // A rectangle turned a quarter counter-clockwise, its box held turned.
+            shape(-3, tall, 1440, [66, 37, 66, 37]),
+            // An up arrow: a right arrow turned a quarter, its head at the turned box's top.
+            shape(9 | 0x1000, tall, 0, [209, 329, 208, 37]),
+            // Unturned: the insets stay where they are.
+            shape(-3, [-576, -288, 576, 288], 0, [66, 37, 66, 37]),
+            // A balloon in a 144 pt square: its body is the top 120 pt.
+            shape(13, [-576, -576, 576, 576], 0, [121, 91, 121, 307]),
+        ],
+        &[],
+    );
+    let insets: Vec<_> = p.slides[0]
+        .shapes
+        .iter()
+        .map(|s| {
+            let b = &body_of(s).body;
+            (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap())
+        })
+        .collect();
+    assert_eq!(insets, [(4.625, 8.25, 4.625, 8.25), (4.625, 26.125, 41.125, 26.0), (8.25, 4.625, 8.25, 4.625), (15.125, 11.375, 15.125, 14.375)]);
+}
+
 #[test]
 fn drawn_shapes_text_keeps_its_anchoring_and_spacing() {
     let bx = [-576, -576, 576, 576];
@@ -2243,14 +2318,55 @@ fn check_media_sample(name: &str, p: &Presentation) {
     }
 }
 
+/// The text rectangles of the PowerPoint 95 samples with text in a turned shape or a balloon; false
+/// for any other sample.
+fn check_text_frame_sample(name: &str, shapes: &[Shape]) -> bool {
+    // AddShape(n, 1440, 1440, 2880, 1440) in twips.
+    let wide = (72.0, 72.0, 144.0, 72.0);
+    let insets = |s: &Shape| {
+        let b = &body_of(s).body;
+        (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap())
+    };
+    match name {
+        // A rectangle with text, then the same turned 90° after its text was typed: PowerPoint 95
+        // keeps the box unturned and the text turns with it (4003 +16), insets 66 × 37 units.
+        "recttext" | "rot90text" => {
+            assert_eq!((boxed(&shapes[0]), insets(&shapes[0])), (wide, (8.25, 4.625, 8.25, 4.625)), "{name}");
+        }
+        // Turned 90° before its text was typed: the box and the text rectangle are held turned
+        // (and the text upright), so the insets move to the unturned box's edges, the turned
+        // box's left becoming the top.
+        "rot90thentext" => {
+            let x = shapes[0].xfrm.unwrap();
+            assert_eq!((x.rot, x.w, x.h), (270.0, 144.0, 72.0));
+            assert_eq!(insets(&shapes[0]), (4.625, 8.25, 4.625, 8.25));
+        }
+        // An up arrow with text: a right arrow turned a quarter, whose head (the turned box's top,
+        // 329 units in) is the unturned box's right.
+        "rot90arrowtext" => assert_eq!(insets(&shapes[0]), (4.625, 26.125, 41.125, 26.0)),
+        // A balloon's box is its body (the square's top 120 of 144 pt); its text's bottom edge,
+        // 307 units above the square's, is 14.375 pt above the body's.
+        "balloontext" => {
+            assert_eq!(boxed(&shapes[0]), (288.0, 198.0, 144.0, 120.0));
+            assert_eq!(insets(&shapes[0]), (15.125, 11.375, 15.125, 14.375));
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// What one PowerPoint 95 shape sample shows, by its case name.
 fn check_shape_sample(name: &str, p: &Presentation) {
+    // Every sample comes here; one with no slide has no shapes to check.
     let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
     let flips = |s: &Shape| (s.xfrm.unwrap().flip_h, s.xfrm.unwrap().flip_v);
     // AddShape(n, 5760, 3960, 2880, 2880) in twips: 2 in square at 4 in, 2.75 in.
     let square = (288.0, 198.0, 144.0, 144.0);
     // AddShape(n, 1440, 1440, 2880, 1440) in twips.
     let wide = (72.0, 72.0, 144.0, 72.0);
+    if check_text_frame_sample(name, shapes) {
+        return;
+    }
     match name {
         "base" => assert!(shapes.is_empty()),
         "shapes" => {
@@ -2461,9 +2577,10 @@ fn check_object_sample(name: &str, shapes: &[Shape]) {
     }
 }
 
-/// The polygons of a placeable WMF (its META_POLYGON records) in points on the slide: the WMF
-/// PowerPoint 95 saved a slide as is in master units about the slide's centre, y down.
-fn wmf_polygons(b: &[u8]) -> Vec<Vec<(f64, f64)>> {
+/// The polygons of a placeable WMF (its META_POLYGON records, and its META_RECTANGLE records as
+/// four corners) in points on a slide of size `slide`: the WMF PowerPoint 95 saved a slide as is in
+/// master units about the slide's centre, y down.
+fn wmf_polygons(b: &[u8], slide: craft_pptx::Size) -> Vec<Vec<(f64, f64)>> {
     let word = |at: usize| b.get(at..at + 2).map(|w| i16::from_le_bytes([w[0], w[1]]));
     let mut polygons = vec![];
     // The placeable header (22 bytes), then the standard one (18).
@@ -2472,10 +2589,17 @@ fn wmf_polygons(b: &[u8]) -> Vec<Vec<(f64, f64)>> {
         if size < 3 {
             break;
         }
+        let pt = |x: i16, y: i16| (f64::from(x) / 8.0 + slide.width / 2.0, f64::from(y) / 8.0 + slide.height / 2.0);
         if func == 0x0324 {
             let n = word(at + 6).unwrap_or(0).max(0) as usize;
-            let point = |i: usize| Some((f64::from(word(at + 8 + 4 * i)?) / 8.0 + 360.0, f64::from(word(at + 10 + 4 * i)?) / 8.0 + 270.0));
+            let point = |i: usize| Some(pt(word(at + 8 + 4 * i)?, word(at + 10 + 4 * i)?));
             polygons.push((0..n).filter_map(point).collect());
+        }
+        // Its parameters are in reverse order: bottom, right, top, left.
+        if func == 0x041B
+            && let (Some(bottom), Some(right), Some(top), Some(left)) = (word(at + 6), word(at + 8), word(at + 10), word(at + 12))
+        {
+            polygons.push(vec![pt(left, top), pt(right, top), pt(right, bottom), pt(left, bottom)]);
         }
         at += size as usize * 2;
     }
@@ -2519,26 +2643,50 @@ fn outline_corners(s: &Shape) -> Option<Vec<(f64, f64)>> {
     )
 }
 
-/// Whether every corner of the model's outline is near a vertex of the polygon PowerPoint 95 drew,
-/// and every vertex near a corner. The pen is drawn inside the frame, so the polygon sits half a
-/// line width inside the outline, and its vertices are rounded to whole units.
+/// Whether the model's outline and the polygon PowerPoint 95 drew have the same vertices in the same
+/// order, from any vertex and in either direction. The pen is drawn inside the frame, so the
+/// polygon sits half a line width inside the outline, and its vertices are rounded to whole units.
 fn outline_matches(corners: &[(f64, f64)], polygon: &[(f64, f64)], width: f64) -> bool {
     let tol = width / 2.0 + 1.0;
-    let near = |a: &(f64, f64), set: &[(f64, f64)]| set.iter().any(|b| (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol);
-    polygon.len() >= 3 && corners.iter().all(|c| near(c, polygon)) && polygon.iter().all(|p| near(p, corners))
+    let same = |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol;
+    // Each vertex once: no repeats in a row, and no closing repeat of the first.
+    let ring = |v: &[(f64, f64)]| {
+        let mut out: Vec<(f64, f64)> = vec![];
+        for p in v {
+            if out.last().is_none_or(|q| !same(p, q)) {
+                out.push(*p);
+            }
+        }
+        if out.len() > 1 && same(&out[0], &out[out.len() - 1]) {
+            out.pop();
+        }
+        out
+    };
+    let (a, b) = (ring(corners), ring(polygon));
+    let n = a.len();
+    n >= 3 && b.len() == n && (0..n).any(|k| (0..n).all(|i| same(&a[i], &b[(k + i) % n])) || (0..n).all(|i| same(&a[i], &b[(k + n - i) % n])))
+}
+
+/// The outline check compares vertices in order: from any vertex, either way round, with or
+/// without a closing repeat, but a crossed contour through the same vertices is not a match.
+#[test]
+fn outlines_match_in_order() {
+    let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    assert!(outline_matches(&square, &[(10.0, 10.0), (10.0, 0.0), (0.0, 0.0), (0.0, 10.0), (10.0, 10.0)], 1.0));
+    assert!(!outline_matches(&square, &[(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)], 1.0));
+    assert!(!outline_matches(&square, &square[..3], 1.0));
 }
 
 /// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
 /// straight outline matches a polygon PowerPoint 95 drew. The number of shapes checked.
 fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
-    let polygons = wmf_polygons(wmf);
+    let polygons = wmf_polygons(wmf, p.slide_size);
     let Some(slide) = p.slides.first() else { return 0 };
     let mut checked = 0;
     for s in &slide.shapes {
         let Some(corners) = outline_corners(s) else { continue };
-        // A rectangle may be drawn as a rectangle record, not a polygon; a dashed line is drawn
-        // dash by dash.
-        if (polygons.is_empty() && preset_of(s).0 == "rect") || s.line.as_ref().is_some_and(|l| l.dash.is_some()) {
+        // A dashed line is drawn dash by dash.
+        if s.line.as_ref().is_some_and(|l| l.dash.is_some()) {
             continue;
         }
         let width = s.line.as_ref().and_then(|l| l.width).unwrap_or(1.0);
@@ -2549,9 +2697,23 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     checked
 }
 
+/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position;
+/// a whole file names none.
+#[test]
+fn slides_the_count_says_are_missing_are_named() {
+    let one = slide(&SlideSpec::new(0x100, 16));
+    let checked = |count: u32| {
+        crate::import_checked(&file_of(&stream_of(document_atom(5760, 4320, count), std::slice::from_ref(&one), &[])), &AppDefaults).unwrap()
+    };
+    assert_eq!(checked(3).1, ["slide 2", "slide 3"]);
+    assert!(checked(1).1.is_empty());
+    // A huge count names no more slides than the reader could have read.
+    assert_eq!(checked(u32::MAX).1.len(), super::MAX_SLIDES);
+}
+
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
-/// the repository). Each imports with the slide count its DocumentAtom gives, at 10 × 7.5 in, and
-/// its shapes' outlines match the rendering PowerPoint 95 saved beside it, if any.
+/// the repository). Each imports with the slide count and size its DocumentAtom gives and nothing
+/// lost, and its shapes' outlines match the rendering PowerPoint 95 saved beside it, if any.
 #[test]
 fn powerpoint_95_samples() {
     let Some(dir) = std::env::var_os("CRAFT_PPT95_SAMPLES") else { return };
@@ -2563,15 +2725,21 @@ fn powerpoint_95_samples() {
         }
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let bytes = std::fs::read(&path).unwrap();
-        let p = crate::import(&bytes, &AppDefaults).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let (p, lost) = crate::import_checked(&bytes, &AppDefaults).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(lost.is_empty(), "{name}: {lost:?}");
         let file = craft_cfb::CompoundFile::open(&bytes).unwrap();
         let stream = file.read_path_capped("PowerPoint Document", bytes.len() as u64).unwrap();
-        let count = super::document(&stream).and_then(|d| d.child(rt::DOCUMENT_ATOM)).and_then(|a| a.u32(32)).unwrap();
-        assert_eq!(p.slides.len(), count as usize, "{name}");
-        assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "{name}");
+        let atom = super::document(&stream).and_then(|d| d.child(rt::DOCUMENT_ATOM)).unwrap();
+        assert_eq!(p.slides.len(), atom.u32(32).unwrap() as usize, "{name}");
+        // The size in master units, 8 to the point.
+        let side = |at: usize| f64::from(atom.u32(at).unwrap()) / 8.0;
+        assert_eq!((p.slide_size.width, p.slide_size.height), (side(0), side(4)), "{name}");
         check_sample(&name, &p);
-        if let Ok(wmf) = std::fs::read(path.with_extension("wmf")) {
-            outlines += check_outlines(&name, &p, &wmf);
+        // The rendering is optional; one that is there but can't be read is a failure.
+        match std::fs::read(path.with_extension("wmf")) {
+            Ok(wmf) => outlines += check_outlines(&name, &p, &wmf),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("{name}.wmf: {e}"),
         }
         seen += 1;
     }
