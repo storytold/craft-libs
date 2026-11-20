@@ -146,7 +146,7 @@ pub fn install_app_menu_with(ctx: &egui::Context, options: &LayoutOptions) -> Re
     if INSTALLED.load(Ordering::SeqCst) || APP_MENU.with_borrow(Option::is_some) {
         return Ok(());
     }
-    let labels = app_menu_labels(options);
+    let labels = app_menu_labels(options).escaped();
     let quit = MenuItem::with_id(craft_quit::QUIT_MENU_ID, labels.quit, true, Some(Accelerator::new(Modifiers::META, Code::KeyQ)));
     let app_menu = Submenu::new(labels.title, true);
     app_menu.append_items(&[
@@ -464,6 +464,7 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                 sub.append(&s)?;
             }
             Node::Standard { kind, label } => {
+                let label = escape(label);
                 let text = Some(label.as_str());
                 let p = match kind {
                     Standard::Services => PredefinedMenuItem::services(text),

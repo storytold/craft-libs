@@ -120,6 +120,24 @@ pub(crate) fn app_menu_labels(options: &LayoutOptions) -> AppMenuLabels {
     }
 }
 
+impl AppMenuLabels {
+    /// The labels as muda reads them: muda drops a single `&` as a mnemonic marker and shows `&&`
+    /// as `&`, so each `&` is doubled.
+    #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+    pub(crate) fn escaped(&self) -> AppMenuLabels {
+        let e = |s: &str| s.replace('&', "&&");
+        AppMenuLabels {
+            title: e(&self.title),
+            about: e(&self.about),
+            services: e(&self.services),
+            hide: e(&self.hide),
+            hide_others: e(&self.hide_others),
+            show_all: e(&self.show_all),
+            quit: e(&self.quit),
+        }
+    }
+}
+
 /// A system or browser shortcut the app also uses for one of its commands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clash {

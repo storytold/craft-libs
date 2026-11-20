@@ -202,6 +202,28 @@ fn the_minimal_app_menu_labels_are_translated() {
     assert_eq!(labels, expected);
 }
 
+/// An `&` in the app's name or in a translation reaches muda doubled, so the menu shows it.
+#[test]
+fn the_minimal_app_menu_keeps_ampersands() {
+    use crate::layout::{AppMenuLabels, app_menu_labels};
+
+    let translated = |s: &'static str| match s {
+        "Services" => "Dienste & Co".to_string(),
+        other => other.into(),
+    };
+    let labels = app_menu_labels(&LayoutOptions { label: &translated, ..LayoutOptions::new("Fish & Chips") }).escaped();
+    let expected = AppMenuLabels {
+        title: "Fish && Chips".into(),
+        about: "About Fish && Chips".into(),
+        services: "Dienste && Co".into(),
+        hide: "Hide Fish && Chips".into(),
+        hide_others: "Hide Others".into(),
+        show_all: "Show All".into(),
+        quit: "Quit Fish && Chips".into(),
+    };
+    assert_eq!(labels, expected);
+}
+
 /// App commands keep ⌘H, ⌘M, ⌘W and ⌘,: the system items give way, and each clash is reported.
 #[test]
 fn clashes_are_resolved_in_the_apps_favour() {
