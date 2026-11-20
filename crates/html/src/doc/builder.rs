@@ -1172,8 +1172,12 @@ impl<'r> Builder<'r> {
                 let fmt = self.fmt();
                 match image {
                     Some(image) => self.start_para().inlines.push(Inline::Image(image)),
-                    None if !alt.is_empty() => self.start_para().push_text(&alt, &fmt),
-                    None => {}
+                    None => {
+                        model::dropped(model::Dropped::HtmlImage);
+                        if !alt.is_empty() {
+                            self.start_para().push_text(&alt, &fmt);
+                        }
+                    }
                 }
             }
             _ => return false,
