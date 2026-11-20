@@ -126,7 +126,9 @@ fn context_menu_paste_delivers_image_at_the_requested_point() {
     fixture.frame(vec![egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)))]).settle();
     let fired = take_output(fixture.ctx()).fired;
     assert!(
-        fired.iter().any(|fired| fired.pasted.as_ref().is_some_and(|content| content.image.is_some()) && fired.paste_at == Some(egui::pos2(120.0, 180.0))),
+        fired
+            .iter()
+            .any(|fired| fired.pasted.as_ref().is_some_and(|content| content.image.is_some()) && fired.paste_at == Some(egui::pos2(120.0, 180.0))),
         "{fired:?}"
     );
 }

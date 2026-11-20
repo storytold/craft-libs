@@ -134,18 +134,27 @@ fn delete_over_unfocused_thumbnails_acts_on_the_pick() {
     fixture.click_at(tile(&fixture, 2)).settle();
     let other = fixture.by_label("Other").expect("other control");
     for _ in 0..3 {
-        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node { break; }
+        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node {
+            break;
+        }
         fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
     }
     assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), other.node, "the other control owns focus");
     let at = tile(&fixture, 2);
     fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Delete, egui::Modifiers::NONE).settle();
-    assert!(events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])), "Delete reaches the picked page");
+    assert!(
+        events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])),
+        "Delete reaches the picked page"
+    );
     let deletes = events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Delete(_))).count();
     let field = fixture.by_label("Draft").expect("text field");
     fixture.click(&field).settle();
     fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Backspace, egui::Modifiers::NONE).settle();
-    assert_eq!(events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Delete(_))).count(), deletes, "the text field keeps its editing key");
+    assert_eq!(
+        events.borrow().iter().filter(|event| matches!(event, ThumbnailEvent::Delete(_))).count(),
+        deletes,
+        "the text field keeps its editing key"
+    );
 }
 
 #[trial]
@@ -162,13 +171,18 @@ fn delete_over_unfocused_thumbnails_uses_the_current_page_when_unpicked() {
     fixture.room(vec2(600.0, 600.0)).settle();
     let other = fixture.by_label("Other").expect("other control");
     for _ in 0..3 {
-        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node { break; }
+        if craft_ui::testing::access::focused_key(fixture.tree()) == other.node {
+            break;
+        }
         fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
     }
     assert_eq!(craft_ui::testing::access::focused_key(fixture.tree()), other.node);
     let at = tile(&fixture, 2);
     fixture.frame(vec![craft_ui::testing::pointer::moved(at)]).key(egui::Key::Delete, egui::Modifiers::NONE).settle();
-    assert!(events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])), "Delete reaches the current page");
+    assert!(
+        events.borrow().iter().any(|event| matches!(event, ThumbnailEvent::Delete(pages) if pages.as_slice() == [1])),
+        "Delete reaches the current page"
+    );
 }
 
 #[trial]

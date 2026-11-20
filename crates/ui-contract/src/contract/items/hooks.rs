@@ -398,8 +398,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         }
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key));
         let props = comp.items().clone();
-        if cx.core.resolved.enabled && props.deletable && props.delete_target == crate::contract::DeleteTarget::FocusOrHover
-            && !cx.core.memory.is_peek() && !crate::runtime::measure::active(&cx.core.ctx)
+        if cx.core.resolved.enabled
+            && props.deletable
+            && props.delete_target == crate::contract::DeleteTarget::FocusOrHover
+            && !cx.core.memory.is_peek()
+            && !crate::runtime::measure::active(&cx.core.ctx)
         {
             crate::runtime::keys::register_hover_delete(&cx.core.ctx, cx.core.id);
         }
@@ -426,7 +429,10 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.switch_page(comp, cx, &props, &layout);
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key)).or(lead_at);
         if matches!(props.select, crate::contract::SelectMode::Multi | crate::contract::SelectMode::Cells)
-            && !header_held && self.renaming.key.is_none() && cx.core.intents.untaken(&Intent::Cancel) && !self.placed().rows().is_empty()
+            && !header_held
+            && self.renaming.key.is_none()
+            && cx.core.intents.untaken(&Intent::Cancel)
+            && !self.placed().rows().is_empty()
             && cx.core.intents.take(Intent::Cancel)
         {
             self.change(craft_behavior::SelectionChange::Clear);

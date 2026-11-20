@@ -59,8 +59,7 @@ fn retry_starts_with_an_empty_password() {
     let seen = Rc::clone(&answers);
     let mut fixture = Fixture::new(move |ui| {
         let mut open = true;
-        let shown = PasswordDialog::new(PasswordPurpose::permissions("poster.pdf"))
-            .opened(craft_ui::contract::Bind::bound(&mut open)).show(ui);
+        let shown = PasswordDialog::new(PasswordPurpose::permissions("poster.pdf")).opened(craft_ui::contract::Bind::bound(&mut open)).show(ui);
         if let Some(answer) = shown.answer {
             seen.borrow_mut().push(answer.secret.expose().to_owned());
         }

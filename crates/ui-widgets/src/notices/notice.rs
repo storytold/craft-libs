@@ -453,7 +453,8 @@ impl<'a> Notice<'a> {
         let text_offset = (line - first) / 2.0;
         // The head includes the complete wrapped message; details and stacked actions follow it.
         let head = (text_offset + title.map_or(0.0, |size| size.y) + message.y).max(line);
-        let with_actions = head + lines_height + leaves_height + if actions.is_empty() || inline_actions { 0.0 } else { stack.max(gap) + actions_height };
+        let with_actions =
+            head + lines_height + leaves_height + if actions.is_empty() || inline_actions { 0.0 } else { stack.max(gap) + actions_height };
         let (needs, height) = if row {
             ((icon_width + text_width + dismiss_width + action_width).max(lines_width), with_actions)
         } else {

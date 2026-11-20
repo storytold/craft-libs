@@ -137,8 +137,7 @@ fn a_row_notice_wraps_actions_onto_further_rows_inside_its_bounds() {
 fn a_wide_notice_wraps_its_message_beside_its_actions() {
     let message = "A long message about the document and the restrictions that apply to its content and editing features.";
     let mut fixture = Fixture::new(move |ui| {
-        Notice::new(Tone::Info, message).dismiss().action(NoticeAction::new("Security settings"))
-            .action(NoticeAction::new("Unlock")).show(ui);
+        Notice::new(Tone::Info, message).dismiss().action(NoticeAction::new("Security settings")).action(NoticeAction::new("Unlock")).show(ui);
     });
     fixture.room(Vec2::new(500.0, 200.0)).settle();
     let text = fixture.texts().iter().find(|run| run.text == message).expect("message painted").rect;
