@@ -321,7 +321,13 @@ fn layout<F: Read + Seek>(file: &mut F, len: u64) -> Result<Layout> {
                 return Ok(Layout { rf64, ds64, junk, fact, block_align, data: body });
             }
             // The first `ds64` and `fact` chunks take the sizes; later ones are left as they are.
-            b"ds64" if rf64 && size >= 28 && ds64.is_none() => ds64 = Some(body),
+            // The WAV reader takes the data size from the first `ds64` chunk of 16 bytes or more.
+            b"ds64" if rf64 && size >= 16 && ds64.is_none() => {
+                if size < 28 {
+                    return Err(AudioError::Malformed("RF64 ds64 chunk is shorter than 28 bytes".into()));
+                }
+                ds64 = Some(body);
+            }
             // A `ds64` id here in a RIFF file is a promotion that stopped before the RF64 id.
             b"JUNK" | b"ds64" if !rf64 && pos == 12 && size == 28 => (ds64, junk) = (Some(body), true),
             b"fact" if size >= 4 && fact.is_none() => fact = Some(body),
@@ -370,9 +376,6 @@ pub(crate) fn repair<F: Read + Write + Seek>(file: &mut F) -> Result<(u64, u64)>
         (true, _) if l.rf64 => return Err(AudioError::Malformed("RF64 file has no ds64 chunk".into())),
         (true, _) => return Err(AudioError::TooLarge("WAV past 4 GiB has no room for a ds64 chunk".into())),
     };
-    if pad == 1 {
-        write_at(file, l.data + data_len, &[0])?;
-    }
     if let Some(at) = l.fact {
         write_at(file, at, &u32::try_from(frames).unwrap_or(u32::MAX).to_le_bytes())?;
     }
@@ -398,6 +401,11 @@ pub(crate) fn repair<F: Read + Write + Seek>(file: &mut F) -> Result<(u64, u64)>
             write_at(file, l.data - 4, &(data_len as u32).to_le_bytes())?;
             write_at(file, 4, &(riff_len as u32).to_le_bytes())?;
         }
+    }
+    // The pad byte goes last: until it is written, 8-bit mono data keeps an odd length that a
+    // repeated repair can count.
+    if pad == 1 {
+        write_at(file, l.data + data_len, &[0])?;
     }
     file.seek(SeekFrom::Start(new_len))?;
     file.flush()?;

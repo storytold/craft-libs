@@ -491,7 +491,8 @@ pub struct WavRepair {
 ///   its first 100,000 chunks, has its data chunk before its `fmt ` chunk, has a `fmt ` chunk shorter
 ///   than 16 bytes or cut short by the end of the file, has 0 channels or 0 bits, has a block size
 ///   other than the channels times the bytes per sample, has an extensible `fmt ` chunk with a cbSize
-///   below 22 or more valid bits than bits per sample, or is RF64 without a `ds64` chunk.
+///   below 22 or more valid bits than bits per sample, or is RF64 without a `ds64` chunk or with a
+///   first `ds64` chunk of 16 to 27 bytes (the WAV reader takes the data size from that chunk).
 /// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
 ///   whose subformat is neither, a sample width the WAV reader does not decode (PCM above 32 bits,
 ///   float other than 32 or 64 bits), and unfinished 8-bit mono data of even length (its last byte

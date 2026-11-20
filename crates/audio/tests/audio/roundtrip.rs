@@ -499,6 +499,68 @@ fn rf64_data_size_comes_from_the_ds64_chunk_after_wave() {
     two.splice(at..at, later);
     let (info, buf) = decode(&two, Some("wav")).unwrap();
     assert_eq!((info.frames, buf.frames()), (300, 300));
+
+    // A 16-byte first ds64 chunk gives the reader the data size, so repair does not use the later one.
+    let mut short = two;
+    short[16..20].copy_from_slice(&16u32.to_le_bytes());
+    short[28..36].copy_from_slice(&4u64.to_le_bytes());
+    short[36..44].copy_from_slice(&[&b"JUNK"[..], &4u32.to_le_bytes()].concat());
+    assert_eq!(decode(&short, Some("wav")).unwrap().1.frames(), 1);
+    let repaired = craft_audio::repair_wav(&mut std::io::Cursor::new(short));
+    assert!(matches!(repaired, Err(craft_audio::AudioError::Malformed(_))), "{repaired:?}");
+}
+
+/// A file whose writes fail once `writes` of them have gone through.
+struct FailingWrites {
+    file: std::io::Cursor<Vec<u8>>,
+    writes: usize,
+}
+
+impl std::io::Read for FailingWrites {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.file, buf)
+    }
+}
+
+impl std::io::Write for FailingWrites {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.writes == 0 {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.writes -= 1;
+        std::io::Write::write(&mut self.file, buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::io::Seek for FailingWrites {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.file, to)
+    }
+}
+
+#[test]
+fn repair_wav_runs_again_after_a_write_error() {
+    let mut u8_mono = craft_audio::pcm_wav_header(0, 1, 8_000, 8);
+    u8_mono.extend([0x80; 3]);
+    let opts = EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24);
+    let (int24, _) = unfinished_wav(&sine(44_100, 1, 999), &opts, 2);
+    for (file, frames) in [(u8_mono, 3), (int24, 999)] {
+        let mut whole = std::io::Cursor::new(file.clone());
+        let repaired = craft_audio::repair_wav(&mut whole).unwrap();
+        assert_eq!(repaired.frames, frames);
+        for writes in 0.. {
+            let mut failing = FailingWrites { file: std::io::Cursor::new(file.clone()), writes };
+            if craft_audio::repair_wav(&mut failing).is_ok() {
+                break;
+            }
+            let mut again = failing.file;
+            assert_eq!(craft_audio::repair_wav(&mut again).unwrap(), repaired, "stopped after {writes} writes");
+            assert_eq!(again.into_inner(), *whole.get_ref(), "stopped after {writes} writes");
+        }
+    }
 }
 
 #[test]
