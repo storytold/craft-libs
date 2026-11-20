@@ -197,13 +197,28 @@ pub fn document(stream: &[u8]) -> Option<Rec<'_>> {
     Some(document)
 }
 
-/// The slides the DocumentAtom counts but the file doesn't hold, by position ("slide 3"): what a
-/// truncated file lost. Empty for a whole file.
-pub fn lost(document: &Rec, p: &Presentation) -> Vec<String> {
+/// Whether a slide record holds what PowerPoint 95 writes first in every slide, its SlideAtom
+/// (1007). One without it kept nothing (a file cut short just after the slide's header): it is left
+/// out and named as lost.
+fn kept(slide: &Rec) -> bool {
+    slide.child(rt::SLIDE_ATOM).is_some()
+}
+
+/// The slides a truncated or damaged file lost, by position ("slide 3"): those listed without their
+/// SlideAtom, and those the DocumentAtom counts past the ones listed. Empty for a whole file.
+pub fn lost(document: &Rec) -> Vec<String> {
     let count = document.child(rt::DOCUMENT_ATOM).and_then(|a| a.u32(SLIDE_COUNT)).map_or(0, |c| c as usize);
-    let read = p.slides.len();
+    let listed: Vec<bool> = document
+        .children()
+        .filter(|r| r.kind == rt::LIST)
+        .flat_map(|list| list.children().filter(|r| r.kind == rt::SLIDE))
+        .take(MAX_SLIDES)
+        .map(|r| kept(&r))
+        .collect();
+    let empty = listed.iter().enumerate().filter(|(_, k)| !**k).map(|(i, _)| i + 1);
     // At most as many as could have been read, so a damaged count can't make a huge list.
-    (read + 1..=count.min(read + MAX_SLIDES)).map(|n| format!("slide {n}")).collect()
+    let missing = listed.len() + 1..=count.min(listed.len() + MAX_SLIDES);
+    empty.chain(missing).map(|n| format!("slide {n}")).collect()
 }
 
 /// What a slide or master says about itself.
@@ -641,7 +656,7 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
     }
 
     let layouts: Vec<_> = p.masters.iter().map(|m| layout_table(m, &HashSet::new())).collect();
-    for s in &slides {
+    for s in slides.iter().filter(|s| kept(&s.rec)) {
         // An unknown master is the first one.
         let (index, master_scheme) =
             by_id.get(&s.master_id).copied().unwrap_or((0, masters.first().and_then(|m| m.scheme).unwrap_or(DEFAULT_SCHEME)));

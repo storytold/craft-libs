@@ -583,8 +583,7 @@ fn hostile_powerpoint_95_streams_never_panic() {
     assert_eq!(p.slides.len(), 1);
     assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "an out-of-range size falls back");
     // Many slides stop at the limit.
-    let empty = rec(rt::SLIDE, NONE, 0x10, &[]);
-    let many = vec![empty; super::MAX_SLIDES + 5];
+    let many = vec![slide(&SlideSpec::new(0x100, 0)); super::MAX_SLIDES + 5];
     let p = import(&stream_of(document_atom(5760, 4320, 0), &many, &[])).unwrap();
     assert_eq!(p.slides.len(), super::MAX_SLIDES);
     // Many masters stop at their own, lower limit: each is a copy of the default master.
@@ -764,7 +763,7 @@ fn paragraphs_keep_their_spacing() {
         [
             (Some(Spacing::Pct(1.5)), Some(Spacing::Pct(0.5)), Some(Spacing::Pct(0.0))),
             (Some(Spacing::Pts(36.0)), Some(Spacing::Pts(12.0)), Some(Spacing::Pts(6.0))),
-            (Some(Spacing::Pct(100.0)), Some(Spacing::Pts(4000.0)), Some(Spacing::Pts(1.0))),
+            (Some(Spacing::Pct(100.0)), Some(Spacing::Pts(1584.0)), Some(Spacing::Pts(1.0))),
         ]
     );
 }
@@ -930,6 +929,20 @@ fn master_placeholders_move_the_layout_boxes() {
     }
     let own: Vec<_> = m.shapes.iter().filter(|s| s.ph.is_none()).map(|s| body_of(s).text()).collect();
     assert_eq!(own, ["Logo"]);
+}
+
+/// An empty footer on the master still gives every layout's footer its size and colour: those of
+/// its end mark.
+#[test]
+fn an_empty_footer_keeps_its_look() {
+    let empty = text(b"", &[char_run(1, 0, 10, 0, [0xFF, 0, 0, 0xFE])], &[para_run(1, false, 0, 2, 0)], 1, [0; 4], MASTER_BODY);
+    let p = deck_of(vec![], &[placeholder_95(8, 1, 2, [-816, 1776, 816, 2064], Some(empty))]);
+    for l in &p.masters[0].layouts {
+        let footer = l.shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).unwrap();
+        let level = body_of(footer).list_style.level(0).unwrap();
+        assert_eq!((level.para.align, level.run.size), (Some(Align::Right), Some(10.0)), "{}", l.name);
+        assert_eq!(level.run.fill, Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0xFF, 0, 0)))), "{}", l.name);
+    }
 }
 
 /// The characters, a font's face and a bullet character are Windows-1252, 0x80–0x9F included.
@@ -2431,8 +2444,9 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     checked
 }
 
-/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position;
-/// a whole file names none.
+/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,
+/// and so does one cut just after a slide's header, which leaves that slide out; a whole file
+/// names none.
 #[test]
 fn slides_the_count_says_are_missing_are_named() {
     let one = slide(&SlideSpec::new(0x100, 16));
@@ -2443,6 +2457,11 @@ fn slides_the_count_says_are_missing_are_named() {
     assert!(checked(1).1.is_empty());
     // A huge count names no more slides than the reader could have read.
     assert_eq!(checked(u32::MAX).1.len(), super::MAX_SLIDES);
+    // Two slides, the stream cut just after the second one's header (its stated length kept).
+    let two = stream_of(document_atom(5760, 4320, 2), &[one.clone(), one.clone()], &[]);
+    let second = two.windows(one.len()).rposition(|w| w == one).unwrap();
+    let (p, lost) = crate::import_checked(&file_of(&two[..second + 16]), &AppDefaults).unwrap();
+    assert_eq!((p.slides.len(), lost), (1, vec!["slide 2".to_string()]));
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in

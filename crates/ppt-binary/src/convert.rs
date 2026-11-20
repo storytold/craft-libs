@@ -180,7 +180,8 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
 /// A main master's placeholder of `kind` at `x`: the box of the default master's placeholder of
 /// the same family. The footer row (date, footer, slide number) sits in the same place on every
 /// layout, with the master's look: `look` gives its first paragraph, whose alignment and first
-/// run's size and colour the master's and layouts' footer placeholders take. `look` is called only
+/// run's size and colour (its end mark's, when it is empty) the master's and layouts' footer
+/// placeholders take. `look` is called only
 /// for the footer row, and only when the default master has such a placeholder.
 pub(crate) fn place_placeholder(master: &mut Master, kind: PhType, x: Xfrm, look: impl FnOnce() -> Option<Paragraph>) {
     let Some(s) = master.shapes.iter_mut().find(|s| s.ph_type().is_some_and(|t| same_family(t, kind))) else { return };
@@ -191,10 +192,9 @@ pub(crate) fn place_placeholder(master: &mut Master, kind: PhType, x: Xfrm, look
             if let Some(p) = &look {
                 let mut level = t.list_style.level(0).cloned().unwrap_or_default();
                 level.para.align = p.props.align.or(level.para.align);
-                if let Some(run) = p.runs.first() {
-                    level.run.size = run.props.size.or(level.run.size);
-                    level.run.fill = run.props.fill.clone().or(level.run.fill.take());
-                }
+                let first = p.runs.first().map_or(&p.end_props, |r| &r.props);
+                level.run.size = first.size.or(level.run.size);
+                level.run.fill = first.fill.clone().or(level.run.fill.take());
                 t.list_style.set(0, level);
             }
         };

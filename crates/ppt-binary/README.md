@@ -38,7 +38,8 @@ PowerPoint 95 (7.0) files use the same compound file and many of the same record
 16-byte record header and a single record tree with no edit chain. A file whose `PowerPoint
 Document` stream starts with that tree is read on its own path; anything else takes the
 PowerPoint 97 path. The tree's Document must hold its DocumentAtom, which counts the slides;
-`import_checked` names the slides that count says a cut-short file is missing ("slide 3"). What
+`import_checked` names the slides a cut-short file is missing ("slide 3"): those the count says it
+should hold, and any cut off after its header, which is left out. What
 was learned of the format came from files PowerPoint 95 itself wrote,
 one feature per file, and the public [MS-PPT] numbering where the records keep it.
 
