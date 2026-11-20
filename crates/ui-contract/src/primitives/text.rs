@@ -960,7 +960,7 @@ impl ReadingMeasure {
 }
 
 #[cfg(feature = "testing")]
-mod memo_tests {
+pub(crate) mod memo_tests {
     use super::{
         Arc, Context, Cow, Direction, HAlign, LayoutRun, Span, StackFacts, StyleColor, TextEnv, TextRun, TypeRole, UiTokens, Wrap, with_memo,
     };
