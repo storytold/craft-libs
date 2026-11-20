@@ -90,6 +90,37 @@ fn canvas(transform: Option<CanvasTransform>) -> ProbeRoot {
 
 const ZOOM: CanvasTransform = CanvasTransform::new(2.0, Vec2::new(10.0, 5.0));
 
+/// A root's egui widget, and its transformed body's forwarding widget, sense what the members that joined it in the
+/// same pass sense: a member that clicks makes them click from the first frame, and one gone or added changes them in
+/// that frame.
+#[trial]
+fn a_root_widget_senses_what_its_members_sense_in_the_same_pass() {
+    let with_member = Rc::new(std::cell::Cell::new(true));
+    let shown = with_member.clone();
+    let mut show_frame = move |ui: &mut Ui| {
+        let root = ProbeRoot::new("canvas", rect(100.0, 100.0, 500.0, 300.0), Sense::empty())
+            .arena()
+            .part(ProbePart::new(BACKGROUND, rect(100.0, 100.0, 500.0, 300.0), Sense::DRAG).level(HitLevel::Background, 0))
+            .transformed(ZOOM)
+            .blocker(Vec2::new(500.0, 300.0));
+        let root = if shown.get() { root.member(ProbeMember::new("tool", rect(160.0, 160.0, 90.0, 30.0), Sense::CLICK)) } else { root };
+        show(ui, &[root]);
+    };
+    let clicks = |frames: &Frames| {
+        [ProbeRoot::id("canvas"), ProbeRoot::transform_widget("canvas")]
+            .map(|id| frames.ctx.widget_rect_last_pass(id).map(|widget| widget.sense.senses_click()))
+    };
+    let mut frames = Frames::new();
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(true); 2], "the first frame's widgets click with their member");
+    with_member.set(false);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(false); 2], "the widgets stop clicking in the frame the member goes");
+    with_member.set(true);
+    frames.idle(1, &mut show_frame);
+    assert_eq!(clicks(&frames), [Some(true); 2], "the widgets click again in the frame the member comes back");
+}
+
 /// Skeleton: `frames_pointer::button_on_canvas_click_and_slop_drag` and `..._on_zoomed_canvas_...`.
 fn member_on_canvas(transform: Option<CanvasTransform>) {
     let (mut show_frame, log) = scene(vec![canvas(transform)]);
