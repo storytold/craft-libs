@@ -424,6 +424,14 @@ fn repair_wav_turns_a_file_past_4_gib_into_rf64() {
     assert_eq!((repaired.frames, repaired.len), (frames, len - 3));
     assert_eq!(file.head, wav_float_header(48_000, 2, frames).unwrap());
 
+    // A JUNK chunk holding other bytes becomes a ds64 chunk with an empty table.
+    let mut dirty = head.clone();
+    assert_eq!(&dirty[12..16], b"JUNK");
+    dirty[20..48].fill(0xAA);
+    let mut file = SparseWav { head: dirty, len, pos: 0 };
+    craft_audio::repair_wav(&mut file).unwrap();
+    assert_eq!(file.head, wav_float_header(48_000, 2, frames).unwrap());
+
     // A RIFF file with no JUNK chunk to turn into ds64 cannot grow past 4 GiB.
     let bare = craft_audio::pcm_wav_header(0, 2, 48_000, 16);
     assert_eq!(&bare[12..16], b"fmt ");
@@ -474,9 +482,13 @@ fn repair_wav_refuses_what_it_cannot_repair() {
     let ext = encode(&sine(48_000, 2, 100), &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24)).unwrap();
     let fmt = ext.windows(4).position(|w| w == b"fmt ").unwrap() + 8;
     assert!(repair(ext.clone()).is_ok());
-    let mut other_guid = ext;
+    let mut other_guid = ext.clone();
     other_guid[fmt + 39] ^= 0xFF;
     assert!(matches!(repair(other_guid), Err(AudioError::Unsupported(_))));
+    // The Ambisonic PCM subformat {00000001-0721-11D3-8644-C8C1CA000000}, which the reader reads as PCM.
+    let mut ambisonic = ext;
+    ambisonic[fmt + 26..fmt + 40].copy_from_slice(&[0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00]);
+    assert_eq!(repair(ambisonic).unwrap().frames, 100);
 }
 
 #[test]

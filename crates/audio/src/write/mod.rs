@@ -482,7 +482,7 @@ pub struct WavRepair {
 ///
 /// A RIFF file that grew past 4 GiB becomes RF64 when it starts with the 28-byte `JUNK` chunk that
 /// [`FileEncoder`] and [`wav_float_header`] write: `RIFF` becomes `RF64` and that `JUNK` chunk
-/// becomes the `ds64` chunk.
+/// becomes a `ds64` chunk with an empty table.
 ///
 /// Errors:
 ///

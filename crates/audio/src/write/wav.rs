@@ -2,7 +2,7 @@
 //! specification, `bext` per EBU Tech 3285, `ds64` per EBU Tech 3306).
 
 use super::pcm::{Quantizer, sample_format, validate_buffer, validate_layout, write_interleaved};
-use crate::wav::{GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
+use crate::wav::{AMBISONIC_TAIL, GUID_TAIL, WAVE_FORMAT_EXTENSIBLE, WAVE_FORMAT_IEEE_FLOAT, WAVE_FORMAT_PCM};
 use crate::{AudioBuffer, AudioError, BitDepth, BwfInfo, Result};
 use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom, Write};
 
@@ -276,7 +276,7 @@ fn pcm_block_align<F: Read + Seek>(file: &mut F, pos: u64, size: u32) -> Result<
     }
     let field = |at: usize| u16::from_le_bytes([fmt[at], fmt[at + 1]]);
     let mut tag = field(0);
-    if tag == WAVE_FORMAT_EXTENSIBLE && n == 40 && fmt[26..] == GUID_TAIL {
+    if tag == WAVE_FORMAT_EXTENSIBLE && n == 40 && (fmt[26..] == GUID_TAIL || fmt[26..] == AMBISONIC_TAIL) {
         tag = field(24);
     }
     if tag != WAVE_FORMAT_PCM && tag != WAVE_FORMAT_IEEE_FLOAT {
@@ -366,10 +366,14 @@ pub(crate) fn repair<F: Read + Write + Seek>(file: &mut F) -> Result<(u64, u64)>
     }
     match ds64 {
         Some(at) => {
-            let mut body = Vec::with_capacity(24);
+            let mut body = Vec::with_capacity(28);
             body.extend_from_slice(&riff_len.to_le_bytes());
             body.extend_from_slice(&data_len.to_le_bytes());
             body.extend_from_slice(&frames.to_le_bytes());
+            if !l.rf64 {
+                // The `JUNK` chunk's last 4 bytes become the table length: no table entries.
+                body.extend_from_slice(&0u32.to_le_bytes());
+            }
             write_at(file, at, &body)?;
             if !l.rf64 {
                 write_at(file, at - 8, b"ds64")?;
