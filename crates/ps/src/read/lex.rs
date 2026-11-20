@@ -138,9 +138,9 @@ impl<'a> Lexer<'a> {
     /// The next token at the top level (`None` at the end of the file).
     pub fn next(&mut self) -> Result<Option<Token>, LexError> {
         self.immediate = false;
-        let t = self.token(0);
+        let t = self.token(0)?;
         self.fresh = true;
-        t
+        Ok(t)
     }
 
     fn token(&mut self, depth: usize) -> Result<Option<Token>, LexError> {
@@ -420,5 +420,12 @@ mod tests {
     fn unterminated_string_is_syntax_error() {
         let mut lex = Lexer::new(b"(open");
         assert_eq!(lex.next(), Err(LexError::Syntax("(".into())));
+    }
+
+    #[test]
+    fn error_does_not_mark_fresh() {
+        let mut lex = Lexer::new(b") rest");
+        assert_eq!(lex.next(), Err(LexError::Syntax(")".into())));
+        assert_eq!(lex.data(), b" rest");
     }
 }
