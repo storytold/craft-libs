@@ -1283,6 +1283,9 @@ impl<'r> Builder<'r> {
         }
         let mut kind = block_kind(name).unwrap_or(ElKind::Inline);
         if matches!(kind, ElKind::Table | ElKind::Tr | ElKind::Cell) && !in_table {
+            if kind == ElKind::Table {
+                model::dropped(model::Dropped::HtmlTableDepth);
+            }
             kind = ElKind::Block;
         }
         if matches!(kind, ElKind::Tr | ElKind::Cell) && self.tables.is_empty() {

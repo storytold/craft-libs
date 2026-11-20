@@ -2164,3 +2164,14 @@ fn the_fragment_leaves_code_and_table_cells_unspaced() {
     assert!(fragment.contains("One") && fragment.contains("code"), "{fragment}");
     assert!(!fragment.contains("margin-"), "{fragment}");
 }
+
+#[test]
+fn reports_flattened_tables_beyond_the_nesting_limit() {
+    let nested = |depth: usize| format!("{}text{}", "<table><tr><td>".repeat(depth), "</td></tr></table>".repeat(depth));
+    craft_flow::begin_import();
+    let _ = parse(&nested(craft_flow::MAX_DEPTH));
+    assert!(!craft_flow::Dropped::HtmlTableDepth.reported());
+    craft_flow::begin_import();
+    let _ = parse(&nested(craft_flow::MAX_DEPTH + 1));
+    assert!(craft_flow::Dropped::HtmlTableDepth.reported());
+}

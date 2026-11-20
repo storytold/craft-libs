@@ -66,6 +66,8 @@ pub enum Dropped {
     Spaces,
     /// Markdown table rows and columns past the table limits or the document's cell budget.
     TableCells,
+    /// An HTML table nested beyond the supported table depth was flattened.
+    HtmlTableDepth,
 }
 
 impl Dropped {
@@ -80,6 +82,7 @@ impl Dropped {
             Dropped::Spaces => {
                 "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
             }
+            Dropped::HtmlTableDepth => format!("import: HTML tables nested beyond {MAX_DEPTH} levels are flattened"),
             Dropped::TableCells => format!(
                 "import: Markdown tables keep {} columns and {} rows at most, and {} cells in all; the rest are left out",
                 craft_wordmodel::table::MAX_COLS,
