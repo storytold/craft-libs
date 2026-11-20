@@ -305,9 +305,29 @@ pub struct Attribute {
 }
 
 impl Attribute {
-    /// The first value as text.
+    /// The first value as text, including textWithLanguage and nameWithLanguage.
+    /// Malformed language framing, like a missing value, yields an empty string.
     pub fn text(&self) -> String {
-        self.values.first().map(|v| String::from_utf8_lossy(v).into_owned()).unwrap_or_default()
+        self.values
+            .first()
+            .and_then(|value| {
+                let text = if matches!(self.tag, 0x35 | 0x36) {
+                    // RFC 8010 section 3.9: two nonnegative SIGNED-SHORT lengths frame the language and text.
+                    let language_len = i16::from_be_bytes(value.get(..2)?.try_into().ok()?);
+                    let length_at = 2usize.checked_add(usize::try_from(language_len).ok()?)?;
+                    let text_at = length_at.checked_add(2)?;
+                    let text_len = i16::from_be_bytes(value.get(length_at..text_at)?.try_into().ok()?);
+                    let text = value.get(text_at..)?;
+                    if text.len() != usize::try_from(text_len).ok()? {
+                        return None;
+                    }
+                    text
+                } else {
+                    value.as_slice()
+                };
+                Some(String::from_utf8_lossy(text).into_owned())
+            })
+            .unwrap_or_default()
     }
     /// The first value as a big-endian integer.
     pub fn int(&self) -> Option<i32> {

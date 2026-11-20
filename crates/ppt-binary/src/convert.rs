@@ -31,7 +31,7 @@ const EMU: f64 = 12700.0;
 
 /// The eight colours of a `.ppt` colour scheme: background, text, shadow, title text, fill,
 /// accent, accent and hyperlink, accent and followed hyperlink.
-type Scheme = [Rgba; 8];
+pub(crate) type Scheme = [Rgba; 8];
 
 const DEFAULT_SCHEME: Scheme = [
     Rgba::rgb(0xFF, 0xFF, 0xFF),
@@ -95,14 +95,17 @@ struct Ctx<'a> {
     used_notes: HashSet<usize>,
 }
 
+/// A page side in master units as points, else `fallback` when it is missing or out of range.
+pub(crate) fn page_side(v: Option<i32>, fallback: f64) -> f64 {
+    v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback)
+}
+
 pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Presentation {
     let atom = d.document_atom();
-    let side =
-        |v: Option<i32>, fallback: f64| v.map(|v| f64::from(v) / MU).filter(|v| v.is_finite() && *v >= 1.0 && *v <= 56.0 * 72.0).unwrap_or(fallback);
-    let size = Size::new(side(atom.as_ref().map(|a| a.slide_w), 720.0), side(atom.as_ref().map(|a| a.slide_h), 540.0));
+    let size = Size::new(page_side(atom.as_ref().map(|a| a.slide_w), 720.0), page_side(atom.as_ref().map(|a| a.slide_h), 540.0));
     // Ids above 256, as a new presentation's are.
     let mut p = Presentation { slide_size: size, default_text_style: app.default_text_style(), next_id: 256, ..Default::default() };
-    p.notes_size = Size::new(side(atom.as_ref().map(|a| a.notes_w), 540.0), side(atom.as_ref().map(|a| a.notes_h), 720.0));
+    p.notes_size = Size::new(page_side(atom.as_ref().map(|a| a.notes_w), 540.0), page_side(atom.as_ref().map(|a| a.notes_h), 720.0));
     p.first_slide_number = atom.as_ref().map_or(1, |a| u32::from(a.first_slide_number));
     let dgg = d.document.child(rt::DRAWING_GROUP).and_then(|g| g.child(rt::DGG_CONTAINER));
     let mut cx = Ctx {
@@ -175,9 +178,9 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
 }
 
 /// A master's first layout of each layout type, and its first layout.
-type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
+pub(crate) type LayoutTable = (Vec<(LayoutType, LayoutId)>, Option<LayoutId>);
 
-fn layout_table(m: &Master, skip: &HashSet<LayoutId>) -> LayoutTable {
+pub(crate) fn layout_table(m: &Master, skip: &HashSet<LayoutId>) -> LayoutTable {
     let mut kinds: Vec<(LayoutType, LayoutId)> = vec![];
     let layouts = m.layouts.iter().filter(|l| !skip.contains(&l.id));
     let first = layouts.clone().next().map(|l| l.id);
@@ -196,6 +199,26 @@ struct Find<'f> {
     first_main: Option<&'f MasterInfo>,
     layouts: &'f [LayoutTable],
     notes_of: &'f HashMap<u32, usize>,
+}
+
+/// A theme named "Imported" carrying a `.ppt` colour scheme's eight colours.
+pub(crate) fn scheme_theme(scheme: &Scheme) -> Theme {
+    let mut t = Theme { name: "Imported".into(), ..Default::default() };
+    for (slot, i) in [
+        (SchemeSlot::Lt1, 0),
+        (SchemeSlot::Dk1, 1),
+        (SchemeSlot::Lt2, 2),
+        (SchemeSlot::Dk2, 3),
+        (SchemeSlot::Accent1, 4),
+        (SchemeSlot::Accent2, 5),
+        (SchemeSlot::Hlink, 6),
+        (SchemeSlot::FolHlink, 7),
+    ] {
+        if let Some(c) = scheme.get(i) {
+            t.colors.set(slot, *c);
+        }
+    }
+    t
 }
 
 /// A converted master: where it went and what its slides inherit.
@@ -370,21 +393,7 @@ impl<'a> Ctx<'a> {
 
     /// A theme carrying the master's colours and fonts, so shapes added later match the deck.
     fn theme(&self, scheme: &Scheme, styles: &StyleSheet) -> Theme {
-        let mut t = Theme { name: "Imported".into(), ..Default::default() };
-        for (slot, i) in [
-            (SchemeSlot::Lt1, 0),
-            (SchemeSlot::Dk1, 1),
-            (SchemeSlot::Lt2, 2),
-            (SchemeSlot::Dk2, 3),
-            (SchemeSlot::Accent1, 4),
-            (SchemeSlot::Accent2, 5),
-            (SchemeSlot::Hlink, 6),
-            (SchemeSlot::FolHlink, 7),
-        ] {
-            if let Some(c) = scheme.get(i) {
-                t.colors.set(slot, *c);
-            }
-        }
+        let mut t = scheme_theme(scheme);
         if let Some(f) = styles.resolve(ty::TITLE, 0).1.font.and_then(|i| self.fonts.get(usize::from(i))) {
             t.fonts.major.latin = f.clone();
         }
@@ -1145,7 +1154,7 @@ fn same_family(a: PhType, b: PhType) -> bool {
 }
 
 /// `SlideLayoutType` as a layout type.
-fn layout_kind(geom: u32) -> LayoutType {
+pub(crate) fn layout_kind(geom: u32) -> LayoutType {
     match geom {
         0 => LayoutType::Title,
         7 => LayoutType::TitleOnly,
