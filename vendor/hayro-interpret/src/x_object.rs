@@ -83,7 +83,10 @@ impl<'a> FormXObject<'a> {
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(stream)?;
-        let resources = dict.get::<Dict<'_>>(RESOURCES);
+        // PdfCraft patch: retain absence; present malformed dictionaries stay local-empty.
+        let resources = dict
+            .contains_key(RESOURCES)
+            .then(|| dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default());
 
         let matrix = Affine::new(
             dict.get::<[f64; 6]>(MATRIX)
@@ -208,7 +211,7 @@ fn draw_form_xobject_once<'a, 'b>(
         });
         interpret(
             TypedIter::new(x_object.decoded.as_ref()),
-            &Resources::from_scope(x_object.resources.clone(), resources.clone()),
+            &Resources::for_form(x_object.resources.clone(), resources.clone()),
             context,
             device,
         );
@@ -258,7 +261,7 @@ fn draw_form_xobject_once<'a, 'b>(
         }
     }
 
-    let resources = Resources::from_scope(x_object.resources.clone(), resources.clone());
+    let resources = Resources::for_form(x_object.resources.clone(), resources.clone());
 
     // PdfCraft patch (70): an isolated group blending in DeviceCMYK starts from a backdrop of
     // its own, so a device able to blend in CMYK computes its interior apart and composites the
@@ -326,7 +329,7 @@ pub(crate) fn interpret_form_contents<'a>(
 
     interpret(
         TypedIter::new(x_object.decoded.as_ref()),
-        &Resources::from_scope(x_object.resources.clone(), resources.clone()),
+        &Resources::for_form(x_object.resources.clone(), resources.clone()),
         context,
         device,
     );
@@ -370,7 +373,7 @@ fn draw_knockout_passes<'a>(
         device.push_clip_path(&clip);
         interpret(
             TypedIter::new(x_object.decoded.as_ref()),
-            &Resources::from_scope(x_object.resources.clone(), resources.clone()),
+            &Resources::for_form(x_object.resources.clone(), resources.clone()),
             context,
             device,
         );
@@ -611,9 +614,14 @@ impl<'a> ImageXObject<'a> {
                 default_space = Some(key);
                 Some(space)
             } else {
+                // PdfCraft patch (80): an Indexed space given in place whose `hival` has no
+                // reading cannot be built and falls back below, as upstream; it is reported.
+                malformed_indexed = cs_obj
+                    .as_ref()
+                    .is_some_and(crate::color::has_unusable_hival);
                 cs_obj
                     .clone()
-                    .and_then(|c| ColorSpace::new(c, cache))
+                    .and_then(|c| ColorSpace::new_allowing_tableless(c, cache))
                     // Inline images can also refer to color spaces by name.
                     .or_else(|| {
                         cs_obj
