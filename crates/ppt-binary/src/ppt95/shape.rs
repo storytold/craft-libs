@@ -193,13 +193,10 @@ pub(super) fn orient_drawn(xfrm: &mut Xfrm, bits: u8, drawn: i32) {
 }
 
 /// PowerPoint 95's trapezoid flipped top to bottom, as its default is drawn: wide at the top, each
-/// bottom corner inset by the adjust value (0 to half the side, a quarter by default) in the
-/// shape's 21600-unit square. The same outline the PowerPoint 97 path gives the trapezoid
-/// (storytold/craft-libs#2492), to be shared once that lands.
+/// bottom corner inset by the adjust value (0 to half the side, a quarter by default). The outline
+/// the PowerPoint 97 path gives OfficeArt's trapezoid; a negative adjust value is 0, as there.
 fn trapezoid_top(adjust: Option<i32>) -> Geom {
-    let a = adjust.unwrap_or(5400).clamp(0, 10800);
-    let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
-    Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
+    geom::trapezoid(adjust.map(|v| u32::try_from(v).unwrap_or(0)))
 }
 
 /// A freeform's points as a path in its box `sides` (left, top, right and bottom, either way
@@ -238,7 +235,9 @@ const BALLOON_BODY: f64 = 5.0 / 6.0;
 /// is its body only, as DrawingML's callout's is, its tail reaching out below ([`balloon`]).
 pub(super) fn geometry(code: i8, adjust: Option<i32>, xfrm: &mut Xfrm) -> Geom {
     let kind = u16::try_from(i16::from(code) + 4).ok().filter(|_| (-3..=14).contains(&code));
-    let Some(name) = kind.and_then(geom::preset_name) else {
+    // PowerPoint 95's trapezoid unmirrored is DrawingML's preset, wide at the bottom; the PowerPoint
+    // 97 path's table has no preset for it, OfficeArt's being wide at the top.
+    let Some(name) = kind.and_then(|k| if k == 8 { Some("trapezoid") } else { geom::preset_name(k) }) else {
         log::warn!("ppt: PowerPoint 95 shape code {code} is not known; read as a rectangle");
         return Geom::Preset { name: "rect".into(), adj: vec![] };
     };
