@@ -60,6 +60,8 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Cinepak video decoder.
+cinepak = []
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Sierra VMD video (8-bit paletted): decoder; `vmd` turns it on too.
@@ -188,3 +190,7 @@ required-features = ["hevc-encode"]
 [[test]]
 name = "av1"
 required-features = ["av1"]
+
+[[test]]
+name = "cinepak"
+required-features = ["cinepak"]
