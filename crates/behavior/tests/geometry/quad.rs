@@ -294,3 +294,17 @@ fn a_plain_edge_drag_and_a_free_one_are_unchanged() {
     // ⇧ stretches along the side, as the reference does: the skew's offset grows with the height.
     assert!(within(&free, [(190.0, 125.0), (492.0, 125.0), (444.079, 367.0), (142.079, 367.0)], 2e-3), "{:?}", free.quad);
 }
+
+/// Only the pointer's move across a dragged side counts (measured on the reference): a right side dragged 50 px out with
+/// the pointer also 40 px lower or higher gives the box of the straight drag.
+#[test]
+fn a_side_drag_in_perspective_ignores_the_pointer_along_the_side() {
+    let narrow_top = [p(210.0, 125.0), p(392.0, 125.0), p(452.0, 327.0), p(150.0, 327.0)];
+    let straight = edge_dragged(narrow_top, 1, p(422.0, 226.0), p(472.0, 226.0));
+    let reference = [(210.0, 97.25), (419.11, 99.99), (526.87, 356.71), (150.0, 354.75)];
+    assert!(within(&straight, reference, 3.0), "{:?}", straight.quad);
+    for to in [p(472.0, 266.0), p(472.0, 186.0)] {
+        let got = edge_dragged(narrow_top, 1, p(422.0, 226.0), to);
+        assert!(within(&got, straight.quad.map(|c| (c.x, c.y)), 1e-9), "to {to:?}: {:?}", got.quad);
+    }
+}
