@@ -86,6 +86,7 @@ tests are in the files they name.
 | PdfCraft PR | Files | Change | Tests |
 |---|---|---|---|
 | [#6498](https://github.com/storytold/pdfcraft/pull/6498) | `page.rs` | A `/Kids` entry with a `/Kids` array and no `/Type /Page` is a page-tree node, so the pages under a node without `/Type` are read (ISO 32000-2 §7.7.3.1–7.7.3.3); an untyped leaf is still a page | `page::page_tree_tests::pages_under_nodes_without_a_type_are_read_in_order` |
+| [#7391](https://github.com/storytold/pdfcraft/pull/7391) | `object/dict.rs` | Patch 51: a closing delimiter or brace between dictionary entries (`/Contents 4 0 R ) >>`) is stepped over as garbage, read or skipped (§7.3.7), so a page dictionary holding one keeps its page and the pages after it (§7.7.3) | `object::dict::tests::a_stray_delimiter_between_entries_keeps_the_dictionary`, `page::page_tree_tests::a_stray_delimiter_in_a_page_dictionary_keeps_the_page_and_the_pages_after_it` |
 
 A craft-libs patch, labeled `Craft patch (CMYK masks)` in code comments,
 takes a luminosity soft mask whose group is DeviceCMYK from the group's inks: ISO 32000-2

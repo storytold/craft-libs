@@ -1163,6 +1163,40 @@ mod page_tree_tests {
         assert_eq!(sizes, [(300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (300.0, 200.0), (400.0, 400.0)]);
     }
 
+    /// PdfCraft patch (51, storytold/pdfcraft#7391): a page dictionary holding a stray delimiter
+    /// between its entries keeps its page, the entries after the byte and the pages after it in
+    /// the tree (ISO 32000-2 §7.3.7, §7.7.3), also when the byte is in a nested dictionary.
+    #[test]
+    fn a_stray_delimiter_in_a_page_dictionary_keeps_the_page_and_the_pages_after_it() {
+        let font = "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>";
+        for stray in [")", "]", "{", "}", ">", ") ] )"] {
+            for nested in [false, true] {
+                let mut objects = vec![
+                    "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+                    "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R] /Count 4 >>".to_string(),
+                ];
+                for page in 0..4 {
+                    let (junk, resources) = match (page, nested) {
+                        (1, false) => (stray, format!("<< {font} >>")),
+                        (1, true) => ("", format!("<< {stray} {font} >>")),
+                        _ => ("", format!("<< {font} >>")),
+                    };
+                    objects.push(format!(
+                        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources {resources} /Contents [] {junk} /Rotate 90 >>"
+                    ));
+                }
+                let pdf = Pdf::new(pdf_bytes(&objects)).unwrap();
+                let pages = pdf.pages();
+                let ids: Vec<_> = pages.iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+                assert_eq!(ids, [3, 4, 5, 6], "{stray:?}, nested {nested}");
+                let second = &pages[1];
+                assert!(matches!(second.rotation(), Rotation::Horizontal), "{stray:?}, nested {nested}: the entry after the byte");
+                let f1 = Name::from_bytes(b"/F1").unwrap();
+                assert!(second.resources().get_font(&f1).is_some(), "{stray:?}, nested {nested}: the page keeps its font");
+            }
+        }
+    }
+
     fn raw_crop_unit_page(unit: f64, crop: [f64; 4]) -> Vec<u8> {
         let bounds = crop.map(|n| n.to_string()).join(" ");
         let objects = [

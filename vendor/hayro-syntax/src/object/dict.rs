@@ -193,7 +193,9 @@ impl Skippable for Dict<'_> {
             } else {
                 let Some(_) = r.skip::<Name<'_>>(is_content_stream) else {
                     // In case there is garbage in-between, be lenient and just try to skip it.
-                    r.skip::<Object<'_>>(is_content_stream)?;
+                    if r.skip::<Object<'_>>(is_content_stream).is_none() {
+                        skip_stray_delimiter(r)?;
+                    }
                     continue;
                 };
 
@@ -208,6 +210,21 @@ impl Skippable for Dict<'_> {
         })();
         r.leave_container();
         result
+    }
+}
+
+// PdfCraft patch (51): a closing delimiter or brace between dictionary entries
+// (`/Contents 4 0 R ) >>`) starts no object, so the garbage skip failed and took the
+// whole dictionary with it: a page dictionary holding one ended the page-tree walk
+// there. Step over that one byte as garbage instead. Each call consumes a byte, so the
+// entry loops still end.
+fn skip_stray_delimiter(r: &mut Reader<'_>) -> Option<()> {
+    match r.peek_byte()? {
+        b')' | b']' | b'{' | b'}' | b'>' => {
+            r.forward();
+            Some(())
+        }
+        _ => None,
     }
 }
 
@@ -434,7 +451,9 @@ where
                     // But only do this if we are parsing a proper dictionary as opposed to an
                     // inline dictionary.
                     repaired = true;
-                    r.read::<Object<'_>>(ctx)?;
+                    if r.read::<Object<'_>>(ctx).is_none() {
+                        skip_stray_delimiter(r)?;
+                    }
                     continue;
                 } else {
                     return None;
@@ -1281,6 +1300,27 @@ mod tests {
 
     fn dict_impl(data: &[u8]) -> Option<Dict<'_>> {
         Reader::new(data).read_with_context::<Dict<'_>>(&ReaderContext::dummy())
+    }
+
+    /// PdfCraft patch (51, storytold/pdfcraft#7391): a closing delimiter or brace between entries
+    /// is garbage there (ISO 32000-2 §7.3.7); the dictionary keeps the entries around it, read or
+    /// skipped, and skipping ends where the dictionary does.
+    #[test]
+    fn a_stray_delimiter_between_entries_keeps_the_dictionary() {
+        for stray in [")", "]", "{", "}", ">", ") ] )"] {
+            let text = format!("<< /A 1 {stray} /B 2 >> 7");
+            let dict = dict_impl(text.as_bytes()).unwrap_or_else(|| panic!("{stray:?}: the dictionary is read"));
+            assert_eq!(dict.get::<i32>(Name::new_unescaped(b"A")), Some(1), "{stray:?}");
+            assert_eq!(dict.get::<i32>(Name::new_unescaped(b"B")), Some(2), "{stray:?}");
+            let mut r = Reader::new(text.as_bytes());
+            assert!(r.skip::<Dict<'_>>(false).is_some(), "{stray:?}: the dictionary is skipped");
+            r.skip_white_spaces_and_comments();
+            assert_eq!(r.read_without_context::<i32>(), Some(7), "{stray:?}: skipping ends after `>>`");
+        }
+        // Stray bytes with no `>>` after them still leave the dictionary unreadable.
+        let unterminated = format!("<< /A 1 {}", ") ] } { > ".repeat(1000));
+        assert!(dict_impl(unterminated.as_bytes()).is_none());
+        assert!(Reader::new(unterminated.as_bytes()).skip::<Dict<'_>>(false).is_none());
     }
 
     #[test]
