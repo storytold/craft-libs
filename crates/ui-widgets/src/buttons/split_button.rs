@@ -200,9 +200,13 @@ impl<T: Value + 'static> Component for SplitButton<'_, T> {
     const PAIRED_MEASURE: bool = true;
 
     fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
-        let (mut whole, mut narrow) = face::measure_pair(ideal, least, &self.spec(ideal.resolved.label));
-        whole.x += ideal.icon();
-        narrow.x += least.icon();
+        let arrow = face::arrow_room(ideal.env.get::<super::ControlPlace>(), ideal.env.get::<super::RibbonLook>());
+        let chevron = chevron(&FaceLook { arrow, ..ideal.style.face.clone() });
+        let (mut whole, mut narrow) = face::measure_pair(ideal, least, &self.spec(ideal.resolved.label, &chevron));
+        if self.arrangement != Arrangement::Stacked {
+            whole.x += arrow.unwrap_or_else(|| face::measured_icon(ideal));
+            narrow.x += arrow.unwrap_or_else(|| face::measured_icon(least));
+        }
         Some((whole, narrow))
     }
 
