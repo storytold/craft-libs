@@ -32,6 +32,13 @@ fn read_bounded_stops_a_stream_with_no_end() {
 }
 
 #[test]
+fn read_bounded_reads_one_byte_past_its_cap() {
+    let mut input = std::io::Cursor::new(vec![0u8; 1 << 16]);
+    assert_eq!(read_bounded(&mut input, 100).err().map(|e| e.kind()), Some(std::io::ErrorKind::FileTooLarge));
+    assert_eq!(input.position(), 101);
+}
+
+#[test]
 fn max_pixels_enforced_for_every_format() {
     for f in rw_formats() {
         let b = encoded(f);
