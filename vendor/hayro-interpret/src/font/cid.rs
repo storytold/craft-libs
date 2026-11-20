@@ -826,9 +826,13 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
                 hayro_cmap::CMapName::IdentityH => Some(CMap::identity_h()),
                 hayro_cmap::CMapName::IdentityV => Some(CMap::identity_v()),
                 _ => {
-                    let data = (cmap_resolver)(cmap_type)?;
                     let resolver = cmap_resolver.clone();
-                    CMap::parse(data, move |n| (resolver)(n))
+                    match (cmap_resolver)(cmap_type) {
+                        Some(data) => CMap::parse(data, move |n| (resolver)(n)),
+                        // PdfCraft patch (116): a CID CMap of an Adobe collection.
+                        None => collection_cmap(n.deref())
+                            .and_then(|text| CMap::parse(text.as_bytes(), move |n| (resolver)(n))),
+                    }
                 }
             }
         }
@@ -839,6 +843,55 @@ fn read_encoding(object: &Object<'_>, cmap_resolver: &CMapResolverFn) -> Option<
         }
         _ => None,
     }
+}
+
+/// PdfCraft patch (116): the number of CIDs in each supplement of the Adobe character
+/// collections, as the CID CMaps Adobe publishes with them state it (`/CIDCount` in
+/// `Adobe-<Ordering>-<Supplement>`, adobe-type-tools/cmap-resources, BSD-3-Clause).
+const COLLECTION_CID_COUNTS: &[(&str, &[u32])] = &[
+    ("Japan1", &[8284, 8359, 8720, 9354, 15444, 20317, 23058, 23060]),
+    ("GB1", &[7717, 9897, 22127, 22353, 29064, 30284, 30572]),
+    ("CNS1", &[14099, 17408, 17601, 18846, 18965, 19088, 19156, 19179]),
+    ("Korea1", &[9333, 18155, 18352]),
+    ("KR", &[3059, 4637, 11451, 11731, 11878, 12235, 14238, 18858, 22480, 22897]),
+    ("Manga1", &[18032]),
+    ("Japan2", &[6068]),
+];
+
+/// PdfCraft patch (116): the CID CMap Adobe publishes for a supplement of one of its character
+/// collections (`Adobe-Japan1-2` and the like) as CMap source text, or `None` for any other
+/// name.
+///
+/// Such a CMap is horizontal, takes two-byte codes and maps each code below the supplement's
+/// CID count to the CID of the same number. ISO 32000-2 §9.7.5.2 doesn't list these names in
+/// Table 116, so a font that names one without embedding it breaks the rule; the whole font
+/// was then dropped for the Helvetica substitute, which drew `Hello world` as `)FMMPXPSME`
+/// and left the font's `/ToUnicode` unread. PDFium, Poppler and Ghostscript read the name as
+/// this CMap and draw the text with the embedded font. Codes from the CID count up map to
+/// CID 0, the `.notdef` glyph, as Adobe's CMap leaves them unmapped.
+fn collection_cmap(name: &[u8]) -> Option<String> {
+    let name = std::str::from_utf8(name).ok()?;
+    let (ordering, supplement) = name.strip_prefix("Adobe-")?.rsplit_once('-')?;
+    // Adobe writes the supplement without leading zeros.
+    if supplement.is_empty()
+        || !supplement.bytes().all(|b| b.is_ascii_digit())
+        || (supplement.len() > 1 && supplement.starts_with('0'))
+    {
+        return None;
+    }
+    let supplement: usize = supplement.parse().ok()?;
+    let (_, counts) = COLLECTION_CID_COUNTS.iter().find(|(o, _)| *o == ordering)?;
+    let count = *counts.get(supplement)?;
+    let last = count.checked_sub(1)?;
+    Some(format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+         /CIDSystemInfo << /Registry (Adobe) /Ordering ({ordering}) /Supplement {supplement} >> def\n\
+         /CMapName /{name} def /CMapType 1 def /WMode 0 def\n\
+         1 begincodespacerange <0000> <FFFF> endcodespacerange\n\
+         1 begincidrange <0000> <{last:04X}> 0 endcidrange\n\
+         1 beginnotdefrange <{count:04X}> <FFFF> 0 endnotdefrange\n\
+         endcmap CMapName currentdict /CMap defineresource pop end end\n"
+    ))
 }
 
 /// PdfCraft patch test (ported from craft-libs): a /W2 run whose first CID is past `MAX_CID`
@@ -930,6 +983,55 @@ mod width_tests {
         }
         for array in ["[7 0 R [-1000 500 880]]", "[8 0 R 22 -900 400 800]", "[20 [7 0 R 500 880]]"] {
             assert!(vertical(array).is_empty(), "{array}");
+        }
+    }
+}
+
+/// PdfCraft patch (116) test: a CID `/Encoding` naming a CMap Adobe publishes for a supplement of
+/// its collections reads two-byte codes as the CIDs of the same number, below the supplement's
+/// CID count, and other names read as no CMap.
+#[cfg(test)]
+mod collection_cmap_tests {
+    use super::read_encoding;
+    use crate::CMapResolverFn;
+    use hayro_syntax::object::{Name, Object};
+    use std::sync::Arc;
+
+    fn cid(name: &str, code: u32) -> Option<u32> {
+        let resolver: CMapResolverFn = Arc::new(|_| None);
+        let name = Name::new(name.as_bytes()).expect("a name");
+        let cmap = read_encoding(&Object::Name(name), &resolver)?;
+        Some(cmap.lookup_cid_code(code, 2).unwrap_or(u32::MAX))
+    }
+
+    #[test]
+    fn an_adobe_collection_cid_cmap_reads_two_byte_codes_as_cids() {
+        // Adobe-Japan1 CIDs 34, 1125 and 843: A, 亜 and あ.
+        assert_eq!(cid("Adobe-Japan1-2", 0x0022), Some(34));
+        assert_eq!(cid("Adobe-Japan1-2", 0x0465), Some(1125));
+        assert_eq!(cid("Adobe-Japan1-2", 0x034B), Some(843));
+        // Adobe-Japan1-0 has 8284 CIDs: 0x205B (8283) is its last, 0x205C reads as CID 0.
+        assert_eq!(cid("Adobe-Japan1-0", 0x205B), Some(8283));
+        assert_eq!(cid("Adobe-Japan1-0", 0x205C), Some(0));
+        assert_eq!(cid("Adobe-Japan1-7", 0x5A13), Some(0x5A13), "Adobe-Japan1-7 has 23060 CIDs");
+        for name in ["Adobe-GB1-6", "Adobe-CNS1-7", "Adobe-Korea1-2", "Adobe-KR-9", "Adobe-Manga1-0", "Adobe-Japan2-0"] {
+            assert_eq!(cid(name, 0x0FA0), Some(0x0FA0), "{name}");
+        }
+        for name in [
+            "Foo-Bar-H",
+            "Adobe-Japan1-8",
+            "Adobe-Japan1-02",
+            "Adobe-Japan1-",
+            "Adobe-Japan1-UCS2",
+            "Adobe-Identity-0",
+            "Adobe-Japan1-99999999999999999999",
+            "Adobe-Japan1",
+            "Adobe--2",
+            "Japan1-2",
+            "adobe-Japan1-2",
+            "Adobe-Japan1-+2",
+        ] {
+            assert_eq!(cid(name, 0x0022), None, "{name}");
         }
     }
 }

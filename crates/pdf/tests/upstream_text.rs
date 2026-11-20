@@ -164,3 +164,29 @@ fn an_octal_escape_past_0o377_reads_its_low_eight_bits() {
     assert_eq!(text(r"(Abschlie\337en)"), "Abschließen", "control: the escape in range");
     assert_eq!(text(r"(\7377)"), "ß7", "three digits at most");
 }
+
+/// PdfCraft patch 116 (storytold/pdfcraft#7513): a Type 0 font whose `/Encoding` names a CMap
+/// Adobe publishes for a supplement of its collections (`/Adobe-Japan1-2`), which ISO 32000-2
+/// §9.7.5.2 doesn't list in Table 116, reads two-byte codes and its `/ToUnicode` (§9.10.2). The
+/// font was dropped for the Helvetica substitute, which read the codes one byte at a time and
+/// never looked at its `/ToUnicode`.
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn an_adobe_collection_cid_cmap_name_reads_two_byte_codes() {
+    let to_unicode = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /T def /CMapType 2 def \
+                      1 begincodespacerange <0000> <FFFF> endcodespacerange \
+                      3 beginbfchar <0022> <0041> <0465> <4E9C> <034B> <3042> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end";
+    let texts = |encoding: &str| {
+        let font = format!("<< /Type /Font /Subtype /Type0 /BaseFont /TestJapan1 /Encoding /{encoding} /DescendantFonts [6 0 R] /ToUnicode 8 0 R >>");
+        let extra = format!(
+            "6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /TestJapan1 /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> \
+             /FontDescriptor 7 0 R /DW 1000 >> endobj\n\
+             7 0 obj << /Type /FontDescriptor /FontName /TestJapan1 /Flags 4 /FontBBox [0 -120 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >> endobj\n\
+             8 0 obj << /Length {} >> stream\n{to_unicode}\nendstream endobj\n",
+            to_unicode.len() + 1
+        );
+        glyph_texts(&font, &extra, b"BT /F1 20 Tf 20 150 Td <00220465034B> Tj ET").into_iter().map(Option::unwrap_or_default).collect::<Vec<_>>()
+    };
+    assert_eq!(texts("Identity-H"), ["A", "亜", "あ"], "control: Identity-H");
+    assert_eq!(texts("Adobe-Japan1-2"), ["A", "亜", "あ"]);
+}
