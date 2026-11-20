@@ -1136,11 +1136,45 @@ fn check_finite(scene: &Scene) -> Result<()> {
     if positions && nodes && materials { Ok(()) } else { Err(malformed(KIND, "a position, transform or material value is not finite")) }
 }
 
+/// Texture magnification filtering for a GLB sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum MagFilter {
+    Nearest = 9728,
+    Linear = 9729,
+}
+
+/// Texture minification filtering for a GLB sampler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum MinFilter {
+    Nearest = 9728,
+    Linear = 9729,
+    NearestMipmapNearest = 9984,
+    LinearMipmapNearest = 9985,
+    NearestMipmapLinear = 9986,
+    LinearMipmapLinear = 9987,
+}
+
+/// Options applied to each sampler written by the GLB exporter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GlbWriteOptions {
+    /// Magnification filter. None leaves the choice to the viewer.
+    pub mag_filter: Option<MagFilter>,
+    /// Minification filter. None leaves the choice to the viewer.
+    pub min_filter: Option<MinFilter>,
+}
+
 /// The scene as a binary glTF file: its nodes, meshes (each part a primitive over the mesh's
 /// [`Mesh::unified`] vertices: positions, normals, UV sets and colours) and materials, with
 /// images that have bytes embedded and the others named by their URI. The binary chunk is
 /// limited to `limits.max_data_bytes`.
 pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
+    write_glb_with_options(scene, limits, &GlbWriteOptions::default())
+}
+
+/// Write a binary glTF scene with explicit sampler filtering options.
+pub fn write_glb_with_options(scene: &Scene, limits: &Limits, options: &GlbWriteOptions) -> Result<Vec<u8>> {
     scene.validate()?;
     scene.instances(limits)?;
     check_finite(scene)?;
@@ -1220,7 +1254,23 @@ pub fn write_glb(scene: &Scene, limits: &Limits) -> Result<Vec<u8>> {
     list("meshes", meshes);
     list("materials", materials);
     list("textures", textures.textures.iter().map(|(image, sampler)| json!({ "source": image, "sampler": sampler })).collect());
-    list("samplers", textures.samplers.iter().map(|s| json!({ "wrapS": wrap(s[0]), "wrapT": wrap(s[1]) })).collect());
+    list(
+        "samplers",
+        textures
+            .samplers
+            .iter()
+            .map(|s| {
+                let mut sampler = Map::from_iter([("wrapS".into(), json!(wrap(s[0]))), ("wrapT".into(), json!(wrap(s[1])))]);
+                if let Some(filter) = options.mag_filter {
+                    sampler.insert("magFilter".into(), json!(filter as u16));
+                }
+                if let Some(filter) = options.min_filter {
+                    sampler.insert("minFilter".into(), json!(filter as u16));
+                }
+                Value::Object(sampler)
+            })
+            .collect(),
+    );
     list("images", textures.images);
     list("accessors", w.accessors);
     list("bufferViews", w.views);
