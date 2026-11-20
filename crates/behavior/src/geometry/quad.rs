@@ -711,16 +711,16 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
 
 /// An ⌥ edge drag (both sides move, about the reference point) on a box whose top and bottom are parallel, as the
 /// reference does it; `None` for any other box, which the frame scaling takes. In the frame of the top edge (`uh`
-/// along it, `nh` across):
+/// along it, `nh` across), with `k = 1 + d / r`, `d` the drag along the edge's axis and `r` how far the dragged edge is
+/// from the reference point along it (half the box for a centred reference point):
 /// - a left or right edge, its side and the opposite one parallel: the side-run rule ([`side_run_scale`]) about the
-///   reference point, with `k = 1 + 2 d·uh / |top|`;
+///   reference point, which keeps its place in the parallelogram;
 /// - a left or right edge, the sides meeting (a box in perspective): the opposite side scales evenly about the
-///   reference point by `k = 1 + 2 d·uh / w`, `w` the box's width between its sides' middles; the dragged corners
-///   keep the place along `uh` a plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite
-///   side's rows;
-/// - a top or bottom edge: a rectangle in that frame, `k h` high (`k = 1 + 2 d·nh / h`, `h` the left side's part
-///   along `nh`) and `k (|top| ± r)` wide, `r` the sides' mean run along `uh`, added for the bottom edge and taken
-///   off for the top one.
+///   reference point, `r` measured to the dragged side's middle; the dragged corners keep the place along `uh` a
+///   plain drag gives them ([`side_run_scale`]) and move along `nh` to the opposite side's rows;
+/// - a top or bottom edge: a rectangle in that frame, `k h` high (`h` the left side's part along `nh`) and
+///   `k (|top| ± m)` wide, `m` the sides' mean run along `uh`, added for the bottom edge and taken off for the top
+///   one, its centre the corners' mean scaled by `k` about the reference point.
 fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
     let q = g.quad0;
@@ -744,25 +744,32 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
     let mean = Point::new(q.iter().map(|p| p.x).sum::<f64>() / 4.0, q.iter().map(|p| p.y).sum::<f64>() / 4.0);
     let d = p - g.start;
     let floor = scale_floor(&q, 0, min_side).max(scale_floor(&q, 1, min_side));
-    let factor = |k: f64| (k.is_finite() && k > 0.0).then_some(k.max(floor));
+    // The factor that carries the dragged edge by the drag's part `by` along its axis, from `reach` away from the
+    // reference point (half the box for a centred one).
+    let factor = |by: f64, reach: f64| {
+        let k = 1.0 + by / reach;
+        (reach.is_finite() && reach > 1e-9 && k.is_finite() && k > 0.0).then_some(k.max(floor))
+    };
     let at = |du: f64, dv: f64, from: Point| from + uh * du + nh * dv;
     let quad = match edge {
         1 | 3 => {
             let sign = if edge == 1 { 1.0 } else { -1.0 };
             if crossing(tl, left, tr, right).is_none() {
-                let k = factor(1.0 + 2.0 * sign * d.dot(uh) / len)?;
-                let (u2, left2) = (u * k, uh * al + nh * (h * k));
-                let right2 = left2 + (right - left);
-                let shape = [Point::ZERO, Point::ZERO + u2, Point::ZERO + u2 + right2, Point::ZERO + left2];
-                let centre = c + (mean - c) * k;
-                let shift = centre - Point::new(shape.iter().map(|p| p.x).sum::<f64>() / 4.0, shape.iter().map(|p| p.y).sum::<f64>() / 4.0);
-                shape.map(|s| s + shift)
-            } else {
-                let w = (tr.midpoint(br) - tl.midpoint(bl)).dot(uh);
-                if !(w.is_finite() && w.abs() > 1e-9) {
+                // The reference point's place in the parallelogram: `tl + tau left + sigma u`.
+                let (r, den) = (c - tl, left.cross(u));
+                if den.abs() <= 1e-9 * left.hypot() * len {
                     return None;
                 }
-                let k = factor(1.0 + 2.0 * sign * d.dot(uh) / w)?;
+                let (tau, sigma) = (r.cross(u) / den, left.cross(r) / den);
+                let reach = if edge == 1 { (1.0 - sigma) * len } else { sigma * len };
+                let k = factor(sign * d.dot(uh), reach)?;
+                let (u2, left2) = (u * k, uh * al + nh * (h * k));
+                let right2 = left2 + (right - left);
+                let origin = c - left2 * tau - u2 * sigma;
+                [origin, origin + u2, origin + u2 + right2, origin + left2]
+            } else {
+                let reach = if edge == 1 { (tr.midpoint(br) - c).dot(uh) } else { (c - tl.midpoint(bl)).dot(uh) };
+                let k = factor(sign * d.dot(uh), reach)?;
                 let mut out = q.map(|p| c + (p - c) * k);
                 let plain = side_run_scale(g, p, min_side)?.quad;
                 for i in if edge == 1 { [1, 2] } else { [0, 3] } {
@@ -773,13 +780,15 @@ fn centred_side_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> 
         }
         _ => {
             let sign = if edge == 2 { 1.0 } else { -1.0 };
-            let k = factor(1.0 + 2.0 * sign * d.dot(nh) / h)?;
+            let reach = if edge == 2 { (bl - c).dot(nh) } else { (c - tl).dot(nh) };
+            let k = factor(sign * d.dot(nh), reach)?;
             let (w, hh) = (k * (len + sign * (al + ar) / 2.0), k * h);
             let centre = c + (mean - c) * k;
             [at(-w / 2.0, -hh / 2.0, centre), at(w / 2.0, -hh / 2.0, centre), at(w / 2.0, hh / 2.0, centre), at(-w / 2.0, hh / 2.0, centre)]
         }
     };
-    quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+    // ⌥ scales about the reference point, so it stays put.
+    quad.iter().all(|c| c.is_finite()).then_some(BoxState { quad, pivot: g.pivot0 })
 }
 
 /// The second order of an edge drag on a box in perspective (measured on the reference): the dragged corners slide

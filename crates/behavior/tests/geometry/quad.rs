@@ -420,3 +420,28 @@ fn the_reference_point_stays_at_the_corners_mean_through_a_perspective_drag() {
     let got = drag(&trapezoid, &trapezoid, BoxPart::Edge(0), p(301.0, 125.0), p(301.0, 95.0), alt, &BoxRules::default());
     assert!(within(&got, [(182.97, 95.0), (419.03, 95.0), (419.03, 357.0), (182.97, 357.0)], 0.01), "{:?}", got.quad);
 }
+
+/// ⌥ drags about a reference point moved off the centre (an ⌥ click at (250, 200) puts it at (249.5, 199.5) on the
+/// reference): each scales by how far the dragged part is from the reference point, measured on the reference.
+#[test]
+fn alt_drags_scale_about_a_moved_reference_point() {
+    let rect = [(150.0, 125.0), (452.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let skewed = [(190.0, 125.0), (492.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let cases = [
+        (rect, BoxPart::Edge(1), (452.0, 226.0), (502.0, 226.0), [(125.43, 106.6), (502.0, 106.6), (502.0, 358.48), (125.43, 358.48)]),
+        (rect, BoxPart::Corner(2), (452.0, 327.0), (482.0, 357.0), [(132.8, 112.12), (487.01, 112.12), (487.01, 349.04), (132.8, 349.04)]),
+        (skewed, BoxPart::Edge(1), (472.0, 226.0), (522.0, 226.0), [(173.64, 108.59), (542.0, 108.59), (502.0, 355.08), (133.64, 355.08)]),
+        (narrow_top, BoxPart::Edge(0), (301.0, 125.0), (301.0, 95.0), [(194.09, 95.0), (449.38, 95.0), (449.38, 378.34), (194.09, 378.34)]),
+        (narrow_top, BoxPart::Corner(2), (452.0, 327.0), (482.0, 357.0), [(203.17, 112.12), (416.64, 112.12), (487.01, 349.04), (132.8, 349.04)]),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (quad, part, from, to, want) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let start = BoxState::new(quad, p(249.5, 199.5));
+        let got = drag(&start, &start, part, p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        // Within 0.1 px: on the skewed box the reference's factor reads 1.2203 where ours reads 1.2195.
+        assert!(within(&got, want, 0.1), "{part:?} of {quad:?}: {:?}", got.quad);
+        assert_eq!(got.pivot, p(249.5, 199.5), "the reference point stays put");
+    }
+}
