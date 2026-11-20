@@ -22,8 +22,10 @@ mod story;
 
 use craft_xml::{El, Local, Node};
 pub use document::{
-    CellStyleValues, ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, ModelDocument, NumberingListValues,
-    TableStyleValues, TextDateKind, TextVariableKind, TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode,
+    CellStyleValues, ConditionValues, CrossReferenceBuildingBlock, CrossReferenceFormatValues, EpubSplitValues, KinsokuTableValues, LayerColorValue,
+    LayerValues, ModelDocument, MojikumiTableValues, NumberingListValues, SectionValues, TableStyleValues, TextDateKind, TextVariableKind,
+    TextVariableValues, TocStyleEntryValues, TocStyleValues, TopLevelKind, TopLevelNode, default_languages, default_xref_text_variables,
+    hyperlink_el, hyperlink_page_destination_el, hyperlink_page_item_source_el, hyperlink_url_destination_el, root_color_group_el,
 };
 pub use effects::{
     DirectionalFeatherValues, DropShadowValues, FeatherValues, GradientFeatherValues, ObjectStyleStack, OpacityStopValues, TransparencySetting,
