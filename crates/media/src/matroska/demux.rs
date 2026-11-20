@@ -848,22 +848,35 @@ fn open_impl<S: ByteSource + ?Sized>(
     if seg.overruns(len) {
         warn(&mut file.warnings, "Segment extends past end of file (truncated)".into());
     }
-    let mut w =
-        Walker { opts, parsed: HashMap::new(), meta_left: len, blocks_seen: false, resuming: false, lookup: None, budget: FrameBudget::new(len) };
+    let mut w = Walker {
+        opts,
+        parsed: HashMap::new(),
+        order: Vec::new(),
+        defer_seek_head: saved.is_some(),
+        meta_left: len,
+        blocks_seen: false,
+        resuming: false,
+        lookup: None,
+        budget: FrameBudget::new(len),
+    };
     w.walk(&mut io, &mut file)?;
     if let Some(saved) = saved {
         w.attach(&mut io, &mut file, saved)?;
     }
     finish_tracks(&mut file);
-    let mut elements: Vec<u64> = w.parsed.keys().copied().collect();
-    elements.sort_unstable();
-    Ok((file, elements))
+    Ok((file, w.order))
 }
 
 struct Walker<'o> {
     opts: &'o OpenOptions,
     /// Start and end of each level-1 element read.
     parsed: HashMap<u64, u64>,
+    /// The starts of the level-1 elements read, in the order they were read (what an
+    /// [`super::IndexStore`] keeps, so that an open from it reads them in the same order).
+    order: Vec<u64>,
+    /// Headers walked for tables from an [`super::IndexStore`]: the SeekHead's targets are read
+    /// after the elements the scan read ([`Walker::attach`]), as the scan read them.
+    defer_seek_head: bool,
     /// Bytes level-1 elements may still read or scan. Distinct elements do not overlap, so a
     /// valid file stays within its length; SeekHead entries pointing into one another do not.
     meta_left: u64,
@@ -988,9 +1001,9 @@ impl Walker<'_> {
             file.indexed = false;
             return Ok(());
         }
-        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
-        // follow a second-level SeekHead reached through the first one
-        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)?;
+        if !self.defer_seek_head {
+            self.follow_seek_head_to_the_end(io, file)?;
+        }
         file.cues.sort_by_key(|c| c.time);
         file.indexed = self.opts.index;
         file.index_end = None;
@@ -1000,8 +1013,9 @@ impl Walker<'_> {
 
     /// Attaches tables saved by an earlier scan (an [`super::IndexStore`]) to a file whose headers
     /// were walked: reads the level-1 elements that scan had read (Cues, Chapters, Tags… after the
-    /// clusters), checks the saved tracks and clusters against the file, and makes the file
-    /// indexed. Tables that do not fit are an error (the caller scans the file instead).
+    /// clusters) in the order it read them and then what the SeekHead points at, as the scan did,
+    /// checks the saved tracks and clusters against the file, and makes the file indexed. Tables
+    /// that do not fit are an error (the caller scans the file instead).
     fn attach<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile, saved: super::index_store::Saved) -> Result<()> {
         let bad = || Error::Invalid("saved index does not fit the file".into());
         let seg_end = file.segment_end;
@@ -1015,6 +1029,7 @@ impl Walker<'_> {
                 self.level1(io, file, &h, seg_end)?;
             }
         }
+        self.follow_seek_head_to_the_end(io, file)?;
         if saved.tracks.len() != file.tracks.len() || saved.tracks.iter().zip(&file.tracks).any(|((number, _, _), t)| *number != t.number) {
             return Err(bad());
         }
@@ -1042,6 +1057,13 @@ impl Walker<'_> {
     /// loaded yet) can be retried by [`MkvFile::extend_index`] without repeating any of it.
     fn save(&self, file: &mut MkvFile, pos: u64) {
         file.index_end = Some(pos);
+    }
+
+    /// Read every element the SeekHead points at (the last step of a walk through the file).
+    fn follow_seek_head_to_the_end<S: ByteSource + ?Sized>(&mut self, io: &mut Io<'_, S>, file: &mut MkvFile) -> Result<()> {
+        self.follow_seek_head(io, file, &[INFO, TRACKS, CUES, CHAPTERS, TAGS, ATTACHMENTS, SEEK_HEAD], u64::MAX)?;
+        // follow a second-level SeekHead reached through the first one
+        self.follow_seek_head(io, file, &[CUES, CHAPTERS, TAGS, ATTACHMENTS], u64::MAX)
     }
 
     /// Read the elements of the given kinds that the SeekHead points at below `before`.
@@ -1083,6 +1105,9 @@ impl Walker<'_> {
         let result = self.level1_read(io, file, h, limit);
         if result.is_err() && !known {
             self.parsed.remove(&h.pos);
+            if self.order.last() == Some(&h.pos) {
+                self.order.pop();
+            }
             self.meta_left = meta_left;
             file.attachments.truncate(attachments);
         }
@@ -1098,6 +1123,7 @@ impl Walker<'_> {
             Size::Known(_) => h.end(limit),
         };
         self.parsed.insert(h.pos, end);
+        self.order.push(h.pos);
         if h.overruns(limit) {
             warn(&mut file.warnings, format!("element 0x{:X} at {} truncated", h.id, h.pos));
         }
@@ -1244,8 +1270,17 @@ impl MkvFile {
         let mut cache = Cache::default();
         let mut io = Io::new(src, &mut cache);
         let budget = FrameBudget::resumed(io.len, &self.tracks);
-        let mut w =
-            Walker { opts: &opts, parsed: resume.parsed, meta_left: resume.meta_left, blocks_seen: true, resuming: true, lookup: None, budget };
+        let mut w = Walker {
+            opts: &opts,
+            parsed: resume.parsed,
+            order: Vec::new(),
+            defer_seek_head: false,
+            meta_left: resume.meta_left,
+            blocks_seen: true,
+            resuming: true,
+            lookup: None,
+            budget,
+        };
         w.walk_from(&mut io, self, start)
     }
 

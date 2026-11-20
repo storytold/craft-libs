@@ -13,7 +13,8 @@
 //! usual and attaches the tables, so it gives the same [`super::MkvFile`] as a scan, apart from
 //! the scan's warnings.
 //!
-//! A file is known by its length and by hashes of its first and last 64 KiB. Saved tables are
+//! A file is known by its length and by hashes of its first and last 64 KiB. A saved index ends
+//! with a checksum of all of it, so one damaged in the store is not used. Saved tables are also
 //! checked before they are used: every count against the bytes that hold it, every offset against
 //! the file's length, every cluster and sync index against its table, and a spread of the saved
 //! clusters must start with a Cluster ID in the file. Anything that does not fit is ignored and
@@ -52,8 +53,10 @@ pub(crate) fn index_store() -> Option<Arc<dyn IndexStore>> {
 
 /// How much of the start and of the end of a file its key is made of.
 const KEY_WINDOW: u64 = 64 * 1024;
-/// The first bytes of a saved index (format version 1).
-const MAGIC: &[u8; 8] = b"CMKVIX01";
+/// The first bytes of a saved index (format version 2: with a checksum).
+const MAGIC: &[u8; 8] = b"CMKVIX02";
+/// The seed of a saved index's checksum (FNV-1a of everything before it).
+const CHECK_SEED: u64 = 0xcbf2_9ce4_8422_2325;
 /// The encoded size of a sample without its `addition`.
 const SAMPLE_BYTES: usize = 8 + 4 + 8 + 8 + 1 + 4 + 8 + 2;
 /// How many saved clusters are checked against the file (spread over the table).
@@ -136,16 +139,27 @@ pub(crate) fn encode(clusters: &[ClusterInfo], tracks: &[(u64, &[Sample], &[u32]
             out.extend_from_slice(&index.to_le_bytes());
         }
     }
+    seal(&mut out);
     out
+}
+
+/// Ends a saved index with the checksum of everything before it.
+pub(crate) fn seal(out: &mut Vec<u8>) {
+    let check = fnv1a(CHECK_SEED, &[out]);
+    out.extend_from_slice(&check.to_le_bytes());
 }
 
 fn put_count(out: &mut Vec<u8>, count: usize) {
     out.extend_from_slice(&u64::try_from(count).unwrap_or(u64::MAX).to_le_bytes());
 }
 
-/// Reads a saved index of a file `len` bytes long: `None` for anything that is not one, or whose
-/// counts, offsets and indices do not fit.
+/// Reads a saved index of a file `len` bytes long: `None` for anything that is not one, whose
+/// checksum does not match, or whose counts, offsets and indices do not fit.
 pub(crate) fn decode(bytes: &[u8], len: u64) -> Option<Saved> {
+    let (bytes, check) = bytes.split_at_checked(bytes.len().checked_sub(8)?)?;
+    if fnv1a(CHECK_SEED, &[bytes]).to_le_bytes() != check {
+        return None;
+    }
     let mut r = Reader { bytes, at: 0 };
     if r.take(MAGIC.len())? != MAGIC || r.u64()? != len {
         return None;
@@ -316,11 +330,33 @@ mod tests {
         lost[1].cluster = 2;
         assert!(decode(&encode(&clusters, &[(1, &lost, &sync)], &[], 10_000), 10_000).is_none());
         assert!(decode(&encode(&clusters, &[(1, &samples, &[5])], &[], 10_000), 10_000).is_none());
-        // A huge count with nothing behind it allocates nothing.
+        // A huge count with nothing behind it (and a checksum that matches) allocates nothing.
         let mut huge = MAGIC.to_vec();
         huge.extend_from_slice(&10_000u64.to_le_bytes());
         huge.extend_from_slice(&u64::MAX.to_le_bytes());
+        seal(&mut huge);
         assert!(decode(&huge, 10_000).is_none());
+    }
+
+    /// Damage that keeps every value in range (a sample's offset moved within the file, any byte
+    /// changed) is caught by the checksum.
+    #[test]
+    fn a_damaged_index_is_refused() {
+        let (clusters, samples, sync) = tables();
+        let bytes = encode(&clusters, &[(1, &samples, &sync)], &[40], 10_000);
+        let mut moved = samples.clone();
+        moved[0].offset = 130;
+        let other = encode(&clusters, &[(1, &moved, &sync)], &[40], 10_000);
+        assert!(decode(&other, 10_000).is_some());
+        // The same bytes as `other` but with the first index's checksum: as if damaged in the store.
+        let mut damaged = other[..other.len() - 8].to_vec();
+        damaged.extend_from_slice(&bytes[bytes.len() - 8..]);
+        assert!(decode(&damaged, 10_000).is_none());
+        for at in 0..bytes.len() {
+            let mut changed = bytes.clone();
+            changed[at] ^= 0x10;
+            assert!(decode(&changed, 10_000).is_none(), "byte {at} changed");
+        }
     }
 
     #[test]

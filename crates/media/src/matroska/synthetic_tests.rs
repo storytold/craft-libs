@@ -228,9 +228,9 @@ fn synthetic_file() {
     assert_seek_builds_an_index(&bytes);
 }
 
-/// An in-memory [`crate::matroska::IndexStore`] that counts what it is asked for one key on one
-/// thread (other tests open files, the same one too, while it is registered; theirs are kept but
-/// not counted).
+/// An in-memory [`crate::matroska::IndexStore`] that counts what it is asked for one key, and
+/// serves only the thread that made it: other tests open files, the same one too, while it is
+/// registered, and they neither find nor save anything in it.
 struct CountingStore {
     key: String,
     thread: std::thread::ThreadId,
@@ -239,15 +239,37 @@ struct CountingStore {
     saves: std::sync::atomic::AtomicUsize,
 }
 
+impl CountingStore {
+    fn new(key: String) -> Self {
+        CountingStore {
+            key,
+            thread: std::thread::current().id(),
+            kept: std::sync::Mutex::default(),
+            loads: std::sync::atomic::AtomicUsize::new(0),
+            saves: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn counts(&self) -> (usize, usize) {
+        (self.loads.load(std::sync::atomic::Ordering::SeqCst), self.saves.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
 impl crate::matroska::IndexStore for CountingStore {
     fn load(&self, key: &str) -> Option<Vec<u8>> {
-        if key == self.key && std::thread::current().id() == self.thread {
+        if std::thread::current().id() != self.thread {
+            return None;
+        }
+        if key == self.key {
             self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         self.kept.lock().unwrap().get(key).cloned()
     }
     fn save(&self, key: &str, index: &[u8]) {
-        if key == self.key && std::thread::current().id() == self.thread {
+        if std::thread::current().id() != self.thread {
+            return;
+        }
+        if key == self.key {
             self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         self.kept.lock().unwrap().insert(key.to_owned(), index.to_vec());
@@ -262,23 +284,20 @@ fn scanned(f: &MkvFile) -> String {
 
 /// A file's sample tables are saved to the registered store after a scan and taken from it at the
 /// next open, which then gives the same file (its Chapters and Attachments before the clusters,
-/// its Tags after them, in an unknown-size Segment). Tables that do not fit the file are not used:
-/// it is scanned again (and saved again).
+/// its Tags after them, in an unknown-size Segment). Tables that do not fit the file, or that were
+/// damaged in the store, are not used: it is scanned again (and saved again). Elements after the
+/// clusters are read in the scan's order, not first those the SeekHead points at.
+///
+/// (One test, as the store is registered for the whole process.)
 #[test]
 fn an_index_store_keeps_the_scan() {
     let bytes = synthetic();
     let plain = OpenOptions { index: true, verify_crc: false, index_limit: None };
     let reference = open_with(&bytes[..], &plain).unwrap();
     let key = crate::matroska::index_store::key_of(&bytes[..]).unwrap();
-    let store = std::sync::Arc::new(CountingStore {
-        key: key.clone(),
-        thread: std::thread::current().id(),
-        kept: std::sync::Mutex::default(),
-        loads: std::sync::atomic::AtomicUsize::new(0),
-        saves: std::sync::atomic::AtomicUsize::new(0),
-    });
+    let store = std::sync::Arc::new(CountingStore::new(key.clone()));
     crate::matroska::set_index_store(Some(store.clone()));
-    let counts = || (store.loads.load(std::sync::atomic::Ordering::SeqCst), store.saves.load(std::sync::atomic::Ordering::SeqCst));
+    let counts = || store.counts();
     // Scanned and saved.
     let first = open_with(&bytes[..], &plain).unwrap();
     assert_eq!(counts(), (1, 1));
@@ -294,7 +313,8 @@ fn an_index_store_keeps_the_scan() {
     let demuxer = Demuxer::new(&bytes[..]).unwrap();
     assert_eq!(scanned(demuxer.file()), scanned(&reference));
     assert_eq!(counts(), (4, 1));
-    // Saved clusters that are not Clusters in the file: scanned again, and saved again.
+    // Saved clusters that are not Clusters in the file (an index saved whole, its checksum
+    // matching): scanned again, and saved again.
     {
         let mut kept = store.kept.lock().unwrap();
         let saved = kept.get_mut(&key).unwrap();
@@ -302,14 +322,95 @@ fn an_index_store_keeps_the_scan() {
         let at = 8 + 8 + 8;
         let offset = u64::from_le_bytes(saved[at..at + 8].try_into().unwrap());
         saved[at..at + 8].copy_from_slice(&(offset - 1).to_le_bytes());
+        saved.truncate(saved.len() - 8);
+        crate::matroska::index_store::seal(saved);
     }
     let third = open_with(&bytes[..], &plain).unwrap();
     assert_eq!(scanned(&third), scanned(&reference));
     assert_eq!(counts(), (5, 2));
+    // An index damaged in the store (its checksum does not match): scanned again, and saved again.
+    {
+        let mut kept = store.kept.lock().unwrap();
+        let saved = kept.get_mut(&key).unwrap();
+        let middle = saved.len() / 2;
+        saved[middle] ^= 0x10;
+    }
+    let fourth = open_with(&bytes[..], &plain).unwrap();
+    assert_eq!(scanned(&fourth), scanned(&reference));
+    assert_eq!(counts(), (6, 3));
     // With CRC checks or an index limit the store is not used.
     let _ = open_with(&bytes[..], &OpenOptions { index: true, verify_crc: true, index_limit: None }).unwrap();
-    assert_eq!(counts(), (5, 2));
+    assert_eq!(counts(), (6, 3));
     crate::matroska::set_index_store(None);
+    the_store_keeps_the_order_of_elements_after_the_clusters();
+}
+
+/// Two Tags after the clusters, the SeekHead pointing at the second only: a scan reads them in the
+/// file's order, and so does an open from the store (not the SeekHead's target first).
+fn the_store_keeps_the_order_of_elements_after_the_clusters() {
+    let tags = |value: &str| {
+        let mut st = Vec::new();
+        el_str(&mut st, TAG_NAME, "TITLE");
+        el_str(&mut st, TAG_STRING, value);
+        let mut tg = Vec::new();
+        el(&mut tg, SIMPLE_TAG, &st);
+        let mut tags = Vec::new();
+        el(&mut tags, TAG, &tg);
+        let mut o = Vec::new();
+        el(&mut o, TAGS, &tags);
+        o
+    };
+    let seek_head = |position: u64| {
+        let mut s = Vec::new();
+        el(&mut s, SEEK_ID, &TAGS.to_be_bytes());
+        el(&mut s, SEEK_POSITION, &position.to_be_bytes());
+        let mut entry = Vec::new();
+        el(&mut entry, SEEK, &s);
+        let mut o = Vec::new();
+        el(&mut o, SEEK_HEAD, &entry);
+        o
+    };
+    let mut info = Vec::new();
+    el_uint(&mut info, TIMESTAMP_SCALE, 1_000_000);
+    let mut v = Vec::new();
+    el_uint(&mut v, TRACK_NUMBER, 1);
+    el_uint(&mut v, TRACK_TYPE, 1);
+    el_str(&mut v, CODEC_ID, "V_MPEG4/ISO/AVC");
+    let mut tracks = Vec::new();
+    el(&mut tracks, TRACK_ENTRY, &v);
+    let mut cluster = Vec::new();
+    el_uint(&mut cluster, TIMESTAMP, 0);
+    el(&mut cluster, SIMPLE_BLOCK, &block(1, 0, 0x80, &[0x65, 1]));
+    let mut middle = Vec::new();
+    el(&mut middle, INFO, &info);
+    el(&mut middle, TRACKS, &tracks);
+    el(&mut middle, CLUSTER, &cluster);
+    middle.extend_from_slice(&tags("A"));
+    // The SeekHead's position of the second Tags (from the Segment's data).
+    let second = (seek_head(0).len() + middle.len()) as u64;
+    let mut f = Vec::new();
+    let mut h = Vec::new();
+    el_str(&mut h, DOC_TYPE, "matroska");
+    el(&mut f, EBML, &h);
+    write_id(&mut f, SEGMENT);
+    write_unknown_size(&mut f, 8);
+    f.extend_from_slice(&seek_head(second));
+    f.extend_from_slice(&middle);
+    f.extend_from_slice(&tags("B"));
+
+    let plain = OpenOptions { index: true, verify_crc: false, index_limit: None };
+    let reference = open_with(&f[..], &plain).unwrap();
+    let values: Vec<String> = reference.tags.iter().map(|t| format!("{t:?}")).collect();
+    assert_eq!(values.len(), 2, "{values:?}");
+    assert!(values[0].contains("\"A\"") && values[1].contains("\"B\""), "{values:?}");
+    let store = std::sync::Arc::new(CountingStore::new(crate::matroska::index_store::key_of(&f[..]).unwrap()));
+    crate::matroska::set_index_store(Some(store.clone()));
+    let scan = open_with(&f[..], &plain).unwrap();
+    let from_store = open_with(&f[..], &plain).unwrap();
+    crate::matroska::set_index_store(None);
+    assert_eq!(store.counts(), (2, 1));
+    assert_eq!(scanned(&scan), scanned(&reference));
+    assert_eq!(scanned(&from_store), scanned(&reference));
 }
 
 /// One video track and one cluster at timestamp `ts` holding `content`.
