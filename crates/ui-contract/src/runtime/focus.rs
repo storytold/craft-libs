@@ -49,6 +49,9 @@ pub struct StopRec {
     #[doc(hidden)]
     pub stop: Stop,
     pub(crate) scope: Option<Id>,
+    /// The component takes its place in its set from its roving group's members of this pass, which the group's owner
+    /// writes into its node at its own report (`group_positions`). Marked at the component's report.
+    pub(crate) group_position: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,7 +205,7 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
     with(ctx, |state| {
         let scope = state.open.last().map(|(id, _)| *id);
-        state.stops.push(StopRec { stop, scope });
+        state.stops.push(StopRec { stop, scope, group_position: false });
     });
 }
 
@@ -285,7 +288,11 @@ impl Transcript {
     fn placed(&self, outer: Option<Id>) -> Transcript {
         let place = |scope: Option<Id>| if scope == self.outer { outer } else { scope };
         Transcript {
-            stops: self.stops.iter().map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope) }).collect(),
+            stops: self
+                .stops
+                .iter()
+                .map(|rec| StopRec { stop: rec.stop.clone(), scope: place(rec.scope), group_position: rec.group_position })
+                .collect(),
             scopes: self
                 .scopes
                 .iter()
@@ -422,12 +429,29 @@ pub(crate) fn register_row_groups(ctx: &Context, owner: Id, rtl: bool, mut ids: 
     with(ctx, |state| state.row_sets.push(RowGroups { owner, rtl, ids }));
 }
 
-/// The place of the component `id`'s own stop among last pass's members of the roving group `group`.
-pub(crate) fn group_position(ctx: &Context, id: Id, group: Id) -> Option<crate::runtime::access::SetPosition> {
+/// Marks the component `id`'s own stop of this pass in the roving group `group` as taking its place in the set from
+/// the group's members (`group_positions`). A component with no such stop this pass keeps the place it reported.
+pub(crate) fn takes_group_position(ctx: &Context, id: Id, group: Id) {
     with(ctx, |state| {
-        let members = || state.last_stops.iter().filter(|rec| rec.stop.group == Some(group) && rec.stop.part.is_none());
-        let index = members().position(|rec| rec.stop.id == id)?;
-        Some(crate::runtime::access::SetPosition::new(index).of(members().count()))
+        if let Some(rec) = state.stops.iter_mut().rev().find(|rec| rec.stop.id == id && rec.stop.part.is_none() && rec.stop.group == Some(group)) {
+            rec.group_position = true;
+        }
+    });
+}
+
+/// The places of the members of the roving group `group` that take theirs from the group (`takes_group_position`),
+/// among this pass's members: the components with their own stop in it, in registration order. The group's owner
+/// asks at its report, after its body's members have run.
+pub(crate) fn group_positions(ctx: &Context, group: Id) -> Vec<(Id, crate::runtime::access::SetPosition)> {
+    with(ctx, |state| {
+        let members: Vec<&StopRec> = state.stops.iter().filter(|rec| rec.stop.group == Some(group) && rec.stop.part.is_none()).collect();
+        let count = members.len();
+        members
+            .iter()
+            .enumerate()
+            .filter(|(_, rec)| rec.group_position)
+            .map(|(index, rec)| (rec.stop.id, crate::runtime::access::SetPosition::new(index).of(count)))
+            .collect()
     })
 }
 

@@ -370,3 +370,38 @@ fn a_tool_bar_is_one_roving_group_from_its_first_pass() {
     assert!(grouped >= 2, "the tools are in the bar's roving group: {settled:?}");
     assert_eq!(first, settled, "the first pass registers the stops as a settled pass does");
 }
+
+/// A tool bar's tools report their place in the set from the pass's members: in the first frame, and in the frame a
+/// tool joins the bar.
+#[trial]
+fn a_tool_bar_reports_set_positions_from_its_first_pass() {
+    const TOOLS: [&str; 4] = ["Brush", "Eraser", "Smudge", "Blur"];
+    let count = Rc::new(Cell::new(3_usize));
+    let ids: Rc<std::cell::RefCell<Vec<egui::Id>>> = Rc::default();
+    let (shown, seen) = (count.clone(), ids.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = Vec::new();
+        Bar::new("Tools", BarKind::Tool).show(ui, |ui, _| {
+            for name in &TOOLS[..shown.get()] {
+                // The bar's body runs in its measuring run and its real run: each tool once.
+                let id = IconButton::new(IconId::new("brush")).label(*name).show(ui).id;
+                if !now.contains(&id) {
+                    now.push(id);
+                }
+            }
+        });
+        *seen.borrow_mut() = now;
+    });
+    let places = |fixture: &Fixture| -> Vec<(usize, usize)> {
+        ids.borrow().iter().map(|id| fixture.tree().position(*id).expect("a tool's place in the set")).collect()
+    };
+    fixture.idle(1);
+    let first = places(&fixture);
+    let size = first[0].1;
+    assert!(size >= 3, "the set holds the three tools: {first:?}");
+    assert!(first.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1 && pair[1].1 == size), "the tools follow each other in one set: {first:?}");
+    count.set(4);
+    fixture.idle(1);
+    let joined = places(&fixture);
+    assert!(joined.len() == 4 && joined.iter().all(|(_, held)| *held == size + 1), "the set counts the new tool in the frame it joins: {joined:?}");
+}

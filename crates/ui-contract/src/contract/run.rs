@@ -1281,6 +1281,7 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
             expanded: e.expanded(),
             position: e.position(),
             group: env.roving.filter(|_| e.core_ref().roving_member),
+            owns: e.roving().map(|_| steps::body_group(id)),
         },
     );
     let shows_label = e.shows_label();

@@ -26,6 +26,8 @@ pub(crate) struct ReportIn<'a> {
     pub scrolls: (bool, bool),
     /// The roving group the component's own stop is in.
     pub group: Option<Id>,
+    /// The roving group of the component's body, which it owns: its report writes its members' places in the set.
+    pub owns: Option<Id>,
     /// The expanded state of a collapsible container, unless `Component::access` says otherwise.
     pub expanded: Option<bool>,
     /// The position the component reports itself, ahead of its group's and its item facts'.
@@ -52,6 +54,14 @@ pub(crate) fn validity_of<V>(validity: &Validity<V>) -> Option<(&Message, bool)>
 pub(crate) fn report(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>) -> Option<String> {
     let validity = register_validity(p);
     report_access(p, facts, input, validity.as_ref().map(|(text, _)| text.clone()));
+    // The body's members have run and reported: each that left its place to the group takes it among this pass's
+    // members.
+    if let Some(group) = input.owns {
+        let ctx = &p.core_ref().ctx;
+        for (member, position) in focus::group_positions(ctx, group) {
+            access::write_set_position(ctx, member, position);
+        }
+    }
     crate::contract::cx::write_cursor(p.core_ref());
     validity.filter(|(_, shown)| !shown).map(|(text, _)| text)
 }
@@ -108,9 +118,11 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if access.position.is_none() {
         access.position = input.position;
     }
+    // A member of a roving group that gives no place of its own takes it from the group's owner, which knows the
+    // members of the pass only after they all ran; its item facts' place stands until then.
+    let group_place = input.group.filter(|_| access.position.is_none());
     if access.position.is_none() {
-        access.position =
-            input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
+        access.position = core.env.facts_of(id).map(|facts| facts.position);
     }
     let paint = core.paint.borrow();
     if role == Role::Merged {
@@ -174,6 +186,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         }
     } else {
         access::report(ctx, &own);
+        if let Some(group) = group_place {
+            focus::takes_group_position(ctx, id, group);
+        }
     }
     if let Some(folded) = &folded {
         keys::register_node(ctx, id, folded.inner, None, focusable);

@@ -52,6 +52,12 @@ pub(crate) fn hide(ctx: &egui::Context, id: Id) {
     adapter::hide(ctx, id);
 }
 
+/// Writes `position` into the node of `id`, which reported itself in this pass: the place its roving group's owner
+/// gives it among the group's members of the pass.
+pub(crate) fn write_set_position(ctx: &egui::Context, id: Id, position: SetPosition) {
+    adapter::write_set_position(ctx, id, position.index, position.size);
+}
+
 /// Reports `id` as the focused node of this pass.
 pub(crate) fn set_focus(ctx: &egui::Context, id: Id) {
     adapter::set_focus(ctx, id);
