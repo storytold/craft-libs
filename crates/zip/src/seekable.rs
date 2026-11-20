@@ -79,6 +79,12 @@ impl<R: Read + Seek> SeekableArchive<R> {
         self.zip.is_empty()
     }
 
+    /// Whether the central directory contains repeated raw names. The strict index keeps one
+    /// entry per raw name, so `len` alone cannot distinguish these from unique records.
+    pub fn has_duplicate_names(&self) -> bool {
+        self.zip.has_duplicate_names()
+    }
+
     /// The name at `index`, copied on demand.
     pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
         if index >= self.zip.len() {
