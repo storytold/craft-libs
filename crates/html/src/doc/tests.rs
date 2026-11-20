@@ -2070,3 +2070,27 @@ fn zero_rowspan_stops_at_the_row_group_boundary() {
         assert_eq!(table.rows[2].len(), 2, "{boundary}: D and E retain their columns");
     }
 }
+
+#[test]
+fn zero_rowspan_covers_an_empty_middle_row() {
+    let flow = parse("<table><tbody><tr><td rowspan=0>A<td>B</tr><tr></tr><tr><td>C</tr></tbody></table>");
+    let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected a table") };
+
+    assert_eq!(table.rows.len(), 3);
+    assert_eq!(table.rows[0][0].rowspan, 3);
+    assert!(table.rows[1][0].covered);
+    assert!(table.rows[2][0].covered);
+    assert_eq!(table.rows[2][1].text(), "C");
+}
+
+#[test]
+fn zero_rowspan_covers_an_empty_trailing_row() {
+    let flow = parse("<table><tbody><tr><td rowspan=0>A<td>B</tr><tr><td>C</tr><tr></tr></tbody><tbody><tr><td>D</tr></tbody></table>");
+    let FBlock::Table(table) = &flow.blocks[0] else { panic!("expected a table") };
+
+    assert_eq!(table.rows[0][0].rowspan, 3);
+    assert_eq!(table.rows.len(), 4);
+    assert!(table.rows[2][0].covered);
+    assert!(!table.rows[3][0].covered);
+    assert_eq!(table.rows[3][0].text(), "D");
+}

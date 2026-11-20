@@ -71,10 +71,8 @@ impl TableB {
         if let Some(rows) = self.rows.get_mut(self.group_start..end) {
             let mut remaining = 0u32;
             for row in rows.iter_mut().rev() {
-                if !row.is_empty() {
-                    remaining += 1;
-                }
-                // Resolve zero spans before expanding the table's covered cells.
+                // Covered cells are inserted using the original row indices, including empty rows.
+                remaining += 1;
                 for cell in row.iter_mut().filter(|cell| cell.rowspan == 0) {
                     cell.rowspan = remaining.clamp(1, 1000);
                 }
