@@ -323,6 +323,162 @@ fn float_wav_header_is_rewritten_in_place_as_the_file_grows() {
     assert!(wav_float_header(48_000, 0, 0).is_err());
 }
 
+/// A file that stopped growing before its header was rewritten: the header for 0 frames, the
+/// samples of `buf`, then `extra` bytes of a frame that was never finished.
+fn unfinished_wav(buf: &AudioBuffer, opts: &EncodeOptions, extra: usize) -> (Vec<u8>, Vec<u8>) {
+    let finished = encode(buf, opts).unwrap();
+    let mut file = encode(&AudioBuffer::new(buf.sample_rate, buf.num_channels(), 0), opts).unwrap();
+    let head = file.len();
+    let sample_bytes = match opts.bit_depth {
+        BitDepth::Int16 => 2,
+        BitDepth::Int24 => 3,
+        _ => 4,
+    };
+    let data_len = buf.frames() * usize::from(buf.num_channels()) * sample_bytes;
+    file.extend_from_slice(&finished[head..head + data_len]);
+    file.extend(std::iter::repeat_n(0x55, extra));
+    (file, finished)
+}
+
+#[test]
+fn repair_wav_rewrites_the_sizes_of_an_unfinished_file() {
+    let bwf = BwfInfo::default().with_description("take 3").with_time_reference(48_000 * 3600);
+    let cases = [
+        (sine(48_000, 2, 1_000), EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Float32).with_bwf(bwf.clone()), 5),
+        // 3 bytes a frame and an odd frame count: the data needs a pad byte.
+        (sine(44_100, 1, 999), EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24).with_bwf(bwf.clone()), 2),
+        (sine(44_100, 1, 999), EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24).with_bwf(bwf), 0),
+        (sine(48_000, 6, 300), EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int16).with_force_rf64(true), 11),
+        (sine(48_000, 2, 0), EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int16), 3),
+    ];
+    for (buf, opts, extra) in cases {
+        let (file, finished) = unfinished_wav(&buf, &opts, extra);
+        assert_ne!(file, finished);
+        let mut file = std::io::Cursor::new(file);
+        let repaired = craft_audio::repair_wav(&mut file).unwrap();
+        assert_eq!(repaired.frames, buf.frames() as u64);
+        let mut file = file.into_inner();
+        assert!(file.len() as u64 >= repaired.len);
+        file.truncate(repaired.len as usize);
+        assert_eq!(file, finished, "{opts:?}");
+        // A finished file stays as it is.
+        let mut again = std::io::Cursor::new(file.clone());
+        assert_eq!(craft_audio::repair_wav(&mut again).unwrap(), repaired);
+        assert_eq!(again.into_inner(), file);
+    }
+}
+
+/// A file whose data is all zeros past `head`, `len` bytes long, without holding them in memory.
+struct SparseWav {
+    head: Vec<u8>,
+    len: u64,
+    pos: u64,
+}
+
+impl std::io::Read for SparseWav {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = (self.len.saturating_sub(self.pos)).min(buf.len() as u64) as usize;
+        for (i, b) in buf[..n].iter_mut().enumerate() {
+            *b = self.head.get(self.pos as usize + i).copied().unwrap_or(0);
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl std::io::Write for SparseWav {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let end = self.pos as usize + buf.len();
+        if end <= self.head.len() {
+            self.head[self.pos as usize..end].copy_from_slice(buf);
+        } else {
+            assert!(buf.iter().all(|&b| b == 0), "only padding is written past the header");
+        }
+        self.pos += buf.len() as u64;
+        self.len = self.len.max(self.pos);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::io::Seek for SparseWav {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = match to {
+            std::io::SeekFrom::Start(p) => p,
+            std::io::SeekFrom::End(d) => self.len.checked_add_signed(d).unwrap(),
+            std::io::SeekFrom::Current(d) => self.pos.checked_add_signed(d).unwrap(),
+        };
+        Ok(self.pos)
+    }
+}
+
+#[test]
+fn repair_wav_turns_a_file_past_4_gib_into_rf64() {
+    let frames = 600_000_000u64; // 4.8 GB of stereo float
+    let head = wav_float_header(48_000, 2, 0).unwrap();
+    let len = head.len() as u64 + frames * 8 + 3;
+    let mut file = SparseWav { head: head.clone(), len, pos: 0 };
+    let repaired = craft_audio::repair_wav(&mut file).unwrap();
+    assert_eq!((repaired.frames, repaired.len), (frames, len - 3));
+    assert_eq!(file.head, wav_float_header(48_000, 2, frames).unwrap());
+
+    // A RIFF file with no JUNK chunk to turn into ds64 cannot grow past 4 GiB.
+    let bare = craft_audio::pcm_wav_header(0, 2, 48_000, 16);
+    assert_eq!(&bare[12..16], b"fmt ");
+    let len = bare.len() as u64 + (1u64 << 32);
+    let mut file = SparseWav { head: bare, len, pos: 0 };
+    assert!(matches!(craft_audio::repair_wav(&mut file), Err(craft_audio::AudioError::TooLarge(_))));
+}
+
+#[test]
+fn repair_wav_refuses_what_it_cannot_repair() {
+    use craft_audio::AudioError;
+    let repair = |bytes: Vec<u8>| craft_audio::repair_wav(&mut std::io::Cursor::new(bytes));
+    let wav = encode(&sine(48_000, 1, 100), &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int16)).unwrap();
+    assert!(matches!(repair(b"not a wave file at all".to_vec()), Err(AudioError::Malformed(_))));
+    // Every cut inside the header is an error, not a panic.
+    let data = wav.windows(4).position(|w| w == b"data").unwrap();
+    for cut in 0..data + 8 {
+        assert!(repair(wav[..cut].to_vec()).is_err(), "cut at {cut}");
+    }
+    // A compressed format (format tag 2, Microsoft ADPCM) has no fixed frame size to count by.
+    let fmt = wav.windows(4).position(|w| w == b"fmt ").unwrap() + 8;
+    let mut adpcm = wav.clone();
+    adpcm[fmt..fmt + 2].copy_from_slice(&2u16.to_le_bytes());
+    assert!(matches!(repair(adpcm), Err(AudioError::Unsupported(_))));
+    // The chunk walk stops, as the reader's does, after 100,000 chunks.
+    let mut many = wav[..12].to_vec();
+    many.extend(b"JUNK\0\0\0\0".repeat(100_001));
+    many.extend_from_slice(&wav[12..]);
+    assert!(matches!(repair(many), Err(AudioError::Malformed(_))));
+    // 8-bit mono: an even data length could end in a sample or in the pad after an odd count.
+    let u8_mono = craft_audio::pcm_wav_header(0, 1, 8_000, 8);
+    for (samples, ok) in [(3, true), (4, false)] {
+        let mut file = u8_mono.clone();
+        file.extend(std::iter::repeat_n(0x80, samples));
+        assert_eq!(repair(file.clone()).map(|r| r.frames).ok(), ok.then_some(3), "{samples} bytes");
+        if ok {
+            // Once repaired, the size settles it.
+            let mut file = std::io::Cursor::new(file);
+            let r = craft_audio::repair_wav(&mut file).unwrap();
+            assert_eq!(repair(file.into_inner()).unwrap(), r);
+        }
+    }
+    // A block size that is not channels × sample bytes would count the wrong frames.
+    let mut odd_align = wav.clone();
+    odd_align[fmt + 12..fmt + 14].copy_from_slice(&4u16.to_le_bytes());
+    assert!(matches!(repair(odd_align), Err(AudioError::Malformed(_))));
+    // An extensible file whose subformat is PCM's tag under another GUID is not PCM.
+    let ext = encode(&sine(48_000, 2, 100), &EncodeOptions::new(EncodeFormat::Wav).with_bit_depth(BitDepth::Int24)).unwrap();
+    let fmt = ext.windows(4).position(|w| w == b"fmt ").unwrap() + 8;
+    assert!(repair(ext.clone()).is_ok());
+    let mut other_guid = ext;
+    other_guid[fmt + 39] ^= 0xFF;
+    assert!(matches!(repair(other_guid), Err(AudioError::Unsupported(_))));
+}
+
 #[test]
 fn zero_frame_flac_round_trips_like_wav_and_aiff() {
     for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {

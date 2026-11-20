@@ -455,6 +455,51 @@ pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<
     wav::header(usize::from(channels), sample_rate, (32, true), None, None, frames, false)
 }
 
+/// What [`repair_wav`] wrote into a file.
+#[cfg(feature = "pcm-encode")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WavRepair {
+    /// The whole frames the data chunk holds.
+    pub frames: u64,
+    /// The length of the repaired file. Bytes past it are a partial last frame; truncate the
+    /// file to this length (`File::set_len`) to drop them.
+    pub len: u64,
+}
+
+/// Rewrites the size fields of a PCM or float WAV whose writer stopped before finishing it, such
+/// as a recorder's file after a crash, for the whole frames the file holds. Every chunk before the
+/// data (`bext`, `fmt `, `fact` and others) keeps its contents, and a file that grew past 4 GiB
+/// becomes RF64 when it starts with the 28-byte `JUNK` chunk that [`FileEncoder`] and
+/// [`wav_float_header`] write. The file must end in its data chunk: everything after the data
+/// chunk's header counts as samples, whatever its size field says.
+///
+/// Errors: [`AudioError::Malformed`] when `file` is not a WAV or has no `fmt ` or data chunk,
+/// [`AudioError::Unsupported`] for a compressed format and for unfinished 8-bit mono data of even
+/// length (its last byte may be a sample or a pad byte), and [`AudioError::TooLarge`] for a RIFF
+/// file past 4 GiB with no room for a `ds64` chunk.
+///
+/// ```
+/// use craft_audio::{repair_wav, wav_float_header};
+/// use std::io::Cursor;
+///
+/// // A recorder wrote the header for 0 frames, then 2 frames and part of a third, then stopped.
+/// let mut bytes = wav_float_header(48_000, 2, 0).unwrap();
+/// bytes.extend([0.25f32, -0.25, 0.5, -0.5, 0.75].iter().flat_map(|s| s.to_le_bytes()));
+/// let mut file = Cursor::new(bytes);
+/// let repaired = repair_wav(&mut file).unwrap();
+/// assert_eq!(repaired.frames, 2);
+/// let mut bytes = file.into_inner();
+/// bytes.truncate(repaired.len as usize);
+/// let header = wav_float_header(48_000, 2, 2).unwrap();
+/// assert_eq!(bytes[..header.len()], header[..]);
+/// ```
+#[cfg(feature = "pcm-encode")]
+pub fn repair_wav<F: std::io::Read + Write + Seek>(file: &mut F) -> Result<WavRepair> {
+    let (frames, len) = wav::repair(file)?;
+    Ok(WavRepair { frames, len })
+}
+
 // With only one of `pcm-encode` and `flac-encode`, the other's formats are refused, not silently
 // written as something else.
 #[cfg(all(test, any(feature = "pcm-encode", feature = "flac-encode"), not(all(feature = "pcm-encode", feature = "flac-encode"))))]
