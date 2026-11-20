@@ -265,13 +265,13 @@ impl<W: Clone, H: Clone> Live<W, H> {
         match self.cfg.when_closed.unwrap_or(consent.settings.when_app_closed) {
             WhenAppClosed::Error => Err(format!("{app} isn't running: open it, then try again.")),
             WhenAppClosed::Headless => {
-                // The app's folders, its default agent folder for an empty setting; only looked up
-                // (and the default created) when the command leaves a direction open.
-                let own = if self.cfg.read_roots.is_empty() || self.cfg.write_root.is_none() {
-                    consent.settings.folders_with(self.cfg.default_folder.as_deref())
-                } else {
-                    super::AgentFolders::default()
-                };
+                // The app's folders, its default agent folder for an empty setting. The default is
+                // created only when a direction the command leaves open has no folder of the
+                // app's own; otherwise it would be made and never used.
+                let s = &consent.settings;
+                let needs_default =
+                    (self.cfg.read_roots.is_empty() && s.read_folder().is_none()) || (self.cfg.write_root.is_none() && s.write_folder().is_none());
+                let own = s.folders_with(self.cfg.default_folder.as_deref().filter(|_| needs_default));
                 let app_read = self.cfg.read_roots.is_empty() && own.read.is_some();
                 let app_write = self.cfg.write_root.is_none() && own.write.is_some();
                 let read = if self.cfg.read_roots.is_empty() { own.read.into_iter().collect() } else { self.cfg.read_roots.clone() };

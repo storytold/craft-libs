@@ -327,6 +327,21 @@ fn empty_folder_settings_fall_back_to_the_default_agent_folder() {
     assert_eq!((f.read, f.write), (Vec::<PathBuf>::new(), None));
 }
 
+/// The default agent folder is made only for a direction that needs it: with the command's read
+/// roots and the app's own write folder, nothing is left for it, and it isn't created.
+#[test]
+fn the_default_agent_folder_is_not_created_when_no_direction_uses_it() {
+    let dir = temp_dir("default-unused");
+    let default = dir.path().join("Agents").join("Test");
+    let made = Arc::new(Made::default());
+    let mut cfg = config(dir.path(), Consent::new(true, settings(WhenAppClosed::Headless, "", "/app-out")), &made);
+    cfg.default_folder = Some(default.clone());
+    cfg.read_roots = paths(&["/cli-in"]);
+    let f = headless_folders(TestLive::new(cfg).resolve());
+    assert_eq!((f.read, f.write), (paths(&["/cli-in"]), Some(PathBuf::from("/app-out"))));
+    assert!(!default.exists(), "an unused default folder is not created");
+}
+
 /// Agents allowed, app closed, "error": the call fails with words that name the app; the command's
 /// choice wins over the app's.
 #[test]
