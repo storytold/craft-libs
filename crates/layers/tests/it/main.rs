@@ -5,6 +5,7 @@ mod comps;
 mod panel_drag_menu;
 mod panel_filter;
 mod panel_input;
+mod panel_memo;
 mod panel_order;
 mod panel_reveal;
 mod panel_rows;
