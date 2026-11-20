@@ -234,10 +234,11 @@ struct Audited<'a> {
     shift: egui::RecordShift,
 }
 
-/// Whether the replay audit runs a child that would replay in a pass whose runs are `real` (test builds only).
+/// Whether the replay audit runs a child that would replay in a pass whose runs are `real` (test builds only). A pass
+/// egui will discard paints nothing, so a run there is no shown run to compare with: the child replays.
 fn audits(ctx: &egui::Context, real: bool) -> bool {
     #[cfg(feature = "testing")]
-    return real && crate::runtime::audit::runs(ctx);
+    return real && !ctx.will_discard() && crate::runtime::audit::runs(ctx);
     #[cfg(not(feature = "testing"))]
     {
         let _ = (ctx, real);

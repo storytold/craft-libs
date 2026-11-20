@@ -206,6 +206,32 @@ fn a_changed_prop_runs_its_view_once() {
     assert_eq!(scene.out, run, "a replay returns what the run returned");
 }
 
+/// A pass egui will discard paints nothing, so a run there keeps no record: a settled view replays through it, and the
+/// replay audit runs nothing in it; a view whose props change in it runs there and again in the shown pass, whose run
+/// is the one kept. The audit is on, so each later replay is compared with a real run.
+#[trial]
+fn a_pass_egui_will_discard_keeps_no_record_and_replays_settled_views() {
+    let mut frames = Frames::new();
+    craft_ui::testing::audit_replays(&frames.ctx, true);
+    let frame = |frames: &mut Frames, shown: &str, discard: bool| {
+        let passes = frames.frame(vec![], |ui| {
+            if discard && ui.ctx().current_pass_index() == 0 {
+                frame::discard_pass(ui.ctx(), "trial");
+            }
+            in_region(ui, region(0), |ui| MemoView::new("title", Title { title: shown.to_owned() }, title).show(ui));
+        });
+        (passes, title_runs())
+    };
+    for _ in 0..WARM {
+        frame(&mut frames, "A", false);
+    }
+    assert_eq!(frame(&mut frames, "A", false), (1, 0), "a settled view replays");
+    assert_eq!(frame(&mut frames, "A", true), (2, 0), "it replays through the discarded pass and the shown one");
+    assert_eq!(frame(&mut frames, "A", false), (1, 0), "its kept record is unchanged: a run gives what it replays");
+    assert_eq!(frame(&mut frames, "B", true), (2, 2), "new props run it in the discarded pass and again in the shown one");
+    assert_eq!(frame(&mut frames, "B", false), (1, 0), "then it replays the shown pass's run");
+}
+
 /// A view that writes its own `&mut Tracked` runs twice for the change that asked for the write, the writing run and
 /// one that reads the written value, then replays.
 #[trial]

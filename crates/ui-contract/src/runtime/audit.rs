@@ -3,6 +3,9 @@
 //! naming the view and the first difference of each kind: a replay that differs from a real run is a view whose props
 //! miss an input, or a registration the journal misses.
 //!
+//! A pass egui will discard paints nothing and keeps no record (`lazy::ran`): the audit skips it, and a view there
+//! replays.
+//!
 //! The audit run keeps the kept run as it was, so every later pass compares with what a replay adds, and every decision
 //! is the one the pass makes with the audit off. Only the outermost view that would replay runs: a view that would
 //! replay inside an audit run replays, and the outer comparison covers that replay. The count trials' counters count

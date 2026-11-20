@@ -554,6 +554,10 @@ pub(crate) fn audit(
     same: Option<crate::runtime::audit::SameOutput>,
     shift: &RecordShift,
 ) {
+    // A pass that turned to discard during the audit run paints nothing: its run is no shown run to compare with.
+    if ctx.will_discard() {
+        return;
+    }
     let Some(kept) = with(ctx, |store, _, _| store.entries.get(&id).and_then(|entry| entry.settled.clone())) else { return };
     let kept_run = crate::runtime::audit::Shown { record: &kept.record, rect: kept.rect, output: kept.output.as_ref() };
     crate::runtime::audit::compare(name, id, (kept_run, shift), run, same);
@@ -587,8 +591,13 @@ pub(crate) struct Ran {
     pub(crate) output: Option<Output>,
 }
 
-/// Keeps the real run `record` of the memoized view `id`, which ran at `place` and took `rect`.
+/// Keeps the real run `record` of the memoized view `id`, which ran at `place` and took `rect`. A run in a pass egui
+/// will discard keeps none: egui paints nothing of that pass (`Painter::is_visible` is false in it), so the run registers
+/// invisible widgets and no nodes, which a shown pass's replay must not add. The kept record stays the last shown pass's.
 pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, Ran { key, edits, seen, view, output }: Ran) {
+    if ctx.will_discard() {
+        return;
+    }
     let targets = focus::targets(ctx);
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
     let lives = crate::runtime::memory::ended_generation(ctx);
