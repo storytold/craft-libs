@@ -843,7 +843,7 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
         let unit = 10i64.pow(3 - subs as u32);
         (((exact + 0.01) / unit as f64 + 0.5).floor() as i64) * unit
     } else {
-        exact.round() as i64
+        exact.floor() as i64
     };
     let days = ms.div_euclid(86_400_000);
     // Rounding the time up can carry into the day after the last one Excel shows.
@@ -1017,6 +1017,25 @@ mod tests {
     fn check(rows: &[(&str, f64, &str)]) {
         for (code, v, excel) in rows {
             assert_eq!(format(code, *v, None), *excel, "{code} with {v}");
+        }
+    }
+
+    #[test]
+    fn formats_without_seconds_do_not_round_across_day_or_minute_boundaries() {
+        let midnight = 45_292.0;
+        let before_midnight = midnight - 0.0002 / 86_400.0;
+        let minute = midnight + 1.0 / 24.0;
+        let before_minute = minute - 0.0002 / 86_400.0;
+        for date_1904 in [false, true] {
+            // Omitting seconds preserves the original day and minute, even less than a
+            // millisecond before the boundary. Showing seconds still rounds once.
+            let render = |code: &str, value| format_dated(code, value, None, date_1904);
+            assert_eq!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight - 1.0));
+            assert_ne!(render("m/d/yyyy", before_midnight), render("m/d/yyyy", midnight));
+            assert_eq!(render("hh:mm", before_midnight), "23:59");
+            assert_eq!(render("hh:mm", before_minute), "00:59");
+            assert_eq!(render("m/d/yyyy hh:mm:ss.000", before_midnight), render("m/d/yyyy hh:mm:ss.000", midnight));
+            assert_eq!(render("hh:mm:ss.000", before_minute), render("hh:mm:ss.000", minute));
         }
     }
 
