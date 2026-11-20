@@ -1809,7 +1809,7 @@ fn check_sample(name: &str, p: &Presentation) {
             // The automation reported 1295, 1367.5, 4610 × 720 twips.
             assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
         }
-        "picture" | "jpeg" | "png" | "picwmf" | "piccrop" | "twopics" | "picshare" | "notes" | "notes2" => check_media_sample(name, p),
+        "picture" | "jpeg" | "png" | "picwmf" | "piccrop" | "piccrop2" | "twopics" | "picshare" | "notes" | "notes2" => check_media_sample(name, p),
         _ => check_shape_sample(name, p),
     }
 }
@@ -1844,6 +1844,11 @@ fn check_media_sample(name: &str, p: &Presentation) {
             // CropLeft 0.25 and CropTop 0.125 of the inch square: what is left of it, where it was.
             let pics = pictures(0);
             assert_eq!((pics.len(), pics[0].0, pics[0].2), (1, (90.0, 81.0, 54.0, 63.0), [0.25, 0.125, 0.0, 0.0]));
+        }
+        "piccrop2" => {
+            // CropRight 0.3 and CropBottom 0.05: the crop's last two values, in that order.
+            let pics = pictures(0);
+            assert_eq!((pics.len(), pics[0].0, pics[0].2), (1, (72.0, 72.0, 50.375, 68.375), [0.0, 0.0, 0.3, 0.05]));
         }
         "twopics" => {
             let pics = pictures(0);

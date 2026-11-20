@@ -9,8 +9,8 @@
 //! A picture on a page is a shape (3008, a rectangle drawn with its format as any shape is) holding
 //! a 4014 container: 4015, the crop (left, top, right and bottom as i32s, in ten-thousandths of the
 //! picture), and 4053 → 4036, the picture's slot number. The shape's box is the cropped picture's.
-//! (On a notes page, 4014 → 4054 → 4032 names the slide its slide image shows instead.) Only the
-//! left and top crops were seen set; the right and bottom are taken to follow in that order.
+//! (On a notes page, 4014 → 4054 → 4032 names the slide its slide image shows instead.) Each of the
+//! four crops was seen set: left and top in one file, right and bottom in another.
 //!
 //! The metafile is kept as it is, as `image/x-wmf` media, as the PowerPoint 97 path keeps the
 //! metafiles of its blip store. Each slot is read once, the first time a shape names it, and all of
