@@ -891,3 +891,39 @@ fn a_side_drag_on_a_box_converging_both_ways_follows_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// Bottom drags on boxes that converge both ways (measured on the reference): the push's centre moves toward where the
+/// sides meet, by how much heavier the top's weight is than the bottom's.
+#[test]
+fn a_bottom_drag_on_a_box_converging_both_ways_follows_the_reference() {
+    let cases = [
+        // Was 4.2 px off.
+        (
+            [(210.0, 125.0), (392.0, 165.0), (452.0, 327.0), (150.0, 327.0)],
+            (301.0, 327.0),
+            (301.0, 267.0),
+            [(235.3733, 130.5765), (366.6267, 159.4235), (446.2927, 279.0788), (190.0418, 261.0945)],
+            0.1,
+        ),
+        // Was 5.7 px off.
+        (
+            [(180.0, 125.0), (422.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            (301.0, 327.0),
+            (301.0, 267.0),
+            [(214.6642, 133.5944), (387.3358, 176.4056), (433.595, 280.3358), (196.4413, 260.6141)],
+            0.3,
+        ),
+        // Was 3.1 px off.
+        (
+            [(210.0, 125.0), (392.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            (301.0, 327.0),
+            (301.0, 287.0),
+            [(226.4126, 130.4108), (375.5874, 179.5892), (456.0606, 301.0523), (181.0337, 281.59)],
+            0.2,
+        ),
+    ];
+    for (quad, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), 2, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
+    }
+}

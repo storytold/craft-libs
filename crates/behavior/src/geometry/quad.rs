@@ -1087,9 +1087,17 @@ fn push_centre(start: [Point; 4], first: [Point; 4], edge: u8, mid: Point) -> Op
             (0.5 + 0.47 * k * k, lean * lean * (0.80 - 0.12 * lean))
         };
         let t = frac * rho / (1.0 - frac + frac * rho) + 0.25 * lean / (1.0 + 0.25 * lean * lean) * x;
+        // On a box whose sides converge too, `sides` = ln of the top's weight over the bottom's: the centre moves
+        // toward where the sides meet, its homogeneous parts shifted by terms in `sides` and ln rho, proportional to
+        // x (fitted on nine such boxes; zero, and the law unchanged, where the sides are parallel).
+        let sides = (apply(&h, unit(0.0, 0.5, 1.0))[2] / apply(&h, unit(1.0, 0.5, 1.0))[2]).ln();
+        let sides = if sides.is_finite() { sides } else { 0.0 };
+        let terms = [sides, sides * sides, sides * lean, sides * sides * lean];
+        let mix = |c: [f64; 4]| c.iter().zip(terms).map(|(a, b)| a * b).sum::<f64>();
         // Homogeneous, so a centre passing through infinity (1/s = 0) stays defined.
-        let lam = place * x;
-        apply(&h, unit(1.0 - bend * x, t * lam, lam))
+        let lam = place * x + mix([-0.8687, -0.0958, 1.793, 3.4711]) * x;
+        let along = t * place * x + mix([-0.3803, -0.2691, -1.2324, 0.3666]) * x;
+        apply(&h, unit(1.0 - bend * x, along, lam))
     } else {
         let inv_s = (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across);
         apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s))
