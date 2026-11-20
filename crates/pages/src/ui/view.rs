@@ -423,7 +423,8 @@ impl<'a> PageView<'a> {
     }
 
     /// Shows the view at `rect`, registering controls and running tools in `before` before drawing.
-    /// Return the view reported by the tool host; `body` receives the resulting placement for overlays.
+    /// Return the view reported by the tool host; `body` receives the resulting placement for overlays. The canvas's
+    /// own view, which the host returns when no tool changed it, is applied only once.
     /// Both callbacks borrow `session` in sequence and run on measuring and real passes.
     pub fn show_at_with<T>(
         self,
@@ -754,7 +755,10 @@ fn run_pass(
         .collect();
     let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
     let pass = tool_pass(&cx.env);
-    let tool_view = before(ui, &PageBody { rect: cx.rect, pages: &preliminary, view: shown, pass: pass.as_ref() });
+    // A tool host returns the canvas's own changed view when no tool moved it. That view was already
+    // applied above, including its page anchor; applying it again here would undo that anchoring.
+    let tool_view = before(ui, &PageBody { rect: cx.rect, pages: &preliminary, view: shown, pass: pass.as_ref() })
+        .filter(|view| Some(*view) != pass.as_ref().and_then(|p| p.view));
     let pre_shapes = slot.take_after(ui.ctx());
     if let Some(view) = tool_view {
         space.set_view(view);

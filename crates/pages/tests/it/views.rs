@@ -159,6 +159,64 @@ fn wheel_zoom_keeps_a_point_on_a_wide_page_under_the_pointer() {
 }
 
 #[trial]
+fn wheel_zoom_keeps_its_anchor_after_an_external_zoom_change() {
+    for zoom in [1.0, 2.0, 4.0] {
+        for fraction in [0.1, 0.5, 0.9] {
+            let mut navigation = NavigationOptions::default();
+            navigation.wheel = WheelScheme::Acrobat;
+            navigation.eased_wheel = true;
+            let Rig { mut fixture, state, out, .. } =
+                rig_config(SmallPages(DemoPages::new(20)), PageViewState::default(), navigation, true, true, |_, _| ());
+            fixture.room(vec2(1274.0, 900.0));
+            fixture.idle(4);
+            {
+                let mut s = state.borrow_mut();
+                s.fit = Fit::None;
+                s.zoom = zoom;
+            }
+            fixture.idle(4);
+            let pointer = {
+                let out = out.borrow();
+                let visible = out.pages[0].rect.intersect(out.view).shrink(15.0);
+                visible.min + visible.size() * fraction
+            };
+            let (before, wide) = {
+                let out = out.borrow();
+                (out.on_page(0, out.under(pointer)), out.pages[0].rect.width() > out.view.width())
+            };
+            let initial = out.borrow().pages[0].rect;
+            let fraction_on_page = (pointer - initial.min) / initial.size();
+            let mods = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+            fixture.frame(vec![
+                egui::Event::ModifiersChanged(mods),
+                egui::Event::PointerMoved(pointer),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 20.0),
+                    modifiers: mods,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                },
+            ]);
+            fixture.idle(20);
+            assert!(state.borrow().zoom > zoom, "wheel zoomed from {zoom} to {}", state.borrow().zoom);
+            let out = out.borrow();
+            let (now, under) = (out.point(0, before), out.under(pointer));
+            assert!(
+                (!wide || (now.x - under.x).abs() < 2.0) && (now.y - under.y).abs() < 2.0,
+                "zoom {zoom} at {fraction} moved {now:?} from {under:?}"
+            );
+            let page = out.pages[0].rect;
+            let screen = page.min + fraction_on_page * page.size();
+            assert!(
+                (!wide || (screen.x - pointer.x).abs() < 2.0) && (screen.y - pointer.y).abs() < 2.0,
+                "zoom {zoom} at {fraction} moved {screen:?} from {pointer:?}"
+            );
+        }
+    }
+}
+
+#[trial]
 fn page_view_one_frame_middle_click_scrolls_from_the_press_position() {
     let mut navigation = NavigationOptions::default();
     navigation.middle_button = craft_behavior::MiddleButton::AutoScroll;
@@ -256,6 +314,17 @@ fn rig_with(
     start: PageViewState,
     navigation: NavigationOptions,
     settle: bool,
+    body: impl FnMut(&mut egui::Ui, &PageBody<'_>) + 'static,
+) -> Rig {
+    rig_config(source, start, navigation, settle, false, body)
+}
+
+fn rig_config(
+    source: impl PageSource + 'static,
+    start: PageViewState,
+    navigation: NavigationOptions,
+    settle: bool,
+    host_passthrough: bool,
     mut body: impl FnMut(&mut egui::Ui, &PageBody<'_>) + 'static,
 ) -> Rig {
     let state = Rc::new(RefCell::new(start));
@@ -266,15 +335,30 @@ fn rig_with(
         let mut now = kept.borrow().clone();
         let offset = now.offset;
         let keep = held.borrow().clone();
-        let shown = PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep).show_with(
-            ui,
-            &mut body,
-            |ui, page, body| {
-                body(ui, page);
-                None
-            },
-            |_, _, _| (),
-        );
+        let page_view = PageView::new("Pages", &source, &mut now, PAPER).options(LayoutOptions::ACROBAT).navigation(navigation).keep(&keep);
+        let shown = if host_passthrough {
+            let rect = egui::Rect::from_min_size(ui.max_rect().min + vec2(276.0, 68.0), vec2(998.0, 832.0));
+            page_view.show_at_with(
+                ui,
+                rect,
+                &mut body,
+                |ui, page, body| {
+                    body(ui, page);
+                    page.pass.and_then(|pass| pass.view)
+                },
+                |_, _, _| (),
+            )
+        } else {
+            page_view.show_with(
+                ui,
+                &mut body,
+                |ui, page, body| {
+                    body(ui, page);
+                    None
+                },
+                |_, _, _| (),
+            )
+        };
         let scrolled = seen.borrow().scrolled || shown.scrolled;
         *seen.borrow_mut() =
             Out { offset, rects: shown.layout.rects.clone(), pages: shown.pages, visible: shown.visible, view: shown.canvas.response.rect, scrolled };
