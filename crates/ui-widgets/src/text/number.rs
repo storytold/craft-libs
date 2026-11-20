@@ -603,7 +603,8 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     /// text value, the selection and the text actions to the same node.
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let rule = self.rule();
-        let numeric = match self.shown_number(cx.value()) {
+        // A value that is not finite shows the dash, as a mixed one does, and has no number to read.
+        let numeric = match self.shown_number(cx.value()).filter(|value| value.is_finite()) {
             Some(value) => Numeric::new(value, rule.bounds()),
             None => Numeric::empty(rule.bounds()),
         };
