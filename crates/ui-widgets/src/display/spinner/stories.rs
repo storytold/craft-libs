@@ -9,7 +9,7 @@ use craft_behavior::ColumnWidth;
 use egui::Ui;
 
 /// The name and the spinner of each size, in two columns that fit their content.
-static COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Content];
+const COLUMNS: [ColumnWidth; 2] = [ColumnWidth::Content, ColumnWidth::Content];
 
 #[story(Spinner, covers = [Default], drive = Drive::Never)]
 fn spinner(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {

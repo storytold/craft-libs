@@ -4,7 +4,20 @@ use super::{ANY, Case, Subject};
 use crate::testing::fixture::Fixture;
 use egui::{Rect, Vec2};
 
-pub(super) const CASES: &[Case] = &[Case::new("paints-inside", ANY, small_rooms_paint_inside_the_shown_rect)];
+pub(super) const CASES: &[Case] =
+    &[Case::new("paints-inside", ANY, small_rooms_paint_inside_the_shown_rect), Case::new("parts-declaration", ANY, parts_declaration)];
+
+fn parts_declaration(subject: &Subject) -> Result<(), String> {
+    for story in &subject.stories {
+        let bad = crate::testing::contract::check_parts_declarations(|| {
+            Fixture::story(story).frame(Vec::new());
+        });
+        if !bad.is_empty() {
+            return Err(format!("{}: components with PARTS = false declared parts: {bad:?}", story.name));
+        }
+    }
+    Ok(())
+}
 
 /// The slack between a painted bound and the shown rect: the rounding of the layout, as the layout cases allow. A
 /// shape's own slack adds half its stroke width.

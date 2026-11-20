@@ -164,7 +164,7 @@ impl ResizeEdges {
 /// producing inverted rects. A maximum constrains a pane when its sibling can take the remainder. A tab group takes
 /// the largest minimum and the largest maximum of its panels, so a panel without a maximum lifts the maximum of the
 /// panels it joins.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, crate::contract::MemoProps)]
 pub struct SizeLimits {
     /// Smallest size.
     pub min: Vec2,

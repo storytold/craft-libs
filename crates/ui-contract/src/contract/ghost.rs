@@ -98,24 +98,56 @@ pub fn painter(ctx: &Context) -> egui::Painter {
 /// size, else painted at the pointer. A brush tip too large for an image hands its centre cross and badge to the
 /// window and paints only its ring, so the pointer itself still moves with the hardware. A badged system cursor keeps
 /// the system's arrow and has only its badge painted.
+///
+/// A tip outline requested within a region (`cursor::request_within`: a canvas's view on the canvas's layer) is a
+/// mark on that canvas: the whole outline goes to the window only while it lies inside the region with no layer above
+/// the region's over it. Otherwise its ring paints on the region's layer clipped to the region, under the panels,
+/// menus and dialogs above it, and the window takes its marks as a too large tip's.
 fn paint_pointer(ctx: &Context, env: &Env, painter: &egui::Painter) {
     use craft_behavior::{Cursor, PaintedCursor};
     let Some(at) = areas::pointer_pos(ctx) else { return };
     let Some(Cursor::Painted(cursor)) = cursor::current(ctx) else { return };
     let closed = pointer::frame(ctx).buttons.contains(craft_behavior::Buttons::PRIMARY);
+    let tip = matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. });
+    let whole = pointer_art(env, &cursor, closed, false);
+    let confined = cursor::current_region(ctx).filter(|region| tip && !shows_whole(ctx, region, &whole, at));
+    let ring = |painter: &egui::Painter| {
+        let art = pointer_art(env, &cursor.clone().marked(false, None), closed, false);
+        match confined {
+            Some(region) => paint_in_region(ctx, region, &art, at),
+            None => art.paint(painter, at),
+        }
+    };
     let target = cursor::image_target(ctx).filter(|_| !matches!(cursor, PaintedCursor::Badged { .. }));
     if let Some(target) = target {
-        if cursor::show_image(ctx, &pointer_art(env, &cursor, closed, false), target) {
+        if confined.is_none() && cursor::show_image(ctx, &whole, target) {
             return;
         }
-        if matches!(cursor, PaintedCursor::Circle { .. } | PaintedCursor::Outline { .. })
-            && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target)
-        {
-            pointer_art(env, &cursor.marked(false, None), closed, false).paint(painter, at);
+        if tip && cursor::show_image(ctx, &pointer_art(env, &cursor, closed, true), target) {
+            ring(painter);
             return;
         }
     }
-    pointer_art(env, &cursor, closed, false).paint(painter, at);
+    match confined {
+        Some(_) => {
+            ring(painter);
+            pointer_art(env, &cursor, closed, true).paint(painter, at);
+        }
+        None => whole.paint(painter, at),
+    }
+}
+
+/// Whether `art` at the pointer `at` lies inside `region` with no layer above the region's layer over it.
+fn shows_whole(ctx: &Context, region: &cursor::CursorRegion, art: &Art, at: Pos2) -> bool {
+    let Some(bounds) = art.bounds().map(|bounds| bounds.translate(at.to_vec2())) else { return true };
+    region.clip.contains_rect(bounds) && !areas::rects_over(ctx, region.layer, None).iter().any(|over| over.intersects(bounds))
+}
+
+/// Paints `art` at the pointer `at` (screen space) on `region`'s layer, clipped to the region.
+fn paint_in_region(ctx: &Context, region: cursor::CursorRegion, art: &Art, at: Pos2) {
+    let to_layer = areas::layer_to_screen(ctx, region.layer).inverse();
+    let painter = egui::Painter::new(ctx.clone(), region.layer, to_layer * region.clip);
+    art.paint(&painter, to_layer * at);
 }
 
 /// The art of `cursor`: the hand as a fist while `closed`; with `marks_only`, a brush tip's centre cross and badge

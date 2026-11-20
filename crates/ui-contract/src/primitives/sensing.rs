@@ -113,7 +113,7 @@ impl<V> TextOutcome<V> {
 
 /// A part as the sensing core registers it.
 // F2-MERGE: F3 (`PartBuilder` adds tooltip and `pointer_only`)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PartDecl {
     pub key: PartKey,
     pub index: Option<u64>,
@@ -153,7 +153,7 @@ impl PartDecl {
 }
 
 /// One member's registration for this pass.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MemberDecl {
     pub id: Id,
     pub rect: Rect,
@@ -174,7 +174,7 @@ impl MemberDecl {
 }
 
 /// What a root registers at step 8: its id and rect.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct RootInfo {
     id: Id,
     rect: Rect,
@@ -396,7 +396,7 @@ pub fn cancel_press_of(ctx: &Context, owner: Id) {
 
 /// Records the transformed body's egui layer.
 pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| set_layer(ctx, arena, layer));
+    crate::runtime::replay::journal(ctx, || (arena, layer), |ctx, &(arena, layer)| set_layer(ctx, arena, layer));
     let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
     with_arena(ctx, arena, pass_nr, |state| state.layer = Some(layer));
 }
@@ -408,7 +408,7 @@ pub(crate) fn set_layer(ctx: &Context, arena: ArenaId, layer: Layer) {
 // names their shapes as the press winner.
 
 /// What a root registers in its arena at step 8, kept for a replay.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct RootRegistration {
     info: RootInfo,
     own: Vec<PartDecl>,
@@ -419,10 +419,11 @@ struct RootRegistration {
 
 /// Notes a root's step-8 registration in the open records.
 fn journal_root(ctx: &Context, arena: ArenaId, info: RootInfo, own: &[PartDecl], widgets: &[Id], (layer, sense): (Layer, Sense)) {
-    crate::runtime::replay::journal(ctx, || {
-        let registration = RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer, sense };
-        move |ctx: &Context| register_root_again(ctx, arena, registration.clone())
-    });
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, RootRegistration { info, own: own.to_vec(), widgets: widgets.to_vec(), layer, sense }),
+        |ctx, (arena, registration)| register_root_again(ctx, *arena, registration.clone()),
+    );
 }
 
 /// A replayed root's step-8 registration: its own parts, rect, widgets, layer and sense, with no press run.
@@ -439,44 +440,61 @@ fn register_root_again(ctx: &Context, arena: ArenaId, registration: RootRegistra
     });
 }
 
-/// Notes in the open records the members that joined `arena`, as they joined.
-fn journal_join(ctx: &Context, arena: ArenaId, joined: &[MemberDecl]) {
-    crate::runtime::replay::journal(ctx, || {
-        let joined = joined.to_vec();
-        move |ctx: &Context| join_again(ctx, arena, joined.clone())
-    });
+/// Notes in the open records the members that joined `arena` on `layer` through `clip`, as declared: a replay joins
+/// them at the stack positions the arena gives them then.
+fn journal_join(ctx: &Context, arena: ArenaId, layer: Layer, clip: Rect, joined: &[MemberDecl]) {
+    crate::runtime::replay::journal(
+        ctx,
+        || (arena, layer, clip, joined.to_vec()),
+        |ctx, (arena, layer, clip, joined)| join_again(ctx, *arena, *layer, *clip, joined),
+    );
 }
 
-/// Replayed members join their arena again.
-fn join_again(ctx: &Context, arena: ArenaId, joined: Vec<MemberDecl>) {
-    journal_join(ctx, arena, &joined);
-    let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
-    with_arena(ctx, arena, pass_nr, |state| {
-        rotate(state, pass_nr);
+/// Replayed members join their arena again, after the members that joined before them in this pass.
+fn join_again(ctx: &Context, arena: ArenaId, layer: Layer, clip: Rect, joined: &[MemberDecl]) {
+    journal_join(ctx, arena, layer, clip, joined);
+    let read = PassRead::of(ctx);
+    let mut shapes = Vec::new();
+    with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
+        rotate(state, read.pass_nr);
         for decl in joined {
-            state.union_sense |= decl.parts.iter().fold(decl.sense, |sense, part| sense | part.sense);
-            state.members.push(decl);
+            join_member(state, decl.clone(), layer, read.target(), &mut shapes);
         }
     });
+    pointer::add_shapes_in(ctx, read.viewport, layer, arena.0, clip, shapes);
 }
 
-/// Places the `over` parts of the root of `arena` (`member` None) or of its member `member` above the members joined
-/// so far, as `place_over_widgets` does; journaled for a replay.
-fn place_over(ctx: &Context, arena: ArenaId, member: Option<Id>) {
-    crate::runtime::replay::journal(ctx, || move |ctx: &Context| place_over(ctx, arena, member));
-    let pass_nr = pass::pass_nr(ctx, pass::current_viewport(ctx));
-    with_arena(ctx, arena, pass_nr, |state| {
-        rotate(state, pass_nr);
+/// Joins `decl`, as declared, to the arena `state` on `layer`: at the next stack position, its `over` parts just above
+/// it, its shapes added to `shapes`.
+fn join_member(state: &mut ArenaState, mut decl: MemberDecl, layer: Layer, target: f32, shapes: &mut Vec<Shape<Id>>) {
+    decl.local = state.layer == Some(layer);
+    let position = member_position(state.members.len());
+    decl.over_at = position + 1;
+    shapes.extend(member_shapes(&decl, position, target));
+    state.union_sense |= decl.parts.iter().fold(decl.sense, |sense, part| sense | part.sense);
+    state.members.push(decl);
+}
+
+/// Places the `over` parts of the root `id` of `arena` (`member` false) or of its member `id` above the members joined
+/// so far, as `place_over_widgets` does, and records their shapes on `layer` through `clip`; journaled, so a replay
+/// places them above the members joined in the replaying pass.
+fn place_over(ctx: &Context, (arena, id, member, layer, clip): (ArenaId, Id, bool, Layer, Rect)) {
+    crate::runtime::replay::journal(ctx, || (arena, id, member, layer, clip), |ctx, &args| place_over(ctx, args));
+    let read = PassRead::of(ctx);
+    let shapes = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
+        rotate(state, read.pass_nr);
         let at = over_position(state.members.len());
-        match member {
-            None => state.own_over_at = at,
-            Some(id) => {
-                if let Some(joined) = state.members.iter_mut().rev().find(|joined| joined.id == id) {
-                    joined.over_at = at;
-                }
-            }
+        if !member {
+            state.own_over_at = at;
+            return Some(own_over_shapes(&state.own, id, at, read.target()));
         }
+        let joined = state.members.iter_mut().rev().find(|joined| joined.id == id)?;
+        joined.over_at = at;
+        Some(member_over_shapes(joined, read.target()).collect())
     });
+    if let Some(shapes) = shapes {
+        pointer::add_shapes_in(ctx, read.viewport, layer, arena.0, clip, shapes);
+    }
 }
 
 /// What step 8 reads of the running pass, fetched once per root: the viewport, the pass number and the pointer
@@ -691,20 +709,10 @@ pub(crate) fn place_over_widgets(ui: &Ui, id: Id, member: Option<ArenaId>, decls
     }
     let arena = member.unwrap_or_else(|| ArenaId::new(id));
     let layer = ui.layer_id();
-    let read = PassRead::of(ctx);
-    place_over(ctx, arena, member.map(|_| id));
-    let shapes = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
-        if member.is_none() {
-            return Some(own_over_shapes(&state.own, id, state.own_over_at, read.target()));
-        }
-        let joined = state.members.iter().rev().find(|joined| joined.id == id)?;
-        Some(member_over_shapes(joined, read.target()).collect::<Vec<_>>())
-    });
-    let Some(shapes) = shapes else { return };
-    pointer::record_shapes_in(ctx, read.viewport, layer, arena.0, clip, shapes);
+    place_over(ctx, (arena, id, member.is_some(), layer, clip));
     // A root's widgets are in its widget record from step 8.
     if member.is_some() && !widgets.is_empty() {
-        pointer::record_widgets_in(ctx, read.viewport, layer, arena.0, &widgets, decls.iter().any(|part| part.sense.contains(Sense::CLICK)));
+        pointer::record_widgets(ctx, layer, arena.0, &widgets, decls.iter().any(|part| part.sense.contains(Sense::CLICK)));
     }
 }
 
@@ -758,27 +766,19 @@ pub(crate) fn sense_members(ui: &Ui, arena: ArenaId, specs: &[MemberSpec<'_>]) -
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
         rotate(state, pass_nr);
         for spec in specs {
-            let mut decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
-            decl.local = state.layer == Some(layer);
-            let position = member_position(state.members.len());
-            decl.over_at = position + 1;
-            shapes.extend(member_shapes(&decl, position, target));
-            state.union_sense |= decl.sense;
-            for part in &decl.parts {
-                state.union_sense |= part.sense;
-            }
-            joined.push((decl.local, known_in(state, spec.id)));
+            let decl = MemberDecl::new(spec.id, spec.rect, spec.sense, spec.parts);
             if recording {
                 recorded.push(decl.clone());
             }
-            state.members.push(decl);
+            join_member(state, decl, layer, target, &mut shapes);
+            joined.push((state.layer == Some(layer), known_in(state, spec.id)));
         }
         state.outcome.filter(|outcome| outcome.pass == pass_nr).unwrap_or_default()
     });
     if recording {
-        journal_join(ctx, arena, &recorded);
+        journal_join(ctx, arena, layer, ui.clip_rect(), &recorded);
     }
-    pointer::record_shapes(ctx, layer, arena.0, ui.clip_rect(), shapes);
+    pointer::add_shapes_in(ctx, pass::current_viewport(ctx), layer, arena.0, ui.clip_rect(), shapes);
     specs
         .iter()
         .zip(joined)
