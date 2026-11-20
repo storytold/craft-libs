@@ -417,26 +417,27 @@ mod tests {
         let health = opened.health.clone();
         health.mark(Fault::Error(OUT_OF_MEMORY.into()));
         let index = opened.queue.submit([]);
-        assert!(health.wait(&opened.device, Some(index.clone())), "{health:?}");
-        assert!(health.wait_timeout(&opened.device, index, std::time::Duration::from_secs(5)), "{health:?}");
+        assert!(health.wait(&opened.device, index.clone()), "{health:?}");
+        assert!(health.wait_timeout(&opened.device, index.clone(), std::time::Duration::from_secs(5)), "{health:?}");
         health.clear_out_of_memory(health.out_of_memory_count());
         assert!(health.is_ok(), "{health:?}");
         // any other error still stops them
         health.mark(Fault::Error("Validation Error".into()));
-        assert!(!health.wait(&opened.device, None));
+        assert!(!health.wait(&opened.device, index));
     }
 
     #[test]
     fn a_lost_device_is_seen_by_its_health() {
         let opened = open(&noop(None), None, &Preference::Software, &Request::default()).unwrap();
         let health = opened.health.clone();
+        let index = opened.queue.submit([]);
         opened.device.destroy();
         health.probe(&opened.device);
         assert!(health.fault().is_some_and(|f| f.is_lost()), "{health:?}");
         assert!(!health.is_ok());
         assert!(matches!(health.device_status(), Err(craft_gpu::GpuFault::DeviceLost(_))), "{health:?}");
         // a later wait does not touch the lost device
-        assert!(!health.wait(&opened.device, None));
+        assert!(!health.wait(&opened.device, index));
     }
 
     #[test]

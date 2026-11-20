@@ -60,9 +60,11 @@ Licensed under MIT OR Apache-2.0.
 - Only an error whose cause is wgpu's "Parent device is lost" counts as a loss. The same words in
   a resource's label do not count. An error about a destroyed buffer or texture is recorded as an
   error.
-- `wait_timeout` and `wait_timeout_cancelable` wait for one submission index. To wait for
+- `wait`, `wait_timeout` and `wait_timeout_cancelable` wait for one submission index. To wait for
   everything submitted so far, pass `queue.submit([])`; work submitted later does not extend the
   wait.
+- `wait` has no deadline. It polls in slices of at most 100 ms, and a loss or an error other than
+  out of memory that another clone of the `DeviceHealth` records ends it after the current slice.
 - `DeviceHealth::watch` replaces the device's uncaptured-error handler. Polls catch the panic that
   `Device::poll` raises on a lost device and record the loss.
 - wgpu keeps one device-lost callback per device, and a later `set_device_lost_callback`
@@ -101,9 +103,9 @@ none of its contents. The caller then:
    to it. The new adapter may not support the old configuration (an HDR format, for example), so
    the caller reads `Surface::get_capabilities` with the new adapter and picks a format, present
    mode and alpha mode from it.
-5. Builds the pipelines for the surface format picked in step 4, the bind groups and renderers
-   again, bind groups and renderers again, and uploads the textures and buffers
-   again from the app's own copies of their data.
+5. Builds the pipelines for the surface format picked in step 4, and the bind groups and
+   renderers, again, and uploads the textures and buffers again from the app's own copies of
+   their data.
 6. Makes any `craft-gpu` context again on the new device, with the new `Opened::device_caps`, and
    submits again the jobs and frames that did not complete.
 7. Uses the new `Opened::health`. The old `DeviceHealth` keeps reporting the loss.
