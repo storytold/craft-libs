@@ -97,7 +97,10 @@ pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &mut DocumentOpti
 
     let size_units = unit_entries(read, &SIZE_UNITS);
     let resolution_units = unit_entries(read, &RESOLUTION_UNITS);
-    let orientations = [Entry::new(Orientation::Portrait, words.portrait.clone()), Entry::new(Orientation::Landscape, words.landscape.clone())];
+    let orientations = [
+        Entry::new(Orientation::Portrait, words.portrait.clone()).icon(IconId::new("orientation_portrait")),
+        Entry::new(Orientation::Landscape, words.landscape.clone()).icon(IconId::new("orientation_landscape")),
+    ];
     let modes = ColorMode::ALL.map(|mode| Entry::new(mode, mode_label(words, mode).clone()));
     let depths: Vec<_> = values.color_mode.depths().iter().map(|&depth| Entry::new(depth, depth_label(words, depth).clone())).collect();
     let working = setup.profiles.iter().find(|profiles| profiles.mode == values.color_mode);
