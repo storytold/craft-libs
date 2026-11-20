@@ -236,7 +236,8 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
     let helper = registry_helper(types)?;
     Ok(quote! {
         #gate
-        #k::__suite_items! {
+        #k::__register_contract! {
+            @suite
             pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
                 #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
             }
@@ -263,7 +264,8 @@ pub(crate) fn pattern_registrations(k: &TokenStream, types: &[Type], purpose: &s
     };
     quote! {
         #gate
-        #k::__suite_items! {
+        #k::__register_contract! {
+            @suite
             pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
                 #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
             }
@@ -684,11 +686,12 @@ mod registry_helper_tests {
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    syn::Item::Macro(item) if item.mac.path.segments.last().is_some_and(|s| s.ident == "__suite_items") => Some(item),
+                    syn::Item::Macro(item) if item.mac.path.segments.last().is_some_and(|s| s.ident == "__register_contract") => Some(item),
                     _ => None,
                 })
                 .expect("registry helper is protected by dependency suite");
-            let helper: syn::ItemFn = syn::parse2(suite.mac.tokens.clone()).unwrap();
+            let tokens = suite.mac.tokens.clone();
+            let helper: syn::ItemFn = syn::parse2(tokens.into_iter().skip(2).collect()).unwrap();
             assert!(helper.sig.ident.to_string().starts_with("__registry_"));
             assert!(helper.sig.inputs.iter().any(|arg| quote!(#arg).to_string().contains("Registry")));
         }
