@@ -32,6 +32,41 @@ fn two_broken_files_get_different_names() {
     assert!(second.broken_moved_to.unwrap().exists());
 }
 
+/// Pads `config.toml` past the read limit; the file is sparse where the file system allows it.
+fn grow_past_limit(dir: &std::path::Path) -> u64 {
+    let len = craft_settings::store::MAX_CONFIG_BYTES + 1;
+    std::fs::OpenOptions::new().write(true).open(config_path(dir)).unwrap().set_len(len).unwrap();
+    len
+}
+
+#[test]
+fn oversized_file_opens_read_only_and_is_left_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n[general]\nlanguage = \"de\"\n");
+    let len = grow_past_limit(tmp.path());
+    let (mut store, report) = open_in(tmp.path());
+    assert!(matches!(&report.read_only, Some(ReadOnlyReason::Unreadable(e)) if e.kind() == std::io::ErrorKind::FileTooLarge), "{report:?}");
+    assert!(report.broken_moved_to.is_none(), "{report:?}");
+    assert_eq!(report.source, Source::Defaults);
+    assert!(matches!(store.flush(), Err(SettingsError::ReadOnly(_))));
+    assert_eq!(std::fs::metadata(config_path(tmp.path())).unwrap().len(), len, "the file is untouched");
+}
+
+#[test]
+fn file_grown_past_the_limit_while_running_is_not_overwritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut store, _) = open_in(tmp.path());
+    store.flush().unwrap();
+    let len = grow_past_limit(tmp.path());
+
+    store.update(|p| p.general.language = "fr".into());
+    assert!(matches!(store.flush(), Err(SettingsError::ReadOnly(_))));
+    assert!(store.is_read_only());
+    assert!(store.take_moved_aside().is_empty());
+    assert_eq!(std::fs::metadata(config_path(tmp.path())).unwrap().len(), len, "the file is untouched");
+    assert!(matches!(store.tick(std::time::Instant::now()).status, craft_settings::SaveStatus::Idle), "no retries once read-only");
+}
+
 #[test]
 fn bad_value_only_resets_its_section() {
     let tmp = tempfile::tempdir().unwrap();

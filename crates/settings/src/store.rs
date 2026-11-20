@@ -1,6 +1,6 @@
 //! The in-memory store: load once, read every frame, save while the application runs.
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,9 @@ use crate::recovery;
 
 /// The settings file name.
 pub const CONFIG_FILE: &str = "config.toml";
+
+/// Largest `config.toml` the store reads. A larger file is left untouched and the store is read-only.
+pub const MAX_CONFIG_BYTES: u64 = 16 << 20;
 
 /// How long after the last change a save is attempted.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -156,7 +159,7 @@ impl<T: Settings> SettingsStore<T> {
             return (store, report);
         }
 
-        match std::fs::read_to_string(&path) {
+        match read_config(&path) {
             Ok(text) => store.load_text(&path, &text, &mut report),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 if let Some((value, from)) = migrate::import_legacy(&options.legacy) {
@@ -291,7 +294,7 @@ impl<T: Settings> SettingsStore<T> {
     /// user's values instead of defaults.
     fn load_best_effort(&mut self, report: &mut LoadReport) {
         if let Some(path) = &self.path
-            && let Ok(text) = std::fs::read_to_string(path)
+            && let Ok(text) = read_config(path)
             && let Ok(mut doc) = document::parse(&text)
         {
             // A failed migration leaves the document half-upgraded; show defaults instead.
@@ -380,9 +383,15 @@ impl<T: Settings> SettingsStore<T> {
     /// and a file from a newer build, or one whose migration fails, makes the store read-only
     /// instead of overwriting it, the same as at startup.
     fn check_disk(&mut self, path: &Path) -> Result<Option<String>, SettingsError> {
-        let text = match std::fs::read_to_string(path) {
+        let text = match read_config(path) {
             Ok(text) => text,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            // Same as at startup: leave the oversized file untouched and stop saving.
+            Err(e) if e.kind() == io::ErrorKind::FileTooLarge => {
+                let why = ReadOnlyReason::Unreadable(e).to_string();
+                self.read_only = Some(why.clone());
+                return Err(SettingsError::ReadOnly(why));
+            }
             Err(e) => return Err(e.into()),
         };
         // A blank file still parses, so adopting it below would replace this store's document --
@@ -414,6 +423,24 @@ impl<T: Settings> SettingsStore<T> {
         }
         Ok((!text.trim().is_empty()).then_some(text))
     }
+}
+
+/// Reads `config.toml` as text. A file larger than [`MAX_CONFIG_BYTES`] fails with
+/// `ErrorKind::FileTooLarge` without being read into memory; text that is not UTF-8 fails with
+/// `ErrorKind::InvalidData`, as `std::fs::read_to_string` does.
+fn read_config(path: &Path) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let too_large = || io::Error::new(io::ErrorKind::FileTooLarge, format!("file is larger than {MAX_CONFIG_BYTES} bytes"));
+    if file.metadata()?.len() > MAX_CONFIG_BYTES {
+        return Err(too_large());
+    }
+    // The length can change after the check, or be unknown (a pipe), so the read is capped too.
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(too_large());
+    }
+    String::from_utf8(bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Exponential backoff: 1 s, 2 s, 4 s, … capped at [`MAX_RETRY_DELAY`].
