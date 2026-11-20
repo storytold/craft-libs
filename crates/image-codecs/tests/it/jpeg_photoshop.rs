@@ -1,8 +1,10 @@
 //! The JPEG encoder writes `Metadata::photoshop_resources` as an APP13 `Photoshop 3.0` segment,
 //! in the exact shape its own decoder reads (marker 0xED, the identifier, then the `8BIM`
 //! resource blocks verbatim). A block too large for one segment is split over consecutive
-//! APP13 segments, each carrying the identifier again, the way Photoshop writes it and the way
-//! `scan_metadata` concatenates it back. No resources means no segment.
+//! APP13 segments, each carrying the identifier again: that split matches how `scan_metadata`
+//! concatenates the segments back, not Photoshop's own continuation format, whose follow-up
+//! segments repeat neither the identifier nor `8BIM` (exiv2 bug #533). No resources means no
+//! segment.
 
 use crate::common;
 use common::*;
@@ -91,7 +93,7 @@ fn app13_uses_the_photoshop_identifier() {
 }
 
 #[test]
-fn a_large_block_splits_over_app13_segments_like_photoshop() {
+fn a_large_block_splits_over_app13_segments_matching_scan_metadata() {
     let mut img = synth(9, 7, ChannelLayout::Rgb, SampleType::U8, 5, 0.3);
     // 5000 bytes: over two 2048-byte chunks, under the 65519 a single segment could hold.
     let resources = resource(1073, &vec![0x5A; 5000]);
