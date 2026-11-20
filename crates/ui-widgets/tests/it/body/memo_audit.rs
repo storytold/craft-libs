@@ -377,6 +377,29 @@ fn a_card_holding_a_scrolling_body_replays_moved_with_its_rows_places() {
     frames.idle(SETTLE, &mut show);
 }
 
+/// A card on half points moved by whole pixels replays while it keeps its side of zero, and runs when the move takes it
+/// across: paint rounds a half pixel away from zero, so across zero the card snaps one pixel off the move. The audit
+/// finds every replay equal to a run.
+#[trial]
+fn a_card_on_half_points_replays_moved_on_its_side_of_zero_and_runs_across_it() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let top = Cell::new(30.5);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, top.get()), Vec2::new(100.0, 30.0)), |ui| {
+            MemoView::new("card", Card { at: 0 }, card).show(ui);
+        });
+    };
+    frames.idle(SETTLE, &mut show);
+    top.set(10.5);
+    frames.frame(vec![], &mut show);
+    assert_eq!(replayed(&frames), 1, "a move that keeps the card below zero replays it");
+    top.set(-9.5);
+    frames.frame(vec![], &mut show);
+    assert_eq!(replayed(&frames), 0, "a move across zero runs it");
+    frames.idle(SETTLE, &mut show);
+}
+
 /// A view that holds a card in a room of its own, `gap` points down.
 #[derive(MemoProps)]
 struct Holder {

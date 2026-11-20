@@ -212,7 +212,8 @@ impl Place {
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
             && now.env == self.env;
-        let placeable = offset == Vec2::ZERO || (keeps_placement(offset, now.pixels_per_point) && movable && !transformed);
+        let placeable =
+            offset == Vec2::ZERO || (keeps_placement(rect.union(self.room), offset, now.pixels_per_point) && movable && !transformed);
         if !same || !placeable {
             return None;
         }
@@ -222,11 +223,18 @@ impl Place {
     }
 }
 
-/// Whether content moved by `offset` lies where a run at the new place puts it: the move is a whole step of egui's UI
-/// rounding, which every widget rect is rounded to, and a whole physical pixel, which paint snaps to (`Surface`, text).
-/// A move between them leaves a rounded rect off the grid a run there rounds it to.
-pub(crate) fn keeps_placement(offset: Vec2, pixels_per_point: f32) -> bool {
-    offset == offset.round_ui() && offset == offset.round_to_pixels(pixels_per_point)
+/// Whether content in `area` moved by `offset` lies where a run at the new place puts it: the move is a whole step of
+/// egui's UI rounding, which every widget rect is rounded to, and a whole physical pixel, which paint snaps to
+/// (`Surface`, text). A move between them leaves a rounded rect off the grid a run there rounds it to. Both roundings
+/// take a half step away from zero (`f32::round`), so a coordinate on a half step rounds to the same place after the
+/// move only on the same side of zero: the area keeps its side of zero along each axis.
+pub(crate) fn keeps_placement(area: Rect, offset: Vec2, pixels_per_point: f32) -> bool {
+    let moved = area.translate(offset);
+    let one_side = |(min, max): (f32, f32), (to_min, to_max): (f32, f32)| (min >= 0.0 && to_min >= 0.0) || (max <= 0.0 && to_max <= 0.0);
+    offset == offset.round_ui()
+        && offset == offset.round_to_pixels(pixels_per_point)
+        && one_side((area.min.x, area.max.x), (moved.min.x, moved.max.x))
+        && one_side((area.min.y, area.max.y), (moved.min.y, moved.max.y))
 }
 
 /// The last measuring run of a measure-only child: content a pass measures and never shows, as a page `Pages` holds
