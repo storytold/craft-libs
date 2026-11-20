@@ -642,6 +642,7 @@ fn pack_line(out: &mut Vec<u8>, codes: &[u16], bits: u8) {
     out.resize(start + written.div_ceil(4) * 4, 0);
 }
 
+/// Write DPX, copying eight-bit rows directly while retaining wider code packing.
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
@@ -653,7 +654,8 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     };
     let bits = bits_for(opts.dpx_bits, img.sample_type());
     let codes: Vec<u16> = match (img.sample_type(), bits) {
-        (SampleType::U8, 8) => img.data().iter().map(|&v| u16::from(v)).collect(),
+        // Eight-bit samples are written directly below, without a widened copy.
+        (SampleType::U8, 8) => Vec::new(),
         (SampleType::U16, 16) => img.to_u16_samples().unwrap_or_default(),
         (SampleType::U16, 10 | 12) => {
             let max = (1u64 << bits) - 1;
@@ -662,7 +664,8 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         (s, b) => return Err(CodecError::encode(F, format!("cannot write {s:?} samples at {b} bits"))),
     };
     let per_line = w as usize * layout.channels();
-    if codes.len() != per_line * h as usize {
+    let sample_count = if bits == 8 { img.data().len() } else { codes.len() };
+    if sample_count != per_line * h as usize {
         return Err(CodecError::encode(F, "the image has the wrong number of samples"));
     }
     let data_len = line_bytes(per_line, bits, if matches!(bits, 10 | 12) { 1 } else { 0 })
@@ -727,8 +730,16 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
 
     let mut out = wr.h;
     out.try_reserve_exact(data_len).map_err(|_| CodecError::encode(F, "out of memory"))?;
-    for row in codes.chunks_exact(per_line.max(1)) {
-        pack_line(&mut out, row, bits);
+    if bits == 8 {
+        for row in img.data().chunks_exact(per_line.max(1)) {
+            let start = out.len();
+            out.extend_from_slice(row);
+            out.resize(start + row.len().div_ceil(4) * 4, 0);
+        }
+    } else {
+        for row in codes.chunks_exact(per_line.max(1)) {
+            pack_line(&mut out, row, bits);
+        }
     }
     Ok(out)
 }
