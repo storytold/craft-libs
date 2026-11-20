@@ -18,7 +18,7 @@ workspace = true
 screen-video = ["dep:miniz_oxide"]
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
-dnx = []
+dnx = ["dep:craft-media"]
 # APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
 apv = ["apv-decode", "apv-encode"]
 apv-decode = ["craft-media/bitstream"]
@@ -70,7 +70,7 @@ threads = ["dep:rayon", "rav1e?/threading"]
 
 [dependencies]
 miniz_oxide = { workspace = true, optional = true }
-craft-media = { workspace = true }
+craft-media = { workspace = true, optional = true }
 craft-jpeg = { workspace = true, optional = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
