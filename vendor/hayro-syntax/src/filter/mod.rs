@@ -9,6 +9,13 @@ mod dct;
 #[cfg(feature = "images")]
 mod jbig2;
 #[cfg(feature = "images")]
+pub use jbig2::{
+    MAX_PAGE_JBIG2_WORK, clear_jbig2_limited, jbig2_limited, jbig2_limited_by_stream,
+    page_jbig2_work_spent,
+};
+#[cfg(all(feature = "images", feature = "std"))]
+pub use jbig2::set_page_jbig2_work;
+#[cfg(feature = "images")]
 mod jpx;
 mod lzw_flate;
 mod run_length;
@@ -88,7 +95,9 @@ impl Filter {
 
     /// PdfCraft patch: `limit` is the most bytes the filter may produce (see `decode_limit`), and
     /// `max_pixels` the most pixels a CCITT or JPEG 2000 image may decode to (the document's
-    /// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels)).
+    /// [`DecodeLimits::max_image_pixels`](crate::DecodeLimits::max_image_pixels)), and
+    /// `rows` the `/Height` of the image whose samples it produces, when it is an image's last
+    /// filter.
     pub(crate) fn apply(
         &self,
         data: &[u8],
@@ -97,6 +106,7 @@ impl Filter {
         limit: usize,
         #[cfg_attr(not(feature = "images"), allow(unused))] max_pixels: u64,
         control: Option<&crate::cancel::Control>,
+        rows: Option<usize>,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
         crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let res = match self {
@@ -112,7 +122,11 @@ impl Filter {
             Self::LzwDecode => (if control.is_some() { lzw_flate::lzw::decode_controlled(data, params, limit, control) } else { lzw_flate::lzw::decode(data, params, limit) })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => (if control.is_some() { lzw_flate::flate::decode_controlled(data, params, limit, control) } else { lzw_flate::flate::decode(data, params, limit) })
+            Self::FlateDecode => (if control.is_some() {
+                lzw_flate::flate::decode_controlled(data, params, limit, control, rows)
+            } else {
+                lzw_flate::flate::decode(data, params, limit, rows)
+            })
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             #[cfg(feature = "images")]
@@ -128,7 +142,8 @@ impl Filter {
                 warn!("image decoding is not supported (enable the `images` feature)");
                 Err(DecodeFailure::ImageDecode)
             }
-            _ => Err(DecodeFailure::StreamDecode),
+            // PdfCraft patch (30): `Stream::raw_data` decrypted the data with the filter this names.
+            Self::Crypt => Ok(FilterResult::from_data(data.to_vec())),
         };
 
         crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
