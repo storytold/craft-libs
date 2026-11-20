@@ -3,7 +3,7 @@
 use craft_behavior::Axis;
 use craft_behavior::dock::{Column, DockEdge, Floating, Group, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, PlainData, Tracked};
-use craft_ui::docking::{DockConfig, DockPanels, HidePanels, PanelSpec, PanelSpecs};
+use craft_ui::docking::{DockConfig, DockPanels, HidePanels, PanelKey, PanelSpec, PanelSpecs};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::env::{BodyMode, ShellCx, ShellEntry, WindowKey};
 use craft_ui::testing::{Fixture, trial};
@@ -65,7 +65,7 @@ fn shown_under(shell: ShellCx, keeps: bool) -> BTreeSet<usize> {
         let mut workspace = Arc::new(Workspace::new(layout()));
         let mut panels = Panels { shown: Rc::clone(&seen) };
         let specs = Tracked::new(Specs);
-        let keep = |panel: &usize| *panel == TOOLBAR || *panel == PALETTE;
+        let keep = Tracked::new(BTreeSet::from([PanelKey::of(&TOOLBAR), PanelKey::of(&PALETTE)]));
         let mut area = DockArea::new("Hidden dock", Bind::bound(&mut workspace), &specs, &mut panels, DockConfig::default());
         if keeps {
             area = area.hide(HidePanels::Except(&keep));

@@ -4,7 +4,7 @@ use super::SplitFramesCx as _;
 use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
-use super::{DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, WindowMenuRows};
+use super::{DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows};
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};
@@ -45,7 +45,7 @@ fn dock(ui: &mut Ui, bind: Bind<'_, Layout<usize>>, shown: &Layout<usize>) -> St
             let Some(Node::Tabs { panels, .. }) = shown.place(&anchor).and_then(|place| shown.node_of(&place)) else { continue };
             let panels = titles(panels);
             let active = panels.first().map_or(PanelKey::new(0), |panel| panel.key);
-            DockGroup::new(anchor, &panels, active).show_at(ui, rect, |_, _| ());
+            DockGroup::new(anchor, Titles::from_content(panels.clone()), active).show_at(ui, rect, |_, _| ());
         }
     });
     area.output.edit.into()
@@ -84,14 +84,14 @@ fn a_dock_of_one_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(DockGroup<'static, usize>, covers = [Default])]
 fn two_panels(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
-    DockGroup::new(LAYERS, &panels, panels[0].key).show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).show(ui, |_, _| ()).output.into()
 }
 
 /// A group in a floating window: nothing goes beside it, so a drop on its body joins it or stacks above or below.
 #[story(DockGroup<'static, usize>, covers = [Default])]
 fn a_group_in_a_window(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
-    DockGroup::new(LAYERS, &panels, panels[0].key).in_window().show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).in_window().show(ui, |_, _| ()).output.into()
 }
 
 /// A click on the panel menu button opens the group's panel menu.
@@ -106,7 +106,7 @@ fn open_panel_menu(fixture: &mut Fixture) {
 fn panel_menu(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let panels = titles(&[LAYERS, CHANNELS]);
     let rows = [DockCommands::FloatPanel, DockCommands::FloatGroup].map(|command| PanelRow::Command(CommandRef::from(command))).to_vec();
-    DockGroup::new(LAYERS, &panels, panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
+    DockGroup::new(LAYERS, Titles::from_content(panels.clone()), panels[0].key).menu(move || rows.clone()).show(ui, |_, _| ()).output.into()
 }
 
 #[story(GroupGrip<usize>, covers = [Default])]

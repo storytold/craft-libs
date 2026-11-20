@@ -1,18 +1,19 @@
 //! `DockArea`: the docking pattern. It shows a workspace's docked tree, dock columns, flyouts and floating groups from
 //! the parts of `docking`, takes the drops of tab and group drags, and applies their actions to the workspace.
 
-use super::hide::{self, Shown};
+use super::hide::{self, PruneKey};
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, Tracked, WordSetCx as _,
+    Bind, BindMut, BodyCx, Cx, Entry, MemoKey, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, Tracked, WordSetCx as _,
 };
+use crate::contract::Revision;
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
-    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea, WindowColumn, actions,
+    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, Titles, SplitArea, WindowColumn, actions,
     column_cells, dock_states, frame, move_actions, with_area_rules,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
@@ -124,7 +125,7 @@ pub struct DockArea<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> {
     config: DockConfig,
     /// Which panels the host hides.
     #[prop]
-    hide: HidePanels<'a, P>,
+    hide: HidePanels<'a>,
     /// The panel whose frame shows alone.
     #[prop]
     maximized: Option<P>,
@@ -214,7 +215,7 @@ struct Drops<'a, P> {
     permissions: &'a dyn Fn(&P) -> Permissions,
     config: &'a DockConfig,
     specs: &'a HashMap<P, PanelSpec>,
-    hide: HidePanels<'a, P>,
+    hide: HidePanels<'a>,
     maximized: Option<&'a P>,
     rtl: bool,
 }
@@ -254,9 +255,19 @@ struct Report<P> {
     files: Vec<drag::OsFile>,
 }
 
+/// The inputs of the workspace's derived values: the workspace, the panels' specs and the lock.
+#[derive(Clone, Copy, crate::contract::MemoProps)]
+pub(super) struct ModelKey {
+    workspace: Revision,
+    specs: Revision,
+    locked: bool,
+}
+
 /// What every part of one pass reads.
 struct Scene<'s, P> {
     dock: Id,
+    /// The key the pruned layout was derived under: what every group's derived values follow.
+    view: u128,
     sizes: DockSizes,
     config: &'s DockConfig,
     layout: &'s Layout<P>,
@@ -348,7 +359,7 @@ struct Look {
 /// What a group's header shows besides its panels' bodies: the tab titles, the panel menu's rows and whether the host
 /// gave any, and the panel commands' states.
 struct GroupParts {
-    titles: Vec<PanelTitle>,
+    titles: Titles,
     hosted: bool,
     states: Vec<(DockCommands, CommandState)>,
 }
@@ -409,7 +420,8 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
             Some(Mixed::Same(held)) => held,
             _ => Arc::default(),
         };
-        let model = derived(&ctx, id, &(held.revision(), specs.revision(), locked), || DockModel::of(&held, specs, locked));
+        let key = ModelKey { workspace: held.revision(), specs: specs.revision(), locked };
+        let model = derived(&ctx, id, &key, || DockModel::of(&held, specs, locked));
         let error = model.error.clone();
         let current = if error.is_none() { held } else { Arc::default() };
         let rights = &model.rights;
@@ -449,6 +461,7 @@ impl<'a, P: Clone + Eq + Hash + Debug + Send + Sync + 'static> DockArea<'a, P> {
                 specs: &model.specs,
                 keys: &model.keys,
                 hide,
+                model: key,
                 maximized: maximized.as_ref(),
                 auto_collapse,
                 sizes,
@@ -549,7 +562,8 @@ struct Input<'i, P> {
     config: &'i DockConfig,
     specs: &'i HashMap<P, PanelSpec>,
     keys: &'i HashMap<PanelKey, P>,
-    hide: HidePanels<'i, P>,
+    hide: HidePanels<'i>,
+    model: ModelKey,
     maximized: Option<&'i P>,
     auto_collapse: bool,
     sizes: DockSizes,
@@ -578,16 +592,19 @@ fn show_area<P: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
     panels: &mut dyn DockPanels<P>,
     mut flyout: Option<&mut Bind<'_, Option<P>>>,
 ) -> Passed<P> {
-    let Input { id, ctx, current, config, specs, keys, hide, maximized, auto_collapse, sizes, rtl } = *input;
+    let Input { id, ctx, current, config, specs, keys, hide, model, maximized, auto_collapse, sizes, rtl } = *input;
     let shell = body.shell();
     let mut memory = body.memory::<AreaMemory<P>>().clone();
     let protected = |panel: &P| rights.get(panel).is_some_and(|rights| rights.is_protected());
-    let Shown { view, floating } = hide::shown(current.layout(), maximized, hide, shell.as_ref(), &protected);
+    let (hide, floating) = hide::resolved(hide, shell.as_ref());
+    let prune = PruneKey { model, hide, floating, maximized: maximized.map(PanelKey::of) };
+    let view = derived(ctx, id.with("pruned"), &prune, || frame::maximize(current.layout(), maximized, hide, &protected).into_owned());
     let layout: &Layout<P> = &view.layout;
     let bounds = shell.as_ref().map_or(body.rect, ShellCx::float_bounds);
     let space = float_space(bounds, &sizes, config, specs);
     let scene = Scene {
         dock: id,
+        view: MemoKey::of(&prune),
         sizes,
         config,
         layout,
@@ -904,6 +921,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         let shown = &members[active];
         let words = body.words::<MenuWords>();
+        let ctx = ui.ctx().clone();
         let panels = RefCell::new(&mut *self.panels);
         // The tab titles, the menu rows and the panel commands' states, built when the group runs.
         // The tab titles, whether the host gives menu rows and the panel commands' states, built once per pass; the
@@ -911,10 +929,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let parts: OnceCell<GroupParts> = OnceCell::new();
         let parts_of = || {
             parts.get_or_init(|| {
-                let titles = members
-                    .iter()
-                    .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
-                    .collect();
+                let key = (scene.view, PanelKey::of(anchor));
+                let list = derived(&ctx, scene.dock.with(("titles", key.1)), &key, || {
+                    members
+                        .iter()
+                        .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+                        .collect::<Vec<_>>()
+                });
+                let titles = Titles::new(&key, list);
                 let hosted = !panels.borrow_mut().panel_rows(shown).is_empty();
                 let permissions = |panel: &P| scene.permissions(panel);
                 let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);
@@ -926,7 +948,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
             let panels = &panels;
             let words = &words;
             let GroupParts { titles, hosted, states } = parts_of();
-            let mut group = DockGroup::new(anchor.clone(), titles, PanelKey::of(&members[at]))
+            let mut group = DockGroup::new(anchor.clone(), titles.clone(), PanelKey::of(&members[at]))
                 .extra(move |ui, body| panels.borrow_mut().group_header(members, at, ui, body))
                 .dock(self.dock)
                 .zones(scene.config.zone_rule())

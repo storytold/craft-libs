@@ -20,7 +20,7 @@ pub struct Placing<'a, P> {
     /// The panels that always show, such as a canvas.
     pub protected: &'a dyn Fn(&P) -> bool,
     /// The panels the area hides, as the shell's visibility leaves them.
-    pub hide: HidePanels<'a, P>,
+    pub hide: HidePanels<'a>,
     /// The panel whose frame the area shows maximized.
     pub maximized: Option<&'a P>,
     /// The floating window whose column the dock lays out, by its id; `None` for a dock area's docked tree.
@@ -35,7 +35,7 @@ impl<'a, P> Placing<'a, P> {
 
     /// The area hides `hide` and shows the frame of `maximized` alone.
     #[must_use]
-    pub fn shown(mut self, hide: HidePanels<'a, P>, maximized: Option<&'a P>) -> Self {
+    pub fn shown(mut self, hide: HidePanels<'a>, maximized: Option<&'a P>) -> Self {
         self.hide = hide;
         self.maximized = maximized;
         self

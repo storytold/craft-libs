@@ -78,13 +78,14 @@ use craft_behavior::{Axis, EditEvents, Flow, Metrics, PartKey, Sense};
 use divider::{Divider, Drag};
 use egui::{Rect, Response, Vec2};
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use tree::{FrameRules, SplitHandle};
 
 const HANDLE: PartKey = PartKey::new("handle");
 
 /// The stable key of a panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, crate::contract::MemoProps)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct PanelKey(pub u64);
 
@@ -112,6 +113,38 @@ pub struct PanelTitle {
     pub title: Label,
     /// Whether the panel's tab shows a close button, where the group's tabs close.
     pub closable: bool,
+}
+
+/// The tab titles of one group, with the key that stands for them in a memoized view's key. A host that keeps its
+/// titles derived from revisions gives [`Titles::new`] the key it derived them under, so the key does not walk the
+/// titles; [`Titles::from_content`] keys by the titles themselves.
+#[derive(Clone, Debug)]
+pub struct Titles {
+    list: Arc<Vec<PanelTitle>>,
+    key: u128,
+}
+
+impl Titles {
+    /// The titles `list`, made from the inputs `key` follows: equal keys must mean equal titles.
+    pub fn new<K: crate::contract::MemoProps + ?Sized>(key: &K, list: Arc<Vec<PanelTitle>>) -> Self {
+        Titles { list, key: crate::contract::MemoKey::of(key) }
+    }
+
+    /// The titles `list`, keyed by their content: the key walks them.
+    pub fn from_content(list: Vec<PanelTitle>) -> Self {
+        Titles { key: crate::contract::MemoKey::of(&list), list: Arc::new(list) }
+    }
+
+    /// The titles in tab order.
+    pub fn as_slice(&self) -> &[PanelTitle] {
+        &self.list
+    }
+}
+
+impl crate::contract::MemoProps for Titles {
+    fn key(&self, key: &mut crate::contract::MemoKey) {
+        self.key.key(key);
+    }
 }
 
 impl PanelTitle {
