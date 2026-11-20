@@ -8,7 +8,8 @@
 //!   sample type, over the part's data window. Every compression the `exr` crate reads is read,
 //!   scan lines and tiles alike (the largest resolution level). Other parts' chunks are skipped
 //!   unread, and channels the filter drops are never allocated. Other parts may be deep.
-//! - [`write`] writes one scan-line part.
+//! - [`write`] writes one scan-line part. [`crate::write`] accepts rows incrementally for one
+//!   or more parts.
 //!
 //! The `exr` crate sizes buffers from headers before it reads pixels, so everything that reaches
 //! it is checked first: preview attributes against their own size, each part's samples against
@@ -1004,7 +1005,7 @@ pub enum SampleDepth {
     Half,
 }
 
-fn to_exr_compression(compression: Compression) -> ExrCompression {
+pub(crate) fn to_exr_compression(compression: Compression) -> ExrCompression {
     match compression {
         Compression::None => ExrCompression::Uncompressed,
         Compression::Rle => ExrCompression::RLE,

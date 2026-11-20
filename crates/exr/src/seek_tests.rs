@@ -90,6 +90,25 @@ fn only_the_requested_channels_are_returned_in_the_requested_order() {
 }
 
 #[test]
+fn reading_in_a_parts_data_window_keeps_off_display_tiles() {
+    let bytes = file(
+        vec![
+            layer(Some("beauty"), (0, 0), (8, 6), &["R"], false, Compression::ZIP1),
+            layer(Some("paint"), (-2, -3), (9, 7), &["R"], true, Compression::ZIP1),
+        ],
+        (8, 6),
+    );
+    let index = indexed(&bytes);
+    let request = Request { data_window: Some(1), ..Request::new(&[(1, 0)], usize::MAX) };
+    let output = read_planes(&mut Cursor::new(&bytes), &index, &request, &never).unwrap();
+    assert_eq!((output.width, output.height), (9, 7));
+    assert_eq!(output.stats.chunks[0], 0);
+    assert_eq!(output.planes[0], (0..9 * 7).map(|i| value(i, 0)).collect::<Vec<_>>());
+    let wrong_part = Request { data_window: Some(1), ..Request::new(&[(0, 0)], usize::MAX) };
+    assert!(index.estimate(&wrong_part).is_err());
+}
+
+#[test]
 fn a_part_with_no_requested_channel_is_not_read() {
     let bytes = file(
         vec![
