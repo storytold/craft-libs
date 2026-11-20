@@ -149,6 +149,14 @@ pub use craft_gcode as gcode;
 pub use craft_geom as geom;
 #[cfg(feature = "gif")]
 pub use craft_gif as gif;
+#[cfg(feature = "gpu")]
+pub use craft_gpu as gpu;
+#[cfg(feature = "gpu-null")]
+pub use craft_gpu_null as gpu_null;
+#[cfg(feature = "gpu-providers")]
+pub use craft_gpu_providers as gpu_providers;
+#[cfg(feature = "gpu-wgpu")]
+pub use craft_gpu_wgpu as gpu_wgpu;
 #[cfg(feature = "gridcraft-format")]
 pub use craft_gridcraft_format as gridcraft_format;
 #[cfg(feature = "gzip")]
@@ -177,6 +185,8 @@ pub use craft_imaging as imaging;
 pub use craft_indd as indd;
 #[cfg(feature = "ipc")]
 pub use craft_ipc as ipc;
+#[cfg(feature = "ipp")]
+pub use craft_ipp as ipp;
 #[cfg(feature = "java-class")]
 pub use craft_java_class as java_class;
 #[cfg(feature = "jmap")]
@@ -269,6 +279,8 @@ pub use craft_platform as platform;
 pub use craft_plist as plist;
 #[cfg(feature = "plotter")]
 pub use craft_plotter as plotter;
+#[cfg(feature = "ppt-binary")]
+pub use craft_ppt_binary as ppt_binary;
 #[cfg(feature = "pptx")]
 pub use craft_pptx as pptx;
 #[cfg(feature = "prc")]
@@ -321,6 +333,8 @@ pub use craft_smime as smime;
 pub use craft_sniff as sniff;
 #[cfg(feature = "sourcemap")]
 pub use craft_sourcemap as sourcemap;
+#[cfg(feature = "sqlite")]
+pub use craft_sqlite as sqlite;
 #[cfg(feature = "ssip")]
 pub use craft_ssip as ssip;
 #[cfg(feature = "stencilcraft-document")]
@@ -356,6 +370,8 @@ pub use craft_tiff as tiff;
 pub use craft_time as time;
 #[cfg(feature = "timeline")]
 pub use craft_timeline as timeline;
+#[cfg(feature = "tracked")]
+pub use craft_tracked as tracked;
 #[cfg(feature = "ui")]
 pub use craft_ui as ui;
 #[cfg(feature = "update")]

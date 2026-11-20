@@ -2,7 +2,7 @@
 
 use crate::contract::{Common, Component, Cx, MeasureCx, PaintUi, Pointer as _, PopupHandle, Props as _, Role, Styled as _};
 use crate::list::{RowThumb, ThumbAspect, ThumbPaint};
-use crate::primitives::{ContentPainterCx, IconSpec, TextRun};
+use crate::primitives::{ContentPainterCx, IconSpec, Span, TextRun};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, IconLook, Ink, StyleCx, TextLook, TypeRole};
 use crate::text::{Adornment, FieldStyle, place, reserve};
@@ -68,7 +68,8 @@ pub struct SelectFace<'a> {
     /// The picked entry's icon, drawn before the text in the chevron's ink.
     #[prop]
     leading: Option<IconSpec<'static>>,
-    /// A short line centred under the thumbnail (a brush's size); it shows only with a thumbnail.
+    /// A short line centred under the thumbnail (a brush's size), in tabular figures, so a number's width follows its
+    /// digit count only; it shows only with a thumbnail.
     #[prop(into)]
     thumb_caption: Option<Label>,
     /// Whether the text shows beside the thumbnail; `false` shows the thumbnail alone, as wide as the thumbnail and
@@ -123,7 +124,10 @@ impl<'a> SelectFace<'a> {
 
     /// The caption's run, when there is a thumbnail to show it under.
     fn caption_run<'s>(&'s self, look: &TextLook) -> Option<TextRun<'s>> {
-        self.thumb.as_ref().and(self.thumb_caption.as_ref()).map(|caption| TextRun::new(caption.as_str()).role(look.role))
+        self.thumb
+            .as_ref()
+            .and(self.thumb_caption.as_ref())
+            .map(|caption| TextRun::spans(vec![Span::new(caption.as_str()).tabular()]).role(look.role))
     }
 
     fn leading_glyphs(&self) -> Vec<Adornment> {
