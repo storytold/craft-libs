@@ -146,14 +146,14 @@ fn a_modal_gate_greys_the_apps_items() {
         builds.set(builds.get() + 1);
         mac_layout(&sample(false, true), &opts)
     };
-    menu.sync_with(1, build);
+    menu.sync_with(&1_u64, build);
     menu.set_gate(modal());
-    menu.sync_with(1, build);
-    menu.sync_with(1, build);
+    menu.sync_with(&1_u64, build);
+    menu.sync_with(&1_u64, build);
     menu.set_gate(Gate::default());
-    menu.sync_with(1, build);
+    menu.sync_with(&1_u64, build);
     menu.set_gate(typing(true));
-    menu.sync_with(1, build);
+    menu.sync_with(&1_u64, build);
     assert_eq!((builds.get(), synced.borrow().len()), (1, 4), "one layout; synced open, greyed, open, typing");
 
     let synced = synced.borrow();
