@@ -7,7 +7,8 @@
 //!
 //! Read so far: the slide size, the masters with their colour schemes and backgrounds, and the
 //! slides in order with their master, layout type and background, holding their placeholders and
-//! text boxes with the text and its character and paragraph formatting ([`text`]).
+//! text boxes with the text, its character and paragraph formatting (spacing and justified
+//! alignment included) and its anchoring ([`text`]).
 //!
 //! A page's object list (3000) holds shapes (3008) and placeholders (3010, which add a 3011 atom:
 //! the type, the size, then the index). Each has its geometry (3009): the box as left, top, right
@@ -18,9 +19,11 @@
 //! master's placeholders place the caller's default master's, and the footer row places every
 //! layout's, as the PowerPoint 97 path does.
 //!
-//! Not read yet: shapes without text, and shapes' own fill, line and shadow; pictures; notes; and
-//! the master's text styles, so the levels of the default master's styles stay as they are (the
-//! slide text carries its own formatting in full).
+//! The master's text styles (the Environment's 4052 atoms, one per text type) become the master's
+//! title, body and other styles. Slide text carries its own formatting in full, so these matter
+//! for text added later.
+//!
+//! Not read yet: shapes without text, and shapes' own fill, line and shadow; pictures; and notes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -224,6 +227,8 @@ struct Object {
     ph: Option<Placeholder>,
     xfrm: Xfrm,
     text: Option<TextBody>,
+    /// The ruler slot its text names.
+    ruler: Option<u32>,
 }
 
 /// The shapes and placeholders of a page's object list.
@@ -252,8 +257,10 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
         };
         Some(Placeholder { kind: ph_type(a.u8(0)?)?, idx: a.u32(4).unwrap_or(0), size, ..Default::default() })
     });
-    let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
-    Some(Object { placeholder, ph, xfrm, text })
+    let container = r.child(rt::TEXT);
+    let text = container.and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
+    let ruler = container.and_then(|c| text::ruler_slot(&c));
+    Some(Object { placeholder, ph, xfrm, text, ruler })
 }
 
 /// An object as a shape: a placeholder of a known type, else a text box when it has text (a shape
@@ -318,10 +325,17 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
         // The master's placeholders set where new slides' placeholders go: the first of each
         // family places the default master's. Its other objects are the master's own shapes.
         let mut placed: Vec<PhType> = vec![];
+        // The rulers of the master's title and body, which give their styles' margins.
+        let (mut title_ruler, mut body_ruler) = (None, None);
         for o in objects(&m.rec).filter_map(|r| object(&r, &env, &scheme, size)) {
             if o.placeholder {
                 if let Some(kind) = o.ph.as_ref().map(|ph| ph.kind).filter(|k| !placed.iter().any(|d| same_family(*d, *k))) {
                     placed.push(kind);
+                    match kind {
+                        PhType::Title => title_ruler = o.ruler,
+                        PhType::Body => body_ruler = o.ruler,
+                        _ => {}
+                    }
                     let text = o.text;
                     place_placeholder(&mut master, kind, o.xfrm, || text.and_then(|t| t.paragraphs.into_iter().next()));
                 }
@@ -329,6 +343,19 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
             }
             if let Some(s) = shape(&mut p, o) {
                 master.shapes.push(s);
+            }
+        }
+        // The master's text styles replace the defaults' first five levels.
+        for (style, ty, ruler) in [
+            (&mut master.title_style, text::TITLE, title_ruler),
+            (&mut master.body_style, text::BODY, body_ruler),
+            (&mut master.other_style, text::OTHER, None),
+        ] {
+            let Some(read) = text::master_style(&env, &scheme, ty, ruler) else { continue };
+            for level in 0..5u8 {
+                if let Some(l) = read.level(level) {
+                    style.set(level, l.clone());
+                }
             }
         }
         p.masters.push(Arc::new(master));

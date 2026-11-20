@@ -43,12 +43,14 @@ master wearing the file's colour scheme, and its background when that isn't the 
 its slides in order with their master, layout type and, when a slide doesn't follow the master's,
 its own background: a solid colour, or none when the slide's background has no fill. Slides hold
 their placeholders (title, body, centred title, subtitle, and the date, footer and slide number)
-and text boxes, each with its box and its text: paragraphs with their level, alignment, bullet
-character and the indents of the text's ruler, and runs with their font, size, bold, italic,
-underline and colour (an RGB or a colour scheme slot). The text is Windows-1252. The master's
-placeholders set where the default master's placeholders go, and its date, footer and slide number
-those of every layout. Shapes without text, the shapes' own fill and line, pictures, notes and the
-master's text styles come later.
+and text boxes, each with its box and its text: the text's anchoring (top, middle or bottom, and
+whether it's centred across) and word wrap, paragraphs with their level, alignment (justified
+included), line spacing, space before and after (in lines or points), bullet character and the
+indents of the text's ruler, and runs with their font, size, bold, italic, underline and colour
+(an RGB or a colour scheme slot). The text is Windows-1252. The master's placeholders set where the
+default master's placeholders go, and its date, footer and slide number those of every layout. The
+master's text styles become its title, body and other styles, level by level. Shapes without text,
+the shapes' own fill and line, pictures and notes come later.
 
 The caller's `craft_pptx::Defaults` supplies the master each of the file's masters starts from:
 its layouts and placeholders. The file's masters then place and style the placeholders that
