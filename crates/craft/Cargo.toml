@@ -220,6 +220,7 @@ craft-gpu-providers = { workspace = true, optional = true }
 craft-gpu-wgpu = { workspace = true, optional = true }
 craft-ipp = { workspace = true, optional = true }
 craft-ppt-binary = { workspace = true, optional = true }
+craft-sqlite = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -531,6 +532,7 @@ heif-testdata = ["heif", "craft-heif/testdata"]
 
 html = ["dep:craft-html"]
 html-flow = ["html", "craft-html/flow"]
+html-standalone = ["html", "craft-html/standalone"]
 
 http-url = ["dep:craft-http-url"]
 
@@ -618,6 +620,8 @@ media-source = ["dep:craft-media-source"]
 menu = ["dep:craft-menu"]
 
 mesh = ["dep:craft-mesh"]
+mesh-abc = ["mesh", "craft-mesh/abc"]
+mesh-dae = ["mesh", "craft-mesh/dae"]
 mesh-fbx = ["mesh", "craft-mesh/fbx"]
 mesh-gltf = ["mesh", "craft-mesh/gltf"]
 mesh-obj = ["mesh", "craft-mesh/obj"]
@@ -665,6 +669,7 @@ pdf-content = ["pdf", "craft-pdf/content"]
 pdf-cos = ["pdf", "craft-pdf/cos"]
 pdf-crypt = ["pdf", "craft-pdf/crypt"]
 pdf-filters = ["pdf", "craft-pdf/filters"]
+pdf-fonts = ["pdf", "craft-pdf/fonts"]
 pdf-interpret = ["pdf", "craft-pdf/interpret"]
 pdf-paths = ["pdf", "craft-pdf/paths"]
 pdf-raster = ["pdf", "craft-pdf/raster"]
@@ -784,6 +789,8 @@ smime = ["dep:craft-smime"]
 sniff = ["dep:craft-sniff"]
 
 sourcemap = ["dep:craft-sourcemap"]
+
+sqlite = ["dep:craft-sqlite"]
 
 ssip = ["dep:craft-ssip"]
 

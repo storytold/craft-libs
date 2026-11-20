@@ -4,14 +4,9 @@
 //! press it was, a click (`-[NSMenu performActionForItemAtIndex:]`) must come back from `take_clicks`, also when the
 //! click is ↩ inside the open menu, and a click made with ⌥ held on a row with an alternate runs the alternate.
 
-// The one sample bar the `it` trials use. This binary needs only `sample()` and its constructors.
-#[cfg(target_os = "macos")]
-#[allow(dead_code)]
-#[path = "it/sample.rs"]
-mod sample;
+use super::sample;
 
-#[cfg(target_os = "macos")]
-fn main() {
+pub(super) fn run() {
     use craft_keymap::Mods;
     use craft_menu::{Alternate, CommandRef, Document, Gate, Item, LayoutOptions, MenuRole, Node, mac, mac_layout};
     use craft_ui::testing::Frames;
@@ -19,17 +14,6 @@ fn main() {
     use objc2::rc::Retained;
     use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSEventSubtype, NSEventType, NSMenu};
     use objc2_foundation::{NSPoint, NSString};
-
-    // Without a harness nothing answers cargo-nextest's `--list`, so it ran the whole test as its listing and failed
-    // on the output. List the one test, as libtest's terse format would, and nothing for `--ignored` (nextest asks
-    // twice). Running it passes `<name> --exact`, which falls through to the test below.
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--list") {
-        if !args.iter().any(|a| a == "--ignored") {
-            println!("mac_appkit: test");
-        }
-        return;
-    }
 
     let Some(mtm) = MainThreadMarker::new() else {
         println!("mac_appkit: harness = false runs on the main thread");
@@ -208,6 +192,3 @@ fn main() {
 
     println!("mac_appkit: ok");
 }
-
-#[cfg(not(target_os = "macos"))]
-fn main() {}

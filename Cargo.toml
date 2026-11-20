@@ -21,6 +21,7 @@ craft-xfdf = { path = "crates/xfdf" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
+craft-sqlite = { path = "crates/sqlite" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
@@ -267,6 +268,7 @@ md5 = { package = "md-5", version = "0.10", default-features = false }
 jxl-oxide = { version = "0.12", default-features = false }
 jixel = "=0.3.4"
 rayon = "1"
+scoped-tls = "1"
 smallvec = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -3,6 +3,7 @@
 use super::BodyHooks;
 use super::placement::{Placement, PlacementSlot, overlay_of};
 use super::regions::Regions;
+use crate::contract::cx::CxCore;
 use crate::contract::overlay::{PlacementChange, PlacementKind, ResizeEdges};
 use crate::contract::{Container, ContainerProps, Cx, Mount, PartsCx};
 use crate::runtime::commands::{self, CommandSet as _, WindowCommand};
@@ -483,7 +484,7 @@ impl BodyHooks<'_> {
         if by_caller {
             let limits = overlay_of(props).map(|overlay| Limits::new(overlay, window_min(props, cx.style.metrics().min_size)));
             if let Some(limits) = limits {
-                self.window_resize(viewport, &limits, cx);
+                self.window_resize(viewport, &limits, cx.core);
             }
         }
         if answered_by_platform(&cx.core.ctx, viewport) {
@@ -491,7 +492,7 @@ impl BodyHooks<'_> {
         }
         let app_moves = windows::app_moves(&cx.core.ctx, viewport);
         if app_moves {
-            self.window_move(viewport, cx);
+            self.window_move(viewport, cx.core);
         }
         // The parts stand only by `WindowParts`, and the results of a part not registered this pass are gone.
         let started =
@@ -511,11 +512,11 @@ impl BodyHooks<'_> {
     /// resize is, from Begin to Commit or Cancel. The app sends the window no size: the caller places the size it
     /// makes of the steps. The press holds the pointer, so its moves arrive while it is outside the window. A pointer
     /// move of this pass is relative to where the window reports itself now, as in [`Self::window_move`].
-    fn window_resize<C: Container>(&mut self, viewport: ViewportId, limits: &Limits, cx: &mut Cx<'_, C>) {
-        let ctx = cx.core.ctx.clone();
+    fn window_resize(&mut self, viewport: ViewportId, limits: &Limits, core: &mut CxCore<'_>) {
+        let ctx = core.ctx.clone();
         let Some(facts) = windows::WindowHost::of(&ctx).facts(viewport) else { return };
         let outer = facts.outer.unwrap_or(facts.inner);
-        let phase = |index: usize| cx.core.results.get(&(GRIP, Some(index as u64))).map(|result| result.press.phase);
+        let phase = |index: usize| core.results.get(&(GRIP, Some(index as u64))).map(|result| result.press.phase);
         let change = |rect: Rect, phase: GesturePhase, grip: usize| {
             let (dx, dy, _) = GRIPS[grip];
             PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Size(edge_of(dx, dy)) }
@@ -571,9 +572,9 @@ impl BodyHooks<'_> {
     /// host adds once the system tells the button is up. Elsewhere the move starts past the click distance, the app
     /// moves the window to this pass's pointer, relative to where the window reports itself, and Escape puts it back.
     /// The drag's desktop pointer is the pressed point of the window where the move put it.
-    fn window_move<C: Container>(&mut self, viewport: ViewportId, cx: &mut Cx<'_, C>) {
-        let ctx = cx.core.ctx.clone();
-        let Some(phase) = cx.core.results.get(&(MOVE_BAND, None)).map(|result| result.press.phase) else { return };
+    fn window_move(&mut self, viewport: ViewportId, core: &mut CxCore<'_>) {
+        let ctx = core.ctx.clone();
+        let Some(phase) = core.results.get(&(MOVE_BAND, None)).map(|result| result.press.phase) else { return };
         let host = windows::WindowHost::of(&ctx);
         let Some(facts) = host.facts(viewport) else { return };
         let outer = facts.outer.unwrap_or(facts.inner);
@@ -672,14 +673,14 @@ impl BodyHooks<'_> {
     /// `placement_changed` a layer reports its own through: one `Commit` per change, as the platform tells no gesture
     /// phase. The first facts are the window's placement, not a change; the steps of a move the app runs are that
     /// move's own ([`Self::window_move`]).
-    pub(super) fn window_placed<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
+    pub(super) fn window_placed(&mut self, props: &ContainerProps, core: &mut CxCore<'_>) {
         if !matches!(props.mount, Mount::Viewport { .. }) {
             return;
         }
-        let Some(viewport) = os_window(props, &cx.core.ctx, cx.core.id, &cx.core.env) else { return };
-        let Some(facts) = windows::WindowHost::of(&cx.core.ctx).facts(viewport) else { return };
+        let Some(viewport) = os_window(props, &core.ctx, core.id, &core.env) else { return };
+        let Some(facts) = windows::WindowHost::of(&core.ctx).facts(viewport) else { return };
         let now = facts.outer.unwrap_or(facts.inner);
-        let placed = &mut cx.core.memory.shown::<WindowPlaced>(sub(sub(cx.core.id, "body"), "window_placed")).0;
+        let placed = &mut core.memory.shown::<WindowPlaced>(sub(sub(core.id, "body"), "window_placed")).0;
         let before = placed.replace(now);
         if self.mode.moving.is_some() || self.mode.sizing.is_some() {
             return;
@@ -777,9 +778,9 @@ impl BodyHooks<'_> {
     /// nothing: its move starts from the band's press, and macOS keeps such a window movable, which AppKit needs to
     /// move it for the hand-off and to resize it from its edges. A pass with no band writes nothing; `AppShell` writes
     /// `false` for a pass with no title bar.
-    pub(super) fn window_movable<C: Container>(&self, viewport: ViewportId, cx: &Cx<'_, C>) {
-        let Some(band) = cx.core.results.get(&(MOVE_BAND, None)) else { return };
-        let ctx = &cx.core.ctx;
+    pub(super) fn window_movable(&self, viewport: ViewportId, core: &CxCore<'_>) {
+        let Some(band) = core.results.get(&(MOVE_BAND, None)) else { return };
+        let ctx = &core.ctx;
         if windows::app_moves(ctx, viewport) {
             return;
         }
@@ -787,7 +788,7 @@ impl BodyHooks<'_> {
             && pointer::with_hover(ctx, pass::current_viewport(ctx), |under, _| {
                 under
                     .and_then(|under| under.press.click.or(under.press.drag))
-                    .is_some_and(|(winner, root)| root == cx.core.id && winner.part.is_some_and(|part| part.key == MOVE_BAND))
+                    .is_some_and(|(winner, root)| root == core.id && winner.part.is_some_and(|part| part.key == MOVE_BAND))
             });
         let this_pass = viewports::pass_number(ctx);
         let allowed = viewports::movable_record(ctx).is_some_and(|(pass, movable)| pass == this_pass && movable);

@@ -30,9 +30,10 @@ use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
-use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PressPhase, Sense, Value};
+use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, NumberCodec, PartKey, PressPhase, Sense, Value};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
+use std::ops::RangeInclusive;
 
 /// The face under the whole field.
 const FACE: PartKey = PartKey::new("face");
@@ -193,6 +194,12 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// A short line under the field's thumbnail (a brush's current size).
     #[prop(into)]
     caption: Option<Label>,
+    /// The range and decimal places of the number `caption` shows (a brush's least and largest size, whole), written
+    /// as [`NumberCodec`] writes plain numbers. The field holds the widest number of the range as a number field does
+    /// ([`NumberCodec::widest`], tabular figures), so a caption that follows a dragged value moves nothing beside the
+    /// field.
+    #[prop]
+    caption_range: Option<(RangeInclusive<f64>, usize)>,
     /// The field's tooltip.
     #[prop(into)]
     tooltip: Option<Tooltip>,
@@ -270,6 +277,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             placeholder: None,
             display_name: None,
             caption: None,
+            caption_range: None,
             tooltip: None,
             head: None,
             keep_open: false,
@@ -329,6 +337,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             placeholder,
             display_name,
             caption,
+            caption_range,
             tooltip,
             mut head,
             keep_open,
@@ -361,6 +370,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
                         placeholder: placeholder.clone(),
                         display_name: display_name.clone(),
                         caption: caption.clone(),
+                        caption_range: caption_range.clone(),
                         face_thumb: face_thumb.clone(),
                         edit_face,
                         open,
@@ -534,6 +544,7 @@ struct PickerFace<'a, K: Value + Eq + Hash + 'static> {
     placeholder: Option<Label>,
     display_name: Option<Label>,
     caption: Option<Label>,
+    caption_range: Option<(RangeInclusive<f64>, usize)>,
     face_thumb: Option<PreviewPaint>,
     edit_face: bool,
     open: bool,
@@ -578,24 +589,31 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
         }
     }
 
-    /// `face` with the caption under its thumbnail, when the picker has one, at the chip's size for a chip.
-    fn captioned<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
+    /// `face` with `caption` under its thumbnail, when there is one, at the chip's size for a chip.
+    fn captioned<'f>(&self, face: SelectFace<'f>, caption: Option<&Label>) -> SelectFace<'f> {
         let face = if self.field == PickerField::Chip { face.kind(FaceKind::Chip) } else { face };
-        match &self.caption {
+        match caption {
             Some(caption) => face.thumb_caption(caption.clone()),
             None => face,
         }
     }
 
-    /// `face` with an empty thumbnail of the cell shape, and the name unless the field shows the thumbnail alone.
-    fn empty_thumb<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
-        self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(!self.thumb_only()))
+    /// `face` with an empty thumbnail of the cell shape over `caption`, and the name unless the field shows the
+    /// thumbnail alone.
+    fn empty_thumb<'f>(&self, face: SelectFace<'f>, caption: Option<&Label>) -> SelectFace<'f> {
+        self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(!self.thumb_only()), caption)
     }
 
-    /// The face of a field showing `text`: with a `row`, its thumbnail and name as `field` says; without, the muted
-    /// look of a mixed value or a placeholder, which a thumbnail-only field shows as an empty thumbnail. The measured
-    /// candidates and the painted face are both built here.
-    fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool) -> SelectFace<'static> {
+    /// The caption the field measures with: the widest number of `caption_range`, else the caption.
+    fn measured_caption(&self, env: &EnvView<'_>) -> Option<Label> {
+        let Some((range, decimals)) = &self.caption_range else { return self.caption.clone() };
+        Some(Label::from(NumberCodec::new(env.units().reader(None), *decimals).widest(range)))
+    }
+
+    /// The face of a field showing `text` over `caption`: with a `row`, its thumbnail and name as `field` says;
+    /// without, the muted look of a mixed value or a placeholder, which a thumbnail-only field shows as an empty
+    /// thumbnail. The measured candidates and the painted face are both built here.
+    fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool, caption: Option<&Label>) -> SelectFace<'static> {
         let face = SelectFace::new(text);
         if let Some(thumb) = self.face_thumb.as_ref().filter(|_| self.field != PickerField::Name) {
             let face = if row.is_some() { face } else { face.placeholder() };
@@ -607,10 +625,10 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
                     }
                 })
                 .name(!self.thumb_only());
-            return self.captioned(face);
+            return self.captioned(face, caption);
         }
         match (row, self.field) {
-            (None, PickerField::Thumbnail | PickerField::Chip) => self.empty_thumb(face.placeholder()),
+            (None, PickerField::Thumbnail | PickerField::Chip) => self.empty_thumb(face.placeholder(), caption),
             (None, _) => face.placeholder(),
             (Some(row), field) => match (&row.preview, field) {
                 (_, PickerField::Name) | (None, _) => face,
@@ -623,7 +641,7 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
                             }
                         })
                         .name(field == PickerField::ThumbnailAndName);
-                    self.captioned(face)
+                    self.captioned(face, caption)
                 }
             },
         }
@@ -654,19 +672,22 @@ impl<K: Value + Eq + Hash + 'static> Component for PickerFace<'_, K> {
         Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
     }
 
-    /// The widest face that can show, so the field keeps its width whichever preset is picked: the face of each
-    /// preset, the mixed word and the placeholder, and an empty thumbnail face for the height.
+    /// The widest face that can show, so the field keeps its width whichever preset is picked and whatever its
+    /// caption shows of `caption_range`: the face of each preset, the mixed word and the placeholder, and an empty
+    /// thumbnail face for the height, each over the widest caption.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let words = cx.words::<PresetWords>();
+        let caption = self.measured_caption(&cx.env);
+        let caption = caption.as_ref();
         let empty = SelectFace::new(Label::Empty);
-        let empty = if self.field == PickerField::Name { empty } else { self.empty_thumb(empty) };
+        let empty = if self.field == PickerField::Name { empty } else { self.empty_thumb(empty, caption) };
         let rows = self.rows.iter().filter(|row| !row.is_group());
         let faces = rows.map(|row| {
             let (text, _) = self.shown(Some(&Some(row.key.clone())), &words, &cx.env);
-            self.face_of(text, Some(row), false)
+            self.face_of(text, Some(row), false, caption)
         });
         let words_shown = [self.shown(None, &words, &cx.env), self.shown(Some(&None), &words, &cx.env)];
-        let notes = words_shown.into_iter().map(|(text, row)| self.face_of(text, row, false));
+        let notes = words_shown.into_iter().map(|(text, row)| self.face_of(text, row, false, caption));
         std::iter::once(empty).chain(faces).chain(notes).map(|face| cx.face(face)).fold(Vec2::ZERO, Vec2::max)
     }
 
@@ -709,7 +730,7 @@ impl<K: Value + Eq + Hash + 'static> Component for PickerFace<'_, K> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let words = cx.words::<PresetWords>();
         let (text, row) = self.shown(cx.value(), &words, &cx.env);
-        ui.face(FACE, self.face_of(text, row, true));
+        ui.face(FACE, self.face_of(text, row, true, self.caption.as_ref()));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> FaceOutput<K> {

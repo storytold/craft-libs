@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
+use craft_ui::contract::MemoProps;
 use craft_ui::runtime::windows::{KeyEquivalent, WindowAction, WindowHost};
 
 use crate::layout::{Clash, Layout};
@@ -45,8 +46,9 @@ pub enum ClipboardKeys {
     Raw,
 }
 
-/// What may run from the menus this frame, set by the app.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What may run from the menus this frame, set by the app. As props of the runtime's command gate, every flag feeds
+/// the key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, MemoProps)]
 #[non_exhaustive]
 pub struct Gate {
     /// A modal dialog is open.

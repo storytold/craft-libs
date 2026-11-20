@@ -117,6 +117,7 @@ impl Lists<'_> {
 impl State {
     pub(super) fn rotate(&mut self) {
         self.last_stops = std::mem::take(&mut self.stops);
+        self.stop_ids.clear();
         self.last_scopes = std::mem::take(&mut self.scopes);
         self.last_scope_order = std::mem::take(&mut self.scope_order);
         self.last_groups = std::mem::take(&mut self.groups);

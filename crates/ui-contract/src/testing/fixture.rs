@@ -397,6 +397,12 @@ impl Fixture {
         self.frames.repaint_requested()
     }
 
+    /// The wait the latest frame asked for before the next pass: `Duration::ZERO` for an immediate repaint, `None` when
+    /// it asked for none.
+    pub fn repaint_delay(&self) -> Option<std::time::Duration> {
+        self.frames.repaint_delay()
+    }
+
     /// The IME output of the latest frame.
     pub fn ime(&self) -> Option<&fixture::ImeSeen> {
         self.frames.ime()
@@ -431,6 +437,20 @@ impl Fixture {
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
     pub fn frame_shapes(&mut self) -> Vec<egui::Shape> {
         self.frame_shapes_with(Vec::new())
+    }
+
+    /// One frame with no events; returns the shapes it painted, nested shapes flattened, each with the clip it paints under.
+    pub fn frame_clipped_shapes(&mut self) -> Vec<(Rect, egui::Shape)> {
+        self.frames.record_paint();
+        self.frame(Vec::new());
+        let mut out = Vec::new();
+        let Some(paint) = self.frames.take_paint() else { return out };
+        for clipped in paint.shapes {
+            let mut shapes = Vec::new();
+            fixture::flatten(clipped.shape, &mut shapes);
+            out.extend(shapes.into_iter().map(|shape| (clipped.clip_rect, shape)));
+        }
+        out
     }
 
     /// One frame with `events`; returns the shapes it painted, nested shapes flattened. What the frame that took the

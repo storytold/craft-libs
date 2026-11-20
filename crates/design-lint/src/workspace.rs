@@ -139,6 +139,9 @@ const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     ("crates/ui-macros/src/registry.rs", FS),
     // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
     ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
+    // Settled fact: `ModalRules` holds a closure the derive cannot take; it keys on its plain fields and the revision
+    // the app moves with every rule change, which stands for the closure.
+    ("crates/menu/src/modal.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
