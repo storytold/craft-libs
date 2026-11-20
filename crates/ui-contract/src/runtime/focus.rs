@@ -648,6 +648,12 @@ pub(crate) fn request_now(ctx: &Context, target: FocusTarget) {
     apply(ctx, acts);
 }
 
+/// Whether egui key focus is on the widget `root` for another component's stop: an arena member, whose stop's widget
+/// is its root's (`Stop::root`).
+pub(crate) fn held_for_member(ctx: &Context, root: Id) -> bool {
+    egui_focus::focused(ctx) == Some(root) && focused_stop(ctx).is_some_and(|(id, _)| id != root)
+}
+
 /// Whether `at` (screen points) lies in a popup layer opened above the layer of the widget that holds egui focus: a
 /// press or a wheel there is the popup's, not the focused widget's. The layer under `at` is the layer test's; the
 /// focused widget's layer is egui's last-pass record of it, since a stop records no layer of its own.

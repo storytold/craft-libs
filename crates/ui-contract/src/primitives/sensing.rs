@@ -630,8 +630,8 @@ pub(crate) struct RootResult {
     pub activation: bool,
     /// The member a click activated.
     pub activated_member: Option<Id>,
-    /// The sense the root's egui widget carries at step 8: its own and its parts'. Its members' senses join it once
-    /// its body has run (`widen_root`).
+    /// The sense the root's egui widget carries at step 8: its own and its parts', and focus while it holds key focus
+    /// for a member. Its members' senses join it once its body has run (`widen_root`).
     pub sense: Sense,
 }
 
@@ -644,11 +644,11 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let read = PassRead::of(ctx);
     let (clip, layer) = (ui.clip_rect(), ui.layer_id());
     // A disabled root only hovers, whatever its parts and members sense; it keeps the focus stop its own sense or a part's grants.
-    let sense = if spec.enabled {
-        spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense)
-    } else {
-        Sense::HOVER | spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense).intersection(Sense::FOCUS)
-    };
+    let own = spec.own.iter().fold(spec.own_sense, |sense, part| sense | part.sense);
+    let sense = if spec.enabled { own } else { Sense::HOVER | own.intersection(Sense::FOCUS) };
+    // A root that holds key focus for a member's stop senses focus now: egui drops the focus of a widget registered
+    // without it, before the members, which read it, run and join their senses (`widen_root`).
+    let sense = if crate::runtime::focus::held_for_member(ctx, spec.id) { sense | Sense::FOCUS } else { sense };
     // The response rect is the root's whole rect and egui's hit test uses its part inside the clip (`interact_rect`),
     // as for any egui widget: a root the clip cuts reports and reveals where it is, not where it shows.
     let response = response::widget(ui, spec.id, spec.rect, sense);
