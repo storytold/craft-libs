@@ -137,24 +137,25 @@ struct Group {
 /// What an item's part wears.
 enum Face {
     Action(IconButton<'static>),
-    Toggle(ToggleButton<'static>),
-    Text(Button<'static>),
+    // Boxed: the two button faces are several hundred bytes each.
+    Toggle(Box<ToggleButton<'static>>),
+    Text(Box<Button<'static>>),
 }
 
 impl Face {
     fn size<C: Component>(self, cx: &MeasureCx<'_, C>) -> Vec2 {
         match self {
             Face::Action(face) => cx.face(face),
-            Face::Toggle(face) => cx.face(face),
-            Face::Text(face) => cx.face(face),
+            Face::Toggle(face) => cx.face(*face),
+            Face::Text(face) => cx.face(*face),
         }
     }
 
     fn paint(self, ui: &mut PaintUi<'_>, part: PartRef) {
         match self {
             Face::Action(face) => ui.face(part, face),
-            Face::Toggle(face) => ui.face(part, face),
-            Face::Text(face) => ui.face(part, face),
+            Face::Toggle(face) => ui.face(part, *face),
+            Face::Text(face) => ui.face(part, *face),
         }
     }
 }
@@ -176,12 +177,14 @@ fn face_of(present: &Present, glyphs: GlyphRole) -> Face {
     let icon = icon_of(resolved);
     let toggle = resolved.checked.is_some();
     match (display_of(present), icon) {
-        (ItemDisplay::Icon, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)),
+        (ItemDisplay::Icon, Some(icon)) if toggle => {
+            Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon).icon_only().glyphs(glyphs)))
+        }
         (ItemDisplay::Icon, Some(icon)) => Face::Action(IconButton::command(icon, item.command.clone()).glyphs(glyphs)),
-        (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(ToggleButton::command(item.command.clone()).icon(icon)),
-        (ItemDisplay::IconText, Some(icon)) => Face::Text(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon)),
-        (_, _) if toggle => Face::Toggle(ToggleButton::command(item.command.clone())),
-        (_, _) => Face::Text(Button::command(item.command.clone()).variant(Variant::GHOST)),
+        (ItemDisplay::IconText, Some(icon)) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()).icon(icon))),
+        (ItemDisplay::IconText, Some(icon)) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST).icon(icon))),
+        (_, _) if toggle => Face::Toggle(Box::new(ToggleButton::command(item.command.clone()))),
+        (_, _) => Face::Text(Box::new(Button::command(item.command.clone()).variant(Variant::GHOST))),
     }
 }
 

@@ -12,7 +12,7 @@ use std::cell::RefCell;
 
 /// Gives egui focus to a widget that is never shown, so it has no node in the pass's update.
 fn focus_nowhere(ui: &mut Ui) {
-    ui.memory_mut(|memory| memory.request_focus(Id::new("a widget with no node")));
+    ui.memory_mut(|memory| memory.request_focus(Id::unique("a widget with no node")));
 }
 
 #[trial]

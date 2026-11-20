@@ -78,8 +78,11 @@ pub enum SplitMenu<'a, T> {
     /// A menu of rows, one per entry.
     Entries(&'a [Entry<T>]),
     /// A menu whose content the caller draws.
-    Body(Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>),
+    Body(MenuBody<'a>),
 }
+
+/// The caller's drawing of a split button's menu.
+pub type MenuBody<'a> = Box<dyn FnMut(&mut Ui, &mut BodyCx<'_>) + 'a>;
 
 /// A button whose end opens a menu. A press on the arrow part opens the menu below the button; a press on the main
 /// part runs the action and never opens it. The button is one Tab stop: Space and Enter run the action, Alt+Down and

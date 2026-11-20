@@ -21,7 +21,6 @@ mod stories;
 use super::search::{HelpEntry, search_order};
 use super::words::MenuWords;
 use super::{Menu, MenuItem, MenuStep};
-use crate::buttons::Arrangement;
 use crate::buttons::face::{self, FaceLook, FaceSpec};
 use crate::contract::{
     Access, Bind, Common, Component, Cx, Focus as _, MeasureCx, MenuKey, Name, NoValue, Outcome, OverlayUi, Overlays as _, Pad, PaintUi, PartsCx,

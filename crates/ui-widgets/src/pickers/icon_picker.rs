@@ -220,7 +220,7 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
 
         let mut items = Vec::new();
         let mut named = Vec::new();
-        for (at, group) in groups.iter().enumerate().filter(|(at, _)| category == 0 || at + 1 == category) {
+        for (_, group) in groups.iter().enumerate().filter(|(at, _)| category == 0 || at + 1 == category) {
             let kept: Vec<&IconPickerItem<K>> =
                 group.items.iter().filter(|item| matcher.as_ref().is_none_or(|matcher| item.matches(matcher))).collect();
             if kept.is_empty() {

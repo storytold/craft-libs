@@ -222,7 +222,7 @@ fn speed_step(
 /// The wheel-speed trial's steps on `os` with the user's wheel speed `speed`: a line notch, a point delta, a zoom
 /// notch (Ctrl+wheel, Cmd+wheel on macOS) in the main window, then a point delta in a second window.
 fn speed_steps(os: Os, speed: WheelSpeed) -> [Took; 4] {
-    let view = Id::new("wheel_speed_view");
+    let view = Id::unique("wheel_speed_view");
     let seen = RefCell::new(Vec::new());
     let rerun = Cell::new(false);
     let mut show = |ui: &mut egui::Ui| {
