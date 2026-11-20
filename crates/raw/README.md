@@ -216,3 +216,59 @@ decode bit-exactly; lossy tiles are made with `jpeg-encoder`, JPEG XL tiles with
 (tests only). Hostile input: every truncation of each sample, byte mutations across the
 header, 400 random mutations per property, random TIFF-like, lossless-JPEG, opcode-list and CIFF
 bytes, and a test per limit.
+
+## Decoder comparison reports
+
+The native `decode_report` example records the decoded sensor samples and selected metadata for an
+explicit, ordered list of local files. It reads one regular file at a time, accepts at most 512 MiB
+of encoded bytes per file, and uses `Limits::default()` for decoding.
+
+```sh
+cargo run --quiet --locked --release -p craft-raw --example decode_report -- fixture-a.dng fixture-b.nef > report.tsv
+```
+
+Use shell redirection that preserves native stdout bytes. The report is UTF-8 TSV with LF line
+endings, a header, and one row per argument, indexed from 1. Schema version 1 has these columns in
+this order.
+
+```text
+schema	input	status	format	sample_type	sample_count	sensor_sha256	width	height	cpp	bits	cfa	active_area	crop	orientation	baseline_exposure_bits
+```
+
+`format` is a fixed lowercase decoder label, such as `dng` or `cfa_tiff`. `sample_type` is `u16` or
+`f32`. `sensor_sha256` hashes the complete decoded sample sequence (`RawImage::data`), encoding
+each integer as two little-endian bytes and each float's IEEE 754 bits as four little-endian bytes.
+The digest is 64 lowercase hexadecimal digits. It reflects any mapping the decoder has already
+applied, such as a DNG `LinearizationTable`, so two stored codes that map to the same value give the
+same digest. Shape and metadata have their own columns, so an orientation change
+can be distinguished from a sample change.
+
+`cfa` is `width,height,origin_x,origin_y:pattern`, where the pattern is a comma-separated row-major
+sequence. It is empty for images without a CFA. Active area and crop are `x,y,width,height`, with
+crop coordinates relative to the active area. Orientation is the Exif integer code, and baseline
+exposure is the `f64` bit pattern as 16 lowercase hexadecimal digits.
+
+Each row's status is `ok`, `read_error`, `input_limit`, `not_raw`, `unsupported`, `corrupt`,
+`decode_limit`, or `tiff_error`. `input_limit` means the encoded-byte cap was exceeded.
+`decode_limit` covers RAW and TIFF decoder limits. A failed input has empty fields after `status`,
+and processing continues. The report contains input ordinals, with paths and free-form diagnostics
+omitted. A completed batch exits successfully even when inputs fail. No arguments or a report
+write or flush failure produces a nonzero exit and a concise diagnostic on stderr.
+
+To compare two pinned decoder revisions, use separate clean checkouts and keep the example source,
+enabled features, and ordered fixture list identical. If a revision predates the example, copy both
+`examples/decode_report/main.rs` and `examples/decode_report/report.rs` at the same relative paths
+under that checkout's `crates/raw/` directory. The example uses the crate's existing `sha2` dev
+dependency. It builds on `main` from
+[`ecee6933`](https://github.com/storytold/craft-libs/commit/ecee693322c27acdbcafed4b57066356404e8378)
+(#1171, 2026-11-13) onwards, the first revision whose `Cfa` has `origin_x` and `origin_y`. Older
+revisions fail to build it. Build and save one report from each checkout, then compare them.
+
+```sh
+git diff --no-index -- before.tsv after.tsv
+```
+
+Repeat on the same revision to check deterministic output. Record both decoder revisions, the
+example source revision, enabled features, fixture checksums and order with the reports. A diff
+exit status of 1 indicates differing reports. Inspect the status, sample digest, shape and metadata
+columns to identify the change.

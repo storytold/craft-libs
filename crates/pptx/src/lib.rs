@@ -52,6 +52,21 @@ pub enum Error {
     Xml(String),
 }
 
+/// Errors returned by presentation model editing helpers.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelError {
+    #[error("no slide {0}")]
+    NoSlide(String),
+    #[error("no shape {0}")]
+    NoShape(ShapeId),
+    #[error("no layout {0}")]
+    NoLayout(LayoutId),
+    #[error("{0}")]
+    Invalid(String),
+}
+
+pub type ModelResult<T> = std::result::Result<T, ModelError>;
+
 /// What the caller supplies where a file or a presentation leaves something out. The reader asks
 /// for a master when a file has none it can read, and for the theme of a master that names none;
 /// the writer for a master when the presentation has none, and for the text styles a master or
@@ -110,6 +125,12 @@ pub fn import(bytes: &[u8], defaults: &dyn Defaults) -> Result<Presentation, Err
 /// left out.
 pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>), Error> {
     read::import_checked(bytes, defaults)
+}
+
+/// [`import_checked`], plus warnings for content the file had that was cut to fit a limit (a
+/// table past the cell cap keeps its leading rows).
+pub fn import_report(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presentation, Vec<String>, Vec<String>), Error> {
+    read::import_report(bytes, defaults)
 }
 
 /// [`import`] with a lower presentation-wide chart point budget, so tests reach the over-budget
@@ -688,6 +709,9 @@ pub struct Slide {
     pub animations: Vec<Animation>,
     /// Speaker notes.
     pub notes: TextBody,
+    /// Whether the slide has an associated notes slide even if its text is empty.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_notes_slide: bool,
     pub comments: Vec<Comment>,
     /// `clrMapOvr`: a colour map replacing the layout's or master's (`bg1`→`dk1`…); None follows
     /// the layout.
@@ -714,6 +738,7 @@ impl Default for Slide {
             transition: None,
             animations: vec![],
             notes: TextBody::default(),
+            has_notes_slide: false,
             comments: vec![],
             color_map: None,
             tags: vec![],

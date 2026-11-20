@@ -1627,6 +1627,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-audio-dsp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ber"
 version = "0.1.0"
 
@@ -1634,6 +1638,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media",
  "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
@@ -1793,9 +1798,13 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color-transform",
  "craft-develop-model",
+ "craft-render-parity",
  "proptest",
+ "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2086,6 +2095,7 @@ dependencies = [
  "craft-dxf",
  "craft-eps",
  "craft-file-formats",
+ "craft-image-codecs",
  "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
@@ -2230,6 +2240,40 @@ version = "0.1.0"
 dependencies = [
  "gif",
  "image",
+]
+
+[[package]]
+name = "craft-gpu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-gpu-null"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+]
+
+[[package]]
+name = "craft-gpu-providers"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-null",
+]
+
+[[package]]
+name = "craft-gpu-wgpu"
+version = "0.1.0"
+dependencies = [
+ "craft-gpu",
+ "craft-gpu-providers",
+ "pollster 0.4.0",
+ "wgpu",
 ]
 
 [[package]]
@@ -2389,6 +2433,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ipp"
+version = "0.1.0"
+
+[[package]]
 name = "craft-java-class"
 version = "0.1.0"
 dependencies = [
@@ -2525,6 +2573,7 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+ "roxmltree 0.21.2",
  "serde",
  "serde_json",
 ]
@@ -2924,7 +2973,21 @@ dependencies = [
 name = "craft-plotter"
 version = "0.1.0"
 dependencies = [
+ "kurbo 0.13.1",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-ppt-binary"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-pptx",
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
 
@@ -3107,6 +3170,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sbs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "craft-mime",
+ "craft-xml",
+ "flate2",
+ "roxmltree 0.21.2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-score"
 version = "0.1.0"
 dependencies = [
@@ -3217,6 +3292,10 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-sqlite"
+version = "0.1.0"
 
 [[package]]
 name = "craft-ssip"
@@ -3447,6 +3526,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]

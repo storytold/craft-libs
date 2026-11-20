@@ -39,6 +39,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod bc;
+pub mod bptc;
+mod eac;
+mod packed;
+pub mod pixels;
 
 use std::borrow::Cow;
 use std::fmt;
@@ -84,6 +88,8 @@ pub enum DdsError {
     Alloc(usize),
     /// The decoded output exceeds the caller-selected per-buffer byte limit.
     LimitExceeded { required: usize, limit: u64 },
+    /// Input pixel data ended before the declared dimensions or block count.
+    Truncated(String),
 }
 
 impl fmt::Display for DdsError {
@@ -94,6 +100,7 @@ impl fmt::Display for DdsError {
             DdsError::Encode(reason) => write!(f, "DDS encode failed: {reason}"),
             DdsError::Alloc(len) => write!(f, "cannot allocate {len} bytes for the texture"),
             DdsError::LimitExceeded { required, limit } => write!(f, "decoded texture requires {required} bytes, exceeding limit {limit}"),
+            DdsError::Truncated(reason) => write!(f, "truncated pixel data: {reason}"),
         }
     }
 }
