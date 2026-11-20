@@ -487,6 +487,40 @@ pub fn parse(xml: &str) -> Option<El> {
     Some(from_xml(math, 0, &mut budget))
 }
 
+/// Strictly parse XML and return its first MathML element without truncating its element tree.
+///
+/// Unlike [`parse`], malformed XML and MathML deeper than [`MAX_DEPTH`] or containing more than
+/// [`MAX_NODES`] descendant elements return an error rather than a partial tree. `Ok(None)` means
+/// the complete document contained no `math` element. Namespaces are treated as in [`parse`].
+/// This only checks parsing: [`read`] and [`to_tree`] have their own conversion limits and may
+/// approximate or omit MathML features.
+pub fn parse_complete(xml: &str) -> Result<Option<El>, craft_xml::Error> {
+    let limits = craft_xml::Limits { max_nodes: MAX_NODES.saturating_mul(4), max_depth: MAX_DEPTH.saturating_mul(2), ..craft_xml::Limits::DEFAULT };
+    let root = craft_xml::Options { ns_decls: false, ..craft_xml::Options::default() }.strict().with_limits(limits).parse(xml.as_bytes())?;
+    let math = if local(&root.name).eq_ignore_ascii_case("math") { Some(&root) } else { root.find(craft_xml::Local("math")) };
+    let Some(math) = math else { return Ok(None) };
+    let mut budget = MAX_NODES;
+    copy_complete(math, 0, &mut budget).map(Some)
+}
+
+fn copy_complete(e: &craft_xml::El, depth: usize, budget: &mut usize) -> Result<El, craft_xml::Error> {
+    if depth > MAX_DEPTH {
+        return Err(craft_xml::Error::TooDeep(MAX_DEPTH));
+    }
+    let mut out = El { name: e.name.to_ascii_lowercase(), attrs: e.attrs.clone(), children: Vec::new() };
+    for node in &e.children {
+        match node {
+            craft_xml::Node::El(child) => {
+                *budget = budget.checked_sub(1).ok_or(craft_xml::Error::TooManyNodes(MAX_NODES))?;
+                out.children.push(Item::El(copy_complete(child, depth + 1, budget)?));
+            }
+            craft_xml::Node::Text(text) | craft_xml::Node::CData(text) => out.children.push(Item::Text(text.clone())),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 fn from_xml(e: &craft_xml::El, depth: usize, budget: &mut usize) -> El {
     let mut out = El { name: e.name.to_ascii_lowercase(), attrs: e.attrs.clone(), children: Vec::new() };
     if depth > MAX_DEPTH {
@@ -852,6 +886,22 @@ fn nary(chr: char, lim_loc: LimLoc, sub: Arg, sup: Arg) -> MNode {
 mod tests {
     use super::*;
     use crate::math::parse_linear;
+
+    #[test]
+    fn complete_mathml_parse_rejects_partial_input_and_limits() {
+        assert!(parse_complete("<math><mi>x</mi><mi>unfinished").is_err());
+        let too_many = format!("<math>{}</math>", "<mi>x</mi>".repeat(MAX_NODES + 1));
+        assert!(matches!(parse_complete(&too_many), Err(craft_xml::Error::TooManyNodes(_))));
+        let at_limit = format!("<math>{}</math>", "<mi>x</mi>".repeat(MAX_NODES));
+        assert_eq!(parse_complete(&at_limit).unwrap().unwrap().children.len(), MAX_NODES);
+        let too_deep = format!("<math>{}x{}</math>", "<mrow>".repeat(MAX_DEPTH + 1), "</mrow>".repeat(MAX_DEPTH + 1));
+        assert!(matches!(parse_complete(&too_deep), Err(craft_xml::Error::TooDeep(_))));
+        assert_eq!(parse_complete("<other/>").unwrap(), None);
+        let math = parse_complete("<math><mi><![CDATA[x]]></mi></math>").unwrap().unwrap();
+        assert_eq!(math.text(), "x");
+        let nested = "<wrapper xmlns:m='http://www.w3.org/1998/Math/MathML'><m:math><m:mi>y</m:mi></m:math></wrapper>";
+        assert_eq!(parse_complete(nested).unwrap().unwrap().text(), "y");
+    }
 
     fn ml(linear: &str) -> String {
         to_mathml(&parse_linear(linear), false, "")
