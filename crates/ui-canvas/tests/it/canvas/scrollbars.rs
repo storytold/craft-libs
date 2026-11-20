@@ -272,3 +272,22 @@ fn a_dragged_vertical_thumb_shows_the_tip_beside_it_and_nothing_when_it_is_not_d
     assert_eq!(fixture.texts().len(), at_rest, "bars with no tip show none");
     assert_eq!(shows_tip(&fixture), None);
 }
+
+/// The step arrows scroll under the pointer but take no keyboard focus: Tab never stops on them, so the canvas keeps
+/// its own keys and an Escape reaches what the canvas shows (a tool's edit), as in the reference application.
+#[trial]
+fn the_document_scroll_arrows_take_no_keyboard_focus() {
+    let (mut fixture, view, _) = document_scrollbars();
+    let start = view.get().center;
+    let arrow = fixture.by_label("Scroll right").expect("the right arrow").center();
+    fixture.frame(vec![pointer::moved(arrow)]).frame(vec![pointer::press(arrow)]).frame(vec![pointer::release(arrow)]);
+    assert!(view.get().center.x > start.x, "the arrow still steps");
+    for step in 0..8 {
+        fixture.key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+        let on_arrow = fixture
+            .focused_stop()
+            .and_then(|(_, part)| part)
+            .is_some_and(|part| matches!(format!("{:?}", part.key).as_str(), "PartKey(\"vertical\")" | "PartKey(\"horizontal\")"));
+        assert!(!on_arrow, "Tab {step} stopped on a scroll bar part: {:?}", fixture.focused_stop());
+    }
+}

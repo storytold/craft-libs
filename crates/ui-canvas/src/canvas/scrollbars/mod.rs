@@ -390,7 +390,10 @@ impl Component for CanvasScrollbars<'_> {
         for (key, axis, bar) in bars.each() {
             cx.scroll(key, bar.track, axis, bar.span.clone());
             for (part, rect, _) in bar.arrows(key, axis) {
-                cx.part(part, rect).sense(Sense::CLICK | Sense::FOCUS).focusable();
+                // As in the reference application the step arrows take no keyboard focus: the canvas scrolls with its own
+                // keys (the arrows, Page Up/Down, Home and End), and a focused arrow would take the Escape that ends a
+                // tool's edit on the canvas.
+                cx.part(part, rect).sense(Sense::CLICK).pointer_only("the canvas scrolls with its own keys");
             }
         }
         if let Some(corner) = bars.corner {
