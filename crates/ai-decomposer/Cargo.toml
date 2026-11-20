@@ -1,0 +1,22 @@
+[package]
+name = "craft-ai-decomposer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cognitive AI Decomposer & Suite Dispatcher: Breaks down natural creative prompts into physics, layout, vector, raster, timeline, and audio sub-commands"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-agent-bridge = { path = "../agent-bridge" }
+craft-studio-director = { path = "../studio-director" }
+craft-i18n = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[features]
+default = []

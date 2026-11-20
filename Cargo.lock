@@ -1552,6 +1552,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-agent-bridge"
+version = "0.1.0"
+dependencies = [
+ "craft-i18n",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-ai"
 version = "0.1.0"
 dependencies = [
@@ -1579,10 +1589,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-assistant-dialog"
+version = "0.1.0"
+dependencies = [
+ "craft-guide",
+ "craft-i18n",
+ "egui",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "craft-ai-decomposer"
+version = "0.1.0"
+dependencies = [
+ "craft-agent-bridge",
+ "craft-i18n",
+ "craft-studio-director",
+ "log",
  "serde",
  "serde_json",
 ]
@@ -2285,6 +2319,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-guide"
+version = "0.1.0"
+dependencies = [
+ "craft-i18n",
+ "egui",
+ "log",
+ "serde",
 ]
 
 [[package]]
@@ -3064,6 +3108,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-proof-hybrid"
+version = "0.1.0"
+dependencies = [
+ "craft-proof",
+ "serde",
+]
+
+[[package]]
 name = "craft-proto"
 version = "0.1.0"
 dependencies = [
@@ -3335,6 +3387,19 @@ dependencies = [
  "proptest",
  "thiserror 2.0.21",
  "weezl 0.2.1",
+]
+
+[[package]]
+name = "craft-studio-director"
+version = "0.1.0"
+dependencies = [
+ "craft-agent-bridge",
+ "craft-guide",
+ "craft-i18n",
+ "log",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -11862,6 +11927,7 @@ version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "serde_core",
  "wasm-bindgen",

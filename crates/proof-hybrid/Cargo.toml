@@ -1,0 +1,19 @@
+[package]
+name = "craft-proof-hybrid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "High-performance hybrid spellchecking & neural proofing engine combining native OS checkers, Hunspell, and contextual AI"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-proof = { path = "../proof" }
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+ai-backend = []

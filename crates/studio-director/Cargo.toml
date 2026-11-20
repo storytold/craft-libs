@@ -1,0 +1,23 @@
+[package]
+name = "craft-studio-director"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Autonomous AI Content Creation Studio: World Physics, Character Consistency, Timeline Choreography, and Multi-App Generation Engine"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-agent-bridge = { path = "../agent-bridge" }
+craft-guide = { path = "../guide" }
+craft-i18n = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+default = []
