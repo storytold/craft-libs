@@ -35,7 +35,7 @@ pub fn wav_order(channels: usize) -> Option<&'static [usize]> {
 }
 
 /// The speakers of a Vorbis stream with `channels` channels, in WAV order (after [`wav_order`]):
-/// mono, stereo, L R C, quad, 5.0, 5.1, 6.1 with a back centre and side surrounds, and 7.1 with
+/// mono, stereo, L R C, quad, 5.0, 5.1, 6.1 with a back center and side surrounds, and 7.1 with
 /// backs and sides. Other counts are unordered. For 7 channels this differs from
 /// [`ChannelLayout::default_for`], which puts the surrounds at the back.
 pub fn layout(channels: u16) -> ChannelLayout {
