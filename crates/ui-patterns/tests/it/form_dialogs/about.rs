@@ -14,6 +14,46 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
+/// WordCraft #5070: an optional default-Enter policy leaves a focused control's unused Enter alone.
+#[trial]
+fn hosted_about_can_leave_enter_with_a_focused_control_without_changing_the_default() {
+    use craft_ui::choice::Checkbox;
+    use craft_ui::contract::{Props as _, Show as _};
+    use egui::{Key, Modifiers};
+
+    for opt_in in [false, true] {
+        let host = Rc::new(RefCell::new(DialogHost::new()));
+        let shown = host.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            shown.borrow_mut().run(ui);
+        });
+        let mut checked = false;
+        let tab = AboutAppTab::new("details", "Details", move |ui| {
+            Checkbox::new(Bind::bound(&mut checked)).label("Keep details visible").show(ui);
+        });
+        let id = host.borrow_mut().open(
+            HostedAbout::new(INFO.clone(), CREDITS.clone())
+                .layout(AboutLayout::Listed)
+                .app_tab(tab)
+                .tab(AboutTab::App(0))
+                .enter_requires_no_focus(opt_in),
+        );
+        fixture.idle(10);
+        let checkbox = fixture.by_label("Keep details visible").expect("the app tab's control");
+        fixture.click(&checkbox).idle(3);
+        assert_eq!(access::focused_key(fixture.tree()), checkbox.node);
+        fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+        assert_eq!(host.borrow().get_by_id::<HostedAbout>(id).is_some(), opt_in, "only the opted-in dialog stays open");
+        if opt_in {
+            fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+            let close = fixture.by_label("Close").expect("the footer");
+            assert_eq!(access::focused_key(fixture.tree()), close.node, "Tab reaches Close");
+            fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+            assert!(host.borrow().get_by_id::<HostedAbout>(id).is_none(), "Enter on Close still closes");
+        }
+    }
+}
+
 static INFO: LazyLock<AboutInfo> = LazyLock::new(|| AboutInfo::new("PhotoCraft", "An image editor.", "1.0"));
 static CREDITS: LazyLock<Credits> = LazyLock::new(|| {
     Credits::new(

@@ -15,6 +15,7 @@ use craft_ui::form::{Field as FormField, Help};
 use craft_ui::menu::Menu;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::focus::{self, FocusTarget};
 use craft_ui::sections::{DialogRole, FooterButton};
 use craft_ui::tabs::{Tab, TabKind, TabStrip};
 use craft_ui::text::TextField;
@@ -244,6 +245,8 @@ pub struct FindReplaceDialog {
     insert: Option<(Field, String)>,
     go_to_kind: usize,
     go_to_target: String,
+    focus_inputs: bool,
+    focus_input_pending: bool,
 }
 
 impl FindReplaceDialog {
@@ -264,6 +267,8 @@ impl FindReplaceDialog {
             insert: None,
             go_to_kind: 0,
             go_to_target: String::new(),
+            focus_inputs: false,
+            focus_input_pending: false,
         }
     }
 
@@ -272,6 +277,16 @@ impl FindReplaceDialog {
     #[must_use]
     pub fn word(mut self, on: bool) -> Self {
         self.word = on;
+        self
+    }
+
+    /// Requests the first input's focus once on opening and when showing another tab. Off by default.
+    /// After that request, Tab and other controls keep the keyboard without a request each pass.
+    /// [`show_tab`](Self::show_tab) also requests the input when asking for the current tab again.
+    #[must_use]
+    pub fn focus_inputs(mut self, on: bool) -> Self {
+        self.focus_input_pending = on && (self.focus_input_pending || !self.focus_inputs);
+        self.focus_inputs = on;
         self
     }
 
@@ -288,6 +303,7 @@ impl FindReplaceDialog {
     /// Shows `tab` in the open dialog, and puts `query` in Find what when given (Find or Replace asked again with a
     /// selection). Replace with, the options, Search Options and the Go To target stay as they are.
     pub fn show_tab(&mut self, tab: FindTab, query: Option<String>) {
+        self.focus_input_pending |= self.focus_inputs;
         self.tab = tab;
         if let Some(query) = query {
             self.query = query;
@@ -341,6 +357,7 @@ impl FindReplaceDialog {
 
     /// Takes every value of `fields` but the message, which only the app sets.
     fn apply(&mut self, fields: FindFields) {
+        self.focus_input_pending |= self.focus_inputs && self.tab != fields.tab;
         self.tab = fields.tab;
         self.query = fields.query;
         self.with = fields.with;
@@ -400,6 +417,7 @@ impl StackDialog for FindReplaceDialog {
         let mut next_tab = tab;
         let mut picked_code: Option<(Field, String)> = None;
         let mut submitted = false;
+        let mut focus_input = self.focus_input_pending;
         let pending = self.insert.take();
         let kinds = self.go_to_kinds.clone();
         let message = self.message.clone();
@@ -486,6 +504,9 @@ impl StackDialog for FindReplaceDialog {
                                 }
                                 field.show(ui, |ui, _| {
                                     let edit = TextField::new(Label::from(kind.label.clone()), Bind::given(target.clone())).show(ui);
+                                    if std::mem::take(&mut focus_input) {
+                                        focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                                    }
                                     if let Some(value) = edit.events.value() {
                                         target.clone_from(value);
                                     }
@@ -506,6 +527,9 @@ impl StackDialog for FindReplaceDialog {
                                     let entries: Vec<Entry<usize>> =
                                         names.iter().enumerate().map(|(at, name)| Entry::new(at, name.clone())).collect();
                                     let edit = Select::new(Label::from(kind.label.clone()), Bind::given(at), &entries).show(ui);
+                                    if std::mem::take(&mut focus_input) {
+                                        focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                                    }
                                     if let Some(&picked) = edit.events.value()
                                         && let Some(name) = names.get(picked)
                                     {
@@ -527,6 +551,9 @@ impl StackDialog for FindReplaceDialog {
                     field = field.replace_selection(code.clone());
                 }
                 let edit = field.show(ui);
+                if std::mem::take(&mut focus_input) {
+                    focus::request(ui.ctx(), FocusTarget::Id(edit.response.id));
+                }
                 if edit.response.has_focus() {
                     last_field = Field::Find;
                 }
@@ -597,6 +624,7 @@ impl StackDialog for FindReplaceDialog {
         }
         self.go_to_kind = go_kind;
         self.go_to_target = target;
+        self.focus_input_pending = focus_input || (self.focus_inputs && tab != next_tab);
         self.tab = next_tab;
         self.insert = picked_code;
 
@@ -617,7 +645,7 @@ impl StackDialog for FindReplaceDialog {
         {
             let (query, with, options) = (self.query.clone(), self.with.clone(), self.options);
             match which {
-                Press::ShowReplace => self.tab = FindTab::Replace,
+                Press::ShowReplace => self.show_tab(FindTab::Replace, None),
                 Press::Highlight(on) => {
                     self.highlighted = *on;
                     self.request = Some(FindRequest::Highlight { query, options, on: *on });
