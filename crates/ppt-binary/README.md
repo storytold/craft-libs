@@ -41,7 +41,9 @@ one feature per file, and the public [MS-PPT] numbering where the records keep i
 So far a PowerPoint 95 file imports with its slide size, its masters (each the caller's default
 master wearing the file's colour scheme, and its background when that isn't the scheme's), and
 its slides in order with their master, layout type and, when a slide doesn't follow the master's,
-its own background: a solid colour, or none when the slide's background has no fill. Slides hold
+its own background: a solid colour, or none when the slide's background has no fill. A slide also
+says whether it shows the master's objects and whether it uses the master's colour scheme or its
+own. Slides hold
 their placeholders (title, body, centred title, subtitle, and the date, footer and slide number)
 and text boxes, each with its box and its text: the text's anchoring (top, middle or bottom, and
 whether it's centred across) and word wrap, paragraphs with their level, alignment (justified
