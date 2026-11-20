@@ -9,6 +9,8 @@ use crate::runtime::requests::ColorRequest;
 
 use crate::choice::{Checkbox, Swatch, SwatchTable};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use crate::display::{Shade, Text};
+use crate::style::TypeRole;
 
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 
@@ -80,6 +82,8 @@ pub(super) struct Kit<'k> {
     pub(super) palette: Option<&'k [[u8; 3]]>,
     /// The document has slices: the Slices choice shows.
     pub(super) has_slices: bool,
+    /// The formats the Format list offers.
+    pub(super) formats: &'k [WebFormat],
 }
 
 /// The settings column over `options` and the output size `link`; the Color Table's cells are selected in `table`,
@@ -94,12 +98,12 @@ pub(super) fn show(
     editing: &mut Option<u16>,
     ask: &mut Option<ColorRequest>,
 ) {
-    let Kit { words, sizing, units, presets, palette, has_slices } = *kit;
+    let Kit { words, sizing, units, presets, palette, has_slices, formats } = *kit;
     FieldGroup::new(words.settings.clone()).show(ui, |ui, _| {
         if !presets.is_empty() {
             preset_row(ui, words, presets, options);
         }
-        format_row(ui, words, options);
+        format_row(ui, words, formats, options);
         format_options(ui, words, units, options);
         if let Some(palette) = palette.filter(|palette| options.format.indexed() && !palette.is_empty()) {
             palette_section(ui, words, palette, options, table, editing, ask);
@@ -110,7 +114,9 @@ pub(super) fn show(
         if let Some(on) = check(ui, &words.convert_srgb, "srgb", options.convert_srgb) {
             options.convert_srgb = on;
         }
-        metadata_row(ui, words, options);
+        if options.has_metadata() {
+            metadata_row(ui, words, options);
+        }
         if has_slices {
             slices_rows(ui, words, options);
         }
@@ -130,8 +136,8 @@ fn preset_row(ui: &mut Ui, words: &SaveForWebWords, presets: &[WebPreset], optio
     });
 }
 
-fn format_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOptions) {
-    let entries: Vec<Entry<WebFormat>> = WebFormat::ALL.iter().map(|format| Entry::new(*format, Label::from(format.name()))).collect();
+fn format_row(ui: &mut Ui, words: &SaveForWebWords, formats: &[WebFormat], options: &mut SaveForWebOptions) {
+    let entries: Vec<Entry<WebFormat>> = formats.iter().map(|format| Entry::new(*format, Label::from(format.name()))).collect();
     row(ui, &words.format, "format", |ui| {
         if let Some(format) = Select::new(words.format.clone(), Bind::given(options.format), &entries).show(ui).value().cloned() {
             options.format = format;
@@ -191,6 +197,13 @@ fn format_options(ui: &mut Ui, words: &SaveForWebWords, units: &Units, options: 
             if let Some(on) = check(ui, &words.embed_profile, "profile", options.embed_profile) {
                 options.embed_profile = on;
             }
+        }
+        WebFormat::Avif => {
+            quality_row(ui, words, options);
+            if let Some(on) = check(ui, &words.transparency, "transparency", options.transparency) {
+                options.transparency = on;
+            }
+            Text::new(words.avif_note.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
         }
         WebFormat::Wbmp => dither_row(ui, words, options, false),
         WebFormat::Png24 => {
