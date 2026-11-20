@@ -174,7 +174,11 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         let val_axis = group_value_axis(&val_map, g);
         let secondary = val_axis.is_some() && val_axis != primary_val;
         for s in g.children(Local("ser")).take(1000) {
+            let needs_categories = c.categories.is_empty();
             let ser = read_series(s, g, (kind, secondary, group_labels), &mut c.categories, &mut budget);
+            if needs_categories && !c.categories.is_empty() {
+                c.category_format = category_format(pa, g, s);
+            }
             c.series.push(ser);
         }
     }
@@ -207,7 +211,6 @@ fn chart_within(root: &El, mut budget: usize) -> Option<Chart> {
         }
     });
     let (val_ax, cat_ax) = read_axes(&mut c, pa, &primary_val);
-    c.category_format = category_format(pa, cat_ax);
     read_text_styles(&mut c, root, ch, val_ax, cat_ax);
     Some(c)
 }
@@ -504,16 +507,18 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
 /// axis' own format, unless it is linked to the source (`sourceLinked`, or no `c:numFmt`), in which
 /// case the format code of the category cells. `None` when the categories are text (their cached
 /// strings show as they are) or the file gives only General.
-fn category_format(pa: &El, cat_ax: Option<&El>) -> Option<String> {
-    // The first series with categories gives them, as in `read_series`: its cache is the one
-    // `strings_capped` reads, so a series whose categories are multi-level text or a bare value
-    // gives no number format, and no later series does.
-    let cat = pa
+fn category_format(pa: &El, group: &El, series: &El) -> Option<String> {
+    // Called only when the budgeted series read first supplies categories. Never rescan caches
+    // or take a format from a skipped series or another plot group's axis.
+    let cat = series.child(Local("cat")).or_else(|| series.child(Local("xVal")))?;
+    let ids: Vec<&str> = group.children(Local("axId")).filter_map(|id| id.attr_local("val")).collect();
+    let cat_ax = pa
         .elements()
-        .filter(|g| g.local().ends_with("Chart") && group_chart_type(g.local(), g).is_some())
-        .flat_map(|g| g.children(Local("ser")))
-        .filter_map(|s| s.child(Local("cat")).or_else(|| s.child(Local("xVal"))))
-        .find(|c| !strings_capped(c, MAX_CACHE_POINTS).is_empty())?;
+        .find(|axis| {
+            matches!(axis.local(), "catAx" | "dateAx")
+                && axis.child(Local("axId")).and_then(|id| id.attr_local("val")).is_some_and(|id| ids.contains(&id))
+        })
+        .or_else(|| pa.children(Local("valAx")).find(|axis| axis.child(Local("axId")).and_then(|id| id.attr_local("val")) == ids.first().copied()));
     if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
         return None;
     }
@@ -1002,6 +1007,20 @@ mod tests {
         assert_eq!(c.categories, ["2024"]);
         assert_eq!(c.category_format, None);
         assert_eq!(c.category_label(0), "2024");
+    }
+
+    #[test]
+    fn category_formats_follow_the_retained_series_and_its_plot_axis() {
+        let skipped = format!(r#"<c:ser><c:idx val="1000"/><c:cat>{}</c:cat></c:ser>"#, num_cat("m/d/yyyy"));
+        let over_budget = format!("{}{}", r#"<c:ser><c:idx val="0"/></c:ser>"#.repeat(1000), skipped);
+        let text = r#"<c:strLit><c:ptCount val="1"/><c:pt idx="0"><c:v>2024</c:v></c:pt></c:strLit>"#;
+        for (first, second, expected) in [(String::new(), num_cat("m/d/yyyy"), "Jan-24"), (over_budget, text.to_string(), "2024")] {
+            let xml = format!(
+                r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart>{first}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:ser><c:idx val="0"/><c:cat>{second}</c:cat></c:ser><c:axId val="3"/><c:axId val="4"/></c:lineChart><c:catAx><c:axId val="1"/><c:numFmt formatCode="0.00" sourceLinked="0"/></c:catAx><c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx><c:dateAx><c:axId val="3"/><c:numFmt formatCode="mmm-yy" sourceLinked="0"/></c:dateAx><c:valAx><c:axId val="4"/><c:axPos val="r"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#
+            );
+            let c = read_chart_xml(xml.as_bytes()).unwrap();
+            assert_eq!(c.category_label(0), expected);
+        }
     }
 
     #[test]

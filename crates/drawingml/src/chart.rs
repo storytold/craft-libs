@@ -833,8 +833,9 @@ impl Chart {
     }
 
     /// The label of category `i`: its number or date in the category format (`45292` with `mmm-yy`
-    /// is "Jan-24"), else the category text as it is. `categories` keeps the cached text, so a
-    /// chart written back keeps its source values.
+    /// is "Jan-24"), else the category text as it is. `categories` keeps the cached text in memory.
+    /// Rebuilding a mixed number/text cache writes the formatted labels as strings; a reload
+    /// preserves those labels but cannot recover the original numeric serials.
     pub fn category_label(&self, i: usize) -> String {
         let raw = self.categories.get(i).map_or("", String::as_str);
         match (&self.category_format, raw.trim().parse::<f64>()) {

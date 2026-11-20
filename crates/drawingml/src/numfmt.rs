@@ -25,6 +25,8 @@ enum Tok {
     Dot,
     Comma,
     Percent,
+    /// An unquoted, unescaped fraction separator.
+    Slash,
 }
 
 /// A section's tokens (`[$₽-419]` gives its symbol; colours, conditions and locales drop out).
@@ -76,6 +78,7 @@ fn tokens(section: &str) -> Vec<Tok> {
             '.' => out.push(Tok::Dot),
             ',' => out.push(Tok::Comma),
             '%' => out.push(Tok::Percent),
+            '/' => out.push(Tok::Slash),
             '@' => {}
             _ => out.push(Tok::Lit(c.to_string())),
         }
@@ -386,7 +389,14 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
     let last = toks.iter().rposition(|t| matches!(t, Tok::Digit(_)));
     let (Some(first), Some(last)) = (first, last) else {
         // No digits: just the section's text ("-" for zero, a label).
-        let s: String = toks.iter().filter_map(|t| if let Tok::Lit(s) = t { Some(s.as_str()) } else { None }).collect();
+        let s: String = toks
+            .iter()
+            .filter_map(|t| match t {
+                Tok::Lit(s) => Some(s.as_str()),
+                Tok::Slash => Some("/"),
+                _ => None,
+            })
+            .collect();
         return s.trim().to_string();
     };
     // A percent sign scales the value before the fraction is picked, as in `fixed`.
@@ -409,6 +419,7 @@ fn lits(ts: &[Tok]) -> String {
         .filter_map(|t| match t {
             Tok::Lit(s) => Some(s.clone()),
             Tok::Percent => Some("%".into()),
+            Tok::Slash => Some("/".into()),
             _ => None,
         })
         .collect()
@@ -545,7 +556,7 @@ fn fraction(toks: &[Tok], v: f64, sep: char) -> Option<(String, bool)> {
     if toks.contains(&Tok::Dot) {
         return None;
     }
-    let slash = toks.iter().position(|t| matches!(t, Tok::Lit(s) if s.as_str() == "/"))?;
+    let slash = toks.iter().position(|t| *t == Tok::Slash)?;
     let is_digit = |t: Option<&Tok>| matches!(t, Some(Tok::Digit(_)));
     // Numerator placeholders end at the slash.
     let mut ns = slash;
@@ -1159,6 +1170,13 @@ mod tests {
             ("0.##", 1.25, "1.25"),
             ("#,##0.0#", 1234.5, "1,234.5"),
         ]);
+    }
+
+    #[test]
+    fn escaped_and_quoted_slashes_stay_literal() {
+        assert_eq!(format(r"0\/8", 2.0, None), "2/8");
+        assert_eq!(format(r#"0"/"8"#, 2.0, None), "2/8");
+        assert_eq!(format("# ?/8", 2.5, None), "2 4/8");
     }
 
     #[test]

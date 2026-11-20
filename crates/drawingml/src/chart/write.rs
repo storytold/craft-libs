@@ -494,7 +494,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", c.category_format.as_deref().unwrap_or("General")).attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "out").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -514,7 +517,10 @@ fn axes(w: &mut Writer, c: &Chart, g: Group) {
         if let Some(t) = &c.axis_titles.0 {
             title(w, t, c);
         }
-        w.tag("c:numFmt").attr("formatCode", c.category_format.as_deref().unwrap_or("General")).attr("sourceLinked", 1).empty();
+        w.tag("c:numFmt")
+            .attr("formatCode", c.category_format.as_deref().unwrap_or("General"))
+            .attr("sourceLinked", u8::from(c.category_format.is_none()))
+            .empty();
         w.tag("c:majorTickMark").attr("val", "none").empty();
         w.tag("c:minorTickMark").attr("val", "none").empty();
         w.tag("c:tickLblPos").attr("val", "nextTo").empty();
@@ -1325,6 +1331,17 @@ mod cache_cap_tests {
         t.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
         let text = String::from_utf8(super::chart_xml(&t).0).unwrap();
         assert!(text.contains("<c:strCache>") && text.contains(r#"<c:date1904 val="0"/>"#), "{text}");
+    }
+
+    #[test]
+    fn explicit_general_category_format_survives_a_rebuild() {
+        let mut c =
+            Chart { kind: ChartType::Bar, categories: vec!["12345678901.25".into()], category_format: Some("General".into()), ..Default::default() };
+        c.series.push(Series { values: vec![Some(1.0)], ..Default::default() });
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!(back.category_format, c.category_format);
+        assert_eq!(back.category_label(0), c.category_label(0));
+        assert_eq!(back.categories, c.categories);
     }
 
     #[test]
