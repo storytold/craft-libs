@@ -6,7 +6,7 @@ use crate::contract::cx::{CxCore, Decls};
 use crate::contract::run::{ErasedPass, TypeFacts};
 use crate::primitives::FaceRecord;
 use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, SetPosition, SubDecl, SubNode, scope};
-use crate::runtime::commands::{self, ResolvedCommand};
+use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
 use crate::runtime::keys;
@@ -33,8 +33,15 @@ pub(crate) struct ReportIn<'a> {
 }
 
 /// The bound command's hint and shortcut text, which describe and key its node.
-fn command_facts(command: &ResolvedCommand, platform: craft_keymap::Platform) -> (Option<&str>, Option<String>) {
-    (command.hint.as_deref(), command.chord.as_ref().map(|chord| chord.display(platform)))
+fn command_facts<'a>(ctx: &egui::Context, command: &'a ResolvedCommand) -> (Option<&'a str>, Option<&'a str>) {
+    let text = command.chord_text.as_deref();
+    #[cfg(feature = "testing")]
+    if text.is_some() {
+        crate::runtime::measure::count_chord_text(ctx);
+    }
+    #[cfg(not(feature = "testing"))]
+    let _ = ctx;
+    (command.hint.as_deref(), text)
 }
 
 /// The message of a validity that warns, refuses or errs, and whether it warns.
@@ -78,40 +85,10 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
         }
     }
     *core.value_text.borrow_mut() = value_text;
-    for node in &mut access.nodes {
-        if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
-            node.expanded = Some(toggle.open);
-        }
-    }
     let role = access.role.unwrap_or(facts.role);
-    access.access_key = access.access_key.or(core.resolved.access_key);
-    if access.grid == access::GridPlace::default() {
-        access.grid = core.grid;
-    }
     debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
     let flags = core.state.flags;
     let resolved = core.resolved;
-    let platform = commands::platform(ctx);
-    let (hint, shortcut) = core.command.as_deref().map_or((None, None), |command| command_facts(command, platform));
-    let shortcut = shortcut.as_deref();
-    for (_, label) in &mut access.custom_actions {
-        *label = core.env.resolve(label);
-    }
-    let tooltip_text = resolved.tooltip.map(|tooltip| core.env.resolve(&tooltip.spec().text));
-    let tooltip = tooltip_text.as_ref().map(Label::as_str);
-    if access.live.is_none() {
-        access.live = input.live;
-    }
-    if access.expanded.is_none() {
-        access.expanded = input.expanded;
-    }
-    if access.position.is_none() {
-        access.position = input.position;
-    }
-    if access.position.is_none() {
-        access.position =
-            input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
-    }
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {
@@ -131,6 +108,35 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     };
     if !input.node {
         return;
+    }
+    // Facts that only a node shows are built after the node check.
+    for node in &mut access.nodes {
+        if let Some(toggle) = core.toggles.iter().find(|toggle| toggle.part == node.part) {
+            node.expanded = Some(toggle.open);
+        }
+    }
+    access.access_key = access.access_key.or(core.resolved.access_key);
+    if access.grid == access::GridPlace::default() {
+        access.grid = core.grid;
+    }
+    let (hint, shortcut) = core.command.as_deref().map_or((None, None), |command| command_facts(ctx, command));
+    for (_, label) in &mut access.custom_actions {
+        *label = core.env.resolve(label);
+    }
+    let tooltip_text = resolved.tooltip.map(|tooltip| core.env.resolve(&tooltip.spec().text));
+    let tooltip = tooltip_text.as_ref().map(Label::as_str);
+    if access.live.is_none() {
+        access.live = input.live;
+    }
+    if access.expanded.is_none() {
+        access.expanded = input.expanded;
+    }
+    if access.position.is_none() {
+        access.position = input.position;
+    }
+    if access.position.is_none() {
+        access.position =
+            input.group.and_then(|group| focus::group_position(ctx, id, group)).or_else(|| core.env.facts_of(id).map(|facts| facts.position));
     }
     let inner_of = access::fold::owner_of(ctx, id);
     let folded = access::fold::take(ctx, id);

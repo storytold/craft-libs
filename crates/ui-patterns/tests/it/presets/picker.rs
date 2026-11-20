@@ -2,9 +2,10 @@
 //! closes; Escape closes and keeps the value; inside a popover, the picker's own popover nests in the parent, which
 //! stays open through the pick.
 
+use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
-use craft_ui::patterns::presets::{PresetPicker, PresetRow, PresetState};
+use craft_ui::patterns::presets::{PickerField, PresetPicker, PresetRow, PresetState};
 use craft_ui::popover::Popover;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
@@ -90,4 +91,40 @@ fn a_picker_in_a_popover_opens_and_picks_with_the_popover_kept_open() {
     assert_eq!(value.get(), Some(2), "the click picks Beta");
     assert!(fixture.by_label("Alpha").is_none(), "the pick closes the picker: only the field shows, with Beta");
     assert!(parent.get(), "the pick keeps the popover open");
+}
+
+/// A chip whose caption follows a dragged value (a brush size) holds the width of the widest number of its range: as
+/// the caption gains digits, and whatever its digits are, the chip and what follows it on the bar stay in place, and
+/// each frame runs one pass (a caption that changed the chip's width made the bar's kept measure stale, and the frame
+/// ran again).
+#[trial]
+fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
+    let size = Rc::new(Cell::new(9u32));
+    let shown = Rc::clone(&size);
+    let rows = vec![PresetRow::item(CORAL, "Coral", 0), PresetRow::item(TEAL, "Teal", 0)];
+    let mut state = PresetState::<u32>::new();
+    let mut value = Some(CORAL);
+    let mut fixture = Fixture::new(move |ui| {
+        Bar::new("Brush options", BarKind::Options).show(ui, |ui, _| {
+            let _ = PresetPicker::new("Brush", Bind::bound(&mut value), &rows, Bind::bound(&mut state))
+                .field(PickerField::Chip)
+                .caption(shown.get().to_string())
+                .caption_range((1.0..=5000.0, 0))
+                .show(ui);
+            let _ = Button::new("Mode").show(ui);
+        });
+    });
+    fixture.settle();
+    let place = |fixture: &Fixture| {
+        let chip = fixture.by_label("Brush").expect("the chip shows").rect;
+        let mode = fixture.by_label("Mode").expect("the button after it shows").rect;
+        (chip.width(), mode.left())
+    };
+    let first = place(&fixture);
+    for next in [10, 100, 1000, 4888, 7] {
+        size.set(next);
+        fixture.frame(Vec::new());
+        assert_eq!(fixture.passes(), 1, "caption {next}: the frame runs one pass");
+        assert_eq!(place(&fixture), first, "caption {next}: the chip and the button after it stay in place");
+    }
 }

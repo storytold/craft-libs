@@ -2134,7 +2134,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::MeasureCx`: `pub struct MeasureCx<'a, C: Component> { pub env: EnvView<'a>, pub style: &'a C::Style, pub resolved: &'a Resolved<'a>, pub proposal: Proposal, pub room: Option<f32>, pub ui: &'a Ui, pub tokens: &'a UiTokens, pub id: Id }`. What `measure` reads: step 5's view of the environment, the style, the resolved props and the shown value.
   - `pub fn value(&self) -> Option<&'a ValueOf<C>>`. The shown value; it has the stage's lifetime, so a borrow of `cx` is not held.
   - `pub fn command(&self) -> Option<&ResolvedCommand>`. The bound command as step 1 resolved it, with the scoped bindings of the scopes above the component.
-  - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
+  - `pub fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>>`. `command` as this component shows it: the label, icon and chord with the scoped bindings of the scopes above
   - `pub fn column_room(&self) -> Option<f32>`. The width a component whose height follows its width (wrapped text, a square plot) sizes at: the room the
   - `pub fn picture_width(&self, least: f32, most: f32) -> f32`. The width a picture sizes at (a plot, a wheel, a well): it takes the room it is offered, down to `least` and up
   - `pub fn label(&self) -> Label`. The label as given.
@@ -3107,10 +3107,12 @@ Per-pass and per-frame services and the one egui adapter.
 The command board: the registry and typed sets, per-frame state, the queue, firing and the gate (spec 11).
 
 - `craft_ui::runtime::commands::CommandGate`: `pub struct CommandGate`. The app's one gate over commands: a dialog is open, a workspace is not ready, a recorder has the keys or an
-  - `pub fn new(allows: impl Fn(&CommandRef) -> bool + Send + Sync + 'static) -> Self`. A gate that lets `allows` commands through.
+  - `pub fn new<P: MemoProps + Send + Sync + 'static>(props: P, allows: fn(&P, &CommandRef) -> bool) -> Self`. A gate that lets through the commands `allows` accepts under `props`; the runtime asks it once per command while the props' key stays the same.
+- `craft_ui::runtime::commands::CommandStates`: `pub struct CommandStates`. The app-scope command states an app holds, in a `Tracked` it hands to `CommandInput::states`.
+  - `pub fn new() -> Self`, `pub fn set(&mut self, command: impl Into<CommandRef>, state: CommandState)`, `pub fn remove(&mut self, command: &CommandRef) -> Option<CommandState>`, `pub fn get(&self, command: &CommandRef) -> Option<&CommandState>`.
 - `craft_ui::runtime::commands::CommandInput`: `pub struct CommandInput`. App-scope command state for this frame, set from app state before the pass.
   - `pub fn new() -> Self`. No state, no overrides and no gate.
-  - `pub fn state(mut self, command: impl Into<CommandRef>, state: CommandState) -> Self`. The state of an app-scope command.
+  - `pub fn states(mut self, states: &Tracked<CommandStates>) -> Self`. The app-scope command states the app holds; the runtime reads them again only when the revision moves.
   - `pub fn overrides(mut self, overrides: Arc<Overrides>) -> Self`. The user's binding overrides; the keymap is rebuilt when the `Arc` changes.
   - `pub fn gate(mut self, gate: CommandGate) -> Self`. The one gate over commands.
 - `craft_ui::runtime::commands::CommandSet`: `pub trait CommandSet: Copy + Send + Sync + 'static`. A typed set of commands, written by `#[derive(CommandSet)]`.
@@ -3133,13 +3135,13 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `fn publish(&mut self, command: impl Into<CommandRef>, state: CommandState)`. This frame's state of a scoped command, for this instance. Publishing an app-scope command here is a
   - `fn take_command<S: CommandSet>(&mut self) -> Option<(S, Fired)>`. The next command of set `S` routed to this instance this pass; each is taken once, so a discard pass does
   - `fn take_step(&mut self, can_undo: bool, can_redo: bool) -> Option<Step>`. Declares Undo and Redo on the innermost instance around this context, enabled as `can_undo` and `can_redo`
-  - `fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<ResolvedCommand>`. `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
+  - `fn resolve_command(&self, command: impl Into<CommandRef>) -> Option<Arc<ResolvedCommand>>`. `command` as this context shows it: the label, icon and chord with the scoped bindings of the scopes above
 - `craft_ui::runtime::commands::FirePhase`: `pub enum FirePhase { Press, Repeat, Release }`. The phase of the key press that fired a command.
 - `craft_ui::runtime::commands::FireSource`: `pub enum FireSource { Key, Menu, Palette, Pointer, Automation, Access }`. Where a fired command came from.
 - `craft_ui::runtime::commands::Fired`: `pub struct Fired { pub command: CommandRef, pub target: Option<Id>, pub source: FireSource, pub phase: FirePhase, pub cycle: bool, pub alt_variant: bool }`. A command a surface or a key fired, as the instance or the app takes it.
 - `craft_ui::runtime::commands::ResolvedCommand`: `pub struct ResolvedCommand { pub label: Arc<str>, pub icon: Option<Cow<'static, str>>, pub chord: Option<Chord>, pub enabled: bool, pub checked: Option<bool>, pub marked: bool, pub hint: Option<Arc<str>>, pub kind: CommandKind, pub instance: Option<Id> }`. A command as a surface shows and fires it.
 - `craft_ui::runtime::commands::fire`: `pub fn fire(ctx: &Context, command: impl Into<CommandRef>, source: FireSource) -> bool`. Fires `command` from a surface that has no component of its own: a menu, the palette or automation. Scoped
-- `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
+- `craft_ui::runtime::commands::resolve`: `pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> Arc<ResolvedCommand>`. `command` as a surface with no component of its own shows it: the label, icon, chord, enabled and checked state
 - `craft_ui::runtime::commands::Binding`: re-export of `craft_keymap::Binding` (outside these crates).
 - `craft_ui::runtime::commands::ChromeCommand`: `pub enum ChromeCommand { TogglePanels, TogglePanelsKeepTools }`. The `window` commands that hide the panels of the window they run in.
   - `pub const ALL: [ChromeCommand; 2]`. Both commands.

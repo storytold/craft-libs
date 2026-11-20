@@ -118,8 +118,10 @@ impl<C: Component> Cx<'_, C> {
         self.core.injected = Some(source);
     }
 
-    /// The modifiers held this frame, Alt alone included.
+    /// The modifiers held this frame, Alt alone included. The read is recorded like a value's: a settled component
+    /// that read them runs again in the frame they change (a menu title underlines its mnemonic while Alt is held).
     pub fn modifiers(&self) -> Mods {
+        crate::runtime::replay::note_read(&self.core.ctx, crate::runtime::reads::BindKey::Modifiers);
         pointer::frame(&self.core.ctx).mods
     }
 }

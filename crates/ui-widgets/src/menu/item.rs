@@ -436,7 +436,7 @@ impl Component for MenuItem<'_> {
         } else if !level.is_submenu() && (back || (forward && !self.submenu)) {
             let rtl = cx.flow.is_rtl();
             level.request_step(if back != rtl { MenuStep::Prev } else { MenuStep::Next });
-            frame::request_repaint(&ctx);
+            frame::request_own_repaint(&ctx);
         }
         let now = frame::clock(&ctx);
         let moving = ctx.input(|input| input.pointer.delta() != Vec2::ZERO);
@@ -451,7 +451,11 @@ impl Component for MenuItem<'_> {
             rest.focused = focused;
             let started = keyboard && !rest.keyboard;
             rest.keyboard = keyboard;
-            if hovered && !moving {
+            // The rest starts at the pointer's last move over the row.
+            if hovered && moving {
+                rest.since = Some(now);
+                (0.0, gained, started)
+            } else if hovered {
                 (now - *rest.since.get_or_insert(now), gained, started)
             } else {
                 rest.since = None;
@@ -462,13 +466,13 @@ impl Component for MenuItem<'_> {
         // The focused row of a menu that the pointer opened is not active: the keyboard makes it so when focus lands on
         // it or the keyboard starts driving the menu.
         if enabled && focused && keyboard && (focus_gained || key_started) && level.activate_row(cx.id) {
-            frame::request_repaint(&ctx);
+            frame::request_own_repaint(&ctx);
         }
         // A disabled row is never active.
         self.active = enabled && level.is_active(cx.id);
-        // A crossed row waits for the rest to end.
+        // A crossed row waits for the rest to end: one pass when it does.
         if hovered && heading && rested < AIM_REST {
-            frame::request_repaint(&ctx);
+            frame::request_repaint_after(&ctx, AIM_REST - rested);
         }
         let typed = enabled && level.take_run(cx.id);
         let asked = enabled && (typed || cx.activation().is_some());
@@ -481,7 +485,7 @@ impl Component for MenuItem<'_> {
                     if replaces_sibling && frame::discardable(&ctx) {
                         frame::discard_pass(&ctx, "menu: a sibling replaced the open submenu");
                     }
-                    frame::request_repaint(&ctx);
+                    frame::request_own_repaint(&ctx);
                 }
             }
             self.open = level.submenu_open(cx.id);
@@ -492,7 +496,7 @@ impl Component for MenuItem<'_> {
             return;
         }
         if takes_over && level.clear_submenu() {
-            frame::request_repaint(&ctx);
+            frame::request_own_repaint(&ctx);
         }
         // The run closes the menus out from the one this row runs in: focus leaves them first, so the command reaches
         // the stop focus returns to.
@@ -635,7 +639,8 @@ impl Component for MenuItem<'_> {
     }
 }
 
-/// Since when the pointer has rested on a row without moving, and whether the row had the focus in the last pass.
+/// Since when the pointer has rested on a row (its last move over the row), and whether the row had the focus in the
+/// last pass.
 #[derive(Clone, Default)]
 struct Rest {
     since: Option<f64>,

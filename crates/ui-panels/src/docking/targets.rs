@@ -11,6 +11,7 @@ use crate::style::StyleCx;
 use craft_behavior::DockSide;
 use craft_behavior::dock::{Action, Column, DockEdge, Layout, Node, ZoneSize, node_at, zones};
 use egui::{Context, Id, Pos2, Rect, Vec2};
+use std::fmt::Debug;
 
 pub use craft_behavior::dock::{SIDE_ZONE_DEPTH_SHARE, SIDE_ZONE_FRACTION};
 
@@ -453,8 +454,9 @@ impl<P: Clone + Send + 'static> DockTargets<P> {
     }
 }
 
-/// The registrations of a pass. A settled region's run record keeps each one to make it again, so the panel type is `Sync`.
-impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
+/// The registrations of a pass. A settled region's run record keeps each one to make it again and compares it with a
+/// real run's, so the panel type is `Sync`, `PartialEq` and `Debug`.
+impl<P: Clone + PartialEq + Debug + Send + Sync + 'static> DockTargets<P> {
     /// Registers `spot` over `rect` for the dock `dock` in the running pass of this viewport. Group and column
     /// rendering call it; it does nothing outside a pass. A floating window registers on its own egui layer, and
     /// the drag session orders the layers, so no registry orders them.
@@ -468,10 +470,13 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
-        Self::journal(ctx, || {
-            let spot = spot.clone();
-            move |ctx: &Context| Self::register_in(ctx, dock, spot.clone(), hit, applies)
-        });
+        Self::journal(
+            ctx,
+            || (dock, spot.clone(), hit, applies),
+            |ctx, (dock, spot, hit, applies)| {
+                Self::register_in(ctx, *dock, spot.clone(), *hit, *applies);
+            },
+        );
         Self::with_dock(ctx, dock, |targets| targets.add(spot, hit, applies, hit));
     }
 
@@ -482,10 +487,13 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_target") {
             return;
         }
-        Self::journal(ctx, || {
-            let spot = spot.clone();
-            move |ctx: &Context| Self::register_band(ctx, dock, spot.clone(), band, line, reach)
-        });
+        Self::journal(
+            ctx,
+            || (dock, spot.clone(), band, line, reach),
+            |ctx, (dock, spot, band, line, reach)| {
+                Self::register_band(ctx, *dock, spot.clone(), *band, *line, *reach);
+            },
+        );
         let near = line.expand(reach).intersect(band);
         Self::with_dock(ctx, dock, |targets| targets.add(spot, band, band, near));
     }
@@ -497,14 +505,18 @@ impl<P: Clone + Send + Sync + 'static> DockTargets<P> {
         if !crate::runtime::measure::effect(ctx, "dock::register_room") {
             return;
         }
-        Self::journal(ctx, || move |ctx: &Context| Self::register_room(ctx, dock, room));
+        Self::journal(ctx, || (dock, room), |ctx, &(dock, room)| Self::register_room(ctx, dock, room));
         Self::with_dock(ctx, dock, |targets| targets.room = Some(room));
     }
 
     /// Notes a registration in the records of the settling regions around the running code, so a region that settles
     /// registers its drop spots again when it replays its last run.
-    fn journal<F: Fn(&Context) + Send + Sync + 'static>(ctx: &Context, make: impl FnOnce() -> F) {
-        crate::runtime::journal(ctx, make);
+    fn journal<A, F>(ctx: &Context, args: impl FnOnce() -> A, again: F)
+    where
+        A: PartialEq + Debug + Send + Sync + 'static,
+        F: Fn(&Context, &A) + Send + Sync + 'static,
+    {
+        crate::runtime::journal(ctx, args, again);
     }
 }
 

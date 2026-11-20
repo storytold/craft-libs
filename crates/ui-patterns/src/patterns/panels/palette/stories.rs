@@ -3,7 +3,7 @@
 use super::CommandPalette;
 use crate::contract::Bind;
 use crate::menu::search::HelpEntry;
-use crate::runtime::commands::{CommandInput, CommandRef, CommandState, EditCommands};
+use crate::runtime::commands::{CommandRef, CommandState, CommandStates, EditCommands};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -69,8 +69,8 @@ fn palette(ui: &mut Ui, data: &mut StoryData, recents: Vec<CommandRef>) -> Story
 }
 
 /// The command states the stories run under: Redo is disabled, as the entries list it.
-fn commands(input: CommandInput) -> CommandInput {
-    input.state(EditCommands::Redo, CommandState::new().enabled(false))
+fn commands(states: &mut CommandStates) {
+    states.set(EditCommands::Redo, CommandState::new().enabled(false));
 }
 
 #[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "PhotoCraft", commands = commands)]
