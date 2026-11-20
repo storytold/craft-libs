@@ -142,9 +142,27 @@ impl Decoder {
         Self { last_frame: None, strips: Vec::new(), palette: Some(palette) }
     }
 
+    /// Create a new Cinepak decoder with an 8-bit palette from a byte slice (up to 768 bytes).
+    pub fn with_palette_slice(palette: &[u8]) -> Self {
+        let mut pal = [0u8; 768];
+        let n = palette.len().min(768);
+        pal[..n].copy_from_slice(&palette[..n]);
+        Self::with_palette(pal)
+    }
+
     /// Set or clear the 8-bit color palette.
     pub fn set_palette(&mut self, palette: Option<[u8; 768]>) {
         self.palette = palette;
+    }
+
+    /// Set or clear the 8-bit color palette from a slice (up to 768 bytes).
+    pub fn set_palette_slice(&mut self, palette: Option<&[u8]>) {
+        self.palette = palette.map(|p| {
+            let mut pal = [0u8; 768];
+            let n = p.len().min(768);
+            pal[..n].copy_from_slice(&p[..n]);
+            pal
+        });
     }
 
     /// Reset internal state, clearing references and codebooks.

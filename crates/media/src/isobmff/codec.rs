@@ -290,6 +290,15 @@ impl CodecConfig {
             CodecConfig::Unknown { .. } => "unknown",
         }
     }
+
+    /// If this is a Cinepak configuration with a custom QuickTime color table, returns the 256-color
+    /// RGB palette (768 bytes: 256 triplets of `[R, G, B]`) suitable for passing to Cinepak decoders.
+    pub fn cinepak_palette(&self) -> Option<[u8; 768]> {
+        match self {
+            CodecConfig::Cinepak { color_table: Some(ct), .. } => parse_qt_palette(ct),
+            _ => None,
+        }
+    }
 }
 
 /// `avcC` — AVCDecoderConfigurationRecord (ISO/IEC 14496-15 §5.3.3).
@@ -1251,6 +1260,35 @@ fn parse_qt_color_table(c: &mut Cur<'_>) -> Option<Vec<u8>> {
     Some(ct)
 }
 
+/// Parses a QuickTime color table payload into a 256-color RGB palette (768 bytes, 3 bytes per entry).
+pub(crate) fn parse_qt_palette(ct: &[u8]) -> Option<[u8; 768]> {
+    if ct.len() < 8 {
+        return None;
+    }
+    let flags = u16::from_be_bytes([ct[4], ct[5]]);
+    let size = u16::from_be_bytes([ct[6], ct[7]]);
+    let num_entries = usize::from(size).checked_add(1)?;
+    let payload = &ct[8..];
+    if payload.len() < num_entries.checked_mul(8)? {
+        return None;
+    }
+    let mut palette = [0u8; 768];
+    for i in 0..num_entries {
+        let chunk = &payload[i * 8..(i + 1) * 8];
+        let val = u16::from_be_bytes([chunk[0], chunk[1]]);
+        let r = chunk[2];
+        let g = chunk[4];
+        let b = chunk[6];
+        let idx = if flags & 0x8000 != 0 { usize::from(val) } else { i };
+        if idx < 256 {
+            palette[idx * 3] = r;
+            palette[idx * 3 + 1] = g;
+            palette[idx * 3 + 2] = b;
+        }
+    }
+    Some(palette)
+}
+
 fn resolve_video_codec(
     format: FourCc,
     f: &[u8; 4],
@@ -1481,6 +1519,14 @@ impl SampleEntry {
     /// PCM entry. The muxer picks the on-disk format (`sowt`/`twos`/`lpcm` for MOV, `ipcm`/`fpcm` for MP4).
     pub fn pcm(cfg: PcmConfig) -> Self {
         Self::audio(FourCc(*b"lpcm"), CodecConfig::Pcm(cfg), cfg.channels, cfg.sample_rate, cfg.bits)
+    }
+
+    /// If this sample entry provides a custom color palette (such as for 8-bit Cinepak with a
+    /// QuickTime color table), returns the 256-color RGB palette (768 bytes, 3 bytes per entry)
+    /// suitable for passing to `craft_video::cinepak::Decoder::with_palette` or
+    /// `craft_video::cinepak::decode_frame_with_palette`.
+    pub fn palette(&self) -> Option<[u8; 768]> {
+        self.codec.cinepak_palette()
     }
 
     /// Serialize as a complete sample entry box. For PCM the format is chosen from the brand.

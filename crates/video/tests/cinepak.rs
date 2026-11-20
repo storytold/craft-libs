@@ -1063,3 +1063,86 @@ fn test_discarded_strips_do_not_taint_grayscale_frame_is_color() {
     // Frame 1 is entirely grayscale and had only 1 strip; discarded second strip from frame 0 must not make frame1.is_color true!
     assert!(!frame1.is_color);
 }
+
+#[test]
+fn test_decode_with_palette_from_sample_entry_and_codec_params() {
+    use craft_media::isobmff::{Brand, CodecConfig, FourCc, Mp4Writer, SampleEntry, TrackConfig, VideoParams, WriteSample, WriterOptions, open};
+    use std::io::Cursor;
+
+    let f = FourCc(*b"cvid");
+    let mut ct = Vec::new();
+    ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+    ct.extend_from_slice(&0u16.to_be_bytes()); // ctFlags: sequential
+    ct.extend_from_slice(&3u16.to_be_bytes()); // ctSize: 4 entries
+    for i in 0..4u16 {
+        ct.extend_from_slice(&i.to_be_bytes());
+        // QuickTime stores 16-bit colors; high byte is 8-bit color
+        ct.extend_from_slice(&((i * 60) << 8).to_be_bytes()); // r: 0, 60, 120, 180
+        ct.extend_from_slice(&((i * 40) << 8).to_be_bytes()); // g: 0, 40, 80, 120
+        ct.extend_from_slice(&((i * 20) << 8).to_be_bytes()); // b: 0, 20, 40, 60
+    }
+
+    let entry = SampleEntry {
+        format: f,
+        data_reference_index: 1,
+        codec: CodecConfig::Cinepak { fourcc: f, color_table_id: 0, color_table: Some(ct) },
+        video: Some(VideoParams { width: 4, height: 4, depth: 8, compressor_name: "Cinepak".into(), ..Default::default() }),
+        audio: None,
+        bitrate: None,
+    };
+
+    // 1. Verify SampleEntry provides the palette
+    let pal = entry.palette().expect("palette on sample entry");
+    assert_eq!(&pal[0..12], &[0, 0, 0, 60, 40, 20, 120, 80, 40, 180, 120, 60]);
+
+    // 2. Create a grayscale/paletted frame referencing palette indices: [1, 2, 3, 1]
+    let mut gray_body = Vec::new();
+    gray_body.push(0x26); // v1 gray full codebook
+    gray_body.extend_from_slice(&8u32.to_be_bytes()[1..4]);
+    gray_body.extend_from_slice(&[1, 2, 3, 1]); // vector 0 uses indices 1, 2, 3, 1
+    gray_body.push(0x32); // v1 vector
+    gray_body.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    gray_body.push(0);
+
+    let mut strip = Vec::new();
+    strip.extend_from_slice(&0x1000u16.to_be_bytes());
+    strip.extend_from_slice(&((12 + gray_body.len()) as u16).to_be_bytes());
+    for v in [0u16, 0, 4, 4] {
+        strip.extend_from_slice(&v.to_be_bytes());
+    }
+    strip.extend_from_slice(&gray_body);
+    let frame_data = frame_of(0, 4, &[strip]);
+
+    // 3. Mux into a QuickTime MOV container with Mp4Writer
+    let mut writer = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mov)).expect("writer");
+    let track_id = writer.add_track(TrackConfig::new(entry, 600)).expect("add_track");
+    writer.write_sample(track_id, WriteSample { data: &frame_data, duration: 40, composition_offset: 0, is_sync: true }).expect("write_sample");
+    let mov_bytes = writer.finish().expect("finish").into_inner();
+
+    // 4. Demux MOV with open() and inspect track parameters
+    let demuxed = open(mov_bytes.as_slice()).expect("open");
+    assert_eq!(demuxed.tracks.len(), 1);
+    let track = &demuxed.tracks[0];
+    let params = track.codec_params();
+    let pal_from_params = params.palette.expect("palette in codec_params");
+    assert_eq!(&pal_from_params[0..12], &[0, 0, 0, 60, 40, 20, 120, 80, 40, 180, 120, 60]);
+    assert_eq!(track.palette().as_ref(), Some(&pal));
+
+    // 5. Decode demuxed sample using Decoder initialized from codec_params palette
+    let sample = demuxed.read_sample(mov_bytes.as_slice(), 0, 0).expect("read_sample");
+    let mut decoder = Decoder::with_palette_slice(&pal_from_params);
+    let frame = decoder.decode(&sample).expect("decode");
+
+    // Top-left 2x2 quadrant (bx=0, by=0) is index 1 -> (60, 40, 20)
+    assert_eq!(frame.pixel_rgb(0, 0).expect("pixel"), [60, 40, 20]);
+    assert_eq!(frame.pixel_rgb(1, 1).expect("pixel"), [60, 40, 20]);
+    // Top-right 2x2 quadrant (bx=2, by=0) is index 2 -> (120, 80, 40)
+    assert_eq!(frame.pixel_rgb(2, 0).expect("pixel"), [120, 80, 40]);
+    assert_eq!(frame.pixel_rgb(3, 1).expect("pixel"), [120, 80, 40]);
+    // Bottom-left 2x2 quadrant (bx=0, by=2) is index 3 -> (180, 120, 60)
+    assert_eq!(frame.pixel_rgb(0, 2).expect("pixel"), [180, 120, 60]);
+    assert_eq!(frame.pixel_rgb(1, 3).expect("pixel"), [180, 120, 60]);
+    // Bottom-right 2x2 quadrant (bx=2, by=2) is index 1 -> (60, 40, 20)
+    assert_eq!(frame.pixel_rgb(2, 2).expect("pixel"), [60, 40, 20]);
+    assert_eq!(frame.pixel_rgb(3, 3).expect("pixel"), [60, 40, 20]);
+}
