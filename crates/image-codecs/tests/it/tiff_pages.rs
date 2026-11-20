@@ -539,6 +539,7 @@ fn every_ifd_and_subifd_is_listed_and_decodable() {
         // Like Photoshop: the first full-resolution page opens; the thumbnail is skipped.
         let img = decode_ok(&b.bytes);
         assert_eq!((img.dimensions(), img.data()[0]), ((9, 7), 2));
+        assert_eq!(probe_size(&b.bytes).unwrap(), (9, 7), "the header probe sizes the page decode opens");
         assert_eq!(img.warnings, [DecodeWarning::MorePages { total: Some(2) }]);
         // Every directory decodes on request.
         for (i, (w, level)) in [(4, 1u8), (9, 2), (3, 5), (2, 6), (9, 3), (5, 4)].into_iter().enumerate() {
@@ -554,6 +555,7 @@ fn a_file_of_only_thumbnails_still_opens() {
     let b = build(true, false, &[gray_page(4, 3, 7, Some(1))], &[0]);
     assert_eq!(tiff_info(&b.bytes).unwrap().default_page(), Some(0));
     assert_eq!(decode_ok(&b.bytes).data()[0], 7);
+    assert_eq!(probe_size(&b.bytes).unwrap(), (4, 3));
 }
 
 #[test]
@@ -698,6 +700,9 @@ fn hostile_sizes_and_counts_are_refused_without_allocating() {
             patch_value(&mut b, little, big, 0, 256, 0, wv);
             patch_value(&mut b, little, big, 0, 257, 0, hv);
             assert!(decode(&b.bytes).is_err(), "{wv}x{hv}");
+            if wv > 300_000 || hv > 300_000 {
+                assert!(matches!(probe_size(&b.bytes), Err(CodecError::LimitExceeded(_))), "{wv}x{hv}: probe");
+            }
             assert!(decode_with(&b.bytes, &DecodeOptions { limits: Limits::none(), ..Default::default() }).is_err(), "{wv}x{hv} without limits");
         }
         // A strip-offset count far past the end of the file.
@@ -805,6 +810,7 @@ fn poke(bytes: &[u8]) {
     let _ = decode_with(bytes, &DecodeOptions { limits: Limits { max_alloc: 16 << 20, ..Limits::default() }, ..Default::default() });
     let _ = exif_orientation(bytes);
     let _ = tiff_orientation(bytes);
+    let _ = probe_size(bytes);
     if let Ok(info) = tiff_info(bytes) {
         for i in 0..info.pages.len().min(8) {
             let _ = decode_tiff_page(bytes, i, &DecodeOptions::default());
@@ -814,15 +820,18 @@ fn poke(bytes: &[u8]) {
 
 #[test]
 fn zoo_decodes_and_never_panics_when_cut_or_corrupted() {
-    for f in zoo() {
+    // CRAFT_HOSTILE_DIVISOR=N (pull requests) runs every N-th cut and flip, from a different offset
+    // for each file, and 1/N of the random rounds.
+    let step = craft_media_testkit::hostile::divisor();
+    for (k, f) in zoo().into_iter().enumerate() {
         let info = tiff_info(&f).unwrap();
         for i in 0..info.pages.len() {
             decode_tiff_page(&f, i, &DecodeOptions::default()).unwrap();
         }
-        for cut in 0..f.len() {
+        for cut in (0..f.len()).filter(|cut| (cut + k) % step == 0) {
             poke(&f[..cut]);
         }
-        for i in 0..f.len() {
+        for i in (0..f.len()).filter(|i| (i + k) % step == 0) {
             for flip in [0xffu8, 0x80, 0x01] {
                 let mut g = f.clone();
                 g[i] ^= flip;
@@ -830,7 +839,7 @@ fn zoo_decodes_and_never_panics_when_cut_or_corrupted() {
             }
         }
         let mut r = Rng::new(f.len() as u64);
-        for _ in 0..300 {
+        for _ in 0..300usize.div_ceil(step) {
             let mut g = f.clone();
             for _ in 0..4 {
                 let i = (r.next_u64() as usize) % g.len();

@@ -28,11 +28,13 @@ pub struct WriterOptions {
     /// chapter track (`tref/chap` → disabled text track) and as a Nero `udta/chpl` list;
     /// [`FragmentedWriter`] writes only `chpl`. See [`crate::isobmff::chapters`] for the formats and limits.
     pub chapters: Vec<Chapter>,
+    /// Additional compatible brands appended to the `ftyp` box (for example `*b"av01"`).
+    pub compatible_brands: Vec<[u8; 4]>,
 }
 
 impl WriterOptions {
     pub fn new(brand: Brand) -> Self {
-        WriterOptions { brand, movie_timescale: 1000, metadata: Vec::new(), chapters: Vec::new() }
+        WriterOptions { brand, movie_timescale: 1000, metadata: Vec::new(), chapters: Vec::new(), compatible_brands: Vec::new() }
     }
 }
 
@@ -213,20 +215,26 @@ fn rescale(v: u64, from: u32, to: u32) -> u64 {
 
 const MATRIX: [i32; 9] = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x4000_0000];
 
-fn write_ftyp(b: &mut BoxBuf, brand: Brand) {
+fn write_ftyp(b: &mut BoxBuf, brand: Brand, compatible_brands: &[[u8; 4]]) {
     let m = b.start(b"ftyp");
-    match brand {
+    let base: &[[u8; 4]] = match brand {
         Brand::Mp4 => {
             b.bytes(b"isom");
             b.u32(0x200);
-            for c in [b"isom", b"iso2", b"avc1", b"mp41", b"mp42"] {
-                b.bytes(c);
-            }
+            &[*b"isom", *b"iso2", *b"avc1", *b"mp41", *b"mp42"]
         }
         Brand::Mov => {
             b.bytes(b"qt  ");
             b.u32(0x200);
-            b.bytes(b"qt  ");
+            &[*b"qt  "]
+        }
+    };
+    for c in base {
+        b.bytes(c);
+    }
+    for c in compatible_brands {
+        if !base.contains(c) {
+            b.bytes(c);
         }
     }
     b.end(m);
@@ -645,7 +653,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
     pub fn new(mut w: W, opts: WriterOptions) -> Result<Self> {
         let start = w.stream_position()?;
         let mut b = BoxBuf::new();
-        write_ftyp(&mut b, opts.brand);
+        write_ftyp(&mut b, opts.brand, &opts.compatible_brands);
         let pad = b.len() as u64;
         b.leaf(if opts.brand == Brand::Mov { b"wide" } else { b"free" }, &[]);
         let mdat = b.len() as u64;
@@ -977,7 +985,7 @@ impl<W: Write> FragmentedWriter<W> {
         let qt = self.opts.brand == Brand::Mov;
         let ts = self.opts.movie_timescale.max(1);
         let mut b = BoxBuf::new();
-        write_ftyp(&mut b, self.opts.brand);
+        write_ftyp(&mut b, self.opts.brand, &self.opts.compatible_brands);
         let m = b.start(b"moov");
         write_mvhd(&mut b, ts, 0, self.tracks.len() as u32 + 1);
         for t in &self.tracks {
@@ -1477,5 +1485,21 @@ mod tests {
             }
             assert_eq!(f.read_sample(plain.as_slice(), 1, 0).unwrap(), 7u32.to_be_bytes());
         }
+    }
+
+    #[test]
+    fn ftyp_appends_custom_compatible_brands_without_duplicates() {
+        let mut opts = WriterOptions::new(Brand::Mp4);
+        opts.compatible_brands = vec![*b"av01", *b"isom", *b"av01"];
+        let mut w = Mp4Writer::new(Cursor::new(Vec::new()), opts).unwrap();
+        let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+        w.write_sample(v, WriteSample { data: &[1; 4], duration: 40, composition_offset: 0, is_sync: true }).unwrap();
+        let out = w.finish().unwrap().into_inner();
+        let size = u32::from_be_bytes(out[0..4].try_into().unwrap()) as usize;
+        assert_eq!(&out[4..8], b"ftyp");
+        let (brands, rest) = out[16..size].as_chunks::<4>();
+        assert!(rest.is_empty());
+        assert!(brands.contains(b"av01"), "missing av01 in {brands:?}");
+        assert_eq!(brands.iter().filter(|&&b| b == *b"isom").count(), 1);
     }
 }
