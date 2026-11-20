@@ -3226,3 +3226,26 @@ fn complex_script_bold_and_italic_toggles_follow_the_styles_own_value() {
     let rc = doc.styles.resolve_char(p.props.style.as_deref(), run).complex();
     assert_eq!((rc.bold, rc.italic), (true, false));
 }
+
+/// A paragraph's style is known before its characters are formatted, so the complex-script
+/// toggles read its value: under a Normal with complex-script bold and italic on, 0x80 (the
+/// style's value) keeps complex-script bold on and 0x81 (inverted) turns complex-script italic
+/// off.
+#[test]
+fn complex_script_toggles_read_the_paragraph_styles_value() {
+    let on = &[0x01u8][..];
+    let spec = RichSpec {
+        text: "\u{e17}\u{e14}\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), grpprl(&[(0x085C, on), (0x085D, on)]))],
+        fonts: vec!["Angsana New"],
+        chpx_runs: vec![(0, grpprl(&[(0x0882, on), (0x085C, &[0x80]), (0x085D, &[0x81])]))],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    assert_eq!(p.props.style.as_deref(), Some("Normal"));
+    let run = &p.runs[0].props;
+    assert_eq!((run.bold_cs, run.italic_cs), (Some(true), Some(false)), "{run:?}");
+    let rc = doc.styles.resolve_char(p.props.style.as_deref(), run).complex();
+    assert_eq!((rc.bold, rc.italic), (true, false));
+}
