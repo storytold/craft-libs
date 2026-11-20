@@ -333,7 +333,17 @@ pub struct HeaderRegion {
 impl HeaderRegion {
     /// A header with no drag band, no rule, on its own line, with no trailing region, no fill and no inset.
     pub const fn new() -> Self {
-        HeaderRegion { band: DragBand::None, rule: false, rule_above: false, inline: false, inline_width: None, trailing: false, fill: None, inset: Pad::None, gap: None }
+        HeaderRegion {
+            band: DragBand::None,
+            rule: false,
+            rule_above: false,
+            inline: false,
+            inline_width: None,
+            trailing: false,
+            fill: None,
+            inset: Pad::None,
+            gap: None,
+        }
     }
 
     /// The surface of a band behind the header.

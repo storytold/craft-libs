@@ -355,9 +355,7 @@ impl Strip<'_> {
     fn ends_pass(&self, batch: &Batch, event: &KeyEvent, next: Option<&KeyEvent>) -> bool {
         // A Space and its release before the next key event wait for one pass together: they are a tap, and the pass
         // that reports them presses and releases the stop at once (`batch.space_release_pending`).
-        let tap = matches!(event, KeyEvent::Press { key: Key::Space, .. })
-            && batch.space_release_pending
-            && !self.canvas_space;
+        let tap = matches!(event, KeyEvent::Press { key: Key::Space, .. }) && batch.space_release_pending && !self.canvas_space;
         let KeyEvent::Press { key, input, .. } = event else { return false };
         let typed = !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || batch.escapes > 0;
         let _ = next;
@@ -494,10 +492,14 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
     let (batch, visible, later) = with(ctx, viewport, |stage| {
         // The pass's bare Space release, read from the input itself: a press the one-press rule or an input sweep held
         // back must still hand its release to the stop it pressed (`route::space_held`).
-        let space_releases = events.iter().filter(|arrived| {
-            matches!(&raw_input::key_event(&arrived.event, os, latin), KeyEvent::Release { input }
+        let space_releases = events
+            .iter()
+            .filter(|arrived| {
+                matches!(&raw_input::key_event(&arrived.event, os, latin), KeyEvent::Release { input }
                 if input.physical.or(input.typed) == Some(Key::Space) && !input.mods.shift && !input.mods.alt)
-        }).count() > 0;
+            })
+            .count()
+            > 0;
         let claims = stage_claims(&record, stage);
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
         stage.layout.set_latin(input.keyboard_layout_is_latin);
@@ -522,7 +524,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &RawInput, events: &mut Vec<Arriv
             alt_code_ended,
             bound: &bound,
         };
-        let mut batch = Batch { space_release_pending: space_releases && !hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed), ..Batch::default() };
+        let mut batch = Batch {
+            space_release_pending: space_releases && !hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
+            ..Batch::default()
+        };
         let mut visible = None;
         let mut later = Vec::new();
         stage.keyed = false;

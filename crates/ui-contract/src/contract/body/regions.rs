@@ -426,10 +426,11 @@ impl<'b> BodyHooks<'b> {
         let header = if inline {
             // The header keeps the width it measured, none when it measured nothing; before its first measure it
             // takes the whole line. The body takes the rest.
-            let head_w = props.header.and_then(|header| header.inline_width).filter(|width| width.is_finite() && *width > 0.0).map_or_else(
-                || sizes.header.map_or(width, |took| took.x.min(width)),
-                |declared| declared.min(width),
-            );
+            let head_w = props
+                .header
+                .and_then(|header| header.inline_width)
+                .filter(|width| width.is_finite() && *width > 0.0)
+                .map_or_else(|| sizes.header.map_or(width, |took| took.x.min(width)), |declared| declared.min(width));
             let cut = if head_w > 0.0 { (head_w + self.region_gap).min(width) } else { 0.0 };
             if rtl {
                 body.max.x = right - cut;

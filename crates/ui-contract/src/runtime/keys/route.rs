@@ -62,7 +62,9 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     if let Some(rec) = &target {
         // A held Space activates on its release, as a mouse release clicks, and it activates the stop that was
         // pressed even when the focus has moved since: the held stop's member and root are what the release has.
-        if (batch.space_released || batch.space_release_pending) && let Some(held) = space_held::held(ctx) {
+        if (batch.space_released || batch.space_release_pending)
+            && let Some(held) = space_held::held(ctx)
+        {
             space_held::clear(ctx);
             route_activate(ctx, &held.record(), &mut routed, &mut activated);
         }
@@ -588,7 +590,6 @@ fn press_route(ctx: &Context, os: Os, rec: &StopRec, press: &Press, driven: Opti
     }
 }
 
-
 fn is_vertical(mv: NavMove) -> bool {
     matches!(mv, NavMove::Up | NavMove::Down | NavMove::PageUp | NavMove::PageDown | NavMove::Start | NavMove::End)
 }
@@ -681,7 +682,6 @@ mod space_held {
             StopRec { stop, scope: None }
         }
     }
-
 }
 
 /// `Activate` of a group member goes to the group's root, which reads `activated_member`. A child or part of a
