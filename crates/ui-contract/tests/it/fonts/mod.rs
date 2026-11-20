@@ -252,3 +252,21 @@ pub(super) fn synthetic_bitmap_ttf(family: &str, c: char) -> Vec<u8> {
 
     synthetic_ttf_with(family, &[(c, false)], false, &[(b"EBLC", eblc), (b"EBDT", ebdt)])
 }
+
+/// Builds a font for `c` whose `glyf` glyph has a single collapsed contour (two identical points
+/// at `(5, 5)`), producing `move_to(5, 5)`, `line_to(5, 5)`, `close()` with zero drawable area.
+pub(super) fn synthetic_collapsed_ttf(family: &str, c: char) -> Vec<u8> {
+    let mut glyf = Vec::new();
+    for x in [1i16, 5, 5, 5, 5, 1, 0] {
+        glyf.extend(x.to_be_bytes());
+    }
+    glyf.extend([0x01u8, 0x01]);
+    for x in [5i16, 0, 5, 0] {
+        glyf.extend(x.to_be_bytes());
+    }
+    let mut loca = Vec::new();
+    for off in [0u32, 0, glyf.len() as u32] {
+        loca.extend(off.to_be_bytes());
+    }
+    synthetic_ttf_with(family, &[(c, false)], false, &[(b"glyf", glyf), (b"loca", loca)])
+}
