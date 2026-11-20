@@ -2,6 +2,7 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
+mod from_items;
 mod keytips;
 mod layout;
 mod memo;

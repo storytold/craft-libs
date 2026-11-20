@@ -1,11 +1,14 @@
 //! Stories of the in-window bar over a small model.
 
+use std::sync::Arc;
+
+use craft_ui::contract::Tracked;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use crate::{Document, Item, LayoutOptions, Menu, MenuBar, MenuBarUi, MenuRole, Node, Target, layout};
 
-fn model() -> MenuBar {
+fn build() -> MenuBar {
     let item = |id: &str, label: &str| Item::new(id, label);
     let bar = MenuBar {
         menus: vec![
@@ -37,9 +40,15 @@ fn model() -> MenuBar {
     layout(&bar, Target::Linux, &LayoutOptions::new("Sample")).bar
 }
 
+/// The story's model, kept in the story's memory: a model made again each pass is a new source, and the bar would run each time.
+fn model(ui: &Ui) -> Arc<Tracked<MenuBar>> {
+    let id = ui.scope_id().with("model");
+    ui.data_mut(|data| data.get_temp_mut_or_insert_with(id, || Arc::new(Tracked::new(build()))).clone())
+}
+
 #[story(MenuBarUi<'static>, covers = [Default], drive = Drive::Never)]
 fn menu_bar_ui(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model()).target(Target::Linux).show(ui);
+    MenuBarUi::new(&model(ui)).target(Target::Linux).show(ui);
     StoryOutput::default()
 }
 
@@ -51,12 +60,12 @@ fn open_window(fixture: &mut Fixture) {
 
 #[story(MenuBarUi<'static>, covers = [Open], drive = Drive::Custom(open_window))]
 fn menu_bar_ui_with_documents(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model()).target(Target::Linux).show(ui);
+    MenuBarUi::new(&model(ui)).target(Target::Linux).show(ui);
     StoryOutput::default()
 }
 
 #[story(MenuBarUi<'static>, covers = [], drive = Drive::Never)]
 fn menu_bar_ui_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model()).target(Target::Linux).help_search(true).show(ui);
+    MenuBarUi::new(&model(ui)).target(Target::Linux).help_search(true).show(ui);
     StoryOutput::default()
 }

@@ -1021,6 +1021,13 @@ impl MemoProps for craft_behavior::fit::FitKeep {
 }
 
 /// Derived `Hash` (`#[non_exhaustive]`).
+impl MemoProps for craft_host::target::Os {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
+/// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_host::target::WindowKind {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
