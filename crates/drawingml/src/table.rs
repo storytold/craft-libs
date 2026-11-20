@@ -120,6 +120,7 @@ impl Table {
     }
     /// Insert an empty row before `at`. A merge the new row falls inside grows to cover it.
     /// Returns false, leaving the table as it was, when the row would take it past [`MAX_CELLS`].
+    #[must_use]
     pub fn insert_row(&mut self, at: usize) -> bool {
         if self.cols.len().saturating_mul(self.rows.len().saturating_add(1)) > MAX_CELLS {
             return false;
@@ -133,6 +134,7 @@ impl Table {
     }
     /// Insert an empty column before `at`. A merge the new column falls inside grows to cover it.
     /// Returns false, leaving the table as it was, when the column would take it past [`MAX_CELLS`].
+    #[must_use]
     pub fn insert_col(&mut self, at: usize) -> bool {
         if self.cols.len().saturating_add(1).saturating_mul(self.rows.len()) > MAX_CELLS {
             return false;
