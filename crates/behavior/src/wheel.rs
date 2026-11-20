@@ -95,7 +95,7 @@ pub struct Wheel {
 /// The eased motion of a canvas's line wheel: notches gather into owed motion that later passes pay out.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WheelEase {
-    owed: Vec2,
+    owed: kurbo::Vec2,
     burst: u32,
     last_notch: f64,
     last_sign: Vec2,
@@ -158,7 +158,7 @@ impl WheelEase {
         if !self.owes() {
             self.last_paid = now - FIRST_PASS;
         }
-        self.owed = Vec2::new(owe(self.owed.x, pan.x * boost), owe(self.owed.y, pan.y * boost));
+        self.owed = kurbo::Vec2::new(owe(self.owed.x, f64::from(pan.x * boost)), owe(self.owed.y, f64::from(pan.y * boost)));
     }
 
     /// Drops the owed motion on the axes marked.
@@ -175,7 +175,7 @@ impl WheelEase {
     pub fn step(&mut self, now: f64) -> Vec2 {
         if !now.is_finite() || now < self.last_paid {
             // A clock that runs backwards or breaks cannot tell how much to pay: the tail goes.
-            self.owed = Vec2::ZERO;
+            self.owed = kurbo::Vec2::ZERO;
             self.last_paid = if now.is_finite() { now } else { self.last_paid };
             return Vec2::ZERO;
         }
@@ -186,26 +186,33 @@ impl WheelEase {
         }
         let fraction = 1.0 - 0.1_f64.powf(dt / 0.1);
         let paid = Vec2::new(pay(self.owed.x, fraction), pay(self.owed.y, fraction));
-        self.owed -= paid;
+        self.owed -= kurbo::Vec2::new(f64::from(paid.x), f64::from(paid.y));
+        // A tail below normal f32 precision cannot move a view and must not keep scheduling frames.
+        if self.owed.x.abs() < f64::from(f32::MIN_POSITIVE) {
+            self.owed.x = 0.0;
+        }
+        if self.owed.y.abs() < f64::from(f32::MIN_POSITIVE) {
+            self.owed.y = 0.0;
+        }
         paid
     }
 
     /// Whether motion is still owed.
     pub fn owes(&self) -> bool {
-        self.owed != Vec2::ZERO
+        self.owed != kurbo::Vec2::ZERO
     }
 }
 
 /// `owed` with `more` added on one axis: motion the other way drops what was owed, and the sum stays within
 /// `MAX_OWED`.
-fn owe(owed: f32, more: f32) -> f32 {
+fn owe(owed: f64, more: f64) -> f64 {
     let owed = if more * owed < 0.0 { 0.0 } else { owed };
-    (owed + more).clamp(-MAX_OWED, MAX_OWED)
+    (owed + more).clamp(-f64::from(MAX_OWED), f64::from(MAX_OWED))
 }
 
 /// The part of `owed` one pass pays, `fraction` of it; a remainder under `SETTLE` is paid whole.
-fn pay(owed: f32, fraction: f64) -> f32 {
-    if owed.abs() <= SETTLE { owed } else { (f64::from(owed) * fraction) as f32 }
+fn pay(owed: f64, fraction: f64) -> f32 {
+    if owed.abs() <= f64::from(SETTLE) { owed as f32 } else { (owed * fraction) as f32 }
 }
 
 impl Wheel {
@@ -772,11 +779,11 @@ mod tests {
 
     #[test]
     fn fast_notches_accelerate_to_a_cap_and_reset_on_reversal_or_idle_but_a_lone_notch_does_not() {
-        const NOTCH: f32 = 40.0;
+        const NOTCH: f64 = 40.0;
         // What one notch of `y` points adds to the owed motion.
-        let notch = |ease: &mut WheelEase, y: f32, now: f64| {
+        let notch = |ease: &mut WheelEase, y: f64, now: f64| {
             let before = ease.owed.y;
-            ease.feed(Vec2::new(0.0, y), now);
+            ease.feed(Vec2::new(0.0, y as f32), now);
             ease.owed.y - before
         };
         let mut ease = WheelEase::default();
@@ -788,9 +795,9 @@ mod tests {
             gains.push(notch(&mut ease, NOTCH, 1.5 + f64::from(i) * 0.02));
         }
         // The owed sum rounds in its last bits, so per-notch gains compare within a hundredth of a point.
-        let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
         assert!(gains.windows(2).all(|pair| pair[1] > pair[0] - 0.01), "a fast run never pays less per notch: {gains:?}");
-        let fastest = gains.iter().copied().fold(0.0, f32::max);
+        let fastest = gains.iter().copied().fold(0.0, f64::max);
         assert!(fastest > 2.0 * NOTCH, "a fast run accelerates: {gains:?}");
         assert!(fastest < 6.0 * NOTCH + 0.01, "the acceleration is capped: {gains:?}");
         assert!(gains.last().is_some_and(|&last| near(last, 6.0 * NOTCH)), "a long run reaches the cap and stays there: {gains:?}");

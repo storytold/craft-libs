@@ -712,7 +712,11 @@ fn run_pass(
         // The canvas was given the view the pass started with, so its change of it is the pan; the state's offset
         // may have moved on since (a scale change anchors the point at the centre), and the pan adds to that.
         let panned = drawn_frame.offset_of(target.center, vw, vh);
-        let given_at = drawn_frame.offset_of(given.center, vw, vh);
+        // A new layout can put the old offset outside its document. The canvas clamps that view before
+        // reporting it; that correction is not a pan to add to the anchor computed above.
+        let mut baseline = given;
+        CanvasScrollbars::clamp(&mut baseline, DocRect::from_origin_size(Point::ZERO, drawn_frame.document(&drawn)));
+        let given_at = drawn_frame.offset_of(baseline.center, vw, vh);
         let (along_x, along_y) = (panned.0 - given_at.0, panned.1 - given_at.1);
         if along_x.abs() > OFFSET_EPSILON || along_y.abs() > OFFSET_EPSILON {
             want = (state.offset.0 + along_x, state.offset.1 + along_y);

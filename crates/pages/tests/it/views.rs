@@ -235,6 +235,21 @@ fn a_changed_zoom_keeps_the_point_at_the_centre_and_a_new_room_the_current_pages
     assert!((after - before).abs() < 1.0, "the current page's top stays put: {before} then {after}");
 }
 
+#[trial]
+fn resizing_back_keeps_the_last_pages_top() {
+    let mut view = rig(3, state_with(|s| s.fit = Fit::Width));
+    view.state.borrow_mut().go_to(2);
+    view.fixture.idle(4);
+    let top = |out: &Out| out.rects[2].y0 - out.offset.1;
+    let before = top(&view.out.borrow());
+    view.fixture.room(vec2(1200.0, 600.0));
+    view.fixture.idle(4);
+    view.fixture.room(vec2(900.0, 600.0));
+    view.fixture.idle(4);
+    let after = top(&view.out.borrow());
+    assert!((before - after).abs() < 1.0, "the last page stays at its top: {before} then {after}");
+}
+
 /// Turning the page gaps off keeps the scroll offset, as production did, so the pages below the top close up toward
 /// it; also when the gaps change while the view is hidden (a page grid shown in its place) and it shows again.
 #[trial]
@@ -291,6 +306,29 @@ fn wheel(fixture: &mut Fixture, lines: f32) {
     }]);
 }
 
+#[trial]
+fn an_eased_notch_settles_at_the_same_page_position_as_an_immediate_notch() {
+    let run = |eased| {
+        let mut navigation = NavigationOptions::default();
+        navigation.wheel_line = 100.0;
+        navigation.eased_wheel = eased;
+        let start = state_with(|s| {
+            s.fit = Fit::None;
+            s.zoom = 1.0;
+        });
+        let mut view = rig_over(DemoPages::new(3), start, navigation, true);
+        wheel(&mut view.fixture, -1.0);
+        view.fixture.idle(100);
+        let state = view.state.borrow();
+        let out = view.out.borrow();
+        (state.offset.1, out.pages[0].rect.min.y)
+    };
+    let immediate = run(false);
+    let eased = run(true);
+    assert!((immediate.0 - eased.0).abs() < 0.0000001, "both notches settle at the same offset: {immediate:?} {eased:?}");
+    assert!((immediate.1 - eased.1).abs() < 0.5, "both notches place the page alike: {immediate:?} {eased:?}");
+}
+
 /// A scroll of `dy` points over the middle of the room from `source`, in device phase `phase`.
 fn swipe(fixture: &mut Fixture, dy: f32, phase: egui::TouchPhase, source: egui::MouseWheelSource) {
     fixture.frame(vec![egui::Event::MouseWheel {
@@ -337,6 +375,28 @@ fn half_notches_past_the_bottom_turn_once_they_add_up_within_one_gesture_and_nev
 
     wheel(&mut fixture, -1.0);
     assert_eq!(state.borrow().current, 2, "a whole notch turns");
+}
+
+#[trial]
+fn the_preview_takes_page_keys_when_first_opened() {
+    let at = Rc::new(RefCell::new(1_usize));
+    let kept = Rc::clone(&at);
+    let pages = DemoPages::new(5);
+    let mut open = false;
+    let mut fixture = Fixture::new(move |ui| {
+        if craft_ui::contract::clicked(&craft_ui::buttons::Button::new("Preview").show(ui)) {
+            open = true;
+        }
+        if open {
+            PagePreview::new(&pages, &[0, 1, 2, 3, 4], &mut kept.borrow_mut(), PAPER).show(ui);
+        }
+    });
+    fixture.room(vec2(900.0, 600.0));
+    fixture.settle();
+    let button = fixture.by_label("Preview").expect("preview button");
+    fixture.click(&button).settle();
+    fixture.key(Key::PageDown, Modifiers::NONE);
+    assert_eq!(*at.borrow(), 2, "Page Down steps the newly opened preview");
 }
 
 #[trial]

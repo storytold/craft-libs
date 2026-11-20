@@ -273,6 +273,8 @@ fn every_open_of_the_grid_reveals_the_asked_page() {
     let open = Rc::new(std::cell::Cell::new(true));
     let reveal = Rc::new(std::cell::Cell::new(Some(30_usize)));
     let current = Rc::new(std::cell::Cell::new(30_usize));
+    let navigated = Rc::new(std::cell::Cell::new(false));
+    let observed = Rc::clone(&navigated);
     let picked: Rc<RefCell<Selection<usize>>> = Rc::default();
     let (shown, asked, at, held) = (Rc::clone(&open), Rc::clone(&reveal), Rc::clone(&current), Rc::clone(&picked));
     let pages = DemoPages::new(60);
@@ -287,6 +289,7 @@ fn every_open_of_the_grid_reveals_the_asked_page() {
                 .show(ui);
             for event in out.events {
                 if let ThumbnailEvent::Go(page) = event {
+                    observed.set(true);
                     at.set(page);
                 }
             }
@@ -294,6 +297,7 @@ fn every_open_of_the_grid_reveals_the_asked_page() {
     });
     fixture.room(vec2(600.0, 600.0));
     fixture.settle();
+    assert!(!navigated.get(), "revealing the current page does not navigate the document");
     let in_view = |fixture: &Fixture, n: usize| {
         let grid = fixture.by_role(Role::LIST_BOX).first().map(|node| node.rect).expect("the grid");
         fixture.by_label(&format!("Page {n}")).is_some_and(|node| grid.contains_rect(node.rect))
