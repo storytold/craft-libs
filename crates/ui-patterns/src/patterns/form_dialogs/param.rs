@@ -463,6 +463,7 @@ impl NumberUnit {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct RowOptions {
     range_decimals: Option<u32>,
+    pub(crate) popup_slider: bool,
     randomize: bool,
     eyedropper: bool,
     eyedropper_armed: bool,
@@ -779,6 +780,13 @@ impl Param {
             ParamKind::Range { .. } => self.options.get_or_insert_default().range_decimals = Some(places),
             _ => {}
         }
+        self
+    }
+
+    /// Shows a Range row's slider in a linear popup opened from the number field.
+    #[must_use]
+    pub fn popup_slider(mut self) -> Self {
+        self.options.get_or_insert_default().popup_slider = true;
         self
     }
 
