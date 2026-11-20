@@ -1252,6 +1252,10 @@ fn paint_over_step(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostSte
     e.paint_over(ui, env);
     steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(h.outer_clip);
+    // Every member of the root's arena has joined: its widgets take their senses.
+    if h.member.is_none() {
+        sensing::widen_root(&h.ctx, h.id, p.facts.role == Role::None);
+    }
 }
 
 /// Steps 15 (settle) and 16 (report, then the tooltip), and the activation step 17 fires.

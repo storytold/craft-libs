@@ -49,6 +49,22 @@ pub(crate) fn widget(ui: &Ui, id: Id, rect: Rect, sense: Sense) -> Response {
     response
 }
 
+/// Adds `sense` to the egui widget `id` the running pass registered, at its rect: egui ORs the senses of a widget
+/// registered again in a pass. Returns whether the widget took a sense it lacked; nothing for a widget the pass has
+/// not registered, or one with no area, which egui's hit test never names.
+pub(crate) fn widen(ctx: &egui::Context, id: Id, sense: egui::Sense) -> bool {
+    let registered = ctx.viewport(|viewport| viewport.this_pass.widgets.get(id).map(|widget| (widget.sense, widget.rect)));
+    let Some((has, rect)) = registered else { return false };
+    if has.contains(sense) || !(rect.is_positive() && rect.is_finite()) {
+        return false;
+    }
+    // `read_response` answers from the running pass for a registered widget with a positive rect.
+    ctx.read_response(id).is_some_and(|response| {
+        let _ = response.interact(sense);
+        true
+    })
+}
+
 /// Whether a pointer button went down on `response`'s widget and is still down.
 pub(crate) fn is_pressed(response: &Response) -> bool {
     response.is_pointer_button_down_on()

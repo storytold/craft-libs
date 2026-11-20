@@ -41,6 +41,12 @@ pub(crate) fn above(ctx: &Context, below: Id, skip: &[Id]) -> Vec<Rect> {
     found
 }
 
+/// The sense of the widget `id` in the last finished pass, whose widget rects egui's hit test reads for the running
+/// pass's press targets. Hover only when that pass did not show `id`.
+pub(crate) fn sensed_last_pass(ctx: &Context, id: Id) -> egui::Sense {
+    ctx.widget_rect_last_pass(id).map_or(egui::Sense::hover(), |widget| widget.sense)
+}
+
 /// An egui widget the runtime makes for a purpose no component registers (a scrim that absorbs presses).
 #[cfg(feature = "testing")]
 pub(crate) fn note_widget(ctx: &Context, id: Id) {
