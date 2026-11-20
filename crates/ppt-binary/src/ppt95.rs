@@ -12,10 +12,11 @@
 //! A page's object list (3000) holds shapes (3008), placeholders (3010, which add a 3011 atom: the
 //! type, the size, then the index) and lines (3014). A shape or placeholder has its geometry
 //! (3009): the shape code and its adjust value, the box as left, top, right and bottom in master
-//! units (576 per inch) measured from the slide's centre, then the angle in sixteenths of a degree.
-//! A turned shape keeps its unturned box. A line holds 3015: its start and end points, in the same
-//! units. Shapes and lines have a format (3005) with their fill, line, shadow and horizontal flip
-//! ([`shape`]). A shape that draws nothing but its text is a text box.
+//! units (576 per inch) measured from the slide's centre, then what is left of the angle after
+//! whole quarter-turns, in sixteenths of a degree. A line holds 3015: its start and end points, in
+//! the same units, and 3007: its arrowheads. Shapes and lines have a format (3005) with their fill,
+//! line width, dashes and colour, shadow, angle and flips ([`shape`]); a box turned by an odd number
+//! of quarter-turns is turned back. A shape that draws nothing but its text is a text box.
 //!
 //! PowerPoint 95 numbers placeholders its own way: on the master 1 title, 2 body, 6 date, 7 slide
 //! number and 8 footer; on slides 0x0C title, 0x0D body, 0x0F centred title and 0x10 subtitle. A
@@ -23,10 +24,9 @@
 //! caller's default master's, and the footer row places every layout's, as the PowerPoint 97 path
 //! does.
 //!
-//! Not read yet: line widths and styles, vertical flips and shadow offsets (no probe changed them);
-//! groups and freeforms, which are skipped; pictures; notes; and the master's text styles, so the
-//! levels of the default master's styles stay as they are (the slide text carries its own
-//! formatting in full).
+//! Not read yet: shadow offsets (no probe could move one); groups and freeforms, which are
+//! skipped; pictures; notes; and the master's text styles, so the levels of the default master's
+//! styles stay as they are (the slide text carries its own formatting in full).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -64,6 +64,7 @@ mod rt {
     pub const PLACEHOLDER: u32 = 3010;
     pub const PLACEHOLDER_ATOM: u32 = 3011;
     pub const LINE: u32 = 3014;
+    pub const ARROWHEADS: u32 = 3007;
     pub const LINE_ATOM: u32 = 3015;
     pub const TEXT: u32 = 4001;
 }
@@ -258,7 +259,7 @@ fn xfrm_of([l, t, right, b]: [i32; 4], size: Size) -> Xfrm {
 }
 
 /// A line: the box its ends span, flipped so that it runs from its start to its end, drawn as its
-/// format says (in the scheme's text and lines colour without one).
+/// format says (1 pt in the scheme's text and lines colour without one), with its arrowheads.
 fn line(r: &Rec, scheme: &Scheme, size: Size) -> Option<Object> {
     let a = r.child(rt::LINE_ATOM)?;
     let (x1, y1, x2, y2) = (a.i32(0)?, a.i32(4)?, a.i32(8)?, a.i32(12)?);
@@ -266,10 +267,13 @@ fn line(r: &Rec, scheme: &Scheme, size: Size) -> Option<Object> {
     (xfrm.flip_h, xfrm.flip_v) = (x2 < x1, y2 < y1);
     let mut look = match r.child(rt::FORMAT) {
         Some(f) => shape::look(&f, scheme),
-        None => Look { line: shape::line_of(scheme[1]), ..Look::none() },
+        None => Look { line: shape::line_of(scheme[1], None), ..Look::none() },
     };
     // A line has no inside to fill, and its direction is in its ends.
-    (look.fill, look.flip_h) = (Fill::None, false);
+    (look.fill, look.flip_h, look.flip_v) = (Fill::None, false, false);
+    if let Some(heads) = r.child(rt::ARROWHEADS).filter(|_| look.line != Line::none()) {
+        shape::arrowheads(&mut look.line, &heads);
+    }
     let geom = Some(Geom::Preset { name: "line".into(), adj: vec![] });
     Some(Object { placeholder: false, ph: None, xfrm, text: None, geom, look, line: true })
 }
@@ -283,8 +287,10 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     let g = r.child(rt::GEOMETRY)?;
     let sides = [g.i32(12)?, g.i32(16)?, g.i32(20)?, g.i32(24)?];
     let mut xfrm = xfrm_of(sides, size);
-    // The box is the unturned one; the angle is in sixteenths of a degree.
-    xfrm.rot = g.i32(28).map_or(0.0, |v| (f64::from(v) / 16.0).rem_euclid(360.0));
+    let format = r.child(rt::FORMAT);
+    // The angle the user set is the format's; the geometry's is what quarter-turns leave of it.
+    let drawn = g.i32(28).unwrap_or(0);
+    shape::orient(&mut xfrm, drawn, format.and_then(|f| f.i32(48)).unwrap_or(drawn));
     let placeholder = r.kind == rt::PLACEHOLDER;
     let ph = r.child(rt::PLACEHOLDER_ATOM).filter(|_| placeholder).and_then(|a| {
         let size = match a.u8(1) {
@@ -297,16 +303,13 @@ fn object(r: &Rec, env: &Env, scheme: &Scheme, size: Size) -> Option<Object> {
     let text = r.child(rt::TEXT).and_then(|c| text::text_body(&c, env, scheme, Some(sides), ph.is_none()));
     let (mut geom, mut look) = (None, Look::none());
     if !placeholder {
-        // The shape code is the low byte: PowerPoint 95 sets bits above it on some shapes (0x60 on
-        // the trapezoid).
-        if let Some((preset, upside_down)) = g.u8(0).and_then(|c| shape::preset(c as i8, g.i32(4), xfrm.w, xfrm.h)) {
-            geom = Some(preset);
-            xfrm.flip_v = upside_down;
-        }
-        if let Some(f) = r.child(rt::FORMAT) {
+        // The shape code is the low byte: the bits above it orient the outline as drawn (0x60 on a
+        // new trapezoid), which the format's angle and flips already say.
+        geom = g.u8(0).and_then(|c| shape::preset(c as i8, g.i32(4), xfrm.w, xfrm.h));
+        if let Some(f) = format {
             look = shape::look(&f, scheme);
         }
-        xfrm.flip_h = look.flip_h;
+        (xfrm.flip_h, xfrm.flip_v) = (look.flip_h, look.flip_v);
     }
     Some(Object { placeholder, ph, xfrm, text, geom, look, line: false })
 }
