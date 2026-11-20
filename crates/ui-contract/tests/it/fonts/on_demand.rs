@@ -381,6 +381,21 @@ fn candidates_with_empty_outlines_are_skipped_for_the_next_usable_font() {
 }
 
 #[trial]
+fn candidates_with_collapsed_outlines_are_skipped_for_the_next_usable_font() {
+    let collapsed = super::synthetic_collapsed_ttf("CollapsedArabic", 'ع');
+    assert_eq!(SystemCandidates.covers(&collapsed, 'ع'), None, "collapsed zero-length contour must not cover");
+    let collapsed_path = write("collapsed-arabic.ttf", &collapsed);
+    let arabic_path = write("usable-after-collapsed.ttf", ARABIC);
+    let files = Files::new(vec![("Arab", vec![collapsed_path, arabic_path.clone()])]);
+    let mut frames = Frames::new();
+    install(&frames, &files);
+
+    show(&mut frames, "ع");
+    assert!(draws(&frames, 'ع'));
+    assert_eq!(registered(&frames), [(arabic_path, 0)]);
+}
+
+#[trial]
 fn ideographic_space_requires_cmap_coverage_and_allows_zero_contours() {
     let no_space = super::synthetic_ttf("NoSpace", &[('日', true)], false);
     let with_space = super::synthetic_ttf("WithSpace", &[('\u{3000}', false)], false);

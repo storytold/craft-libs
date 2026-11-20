@@ -221,26 +221,46 @@ impl FontProvider for Installed {
     }
 }
 
-/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts the drawable segments of a glyph.
+/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts the drawable segments of a glyph,
+/// ignoring zero-length collapsed lines and curves whose control points and endpoint all coincide
+/// with the current point.
 #[derive(Default)]
-struct ContourCount(usize);
+struct ContourCount {
+    segments: usize,
+    start: Option<(f32, f32)>,
+    current: Option<(f32, f32)>,
+}
 
 impl skrifa::outline::OutlinePen for ContourCount {
-    fn move_to(&mut self, _x: f32, _y: f32) {}
-
-    fn line_to(&mut self, _x: f32, _y: f32) {
-        self.0 = self.0.saturating_add(1);
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.start = Some((x, y));
+        self.current = Some((x, y));
     }
 
-    fn quad_to(&mut self, _cx0: f32, _cy0: f32, _x: f32, _y: f32) {
-        self.0 = self.0.saturating_add(1);
+    fn line_to(&mut self, x: f32, y: f32) {
+        if self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
     }
 
-    fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
-        self.0 = self.0.saturating_add(1);
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
     }
 
-    fn close(&mut self) {}
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        if self.current != Some((cx0, cy0)) || self.current != Some((cx1, cy1)) || self.current != Some((x, y)) {
+            self.segments = self.segments.saturating_add(1);
+        }
+        self.current = Some((x, y));
+    }
+
+    fn close(&mut self) {
+        self.current = self.start;
+    }
 }
 
 /// Whether `font` draws at least one outline segment for `glyph_id`.
@@ -248,7 +268,7 @@ fn has_outline_contour(font: &skrifa::FontRef<'_>, glyph_id: skrifa::GlyphId) ->
     let Some(outline) = font.outline_glyphs().get(glyph_id) else { return false };
     let mut pen = ContourCount::default();
     let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
-    outline.draw(settings, &mut pen).is_ok() && pen.0 > 0
+    outline.draw(settings, &mut pen).is_ok() && pen.segments > 0
 }
 
 /// Whether `font` stores a readable, non-empty `COLR` glyph for `glyph_id`.
