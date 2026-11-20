@@ -1004,14 +1004,19 @@ fn perspective_push(
         let drift_place = 2.0 * spread * lean * lean;
         // Past the opposite edge (x < -1, the middle flipped) the factor levels off at place * e^(-ln² rho / 2) and the
         // row drifts further with 1 / s_m = x + 1 (measured on five boxes, rho 0.5 to 1.66).
-        let (factor, row) = if x < -1.0 {
+        // A shrink (x > 0) bends 1/s to `place * x / (1 - kappa x)`, kappa at least the linear law's slope and larger
+        // on boxes in strong perspective (measured on six boxes, rho 0.5 to 2.5). Homogeneous `(w, row * lam, lam)`.
+        let (w, lam, row) = if x < -1.0 {
             let extra = drift_row * lean * lean * (0.8 - 0.3 * lean);
-            (place * (-lean * lean / 2.0).exp(), row + drift_row * x + extra * (x + 1.0))
+            (1.0, place * (-lean * lean / 2.0).exp() * x, row + drift_row * x + extra * (x + 1.0))
+        } else if x > 0.0 {
+            let strong = if lean > 0.0 { 0.3734 - 0.179 * lean } else { 0.4215 - 0.1735 * lean };
+            let kappa = (drift_place / place).max(lean * lean * strong);
+            (1.0 - kappa * x, place * x, row + drift_row * x)
         } else {
-            (place + drift_place * x, row + drift_row * x)
+            (1.0, (place + drift_place * x) * x, row + drift_row * x)
         };
-        let inv_s = factor * x;
-        apply(&h, unit(1.0, row * inv_s, inv_s))
+        apply(&h, unit(w, row * lam, lam))
     } else if edge == 2 {
         // A bottom drag, in the start box's frame: the centre's row sits at `frac` of the middle row in document
         // units and drifts with `x` by a term odd in ln rho; its 1/s bends away from the side drags' `place * x` as x
