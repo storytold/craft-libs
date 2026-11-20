@@ -937,13 +937,24 @@ fn interpret_window<'a>(
                     .next()
                     .is_some();
 
-                if has_outline {
+                // PdfCraft patch: a glyph shown in a clipping mode that contributes no outline
+                // still clips -- the clip is empty, so nothing paints through it, as a glyph with
+                // an outline clips to its shape. Applying nothing instead left what followed
+                // unmasked. A text object that shows no glyph at all is not this case and leaves
+                // the clipping path alone, and a glyph whose outline is unavailable (Type 3)
+                // leaves the real clip unknown, so both stay unclipped.
+                let state = &context.get().text_state;
+                let empty_clip = state.clip_shown && !state.clip_unsupported;
+
+                if has_outline || empty_clip {
                     let clip_path = context.get().ctm * context.get().text_state.clip_paths.clone();
 
                     context.push_clip_path(clip_path, FillRule::NonZero, device);
                 }
 
                 context.get_mut().text_state.clip_paths.truncate(0);
+                context.get_mut().text_state.clip_shown = false;
+                context.get_mut().text_state.clip_unsupported = false;
             }
             TypedInstruction::TextFont(t) => {
                 let name = t.0;
@@ -988,17 +999,7 @@ fn interpret_window<'a>(
                     .map(TextStateFont::Fallback);
                 }
 
-                for obj in s.0.iter::<Object<'_>>() {
-                    match obj {
-                        Object::Number(num) => {
-                            context.get_mut().text_state.apply_adjustment(num.as_f32());
-                        }
-                        Object::String(text) => {
-                            text::show_text_string(context, device, resources, &text);
-                        }
-                        _ => {}
-                    }
-                }
+                text::show_text_array(context, device, resources, s.0);
             }
             TypedInstruction::HorizontalScaling(h) => {
                 context.get_mut().text_state.horizontal_scaling = h.0.as_f32();

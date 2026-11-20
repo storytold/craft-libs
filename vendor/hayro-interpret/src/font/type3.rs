@@ -309,15 +309,12 @@ impl<'a> Type3<'a> {
             glyph.nesting_depth,
         );
 
-        let mut resources = Resources::from_parent(
-            self.dict.get(RESOURCES).unwrap_or_default(),
+        // A procedure's own dictionary replaces the font's, and the font's replaces the
+        // enclosing scope. Only absence inherits; an explicit empty dictionary is isolated.
+        let resources = Resources::from_scope(
+            program.dict().get(RESOURCES).or_else(|| self.dict.get(RESOURCES)),
             glyph.parent_resources.clone(),
         );
-
-        // Technically not valid, but also support by Adobe Acrobat. See PDFBOX-5294.
-        if let Some(procs_resources) = program.dict().get::<Dict<'_>>(RESOURCES) {
-            resources = Resources::from_parent(procs_resources, resources);
-        }
 
         if is_shape_glyph {
             let mut device = Type3ShapeGlyphDevice::new(device, paint.clone());

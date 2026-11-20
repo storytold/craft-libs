@@ -312,8 +312,10 @@ impl<'a> TilingPattern<'a> {
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(&self.stream)?;
-        let resources = Resources::from_parent(
-            self.stream.dict().get(RESOURCES).unwrap_or_default(),
+        // Tiling patterns have their own required resource scope, even when malformed
+        // input omits the dictionary. They never borrow names from their caller.
+        let resources = Resources::from_scope(
+            Some(self.stream.dict().get(RESOURCES).unwrap_or_default()),
             self.parent_resources.clone(),
         );
         let iter = TypedIter::new(decoded.as_ref());

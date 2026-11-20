@@ -211,7 +211,7 @@ fn draw_form_xobject_once<'a, 'b>(
         });
         interpret(
             TypedIter::new(x_object.decoded.as_ref()),
-            &Resources::for_form(x_object.resources.clone(), resources.clone()),
+            &Resources::from_scope(x_object.resources.clone(), resources.clone()),
             context,
             device,
         );
@@ -261,7 +261,7 @@ fn draw_form_xobject_once<'a, 'b>(
         }
     }
 
-    let resources = Resources::for_form(x_object.resources.clone(), resources.clone());
+    let resources = Resources::from_scope(x_object.resources.clone(), resources.clone());
 
     // PdfCraft patch (70): an isolated group blending in DeviceCMYK starts from a backdrop of
     // its own, so a device able to blend in CMYK computes its interior apart and composites the
@@ -329,7 +329,7 @@ pub(crate) fn interpret_form_contents<'a>(
 
     interpret(
         TypedIter::new(x_object.decoded.as_ref()),
-        &Resources::for_form(x_object.resources.clone(), resources.clone()),
+        &Resources::from_scope(x_object.resources.clone(), resources.clone()),
         context,
         device,
     );
@@ -373,7 +373,7 @@ fn draw_knockout_passes<'a>(
         device.push_clip_path(&clip);
         interpret(
             TypedIter::new(x_object.decoded.as_ref()),
-            &Resources::for_form(x_object.resources.clone(), resources.clone()),
+            &Resources::from_scope(x_object.resources.clone(), resources.clone()),
             context,
             device,
         );
