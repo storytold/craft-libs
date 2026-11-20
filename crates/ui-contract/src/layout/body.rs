@@ -1171,6 +1171,26 @@ fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
     first.filter(|first| (2.0 * first - height).abs() <= ONE_LINE_SLACK)
 }
 
+/// Where a labelled control's row of `height` sits below the top of the flow, as `place_in_cell` places any other
+/// one-line child: `(offset, taken)`. On the line of the unwrapped `Row` around it the row's centre is on the line, and
+/// it takes the offset with its height, as the line does. Else, in a horizontal layout that does not wrap, it is
+/// centred in `room`, the flow's height, and takes only its height, so a tall room does not make the row taller.
+/// Anywhere else it sits at the top. An options bar shown in a slot shorter than it asks for centres its members this
+/// way; without it a check box with its label after it stood at the bar's top edge while the fields beside it sat on
+/// the bar's middle.
+pub(crate) fn labelled_above(ui: &Ui, room: f32, height: f32) -> (f32, f32) {
+    let env = Env::of(ui);
+    let layout = ui.layout();
+    match env.row_line.and_then(|line| line.centre) {
+        Some(centre) => {
+            let above = (centre - height / 2.0).max(0.0);
+            (above, above)
+        }
+        None if layout.is_horizontal() && !layout.main_wrap && !env.grid_top && room.is_finite() => (((room - height) / 2.0).max(0.0), 0.0),
+        None => (0.0, 0.0),
+    }
+}
+
 /// The rect a child of measured `size` takes in flow in `ui`: the next cell of the `Grid` or spread `Row` body that
 /// encloses it directly, else the next allocation of `ui`'s layout. A direct child of an unwrapped `Row` that is one
 /// line sits with its centre on the row's line; a child of more than one line (a column, a field with a help line)

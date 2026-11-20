@@ -305,7 +305,9 @@ fn flow_leaf_row<C: Show>(
     // The child's own height: a stacked label pushes the control down, and the allocation below follows the placement.
     // The row spans the room's own edges: a room that scrolls along x is unbounded at its start edge, the left one
     // under RTL.
-    let row = Rect::from_min_max(avail.min, egui::pos2(avail.max.x, avail.min.y + ideal.y));
+    // Outside a grid's cell the row sits on the line of the flow around it, as a control without a label after it does.
+    let (above, taken) = if in_cell { (0.0, 0.0) } else { crate::layout::labelled_above(ui, avail.height(), ideal.y) };
+    let row = Rect::from_min_max(egui::pos2(avail.min.x, avail.min.y + above), egui::pos2(avail.max.x, avail.min.y + above + ideal.y));
     let at = LeafLabel { id, owner, parent: None, row, text: &label, side: &side, under: &under };
     let placed = leaf(ui, &env, &at, &mut child, trailing);
     // In a column that sizes from its content the row is the label plus the control, never the room around them.
@@ -356,7 +358,7 @@ fn flow_leaf_row<C: Show>(
     let bottom = control.bottom().max(placed.label.bottom());
     placed.finish(ui.ctx());
     // The grid's cursor takes the row as its next cell (outside a grid, the next allocation of `ui`'s layout).
-    let _ = crate::layout::take_in_flow(ui, Vec2::new(extent, (bottom - row.top()).max(ideal.y)));
+    let _ = crate::layout::take_in_flow(ui, Vec2::new(extent, (bottom - row.top()).max(ideal.y) + taken));
     output
 }
 
