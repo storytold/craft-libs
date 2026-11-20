@@ -47,7 +47,7 @@ impl Search<'_> {
     }
 
     /// A half-sample vector the bitstream can carry whose prediction stays inside the reference.
-    fn valid(&self, mv: [i32; 2]) -> bool {
+    pub(crate) fn valid(&self, mv: [i32; 2]) -> bool {
         let f = 1i32 << self.f_code.saturating_sub(1);
         let (ox, oy) = self.origin();
         let size = [self.reference.w as i32, self.reference.h as i32];
@@ -58,7 +58,8 @@ impl Search<'_> {
         })
     }
 
-    fn mv_cost(&self, mv: [i32; 2]) -> u32 {
+    /// λ·(bits of `mv` against the predictor).
+    pub(crate) fn mv_cost(&self, mv: [i32; 2]) -> u32 {
         let t = enc_tables();
         let bits: u32 = (0..2).map(|c| t.motion_bits(wrap_delta(mv[c], self.pmv[c], self.f_code), self.f_code)).sum();
         self.lambda * bits

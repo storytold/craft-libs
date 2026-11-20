@@ -56,48 +56,8 @@ pub fn animation(width: u32, height: u32, frames: &[AnimFrame], opts: &AnimOptio
     if frames.is_empty() {
         return Err(Error::Encode("an animation needs a frame"));
     }
-    let mut anmf = Vec::new();
-    let mut any_alpha = opts.alpha;
-    for f in frames {
-        if f.width == 0 || f.height == 0 || f.x % 2 != 0 || f.y % 2 != 0 {
-            return Err(Error::Encode("a frame is empty or not at an even position"));
-        }
-        if f.x.checked_add(f.width).is_none_or(|r| r > width) || f.y.checked_add(f.height).is_none_or(|b| b > height) {
-            return Err(Error::Encode("a frame reaches past the canvas"));
-        }
-        if f.duration_ms >= 1 << 24 {
-            return Err(Error::Encode("a frame duration is 2^24 ms or more"));
-        }
-        let mut body = Vec::new();
-        u24(&mut body, f.x / 2);
-        u24(&mut body, f.y / 2);
-        u24(&mut body, f.width - 1);
-        u24(&mut body, f.height - 1);
-        u24(&mut body, f.duration_ms);
-        // Bit 1: do not blend; bit 0: dispose to the background.
-        body.push(u8::from(!f.blend) << 1 | u8::from(f.dispose_to_background));
-        match f.payload {
-            Payload::Lossy { vp8, alpha } => {
-                if f.width > MAX_VP8_DIMENSION || f.height > MAX_VP8_DIMENSION {
-                    return Err(Error::Encode("a lossy frame is at most 16383 pixels a side"));
-                }
-                if let Some(a) = alpha {
-                    if a.len() as u64 != u64::from(f.width) * u64::from(f.height) {
-                        return Err(Error::Encode("an alpha plane does not match its frame"));
-                    }
-                    any_alpha = true;
-                    let mut alph = Vec::with_capacity(a.len() + 1);
-                    // Header byte: no pre-processing, no filtering, no compression.
-                    alph.push(0);
-                    alph.extend_from_slice(a);
-                    chunk(&mut body, b"ALPH", &alph)?;
-                }
-                chunk(&mut body, b"VP8 ", vp8)?;
-            }
-            Payload::Lossless { vp8l } => chunk(&mut body, b"VP8L", vp8l)?,
-        }
-        chunk(&mut anmf, b"ANMF", &body)?;
-    }
+    // Determine the header flag before writing, without retaining another full animation.
+    let any_alpha = opts.alpha || frames.iter().any(|f| matches!(f.payload, Payload::Lossy { alpha: Some(_), .. }));
     let mut body = b"WEBP".to_vec();
     let flags = [(opts.icc.is_some(), 0x20u8), (any_alpha, 0x10), (opts.exif.is_some(), 0x08), (opts.xmp.is_some(), 0x04), (true, 0x02)]
         .iter()
@@ -113,7 +73,46 @@ pub fn animation(width: u32, height: u32, frames: &[AnimFrame], opts: &AnimOptio
     let mut anim = opts.background_bgra.to_vec();
     anim.extend_from_slice(&opts.loop_count.to_le_bytes());
     chunk(&mut body, b"ANIM", &anim)?;
-    body.extend_from_slice(&anmf);
+
+    for f in frames {
+        if f.width == 0 || f.height == 0 || f.x % 2 != 0 || f.y % 2 != 0 {
+            return Err(Error::Encode("a frame is empty or not at an even position"));
+        }
+        if f.x.checked_add(f.width).is_none_or(|r| r > width) || f.y.checked_add(f.height).is_none_or(|b| b > height) {
+            return Err(Error::Encode("a frame reaches past the canvas"));
+        }
+        if f.duration_ms >= 1 << 24 {
+            return Err(Error::Encode("a frame duration is 2^24 ms or more"));
+        }
+        let mut frame_body = Vec::new();
+        u24(&mut frame_body, f.x / 2);
+        u24(&mut frame_body, f.y / 2);
+        u24(&mut frame_body, f.width - 1);
+        u24(&mut frame_body, f.height - 1);
+        u24(&mut frame_body, f.duration_ms);
+        // Bit 1: do not blend; bit 0: dispose to the background.
+        frame_body.push(u8::from(!f.blend) << 1 | u8::from(f.dispose_to_background));
+        match f.payload {
+            Payload::Lossy { vp8, alpha } => {
+                if f.width > MAX_VP8_DIMENSION || f.height > MAX_VP8_DIMENSION {
+                    return Err(Error::Encode("a lossy frame is at most 16383 pixels a side"));
+                }
+                if let Some(a) = alpha {
+                    if a.len() as u64 != u64::from(f.width) * u64::from(f.height) {
+                        return Err(Error::Encode("an alpha plane does not match its frame"));
+                    }
+                    let mut alph = Vec::with_capacity(a.len() + 1);
+                    // Header byte: no pre-processing, no filtering, no compression.
+                    alph.push(0);
+                    alph.extend_from_slice(a);
+                    chunk(&mut frame_body, b"ALPH", &alph)?;
+                }
+                chunk(&mut frame_body, b"VP8 ", vp8)?;
+            }
+            Payload::Lossless { vp8l } => chunk(&mut frame_body, b"VP8L", vp8l)?,
+        }
+        chunk(&mut body, b"ANMF", &frame_body)?;
+    }
     if let Some(exif) = opts.exif {
         chunk(&mut body, b"EXIF", exif)?;
     }
@@ -229,6 +228,23 @@ mod tests {
         assert_eq!(file[20], 0x20 | 0x08 | 0x02);
         let anim = file.windows(4).position(|c| c == b"ANIM").unwrap();
         assert_eq!(&file[anim + 8..anim + 14], &[1, 2, 3, 4, 0, 0]);
+    }
+
+    #[test]
+    fn lossy_container_keeps_alpha_payload_padding_and_xmp() {
+        // Container-only fixture: the writer must not reinterpret an encoder's VP8 bytes.
+        let vp8 = [11, 22, 33];
+        let alpha = [128];
+        let f = frame(Payload::Lossy { vp8: &vp8, alpha: Some(&alpha) }, 0, 0, 1, 1, 17);
+        let file = animation(1, 1, &[f], &AnimOptions { xmp: Some(b"xmp"), ..Default::default() }).unwrap();
+        let info = scan(&file, 10).unwrap();
+        assert!(info.alpha && info.complete);
+        assert_eq!(info.frames[0].duration_ms, 17);
+        let at = file.windows(4).position(|c| c == b"ANMF").unwrap();
+        let payload = at + 8 + 16;
+        assert_eq!(&file[payload..payload + 10], &[b'A', b'L', b'P', b'H', 2, 0, 0, 0, 0, 128]);
+        assert_eq!(&file[payload + 10..payload + 22], &[b'V', b'P', b'8', b' ', 3, 0, 0, 0, 11, 22, 33, 0]);
+        assert_eq!(&file[file.len() - 12..], &[b'X', b'M', b'P', b' ', 3, 0, 0, 0, b'x', b'm', b'p', 0]);
     }
 
     #[test]

@@ -236,6 +236,20 @@ impl MarginPreference {
         let values: Option<Vec<f64>> = source.split_whitespace().take(limit).map(|v| v.parse::<f64>().ok().filter(|v| v.is_finite())).collect();
         values.filter(|values| !values.is_empty())
     }
+
+    /// Emits a `MarginPreference` element from resolved column and margin geometry.
+    pub fn to_el(column_count: usize, column_gutter: f64, top: f64, bottom: f64, left: f64, right: f64, columns_positions: &[f64]) -> El {
+        let positions: Vec<String> = columns_positions.iter().copied().map(crate::value::num).collect();
+        El::new("MarginPreference")
+            .with_attr("ColumnCount", column_count.max(1))
+            .with_attr("ColumnGutter", crate::value::num(column_gutter))
+            .with_attr("Top", crate::value::num(top))
+            .with_attr("Bottom", crate::value::num(bottom))
+            .with_attr("Left", crate::value::num(left))
+            .with_attr("Right", crate::value::num(right))
+            .with_attr("ColumnDirection", "Horizontal")
+            .with_attr("ColumnsPositions", positions.join(" "))
+    }
 }
 
 /// A child of a page, in document order.
@@ -322,6 +336,39 @@ pub struct Guide {
     pub values: Values,
     /// Its children other than `<Properties>`, as written.
     pub rest: Vec<El>,
+}
+
+/// Values for emitting an IDML `Guide` element.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GuideValues {
+    pub self_id: String,
+    pub horizontal: bool,
+    pub location: f64,
+    pub fit_to_page: bool,
+    pub locked: bool,
+    pub page_index: usize,
+    pub liquid: bool,
+    pub item_layer: Option<String>,
+}
+
+impl GuideValues {
+    /// Emits a `Guide` element.
+    pub fn to_el(&self) -> El {
+        let bool_s = |b: bool| if b { "true" } else { "false" };
+        let mut el = El::new("Guide")
+            .with_attr("Self", &self.self_id)
+            .with_attr("Orientation", if self.horizontal { "Horizontal" } else { "Vertical" })
+            .with_attr("Location", crate::value::num(self.location))
+            .with_attr("FitToPage", bool_s(self.fit_to_page))
+            .with_attr("ViewThreshold", "5")
+            .with_attr("Locked", bool_s(self.locked))
+            .with_attr("PageIndex", self.page_index.to_string())
+            .with_attr("GuideType", if self.liquid { "Liquid" } else { "Ruler" });
+        if let Some(layer) = &self.item_layer {
+            el.attrs.push(("ItemLayer".into(), layer.clone()));
+        }
+        el
+    }
 }
 
 impl Guide {

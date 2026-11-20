@@ -1,0 +1,15 @@
+[package]
+name = "craft-cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "What a cloud provider offers the Craft apps: files, sharing, contacts, notifications and mail as contracts, with no vendor and no IO"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
