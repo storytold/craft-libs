@@ -492,7 +492,7 @@ impl<P: Clone + Hash + Send + Sync + PartialEq + Debug + 'static> Container for 
         HeaderParts::NONE.end(band + button)
     }
 
-    /// The host's items, then the tab row, on one line. The tab row is a memoized view ([`tab_row`]): it runs when its
+    /// The host's items, then the tab row, on one line. The tab row is a memoized view (`tab_row`): it runs when its
     /// tabs, its room or the input on it change, else it replays, and what the user did on it comes out of its outbox.
     fn header(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
         for (command, state) in self.command_states.drain(..) {
