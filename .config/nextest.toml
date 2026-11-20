@@ -1,0 +1,61 @@
+# cargo-nextest (https://nexte.st) runs every test in its own process, in parallel across test
+# binaries. Every leg of the Workspace gate uses it (.github/workflows/workspace.yml); local runs may
+# keep `cargo test`. Nextest does not run doctests, so the gate also runs `cargo test --doc`.
+#
+#   cargo nextest run --workspace --profile ci
+#   cargo test --workspace --doc
+#
+# Refuse an older nextest: CI installs exactly this version (GHSA-vc25-qg58-w57c is fixed in it).
+nextest-version = "0.9.150"
+
+# Some tests share a resource that an in-process mutex keeps to one test at a time. With one
+# process per test those mutexes no longer serialize anything, so these groups do it instead, one
+# test at a time, as under `cargo test`.
+[test-groups]
+# craft-ui: `gpu_test_lock()` / `gpu_lock()`. Each renderer creates its own wgpu instance and
+# device, and creating or destroying one while another test uses its device can crash.
+gpu = { max-threads = 1 }
+# craft-video h264_decode: `FIXTURE_GENERATION` keeps a second producer from replacing a fixture
+# file another test is reading.
+video-fixtures = { max-threads = 1 }
+# craft-print: `PRINT_TICKET_PROVIDER` serializes the Windows PrintTicket provider, and the tests
+# share the one test print queue the gate installs.
+print = { max-threads = 1 }
+# craft-video integration tests on Linux and macOS: the binaries generate and read the same fixture
+# directories (see the `ci` overrides below).
+video-integration = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(craft-ui) & (binary(visual_regression) | test(/^combo::tests::|selected_tab_erases_a_baseline_centered_on_its_bottom_edge/))'
+test-group = 'gpu'
+
+[[profile.default.overrides]]
+filter = 'package(craft-video) & binary(h264_decode)'
+test-group = 'video-fixtures'
+
+[[profile.default.overrides]]
+filter = 'package(craft-print)'
+test-group = 'print'
+
+# The gate (`--profile ci`). Run every test and list all failures at the end, as `cargo test`
+# reports a whole binary. Slow tests are named every 60 seconds; none is stopped for being slow,
+# so a hang is still ended by the gate's own timeout, as before.
+[profile.ci]
+fail-fast = false
+slow-timeout = { period = "60s" }
+failure-output = "immediate-final"
+
+
+# Linux and macOS (the resource audit in craft-libs#2058): every GPU consumer shares the one `gpu`
+# slot, and the craft-video integration binaries share their fixture directories. Conservative on
+# purpose: the in-process mutexes these tests rely on do not reach across nextest's processes.
+# Windows keeps the default groups above, which its leg has passed with since it moved to nextest.
+[[profile.ci.overrides]]
+platform = 'cfg(unix)'
+filter = 'package(craft-ui) | package(craft-keymap) | package(craft-update)'
+test-group = 'gpu'
+
+[[profile.ci.overrides]]
+platform = 'cfg(unix)'
+filter = 'package(craft-video) & kind(test)'
+test-group = 'video-integration'

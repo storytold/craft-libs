@@ -146,6 +146,53 @@ pub fn color_channels<'a>(names: impl IntoIterator<Item = &'a str>) -> Option<(C
     best.or_else(|| (count == 1).then(|| (ColorLayout::Y, vec![0])))
 }
 
+/// The main picture of a file by the OpenEXR convention, the one compositing applications show
+/// when a file is imported: the channels without a layer prefix, `R`, `G`, `B` (and `A` when
+/// present), of the first part that has all three; else the first part's unprefixed `Y` (and
+/// `A`). Named layers never stand in for it: a file of named layers only (Blender's
+/// `ViewLayer.Combined.R`, a part that stores `beauty.R`) has no main picture, and its layers
+/// are reached by name, as in After Effects (EXtractoR) and Nuke (the `rgba` layer stays empty).
+///
+/// `parts` gives each part's channel names as stored, in file order. Returns the part's index
+/// and the channels' indices in that part, in layout order (R, G, B, A or Y, A). The names are
+/// matched exactly, as the specification spells them; the first of duplicate names counts.
+pub fn main_picture<'a, P, C>(parts: P) -> Option<(usize, ColorLayout, Vec<usize>)>
+where
+    P: IntoIterator<Item = C>,
+    C: IntoIterator<Item = &'a str>,
+{
+    let mut luminance: Option<(usize, ColorLayout, Vec<usize>)> = None;
+    for (part, names) in parts.into_iter().enumerate() {
+        let (mut r, mut g, mut b, mut a, mut y) = (None, None, None, None, None);
+        for (index, name) in names.into_iter().enumerate() {
+            let slot = match name {
+                "R" => &mut r,
+                "G" => &mut g,
+                "B" => &mut b,
+                "A" => &mut a,
+                "Y" => &mut y,
+                _ => continue,
+            };
+            slot.get_or_insert(index);
+        }
+        if let (Some(r), Some(g), Some(b)) = (r, g, b) {
+            return Some(match a {
+                Some(a) => (part, ColorLayout::Rgba, vec![r, g, b, a]),
+                None => (part, ColorLayout::Rgb, vec![r, g, b]),
+            });
+        }
+        if luminance.is_none()
+            && let Some(y) = y
+        {
+            luminance = Some(match a {
+                Some(a) => (part, ColorLayout::YA, vec![y, a]),
+                None => (part, ColorLayout::Y, vec![y]),
+            });
+        }
+    }
+    luminance
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -234,5 +281,47 @@ mod tests {
         assert_eq!(pick(&["depth.Z"]), Some((ColorLayout::Y, vec![0])));
         assert_eq!(pick(&[]), None);
         assert_eq!(pick(&["r", "g", "b"]), None);
+    }
+
+    #[test]
+    fn the_main_picture_is_the_unprefixed_colour_of_the_first_part_that_has_it() {
+        let main = |parts: &[&[&str]]| main_picture(parts.iter().map(|p| p.iter().copied()));
+        // One part: the bare channels, whatever else is there, also before them alphabetically.
+        assert_eq!(
+            main(&[&["A", "B", "CryptoMaterial00.A", "CryptoMaterial00.B", "CryptoMaterial00.G", "CryptoMaterial00.R", "G", "R", "Z"]]),
+            Some((0, ColorLayout::Rgba, vec![7, 6, 1, 0]))
+        );
+        assert_eq!(main(&[&["B", "G", "R", "diffuse.A", "diffuse.B", "diffuse.G", "diffuse.R"]]), Some((0, ColorLayout::Rgb, vec![2, 1, 0])));
+        // Named layers only (Blender multilayer): no main picture, however good a layer looks.
+        assert_eq!(
+            main(&[&[
+                "ViewLayer.AO.B",
+                "ViewLayer.AO.G",
+                "ViewLayer.AO.R",
+                "ViewLayer.Combined.A",
+                "ViewLayer.Combined.B",
+                "ViewLayer.Combined.G",
+                "ViewLayer.Combined.R"
+            ]]),
+            None
+        );
+        assert_eq!(
+            main(&[&["ViewLayer.Combined.A", "ViewLayer.Combined.B", "ViewLayer.Combined.G", "ViewLayer.Combined.R"], &["ViewLayer.Depth.Z"]]),
+            None
+        );
+        // Multi-part: the first part with bare R, G and B, not the first part.
+        assert_eq!(main(&[&["Z"], &["A", "B", "G", "R"], &["B", "G", "R"]]), Some((1, ColorLayout::Rgba, vec![3, 2, 1, 0])));
+        assert_eq!(main(&[&["B", "G", "R"], &["A", "B", "G", "R"]]), Some((0, ColorLayout::Rgb, vec![2, 1, 0])));
+        // Colour wins over an earlier luminance part; luminance when there is no colour.
+        assert_eq!(main(&[&["Y"], &["B", "G", "R"]]), Some((1, ColorLayout::Rgb, vec![2, 1, 0])));
+        assert_eq!(main(&[&["Z"], &["A", "Y"], &["Y"]]), Some((1, ColorLayout::YA, vec![1, 0])));
+        // Incomplete colour, other spellings and lone data channels are no picture.
+        assert_eq!(main(&[&["G", "R"]]), None);
+        assert_eq!(main(&[&["b", "g", "r"]]), None);
+        assert_eq!(main(&[&["Z"]]), None);
+        assert_eq!(main(&[&["A"]]), None);
+        assert_eq!(main(&[]), None);
+        // The first of duplicate names counts.
+        assert_eq!(main(&[&["R", "G", "B", "R"]]), Some((0, ColorLayout::Rgb, vec![0, 1, 2])));
     }
 }
