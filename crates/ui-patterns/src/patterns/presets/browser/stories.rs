@@ -59,7 +59,7 @@ fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let slider = *data.value("slider", true);
     let new_group = *data.value("new_group", true);
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows)
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows)
         .toolbar(true)
         .reorder(PresetReorder::items_and_groups().nest(NESTING))
         .footer(PresetFooterOptions::new().slider(slider).new_group(new_group).can_delete(selected.is_some()));
@@ -85,7 +85,7 @@ fn preset_browser(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn preset_browser_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = library_rows();
     let selected = *data.value("selected", None::<u32>);
-    let mut browser = PresetBrowser::new("Swatches", Bind::bound(data.value("state", PresetState::<u32>::new())), &rows).tiles(PresetTiles::Chips);
+    let mut browser = PresetBrowser::new("Swatches", data.bind("state", PresetState::<u32>::new()), &rows).tiles(PresetTiles::Chips);
     if let Some(key) = selected {
         browser = browser.selected(key);
     }

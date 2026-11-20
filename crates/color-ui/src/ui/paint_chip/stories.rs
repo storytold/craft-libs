@@ -118,14 +118,14 @@ fn paints() -> Vec<(String, Paint)> {
 #[story(PaintList<'static>, covers = [Default], drive = Drive::Never)]
 fn paint_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let paints = paints();
-    PaintList::new("Paints", &paints, Bind::bound(data.value("selected", None::<usize>))).show(ui).into()
+    PaintList::new("Paints", &paints, data.bind("selected", None::<usize>)).show(ui).into()
 }
 
 #[story(PaintList<'static>, covers = [], drive = Drive::Never)]
 fn paint_list_selection_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let paints = paints();
     let rows = [PaintRow::linked(PaintLink::new("Primary / Blue", PaintLinkKind::Style))];
-    PaintList::new("Selection colors", &paints, Bind::bound(data.value("selected", Some(0usize))))
+    PaintList::new("Selection colors", &paints, data.bind("selected", Some(0usize)))
         .options(PaintListOptions { select_users: true, bind: true, remove: true, add: true, ..PaintListOptions::SELECTION_COLORS })
         .rows(&rows)
         .show(ui)
@@ -135,6 +135,6 @@ fn paint_list_selection_colors(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(PaintChip<'static>, covers = [Invalid], drive = Drive::Never)]
 fn paint_chip_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_none = |paint: &Paint| if matches!(paint, Paint::None) { Validity::Refuse(Message::new("A fill is required")) } else { Validity::Ok };
-    let held = Bind::bound(data.value("paint", Paint::None)).check(refuse_none);
+    let held = data.bind("paint", Paint::None).check(refuse_none);
     PaintChip::new("Fill", held, BLUE).show(ui).into()
 }

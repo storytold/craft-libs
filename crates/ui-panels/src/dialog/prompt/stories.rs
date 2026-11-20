@@ -35,7 +35,7 @@ fn answers() -> [FooterButton; 3] {
 fn prompt(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     Prompt::new("Unsaved changes", "Do you want to save the changes you made to “poster.psd”?")
         .answers(answers())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }
@@ -51,7 +51,7 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .extras(|ui| {
             Checkbox::new(Bind::bound(&mut apply_to_all)).label("Apply to All").show(ui);
         })
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into();
     *data.value("apply", false) = apply_to_all;

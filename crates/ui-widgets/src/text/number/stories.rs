@@ -46,9 +46,9 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("control_size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
     let units = Env::of(ui).view().units();
     let out = FieldGroup::new("Number field states").show(ui, |ui, _| {
-        let first = row("Plain").show(ui, |ui, _| NumberField::new("Plain", Bind::bound(data.value("plain", Some(42.0)))).size(size).show(ui).edit);
+        let first = row("Plain").show(ui, |ui, _| NumberField::new("Plain", data.bind("plain", Some(42.0))).size(size).show(ui).edit);
         row("With unit").show(ui, |ui, _| {
-            NumberField::new("Gap", Bind::bound(data.value("gap", Some(SIZE))))
+            NumberField::new("Gap", data.bind("gap", Some(SIZE)))
                 .range(RANGE)
                 .step(0.5)
                 .unit(units.symbol(UnitKind::Millimetres))
@@ -57,7 +57,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         });
         Row::new().show(ui, |ui, _| {
             row("Unit after").show(ui, |ui, _| {
-                NumberField::new("Angle", Bind::bound(data.value("angle", Some(120.0))))
+                NumberField::new("Angle", data.bind("angle", Some(120.0)))
                     .range(0.0..=360.0)
                     .unit_kind(UnitKind::Degrees)
                     .unit_placement(UnitPlacement::After)
@@ -73,10 +73,10 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .show(ui);
         });
         row("Invalid").show(ui, |ui, _| {
-            NumberField::new("Columns", Bind::bound(data.value("invalid", Some(7.0))).check(refuse_all)).range(COLUMNS).size(size).show(ui);
+            NumberField::new("Columns", data.bind("invalid", Some(7.0)).check(refuse_all)).range(COLUMNS).size(size).show(ui);
         });
         row("Pop-up slider").show(ui, |ui, _| {
-            NumberField::new("Opacity", Bind::bound(data.value("opacity", Some(100.0))))
+            NumberField::new("Opacity", data.bind("opacity", Some(100.0)))
                 .range(RANGE)
                 .unit("%")
                 .popup_slider(RANGE)
@@ -84,7 +84,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 .show(ui);
         });
         row("Zoom stops").show(ui, |ui, _| {
-            NumberField::new("Zoom", Bind::bound(data.value("zoom", Some(100.0))))
+            NumberField::new("Zoom", data.bind("zoom", Some(100.0)))
                 .range(0.1..=12_800.0)
                 .unit("%")
                 .stepper(zoom_step)
@@ -111,7 +111,7 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(NumberField<'static>, covers = [LongText], drive = Drive::Never)]
 fn number_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    NumberField::new("Size", Bind::bound(data.value("long", Some(HUGE)))).show(ui).edit.into()
+    NumberField::new("Size", data.bind("long", Some(HUGE))).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -121,7 +121,7 @@ fn number_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(NumberField<'static>, covers = [Invalid], drive = Drive::Never)]
 fn number_field_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    NumberField::new("Size", Bind::bound(data.value("invalid", Some(7.0))).check(refuse_all)).range(COLUMNS).show(ui).edit.into()
+    NumberField::new("Size", data.bind("invalid", Some(7.0)).check(refuse_all)).range(COLUMNS).show(ui).edit.into()
 }
 
 /// Focuses the field and opens its list or slider with Alt+Down.
@@ -139,21 +139,21 @@ fn number_field_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Entry::new(NumberPick::Number(8.0), "Small"),
         Entry::new(NumberPick::Number(24.0), "Large"),
     ];
-    NumberField::new("Size", Bind::bound(data.value("presets", Some(SIZE)))).presets(&presets).show(ui).edit.into()
+    NumberField::new("Size", data.bind("presets", Some(SIZE))).presets(&presets).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [], drive = Drive::Custom(open_popup))]
 fn number_field_popup_slider(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    NumberField::new("Size", Bind::bound(data.value("slider", Some(SIZE)))).range(RANGE).popup_slider(RANGE).show(ui).edit.into()
+    NumberField::new("Size", data.bind("slider", Some(SIZE))).range(RANGE).popup_slider(RANGE).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("Auto"))]
 fn number_field_auto(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let codec = NumberCodec::new(Reader::new(), 1).or_parse(|text| text.trim().eq_ignore_ascii_case("auto").then_some(AUTO));
-    NumberField::new("Size", Bind::bound(data.value("auto", Some(SIZE)))).codec(codec).range(RANGE).show(ui).edit.into()
+    NumberField::new("Size", data.bind("auto", Some(SIZE))).codec(codec).range(RANGE).show(ui).edit.into()
 }
 
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("7"))]
 fn number_field_snapped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    NumberField::new("Size", Bind::bound(data.value("snapped", Some(SIZE)))).range(RANGE).step(5.0).snap_typed(true).show(ui).edit.into()
+    NumberField::new("Size", data.bind("snapped", Some(SIZE))).range(RANGE).step(5.0).snap_typed(true).show(ui).edit.into()
 }

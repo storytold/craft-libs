@@ -18,7 +18,7 @@ fn color_disc(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ColorDisc<'static>, covers = [Invalid], drive = Drive::Never)]
 fn color_disc_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_pale = |moved: &DiscMove| if moved.saturation < 0.5 { Validity::Refuse(Message::new("Too pale")) } else { Validity::Ok };
-    let moved = Bind::bound(data.value("pale", DiscMove::new(1, 0.0, 0.2))).check(refuse_pale);
+    let moved = data.bind("pale", DiscMove::new(1, 0.0, 0.2)).check(refuse_pale);
     ColorDisc::new("Harmony", &MARKERS, moved).chosen(1).show(ui).into()
 }
 

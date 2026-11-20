@@ -14,6 +14,6 @@ fn tour(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         TourStep::new("Properties", "The selected layer's settings show in this panel."),
         TourStep::new("Export", "When the poster is ready, export it from the File menu."),
     ];
-    Tour::new("Welcome tour", &steps, Bind::bound(data.value("index", 0_usize))).show(ui);
+    Tour::new("Welcome tour", &steps, data.bind("index", 0_usize)).show(ui);
     StoryOutput::default()
 }

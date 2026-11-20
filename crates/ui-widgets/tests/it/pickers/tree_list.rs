@@ -16,7 +16,7 @@ fn picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         TreeEntry::new(5u32, "Beach day").within(1),
         TreeEntry::new(6u32, "Inbox"),
     ];
-    TreePicker::new("Album", Bind::bound(data.value("album", None::<u32>)), &entries).show(ui).into()
+    TreePicker::new("Album", data.bind("album", None::<u32>), &entries).show(ui).into()
 }
 
 /// The names of the listed items; a row reads as its name, then its detail line.

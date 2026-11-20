@@ -82,7 +82,7 @@ fn curve_editor_percent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// The plot of the curve editor alone.
 #[story(CurveGraph<'static>, covers = [Default], drive = Drive::Drag(Grip::new(PLOT)))]
 fn curve_graph(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    CurveGraph::new("Curve", Bind::bound(data.value("curve", bent()))).show(ui).into()
+    CurveGraph::new("Curve", data.bind("curve", bent())).show(ui).into()
 }
 
 #[story(CurveGraph<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -96,7 +96,7 @@ fn curve_graph_that_is_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     let refuse = |curve: &Curve| {
         if curve.points().is_some_and(|points| points.len() > 2) { Validity::Refuse(Message::new("Too many points")) } else { Validity::Ok }
     };
-    CurveGraph::new("Curve", Bind::bound(data.value("refused", bent())).check(refuse)).show(ui).into()
+    CurveGraph::new("Curve", data.bind("refused", bent()).check(refuse)).show(ui).into()
 }
 
 /// One curve, read-only.

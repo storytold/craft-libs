@@ -10,7 +10,7 @@ const FAMILIES: [&str; 3] = ["Garamond", "Georgia", "Arial"];
 
 fn combo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options: Vec<Entry<String>> = FAMILIES.iter().map(|family| Entry::new((*family).to_owned(), *family)).collect();
-    ComboBox::new("Font", Bind::bound(data.value("font", "Arial".to_owned())), &options).show(ui).into()
+    ComboBox::new("Font", data.bind("font", "Arial".to_owned()), &options).show(ui).into()
 }
 
 fn font(fixture: &mut Fixture) -> String {

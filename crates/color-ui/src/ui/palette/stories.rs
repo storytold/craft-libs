@@ -30,7 +30,7 @@ fn named(entries: impl IntoIterator<Item = (String, Srgba)>) -> Vec<(Label, Srgb
 #[story(SwatchPalette<'static>, covers = [], drive = Drive::Never)]
 fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let swatches = named(PALETTE.iter().map(|(name, color)| ((*name).to_owned(), *color)));
-    let shown = SwatchPalette::new("Swatches", Bind::bound(data.value("color", PALETTE[8].1)), &swatches).show(ui);
+    let shown = SwatchPalette::new("Swatches", data.bind("color", PALETTE[8].1), &swatches).show(ui);
     let last = data.note("last", String::new());
     if let Some(event) = &shown.edit {
         *last = format!("{event:?}");

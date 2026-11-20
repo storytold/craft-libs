@@ -16,14 +16,14 @@ fn options() -> Vec<Entry<String>> {
 #[story(ComboBox<'static>, covers = [Default], drive = Drive::Type("Garamond"))]
 fn combo_box(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
-    ComboBox::new("Font", Bind::bound(data.value("font", "Charter".to_owned())), &options).placeholder("Choose a font").show(ui).into()
+    ComboBox::new("Font", data.bind("font", "Charter".to_owned()), &options).placeholder("Choose a font").show(ui).into()
 }
 
 #[story(ComboBox<'static>, covers = [LongText], drive = Drive::Never)]
 fn combo_box_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
     let long = "A family name that runs far past the room the field has left beside its chevron".to_owned();
-    ComboBox::new("Font", Bind::bound(data.value("long", long)), &options).show(ui).into()
+    ComboBox::new("Font", data.bind("long", long), &options).show(ui).into()
 }
 
 #[story(ComboBox<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -37,7 +37,7 @@ fn combo_box_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let options = options();
     let refuse_zapfino =
         |family: &String| if family == "Zapfino" { Validity::Refuse(Message::new("Zapfino is not installed")) } else { Validity::Ok };
-    ComboBox::new("Font", Bind::bound(data.value("invalid", "Zapfino".to_owned())).check(refuse_zapfino), &options).show(ui).into()
+    ComboBox::new("Font", data.bind("invalid", "Zapfino".to_owned()).check(refuse_zapfino), &options).show(ui).into()
 }
 
 /// Focuses the field and opens the list on every option with Alt+Down.
@@ -51,5 +51,5 @@ fn open_list(fixture: &mut Fixture) {
 fn combo_box_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut options = options();
     options.insert(2, Entry::separator());
-    ComboBox::new("Font", Bind::bound(data.value("open", "Charter".to_owned())), &options).show(ui).into()
+    ComboBox::new("Font", data.bind("open", "Charter".to_owned()), &options).show(ui).into()
 }

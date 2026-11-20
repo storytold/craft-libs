@@ -15,7 +15,7 @@ fn inspect_overlay(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (shown, recorded) = inspect::record(ui, key, |ui| {
         Stack::new().show(ui, |ui, _| {
             Button::new("Apply").show(ui);
-            Checkbox::new(Bind::bound(data.value("snap", true))).label("Snap to grid").show(ui);
+            Checkbox::new(data.bind("snap", true)).label("Snap to grid").show(ui);
         })
     });
     let rect = shown.output.rect;

@@ -13,7 +13,7 @@ use egui::Ui;
 fn group_with_a_field_and_a_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     FieldGroup::new("")
         .show(ui, |ui, _| {
-            Field::new("Size").show(ui, |ui, _| NumberField::new("Size", Bind::bound(data.value("size", Some(12.0)))).show(ui));
+            Field::new("Size").show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(12.0))).show(ui));
             Button::new("Reset").show(ui);
         })
         .into()

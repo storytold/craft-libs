@@ -23,12 +23,12 @@ fn printers() -> Vec<Printer> {
 fn print_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), duplex: Some(Duplex::LongEdge), ..Settings::default() };
     let printers = printers();
-    PrintPanel::new(Bind::bound(data.value("settings", start)), &printers).show(ui).into()
+    PrintPanel::new(data.bind("settings", start), &printers).show(ui).into()
 }
 
 #[story(PrintPanel<'static>, covers = [], drive = Drive::Never)]
 fn print_panel_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PrintPanel::new(Bind::bound(data.value("settings", Settings::default())), &[]).discovering(true).show(ui).into()
+    PrintPanel::new(data.bind("settings", Settings::default()), &[]).discovering(true).show(ui).into()
 }
 
 const PICTURE: [usize; 2] = [240, 160];
@@ -68,7 +68,7 @@ fn print_preview_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = preview_sheet(ui);
     let paper = Rect::from_min_size(pos2(0.0, 0.0), sheet.paper);
     let size = sheet.image.size();
-    let position = Bind::bound(data.value("position", pos2(400.0, 156.0))).check_with((paper, size), |(paper, size), at| {
+    let position = data.bind("position", pos2(400.0, 156.0)).check_with((paper, size), |(paper, size), at| {
         if paper.contains_rect(Rect::from_min_size(*at, *size)) { Validity::Ok } else { Validity::Refuse(Message::new("Off the paper")) }
     });
     PrintPreview::new("Print preview", &sheet, position).show(ui).into()
@@ -79,13 +79,13 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), duplex: Some(Duplex::LongEdge), ..Settings::default() };
     let printers = printers();
     let sheet = sheet(ui, true);
-    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet).ready(true).show(ui).into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", Settings::default())), &[], Bind::given(DialogFields::default()), &sheet)
+    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()), &sheet)
         .discovering(true)
         .show(ui)
         .into()
@@ -96,5 +96,5 @@ fn print_dialog_busy(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = Settings { printer: "Office_1".to_owned(), ..Settings::default() };
     let printers = printers();
     let sheet = sheet(ui, false);
-    PrintDialog::new(Bind::bound(data.value("settings", start)), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
+    PrintDialog::new(data.bind("settings", start), &printers, Bind::given(DialogFields::default()), &sheet).busy(true).show(ui).into()
 }

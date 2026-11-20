@@ -13,7 +13,7 @@ fn stats() -> SelectionStats {
 fn readout(ui: &mut Ui, data: &mut StoryData, initial: StatsShown) -> StoryOutput {
     let shown = *data.value("shown", initial);
     let parts = stats_parts(&stats(), &shown, &StatsWords::default(), |value| format!("{value:.1}"));
-    SelectionStatsReadout::new("Selection statistics", &parts, Bind::bound(data.value("shown", initial))).show(ui).into()
+    SelectionStatsReadout::new("Selection statistics", &parts, data.bind("shown", initial)).show(ui).into()
 }
 
 #[story(SelectionStatsReadout<'static>, covers = [Default])]
@@ -33,7 +33,7 @@ fn no_statistic_shown_is_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     let refuse_none = |shown: &StatsShown| {
         if *shown == StatsShown::default() { Validity::Refuse(Message::new("Show at least one statistic")) } else { Validity::Ok }
     };
-    SelectionStatsReadout::new("Selection statistics", &parts, Bind::bound(data.value("shown", StatsShown::default())).check(refuse_none))
+    SelectionStatsReadout::new("Selection statistics", &parts, data.bind("shown", StatsShown::default()).check(refuse_none))
         .show(ui)
         .into()
 }

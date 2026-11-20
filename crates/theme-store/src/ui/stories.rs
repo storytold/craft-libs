@@ -18,13 +18,13 @@ fn favorites() -> Vec<ThemeId> {
 fn appearance_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let client = SuiteClient::memory().view();
     let favorites = favorites();
-    AppearancePage::new(&client, Bind::bound(data.value("draft", SelectionChange::default()))).favorites(&favorites).show(ui).into()
+    AppearancePage::new(&client, data.bind("draft", SelectionChange::default())).favorites(&favorites).show(ui).into()
 }
 
 #[story(AppearancePage<'static>, covers = [], drive = Drive::Never)]
 fn appearance_page_without_text_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let client = SuiteClient::memory().view();
-    AppearancePage::new(&client, Bind::bound(data.value("plain", SelectionChange::default()))).text_size(false).system_dark(true).show(ui).into()
+    AppearancePage::new(&client, data.bind("plain", SelectionChange::default())).text_size(false).system_dark(true).show(ui).into()
 }
 
 /// One theme's chips in a group: plain, chosen, favourite, and both. A click on a star toggles the chip's favourite.

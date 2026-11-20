@@ -23,7 +23,7 @@ fn list_manager(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .name("Batch Export")
         .searchable(true)
         .note("This document also has a script project.".into())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }
@@ -34,7 +34,7 @@ fn list_manager_empty(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let actions = vec![ListManagerAction::run(&words), ListManagerAction::create(&words)];
     ListManager::new("Macros", "Macro name:", Vec::new(), actions)
         .empty("This document has no scripts or macros.".into())
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui)
         .into()
 }

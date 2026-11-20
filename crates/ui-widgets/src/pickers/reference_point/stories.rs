@@ -17,7 +17,7 @@ fn pick_top_left(fixture: &mut Fixture) {
 /// centre pick shows its arrow.
 #[story(ReferencePoint<'static>, covers = [Default], drive = Drive::Custom(pick_top_left))]
 fn reference_point(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ReferencePoint::new("Reference point", Bind::bound(data.value("point", Anchor9::Centre))).growth((1.0, 1.0)).show(ui).into()
+    ReferencePoint::new("Reference point", data.bind("point", Anchor9::Centre)).growth((1.0, 1.0)).show(ui).into()
 }
 
 #[story(ReferencePoint<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -28,18 +28,18 @@ fn reference_point_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ReferencePoint<'static>, covers = [Invalid], drive = Drive::Never)]
 fn reference_point_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_bottom = |point: &Anchor9| if *point == Anchor9::Bottom { Validity::Refuse(Message::new("Not a corner")) } else { Validity::Ok };
-    ReferencePoint::new("Reference point", Bind::bound(data.value("bottom", Anchor9::Bottom)).check(refuse_bottom)).show(ui).into()
+    ReferencePoint::new("Reference point", data.bind("bottom", Anchor9::Bottom).check(refuse_bottom)).show(ui).into()
 }
 
 /// The canvas grows wider and shrinks shorter: the arrows beside the pick point away along the width and back along
 /// the height.
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_growth(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ReferencePoint::new("Reference point", Bind::bound(data.value("grown", Anchor9::TopLeft))).growth((200.0, -100.0)).show(ui).into()
+    ReferencePoint::new("Reference point", data.bind("grown", Anchor9::TopLeft)).growth((200.0, -100.0)).show(ui).into()
 }
 
 /// The options bar's size: the grid is an icon square and every point is a dot.
 #[story(ReferencePoint<'static>, covers = [], drive = Drive::Never)]
 fn reference_point_compact(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    ReferencePoint::new("Reference point", Bind::bound(data.value("compact", Anchor9::Centre))).compact().show(ui).into()
+    ReferencePoint::new("Reference point", data.bind("compact", Anchor9::Centre)).compact().show(ui).into()
 }

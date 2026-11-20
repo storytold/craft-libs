@@ -22,5 +22,5 @@ fn report_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     if plain {
         dialog = dialog.lines((0..count).map(|n| Label::from(format!("page-{:03}.png: 2 layers merged", n + 1))).collect());
     }
-    dialog.opened(Bind::bound(data.value("open", true))).show(ui).into()
+    dialog.opened(data.bind("open", true)).show(ui).into()
 }

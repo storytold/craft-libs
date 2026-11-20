@@ -61,7 +61,7 @@ fn menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_row(ui, |ui| {
         let opener = Button::new("File").show(ui);
         let mut ran = false;
-        let shown = Menu::new("File").size(size).open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        let shown = Menu::new("File").size(size).open(data.bind("open", true)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
             ran |= icon(MenuItem::new("&New").shortcut("Ctrl+N"), "image").show(ui).ran;
             ran |= icon(MenuItem::new("Open").shortcut("Ctrl+O"), "settings").show(ui).ran;
             MenuItem::submenu("Open Recent").show(ui);
@@ -81,7 +81,7 @@ fn menu_taller_than_the_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     in_row(ui, |ui| {
         let opener = Button::new("Fonts").show(ui);
         let mut ran = false;
-        let shown = Menu::new("Fonts").open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
+        let shown = Menu::new("Fonts").open(data.bind("open", true)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
             for name in FONTS {
                 ran |= MenuItem::new(name).show(ui).ran;
             }
@@ -149,7 +149,7 @@ fn menu_of_values(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     in_row(ui, |ui| {
         let opener = Button::new("Zoom").show(ui);
         let entries = [Entry::new(0u8, "Fit in Window").checked(true), Entry::new(1, "Fill Screen"), Entry::separator(), Entry::new(2, "100%")];
-        let picked = Menu::new("Zoom").values().open(Bind::bound(data.value("open", true))).opened_by(&opener, Trigger::Click).pick(ui, &entries);
+        let picked = Menu::new("Zoom").values().open(data.bind("open", true)).opened_by(&opener, Trigger::Click).pick(ui, &entries);
         let ran = picked.picked.is_some();
         let mut output = StoryOutput::from(picked);
         output.clicked |= ran;

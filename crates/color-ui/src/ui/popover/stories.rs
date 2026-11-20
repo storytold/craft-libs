@@ -16,7 +16,7 @@ fn picked() -> PickedColor {
 
 #[story(ColorPopover<'static>, covers = [Default], drive = Drive::Never)]
 fn closed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    StoryOutput::from(ColorPopover::new("Fill colour", Bind::bound(data.value("color", picked()))).show(ui))
+    StoryOutput::from(ColorPopover::new("Fill colour", data.bind("color", picked())).show(ui))
 }
 
 #[story(ColorPopover<'static>, covers = [], drive = Drive::Never)]

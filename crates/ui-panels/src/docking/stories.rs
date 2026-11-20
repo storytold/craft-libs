@@ -143,7 +143,7 @@ impl DockPanels<u32> for NumberedPanels {
 #[story(WindowMenuRows<'static, u32>, covers = [Default], drive = Drive::Never)]
 fn window_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let layout = Layout::new(Some(Node::tabs(vec![1], 0)), Vec::new());
-    let menu = Menu::new("Window").open(Bind::bound(data.value("open", true))).show(ui, |ui, _| {
+    let menu = Menu::new("Window").open(data.bind("open", true)).show(ui, |ui, _| {
         WindowMenuRows::new(&layout, &NumberedPanels, &[1, 2]).show(ui);
     });
     StoryOutput::from(menu.output)

@@ -228,7 +228,7 @@ fn list_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .rename(true)
         .rename_column(NAME)
         .columns(columns)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
+        .selection(data.bind("selection", Selection::single(0_usize)))
         .show_items(ui, &Layers(&rows), &mut |key, icx| {
             let layer = &rows[*key];
             let row = ListRow::new(layer.name.clone())
@@ -304,7 +304,7 @@ fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let target = *data.value("target", ThumbTarget::Extra(0));
     let out = List::<usize>::new("Layers")
         .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
+        .selection(data.bind("selection", Selection::single(0_usize)))
         .show_items(ui, &Labels(&MASK_ROWS), &mut |key, icx| {
             let row = ListRow::new(MASK_ROWS[*key]).state(icx.row.clone()).thumb(ThumbSize::Medium, layer_thumb);
             match *key {
@@ -423,7 +423,7 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let out = List::<usize>::new("Layers")
         .tree(true)
         .natural_height(true)
-        .selection(Bind::bound(data.value("selection", Selection::single(0_usize))))
+        .selection(data.bind("selection", Selection::single(0_usize)))
         .show_items(ui, &TreeNodes { shown: &shown, open: &open }, &mut |key, _| {
             let (name, depth) = TREE[*key];
             let row = ListRow::new(name).depth(depth);
@@ -450,7 +450,7 @@ fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let out = List::<usize>::new("Layers")
         .rename(true)
         .row_menu()
-        .selection(Bind::bound(data.value("selection", Selection::single(1_usize))))
+        .selection(data.bind("selection", Selection::single(1_usize)))
         .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
     let menu_row = data.value("menu", None::<usize>);
     for event in &out.events {

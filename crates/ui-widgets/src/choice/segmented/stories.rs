@@ -71,13 +71,13 @@ fn segmented_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Segmented<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn segmented_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_large = |size: &u8| if *size == 3 { Validity::Refuse(Message::new("Too large")) } else { Validity::Ok };
-    Segmented::new("Size", Bind::bound(data.value("large", 3u8)).check(refuse_large), &sizes()).show(ui).into()
+    Segmented::new("Size", data.bind("large", 3u8).check(refuse_large), &sizes()).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [], disabled_text = "Pick a layer first")]
 fn segmented_with_reason(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let tooltip = data.tooltip("The size of the brush");
-    Segmented::new("Size", Bind::bound(data.value("size", 1u8)), &sizes()).tooltip(tooltip).show(ui).into()
+    Segmented::new("Size", data.bind("size", 1u8), &sizes()).tooltip(tooltip).show(ui).into()
 }
 
 #[story(Segmented<'static, u8>, covers = [], drive = Drive::Never, group = "Icons", title = "Three icons")]

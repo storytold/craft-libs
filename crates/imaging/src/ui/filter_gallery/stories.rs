@@ -153,7 +153,7 @@ fn workspace(ui: &mut Ui, data: &mut StoryData, rendering: bool) -> StoryOutput 
     let session = data.value("session", start()).clone();
     let mut workspace = FilterGalleryWorkspace::new(FilterGalleryOpen::new(image.size(), "Photo", session));
     let source: &dyn FilterGallerySource = &MockSource { image, rendering, thumbs: FakeThumbSource::new() };
-    let pass = workspace.show(ui, WorkspaceCx::new(source, Bind::bound(data.value("open", true))));
+    let pass = workspace.show(ui, WorkspaceCx::new(source, data.bind("open", true)));
     // A swatch press asks the app for a color; the story has no picker.
     for event in &pass.events {
         if let FilterGalleryEvent::PickColor(request) = event {

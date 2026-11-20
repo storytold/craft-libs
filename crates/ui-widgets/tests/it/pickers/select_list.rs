@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// A select over One to Four.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::new(3u8, "Three"), Entry::new(4u8, "Four")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 /// The select with a button after it, which Tab reaches next.
@@ -91,7 +91,7 @@ fn tab_in_the_open_list_chooses_the_row_the_keys_reached_and_moves_on() {
 /// A select over a Latin entry, the two Turkic capital i's and a Greek one.
 fn turkic(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::new(1u8, "Kitap"), Entry::new(2u8, "IRMAK"), Entry::new(3u8, "İSTANBUL"), Entry::new(4u8, "Ωμέγα")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 /// The value after typing `typed` on the closed, focused select holding `held`, with Azerbaijani as the host's
@@ -128,7 +128,7 @@ fn type_ahead_folds_case_in_the_interface_language() {
 /// A select over two groups under headings: Shapes (One, Two) and Lines (Three).
 fn grouped(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = [Entry::heading("Shapes"), Entry::new(1u8, "One"), Entry::new(2u8, "Two"), Entry::heading("Lines"), Entry::new(3u8, "Three")];
-    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+    Select::new("Pick", data.bind("value", 1u8), &entries).show(ui).into()
 }
 
 #[trial]

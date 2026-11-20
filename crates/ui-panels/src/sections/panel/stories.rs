@@ -33,7 +33,7 @@ fn panel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn panel_with_actions_and_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Panel::new("Layers")
         .titled()
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .subtitle("3 layers")
         .icon(IconSpec::svg(IconId::new("settings")))
         .actions([HeaderAction::Menu, HeaderAction::Float, HeaderAction::Close])

@@ -22,7 +22,7 @@ fn reorderable_sections(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .collect();
     let mut initial = SectionLayout::new(specs.iter().map(|spec| spec.key.clone()));
     initial.set_folded(&SectionKey::new("folders"), true);
-    let layout = Bind::bound(data.value("layout", initial));
+    let layout = data.bind("layout", initial);
     ReorderableSections::new("Sidebar", layout, &specs)
         .show(ui, |ui, key: &SectionKey, _| {
             if IDS.iter().any(|(id, _, count)| *id == key.as_str() && *count > 0) {

@@ -18,7 +18,7 @@ fn chip_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &[("Sm", ControlSize::Sm), ("Md", ControlSize::Md)]);
     let disabled = *data.value("disabled", false);
     let clear_all = *data.value("clear all", true);
-    let field = ChipField::new("Keywords", Bind::bound(data.value("keywords", keywords())))
+    let field = ChipField::new("Keywords", data.bind("keywords", keywords()))
         .placeholder("Add a keyword")
         .partial(|chip: &str| chip == "red")
         .size(size)
@@ -30,7 +30,7 @@ fn chip_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn chip_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let many = (1..=14).map(|n| format!("A keyword number {n} that runs long")).collect();
     let max_lines = *data.choice("max lines", Some(2usize), &[("2", Some(2usize)), ("All", None)]);
-    let field = ChipField::new("Keywords", Bind::bound(data.value("long", many)));
+    let field = ChipField::new("Keywords", data.bind("long", many));
     match max_lines {
         Some(lines) => field.max_lines(lines),
         None => field,
@@ -54,7 +54,7 @@ fn open_more(fixture: &mut Fixture) {
 #[story(ChipField<'static>, covers = [Open], drive = Drive::Custom(open_more))]
 fn chip_field_more(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let many = ["kite", "red", "beach", "sky", "sand", "dune", "wave", "tide", "shell", "gull"].map(String::from).to_vec();
-    ChipField::new("Keywords", Bind::bound(data.value("more", many))).max_lines(1).clear_all().show(ui).into()
+    ChipField::new("Keywords", data.bind("more", many)).max_lines(1).clear_all().show(ui).into()
 }
 
 #[story(ChipField<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -65,5 +65,5 @@ fn chip_field_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ChipField<'static>, covers = [Invalid], drive = Drive::Never)]
 fn chip_field_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_none = |chips: &Vec<String>| if chips.is_empty() { Validity::Refuse(Message::new("Add at least one keyword")) } else { Validity::Ok };
-    ChipField::new("Keywords", Bind::bound(data.value("empty", Vec::new())).check(refuse_none)).show(ui).into()
+    ChipField::new("Keywords", data.bind("empty", Vec::new()).check(refuse_none)).show(ui).into()
 }

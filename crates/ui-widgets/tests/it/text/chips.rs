@@ -33,7 +33,7 @@ mod field {
 
     /// Eight chips in one line at most, with Clear All; the field's report goes to the story data.
     fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-        let out = ChipField::new("Keywords", Bind::bound(data.value("chips", keywords()))).max_lines(1).clear_all().show(ui);
+        let out = ChipField::new("Keywords", data.bind("chips", keywords())).max_lines(1).clear_all().show(ui);
         if let Some(at) = out.activated {
             *data.value("activated", None::<usize>) = Some(at);
         }

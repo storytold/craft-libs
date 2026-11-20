@@ -11,7 +11,7 @@ use egui::Ui;
 fn form_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let ok_enabled = *data.value("ok_enabled", true);
     FormDialog::own("Options")
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui, |ui, _, value| {
             Checkbox::new(Bind::bound(value)).label(Label::from("Smooth")).show(ui);
             ok_enabled

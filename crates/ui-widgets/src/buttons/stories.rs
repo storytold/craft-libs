@@ -111,8 +111,8 @@ fn icon_button_badge(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(ToggleButton<'static>, covers = [], drive = Drive::Never)]
 fn toggle_button_on(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
-        ToggleButton::new("Snap to grid", Bind::bound(data.value("snap", false))).id_salt("snap").show(ui);
-        ToggleButton::new("Guides", Bind::bound(data.value("on", true))).icon(IconId::new("eye")).id_salt("guides").show(ui);
+        ToggleButton::new("Snap to grid", data.bind("snap", false)).id_salt("snap").show(ui);
+        ToggleButton::new("Guides", data.bind("on", true)).icon(IconId::new("eye")).id_salt("guides").show(ui);
     });
     shown.into()
 }
@@ -122,7 +122,7 @@ fn toggle_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let disabled = *data.value("disabled", false);
     let label = data.value("label", String::from("Snap to grid")).clone();
-    ToggleButton::new(label, Bind::bound(data.value("on", false))).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
+    ToggleButton::new(label, data.bind("on", false)).icon(IconId::new("eye")).size(size).enabled(!disabled).show(ui).into()
 }
 
 #[story(ToggleButton<'static>, covers = [Mixed], drive = Drive::Never)]
@@ -133,7 +133,7 @@ fn toggle_button_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ToggleButton<'static>, covers = [Invalid], drive = Drive::Never)]
 fn toggle_button_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_on = |on: &bool| if *on { Validity::Refuse(Message::new("Snapping is not available here")) } else { Validity::Ok };
-    ToggleButton::new("Snap to grid", Bind::bound(data.value("invalid", true)).check(refuse_on)).show(ui).into()
+    ToggleButton::new("Snap to grid", data.bind("invalid", true).check(refuse_on)).show(ui).into()
 }
 
 fn presets() -> [Entry<u8>; 4] {

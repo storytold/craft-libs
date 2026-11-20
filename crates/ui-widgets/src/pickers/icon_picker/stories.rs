@@ -52,10 +52,10 @@ fn icon_picker_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(IconPicker<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn icon_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("tool", Some(3u8))), &groups()).show(ui).into()
+    IconPicker::new("Tool", data.bind("tool", Some(3u8)), &groups()).show(ui).into()
 }
 
 #[story(IconPicker<'static, u8>, covers = [Empty], drive = Drive::Type("zzz"))]
 fn icon_picker_no_match(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    IconPicker::new("Tool", Bind::bound(data.value("none", None)), &groups()).show(ui).into()
+    IconPicker::new("Tool", data.bind("none", None), &groups()).show(ui).into()
 }
