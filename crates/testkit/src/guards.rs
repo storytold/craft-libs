@@ -151,15 +151,22 @@ impl Token {
     }
 }
 
-/// Whether `c` can start a Rust identifier: `_` or a character with the Unicode `XID_Start` property.
+/// Whether `c` can start a Rust identifier: `_`, a letter, or another non-ASCII character that is not white
+/// space (see [`non_ascii_word`]).
 fn is_ident_start(c: char) -> bool {
-    c == '_' || unicode_ident::is_xid_start(c)
+    c == '_' || c.is_alphabetic() || non_ascii_word(c)
 }
 
-/// Whether `c` can continue a Rust identifier: a character with the Unicode `XID_Continue` property, which
-/// includes `_`, digits and combining marks such as U+0301.
+/// Whether `c` can continue a Rust identifier: `_`, a letter or digit, or another non-ASCII character that is
+/// not white space, such as the combining mark U+0301.
 fn is_ident_continue(c: char) -> bool {
-    unicode_ident::is_xid_continue(c)
+    c == '_' || c.is_alphanumeric() || non_ascii_word(c)
+}
+
+/// Whether `c` is a non-ASCII character other than Rust's white space and the byte order mark U+FEFF. Outside
+/// literals and comments, Rust allows such a character only in an identifier, so it is read as part of one.
+fn non_ascii_word(c: char) -> bool {
+    !c.is_ascii() && !c.is_whitespace() && !matches!(c, '\u{200E}' | '\u{200F}' | '\u{FEFF}')
 }
 
 /// Split Rust source into tokens with 1-based line numbers.
@@ -181,7 +188,9 @@ fn lex_rust(code: &str) -> Vec<Token> {
         if c == '\n' {
             line += 1;
             i += 1;
-        } else if c.is_whitespace() {
+        } else if c.is_whitespace() || matches!(c, '\u{200E}' | '\u{200F}' | '\u{FEFF}') {
+            // Rust also reads the left-to-right and right-to-left marks as white space, and skips a byte
+            // order mark at the start of a file.
             i += 1;
         } else if c == '/' && at(i + 1) == Some('/') {
             while i < len && chars[i] != '\n' {

@@ -1446,6 +1446,10 @@ fn guards_read_names_that_hold_combining_marks() {
 
     let menu = "use muda::{PredefinedMenuItem as Ite\u{301}m};\nfn menu() {\n    let a = Ite\u{301}m::quit(None);\n}\n";
     assert_eq!(lines(&predefined_quit([("src/menu.rs", menu)])), vec![3]);
+
+    // A byte order mark and the left-to-right and right-to-left marks are not part of a name.
+    let marked = "\u{FEFF}use std::time::Instant;\nuse std::time as\u{200E}t;\nfn run() { t\u{200F}::Instant::now(); }\n";
+    assert_eq!(lines(&std_instant([("src/marked.rs", marked)])), vec![1, 3]);
 }
 
 #[test]
