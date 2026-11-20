@@ -162,8 +162,9 @@ impl<C: Component> MeasureCx<'_, C> {
     /// The size `face` has when `PaintUi::face` shows it as the look of a part: steps 1, 2 and 4 of the face run
     /// under the composite's resolved `enabled`, `size` and sizing. A composite measured at its least measures the face at
     /// its least; otherwise the face has no proposal.
-    /// The face is part of the composite's measure call: the call's answer and the inputs the face read are what the
-    /// layout memory keeps, and the face keeps no entry of its own.
+    /// The face is measured inside the composite's own run (measure, parts or header parts). Only the composite's
+    /// measure call sizes the composite: its answer and the inputs the face read are what the layout memory keeps,
+    /// and the face keeps no entry of its own.
     pub fn face<S: Show>(&self, mut face: S) -> Vec2 {
         // The face is the composite's look: a composite sized to its content sizes its face so.
         if let Some(sizing) = self.resolved.sizing {

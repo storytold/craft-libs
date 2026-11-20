@@ -1818,8 +1818,9 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
 pub(crate) enum MeasureFor {
     /// A component its caller shows, or sizes a rect by: a leaf of the transcript of the body it is measured in.
     Component,
-    /// A composite's face (`MeasureCx::face`): part of the composite's measure call, whose answer and inputs are the
-    /// transcript's record of it, so the face keeps no leaf of its own.
+    /// A composite's face (`MeasureCx::face`), measured inside the composite's own run (measure, parts or header
+    /// parts). Only the composite's measure call sizes the composite, and its answer and inputs are the transcript's
+    /// record, so the face keeps no leaf of its own.
     Face,
 }
 

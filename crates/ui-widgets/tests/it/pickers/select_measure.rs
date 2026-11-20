@@ -121,6 +121,8 @@ fn a_face_change_that_leaves_the_select_size_alone_asks_for_no_discard_pass() {
     let mut rect = Rect::NOTHING;
     frames.idle(30, |ui| rect = scene(ui, &labels, true));
     let before = rect.width();
+    // Entry 0 is the first face `Select::measure` visits: with a face leaf, the transcript kept that face's call, so
+    // this edit was the one that caused a discard pass.
     labels[0] = "Normal, wider than a field yet narrower";
     let passes = frames.frame(vec![], |ui| rect = scene(ui, &labels, true));
     assert!((rect.width() - before).abs() <= SLACK, "the wider first entry leaves the select's width alone: {before} {}", rect.width());
