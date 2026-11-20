@@ -38,6 +38,10 @@ pub(crate) trait TextResult {
     fn submit_mods(&self) -> craft_keymap::Mods;
     /// Whether Tab (`Some(true)`) or Shift+Tab (`Some(false)`) moved focus off the part this pass.
     fn left_by_tab(&self) -> Option<bool>;
+    /// Whether a `TabKey::Reports` part kept focus on Tab (`Some(true)`) or Shift+Tab (`Some(false)`) this pass.
+    fn tab(&self) -> Option<bool>;
+    /// The part's caret as a byte offset into its text after the pass; `None` while its widget has no caret.
+    fn caret(&self) -> Option<usize>;
     fn as_any(&self) -> &dyn Any;
 }
 
@@ -45,6 +49,8 @@ pub(crate) struct RecordedText<V> {
     pub(crate) outcome: crate::primitives::TextOutcome<V>,
     pub(crate) submit_mods: craft_keymap::Mods,
     pub(crate) left_by_tab: Option<bool>,
+    pub(crate) tab: Option<bool>,
+    pub(crate) caret: Option<usize>,
 }
 
 impl<V: 'static> TextResult for RecordedText<V> {
@@ -54,6 +60,14 @@ impl<V: 'static> TextResult for RecordedText<V> {
 
     fn left_by_tab(&self) -> Option<bool> {
         self.left_by_tab
+    }
+
+    fn tab(&self) -> Option<bool> {
+        self.tab
+    }
+
+    fn caret(&self) -> Option<usize> {
+        self.caret
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -268,6 +282,14 @@ impl<C: Component> Cx<'_, C> {
     /// `finish` read it.
     pub fn context_requested(&self) -> bool {
         crate::runtime::keys::context_request(&self.core.ctx, self.core.id).is_some()
+    }
+
+    /// The context requests made in this pass so far, in order: each component asked and the rect its menu opens at
+    /// (its part's, when it was made at one). A container reads in `finish` those its body's components made, which
+    /// ran before it finished: a secondary click or the Menu key on a child reaches the region around it this way,
+    /// whatever the child does with its own request.
+    pub fn context_requests(&self) -> Vec<(Id, Rect)> {
+        crate::runtime::keys::context_requests(&self.core.ctx)
     }
 
     /// Names the member of this container's roving group (`ContainerProps.roving`) that Tab arrives at; the

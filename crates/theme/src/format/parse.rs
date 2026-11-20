@@ -471,9 +471,10 @@ impl Parser {
                         Some(hc) => p.at("high_contrast", |p| p.mode_pins(hc, variants, false)),
                         None => Some(ModePins::default()),
                     };
-                    match (pins, high_contrast) {
-                        (Some(pins), Some(high_contrast)) => {
-                            out.insert(id, AppOverrides { pins, high_contrast });
+                    let shape = p.shape(app);
+                    match (pins, high_contrast, shape) {
+                        (Some(pins), Some(high_contrast), Some(shape)) => {
+                            out.insert(id, AppOverrides { pins, high_contrast, shape });
                             true
                         }
                         _ => false,

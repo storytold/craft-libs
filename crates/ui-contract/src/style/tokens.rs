@@ -2,7 +2,7 @@
 
 use crate::fonts::{SEMIBOLD, StackFacts};
 use crate::primitives::IconSet;
-use craft_theme::{AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
+use craft_theme::{AppId, AppSizes, Appearance, Contrast, GroupValues, IconPackId, Size, ThemeDef, Tokens, TypeRole, resolve_sized};
 use egui::{CornerRadius, FontFamily, FontId};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -42,6 +42,15 @@ pub struct UiTokens {
     key: u64,
 }
 
+/// Two sets are equal when their content keys are: equal sets share a key.
+impl PartialEq for UiTokens {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for UiTokens {}
+
 impl UiTokens {
     /// A token set resolved under `contrast` and `density`, with no theme values for token groups, drawing the default
     /// icon set.
@@ -49,9 +58,10 @@ impl UiTokens {
         Self::with_icons(tokens, contrast, density, IconSet::default())
     }
 
-    /// The tokens `theme` resolves to under `appearance` and `sizes`, drawing the icon pack the theme names.
-    pub fn of_theme(theme: &ThemeDef, appearance: Appearance, sizes: &AppSizes) -> Self {
-        let tokens = Arc::new(resolve_sized(theme, appearance, None, sizes).tokens);
+    /// The tokens `theme` resolves to under `appearance` and `sizes`, with the pins of `app` (`None`: no app's), drawing
+    /// the icon pack the theme names.
+    pub fn of_theme(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId>, sizes: &AppSizes) -> Self {
+        let tokens = Arc::new(resolve_sized(theme, appearance, app, sizes).tokens);
         Self::with_icons(tokens, appearance.contrast, appearance.size, theme_icons(theme.icon_pack.as_ref()))
     }
 

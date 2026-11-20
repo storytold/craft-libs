@@ -27,47 +27,52 @@ const CLOSED: &[&str] = &[
     "SetPosition",
     "States",
     "StateMix",
-    "ShowReadouts",    // the one Show Transformation Values flag: a bool, fixed by meaning
-    "PenDraft",        // whose anchors a pen draft holds: own or foreign, fixed by meaning
-    "CollectionEvent", // built or matched in craft-ui-patterns
-    "ColumnAlign",     // built or matched in craft-ui-widgets
-    "ColumnEvent",     // built or matched in craft-ui-widgets
-    "DialogOutput",    // built or matched in craft-ui-canvas
-    "DocText",         // built or matched in craft-ui-widgets
-    "DockEvent",       // built or matched in craft-ui-patterns
-    "Drag",            // built or matched in craft-ui-canvas
-    "Drive",           // built or matched in craft-ui-widgets
-    "FirePhase",       // built or matched in craft-ui-canvas
-    "FocusPolicy",     // built or matched in craft-ui-canvas
-    "GridEvent",       // built or matched in craft-ui-patterns
-    "GroupAt",         // built or matched in craft-ui-patterns
-    "GroupItem",       // built or matched in craft-ui-patterns
-    "Guide",           // built or matched in craft-ui-canvas
-    "GuideColor",      // built or matched in craft-ui-patterns
-    "GuideLine",       // built or matched in craft-ui-canvas
-    "HAlign",          // built or matched in craft-ui-widgets
-    "HostAnswer",      // built or matched in craft-ui-patterns
-    "IconSpec",        // built or matched in craft-ui-widgets
-    "Inner",           // built or matched in craft-ui-panels
-    "MenuKey",         // built or matched in craft-ui-widgets
-    "Mount",           // built or matched in craft-ui-panels
-    "OpenChange",      // built or matched in craft-ui-patterns
-    "OuterEdit",       // built or matched in craft-ui-widgets
-    "Pending",         // built or matched in craft-ui-canvas
-    "ProxyColor",      // built or matched in craft-ui-patterns
-    "ReorderMove",     // built or matched in craft-ui-patterns
-    "RowState",        // built or matched in craft-ui-widgets
-    "RuleLook",        // built or matched in craft-ui-canvas
-    "ShellRegions",    // built or matched in craft-ui-shell
-    "SizeLimits",      // built or matched in craft-ui-panels
-    "StoryOutput",     // built or matched in craft-ui-widgets
-    "SurfaceStyle",    // built or matched in craft-ui-widgets
-    "Target",          // built or matched in craft-ui-canvas
-    "TextOptions",     // built or matched in craft-ui-widgets
-    "TransformReach",  // `MoveOnly { points }` is built in PhotoCraft's type tool
-    "ToastEnd",        // built or matched in craft-ui-widgets
-    "TrackLook",       // built or matched in craft-ui-widgets
-    "VariantParts",    // built or matched in craft-ui-widgets
+    "ShowReadouts",     // the one Show Transformation Values flag: a bool, fixed by meaning
+    "PenDraft",         // whose anchors a pen draft holds: own or foreign, fixed by meaning
+    "CollectionEvent",  // built or matched in craft-ui-patterns
+    "ColumnAlign",      // built or matched in craft-ui-widgets
+    "ColumnEvent",      // built or matched in craft-ui-widgets
+    "DialogOutput",     // built or matched in craft-ui-canvas
+    "DocText",          // built or matched in craft-ui-widgets
+    "DockEvent",        // built or matched in craft-ui-patterns
+    "Drag",             // built or matched in craft-ui-canvas
+    "Drive",            // built or matched in craft-ui-widgets
+    "FirePhase",        // built or matched in craft-ui-canvas
+    "FocusPolicy",      // built or matched in craft-ui-canvas
+    "GridEvent",        // built or matched in craft-ui-patterns
+    "GroupAt",          // built or matched in craft-ui-patterns
+    "GroupItem",        // built or matched in craft-ui-patterns
+    "Guide",            // built or matched in craft-ui-canvas
+    "GuideColor",       // built or matched in craft-ui-patterns
+    "GuideLine",        // built or matched in craft-ui-canvas
+    "HAlign",           // built or matched in craft-ui-widgets
+    "HostAnswer",       // built or matched in craft-ui-patterns
+    "IconSpec",         // built or matched in craft-ui-widgets
+    "Inner",            // built or matched in craft-ui-panels
+    "MenuKey",          // built or matched in craft-ui-widgets
+    "Mount",            // built or matched in craft-ui-panels
+    "OpenChange",       // built or matched in craft-ui-patterns
+    "OuterEdit",        // built or matched in craft-ui-widgets
+    "Pending",          // built or matched in craft-ui-canvas
+    "ProxyColor",       // built or matched in craft-ui-patterns
+    "ReorderMove",      // built or matched in craft-ui-patterns
+    "RowState",         // built or matched in craft-ui-widgets
+    "RuleLook",         // built or matched in craft-ui-canvas
+    "ShellRegions",     // built or matched in craft-ui-shell
+    "SizeLimits",       // built or matched in craft-ui-panels
+    "StoryOutput",      // built or matched in craft-ui-widgets
+    "SurfaceStyle",     // built or matched in craft-ui-widgets
+    "Target",           // built or matched in craft-ui-canvas
+    "TextOptions",      // built or matched in craft-ui-widgets
+    "TransformReach",   // `MoveOnly { points }` is built in PhotoCraft's type tool
+    "GalleryItem",      // built in WordCraft's ui-egui, one literal per tile, with its key, label and face
+    "RibbonOutput",     // built in WordCraft's ui-egui, which reports an empty ribbon output while no ribbon shows
+    "LineBreakOptions", // built field by field in WordCraft's paragraph dialog, a record of check boxes that mirrors the format
+    "AsianTypography",  // built field by field in WordCraft's paragraph dialog, a record of check boxes that mirrors the format
+    "GapEdge",          // the start and the end of a column gap: two edges, fixed by meaning, matched in WordCraft's column ruler
+    "ToastEnd",         // built or matched in craft-ui-widgets
+    "TrackLook",        // built or matched in craft-ui-widgets
+    "VariantParts",     // built or matched in craft-ui-widgets
 ];
 
 /// Permission keys whose only allowed location is craft-ui-contract's `runtime::egui`.
@@ -137,6 +142,9 @@ const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
 const NO_GLOBAL_STATE: &[(&str, &str)] = &[
     // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
     ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
+    // Settled fact: `ModalRules` holds a closure the derive cannot take; it keys on its plain fields and the revision
+    // the app moves with every rule change, which stands for the closure.
+    ("crates/menu/src/modal.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),

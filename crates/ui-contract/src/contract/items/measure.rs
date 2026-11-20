@@ -6,7 +6,7 @@ use super::{header, rows};
 use crate::contract::body::EnvFacts;
 use crate::contract::collection::RowState;
 use crate::contract::run::{Measuring, ShowAt};
-use crate::contract::{Collection, Internal, ItemCx, Props, Show as _, Sizing};
+use crate::contract::{Collection, Internal, ItemCx, Props, Show as _};
 use crate::runtime::access::SetPosition;
 use crate::runtime::env::{Env, EnvView, ItemFacts};
 use crate::runtime::layout_memory;
@@ -20,7 +20,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// Whether the collection takes its width from its widest row: `Sizing::Content`. A row's width holds its
     /// column cells at the widths the header resolves for them.
     pub(super) fn content_sized(&self, comp: &C) -> bool {
-        comp.props(Internal::new()).sizing == Sizing::Content
+        comp.props(Internal::new()).sizing.content_width()
     }
 
     /// The padding the collection's props add on every side of its rows (`ShapeHooks::pad`).
@@ -40,7 +40,7 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     /// the width the column settles on.
     pub(super) fn width_from_content(&mut self, comp: &C, ui: &Ui, id: Id, room: Vec2, item: Option<Vec2>, scx: &StyleCx<'_>) -> f32 {
         let rows = if self.header.has_columns() { self.header.least_width() } else { self.largest_in(comp, ui, id, room).x };
-        rows.max(comp.ideal_width(item, scx)).min(room.x)
+        rows.max(comp.ideal_width(item, self.source.len(), scx)).min(room.x)
     }
 
     /// The largest ideal size of the rows in this pass, and the widest cell each column's items reported: each row is

@@ -798,7 +798,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Collection for TileGrid<'_, K
     }
 
     /// The last layout again while the width, the rows stamp and everything the arrangement reads are the same.
-    fn ideal_width(&self, item: Option<Vec2>, cx: &StyleCx<'_>) -> f32 {
+    fn ideal_width(&self, item: Option<Vec2>, _rows: usize, cx: &StyleCx<'_>) -> f32 {
         if self.card_columns == 0 {
             return 0.0;
         }

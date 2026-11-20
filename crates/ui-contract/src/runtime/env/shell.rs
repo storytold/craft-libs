@@ -125,6 +125,28 @@ struct Inner {
     region: Option<Rect>,
     revealed_rects: RevealedRects,
     dialog: DialogRecord,
+    page_band: Option<PageBandRoom>,
+}
+
+/// The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
+/// the window's ends take in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PageBandRoom {
+    /// The band's rect.
+    pub rect: Rect,
+    /// The width the window's start end takes (the traffic lights' inset or the caption buttons), from the band's
+    /// reading start.
+    pub start: f32,
+    /// The width the window's end end takes, from the band's reading end.
+    pub end: f32,
+}
+
+impl PageBandRoom {
+    /// The band at `rect`, the window's start end taking `start` of it and its end end `end`.
+    pub const fn new(rect: Rect, start: f32, end: f32) -> Self {
+        PageBandRoom { rect, start, end }
+    }
 }
 
 /// The rects that body content registered this pass for the edge it was revealed from. The registry is shared by the
@@ -166,6 +188,7 @@ impl ShellCx {
             region: None,
             revealed_rects: RevealedRects::default(),
             dialog: DialogRecord::default(),
+            page_band: None,
         };
         ShellCx { inner: Arc::new(inner) }
     }
@@ -309,6 +332,17 @@ impl ShellCx {
     /// Where floating frames may go: the body rect plus the area under bars that overlay the body.
     pub fn float_bounds(&self) -> Rect {
         self.inner.float_bounds
+    }
+
+    /// The page band's room while a full-window page shows, else `None`.
+    pub fn page_band(&self) -> Option<PageBandRoom> {
+        self.inner.page_band
+    }
+
+    /// The page band's room while a full-window page shows; `None` when no page shows or the window is full screen.
+    pub fn with_page_band(mut self, room: Option<PageBandRoom>) -> Self {
+        Arc::make_mut(&mut self.inner).page_band = room;
+        self
     }
 }
 

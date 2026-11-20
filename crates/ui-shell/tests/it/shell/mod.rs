@@ -5,6 +5,7 @@ mod canvas_panel;
 mod caption_button;
 mod document_window;
 mod embed;
+mod f6;
 mod opening;
 mod reveal;
 mod screen_mode;

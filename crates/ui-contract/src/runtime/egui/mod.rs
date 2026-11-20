@@ -2,6 +2,7 @@
 
 pub mod access;
 pub mod alloc;
+pub(crate) mod alt_code;
 pub mod areas;
 pub mod child;
 pub mod clipboard;

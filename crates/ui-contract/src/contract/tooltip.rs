@@ -7,7 +7,8 @@
 //! A component with no tooltip shows its own label as the tooltip when its type declares `Component::SHOWS_LABEL`
 //! false (or an instance does, through `Component::shows_label`): no text paints that name, inside a field or not. A
 //! component with no label of its own is named by its field label, which is on screen, and shows none.
-//! A component that paints its label shows it whole as the tooltip when the paint cut it.
+//! A component that paints its label shows it whole as the tooltip when the paint cut it. A canvas control shows no
+//! label as its tooltip: its rect is the canvas, and its parts carry their own tooltips.
 
 use super::cx::{Decls, PartExtras};
 use super::overlay::{self, Anchor, Layer, Overlay, Place};
@@ -57,6 +58,8 @@ pub(crate) struct TipIn<'a> {
     pub parts: &'a Decls,
     /// The instance's `shows_label` fact.
     pub shows_label: bool,
+    /// The type is a canvas control (`Meta::CANVAS_CONTROL`): its label is never its tooltip.
+    pub canvas_control: bool,
     /// The validity message no enclosing container shows as its status line (step 16's report).
     pub message: Option<String>,
 }
@@ -73,26 +76,38 @@ fn spec_text(env: &crate::runtime::env::EnvView<'_>, spec: &TooltipSpec, enabled
 /// The text the component's own tooltip shows, or `None` when it has none: its validity message when no container
 /// shows it (`message`); else the tooltip's text, or its disabled text while disabled, with the bound command's
 /// chord; else the full label when the paint cut it, or its own label when the component declares it paints no
-/// label (`shows_label`).
-fn text_of(core: &super::CxCore<'_>, shows_label: bool, message: Option<String>) -> Option<String> {
+/// label (`shows_label`), its face dropped the label (`PaintRecord::label_dropped`) or its command has a hint. A
+/// bound command's hint follows on a line of its own.
+///
+/// A canvas control (`canvas_control`) never shows its label: its rect is the canvas it is shown over, not a face of
+/// its own, so the label would show wherever the pointer rests on the page ("Rulers margins" over a whole page). Its
+/// parts name themselves with their own tooltips (a margin edge's "Left Margin").
+fn text_of(core: &super::CxCore<'_>, shows_label: bool, canvas_control: bool, message: Option<String>) -> Option<String> {
     if message.is_some() {
         return message;
     }
+    let hint = core.command.as_deref().and_then(|command| command.hint.as_deref()).filter(|hint| !hint.is_empty());
     let base = match core.resolved.tooltip.map(|tooltip| tooltip.spec()) {
         Some(spec) => spec_text(&core.env, spec, core.resolved.enabled),
+        None if canvas_control => return None,
         None => {
             let paint = core.paint.borrow();
+            let unpainted = !shows_label || paint.label_dropped || hint.is_some();
             match paint.elided.clone() {
                 Some(full) => full,
-                None if !shows_label && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
+                None if unpainted && !core.resolved.label.is_empty() => core.resolved.label.to_owned(),
                 None => return None,
             }
         }
     };
     let platform = crate::runtime::windows::os_of(&core.ctx);
-    Some(match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
+    let text = match core.command.as_deref().and_then(|command| command.chord.as_ref()) {
         Some(chord) => with_chord(&base, chord, platform),
         None => base,
+    };
+    Some(match hint {
+        Some(hint) => format!("{text}\n{hint}"),
+        None => text,
     })
 }
 
@@ -156,7 +171,9 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
             part.hovered || keyboard,
             Some(part.part),
         ),
-        None => (text_of(core, input.shows_label, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None),
+        None => {
+            (text_of(core, input.shows_label, input.canvas_control, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None)
+        }
     };
     let call = TipCall {
         ctx: &core.ctx,
@@ -171,6 +188,7 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
         wants_input: hovered,
         pressed: member_pressed.unwrap_or_else(|| core.press.phase.is_press()),
         subject,
+        describes: subject.is_none().then_some(core.id),
     };
     show_tip(call);
 }
@@ -196,6 +214,39 @@ pub fn attach(response: &egui::Response, tooltip: &Tooltip) {
         wants_input: response.hovered() || response.has_focus(),
         pressed: crate::runtime::egui::response::is_pressed(response),
         subject: None,
+        describes: Some(response.id),
+    };
+    show_tip(call);
+}
+
+/// Shows `tip` at the pointer for a surface whose tips have no part of their own (a canvas tool's hover tip): the same
+/// delay, grace, look and hiding as a component's tooltip, placed at the pointer whatever the tip's `at` says.
+///
+/// `owner` is the component whose memory keeps the timer. `at` is where the pointer rests in `ui`'s layer, `None` once
+/// it left; `pressed` is a press or drag that hides the tip. With no tip, a tip shown hides.
+pub fn at_pointer(ui: &Ui, owner: egui::Id, tip: Option<&Tooltip>, at: Option<egui::Pos2>, pressed: bool) {
+    let ctx = ui.ctx();
+    let env = Env::of(ui);
+    let spec = tip.map(|tip| {
+        let mut spec = tip.spec().clone();
+        spec.at = TooltipAt::Pointer;
+        spec
+    });
+    let text = spec.as_ref().map(|spec| spec_text(&env.view(), spec, true));
+    let call = TipCall {
+        ctx,
+        owner,
+        id: sub(owner, "pointer tip"),
+        env: &env,
+        layer: ui.layer_id(),
+        rect: Rect::from_center_size(at.unwrap_or_default(), Vec2::ZERO),
+        text,
+        rich: None,
+        spec,
+        wants_input: at.is_some(),
+        pressed,
+        subject: None,
+        describes: Some(owner),
     };
     show_tip(call);
 }
@@ -218,10 +269,12 @@ struct TipCall<'a> {
     wants_input: bool,
     pressed: bool,
     subject: Option<PartRef>,
+    /// The node the tooltip describes; `None` for a part's tooltip.
+    describes: Option<egui::Id>,
 }
 
 fn show_tip(call: TipCall<'_>) {
-    let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text, rich, spec, wants_input, pressed, subject } = call;
+    let TipCall { ctx, owner, id, env, layer: rect_layer, rect, text, rich, spec, wants_input, pressed, subject, describes } = call;
     let state_id = sub(id, "tip_state");
     let has_content = text.is_some() || rich.is_some();
     // A component with no tooltip content and no timer or fading layer left from before has nothing to advance.
@@ -291,9 +344,9 @@ fn show_tip(call: TipCall<'_>) {
         None => {
             if let Some(text) = &text {
                 let tip = TipText { common: Common::default(), text }.id_salt(tip_id).show(ui);
-                if subject.is_none() {
+                if let Some(node) = describes {
                     // The described control's node was written earlier in the pass; the relation joins it.
-                    let patch = LabelPatch::DescribedBy { node: id, label: tip.id };
+                    let patch = LabelPatch::DescribedBy { node, label: tip.id };
                     crate::runtime::egui::access::write_label_patch(ctx, &patch);
                 }
             }

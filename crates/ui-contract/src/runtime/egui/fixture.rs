@@ -93,6 +93,13 @@ pub struct ImeSeen {
     pub reset: Option<egui::ImeResetId>,
     /// Where the candidate window opens.
     pub caret: Rect,
+
+    /// The IME context the output belongs to; it changes with the owner, its epoch, its focus or its purpose.
+    pub generation: u64,
+    /// The bounded committed text around the caret, or `Unavailable`.
+    pub surrounding: egui::output::IMESurroundingText,
+    /// Whether the input method made the change to `surrounding`.
+    pub cause: egui::output::ImeChangeCause,
 }
 
 /// The files the OS hovers over or drops on a frame's window, by name; a hovered file also has the media type the OS gave.
@@ -136,6 +143,45 @@ fn window_focus_facts(ctx: &Context, events: &[Event], native_pixels_per_point: 
 /// The focus the fixture's window last reported; unset before any focus event.
 #[derive(Default)]
 struct WindowFocus(Option<bool>);
+
+/// The child windows of the root that are open: each opens with its first frame and stays listed in every frame's
+/// viewports, as eframe lists every open viewport, until a test closes it ([`close_viewport`]) or the app sends it
+/// `ViewportCommand::Close`.
+#[derive(Default)]
+struct OpenChildren(Vec<egui::ViewportId>);
+
+/// The open child windows, with `viewport` opened first when it is a child.
+fn open_children(ctx: &Context, viewport: egui::ViewportId) -> Vec<egui::ViewportId> {
+    Service::<OpenChildren>::run(ctx, |open| {
+        if viewport != egui::ViewportId::ROOT && !open.0.contains(&viewport) {
+            open.0.push(viewport);
+        }
+        open.0.clone()
+    })
+}
+
+/// One run of `ui` on `input`; a root pass declares the open `children` after it, as an eframe app shows each of its
+/// windows every frame: egui keeps a child viewport only while its parent's passes show it. Each child's content runs
+/// in its own frames, so the declaration shows nothing.
+fn run_ui(ctx: &Context, input: RawInput, children: &[egui::ViewportId], mut ui: impl FnMut(&mut Ui)) -> egui::FullOutput {
+    let root = input.viewport_id == egui::ViewportId::ROOT;
+    ctx.run_ui(input, |top| {
+        ui(top);
+        if root && !children.is_empty() {
+            let embedded = ctx.embed_viewports();
+            ctx.set_embed_viewports(false);
+            for child in children {
+                ctx.show_viewport_deferred(*child, egui::ViewportBuilder::default(), |_, _| {});
+            }
+            ctx.set_embed_viewports(embedded);
+        }
+    })
+}
+
+/// Closes the child window `viewport`: later frames no longer list it.
+pub(crate) fn close_viewport(ctx: &Context, viewport: egui::ViewportId) {
+    Service::<OpenChildren>::run(ctx, |open| open.0.retain(|held| *held != viewport));
+}
 
 /// The fixture's reset bridge, as egui-winit keeps one per window: the reset request it holds for each viewport, and
 /// the requests it dropped, which the next frame reports as `Event::ImeResetRetired`.
@@ -187,7 +233,8 @@ impl ImeResets {
 }
 
 /// Runs one pass of `viewport` at `time` seconds with `events` and `files`, on a window of `native_pixels_per_point`
-/// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live.
+/// (egui's default when `None`). A viewport other than the root is a child window of the root, which stays live; the
+/// child stays open in every later frame, the root's included, until it is closed.
 #[expect(clippy::too_many_arguments, reason = "the arguments are the facts of one frame, and every caller passes them all")]
 pub(crate) fn run_frame(
     ctx: &Context,
@@ -204,9 +251,10 @@ pub(crate) fn run_frame(
     let dropped_files = files.dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
     Service::<ImeResets>::run(ctx, |resets| resets.input(viewport, &mut events));
     let mut viewports = window_focus_facts(ctx, &events, native_pixels_per_point);
-    if viewport != egui::ViewportId::ROOT {
+    let children = open_children(ctx, viewport);
+    for child in &children {
         viewports
-            .insert(viewport, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), native_pixels_per_point, ..egui::ViewportInfo::default() });
+            .insert(*child, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), native_pixels_per_point, ..egui::ViewportInfo::default() });
     }
     let input = RawInput {
         screen_rect: Some(screen),
@@ -218,7 +266,7 @@ pub(crate) fn run_frame(
         viewports,
         ..RawInput::default()
     };
-    let mut output = drive(|| ctx.run_ui(input, ui));
+    let mut output = drive(|| run_ui(ctx, input, &children, ui));
     Service::<ImeResets>::run(ctx, |resets| resets.output(viewport, &output.platform_output));
     let mut flat = Vec::new();
     for clipped in &output.shapes {
@@ -257,6 +305,15 @@ pub(crate) fn run_frame(
         })
         .collect();
     let closed = output.viewport_output.values().any(|viewport| viewport.commands.iter().any(|command| matches!(command, ViewportCommand::Close)));
+    let closing: Vec<egui::ViewportId> = output
+        .viewport_output
+        .iter()
+        .filter(|(id, out)| **id != egui::ViewportId::ROOT && out.commands.iter().any(|command| matches!(command, ViewportCommand::Close)))
+        .map(|(id, _)| *id)
+        .collect();
+    for child in closing {
+        close_viewport(ctx, child);
+    }
     let repaint_delay = output.viewport_output.get(&egui::ViewportId::ROOT).map_or(std::time::Duration::MAX, |viewport| viewport.repaint_delay);
     let copied = output
         .platform_output
@@ -286,6 +343,9 @@ pub(crate) fn run_frame(
             interrupt: ime.should_interrupt_composition,
             reset: ime.reset_request,
             caret: ime.cursor_rect,
+            generation: ime.context_generation,
+            surrounding: ime.surrounding_text.clone(),
+            cause: ime.change_cause,
         }),
         textures: std::mem::take(&mut output.textures_delta),
         shapes: output.shapes,
@@ -366,8 +426,14 @@ pub(crate) fn reordered_fonts() -> egui::FontDefinitions {
 /// Runs one frame like `run_frame` and returns the shapes it painted, nested shapes flattened.
 pub(crate) fn run_frame_shapes(ctx: &Context, time: f64, screen: Vec2, ui: impl FnMut(&mut Ui)) -> Vec<Shape> {
     let screen = Rect::from_min_size(Pos2::ZERO, screen);
-    let input = RawInput { screen_rect: Some(screen), time: Some(time), ..RawInput::default() };
-    let mut output = drive(|| ctx.run_ui(input, ui));
+    let children = open_children(ctx, egui::ViewportId::ROOT);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo::default());
+    for child in &children {
+        viewports.insert(*child, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), ..egui::ViewportInfo::default() });
+    }
+    let input = RawInput { screen_rect: Some(screen), time: Some(time), viewports, ..RawInput::default() };
+    let mut output = drive(|| run_ui(ctx, input, &children, ui));
     output.textures_delta.clear();
     let mut flat = Vec::new();
     for clipped in output.shapes {

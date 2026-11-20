@@ -108,6 +108,15 @@ impl<'a> Archive<'a> {
         Ok(Some(file.is_dir()))
     }
 
+    /// Whether the entry at `index` is a symbolic link according to its Unix mode bits.
+    pub fn entry_is_symlink(&mut self, index: usize) -> Result<Option<bool>, Error> {
+        if index >= self.zip.len() {
+            return Ok(None);
+        }
+        let file = self.zip.by_index_raw(index).map_err(|error| Error::NotZip(error.to_string()))?;
+        Ok(Some(file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000)))
+    }
+
     /// Declared decoded and compressed sizes at `index`, without name lookup.
     pub fn entry_sizes(&mut self, index: usize) -> Result<Option<(u64, u64)>, Error> {
         if index >= self.zip.len() {
@@ -273,5 +282,31 @@ mod ownership_tests {
         assert!(weak.upgrade().is_some());
         drop(clone);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn entry_is_symlink_reports_unix_symlink_entries() {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.add_symlink("link", "/outside", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.start_file("file.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, b"ok").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 4, max_total_bytes: 16 }).unwrap();
+        assert_eq!(archive.entry_is_symlink(0).unwrap(), Some(true));
+        assert_eq!(archive.entry_is_symlink(1).unwrap(), Some(false));
+        assert_eq!(archive.entry_is_symlink(2).unwrap(), None);
+    }
+
+    #[test]
+    fn streaming_writer_supports_directories_and_custom_destinations() {
+        let mut writer = crate::Writer::to_writer(Cursor::new(Vec::new()));
+        writer.add_directory("resources/").unwrap();
+        writer.add("resources/data.bin", b"1234", crate::Compression::Stored).unwrap();
+        let bytes = writer.finish_into().unwrap().into_inner();
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 4, max_total_bytes: 16 }).unwrap();
+        assert_eq!(archive.len(), 2);
+        assert_eq!(archive.entry_is_dir(0).unwrap(), Some(true));
+        assert_eq!(archive.entry_is_dir(1).unwrap(), Some(false));
+        assert_eq!(archive.read("resources/data.bin", 16).unwrap().unwrap(), b"1234");
     }
 }

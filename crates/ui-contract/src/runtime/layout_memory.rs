@@ -1106,6 +1106,14 @@ pub fn forget_kept(ctx: &Context) {
     });
 }
 
+/// How many component entries the valid kept measurements hold, each body counting only the components directly in
+/// it.
+#[cfg(feature = "testing")]
+pub fn kept_leaves(ctx: &Context) -> usize {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.kept.values().filter(|kept| kept.valid).map(|kept| kept.transcript.leaves.len()).sum())
+}
+
 /// Asks the end hook for the frame's discard pass, as a change of measured size does.
 #[track_caller]
 pub(crate) fn ask_discard(ctx: &Context) {
@@ -1117,19 +1125,21 @@ pub(crate) fn ask_discard(ctx: &Context) {
 /// Notes in the run records open around the running code that a replay keeps the entry and the kept transcript of
 /// `id`: the replayed run does not reach them, and an entry no pass touched in a frame is dropped.
 fn journal_keep(ctx: &Context, id: Id) {
-    crate::runtime::replay::journal(ctx, || {
-        move |ctx: &Context| {
+    crate::runtime::replay::journal(
+        ctx,
+        || id,
+        |ctx, id| {
             let moment = Moment::of(ctx);
             with(ctx, &moment, |memory| {
-                if let Some(entry) = memory.entries.get_mut(&id) {
+                if let Some(entry) = memory.entries.get_mut(id) {
                     entry.touched = moment.frame;
                 }
-                if let Some(kept) = memory.kept.get_mut(&id) {
+                if let Some(kept) = memory.kept.get_mut(id) {
                     kept.touched = moment.frame;
                 }
             });
-        }
-    });
+        },
+    );
 }
 
 /// The end hook: asks egui for at most one discard pass per frame, and for a repaint when a change cannot get one, so

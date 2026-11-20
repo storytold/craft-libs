@@ -1,5 +1,6 @@
 mod cross_fill;
 mod fill_column;
+mod fill_height;
 mod fill_share;
 mod fonts;
 mod grid_labels;
@@ -12,4 +13,5 @@ mod rtl_scroll;
 mod scroll_region;
 mod shrink_order;
 mod stack_header;
+mod stack_widths;
 mod zero_width;

@@ -89,7 +89,9 @@ fn focus_in_no_layer(ctx: &Context) -> bool {
 }
 
 /// Escape reaches only the top layer, and only when focus is inside its scope (a modal also when it is in no layer):
-/// a component inside that takes the Escape (a draft, a gesture) keeps it, and a captured press goes first.
+/// a component inside that takes the Escape (a gesture, a draft outside a dialog) keeps it, and a captured press goes
+/// first. A text draft in a dialog whose Escape closes it ends without taking the Escape, so one Escape cancels the
+/// dialog (`focus::escape_closes_dialog`).
 fn escape(ctx: &Context, layer: &Layer<'_>, scope: Option<FocusPolicy>, inside: Option<bool>) -> Option<CloseReason> {
     let policy = scope?;
     if policy.cancel == CancelRule::Ignore || overlay::top(ctx) != Some(layer.id) {
@@ -118,8 +120,10 @@ impl<C: Component> Cx<'_, C> {
         self.core.injected = Some(source);
     }
 
-    /// The modifiers held this frame, Alt alone included.
+    /// The modifiers held this frame, Alt alone included. The read is recorded like a value's: a settled component
+    /// that read them runs again in the frame they change (a menu title underlines its mnemonic while Alt is held).
     pub fn modifiers(&self) -> Mods {
+        crate::runtime::replay::note_read(&self.core.ctx, crate::runtime::reads::BindKey::Modifiers);
         pointer::frame(&self.core.ctx).mods
     }
 }
