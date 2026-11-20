@@ -19,6 +19,9 @@
 //!   formats, `f16`, timestamps, sizes).
 //! - [`DeviceHealth`] records a device loss or an uncaptured error instead of panicking, and
 //!   [`Recovery`] says what to open after a loss.
+//! - For a `craft-gpu` context on an opened device, [`device_caps`] gives the device's
+//!   `craft_gpu::DeviceCaps`, [`DeviceHealth::device_status`] reports a loss as
+//!   `craft_gpu::GpuFault::DeviceLost`, and a [`Fault`] converts to a `craft_gpu::GpuFault`.
 //!
 //! The selection functions are pure, so tests run without a GPU.
 
@@ -30,7 +33,7 @@ mod preference;
 mod recovery;
 
 pub use adapter::{Candidate, choose, intel_gen9_to_gen11, native_descriptor, native_instance};
-pub use caps::{Capabilities, Vendor};
+pub use caps::{Capabilities, Vendor, device_caps};
 pub use health::{DeviceHealth, Fault, OUT_OF_MEMORY, WaitOutcome};
 pub use open::{OpenError, Opened, Request, pick};
 #[cfg(not(target_arch = "wasm32"))]

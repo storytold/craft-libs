@@ -153,6 +153,24 @@ impl fmt::Display for Capabilities {
     }
 }
 
+/// The [`DeviceCaps`](craft_gpu::DeviceCaps) a `craft-gpu` context reports for `device`: the
+/// limits and features the device was opened with, not the adapter's, in the same form
+/// `craft-gpu-wgpu` reports for a device it opens itself.
+pub fn device_caps(device: &wgpu::Device) -> craft_gpu::DeviceCaps {
+    device_caps_of(&device.adapter_info(), device.features(), &device.limits())
+}
+
+fn device_caps_of(info: &AdapterInfo, features: Features, limits: &Limits) -> craft_gpu::DeviceCaps {
+    craft_gpu::DeviceCaps {
+        backend_name: format!("{:?}", info.backend),
+        device_name: info.name.clone(),
+        max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+        max_buffer_size: limits.max_buffer_size,
+        max_texture_dimension_2d: limits.max_texture_dimension_2d,
+        features: features.iter_names().map(|(name, _)| name.to_string()).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +217,23 @@ mod tests {
         assert!(c.to_string().contains("software"));
         let wanted = Features::TEXTURE_FORMAT_NV12 | Features::SHADER_F16;
         assert_eq!(Capabilities::available(Features::SHADER_F16 | Features::TIMESTAMP_QUERY, wanted), Features::SHADER_F16);
+    }
+
+    #[test]
+    fn device_caps_carry_the_device_limits_and_feature_names() {
+        let limits =
+            Limits { max_texture_dimension_2d: 16384, max_buffer_size: 1 << 30, max_storage_buffer_binding_size: 1 << 28, ..Limits::default() };
+        let features = Features::TEXTURE_FORMAT_NV12 | Features::TIMESTAMP_QUERY;
+        let caps = device_caps_of(&info("NVIDIA GeForce RTX 4070", 0x10de, DeviceType::DiscreteGpu), features, &limits);
+        assert_eq!(caps.backend_name, "Vulkan");
+        assert_eq!(caps.device_name, "NVIDIA GeForce RTX 4070");
+        assert_eq!((caps.max_texture_dimension_2d, caps.max_buffer_size, caps.max_storage_buffer_binding_size), (16384, 1 << 30, 1 << 28));
+        let mut names = caps.features.clone();
+        names.sort();
+        assert_eq!(names, ["TEXTURE_FORMAT_NV12", "TIMESTAMP_QUERY"]);
+        // a device opened without features reports none
+        let bare = device_caps_of(&info("llvmpipe", 0x10005, DeviceType::Cpu), Features::empty(), &Limits::downlevel_defaults());
+        assert!(bare.features.is_empty());
+        assert_eq!(bare.max_texture_dimension_2d, 2048);
     }
 }

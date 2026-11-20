@@ -71,6 +71,18 @@ impl fmt::Display for Fault {
     }
 }
 
+/// A loss becomes [`GpuFault::DeviceLost`](craft_gpu::GpuFault::DeviceLost), and any other
+/// fault becomes [`GpuFault::Operation`](craft_gpu::GpuFault::Operation), each with the fault's
+/// text.
+impl From<Fault> for craft_gpu::GpuFault {
+    fn from(fault: Fault) -> Self {
+        match fault {
+            Fault::Lost(s) => craft_gpu::GpuFault::DeviceLost(s),
+            Fault::Error(s) => craft_gpu::GpuFault::Operation(s),
+        }
+    }
+}
+
 /// The message an out-of-memory [`Fault::Error`] carries (wgpu's `Error::OutOfMemory`).
 pub const OUT_OF_MEMORY: &str = "Out of Memory";
 
@@ -218,6 +230,18 @@ impl DeviceHealth {
             return Some(Fault::Error(OUT_OF_MEMORY.into()));
         }
         self.0.error.get().map(|text| Fault::Error(text.clone()))
+    }
+
+    /// The device loss in the form of `craft_gpu::GpuContext::device_status`:
+    /// [`GpuFault::DeviceLost`](craft_gpu::GpuFault::DeviceLost) once a loss is recorded,
+    /// otherwise `Ok`. Other errors are reported by [`fault`](Self::fault). wgpu keeps one
+    /// device-lost callback per device, so a `craft-gpu` context on a device that
+    /// [`watch`](Self::watch) watches reads the loss here instead of setting its own callback.
+    pub fn device_status(&self) -> Result<(), craft_gpu::GpuFault> {
+        match self.0.lost.get() {
+            Some(text) => Err(craft_gpu::GpuFault::DeviceLost(text.clone())),
+            None => Ok(()),
+        }
     }
 
     /// Uncaptured wgpu errors seen so far.
@@ -460,6 +484,22 @@ mod tests {
         assert_eq!(h.fault().map(|f| f.to_string()).as_deref(), Some("GPU device lost: reset"));
         // a recorded loss is not wgpu reporting the device lost
         assert!(!h.device_lost());
+    }
+
+    #[test]
+    fn faults_in_the_craft_gpu_form() {
+        use craft_gpu::GpuFault;
+        let h = DeviceHealth::new();
+        assert_eq!(h.device_status(), Ok(()));
+        // an error, out of memory included, is not a loss
+        h.mark(Fault::Error(OUT_OF_MEMORY.into()));
+        h.mark(Fault::Error("Validation Error".into()));
+        assert_eq!(h.device_status(), Ok(()));
+        h.mark(Fault::Lost("reset".into()));
+        assert_eq!(h.device_status(), Err(GpuFault::DeviceLost("reset".into())));
+        assert_eq!(GpuFault::from(Fault::Lost("reset".into())), GpuFault::DeviceLost("reset".into()));
+        assert_eq!(GpuFault::from(Fault::Error(OUT_OF_MEMORY.into())), GpuFault::Operation(OUT_OF_MEMORY.into()));
+        assert_eq!(h.fault().map(GpuFault::from), Some(GpuFault::DeviceLost("reset".into())));
     }
 
     #[test]

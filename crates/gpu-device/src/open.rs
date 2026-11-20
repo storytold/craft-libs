@@ -41,6 +41,14 @@ pub struct Opened {
     pub notices: Vec<Notice>,
 }
 
+impl Opened {
+    /// The device's [`DeviceCaps`](craft_gpu::DeviceCaps) for a `craft-gpu` context
+    /// ([`device_caps`](crate::device_caps)).
+    pub fn device_caps(&self) -> craft_gpu::DeviceCaps {
+        crate::caps::device_caps(&self.device)
+    }
+}
+
 /// Why no device could be opened.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenError {
@@ -231,6 +239,12 @@ mod tests {
         assert!(!opened.caps.shader_f16 && !opened.caps.timestamps, "only the features asked for: {}", opened.caps);
         assert!(opened.notices.is_empty(), "{:?}", opened.notices);
         assert!(opened.health.is_ok());
+        // the craft-gpu caps name only the features the device was opened with
+        let caps = opened.device_caps();
+        assert_eq!(caps.features, ["TEXTURE_FORMAT_NV12"]);
+        assert_eq!(caps.device_name, opened.caps.name);
+        assert_eq!(caps.max_texture_dimension_2d, opened.device.limits().max_texture_dimension_2d);
+        assert_eq!(opened.health.device_status(), Ok(()));
     }
 
     #[test]
@@ -322,6 +336,7 @@ mod tests {
         health.probe(&opened.device);
         assert!(health.fault().is_some_and(|f| f.is_lost()), "{health:?}");
         assert!(!health.is_ok());
+        assert!(matches!(health.device_status(), Err(craft_gpu::GpuFault::DeviceLost(_))), "{health:?}");
         // a later wait does not touch the lost device
         assert!(!health.wait(&opened.device, None));
     }

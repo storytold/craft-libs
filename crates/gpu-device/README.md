@@ -2,8 +2,8 @@
 
 Choosing and opening a wgpu device for a Craft app: an adapter choice the user can set, fixes for
 drivers that crash, a software fallback, a capability report, and device health with recovery
-after a device loss. The crate depends on `wgpu` 30, `pollster` and `log`, with `serde` as an
-optional feature (on by default). It depends on no app crate.
+after a device loss. The crate depends on `craft-gpu`, `wgpu` 30, `pollster` and `log`, with
+`serde` as an optional feature (on by default). It depends on no app crate.
 
 Licensed under MIT OR Apache-2.0.
 
@@ -24,6 +24,8 @@ Licensed under MIT OR Apache-2.0.
 | `Capabilities`, `Vendor` | NV12 and P010 (sampled only in wgpu 30), 16-bit norm, `f16` and timestamp support, the largest texture and buffer, the vendor, and whether the adapter is a software one |
 | `DeviceHealth`, `Fault`, `WaitOutcome` | records a device loss or an uncaptured error instead of panicking; polls and bounded waits that do not touch a lost device |
 | `Recovery`, `RecoveryPolicy` | the preference to open after a loss: the user's own, and `Software` once the device was lost 3 times in 10 minutes (both values can be set) |
+| `device_caps(device)`, `Opened::device_caps` | the `craft_gpu::DeviceCaps` of a device: its own limits and enabled feature names, in the form `craft-gpu-wgpu` reports |
+| `DeviceHealth::device_status` | a recorded loss as `craft_gpu::GpuFault::DeviceLost`, in the form of `GpuContext::device_status`; `Fault` converts to `GpuFault` (a loss to `DeviceLost`, an error to `Operation`) |
 | `Notice` | the adapter asked for is missing, no software adapter is listed, only a software adapter can draw, an adapter failed to open, or drawing moved to software after losses; the `Display` text is English, for the log |
 
 ## Failure cases
@@ -57,6 +59,9 @@ Licensed under MIT OR Apache-2.0.
   wait.
 - `DeviceHealth::watch` replaces the device's uncaptured-error handler. Polls catch the panic that
   `Device::poll` raises on a lost device and record the loss.
+- wgpu keeps one device-lost callback per device, and a later `set_device_lost_callback`
+  replaces the one `DeviceHealth::watch` set. A `craft-gpu` context on a watched device reads
+  `DeviceHealth::device_status` instead of setting its own callback.
 - After an out-of-memory error, polls and waits keep running, so staging memory is reclaimed.
   The app reads `DeviceHealth::out_of_memory_count` when it handles the error, frees memory, and
   passes the count to `DeviceHealth::clear_out_of_memory`. The device is then healthy again,

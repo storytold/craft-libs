@@ -16,12 +16,13 @@ default = ["serde"]
 serde = ["dep:serde"]
 
 [dependencies]
+craft-gpu = { workspace = true }
 wgpu = "30"
 log = { workspace = true }
 serde = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pollster = "0.4"
+pollster = { workspace = true }
 
 [dev-dependencies]
 # The noop backend opens devices without a GPU in the tests.
