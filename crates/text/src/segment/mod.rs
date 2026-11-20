@@ -17,6 +17,10 @@
 //! leaves a line short enough, [`emergency_breaks`] gives the places to break a word anyway:
 //! between grapheme clusters, never inside one.
 //!
+//! Navigation across extended grapheme clusters (UAX #29) for cursor movement, selection, and
+//! atomic cluster mutations is provided by [`prev_grapheme_offset`], [`next_grapheme_offset`],
+//! and [`grapheme_bounds`].
+//!
 //! Composers that build their own opportunity lists can filter them with [`kinsoku_allows`].
 
 #[cfg(any(feature = "thai", feature = "lao", feature = "khmer", feature = "burmese"))]
@@ -31,7 +35,7 @@ use unicode_linebreak::{BreakClass, BreakOpportunity, break_property};
 
 pub use kinsoku::kinsoku_allows;
 use kinsoku::{is_east_asian, soft_line_start};
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 
 /// Which kinsoku (line-start and line-end) rules apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -131,6 +135,148 @@ fn breaks_with_words(text: &str, options: &Options, words: Vec<usize>) -> Vec<Br
 pub fn emergency_breaks(text: &str, range: Range<usize>) -> Vec<usize> {
     let Some(piece) = text.get(range.clone()) else { return Vec::new() };
     piece.grapheme_indices(true).skip(1).map(|(o, _)| range.start + o).collect()
+}
+
+/// Returns the start byte offset of the extended grapheme cluster preceding `cursor`.
+///
+/// If `cursor` is at an extended grapheme cluster boundary, this returns the start
+/// of the preceding cluster (or `0` if `cursor == 0`). If `cursor` falls strictly
+/// inside a cluster (for example, between a base vowel and a combining mark, or between
+/// components of an emoji sequence), it snaps back to the start of that enclosing cluster.
+/// A byte index inside a multi-byte codepoint counts as inside the cluster that holds it, so
+/// `prev_grapheme_offset("viện", 3)` is `2`, the start of `'ệ'`, not `1`.
+///
+/// # Architecture Contract (Tier 2: Text Core)
+/// - **WHY:** Cursor navigation (`Arrow Left`, `Backspace`) in document editors must operate on
+///   Extended Grapheme Cluster boundaries (UAX #29). Naive byte or `char` decrements peel
+///   combining marks off decomposed vowels (e.g. stripping `\u{0302}` from `e\u{0323}\u{0302}`),
+///   corrupting NFD sequences and leaving invalid orphan marks.
+/// - **DANGER:** Unaligned cursor offsets (e.g. from mouse clicks inside multi-byte codepoints
+///   or between marks) can panic downstream string slicing or break document invariants.
+/// - **CONTRACT:**
+///   1. Empty `text` returns `0`.
+///   2. `cursor >= text.len()` is clamped to `text.len()` and navigates from there; the result is
+///      still the start of the last cluster, not `text.len()`.
+///   3. `!text.is_char_boundary(cursor)` is safe: the cursor is first floored to the start of its
+///      codepoint, which belongs to the enclosing cluster, so the result is that cluster's start.
+///   4. Always returns a valid UTF-8 char boundary in range `0..=cursor.min(text.len())`.
+///   5. Zero panics; `O(1)` auxiliary memory, no heap allocation.
+pub fn prev_grapheme_offset(text: &str, cursor: usize) -> usize {
+    let clamped = cursor.min(text.len());
+    let mut c = clamped;
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
+    }
+    if c == 0 || text.is_empty() {
+        return 0;
+    }
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    let boundary = match gc.prev_boundary(text, 0) {
+        Ok(Some(boundary)) => boundary,
+        _ => 0,
+    };
+    // The cursor was inside a codepoint (`c < clamped`): it lies inside the cluster holding that
+    // codepoint, so when `c` starts a cluster the answer is `c`, not the boundary before it.
+    // Without this, `prev` would skip the very cluster the other two primitives report.
+    if c != clamped {
+        let mut probe = GraphemeCursor::new(c, text.len(), true);
+        if matches!(probe.is_boundary(text, 0), Ok(true)) {
+            return c;
+        }
+    }
+    boundary
+}
+
+/// Returns the end byte offset of the extended grapheme cluster following `cursor`.
+///
+/// If `cursor` is at an extended grapheme cluster boundary, this returns the end
+/// of the subsequent cluster (or `text.len()` if `cursor >= text.len()`). If `cursor`
+/// falls strictly inside a cluster (for example, between a base vowel and a combining
+/// mark, or between components of an emoji sequence), it snaps forward to the end of
+/// that enclosing cluster.
+///
+/// # Architecture Contract (Tier 2: Text Core)
+/// - **WHY:** Forward cursor navigation (`Arrow Right`, `Delete`) must treat extended grapheme
+///   clusters as indivisible atomic units (UAX #29), ensuring isomorphic mutation behavior
+///   between precomposed (NFC) and decomposed (NFD) text.
+/// - **DANGER:** Stepping forward by single codepoints splits emoji ZWJ chains, flag pairs, or
+///   base letters from their diacritics.
+/// - **CONTRACT:**
+///   1. Empty `text` returns `0`.
+///   2. `cursor >= text.len()` returns `text.len()`: there is no next cluster.
+///   3. `!text.is_char_boundary(cursor)` is safe: the cursor is first floored to the start of its
+///      codepoint, which belongs to the enclosing cluster, so the result is that cluster's end.
+///   4. Always returns a valid UTF-8 char boundary in range `cursor.min(text.len())..=text.len()`.
+///   5. Zero panics; `O(1)` auxiliary memory, no heap allocation.
+pub fn next_grapheme_offset(text: &str, cursor: usize) -> usize {
+    let mut c = cursor.min(text.len());
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
+    }
+    if c >= text.len() {
+        return text.len();
+    }
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    match gc.next_boundary(text, 0) {
+        Ok(Some(boundary)) => boundary,
+        _ => text.len(),
+    }
+}
+
+/// Returns the `(start, end)` byte offsets of the extended grapheme cluster enclosing `cursor`.
+///
+/// For any `cursor` within `0..text.len()`, returns the boundaries `(start, end)` of the
+/// cluster containing `cursor` (where `start <= cursor < end`). At a cluster boundary that
+/// cluster is the one starting there; a cursor inside a multi-byte codepoint is floored to the
+/// start of that codepoint, which belongs to the enclosing cluster. If `cursor >= text.len()`,
+/// returns the boundaries of the last cluster in `text` (or `(0, 0)` if `text` is empty).
+///
+/// # Architecture Contract (Tier 2: Text Core)
+/// - **WHY:** High-level editor actions (such as double-click word/character selection and
+///   block cursor rendering) need the full enclosing grapheme cluster boundaries. Calling
+///   `prev_grapheme_offset` at cluster start moves to the *preceding* cluster, requiring
+///   downstream consumers to implement fragile off-by-one compensation without this primitive.
+/// - **DANGER:** In multi-byte or decomposed clusters (e.g. Vietnamese NFD or emoji ZWJ),
+///   imprecise cursor placement within combining marks must never return partial slices.
+/// - **CONTRACT:**
+///   1. Returns `(0, 0)` for empty text; `cursor >= text.len()` returns the last cluster.
+///   2. `!text.is_char_boundary(cursor)` is safe: the cursor is floored to its codepoint start,
+///      which belongs to the enclosing cluster.
+///   3. Always returns valid UTF-8 char boundaries with `0 <= start <= cursor.min(text.len()) <= end <= text.len()`.
+///   4. Zero panics; `O(1)` auxiliary memory, no heap allocation.
+pub fn grapheme_bounds(text: &str, cursor: usize) -> (usize, usize) {
+    if text.is_empty() {
+        return (0, 0);
+    }
+    let mut c = cursor.min(text.len());
+    while !text.is_char_boundary(c) {
+        c = c.saturating_sub(1);
+    }
+    if c >= text.len() {
+        return (prev_grapheme_offset(text, text.len()), text.len());
+    }
+    let mut gc = GraphemeCursor::new(c, text.len(), true);
+    match gc.is_boundary(text, 0) {
+        Ok(true) => {
+            let end = match gc.next_boundary(text, 0) {
+                Ok(Some(end)) => end,
+                _ => text.len(),
+            };
+            (c, end)
+        }
+        _ => {
+            let start = match gc.prev_boundary(text, 0) {
+                Ok(Some(start)) => start,
+                _ => 0,
+            };
+            let mut gc_end = GraphemeCursor::new(start, text.len(), true);
+            let end = match gc_end.next_boundary(text, 0) {
+                Ok(Some(end)) => end,
+                _ => text.len(),
+            };
+            (start, end)
+        }
+    }
 }
 
 /// Whether a line may break between `before` and `after`, given whether UAX #14 (or the word
