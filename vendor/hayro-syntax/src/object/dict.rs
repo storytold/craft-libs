@@ -147,8 +147,8 @@ impl<'a> Dict<'a> {
                 } else {
                     (Some(b"<<"), b">>")
                 };
-                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset, _| {
-                    offsets.insert(name.into_owned(), offset);
+                let _ = parse_dict_with(&mut reader, &repr.ctx, start, end, |name, offset| {
+                    update_index(&mut offsets, name, offset);
                     Some(())
                 });
                 offsets
@@ -298,9 +298,9 @@ fn read_inner<'a>(
         start_tag,
         end_tag,
         #[inline]
-        |name, offset, _| {
+        |name, offset| {
             if let Some(index) = &mut offsets {
-                index.insert(name.into_owned(), offset);
+                update_index(index, name, offset);
                 if index.len() > EAGER_DICT_ENTRIES {
                     offsets = None;
                 }
@@ -327,6 +327,15 @@ fn read_inner<'a>(
     }))))
 }
 
+/// Apply the last occurrence of a dictionary key, including an omitted value.
+fn update_index(index: &mut FxHashMap<Name<'static>, usize>, name: Name<'_>, offset: Option<usize>) {
+    if let Some(offset) = offset {
+        index.insert(name.into_owned(), offset);
+    } else {
+        index.remove(name.as_ref());
+    }
+}
+
 pub(crate) struct DictProbe<'a> {
     pub(crate) data: &'a [u8],
     pub(crate) has_root: bool,
@@ -351,11 +360,11 @@ pub(crate) fn probe_dict<'a>(
         start_tag,
         end_tag,
         #[inline]
-        |name, _, _value_reader| {
+        |name, offset| {
             if name.as_ref() == keys::ROOT {
-                has_root = true;
+                has_root = offset.is_some();
             } else if name.as_ref() == keys::TYPE {
-                has_type = true;
+                has_type = offset.is_some();
             }
 
             Some(())
@@ -380,7 +389,7 @@ fn parse_dict_with<'a, F>(
     on_entry: F,
 ) -> Option<(&'a [u8], bool)>
 where
-    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+    F: FnMut(Name<'a>, Option<usize>) -> Option<()>,
 {
     // An inline image dictionary has no enclosing << >> pair; count only actual
     // containers. Its array/dictionary operands still enter the same depth guard.
@@ -405,7 +414,7 @@ fn parse_dict_with_inner<'a, F>(
     mut on_entry: F,
 ) -> Option<(&'a [u8], bool)>
 where
-    F: FnMut(Name<'a>, usize, &Reader<'a>) -> Option<()>,
+    F: FnMut(Name<'a>, Option<usize>) -> Option<()>,
 {
     let dict_data = r.tail()?;
     let start_offset = r.offset();
@@ -455,13 +464,14 @@ where
             // than the cap is ever parsed, and no value is read with a part of it missing.
             // Any other value that can't be read still fails the dictionary, as before.
             match skip_value(r, ctx.in_content_stream())? {
-                Skipped::Read => on_entry(name, offset, r)?,
+                Skipped::Read => on_entry(name, Some(offset))?,
                 Skipped::SteppedOver => {
                     warn!(
                         "dictionary entry /{} nests past {} levels and was left out",
                         name.as_str(),
                         crate::byte_reader::MAX_CONTAINER_DEPTH
                     );
+                    on_entry(name, None)?;
                     repaired = true;
                 }
             }
@@ -1522,6 +1532,24 @@ mod tests {
                     assert_eq!(reader.offset(), data.len());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_last_dictionary_entry_still_wins_when_a_value_is_omitted() {
+        let deep = overdeep_value(crate::byte_reader::MAX_CONTAINER_DEPTH + 1, "array");
+        let padding: alloc::string::String = (0..=super::EAGER_DICT_ENTRIES)
+            .map(|i| alloc::format!("/Padding{i} {i} "))
+            .collect();
+        for prefix in ["", padding.as_str()] {
+            let data = alloc::format!("<< {prefix}/Choice 1 /Choice {deep} /Other 2 >>");
+            let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+            assert!(!dict.contains_key("Choice"));
+            assert_eq!(dict.get::<i32>("Other"), Some(2));
+
+            let data = alloc::format!("<< {prefix}/Choice {deep} /Choice 1 >>");
+            let dict = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+            assert_eq!(dict.get::<i32>("Choice"), Some(1));
         }
     }
 

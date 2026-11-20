@@ -156,6 +156,7 @@ impl<'a> Reader<'a> {
                     self.forward();
                     true
                 }
+                b')' | b'>' => return None,
                 // A literal string, with its balanced parentheses and escapes.
                 b'(' => {
                     let mut open = 1usize;
