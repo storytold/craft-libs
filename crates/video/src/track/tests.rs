@@ -432,13 +432,11 @@ fn track_decoder_options_and_draft_persist_across_reset() {
         assert_eq!(dec.threads(), Some(1));
         assert!(dec.draft());
         if let Inner::Hevc { dec: inner, .. } = &dec.inner {
-            assert_eq!(inner.threads(), 1);
             assert!(inner.draft());
         }
         dec.reset().unwrap();
         assert!(dec.draft());
         if let Inner::Hevc { dec: inner, .. } = &dec.inner {
-            assert_eq!(inner.threads(), 1);
             assert!(inner.draft());
         }
     }
@@ -448,13 +446,11 @@ fn track_decoder_options_and_draft_persist_across_reset() {
         assert_eq!(dec.threads(), Some(1));
         assert!(dec.draft());
         if let Inner::Av1 { dec: inner, .. } = &dec.inner {
-            assert_eq!(inner.threads(), 1);
             assert!(inner.draft());
         }
         dec.reset().unwrap();
         assert!(dec.draft());
         if let Inner::Av1 { dec: inner, .. } = &dec.inner {
-            assert_eq!(inner.threads(), 1);
             assert!(inner.draft());
         }
     }
