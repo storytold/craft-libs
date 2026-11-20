@@ -432,6 +432,23 @@ fn repair_wav_turns_a_file_past_4_gib_into_rf64() {
     craft_audio::repair_wav(&mut file).unwrap();
     assert_eq!(file.head, wav_float_header(48_000, 2, frames).unwrap());
 
+    // A repair that stopped after naming the ds64 chunk but before writing RF64 finishes next time.
+    let mut half = head.clone();
+    half[12..16].copy_from_slice(b"ds64");
+    let mut file = SparseWav { head: half, len, pos: 0 };
+    assert_eq!(craft_audio::repair_wav(&mut file).unwrap(), repaired);
+    assert_eq!(file.head, wav_float_header(48_000, 2, frames).unwrap());
+
+    // In a RIFF file only the chunk right after WAVE becomes ds64; a later ds64 chunk is left as it is.
+    let at = head.windows(4).position(|w| w == b"data").unwrap();
+    let later: Vec<u8> = [&b"ds64"[..], &28u32.to_le_bytes(), &[0xBB; 28]].concat();
+    let mut two = head.clone();
+    two.splice(at..at, later.iter().copied());
+    let mut file = SparseWav { head: two, len: len + 36, pos: 0 };
+    assert_eq!(craft_audio::repair_wav(&mut file).unwrap().frames, frames);
+    assert_eq!((&file.head[..4], &file.head[12..16]), (&b"RF64"[..], &b"ds64"[..]));
+    assert_eq!(file.head[at..at + 36], later[..]);
+
     // A RIFF file with no JUNK chunk to turn into ds64 cannot grow past 4 GiB.
     let bare = craft_audio::pcm_wav_header(0, 2, 48_000, 16);
     assert_eq!(&bare[12..16], b"fmt ");

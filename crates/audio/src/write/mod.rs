@@ -482,7 +482,8 @@ pub struct WavRepair {
 ///
 /// A RIFF file that grew past 4 GiB becomes RF64 when it starts with the 28-byte `JUNK` chunk that
 /// [`FileEncoder`] and [`wav_float_header`] write: `RIFF` becomes `RF64` and that `JUNK` chunk
-/// becomes a `ds64` chunk with an empty table.
+/// becomes a `ds64` chunk with an empty table. A RIFF file whose 28-byte chunk there already has the
+/// `ds64` id, left by an earlier repair that stopped before writing `RF64`, becomes RF64 the same way.
 ///
 /// Errors:
 ///
@@ -493,7 +494,8 @@ pub struct WavRepair {
 /// - [`AudioError::Unsupported`] for a format other than PCM and IEEE float, an extensible format
 ///   whose subformat is neither, and unfinished 8-bit mono data of even length (its last byte may
 ///   be a sample or a pad byte).
-/// - [`AudioError::TooLarge`] for a RIFF file past 4 GiB that does not start with that `JUNK` chunk.
+/// - [`AudioError::TooLarge`] for a RIFF file past 4 GiB that does not start with that `JUNK` or
+///   `ds64` chunk.
 /// - [`AudioError::Io`] when reading, writing or seeking `file` fails.
 ///
 /// ```

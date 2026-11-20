@@ -243,8 +243,8 @@ pub(crate) fn header(
 /// Where the size fields of a WAV sit, from a walk of its chunks up to `data`.
 struct Layout {
     rf64: bool,
-    /// The body of the `ds64` chunk, or of a 28-byte `JUNK` chunk right after `WAVE` that can
-    /// become one.
+    /// The body of the `ds64` chunk of an RF64 file, or in a RIFF file the body of the 28-byte
+    /// `JUNK` or `ds64` chunk right after `WAVE` that can become one.
     ds64: Option<u64>,
     junk: bool,
     fact: Option<u64>,
@@ -310,8 +310,9 @@ fn layout<F: Read + Seek>(file: &mut F, len: u64) -> Result<Layout> {
                 let block_align = block_align.ok_or_else(|| AudioError::Malformed("WAV data chunk before its fmt chunk".into()))?;
                 return Ok(Layout { rf64, ds64, junk, fact, block_align, data: body });
             }
-            b"ds64" if size >= 28 => ds64 = Some(body),
-            b"JUNK" if !rf64 && pos == 12 && size == 28 => (ds64, junk) = (Some(body), true),
+            b"ds64" if rf64 && size >= 28 => ds64 = Some(body),
+            // A `ds64` id here in a RIFF file is a promotion that stopped before the RF64 id.
+            b"JUNK" | b"ds64" if !rf64 && pos == 12 && size == 28 => (ds64, junk) = (Some(body), true),
             b"fact" if size >= 4 => fact = Some(body),
             b"fmt " => block_align = Some(pcm_block_align(file, body, size)?),
             _ => {}
