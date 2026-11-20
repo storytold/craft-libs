@@ -4,7 +4,9 @@ use super::SplitFramesCx as _;
 use super::group::MENU;
 use super::stack::{StackSection, StackSections};
 use super::tree::FrameRules;
-use super::{DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows};
+use super::{
+    DockCommands, DockGroup, DragUnit, GroupGrip, HANDLE, PanelKey, PanelSpec, PanelSpecs, PanelTitle, SplitArea, Splitter, Titles, WindowMenuRows,
+};
 use crate::contract::SizeLimits;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Tracked, Validity};
 use crate::menu::{Menu, PanelRow};

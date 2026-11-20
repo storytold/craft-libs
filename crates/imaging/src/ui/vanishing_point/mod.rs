@@ -52,7 +52,7 @@ use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
 use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
-use craft_ui::contract::{Bind, Job, Tracked, Pending, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,

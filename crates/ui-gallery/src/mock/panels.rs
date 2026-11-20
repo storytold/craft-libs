@@ -13,11 +13,11 @@ use craft_ui::canvas::{
     tool_pass,
 };
 use craft_ui::canvas_controls::{Guides, Marquee};
-use craft_ui::contract::{SizeLimits, Tracked};
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
+use craft_ui::contract::{SizeLimits, Tracked};
 use craft_ui::docking::{DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;

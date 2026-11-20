@@ -68,7 +68,7 @@ use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
-use craft_ui::contract::{Bind, Tracked, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
     SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,

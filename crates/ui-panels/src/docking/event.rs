@@ -2,8 +2,8 @@
 
 use super::{DockCommands, DockSizes, DragUnit, PanelKey};
 use crate::contract::{MemoKey, MemoProps, Tracked};
-use std::collections::BTreeSet;
 use egui::{Rect, Vec2};
+use std::collections::BTreeSet;
 
 /// A request for host state outside the layout, or a report of where something ended up.
 #[derive(Clone, Debug, PartialEq, Eq)]

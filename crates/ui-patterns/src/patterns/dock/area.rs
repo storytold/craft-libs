@@ -2,18 +2,18 @@
 //! the parts of `docking`, takes the drops of tab and group drags, and applies their actions to the workspace.
 
 use super::hide::{self, PruneKey};
+use crate::contract::Revision;
 use crate::contract::overlay::{PlacementChange, PlacementKind};
 use crate::contract::{
     Bind, BindMut, BodyCx, Cx, Entry, MemoKey, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, Tracked, WordSetCx as _,
 };
-use crate::contract::Revision;
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::{Arrangement, close_requests, cross_window, end_replaced_drags, float_drop, native, open_requests};
 use crate::docking::{
     ColumnArrow, ColumnBar, DockColumn, DockCommands, DockConfig, DockDropTarget, DockDropped, DockEvent, DockGroup, DockPanels, DockRoot, DockScene,
     DockSizes, DockSpot, DockTargets, DockTo, DockWords, DragUnit, FloatSpace, FloatingGroup, FlyoutResize, GroupAt, GroupDrag, HidePanels,
-    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, Titles, SplitArea, WindowColumn, actions,
+    IconicColumn, IconicSizes, PanelDrag, PanelKey, PanelSpec, PanelSpecs, PanelTitle, Placing, SpecSource, SplitArea, Titles, WindowColumn, actions,
     column_cells, dock_states, frame, move_actions, with_area_rules,
 };
 use crate::menu::{GroupItem, MenuWords, PanelMenu, PanelRow};
@@ -930,13 +930,16 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let parts_of = || {
             parts.get_or_init(|| {
                 let key = (scene.view, PanelKey::of(anchor));
-                let list = derived(&ctx, scene.dock.with(("titles", key.1)), &key, || {
-                    members
-                        .iter()
-                        .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
-                        .collect::<Vec<_>>()
+                // Keyed by their content once built, so a group's tab row replays unless its own titles changed.
+                let titles = derived(&ctx, scene.dock.with(("titles", key.1)), &key, || {
+                    Titles::from_content(
+                        members
+                            .iter()
+                            .map(|panel| PanelTitle::new(PanelKey::of(panel), scene.spec(panel).label).closable(scene.permissions(panel).closable))
+                            .collect(),
+                    )
                 });
-                let titles = Titles::new(&key, list);
+                let titles = Titles::clone(&titles);
                 let hosted = !panels.borrow_mut().panel_rows(shown).is_empty();
                 let permissions = |panel: &P| scene.permissions(panel);
                 let states = dock_states(&DockScene::new(scene.layout, scene.space, false, &permissions).floated(scene.floated), shown);

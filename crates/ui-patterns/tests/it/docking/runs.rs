@@ -13,7 +13,9 @@ use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag;
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, trial};
+use craft_ui::testing::{
+    Fixture, MemoRun, last_frame_memo_runs, last_pass_derived_builds, last_pass_memo_key_bytes, last_pass_memo_runs, last_pass_runs, trial,
+};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

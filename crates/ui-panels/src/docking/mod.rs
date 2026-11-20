@@ -78,8 +78,8 @@ use craft_behavior::{Axis, EditEvents, Flow, Metrics, PartKey, Sense};
 use divider::{Divider, Drag};
 use egui::{Rect, Response, Vec2};
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 use tree::{FrameRules, SplitHandle};
 
 const HANDLE: PartKey = PartKey::new("handle");
@@ -115,9 +115,9 @@ pub struct PanelTitle {
     pub closable: bool,
 }
 
-/// The tab titles of one group, with the key that stands for them in a memoized view's key. A host that keeps its
-/// titles derived from revisions gives [`Titles::new`] the key it derived them under, so the key does not walk the
-/// titles; [`Titles::from_content`] keys by the titles themselves.
+/// The tab titles of one group with their content key, taken once when they are made: a memoized view that holds them
+/// feeds that key, not the titles. A host keeps a group's titles in a derived value so the key is taken only when they
+/// are rebuilt.
 #[derive(Clone, Debug)]
 pub struct Titles {
     list: Arc<Vec<PanelTitle>>,
@@ -125,12 +125,7 @@ pub struct Titles {
 }
 
 impl Titles {
-    /// The titles `list`, made from the inputs `key` follows: equal keys must mean equal titles.
-    pub fn new<K: crate::contract::MemoProps + ?Sized>(key: &K, list: Arc<Vec<PanelTitle>>) -> Self {
-        Titles { list, key: crate::contract::MemoKey::of(key) }
-    }
-
-    /// The titles `list`, keyed by their content: the key walks them.
+    /// The titles `list`, keyed by their content: this call walks them.
     pub fn from_content(list: Vec<PanelTitle>) -> Self {
         Titles { key: crate::contract::MemoKey::of(&list), list: Arc::new(list) }
     }

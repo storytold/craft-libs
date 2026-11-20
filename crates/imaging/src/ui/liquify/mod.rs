@@ -72,7 +72,7 @@ use craft_behavior::{CancelReason, Cursor, EditEvent, EditHistory, Mixed};
 use craft_ui::canvas::{NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Tracked, Pattern, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Pattern, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::dialog::{
     FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, FullWindowWorkspace, RasterOverlay,
     WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
@@ -555,8 +555,8 @@ impl LiquifyWorkspace {
                     let shown = Row::new()
                         .fill()
                         .show(ui, |ui, _| {
-                            let rail =
-                                ToolRail::new(words.tools.clone(), &state.slots, &work.edit.settings.tool, &state.last_used).show_column(ui, |_, _| {});
+                            let rail = ToolRail::new(words.tools.clone(), &state.slots, &work.edit.settings.tool, &state.last_used)
+                                .show_column(ui, |_, _| {});
                             if let Some(next) = rail.last_used {
                                 *state.last_used = next;
                             }

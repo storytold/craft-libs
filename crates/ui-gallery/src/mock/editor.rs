@@ -96,7 +96,14 @@ impl<'a> EditorMock<'a> {
 fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
     let mut tools = cx.keep::<Tools>().clone();
     let (events, picked) = {
-        let mut panels = Panels { document: &mut state.document, tool: state.tool, tools: &mut tools, slots: &state.slots, last_used: &mut state.last_used, picked: None };
+        let mut panels = Panels {
+            document: &mut state.document,
+            tool: state.tool,
+            tools: &mut tools,
+            slots: &state.slots,
+            last_used: &mut state.last_used,
+            picked: None,
+        };
         // The mock app is a preview inside the gallery's page: its floats stay in it.
         let mut area =
             DockArea::new("Dock", Bind::bound(&mut state.workspace), &state.specs, &mut panels, DockConfig::default().native_windows(false))

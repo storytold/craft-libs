@@ -1,8 +1,8 @@
 //! The drawer's own logic: how an edit changes the toolbar and what a drop on the rail asks for, and which of its tools
 //! drag, where the rail leaves group gaps and which side the drawer opens on.
 
-use craft_ui::rails::{DropAt, RailTool, ToolSlot, ToolbarEdit, apply_toolbar_edit};
 use craft_ui::contract::Tracked;
+use craft_ui::rails::{DropAt, RailTool, ToolSlot, ToolbarEdit, apply_toolbar_edit};
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::runtime::drag;
 use craft_ui::testing::{Fixture, stories, trial};

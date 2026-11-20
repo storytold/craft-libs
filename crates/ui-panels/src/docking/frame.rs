@@ -1,7 +1,7 @@
 //! What the tree adds around the groups: Maximize Frame, the hidden-panel prune and the outer edge bands.
 
-use super::config::DockConfig;
 use super::PanelKey;
+use super::config::DockConfig;
 use super::event::HidePanels;
 use super::targets::{DockSizes, DockSpot, DockTargets};
 use super::tree;

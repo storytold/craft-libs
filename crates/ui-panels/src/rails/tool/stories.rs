@@ -1,7 +1,7 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
-use crate::contract::Tracked;
 use super::{LastUsed, RailTool, ToolRail, ToolSlot};
+use crate::contract::Tracked;
 use crate::docking::{DockGrid, DockSizes};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;

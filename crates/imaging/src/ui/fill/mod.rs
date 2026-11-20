@@ -62,7 +62,7 @@ use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::canvas_controls::{Marquee, MarqueeLook};
-use craft_ui::contract::{Bind, Tracked, BodyCx, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, Tracked, clicked};
 use craft_ui::dialog::{
     DialogResult, DialogWords, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView,
     FullWindowWorkspace, RasterOverlay, SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,

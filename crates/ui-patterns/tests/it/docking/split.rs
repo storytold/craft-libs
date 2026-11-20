@@ -10,8 +10,8 @@ use craft_ui::testing::memory::global;
 use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Pos2, Rect};
-use std::collections::BTreeSet;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 fn spec(panel: &u8) -> PanelSpec {
