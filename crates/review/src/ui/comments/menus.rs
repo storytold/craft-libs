@@ -244,7 +244,8 @@ pub(super) fn card_menu<H>(
                 }
             });
             Divider::horizontal().show(ui);
-            row(ui, &words.delete, CardMenu::Delete, editable && !thread.locked);
+            // Deleting the root also deletes its descendants; the host's flag covers that whole operation.
+            row(ui, &words.delete, CardMenu::Delete, editable && !thread.locked && thread.messages.first().is_some_and(|message| message.deletable));
         } else {
             if editable {
                 row(ui, &words.edit, CardMenu::Edit, true);

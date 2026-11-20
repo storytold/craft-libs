@@ -19,6 +19,23 @@ fn message(author: &str, text: &str) -> CommentMessage {
     CommentMessage { author: author.into(), created: 0, modified: None, text: text.into(), reactions: Vec::new(), read: true, deletable: true }
 }
 
+#[trial]
+fn root_delete_respects_its_deletable_flag() {
+    let mut item = thread(1, 1, "Comment");
+    item.messages[0].deletable = false;
+    item.messages.push(message("Bo", "Reply"));
+    let mut state = CommentsPanelState::default();
+    state.selected = Selection::single(ThreadId(1));
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = CommentsPanel::new("Comments", std::slice::from_ref(&item), &mut state).show(ui);
+    });
+    fixture.settle();
+    let more = fixture.by_label("More").expect("the root menu");
+    fixture.click(&more).settle();
+    let delete = fixture.by_label("Delete").expect("deletion is shown");
+    assert!(fixture.tree().is_disabled_key(delete.node), "the root and its descendants cannot be deleted");
+}
+
 /// A locked comment does not prevent editing or deleting its separate reply.
 #[trial]
 fn a_locked_comment_still_offers_reply_actions() {
