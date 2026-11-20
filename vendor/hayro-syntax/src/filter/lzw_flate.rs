@@ -1206,13 +1206,13 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                 return None;
             }
 
-            if is_png_predictor && params.control.is_none() {
+            if is_png_predictor {
                 // PdfCraft patch: PNG predictors work on bytes whatever the bit depth, so they are
                 // undone a row at a time on byte slices instead of through the bit-level readers.
                 // In usize (the u8 product overflowed).
                 let bpp = (usize::from(params.colors) * usize::from(params.bits_per_component))
                     .div_ceil(8);
-                return Some(unfilter_png(&data, row_len, bpp));
+                return unfilter_png(&data, row_len, bpp, params.control.as_ref());
             }
 
             if i == 2
@@ -1228,19 +1228,9 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             }
 
             #[cfg(all(test, feature = "std"))]
-            if i == 2 {
-                BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
-            }
+            BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
 
-            let (bit_size, chunk_len) = if is_png_predictor {
-                (
-                    8,
-                    // PdfCraft patch: in usize (the u8 product overflowed).
-                    (usize::from(params.colors) * usize::from(params.bits_per_component)).div_ceil(8),
-                )
-            } else {
-                (params.bits_per_component, params.colors as usize)
-            };
+            let (bit_size, chunk_len) = (params.bits_per_component, params.colors as usize);
             let zero_row = vec![0; row_len];
             let mut prev_row = BitChunks::new(&zero_row, bit_size, chunk_len)?;
             let zero_col = BitChunk::new(0, chunk_len);
@@ -1250,56 +1240,7 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
 
             for in_row in data.chunks_exact(total_row_len) {
                 crate::cancel::check(params.control.as_ref())?;
-                if is_png_predictor {
-                    let predictor = in_row[0];
-                    let in_data = &in_row[1..];
-                    let in_data_chunks = BitChunks::new(in_data, bit_size, chunk_len)?;
-
-                    match predictor {
-                        1 => apply::<Sub>(
-                            prev_row,
-                            zero_col.clone(),
-                            zero_col.clone(),
-                            in_data_chunks,
-                            &mut writer,
-                            run,
-                        )?,
-                        2 => apply::<Up>(
-                            prev_row,
-                            zero_col.clone(),
-                            zero_col.clone(),
-                            in_data_chunks,
-                            &mut writer,
-                            run,
-                        )?,
-                        3 => apply::<Avg>(
-                            prev_row,
-                            zero_col.clone(),
-                            zero_col.clone(),
-                            in_data_chunks,
-                            &mut writer,
-                            run,
-                        )?,
-                        4 => apply::<Paeth>(
-                            prev_row,
-                            zero_col.clone(),
-                            zero_col.clone(),
-                            in_data_chunks,
-                            &mut writer,
-                            run,
-                        )?,
-                        _ => {
-                            // Just copy the data.
-                            let mut reader = BitReader::new(in_data);
-                            let mut checks = crate::cancel::Checkpoints::new(params.control.as_ref());
-
-                            while let Some(data) = reader.read(bit_size) {
-                                checks.at(writer.cur_pos())?;
-                                writer.write(data);
-                            }
-                        }
-                    }
-                } else if i == 2 {
+                if i == 2 {
                     apply::<Sub>(
                         prev_row,
                         zero_col.clone(),
@@ -1402,13 +1343,20 @@ fn bit_level_only() -> bool {
 /// rows of `row_len` bytes, each after its filter-type byte, with `bpp` bytes per complete pixel
 /// (at least 1). An unknown filter type copies the row as it is. Bytes after the last complete
 /// row are dropped.
-fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
+fn unfilter_png(
+    data: &[u8],
+    row_len: usize,
+    bpp: usize,
+    control: Option<&crate::cancel::Control>,
+) -> Option<Vec<u8>> {
     let bpp = bpp.max(1);
     let in_row_len = row_len.saturating_add(1);
     let num_rows = data.len() / in_row_len;
     let mut out = vec![0; num_rows.saturating_mul(row_len)];
     let zero_row = vec![0; row_len];
     let mut prev: &[u8] = &zero_row;
+    let mut checks = crate::cancel::Checkpoints::new(control);
+    let mut work = 0usize;
 
     for (cur, in_row) in out
         .chunks_exact_mut(row_len)
@@ -1423,6 +1371,8 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
                 let mut left: &[u8] = &zero_row;
                 for (px, src) in cur.chunks_mut(bpp).zip(src.chunks(bpp)) {
                     for ((c, s), l) in px.iter_mut().zip(src).zip(left) {
+                        checks.at(work)?;
+                        work = work.saturating_add(1);
                         *c = s.wrapping_add(*l);
                     }
                     left = px;
@@ -1430,6 +1380,8 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
             }
             2 => {
                 for ((c, s), u) in cur.iter_mut().zip(src).zip(prev) {
+                    checks.at(work)?;
+                    work = work.saturating_add(1);
                     *c = s.wrapping_add(*u);
                 }
             }
@@ -1441,6 +1393,8 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
                     .zip(prev.chunks(bpp))
                 {
                     for (((c, s), l), u) in px.iter_mut().zip(src).zip(left).zip(up) {
+                        checks.at(work)?;
+                        work = work.saturating_add(1);
                         // The sum is taken before halving, without wrapping.
                         let avg = (u16::from(*l) + u16::from(*u)) / 2;
                         *c = s.wrapping_add(avg as u8);
@@ -1459,6 +1413,8 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
                     for ((((c, s), l), u), ul) in
                         px.iter_mut().zip(src).zip(left).zip(up).zip(up_left)
                     {
+                        checks.at(work)?;
+                        work = work.saturating_add(1);
                         *c = s.wrapping_add(paeth_byte(*l, *u, *ul));
                     }
                     left = px;
@@ -1467,6 +1423,8 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
             }
             _ => {
                 for (c, s) in cur.iter_mut().zip(src) {
+                    checks.at(work)?;
+                    work = work.saturating_add(1);
                     *c = *s;
                 }
             }
@@ -1475,7 +1433,7 @@ fn unfilter_png(data: &[u8], row_len: usize, bpp: usize) -> Vec<u8> {
         prev = cur;
     }
 
-    out
+    Some(out)
 }
 
 /// The Paeth predictor on bytes: the neighbour nearest `left + up - up_left`, preferring left,
