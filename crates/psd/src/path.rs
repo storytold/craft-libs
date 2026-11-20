@@ -64,6 +64,15 @@ impl PathRecord {
     pub fn is_knot(&self) -> bool {
         matches!(self.selector, 1 | 2 | 4 | 5)
     }
+    /// Decodes a knot's signed 8.24 coordinates as `(x, y)` document fractions.
+    /// Non-knot records return `None`; grouping and recovery policy remain with the caller.
+    pub fn knot(&self) -> Option<PsdKnot> {
+        if !self.is_knot() {
+            return None;
+        }
+        let pt = |i: usize| (fixed_to_f64(self.i32_at(i * 8 + 4)), fixed_to_f64(self.i32_at(i * 8)));
+        Some(PsdKnot { linked: matches!(self.selector, 1 | 4), pre: pt(0), anchor: pt(1), post: pt(2) })
+    }
 }
 
 /// A Bézier knot as fractions of the document size: `(x, y)` pairs.
@@ -158,15 +167,14 @@ impl PathData {
                     // No preallocation: the count is untrusted (u16) and PsdKnot is 56 bytes.
                     knots: Vec::new(),
                 });
-            } else if r.is_knot() {
+            } else if let Some(knot) = r.knot() {
                 let closed = r.selector <= 2;
                 if remaining == 0 && out.last().is_none_or(|s| s.closed != closed) {
                     out.push(PsdSubpath { closed, operation: -1, knots: Vec::new() });
                 }
                 remaining = remaining.saturating_sub(1);
-                let pt = |i: usize| (fixed_to_f64(r.i32_at(i * 8 + 4)), fixed_to_f64(r.i32_at(i * 8)));
                 if let Some(s) = out.last_mut() {
-                    s.knots.push(PsdKnot { linked: matches!(r.selector, 1 | 4), pre: pt(0), anchor: pt(1), post: pt(2) });
+                    s.knots.push(knot);
                 }
             }
         }
@@ -244,10 +252,45 @@ impl VectorMaskBlock {
     }
 }
 
+/// Extract the raw Pascal-string path name bytes from a Clipping Path Name resource (2999).
+///
+/// Returns `None` if the resource is empty or truncated before the declared name length.
+pub fn clipping_path_name(data: &[u8]) -> Option<&[u8]> {
+    let len = usize::from(*data.first()?);
+    data.get(1..1 + len)
+}
+
+/// Encode a Clipping Path Name resource (2999): legacy Pascal name followed by 16.16 unsigned
+/// fixed-point flatness.
+pub fn clipping_path_resource(name: &str, flatness: f32) -> Vec<u8> {
+    let legacy = crate::io::encode_legacy_name(name);
+    let mut out = Vec::with_capacity(1 + legacy.len() + 4);
+    crate::io::write_pascal(&mut out, &legacy, 1);
+    out.extend_from_slice(&((flatness.max(0.0) * 65536.0) as u32).to_be_bytes());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn record_knot_decodes_signed_y_first_coordinates_without_grouping() {
+        let mut data = [0; 24];
+        for (chunk, value) in data.as_chunks_mut::<4>().0.iter_mut().zip([-(1i32 << 23), 1 << 22, 1 << 24, -(1 << 24), i32::MIN, i32::MAX]) {
+            chunk.copy_from_slice(&value.to_be_bytes());
+        }
+        for selector in [1, 2, 4, 5] {
+            let knot = PathRecord { selector, data }.knot().unwrap();
+            assert_eq!(knot.linked, matches!(selector, 1 | 4));
+            assert_eq!(knot.pre, (0.25, -0.5));
+            assert_eq!(knot.anchor, (-1.0, 1.0));
+            assert_eq!(knot.post, (f64::from(i32::MAX) / 16_777_216.0, -128.0));
+        }
+        for selector in [0, 3, 6, 7, 8, u16::MAX] {
+            assert_eq!(PathRecord { selector, data }.knot(), None);
+        }
+    }
     fn sample() -> Vec<PsdSubpath> {
         vec![
             PsdSubpath {
@@ -313,5 +356,14 @@ mod tests {
         let s = p.subpaths();
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].knots.len(), 3);
+    }
+
+    #[test]
+    fn clipping_path_resource_roundtrip_and_truncation() {
+        let bytes = clipping_path_resource("Outline", 1.5);
+        assert_eq!(bytes, b"\x07Outline\x00\x01\x80\x00");
+        assert_eq!(clipping_path_name(&bytes), Some(b"Outline".as_slice()));
+        assert_eq!(clipping_path_name(&[]), None);
+        assert_eq!(clipping_path_name(&[5, b'a', b'b']), None);
     }
 }

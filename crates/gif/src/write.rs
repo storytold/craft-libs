@@ -194,6 +194,45 @@ pub fn animation(width: u32, height: u32, frames: &[RgbaFrame<'_>], options: Opt
     writer.finish()
 }
 
+/// Encode a single pre-quantized indexed-color frame as a GIF89a image.
+///
+/// `palette` holds 1 to 256 RGB triplets; `indices` is `width * height` row-major palette indices.
+/// When `interlaced` is true, rows are reordered into GIF's 4-pass interlaced order before writing.
+pub fn encode_indexed(
+    width: u32,
+    height: u32,
+    palette: &[[u8; 3]],
+    indices: &[u8],
+    transparent: Option<u8>,
+    interlaced: bool,
+) -> Result<Vec<u8>, Error> {
+    let (w, h) = dimensions(width, height)?;
+    let expected = usize::from(w) * usize::from(h);
+    if indices.len() != expected {
+        return Err(Error::FrameLength { index: 0, actual: indices.len(), expected });
+    }
+    if palette.is_empty() || palette.len() > 256 {
+        return Err(Error::Encode("GIF palette must hold 1 to 256 entries".into()));
+    }
+    let flat_palette: Vec<u8> = palette.iter().flat_map(|c| *c).collect();
+    let buffer = if interlaced { std::borrow::Cow::Owned(interlace(indices, usize::from(w))) } else { std::borrow::Cow::Borrowed(indices) };
+    let mut enc = gif::Encoder::new(Vec::new(), w, h, &flat_palette).map_err(Error::from)?;
+    let frame = gif::Frame { width: w, height: h, buffer, transparent, interlaced, ..gif::Frame::default() };
+    enc.write_frame(&frame).map_err(Error::from)?;
+    enc.into_inner().map_err(Error::from)
+}
+
+/// The rows of a `width`-wide image in GIF's interlaced order: every 8th row from 0, every 8th
+/// from 4, every 4th from 2, then every 2nd from 1.
+fn interlace(px: &[u8], width: usize) -> Vec<u8> {
+    let rows: Vec<&[u8]> = px.chunks(width.max(1)).collect();
+    [(0, 8), (4, 8), (2, 4), (1, 2)]
+        .into_iter()
+        .flat_map(|(start, step)| rows.iter().skip(start).step_by(step))
+        .flat_map(|r| r.iter().copied())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -287,5 +326,18 @@ mod tests {
         let decoded = crate::frames::read_frames(&bytes, &crate::frames::FrameLimits::default()).unwrap();
         assert_eq!(decoded.frames[0].rgba, red);
         assert_eq!(decoded.frames[1].rgba, blue);
+    }
+
+    #[test]
+    fn encode_indexed_validates_and_writes_gif() {
+        let palette = [[255, 0, 0], [0, 255, 0]];
+        let indices = [0u8, 1, 1, 0, 0, 1, 1, 0, 0];
+        let bytes = super::encode_indexed(3, 3, &palette, &indices, Some(1), true).unwrap();
+        let info = crate::scan(&bytes, 4).unwrap();
+        assert_eq!((info.width, info.height), (3, 3));
+        assert_eq!(info.frames.len(), 1);
+        assert_eq!(info.frames[0].transparent, Some(1));
+        assert!(super::encode_indexed(2, 2, &[], &[0; 4], None, false).is_err());
+        assert!(super::encode_indexed(2, 2, &palette, &[0; 3], None, false).is_err());
     }
 }
