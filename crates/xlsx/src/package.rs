@@ -516,6 +516,7 @@ impl<'a> Package<'a> {
     fn read_binary_external_links(&mut self, wb: &Workbook) -> Result<Vec<((String, Option<ExternalLink>), Option<xlsb::ExternalInfo>)>, Error> {
         let rels = self.workbook_rels()?;
         let mut out = Vec::with_capacity(wb.external_references.len());
+        let mut seen: std::collections::BTreeMap<String, (Option<ExternalLink>, Option<xlsb::ExternalInfo>)> = Default::default();
         for id in &wb.external_references {
             let Some(rel) = rels.by_id(id).filter(|r| !r.external) else {
                 self.warn(format!("external link {id}: the relationship is missing"));
@@ -523,6 +524,10 @@ impl<'a> Package<'a> {
                 continue;
             };
             let part = rel.target.clone();
+            if let Some((link, info)) = seen.get(&part) {
+                out.push(((part, link.clone()), info.clone()));
+                continue;
+            }
             let read = (|| {
                 if let Some(types) = &self.binary {
                     xlsb::check_type(types, &part, xlsb::EXTERNAL_LINK)?;
@@ -531,14 +536,16 @@ impl<'a> Package<'a> {
                 let part_rels = self.opc.rels(&part)?;
                 xlsb::external_link(&bytes, &part_rels, &self.limits, &self.budget, &mut self.warnings)
             })();
-            match read {
-                Ok((link, info)) => out.push(((part, Some(link)), Some(info))),
+            let entry = match read {
+                Ok((link, info)) => (Some(link), Some(info)),
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
                     self.warn(format!("skipped {part}: {e}; formulas through it keep their saved results"));
-                    out.push(((part, None), None));
+                    (None, None)
                 }
-            }
+            };
+            seen.insert(part.clone(), entry.clone());
+            out.push(((part, entry.0), entry.1));
         }
         Ok(out)
     }

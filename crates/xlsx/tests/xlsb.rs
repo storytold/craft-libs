@@ -2298,6 +2298,58 @@ fn external_links_are_read_once_and_keep_their_numbers() {
 }
 
 #[test]
+fn duplicate_external_links_share_budget_and_enforce_cache_cap() {
+    let rels = RELS.replace(
+        "</Relationships>",
+        &format!(r#"<Relationship Id="x1" Type="{LINK_TYPE}" Target="../links/one.bin"/><Relationship Id="x2" Type="{LINK_TYPE}" Target="../links/one.bin"/></Relationships>"#),
+    );
+    let types = TYPES.replace("</Types>", r#"<Override PartName="/links/one.bin" ContentType="application/vnd.ms-excel.externalLink"/></Types>"#);
+    let mut ptg_ref = vec![0x3A, 1, 0];
+    ptg_ref.extend(0u32.to_le_bytes());
+    ptg_ref.extend(0u16.to_le_bytes());
+    let mut ptg_ref2 = vec![0x3A, 5, 0];
+    ptg_ref2.extend(0u32.to_le_bytes());
+    ptg_ref2.extend(0u16.to_le_bytes());
+    // Adjust xti 5 to point to book 2 (x2), sheet 0..0.
+    let plain = book(false);
+    let end = record(132, &[]);
+    let mut xti = 7u32.to_le_bytes().to_vec();
+    for (bk, first, last) in [(0u32, 0i32, 0i32), (1, 0, 0), (1, 1, 1), (1, 0, 1), (1, -2, -2), (2, 0, 0), (1, -1, -1)] {
+        xti.extend([bk.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    let links_rec = [record(353, &[]), record(357, &[]), record(355, &wide("x1")), record(355, &wide("x2")), record(362, &xti), record(354, &[])];
+    let bk = [&plain[..plain.len() - end.len()], &links_rec.concat(), &end].concat();
+    let data = [row(0), formula_cell(0, &ptg_ref, &[]), formula_cell(1, &ptg_ref2, &[])].concat();
+    let (one, two, strings, lrels, link) = (worksheet(&data, &[]), worksheet(&[], &[]), sst(), link_rels(), workbook_link());
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &bk),
+        ("records/_rels/book.bin.rels", rels.as_bytes()),
+        ("data/one.bin", &one),
+        ("data/two.bin", &two),
+        ("text/strings.bin", &strings),
+        ("links/one.bin", &link),
+        ("links/_rels/one.bin.rels", lrels.as_bytes()),
+    ])
+    .unwrap();
+
+    // Five cached cells fit a 5-cell budget even when referenced by two link entries.
+    let limits = Limits { binary_cells: 5, ..Limits::default() };
+    let mut p = Package::open(&bytes, &limits).unwrap();
+    let wb = p.workbook().unwrap();
+    let ext = p.external_links(&wb).unwrap();
+    assert_eq!(ext.len(), 2);
+    assert!(matches!(&ext[0].1, Some(craft_xlsx::ExternalLink::Book(b)) if b.sheet_data[0].cells.len() == 5));
+    assert_eq!(ext[0].1, ext[1].1);
+
+    // Tightening the budget below the 5 cached cells fails with TooLarge.
+    let too_small = Limits { binary_cells: 4, ..Limits::default() };
+    let mut p2 = Package::open(&bytes, &too_small).unwrap();
+    assert!(matches!(p2.workbook(), Err(Error::TooLarge(_))));
+}
+
+#[test]
 fn an_external_reference_without_an_id_keeps_its_place() {
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
     let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
