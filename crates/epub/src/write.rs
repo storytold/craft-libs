@@ -137,6 +137,19 @@ pub struct Book<'a> {
     pub ncx: bool,
 }
 
+/// Options for generating XHTML documents and the package navigation document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WriteOptions {
+    /// Include the HTML5 doctype. Enabled by default.
+    pub include_doctype: bool,
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        Self { include_doctype: true }
+    }
+}
+
 /// A content document's shell around `body`: XML declaration, `html` with the XHTML and `epub`
 /// namespaces and the language, a `head` with the character set and title, then `head`, and a
 /// `body` element with `body_attrs`.
@@ -144,9 +157,15 @@ pub struct Book<'a> {
 /// `lang` and `title` are escaped here. `head`, `body_attrs` (with its leading space) and `body`
 /// are markup, written as given.
 pub fn xhtml(lang: &str, title: &str, head: &str, body_attrs: &str, body: &str) -> String {
+    xhtml_with_options(lang, title, head, body_attrs, body, &WriteOptions::default())
+}
+
+/// Like [`xhtml`], with an option to omit the doctype for strict XML consumers.
+pub fn xhtml_with_options(lang: &str, title: &str, head: &str, body_attrs: &str, body: &str, options: &WriteOptions) -> String {
     let lang = language(lang);
+    let doctype = if options.include_doctype { "<!DOCTYPE html>\n" } else { "" };
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"{lang}\" lang=\"{lang}\">\n<head><meta charset=\"utf-8\"/><title>{}</title>{head}</head>\n<body{body_attrs}>\n{body}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{doctype}<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"{lang}\" lang=\"{lang}\">\n<head><meta charset=\"utf-8\"/><title>{}</title>{head}</head>\n<body{body_attrs}>\n{body}</body>\n</html>\n",
         esc(title)
     )
 }
@@ -322,7 +341,7 @@ fn nav_items<'b>(book: &'b Book, title_limit: usize) -> Cow<'b, [NavItem]> {
     Cow::Owned(vec![NavItem { href: path, label: capped_title(&book.metadata.title, title_limit).to_string(), level: 1 }])
 }
 
-fn nav_document(book: &Book, title_limit: usize) -> String {
+fn nav_document(book: &Book, title_limit: usize, options: &WriteOptions) -> String {
     let kind = match book.nav.kind {
         NavKind::Toc => "toc",
         NavKind::PageList => "page-list",
@@ -330,7 +349,7 @@ fn nav_document(book: &Book, title_limit: usize) -> String {
     let start = |_: usize, i: &NavItem| format!("<li><a href=\"{}\">{}</a>", esc_attr(&i.href), esc(&i.label));
     let list = nested(&nav_items(book, title_limit), &Nesting { start: &start, end: "</li>", sub_start: "<ol>", sub_end: "</ol>" });
     let body = format!("<nav epub:type=\"{kind}\" id=\"toc\"><h1>{}</h1><ol>{list}</ol></nav>", esc(&book.nav.heading));
-    xhtml(&book.metadata.language, capped_title(&book.metadata.title, title_limit), "", "", &body)
+    xhtml_with_options(&book.metadata.language, capped_title(&book.metadata.title, title_limit), "", "", &body, options)
 }
 
 /// The EPUB 2 table of contents (NCX): the same entries as nested `navPoint`s in reading order.
@@ -369,24 +388,35 @@ fn ncx_document(book: &Book, title_limit: usize) -> String {
 /// `OEBPS/` the package document, the navigation document, `toc.ncx` when [`Book::ncx`] asks for
 /// it, and the resources in their order.
 pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
-    write_with_title_limit(book, MAX_TITLE_CHARS)
+    write_with_options(book, &WriteOptions::default())
+}
+
+/// Write a book with options for the generated navigation document.
+pub fn write_with_options(book: &Book, options: &WriteOptions) -> Result<Vec<u8>, Error> {
+    write_with_title_limit(book, MAX_TITLE_CHARS, options)
 }
 
 /// Write a book without silently truncating its title. Titles longer than
 /// [`MAX_PRESERVED_TITLE_CHARS`] characters return an error.
 pub fn write_preserving_title(book: &Book) -> Result<Vec<u8>, Error> {
+    write_preserving_title_with_options(book, &WriteOptions::default())
+}
+
+/// Write a book without truncating its title, using the supplied navigation options.
+/// Titles longer than [`MAX_PRESERVED_TITLE_CHARS`] characters return an error.
+pub fn write_preserving_title_with_options(book: &Book, options: &WriteOptions) -> Result<Vec<u8>, Error> {
     if book.metadata.title.chars().count() > MAX_PRESERVED_TITLE_CHARS {
         return invalid(format!("title exceeds {MAX_PRESERVED_TITLE_CHARS} characters"));
     }
-    write_with_title_limit(book, MAX_PRESERVED_TITLE_CHARS)
+    write_with_title_limit(book, MAX_PRESERVED_TITLE_CHARS, options)
 }
 
-fn write_with_title_limit(book: &Book, title_limit: usize) -> Result<Vec<u8>, Error> {
+fn write_with_title_limit(book: &Book, title_limit: usize, options: &WriteOptions) -> Result<Vec<u8>, Error> {
     check(book)?;
     let modified =
         w3cdtf(&book.metadata.modified).ok_or_else(|| Error::Invalid(format!("`{}` is not a modification date", book.metadata.modified)))?;
     let opf = package_document(book, &modified, title_limit);
-    let nav = nav_document(book, title_limit);
+    let nav = nav_document(book, title_limit, options);
     let ncx = book.ncx.then(|| ncx_document(book, title_limit));
     let fail = |e: craft_zip::Error| Error::Invalid(e.to_string());
     let mut z = craft_zip::Writer::new();
