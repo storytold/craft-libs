@@ -1,13 +1,14 @@
 //! The cursor service (8.5): requests of a pass collect here, the end hook picks the winner and records it, and a
 //! painted winner reaches the window as its cursor image where the window shows one.
 
+use crate::runtime::egui::areas::LayerKey;
 use crate::runtime::egui::{output, pass, viewports};
 use crate::runtime::frame::PerViewport;
 use crate::runtime::windows;
 use craft_behavior::cursor::pick_index;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority, PaintedCursor};
 use craft_host::target::Os;
-use egui::{Context, LayerId, Rect, ViewportId};
+use egui::{Context, Rect, ViewportId};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -44,14 +45,14 @@ pub(crate) struct ImageTarget {
 #[non_exhaustive]
 pub struct CursorRegion {
     /// The layer the requester paints on.
-    pub layer: LayerId,
+    pub layer: LayerKey,
     /// The part of the screen the footprint may cover.
     pub clip: Rect,
 }
 
 impl CursorRegion {
     /// The region of `clip` on `layer`.
-    pub fn new(layer: LayerId, clip: Rect) -> Self {
+    pub fn new(layer: LayerKey, clip: Rect) -> Self {
         CursorRegion { layer, clip }
     }
 }
