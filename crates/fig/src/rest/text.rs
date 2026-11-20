@@ -319,6 +319,16 @@ fn text_style(v: &View, size: Option<f64>) -> Obj {
             }
         }
     }
+    // OpenType features turned on or off (`SS16`: SF Pro's large symbols) as REST `opentypeFlags`.
+    let mut flags = Obj::new();
+    for (key, on) in [("toggledOnOTFeatures", 1), ("toggledOffOTFeatures", 0)] {
+        for tag in v.get(key).map(Kv::list).unwrap_or_default().iter().filter_map(Kv::str) {
+            flags.insert(tag.to_string(), json!(on));
+        }
+    }
+    if !flags.is_empty() {
+        s.insert("opentypeFlags".into(), Value::Object(flags));
+    }
     // An empty URL is kept: on an override entry it clears the text's own link.
     if let Some(u) = v.get("hyperlink").and_then(|h| h.get("url")).and_then(Kv::str) {
         s.insert("hyperlink".into(), json!({"type": "URL", "url": u}));
