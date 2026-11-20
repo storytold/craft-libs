@@ -123,6 +123,7 @@ pub fn render_into<'a>(
                 InterpreterWarning::ImageDecodeFailure => 1,
                 InterpreterWarning::UnsupportedFont => 2,
                 InterpreterWarning::ContentTruncated => 4,
+                InterpreterWarning::ColorFallback | InterpreterWarning::MalformedIndexedImage | InterpreterWarning::Type3WidthsMissing => 0,
             };
             sink.fetch_or(bit, Ordering::Relaxed);
             original(warning);
@@ -143,6 +144,7 @@ pub fn render_into<'a>(
             options.background[2],
             options.background[3],
         ),
+        ..Default::default()
     };
     catch_unwind(AssertUnwindSafe(|| hayro::render_into(page, cache, &settings, &rs, buffer))).map_err(|_| Error::BackendPanic)?;
     if cancelled() {
