@@ -489,6 +489,10 @@ impl CheckResultDialog {
                                 );
                                 ui.label(RichText::new(text).size(12.5).color(text_muted));
                             }
+                            Status::Off => {
+                                let text = t("Update checks are turned off in {app}.", &[("app", self.app.name)]);
+                                ui.label(RichText::new(text).size(12.5).color(text_muted));
+                            }
                             Status::Updated(version) => {
                                 let text = t("{app} updated to {version}.", &[("app", self.app.name), ("version", version)]);
                                 ui.label(RichText::new(text).size(12.5).color(text_primary));
@@ -1301,6 +1305,7 @@ pub(crate) mod tests {
             (Status::Installing, vec!["Installing update…", "OK"], true),
             (Status::Ready, vec![ready.as_str(), "RESTART TO UPDATE", "OK"], true),
             (Status::Managed, vec!["PhotoCraft 0.1.0 follows the version chosen in the launcher, so it does not update itself.", "OK"], true),
+            (Status::Off, vec!["Update checks are turned off in PhotoCraft.", "OK"], true),
             (Status::Updated("0.2.0".into()), vec!["PhotoCraft updated to 0.2.0.", "OK"], false),
             (Status::InstallFailed("disk full".into()), vec!["The update could not be installed: disk full", "CHECK AGAIN", "OK"], true),
         ] {
@@ -1364,6 +1369,7 @@ pub(crate) mod tests {
             Status::Installing,
             Status::Ready,
             Status::Managed,
+            Status::Off,
             Status::Updated("0.2.0".into()),
             Status::InstallFailed("no network".into()),
         ] {
