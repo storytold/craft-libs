@@ -666,3 +666,36 @@ pub(crate) fn register(input: TokenStream) -> syn::Result<TokenStream> {
     }
     registrations(&k, &registered.types, &registered.declared, registered.shape)
 }
+
+#[cfg(test)]
+mod registry_helper_tests {
+    use super::*;
+    use quote::quote;
+
+    #[test]
+    fn component_and_pattern_helpers_are_guarded_by_dependency_suite() {
+        let ty: Type = syn::parse_quote!(Example);
+        let declared = Declared { sample: Some(syn::parse_quote!(make_example)), ..Declared::default() };
+        let component = registrations(&quote!(craft_ui), std::slice::from_ref(&ty), &declared, Shape::Leaf).unwrap();
+        let pattern = pattern_registrations(&quote!(craft_ui), &[ty], "pattern", &quote!(probe));
+        for tokens in [component.clone(), pattern] {
+            let file: syn::File = syn::parse2(tokens).unwrap();
+            let suite = file
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    syn::Item::Macro(item) if item.mac.path.segments.last().is_some_and(|s| s.ident == "__suite_items") => Some(item),
+                    _ => None,
+                })
+                .expect("registry helper is protected by dependency suite");
+            let helper: syn::ItemFn = syn::parse2(suite.mac.tokens.clone()).unwrap();
+            assert!(helper.sig.ident.to_string().starts_with("__registry_"));
+            assert!(helper.sig.inputs.iter().any(|arg| quote!(#arg).to_string().contains("Registry")));
+        }
+        let file: syn::File = syn::parse2(component).unwrap();
+        assert!(
+            file.items.iter().any(|item| matches!(item, syn::Item::Const(item) if quote!(#item).to_string().contains("make_example"))),
+            "sample remains referenced outside the dependency suite wrapper"
+        );
+    }
+}
