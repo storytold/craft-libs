@@ -111,7 +111,7 @@ pub fn convert<'a>(d: &Doc<'a>, pictures: &'a [u8], app: &'a dyn Defaults) -> Pr
     let mut cx = Ctx {
         p,
         fonts: doc::fonts(d),
-        blips: crate::blip::Store::new(dgg, pictures),
+        blips: crate::blip::Store::new(dgg, pictures, crate::blip::MAX_TOTAL),
         media: HashMap::new(),
         inline_media: HashMap::new(),
         numbering: doc::outline_numbering(&d.document),

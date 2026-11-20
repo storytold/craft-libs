@@ -1,6 +1,12 @@
 //! The record framing [MS-ODRAW] shares with [MS-PPT]: an 8-byte header (version, instance, type,
 //! length) followed by `len` bytes, which for a container (version `0xF`) are more records.
 
+/// Shape groups nest at most this deep in a drawing; deeper groups are left out.
+pub const MAX_DEPTH: usize = 12;
+/// Most records one drawing walk reads, all its containers together, so a wide or deep tree can't
+/// multiply the work.
+pub const MAX_RECORDS: usize = 200_000;
+
 /// The little-endian `u16` at `at`, if `b` holds it.
 pub fn u16_at(b: &[u8], at: usize) -> Option<u16> {
     let s = b.get(at..at.checked_add(2)?)?;

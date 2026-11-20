@@ -3,7 +3,9 @@
 //! anchor and client records (placeholder, text).
 
 use crate::doc::rt;
-use crate::record::{MAX_DEPTH, Rec};
+use craft_officeart::record::{MAX_DEPTH, MAX_RECORDS};
+
+use crate::record::Rec;
 
 pub use craft_officeart::props::{Props, prop};
 
@@ -56,33 +58,40 @@ pub struct Drawing<'a> {
 pub fn drawing<'a>(container: &Rec<'a>) -> Drawing<'a> {
     let mut out = Drawing { shapes: vec![], background: None };
     let Some(dg) = container.child(rt::DRAWING).and_then(|d| d.child(rt::DG_CONTAINER)) else { return out };
+    let mut budget = MAX_RECORDS;
     // The background is the container's own shape (`OfficeArtDgContainer.shape`, [MS-ODRAW]
     // 2.2.13), not one found by its fBackground flag.
     if let Some(bg) = dg.child(rt::SP_CONTAINER) {
-        out.background = Some(shape(&bg));
+        out.background = Some(shape(&bg, &mut budget));
     }
     if let Some(top) = dg.child(rt::SPGR_CONTAINER) {
         // The first shape of the top group is the patriarch, standing for the drawing itself.
-        out.shapes = group_children(&top, 0).into_iter().filter(|s| !s.patriarch).collect();
+        out.shapes = group_children(&top, 0, &mut budget).into_iter().filter(|s| !s.patriarch).collect();
     }
     out
 }
 
-fn group_children<'a>(gr: &Rec<'a>, depth: usize) -> Vec<RawShape<'a>> {
+/// The shapes and groups of a group container, nested at most [`MAX_DEPTH`] deep, reading at most
+/// `budget` records more (shared by the whole drawing).
+fn group_children<'a>(gr: &Rec<'a>, depth: usize, budget: &mut usize) -> Vec<RawShape<'a>> {
     if depth > MAX_DEPTH {
         return vec![];
     }
     let mut out = vec![];
     for r in gr.children() {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
         match r.kind {
-            rt::SP_CONTAINER => out.push(shape(&r)),
+            rt::SP_CONTAINER => out.push(shape(&r, budget)),
             rt::SPGR_CONTAINER => {
                 let mut kids = r.children();
                 // A group container's first shape describes the group itself.
                 let Some(head) = kids.next().filter(|h| h.kind == rt::SP_CONTAINER) else { continue };
-                let mut g = shape(&head);
+                let mut g = shape(&head, budget);
                 g.is_group = true;
-                g.children = group_children(&r, depth + 1).into_iter().skip(1).collect();
+                g.children = group_children(&r, depth + 1, budget).into_iter().skip(1).collect();
                 out.push(g);
             }
             _ => {}
@@ -95,7 +104,7 @@ fn rect_i32(r: &Rec) -> Option<Anchor> {
     Some(Anchor { left: f64::from(r.i32(0)?), top: f64::from(r.i32(4)?), right: f64::from(r.i32(8)?), bottom: f64::from(r.i32(12)?) })
 }
 
-fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
+fn shape<'a>(sp: &Rec<'a>, budget: &mut usize) -> RawShape<'a> {
     let mut s = RawShape {
         shape_type: 0,
         spid: 0,
@@ -115,6 +124,10 @@ fn shape<'a>(sp: &Rec<'a>) -> RawShape<'a> {
     let mut primary: Vec<Rec> = vec![];
     let mut tables: Vec<Rec> = vec![];
     for r in sp.children() {
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
         match r.kind {
             rt::FSP => {
                 s.shape_type = r.instance;
@@ -206,7 +219,7 @@ mod tests {
         let fsp = atom(rt::FSP, 1, &[1025u32.to_le_bytes(), 0u32.to_le_bytes()].concat());
         let anchor = atom(rt::CHILD_ANCHOR, 0, &[1i32, 2, 3, 4].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
         let sp = container(rt::SP_CONTAINER, 0, &[fsp, fopt(&entries, &name), anchor]);
-        let s = shape(&Rec::at(&sp, 0).unwrap());
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone());
         assert_eq!(s.props.len(), MAX_PROPS);
         assert_eq!(s.props.string(prop::NAME).as_deref(), Some("Kept"));
         assert_eq!(s.props.get(0x1000), Some(0));
@@ -237,8 +250,47 @@ mod tests {
             0,
             &[fsp, secondary, fopt(&[(prop::FILL_COLOR, 1), (prop::LINE_WIDTH, 1)], &[]), fopt(&[(prop::FILL_COLOR, 2)], &[])],
         );
-        let s = shape(&Rec::at(&sp, 0).unwrap());
+        let s = shape(&Rec::at(&sp, 0).unwrap(), &mut MAX_RECORDS.clone());
         assert_eq!((s.props.get(prop::FILL_COLOR), s.props.get(prop::LINE_WIDTH), s.props.get(prop::LINE_COLOR)), (Some(2), Some(1), Some(3)));
+    }
+
+    /// A slide whose drawing's top group holds `members` after its patriarch.
+    fn slide_of(members: Vec<Vec<u8>>) -> Vec<u8> {
+        let patriarch = container(rt::SP_CONTAINER, 0, &[atom(rt::FSP, 0, &[0, 4, 0, 0, 5, 0, 0, 0])]);
+        let top = container(rt::SPGR_CONTAINER, 0, &[vec![patriarch], members].concat());
+        container(rt::SLIDE, 0, &[container(rt::DRAWING, 0, &[container(rt::DG_CONTAINER, 0, &[top])])])
+    }
+
+    /// Groups nest at most [`MAX_DEPTH`] deep: a deeper group is left out, its parents kept.
+    #[test]
+    fn groups_nest_at_most_max_depth() {
+        let leaf = || container(rt::SP_CONTAINER, 0, &[atom(rt::FSP, 1, &[0; 8])]);
+        let nested = |levels: usize| (0..levels).fold(leaf(), |inner, _| container(rt::SPGR_CONTAINER, 0, &[leaf(), inner]));
+        let depth = |s: &RawShape| {
+            let mut n = 0;
+            let mut at = s;
+            while let Some(child) = at.children.first() {
+                n += 1;
+                at = child;
+            }
+            n
+        };
+        let read = |levels: usize| {
+            let slide = slide_of(vec![nested(levels)]);
+            depth(&super::drawing(&Rec::at(&slide, 0).unwrap()).shapes[0])
+        };
+        let limit = craft_officeart::record::MAX_DEPTH;
+        assert_eq!(read(limit), limit);
+        assert_eq!(read(limit + 8), limit, "the groups past the limit are left out");
+    }
+
+    /// A drawing reads at most [`MAX_RECORDS`] records, however many shapes it holds.
+    #[test]
+    fn a_drawing_reads_at_most_max_records() {
+        let shapes = vec![container(rt::SP_CONTAINER, 0, &[]); MAX_RECORDS + 5];
+        let slide = slide_of(shapes);
+        let d = super::drawing(&Rec::at(&slide, 0).unwrap());
+        assert!(d.shapes.len() < MAX_RECORDS, "{}", d.shapes.len());
     }
 
     #[test]
