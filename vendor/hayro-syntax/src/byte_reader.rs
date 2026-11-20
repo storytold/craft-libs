@@ -429,7 +429,7 @@ fn open_level(kinds: &mut Vec<u64>, depth: &mut usize, dict: bool) -> Option<()>
 #[cfg(test)]
 mod tests {
     use super::Reader;
-    use crate::object::{Array, Dict};
+    use crate::object::{Array, Dict, FromBytes};
     use crate::reader::ReaderExt;
     use alloc::format;
     use alloc::string::String;
@@ -467,8 +467,12 @@ mod tests {
                 assert_eq!(reader.skip_depth, 0, "a rejected array must unwind its depth");
 
                 let mut reader = Reader::new(dictionary.as_bytes());
-                assert_eq!(reader.skip::<Dict<'_>>(in_content).is_some(), depth <= 64, "dictionary {depth}");
-                assert_eq!(reader.skip_depth, 0, "a rejected dictionary must unwind its depth");
+                assert!(reader.skip::<Dict<'_>>(in_content).is_some(), "outer dictionary {depth} survives");
+                assert_eq!(reader.skip_depth, 0, "a recovered dictionary must unwind its depth");
+                // #5320 changes refusal of the whole dictionary into omission of its whole entry.
+                // The cap still prevents traversing any part of that overdeep value.
+                let parsed = Dict::from_bytes(dictionary.as_bytes()).expect("the outer dictionary survives");
+                assert_eq!(parsed.contains_key("A"), depth <= 64, "dictionary {depth}: whole or absent");
             }
         }
     }
@@ -481,7 +485,13 @@ mod tests {
                 data = if level % 2 == 0 { format!("<< /A {data} >>") } else { format!("[{data}]") };
             }
             let mut reader = Reader::new(data.as_bytes());
-            assert_eq!(reader.skip::<crate::object::Object<'_>>(true).is_some(), depth <= 64);
+            // At 65 the outside container is a dictionary, so its entire /A is omitted.
+            // At 64 the outside container is an array and the whole value fits.
+            assert!(reader.skip::<crate::object::Object<'_>>(true).is_some());
+            if depth > 64 {
+                let parsed = Dict::from_bytes(data.as_bytes()).expect("outer dictionary survives");
+                assert!(!parsed.contains_key("A"), "the mixed value is absent, not truncated at the cap");
+            }
             assert_eq!(reader.skip_depth, 0);
         }
     }
