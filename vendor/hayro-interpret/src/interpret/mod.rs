@@ -1070,6 +1070,7 @@ fn interpret_window<'a>(
             }
             TypedInstruction::InlineImage(i) => {
                 let warning_sink = context.settings.warning_sink.clone();
+                let extended_warning_sink = context.settings.extended_warning_sink.clone();
                 let transfer_function = context.get().graphics_state.transfer_function.clone();
                 let cache = context.interpreter_cache.object_cache.clone();
                 // PdfCraft patch (80): an inline image naming a resource colour space that is an
@@ -1097,7 +1098,7 @@ fn interpret_window<'a>(
                     i.0,
                     |name| named_color_space(name, resources, &defaults, context),
                     &warning_sink,
-                    Some(&context.settings.extended_warning_sink),
+                    Some(&extended_warning_sink),
                     &cache,
                     None,
                     false,
