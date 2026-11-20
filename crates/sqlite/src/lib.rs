@@ -10,6 +10,46 @@ use core::fmt;
 
 const MAX_VARINT_BYTES: usize = 9;
 
+/// The b-tree cell layouts that carry payload bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PayloadKind {
+    /// A table leaf cell; table interior cells have no payload.
+    TableLeaf,
+    /// An index leaf or interior cell, which share the same payload thresholds.
+    Index,
+}
+
+/// Return the number of payload bytes stored in the b-tree page before overflow.
+///
+/// `usable` is the page size minus its reserved bytes, not the space remaining after the
+/// cell header. It may be odd. Sizes outside 480..=65,536 return `None`; validating the
+/// database header and bounding payload reads remain the caller's responsibility.
+///
+/// This implements the [SQLite b-tree cell payload formula](https://www.sqlite.org/fileformat.html#b_tree_pages).
+/// The calculation allocates nothing and accepts the full `u64` payload length without
+/// implying that the payload fits in the database or in memory.
+pub fn local_payload_len(usable: u32, payload_len: u64, kind: PayloadKind) -> Option<u32> {
+    // SQLite requires at least 480 usable bytes; this also keeps every divisor and
+    // subtraction below valid even when the caller supplies an untrusted header.
+    if !(480..=65_536).contains(&usable) {
+        return None;
+    }
+    let usable = u64::from(usable);
+    let maximum = match kind {
+        PayloadKind::TableLeaf => usable - 35,
+        PayloadKind::Index => (usable - 12) * 64 / 255 - 23,
+    };
+    let local = if payload_len <= maximum {
+        payload_len
+    } else {
+        let minimum = (usable - 12) * 32 / 255 - 23;
+        let candidate = minimum + (payload_len - minimum) % (usable - 4);
+        if candidate <= maximum { candidate } else { minimum }
+    };
+    // Both branches bound the result by the supported page's maximum local payload.
+    Some(local as u32)
+}
+
 /// A failure to decode part of a SQLite record or page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
