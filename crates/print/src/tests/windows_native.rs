@@ -314,6 +314,15 @@ fn actual_size_prints_paper_sized_sheets_unscaled() {
     assert!((frame.matrix[4] - mm(0.5)).abs() < 1e-6 && (frame.matrix[5] - mm(0.5)).abs() < 1e-6, "{:?}", frame.matrix);
     let shrink = plan(&sheets.sheets, a4, Fit::Shrink { margin: 12.0 }).unwrap();
     assert!(shrink[0].frame.as_ref().unwrap().matrix[0] < 0.98, "shrink-to-fit still shrinks it (to 97.5%)");
+
+    // A sheet a hair over the paper on one side, within the paper tolerance (210.2 × 250 mm on
+    // A4), fits too: it prints at 100%, not shrunk by the hair. (210.2 × 200 mm is a landscape
+    // sheet: it turns onto A4 as 200 × 210.2 and fits anyway.)
+    let over = TestPage { media: Some([0.0, 0.0, mm(210.2), mm(250.0)]), ..LETTER };
+    let pdf = test_pdf(&[over], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, a4, Fit::ActualSize { margin: 12.0 }).unwrap();
+    assert_eq!(edits[0].frame.as_ref().expect("reframed onto A4").matrix[0], 1.0, "unscaled");
 }
 
 #[test]

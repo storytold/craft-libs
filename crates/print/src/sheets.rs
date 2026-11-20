@@ -1150,7 +1150,9 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
                 // its margins printed half a centimetre wider. Only larger sheets shrink.
                 let fits = matches!(fit, Fit::ActualSize { .. }) && w <= pw + PAPER_SAME && h <= ph + PAPER_SAME;
                 let margin = if !fits && margin.is_finite() && margin > 0.0 && 2.0 * margin < pw.min(ph) { margin } else { 0.0 };
-                let scale = ((pw - 2.0 * margin) / w).min((ph - 2.0 * margin) / h).min(1.0);
+                // A sheet that fits within the paper tolerance prints at 100% too: a hair over the
+                // paper, it would otherwise shrink by that hair.
+                let scale = if fits { 1.0 } else { ((pw - 2.0 * margin) / w).min((ph - 2.0 * margin) / h).min(1.0) };
                 if scale >= 1.0 && close((w, h), paper) {
                     None
                 } else {
