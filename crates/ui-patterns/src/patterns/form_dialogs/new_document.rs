@@ -24,7 +24,7 @@ use craft_behavior::{ColumnWidth, PixelSize};
 
 use craft_theme::Srgba;
 use egui::{Context, Response, Ui};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use cards::{Left, TabId};
 
@@ -51,6 +51,7 @@ craft_ui::words! {
         cards: "newDocument.cards" = "Blank Document Presets";
         saved_list: "newDocument.savedList" = "Saved Presets";
         delete: "newDocument.delete" = "Delete";
+        clear_recent: "newDocument.clearRecent" = "Clear All";
         recent: "newDocument.recent" = "Recent";
         saved: "newDocument.saved" = "Saved";
         photo: "newDocument.photo" = "Photo";
@@ -133,6 +134,7 @@ struct Setup {
     categories: Vec<PresetCategory>,
     recent_defaults: Vec<DocumentPreset>,
     recent: Vec<DocumentOptions>,
+    recent_menu: bool,
     clipboard: Option<PixelSize>,
     background: [f32; 3],
     print_ppi: f64,
@@ -146,7 +148,6 @@ struct Setup {
 #[derive(Clone, Copy)]
 struct Read<'a> {
     setup: &'a Setup,
-    recents: &'a [DocumentOptions],
     library: &'a PresetLibrary<DocumentOptions>,
     words: &'a NewDocumentWords,
     preset_words: &'a NewDocumentPresetWords,
@@ -164,6 +165,7 @@ struct Bound<'a> {
     tab: Option<&'a RefCell<String>>,
     /// Each save and delete of the frame.
     events: &'a RefCell<Vec<NamedPresetEvent<String>>>,
+    recent_action: &'a Cell<Option<RecentDocumentAction>>,
 }
 
 /// What the body reads besides its form: the setup, the words and the units.
@@ -191,6 +193,8 @@ struct Session {
     tab: TabId,
     /// The card the user picked in the open tab (the saved row in Saved).
     card: Option<usize>,
+    /// The recent entry whose menu is open and the list in which it was found.
+    recent_menu: Option<cards::RecentMenu>,
     /// The orientation picked with the control; built-in cards turn with it.
     orientation: Option<Orientation>,
     /// The Save Document Preset pane's name, while the pane stands in for the details.
@@ -211,6 +215,7 @@ impl Default for Session {
             gesture: None,
             tab: TabId::Recent,
             card: None,
+            recent_menu: None,
             orientation: None,
             naming: None,
             preset_artboard: false,
@@ -226,6 +231,7 @@ impl Session {
     /// running size edit. The fields that show the size follow the settings by themselves.
     fn reset(&mut self) {
         self.card = None;
+        self.recent_menu = None;
         self.orientation = None;
         self.naming = None;
         self.name_tried = false;
@@ -348,6 +354,15 @@ impl NewDocumentResult {
     }
 }
 
+/// An edit the host should apply to its Recent list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecentDocumentAction {
+    /// Remove the entry at this position in the supplied Recent list, before filtering.
+    Remove(usize),
+    /// Remove every entry in the supplied Recent list.
+    Clear,
+}
+
 /// What the dialog reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -366,6 +381,8 @@ pub struct NewDocumentOutput {
     /// The saved-preset edits the user made this pass (create, delete), for the app to store, keyed by the preset's
     /// name before the event.
     pub presets: Vec<NamedPresetEvent<String>>,
+    /// A Recent menu edit the host should apply. The dialog does not own the list.
+    pub recent_action: Option<RecentDocumentAction>,
 }
 
 impl Outcome for NewDocumentOutput {
@@ -411,19 +428,18 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         session.tab = tab;
         session.card = None;
     }
-    let recents: Vec<DocumentOptions> = setup.recent.iter().filter(|recent| recent.fits()).cloned().collect();
     let mut library = match bound.saved {
         Some(cell) => cell.borrow().clone(),
         None => form.saved::<PresetLibrary<DocumentOptions>>(&PRESETS_KEY).clone(),
     };
     let mut changed = false;
 
-    let read = Read { setup, recents: &recents, library: &library, words, preset_words, library_words, units };
+    let read = Read { setup, library: &library, words, preset_words, library_words, units };
     let mut left = Left::default();
     let mut right = Right::default();
     Grid::new(&COLUMNS).fill().show(ui, |ui, _| {
         Stack::new().fill().show(ui, |ui, _| {
-            cards::show(ui, &session, values, &read, &mut left);
+            cards::show(ui, &mut session, values, &read, &mut left);
         });
         Stack::new().scroll(Scroll::vertical()).show(ui, |ui, _| {
             details::show(ui, &mut session, values, &read, &mut right);
@@ -440,6 +456,10 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         if picked.activated {
             form.request_close_as(CloseReason::Activated);
         }
+    }
+    if let Some(action) = left.recent_action {
+        session.card = None;
+        bound.recent_action.set(Some(action));
     }
     if right.request_color {
         let current = background_rgb(values.background, setup.background).unwrap_or([1.0; 3]);
@@ -525,6 +545,9 @@ pub struct NewDocumentDialog<'a> {
     /// the id `"default"` is named "Default {app} Size".
     #[prop]
     recent_defaults: Vec<DocumentPreset>,
+    /// Offers Delete and Clear All for actual Recent entries and reports the action to the host. Off by default.
+    #[prop]
+    recent_menu: bool,
     /// Keeps the documents created lately, newest first, under `key`, and lists them in Recent. The result's
     /// [`NewDocumentResult::remember`] stores the list with the created settings added.
     #[prop]
@@ -584,6 +607,7 @@ impl<'a> NewDocumentDialog<'a> {
             open: None,
             categories: PresetCategory::standard(),
             recent_defaults: PresetCategory::default_recent(),
+            recent_menu: false,
             remember_recent: None,
             clipboard: None,
             background_color: None,
@@ -608,6 +632,7 @@ impl<'a> NewDocumentDialog<'a> {
             open,
             categories,
             recent_defaults,
+            recent_menu,
             remember_recent,
             clipboard,
             background_color,
@@ -631,6 +656,7 @@ impl<'a> NewDocumentDialog<'a> {
         let saved_cell = saved.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
         let tab_cell = tab.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
         let events = RefCell::new(Vec::new());
+        let recent_action = Cell::new(None);
         let env = Env::of(ui);
         let words = env.words::<NewDocumentWords>();
         let preset_words = env.words::<NewDocumentPresetWords>();
@@ -640,6 +666,7 @@ impl<'a> NewDocumentDialog<'a> {
             categories,
             recent_defaults,
             recent,
+            recent_menu,
             clipboard,
             background: background_color.map_or([1.0; 3], |color| color.to_rgb_array()),
             print_ppi: print_resolution,
@@ -650,7 +677,7 @@ impl<'a> NewDocumentDialog<'a> {
         };
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
-            bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), events: &events },
+            bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), events: &events, recent_action: &recent_action },
             setup: &setup,
             words: &words,
             preset_words: &preset_words,
@@ -703,6 +730,7 @@ impl<'a> NewDocumentDialog<'a> {
             }),
             requests: shown.requests,
             presets: events,
+            recent_action: recent_action.get(),
         }
     }
 }
@@ -731,6 +759,7 @@ pub struct HostedNewDocument {
     saved: PresetLibrary<DocumentOptions>,
     /// The recent documents the app gave; the app adds the created one itself.
     recent: Vec<DocumentOptions>,
+    recent_action: Option<RecentDocumentAction>,
     /// The shown tab's id.
     tab: String,
     /// The saved-preset edits the app has not taken yet.
@@ -762,6 +791,7 @@ impl HostedNewDocument {
             open: true,
             saved: PresetLibrary::new(),
             recent: Vec::new(),
+            recent_action: None,
             tab: TabId::Recent.key(&[]),
             events: Vec::new(),
         }
@@ -795,6 +825,21 @@ impl HostedNewDocument {
     pub fn recent(mut self, list: Vec<DocumentOptions>) -> Self {
         self.recent = list;
         self
+    }
+
+    /// The Recent list supplied by the app, in the order a menu action indexes.
+    pub fn recent_documents(&self) -> &[DocumentOptions] {
+        &self.recent
+    }
+
+    /// Displays an updated Recent list without reopening the dialog.
+    pub fn replace_recent(&mut self, list: Vec<DocumentOptions>) {
+        self.recent = list;
+    }
+
+    /// The Recent menu edit since the last call, for the app to apply.
+    pub fn take_recent_action(&mut self) -> Option<RecentDocumentAction> {
+        self.recent_action.take()
     }
 
     /// The saved presets as the user left them.
@@ -883,6 +928,9 @@ impl StackDialog for HostedNewDocument {
             .show(ui);
         self.requests.extend(shown.requests);
         self.events.extend(shown.presets);
+        if let Some(action) = shown.recent_action {
+            self.recent_action = Some(action);
+        }
         match (shown.result, shown.closed) {
             (Some(result), _) => Some(DialogResult::Ok(result)),
             (None, Some(_)) => {

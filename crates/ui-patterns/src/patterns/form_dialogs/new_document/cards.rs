@@ -1,11 +1,12 @@
 //! The left column of New Document: the category tabs over the grid of preset cards, or the list of saved presets.
 
 use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, PresetCategory, size_line};
-use super::{NewDocumentWords, Read, Session, Setup, background_label, depth_label, mode_label};
+use super::{NewDocumentWords, Read, RecentDocumentAction, Session, Setup, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
-use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
+use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, clicked};
 use crate::display::{Shade, Text};
 use crate::list::{List, ListRow, ThumbAspect};
+use crate::menu::{Menu, MenuItem};
 use crate::patterns::presets::PresetId;
 use crate::primitives::{ContentPainterCx, PaintShape};
 use crate::runtime::env::{Label, UnitKind};
@@ -13,9 +14,10 @@ use crate::style::TypeRole;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use crate::tile_grid::{Tile, TileGrid};
 use craft_behavior::{DisplayOrder, ItemSource, Selection, SelectionChange, keyed};
-use egui::{CornerRadius, Rect, Ui, vec2};
+use egui::{CornerRadius, Rect, Response, Ui, vec2};
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::sync::Arc;
 
 /// A tab of the preset browser.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -70,6 +72,15 @@ pub(super) struct Card {
     pub(super) aspect: (u32, u32),
     /// The library preset a Saved row stands for.
     pub(super) saved: Option<PresetId>,
+    /// The index in the supplied Recent list, before adding or filtering any cards.
+    pub(super) recent_index: Option<usize>,
+}
+
+/// The open menu's target. A changed list invalidates its position, even when it still has the same length.
+#[derive(Clone)]
+pub(super) struct RecentMenu {
+    index: usize,
+    list: Arc<[(usize, DocumentOptions)]>,
 }
 
 /// The card the user picked in this pass.
@@ -87,6 +98,7 @@ pub(super) struct Left {
     pub(super) picked: Option<Picked>,
     /// The saved presets the Delete intent removed.
     pub(super) delete: Vec<PresetId>,
+    pub(super) recent_action: Option<RecentDocumentAction>,
 }
 
 /// The cards as a display order keyed by position.
@@ -116,7 +128,7 @@ impl ItemSource<usize> for CardList<'_> {}
 const CARD_COLUMNS: usize = 3;
 
 /// Shows the tabs and what the open tab lists, and reports the tab and the card the user picked.
-pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
+pub(super) fn show(ui: &mut Ui, session: &mut Session, values: &DocumentOptions, read: &Read<'_>, left: &mut Left) {
     let (setup, words) = (read.setup, read.words);
     let tabs: Vec<TabId> =
         std::iter::once(TabId::Recent).chain((0..setup.categories.len()).map(TabId::Category)).chain(std::iter::once(TabId::Saved)).collect();
@@ -134,6 +146,10 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
     }
 
     let tab = left.tab.unwrap_or(session.tab);
+    let recent_menu = tab == TabId::Recent && setup.recent_menu;
+    if !recent_menu {
+        session.recent_menu = None;
+    }
     let cards = cards_of(tab, session, values, read);
     let selected = if tab == session.tab { selected_of(tab, session, values, &cards) } else { None };
     let selection = selected.map_or_else(|| Selection::new(Vec::new(), None, None), Selection::single);
@@ -174,8 +190,37 @@ pub(super) fn show(ui: &mut Ui, session: &Session, values: &DocumentOptions, rea
             .rows_stamp(stamp)
             .selection(Bind::given(selection))
             .show_items(ui, &list, &mut |index, _| tile_of(&cards[*index]));
+        if recent_menu {
+            if let Some(request) = shown.response.events.iter().rev().find_map(|event| match event {
+                CollectionEvent::ContextMenu(request) => Some(request),
+                _ => None,
+            }) {
+                session.recent_menu = cards
+                    .get(request.key)
+                    .and_then(|card| card.recent_index)
+                    .map(|index| RecentMenu { index, list: recent_items(setup).map(|(at, item)| (at, item.clone())).collect() });
+            }
+            left.recent_action = show_recent_menu(ui, &shown.response.response, read, &mut session.recent_menu);
+        }
         route(shown.response.events, &cards, left);
     }
+}
+
+fn show_recent_menu(ui: &mut Ui, response: &Response, read: &Read<'_>, menu: &mut Option<RecentMenu>) -> Option<RecentDocumentAction> {
+    let target = menu.take().filter(|target| recent_items(read.setup).eq(target.list.iter().map(|(at, item)| (*at, item))))?;
+    let mut action = None;
+    let shown = Menu::context(read.words.recent.clone(), response).show(ui, |ui, _| {
+        if MenuItem::new(read.words.delete.clone()).show(ui).ran {
+            action = Some(RecentDocumentAction::Remove(target.index));
+        }
+        if MenuItem::new(read.words.clear_recent.clone()).show(ui).ran {
+            action = Some(RecentDocumentAction::Clear);
+        }
+    });
+    if action.is_none() && shown.output.closed.is_none() {
+        *menu = Some(target);
+    }
+    action
 }
 
 /// Turns a collection's events into the card picked: a selection change picks, Enter or a double click activates.
@@ -249,7 +294,7 @@ fn preset_title(preset: &DocumentPreset, setup: &Setup, words: &NewDocumentWords
 
 /// The cards `tab` lists.
 fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read<'_>) -> Vec<Card> {
-    let Read { setup, recents, library, words, preset_words, units, .. } = *read;
+    let Read { setup, library, words, preset_words, units, .. } = *read;
     let preset_card = |preset: &DocumentPreset| {
         let preset = session.orientation.map_or_else(|| preset.clone(), |orientation| preset.turned(orientation));
         let mut settings = preset.options(setup.print_ppi, setup.screen_ppi);
@@ -265,6 +310,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
             artboard: Some(preset.artboard),
             detail: None,
             saved: None,
+            recent_index: None,
         }
     };
     match tab {
@@ -289,6 +335,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     artboard: None,
                     detail: None,
                     saved: Some(preset.id),
+                    recent_index: None,
                 }
             })
             .collect(),
@@ -305,9 +352,10 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     artboard: None,
                     detail: None,
                     saved: None,
+                    recent_index: None,
                 });
             }
-            for recent in recents {
+            for (recent_index, recent) in recent_items(setup) {
                 let title = recent_title(recent, setup, words, preset_words);
                 let line = size_line(recent, words, units);
                 let detail = words.recent_detail.fill(&[
@@ -325,12 +373,13 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     artboard: None,
                     detail: Some(detail),
                     saved: None,
+                    recent_index: Some(recent_index),
                 });
             }
             for preset in &setup.recent_defaults {
                 let card = Card { artboard: None, ..preset_card(preset) };
-                let listed =
-                    recents.iter().any(|recent| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);
+                let listed = recent_items(setup)
+                    .any(|(_, recent)| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);
                 if !listed {
                     cards.push(card);
                 }
@@ -338,6 +387,10 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
             cards
         }
     }
+}
+
+fn recent_items(setup: &Setup) -> impl Iterator<Item = (usize, &DocumentOptions)> {
+    setup.recent.iter().enumerate().filter(|(_, recent)| recent.fits())
 }
 
 /// A recent document takes the name of the built-in preset it matches.
