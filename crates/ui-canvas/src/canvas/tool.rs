@@ -220,9 +220,12 @@ pub(crate) struct ToolRequests {
     pub(crate) autoscroll_at: Option<Pos2>,
     /// The pan's scroll-all-windows choice, from [`ToolContext::pan_view`].
     pub(crate) pan: Option<bool>,
-    /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
-    pub(crate) hud: Option<Vec<(Label, String)>>,
+    /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`] or [`ToolContext::hud_at`].
+    pub(crate) hud: Option<HudRequest>,
 }
+
+/// A hud's rows and the screen point they sit beside instead of the pointer, from [`ToolContext::hud_at`].
+pub(crate) type HudRequest = (Vec<(Label, String)>, Option<Pos2>);
 
 /// What a tool sees and may ask for during a call.
 #[non_exhaustive]
@@ -524,7 +527,13 @@ impl<'a> ToolContext<'a> {
     /// Labelled values to show beside the pointer this pass, never gated by Show Transformation Values (brush size
     /// readouts). The last request of a pass wins. A hud asked for in the same pass as a readout replaces it.
     pub fn hud(&mut self, rows: Vec<(Label, String)>) {
-        self.requests.hud = Some(rows);
+        self.requests.hud = Some((rows, None));
+    }
+
+    /// [`hud`](Self::hud) beside the screen point `at` instead of the pointer: values tied to a place that stays put
+    /// while the pointer moves, such as a brush resize's circle.
+    pub fn hud_at(&mut self, at: Pos2, rows: Vec<(Label, String)>) {
+        self.requests.hud = Some((rows, Some(at)));
     }
 
     /// Asks for another pass (an animation, a held key that repeats).

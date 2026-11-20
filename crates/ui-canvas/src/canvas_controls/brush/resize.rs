@@ -1,6 +1,7 @@
 //! Photoshop's on-canvas brush resize.
 
 use super::{FalloffPreview, TipFalloff};
+use crate::canvas::ToolContext;
 use crate::canvas_controls::CanvasControlWords;
 use crate::runtime::env::{Label, UnitKind, Units};
 use crate::style::DataColor;
@@ -121,7 +122,8 @@ impl ResizeRun {
 /// resizes the brush instead of painting. Moving right makes the diameter bigger and down makes the level harder, in
 /// screen directions however the view is turned or flipped and in every text direction. The circle stays where the
 /// press was, tinted by the tip's falloff ([`preview`](Self::preview)); the tool hides the pointer while
-/// [`active`](Self::active), and the readout ([`readout_rows`](Self::readout_rows)) follows the pointer.
+/// [`active`](Self::active), and the readout ([`show_readout`](Self::show_readout)) sits beside the circle's centre,
+/// so it stays put while the pointer sets the values.
 ///
 /// The gesture reports [`ResizeStep`]s. It has no keyboard path (Photoshop has none): the bracket keys and the
 /// Shift bracket keys are the app's size and hardness commands.
@@ -231,8 +233,8 @@ impl BrushResize {
         })
     }
 
-    /// The rows of the readout beside the pointer: the diameter in whole pixels and the level (hardness, opacity or
-    /// density) in whole percents. No rows when no resize runs. The tool hands them to `ToolContext::readout`.
+    /// The rows of the readout: the diameter in whole pixels and the level (hardness, opacity or density) in whole
+    /// percents. No rows when no resize runs. The tool hands them to [`show_readout`](Self::show_readout).
     pub fn readout_rows(&self, units: &Units, words: &CanvasControlWords) -> Vec<(Label, String)> {
         let Some(run) = &self.run else { return Vec::new() };
         let label = match run.options.level {
@@ -243,5 +245,20 @@ impl BrushResize {
         let pixels = units.pixels(run.now.diameter.round().max(0.0));
         let level = units.text(UnitKind::Percent, run.now.level * PERCENT, 0..=0);
         vec![(words.diameter.clone(), pixels), (label.clone(), level)]
+    }
+
+    /// Asks `cx` for `rows` as a hud beside the press point, the circle's centre, so the readout stays put while the
+    /// pointer moves away from it to set the values. Beside the pointer when the canvas has no view or the press point
+    /// does not map to the screen. Nothing when no resize runs or `rows` is empty.
+    pub fn show_readout(&self, cx: &mut ToolContext<'_>, rows: Vec<(Label, String)>) {
+        let Some(run) = &self.run else { return };
+        if rows.is_empty() {
+            return;
+        }
+        let at = cx.space().map(|space| space.view.to_screen(run.anchor)).filter(|at| at.x.is_finite() && at.y.is_finite());
+        match at {
+            Some(at) => cx.hud_at(at, rows),
+            None => cx.hud(rows),
+        }
     }
 }
