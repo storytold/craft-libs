@@ -343,6 +343,11 @@ impl Fixture {
         self.set_root(|root| root.density = density)
     }
 
+    /// The component set.
+    pub fn set(&mut self, set: craft_theme::ComponentSet) -> &mut Self {
+        self.root_value(set)
+    }
+
     /// The interface scale.
     pub fn scale(&mut self, scale: Scale) -> &mut Self {
         self.set_root(|root| root.scale = scale)

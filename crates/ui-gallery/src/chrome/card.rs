@@ -53,6 +53,8 @@ pub struct Look {
     pub direction: Option<Direction>,
     /// The control size.
     pub size: Option<ControlSize>,
+    /// The component set.
+    pub set: Option<craft_theme::ComponentSet>,
 }
 
 /// One story a card shows.
@@ -434,6 +436,9 @@ impl Host<'_> {
                 env.direction = look.direction;
                 env.size = look.size;
                 env.wheel = gated.then_some(craft_ui::runtime::env::WheelScope::Gated);
+                if let Some(set) = look.set {
+                    env.values.set(set);
+                }
             },
             |ui| match region {
                 Some(key) => inspect::record(ui, key, |ui| show(ui, data)),

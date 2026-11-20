@@ -4,7 +4,7 @@
 use super::card::Look;
 use super::overview::{Spec, SpecStory, apply, grid, on_background, selected_type, target_story};
 use super::panels::Panels;
-use crate::viewer::{DIRECTIONS, MODES, PanelId, VariantAxis, entry_of};
+use crate::viewer::{DIRECTIONS, MODES, PanelId, SETS, VariantAxis, entry_of};
 use craft_i18n::Direction;
 use craft_theme::variant::Tone;
 use craft_theme::{ControlSize, Mode, ModeChoice};
@@ -29,6 +29,7 @@ fn noun(axis: VariantAxis) -> &'static str {
         VariantAxis::Mode => "mode",
         VariantAxis::Contrast => "contrast",
         VariantAxis::Size => "size",
+        VariantAxis::Set => "set",
         VariantAxis::Direction => "direction",
         VariantAxis::ControlSize => "control size",
         VariantAxis::DirectionAndControlSize => "direction and control size",
@@ -65,6 +66,9 @@ fn values(axis: VariantAxis) -> Option<Vec<Value>> {
                 .map(|choice| Value { label: choice.label, look: Look { direction: direction(choice.value), ..Look::default() } })
                 .collect(),
         ),
+        VariantAxis::Set => {
+            Some(SETS.0.iter().map(|choice| Value { label: choice.label, look: Look { set: Some(choice.value), ..Look::default() } }).collect())
+        }
         VariantAxis::ControlSize => {
             Some(sizes.iter().map(|(size, label)| Value { label, look: Look { size: Some(*size), ..Look::default() } }).collect())
         }
@@ -122,10 +126,11 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
     let cards: Vec<Spec> = match (target, values(axis)) {
         (Some((type_name, index)), Some(values)) => {
             let Some(entry) = entry_of(type_name) else { return false };
-            let (mode, direction) = (p.env.appearance(ui.ctx()).mode, p.env.direction);
+            let (mode, direction, set) = (p.env.appearance(ui.ctx()).mode, p.env.direction, p.env.component_set());
             let shown = |look: &Look| match axis {
                 VariantAxis::Mode => look.mode == Some(mode),
                 VariantAxis::Direction => look.direction == Some(direction),
+                VariantAxis::Set => look.set == Some(set),
                 _ => false,
             };
             values
@@ -179,6 +184,9 @@ pub(super) fn show(ui: &mut Ui, p: &mut Panels<'_>, tab: PanelId) -> bool {
         }
         if let Some(direction) = card.look.direction {
             p.env.direction = direction;
+        }
+        if let Some(set) = card.look.set {
+            p.env.values.set(set);
         }
         closed = true;
     }
