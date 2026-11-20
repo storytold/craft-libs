@@ -4,8 +4,9 @@ use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
-    PathEdit, PathSelection, PathTool, SegmentMark,
+    PathEdit, PathMode, PathSelection, PathTool, PenMode, SegmentMark,
 };
+use craft_keymap::Mods;
 use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
@@ -1279,14 +1280,16 @@ fn a_convert_drag_without_alt_keeps_the_mirrored_pair() {
 }
 
 // The ⌥ presses the issue lists as not measured keep today's mirrored pair: on a smooth anchor, with ⇧ held as
-// well, and on the end anchor of an open subpath (guards, each passes before and after).
+// well, and on either end anchor of an open subpath (its first, knot 0, and its last, `knot + 1 == len`; guards,
+// each passes before and after).
 #[trial]
 fn alt_convert_keeps_todays_pair_for_the_unmeasured_presses() {
     let near1 = |a: Point, b: Point| a.distance(b) < 1e-6;
     let cases = [
         ("smooth anchor", 1u64, (260.0, 60.0), (0, 2), (310.0, 90.0), (210.0, 30.0)),
         ("corner with ⌥⇧", 2, (140.0, 200.0), (0, 1), (190.0, 230.0), (90.0, 170.0)),
-        ("open subpath end", 1, (60.0, 60.0), (0, 0), (110.0, 90.0), (10.0, 30.0)),
+        ("open subpath first anchor", 1, (60.0, 60.0), (0, 0), (110.0, 90.0), (10.0, 30.0)),
+        ("open subpath last anchor", 1, (340.0, 160.0), (0, 3), (390.0, 190.0), (290.0, 130.0)),
     ];
     for (name, path, at, knot, out, in_ctrl) in cases {
         let mut h = two_paths();
@@ -1334,6 +1337,10 @@ fn the_alt_convert_press_emits_the_alone_flag() {
         last(&mut two_paths(), p(60.0, 60.0), egui::Modifiers::ALT),
         Some(PathEdit::Convert { path: 1, out: Some(_), alone: false, .. })
     ));
+    assert!(matches!(
+        last(&mut two_paths(), p(340.0, 160.0), egui::Modifiers::ALT),
+        Some(PathEdit::Convert { path: 1, out: Some(_), alone: false, .. })
+    ));
     let mut h = two_paths();
     h.update(|st| st.tool = BezierTool::Convert);
     let at = h.screen(p(140.0, 200.0));
@@ -1342,6 +1349,64 @@ fn the_alt_convert_press_emits_the_alone_flag() {
     h.release_at(at);
     h.fixture.hold(egui::Modifiers::NONE);
     assert!(matches!(h.last_change(), Some(PathEdit::Convert { path: 2, out: None, alone: false, .. })), "{:?}", h.last_change());
+}
+
+// The Pen with ⌥ is Convert Point: `PathMode::resolve` gives the overlay `BezierTool::Convert` for that press (the
+// ⌥ row comes before the Pen's Auto Add/Delete), so it takes today's one-handle rule too. PhotoCraft #12740 measured
+// the Convert Point tool, not this route: unmeasured but changed, and pinned here.
+#[trial]
+fn the_pen_with_alt_runs_convert_and_pulls_one_handle_too() {
+    let mode = PathMode::resolve(PathTool::Pen, Mods::ALT, false, true);
+    assert_eq!(mode.bezier, BezierTool::Convert, "the Pen with ⌥ runs the overlay's Convert tool");
+    assert_eq!(mode.draft, Some(PenMode::Pen), "and keeps the pen draft shown");
+    let mut h = two_paths();
+    h.update(|st| st.tool = mode.bezier);
+    let at = h.screen(p(140.0, 200.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.drag(at, vec2(50.0, 30.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    assert!(matches!(h.last_change(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: true, .. })), "{:?}", h.last_change());
+    let st = h.state.borrow();
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "one handle out, the other stays: {k:?}");
+}
+
+// The flag follows the modifiers held at the press: ⌥ at the press and released mid-drag still latches it, so the
+// preview and the commit both pull out one handle only; ⌥ pressed mid-drag on a press that began without it keeps
+// today's mirrored pair. Releasing or pressing ⌥ during a drag is a not-measured case per PhotoCraft #12740: the
+// latch is the Add Anchor ⌥ pattern (#2284), and the second half is a guard that passes before and after.
+#[trial]
+fn the_alone_flag_latches_at_the_press_and_survives_alt_released_mid_drag() {
+    let gesture = |h: &mut Harness, mods: [egui::Modifiers; 2]| {
+        let at = h.screen(p(140.0, 200.0));
+        h.fixture.hold(mods[0]);
+        h.press_at(at);
+        h.move_to(at + vec2(25.0, 15.0));
+        h.fixture.hold(mods[1]);
+        h.move_to(at + vec2(50.0, 30.0));
+        h.release_at(at + vec2(50.0, 30.0));
+        h.fixture.hold(egui::Modifiers::NONE);
+    };
+    // ⌥ at the press, released before the release: still one handle.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    gesture(&mut h, [egui::Modifiers::ALT, egui::Modifiers::NONE]);
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: true, .. })), "{:?}", st.changes);
+        let k = st.paths[1].subpaths[0].knots[1];
+        assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(140.0, 200.0)) && !k.smooth, "the released ⌥ does not undo the latch: {k:?}");
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
+    }
+    // No ⌥ at the press, ⌥ held mid-drag: today's mirrored pair.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    gesture(&mut h, [egui::Modifiers::NONE, egui::Modifiers::ALT]);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::Convert { path: 2, out: Some(_), alone: false, .. })), "{:?}", st.changes);
+    let k = st.paths[1].subpaths[0].knots[1];
+    assert!(near(k.out_ctrl, p(190.0, 230.0)) && near(k.in_ctrl, p(90.0, 170.0)) && k.smooth, "the mid-drag ⌥ does not latch: {k:?}");
 }
 
 // The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with the path targeted

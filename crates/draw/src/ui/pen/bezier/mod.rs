@@ -481,7 +481,7 @@ impl<'a> BezierOverlay<'a> {
                 let Some(knot) = path.knot(knot_ref) else { continue };
                 let anchor = view.to_screen(knot.anchor);
                 let sub = &path.subpaths[knot_ref.subpath];
-                let interior = sub.closed || (knot_ref.knot != 0 && knot_ref.knot + 1 != sub.knots.len());
+                let interior = Self::interior(sub, knot_ref);
                 let anchor_shown = self.selection.shows(path.key, knot_ref.subpath);
                 if near.contains(anchor) {
                     items.push(Item {
@@ -561,6 +561,12 @@ impl<'a> BezierOverlay<'a> {
 
     fn path(paths: &[EditPath], key: u64) -> Option<&EditPath> {
         paths.iter().find(|p| p.key == key)
+    }
+
+    /// Whether `knot` is an interior anchor of `sub`, the `interior` of [`BezierTool::takes`]: in a closed subpath, or
+    /// with an anchor on each side. Neither end of an open subpath is interior: those are the pen draft's.
+    fn interior(sub: &EditSubpath, knot: KnotRef) -> bool {
+        sub.closed || (knot.knot != 0 && knot.knot + 1 != sub.knots.len())
     }
 
     fn subpath_anchors(paths: &[EditPath], key: u64, subpath: usize) -> Vec<KnotRef> {
@@ -675,11 +681,10 @@ impl<'a> BezierOverlay<'a> {
                 // ⌥ held at a press on a corner anchor: the drag pulls out one handle and the other
                 // stays where it is (PhotoCraft #12740, measured on a closed corner square). The
                 // presses the issue lists as not measured keep today's mirrored pair: a smooth
-                // anchor, ⇧ held with ⌥, and the end anchor of an open subpath.
+                // anchor, ⇧ held with ⌥, and either end anchor of an open subpath.
                 let corner = knot_at(path, knot).is_some_and(|k| !k.smooth);
-                let open_end = Self::path(paths, path)
-                    .is_some_and(|p| p.subpaths.get(knot.subpath).is_some_and(|s| !s.closed && (knot.knot == 0 || knot.knot + 1 == s.knots.len())));
-                Target::Convert { path, knot, alone: mods.alt && !mods.shift && corner && !open_end }
+                let interior = Self::path(paths, path).and_then(|p| p.subpaths.get(knot.subpath)).is_some_and(|s| Self::interior(s, knot));
+                Target::Convert { path, knot, alone: mods.alt && !mods.shift && corner && interior }
             }
             (_, BezierHit::Anchor { path, knot }) => {
                 let from = knot_at(path, knot).map_or(Point::ZERO, |k| k.anchor);
