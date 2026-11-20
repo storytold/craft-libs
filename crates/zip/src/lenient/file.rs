@@ -14,7 +14,8 @@ const ZIP64_RECORD: u64 = 56;
 /// The entry named `name` (not a folder), decompressed to at most `max_bytes` and checked against
 /// its CRC-32. `None`: the archive has no such entry.
 pub fn read_named_entry(file: &mut (impl Read + Seek), name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>, ZipError> {
-    let (archive, prefix) = read_directory(file, MAX_DIRECTORY, usize::MAX)?;
+    let (directory, prefix, _) = read_directory(file, MAX_DIRECTORY)?;
+    let archive = zip::parse(&directory, usize::MAX)?;
     let Some(mut entry) = archive.entries.into_iter().find(|e| e.name == name && !e.is_dir) else { return Ok(None) };
     if entry.compressed_size > max_bytes.saturating_add(1 << 16) {
         return Err(ZipError::TooLarge(max_bytes));
@@ -30,18 +31,38 @@ pub fn read_named_entry(file: &mut (impl Read + Seek), name: &str, max_bytes: u6
     zip::read_entry(&local, &entry, max_bytes).map(Some)
 }
 
-/// Read ordinary central directory records in order, retaining repeated names. Only the tail
-/// and bounded directory are read; local headers and payloads are not opened. Keep extraction
-/// and its independent validation on the caller's strict reader.
-pub fn directory_entries(file: &mut (impl Read + Seek), max_directory_bytes: u64, max_entries: usize) -> Result<Vec<zip::ZipEntry>, ZipError> {
-    let (archive, _) = read_directory(file, max_directory_bytes.min(MAX_DIRECTORY), max_entries)?;
-    if archive.truncated || u64::try_from(archive.entries.len()).ok() != Some(archive.declared_entries) {
-        return Err(ZipError::Truncated("directory entries"));
-    }
-    Ok(archive.entries)
+/// The original bytes and absolute offset of one central record, before name decoding.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DirectoryRecordName {
+    pub name: Vec<u8>,
+    pub offset: u64,
 }
 
-fn read_directory(file: &mut (impl Read + Seek), max_directory_bytes: u64, max_entries: usize) -> Result<(zip::ZipArchive, u64), ZipError> {
+/// List original central records in order, retaining repeats and reading only bounded metadata.
+pub fn directory_record_names(
+    file: &mut (impl Read + Seek),
+    max_directory_bytes: u64,
+    max_entries: usize,
+) -> Result<Vec<DirectoryRecordName>, ZipError> {
+    let (directory, _, start) = read_directory(file, max_directory_bytes.min(MAX_DIRECTORY))?;
+    let mut names = Vec::new();
+    let archive = zip::parse_directory(&directory, max_entries, None, Some(&mut names))?;
+    if archive.truncated || u64::try_from(names.len()).ok() != Some(archive.declared_entries) {
+        return Err(ZipError::Truncated("directory entries"));
+    }
+    names
+        .into_iter()
+        .map(|(relative, name)| {
+            let offset = u64::try_from(relative)
+                .ok()
+                .and_then(|relative| start.checked_add(relative))
+                .ok_or_else(|| ZipError::Corrupt("directory record offset overflows".into()))?;
+            Ok(DirectoryRecordName { name, offset })
+        })
+        .collect()
+}
+
+fn read_directory(file: &mut (impl Read + Seek), max_directory_bytes: u64) -> Result<(Vec<u8>, u64, u64), ZipError> {
     let len = file.seek(SeekFrom::End(0)).map_err(io)?;
     let tail_start = len.saturating_sub(zip::EOCD_SEARCH as u64);
     let tail = read_at(file, tail_start, len - tail_start)?;
@@ -108,8 +129,7 @@ fn read_directory(file: &mut (impl Read + Seek), max_directory_bytes: u64, max_e
         put(&mut end, 16, &[0; 4])?;
     }
     directory.extend_from_slice(&end);
-    let archive = zip::parse(&directory, max_entries)?;
-    Ok((archive, prefix))
+    Ok((directory, prefix, start))
 }
 
 /// Overwrite `bytes` at `at` in a record read from the file.
@@ -154,10 +174,37 @@ mod tests {
         .unwrap();
         assert!(strict.has_duplicate_names());
         assert_eq!(strict.len(), 2);
-        let records = directory_entries(&mut Cursor::new(&bytes), 4096, 3).unwrap();
-        assert_eq!(records.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["notes.txt", "notes.txt", "index.txt"]);
-        assert!(matches!(directory_entries(&mut Cursor::new(&bytes), 8, 3), Err(ZipError::TooLarge(8))));
-        assert!(directory_entries(&mut Cursor::new(&bytes), 4096, 2).is_err());
+        let records = directory_record_names(&mut Cursor::new(&bytes), 4096, 3).unwrap();
+        assert_eq!(records.iter().map(|r| r.name.as_slice()).collect::<Vec<_>>(), [b"notes.txt".as_slice(), b"notes.txt", b"index.txt"]);
+        assert_eq!(strict.index_for_central_record(records[2].offset), Some(1));
+        assert!(matches!(directory_record_names(&mut Cursor::new(&bytes), 8, 3), Err(ZipError::TooLarge(8))));
+        assert!(directory_record_names(&mut Cursor::new(&bytes), 4096, 2).is_err());
+    }
+
+    #[test]
+    fn unicode_path_alias_does_not_replace_the_original_record_name() {
+        use std::io::Write;
+        let raw = "catalog.lrcat";
+        let alias = "Café.lrcat";
+        let mut extra = vec![1];
+        extra.extend_from_slice(&zip::crc32(raw.as_bytes()).to_le_bytes());
+        extra.extend_from_slice(alias.as_bytes());
+        let mut opts = ::zip::write::FullFileOptions::default().compression_method(::zip::CompressionMethod::Stored);
+        opts.add_extra_field(0x7075, extra, false).unwrap();
+        let mut writer = ::zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file(raw, opts).unwrap();
+        writer.write_all(b"catalog").unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let records = directory_record_names(&mut Cursor::new(&bytes), 4096, 1).unwrap();
+        assert_eq!(records[0].name, raw.as_bytes());
+        assert_eq!(read(&bytes, alias).unwrap().as_deref(), Some(b"catalog".as_slice()));
+        let mut strict = crate::SeekableArchive::open(
+            Cursor::new(&bytes),
+            crate::SeekableLimits { max_entries: 1, max_metadata_bytes: 4096, max_total_bytes: 64 },
+        )
+        .unwrap();
+        assert_eq!(strict.entry_name(0).unwrap().as_deref(), Some(alias));
+        assert_eq!(strict.index_for_central_record(records[0].offset), Some(0));
     }
 
     /// The same archive with a ZIP64 end record and locator before its classic end record, whose

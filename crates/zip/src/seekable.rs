@@ -85,6 +85,12 @@ impl<R: Read + Seek> SeekableArchive<R> {
         self.zip.has_duplicate_names()
     }
 
+    /// Locate a surviving entry by the absolute offset of its central directory record,
+    /// without decoding its name or reading the local entry header.
+    pub fn index_for_central_record(&self, offset: u64) -> Option<usize> {
+        (0..self.zip.len()).find(|&i| self.zip.by_index_data(i).is_ok_and(|e| e.central_header_start() == offset))
+    }
+
     /// The name at `index`, copied on demand.
     pub fn entry_name(&mut self, index: usize) -> Result<Option<String>, Error> {
         if index >= self.zip.len() {
