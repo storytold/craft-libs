@@ -44,8 +44,22 @@ pub struct Surface {
     pub tri: u32,
 }
 
+/// The edge function of `a → b` at `p`, `(b - a) × (p - a)`, rounded once from the exact value
+/// of its six products. Each product is split into its rounded value and its rounding error,
+/// and the twelve parts are added with Neumaier's compensation, so corners far from `p` do not
+/// cancel the digits that place `p` against the edge.
 fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
-    (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    let products = [(b.x, p.y), (-b.x, a.y), (-a.x, p.y), (-b.y, p.x), (b.y, a.x), (a.y, p.x)];
+    let (mut sum, mut compensation) = (0.0f64, 0.0f64);
+    for (x, y) in products {
+        let high = x * y;
+        for part in [high, x.mul_add(y, -high)] {
+            let next = sum + part;
+            compensation += if sum.abs() >= part.abs() { (sum - next) + part } else { (part - next) + sum };
+            sum = next;
+        }
+    }
+    sum + compensation
 }
 
 /// Vertex indices of triangle `t` of an index buffer.
@@ -268,21 +282,29 @@ impl Bins {
             };
             for &t in list {
                 let Some(([pa, pb, pc], area, [x0, x1, y0, y1])) = texel_triangle(uvs, indices, t as usize, size) else { continue };
-                // A texel center within 1e-6 texel of an edge, plus the `f64` rounding of the edge
-                // function at these coordinates, counts as inside: both triangles that share the
-                // edge write it. The slack is at most 1e-3 of the triangle's smallest height, so
-                // far corners do not widen a thin triangle. Each edge function is its distance
-                // times the edge's length.
-                let reach = [pa, pb, pc].iter().map(|q| q.abs().max_element()).fold(f64::from(size.max_element()), f64::max);
-                let lengths = [(pb, pc), (pc, pa), (pa, pb)].map(|(a, b)| (b - a).length());
-                let lowest = area.abs() / lengths.iter().copied().fold(0.0, f64::max);
-                let slack = (1e-6 + 8.0 * f64::EPSILON * reach).min(1e-3 * lowest);
-                let eps = lengths.map(|length| -slack * length);
                 let (y0, y1) = (y0.max(row0), y1.min(row0 + rows));
+                if y0 >= y1 {
+                    continue;
+                }
+                // Each edge function is taken in full at the first texel center of the box and
+                // stepped from there along its gradient, so its rounding at the other centers is
+                // a few `f64` steps of the box's size rather than of the corners' coordinates.
+                // Each edge function is its distance times the edge's length. A texel center
+                // within 1e-6 texel of an edge, plus that rounding, counts as inside: both
+                // triangles that share the edge write it. The slack is at most 1e-3 of the
+                // triangle's smallest height, so a thin triangle is not widened.
+                let start = DVec2::new(f64::from(x0) + 0.5, f64::from(y0) + 0.5);
+                let edges = [(pb, pc), (pc, pa), (pa, pb)];
+                let base = edges.map(|(a, b)| edge(a, b, start) * area.signum());
+                let step = edges.map(|(a, b)| DVec2::new(a.y - b.y, b.x - a.x) * area.signum());
+                let lengths = edges.map(|(a, b)| (b - a).length());
+                let lowest = area.abs() / lengths.iter().copied().fold(0.0, f64::max);
+                let slack = (1e-6 + 8.0 * f64::EPSILON * f64::from(size.max_element())).min(1e-3 * lowest);
+                let eps = lengths.map(|length| -slack * length);
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        let p = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
-                        let (w0, w1, w2) = (edge(pb, pc, p) * area.signum(), edge(pc, pa, p) * area.signum(), edge(pa, pb, p) * area.signum());
+                        let d = DVec2::new(f64::from(x - x0), f64::from(y - y0));
+                        let [w0, w1, w2] = [0, 1, 2].map(|i| base[i] + (step[i].x * d.x + step[i].y * d.y));
                         if w0 < eps[0] || w1 < eps[1] || w2 < eps[2] {
                             continue;
                         }
@@ -510,6 +532,16 @@ mod tests {
         // The same triangle mirrored to cover u + v >= 0 covers every texel center.
         let g = UvGBuffer::from_slices(&[[m, m], [-m, m], [m, -m]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
         assert_eq!(g.covered_count(), 64);
+        // The same triangles with corners up to 1e18 texels away, the farthest that is drawn.
+        for m in [1e15_f32, 1.25e17] {
+            let g = UvGBuffer::from_slices(&[[-m, -m], [m, -m], [-m, m]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+            assert_eq!(g.covered_count(), 0, "{m}");
+            let g = UvGBuffer::from_slices(&[[m, m], [-m, m], [m, -m]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+            assert_eq!(g.covered_count(), 64, "{m}");
+            assert!(g.bary.iter().all(|[b1, b2]| (0.0..=1.0).contains(b1) && (0.0..=1.0).contains(b2)), "{m}: {:?}", g.bary);
+            let g = UvGBuffer::from_slices(&[[-m, 0.0], [m, 0.0], [0.0, 0.0125]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+            assert_eq!(g.covered_count(), 0, "{m}");
+        }
     }
 
     /// The `what`, `got` and `limit` of a `TooLarge` error, `None` for any other result.
