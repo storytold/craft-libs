@@ -31,10 +31,23 @@
 #![forbid(unsafe_code)]
 // The helpers the formats share are not all used by every subset of them.
 #![cfg_attr(
-    not(all(feature = "stl", feature = "obj", feature = "ply", feature = "gltf", feature = "fbx", feature = "threemf")),
+    not(all(
+        feature = "stl",
+        feature = "obj",
+        feature = "ply",
+        feature = "gltf",
+        feature = "fbx",
+        feature = "threemf",
+        feature = "dae",
+        feature = "abc"
+    )),
     allow(dead_code, unused_imports)
 )]
 
+#[cfg(feature = "abc")]
+pub mod abc;
+#[cfg(feature = "dae")]
+pub mod dae;
 #[cfg(feature = "fbx")]
 pub mod fbx;
 #[cfg(feature = "gltf")]
