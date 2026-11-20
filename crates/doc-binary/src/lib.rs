@@ -753,6 +753,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 pb.mark = char_props(chpx, ctx.fonts, &CharProps::default());
                 // A tracked paragraph mark: an inserted or deleted paragraph break.
                 ctx.revs.mark(&mut pb.mark, chpx, ctx.pieces.piece_prm(cp));
+                // A hyperlink's result met so far stays in this paragraph.
+                flush_link_result(&mut pb, field.as_mut(), ctx.work);
                 let done = std::mem::take(&mut pb);
                 out.push(ParaOut {
                     para: Paragraph {
@@ -785,8 +787,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 {
                     // The instruction is complete here: a hyperlink's result keeps the
                     // boundaries and objects met inside it, at their places in its text.
-                    let link = hyperlink_target(f.instr.trim()).is_some();
-                    f.sep = Some(FieldResult { objects: link.then(Vec::new), ..FieldResult::default() });
+                    f.sep = Some(FieldResult { link: hyperlink_target(f.instr.trim()), ..FieldResult::default() });
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -865,7 +866,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     }
     // A hyperlink left unfinished at the end of the walk still writes the boundaries and objects
     // it kept, so no bookmark loses its start or its end and no picture is lost.
-    for (_, props, obj) in field.and_then(|f| f.sep).and_then(|r| r.objects).unwrap_or_default() {
+    for (_, props, obj) in field.and_then(|f| f.sep).map(|r| r.objects).unwrap_or_default() {
         push_object(&mut pb, obj, props);
     }
     if !pb.text.is_empty() {
@@ -929,10 +930,13 @@ struct FieldResult {
     text: String,
     /// (byte length in `text`, formatting) in order; adjacent runs differ.
     runs: Vec<(usize, CharProps)>,
-    /// For a hyperlink, the inline objects (bookmark boundaries, pictures, floating shapes, note
-    /// references) met inside the result: (byte offset in `text`, anchor formatting, object), in
-    /// order. `None` for other fields, whose objects are written as met.
-    objects: Option<Vec<(usize, CharProps, InlineObject)>>,
+    /// A hyperlink's target. Only a hyperlink's result keeps the objects met inside it, and it is
+    /// written out at each paragraph or cell mark it spans ([`flush_link_result`]).
+    link: Option<String>,
+    /// The inline objects (bookmark boundaries, pictures, floating shapes, note references) met
+    /// inside a hyperlink's result: (byte offset in `text`, anchor formatting, object), in order.
+    /// Other fields write their objects as met.
+    objects: Vec<(usize, CharProps, InlineObject)>,
 }
 
 impl FieldResult {
@@ -948,13 +952,11 @@ impl FieldResult {
     /// Keeps an object at the current end of the text, if this result keeps them; otherwise
     /// hands it back to be written now.
     fn keep(&mut self, obj: InlineObject, props: CharProps) -> Option<(InlineObject, CharProps)> {
-        match self.objects.as_mut() {
-            Some(objects) => {
-                objects.push((self.text.len(), props, obj));
-                None
-            }
-            None => Some((obj, props)),
+        if self.link.is_none() {
+            return Some((obj, props));
         }
+        self.objects.push((self.text.len(), props, obj));
+        None
     }
 }
 
@@ -984,8 +986,33 @@ fn anchor_props(ctx: &WalkCtx<'_>, cp: u32) -> CharProps {
     props
 }
 
-/// Emit a finished field: HYPERLINK keeps its result text as a linked run; every other
-/// field becomes one inline object with its cached result.
+/// Emit a finished field: HYPERLINK keeps its result text as linked runs ([`write_link_result`]);
+/// every other field becomes one inline object with its cached result.
+fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
+    let instr = f.instr.trim().to_string();
+    let result = f.sep.unwrap_or_default();
+    if let Some(target) = hyperlink_target(&instr) {
+        write_link_result(pb, result, &target, work);
+        return;
+    }
+    // Other fields become one object; their objects (none are kept today) go before it.
+    for (_, props, obj) in result.objects {
+        push_object(pb, obj, props);
+    }
+    pb.push('\u{FFFC}', f.anchor);
+    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
+}
+
+/// Writes the part of a hyperlink's result held so far before a paragraph or cell mark, so that
+/// each part stays in the paragraph it was met in; the field goes on with an empty result.
+fn flush_link_result(pb: &mut ParaBuild, field: Option<&mut FieldBuild>, work: &Work) {
+    let Some(result) = field.and_then(|f| f.sep.as_mut()) else { return };
+    let Some(target) = result.link.take() else { return };
+    write_link_result(pb, std::mem::take(result), &target, work);
+    result.link = Some(target);
+}
+
+/// Writes a hyperlink's result as linked runs.
 ///
 /// The target is copied once per run of equally formatted result text, not per character,
 /// and each copy is charged to `work` ([`MAX_WORK`]); once that is spent the rest of the
@@ -993,51 +1020,39 @@ fn anchor_props(ctx: &WalkCtx<'_>, cp: u32) -> CharProps {
 /// references met inside the result are written at their places in its text, splitting a run
 /// where one falls inside it, and are inside the link as a `w:hyperlink`'s are, so one field is
 /// written back (#2286).
-fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
-    let instr = f.instr.trim().to_string();
-    let result = f.sep.unwrap_or_default();
-    let mut kept = result.objects.unwrap_or_default().into_iter().peekable();
-    if let Some(target) = hyperlink_target(&instr) {
-        let cost = target.len() as u64;
-        let in_link = |mut props: CharProps| {
-            if work.charge(cost, Cost::LinkTarget) {
-                props.link = Some(target.clone());
+fn write_link_result(pb: &mut ParaBuild, result: FieldResult, target: &str, work: &Work) {
+    let cost = target.len() as u64;
+    let in_link = |mut props: CharProps| {
+        if work.charge(cost, Cost::LinkTarget) {
+            props.link = Some(target.to_owned());
+        }
+        props
+    };
+    let mut kept = result.objects.into_iter().peekable();
+    let mut at = 0usize;
+    'runs: for (len, mut props) in result.runs {
+        let end = at.saturating_add(len);
+        loop {
+            while let Some((_, props, obj)) = kept.next_if(|(o, _, _)| *o <= at) {
+                push_object(pb, obj, in_link(props));
             }
-            props
-        };
-        let mut at = 0usize;
-        'runs: for (len, mut props) in result.runs {
-            let end = at.saturating_add(len);
-            loop {
-                while let Some((_, props, obj)) = kept.next_if(|(o, _, _)| *o <= at) {
-                    push_object(pb, obj, in_link(props));
-                }
-                // The text up to the next object inside this run, or to the run's end.
-                let stop = kept.peek().map_or(end, |(o, _, _)| (*o).min(end));
-                let Some(piece) = result.text.get(at..stop) else { break 'runs };
-                let last = stop >= end;
-                let mut linked = if last { std::mem::take(&mut props) } else { props.clone() };
-                if work.charge(cost, Cost::LinkTarget) {
-                    linked.link = Some(target.clone());
-                }
-                let mut chars = piece.chars();
-                if let Some(first) = chars.next() {
-                    pb.push(first, linked);
-                    chars.for_each(|c| pb.extend(c));
-                }
-                at = stop;
-                if last {
-                    break;
-                }
+            // The text up to the next object inside this run, or to the run's end.
+            let stop = kept.peek().map_or(end, |(o, _, _)| (*o).min(end));
+            let Some(piece) = result.text.get(at..stop) else { break 'runs };
+            let last = stop >= end;
+            let linked = in_link(if last { std::mem::take(&mut props) } else { props.clone() });
+            let mut chars = piece.chars();
+            if let Some(first) = chars.next() {
+                pb.push(first, linked);
+                chars.for_each(|c| pb.extend(c));
+            }
+            at = stop;
+            if last {
+                break;
             }
         }
-        kept.for_each(|(_, props, obj)| push_object(pb, obj, in_link(props)));
-        return;
     }
-    // Other fields become one object; their objects (none are kept today) go before it.
-    kept.for_each(|(_, props, obj)| push_object(pb, obj, props));
-    pb.push('\u{FFFC}', f.anchor);
-    pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
+    kept.for_each(|(_, props, obj)| push_object(pb, obj, in_link(props)));
 }
 
 /// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.

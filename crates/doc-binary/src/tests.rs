@@ -1741,6 +1741,36 @@ fn a_bookmark_around_a_linked_picture_encloses_it() {
     assert!(p0.runs.iter().all(|r| r.props.link.as_deref() == Some("http://x")), "runs: {:?}", p0.runs);
 }
 
+/// #2286: a hyperlink's result that spans a paragraph mark keeps each part, and the picture in
+/// it, in the paragraph it is in, all linked; so does an unfinished one before the last mark.
+#[test]
+fn a_hyperlink_over_two_paragraphs_keeps_each_part_in_its_paragraph() {
+    let text = "P\u{13}HYPERLINK http://x\u{14}a\u{1}\rb\u{15}\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        data_stream: picf_with_png(16),
+        chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let [p0, p1] = paras.as_slice() else { panic!("paragraphs: {paras:?}") };
+    assert_eq!(p0.text, "Pa\u{FFFC}");
+    assert!(matches!(p0.objects.as_slice(), [craft_wordmodel::para::InlineObject::Image { .. }]), "objects: {:?}", p0.objects);
+    assert_eq!(p0.props_of_char(0).link, None);
+    assert_eq!(p0.props_of_char(1).link.as_deref(), Some("http://x"));
+    assert_eq!(p0.props_of_char(2).link.as_deref(), Some("http://x"));
+    assert_eq!(p1.text, "b");
+    assert_eq!(p1.props_of_char(0).link.as_deref(), Some("http://x"));
+
+    let text = "Go \u{13}HYPERLINK http://x\u{14}ab\r";
+    let doc = read(&struct_doc(&structured_spec(text, text.chars().count() as u32))).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "Go ab");
+    assert_eq!(p0.props_of_char(3).link.as_deref(), Some("http://x"));
+}
+
 /// #2286: a hyperlink the walk never sees end still writes the boundaries kept in its result.
 #[test]
 fn an_unfinished_hyperlink_still_writes_its_bookmarks() {
