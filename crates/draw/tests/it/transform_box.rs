@@ -1250,3 +1250,28 @@ fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
         assert_eq!(h.state().quad, turned.quad, "the box never moved");
     }
 }
+
+/// An edge handle snaps only along its drag (measured on the reference): a ⇧ side drag on a box in perspective, whose
+/// handle starts 1 px off a snap line along the side, lands where it would with snapping off. Without that, the line
+/// would pull the handle along the side, and on a box in perspective that turns the dragged side.
+#[trial]
+fn an_edge_handle_snaps_only_along_its_drag() {
+    let quad = [Point::new(130.0, 80.0), Point::new(270.0, 80.0), Point::new(300.0, 220.0), Point::new(100.0, 220.0)];
+    let shift = Mods { shift: true, ..Mods::NONE };
+    let run = |snap: bool| {
+        let mut h = harness(BoxState::new(quad, Point::new(200.0, 150.0)), |config| {
+            config.snap = snap;
+            config.mods = Some(shift);
+            config.targets = vec![SnapTarget::new(craft_behavior::Axis::X, 149.0, SnapKind::Guide)];
+        });
+        let from = h.screen(Point::new(285.0, 150.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(50.0, 0.0))]);
+        frame(&mut h, vec![pointer::release(from + by(50.0, 0.0))]);
+        h.state().quad
+    };
+    let (off, on) = (run(false), run(true));
+    assert!(off.iter().zip(on).all(|(a, b)| a.distance(b) < 1e-6), "snapping off {off:?}, on {on:?}");
+}

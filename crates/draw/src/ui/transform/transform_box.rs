@@ -621,7 +621,14 @@ impl<'a> TransformBox<'a> {
             {
                 let off = grip.from - grabbed;
                 let (at, lines) = snap.point(to - off, mods, gesture);
-                (at + off, lines)
+                // An edge handle snaps only along its drag (the reference's): across the box's top edge for a side, along
+                // it for the top or bottom edge. A pull along the edge would turn a dragged side on a box in perspective.
+                let pull = at - (to - off);
+                let pull = match (grip.part, drag_axis(&grip.start.quad, grip.part)) {
+                    (BoxPart::Edge(_), Some(axis)) => axis * pull.dot(axis),
+                    _ => pull,
+                };
+                (to + pull, lines)
             }
             (BoxPart::Inside, Some(snap), _) if !distort_mode => {
                 let moved = bounds_of(&grip.start.quad) + (to - grip.from);
@@ -1424,6 +1431,19 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
         BoxPart::Pivot => Some(state.pivot),
         _ => None,
     }
+}
+
+/// The direction an edge of `quad` is dragged along: the top edge's direction for a side, its normal for the top or
+/// bottom edge; `None` for another part or a collapsed top edge.
+fn drag_axis(quad: &[Point; 4], part: BoxPart) -> Option<DocVec> {
+    let BoxPart::Edge(i) = part else { return None };
+    let top = quad[1] - quad[0];
+    let len = top.hypot();
+    if !(len.is_finite() && len > 1e-9) {
+        return None;
+    }
+    let uh = top / len;
+    Some(if i % 2 == 1 { uh } else { DocVec::new(-uh.y, uh.x) })
 }
 
 /// The bounds of `quad`.
