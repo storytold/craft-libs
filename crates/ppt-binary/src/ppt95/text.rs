@@ -17,6 +17,8 @@
 //! character formatting (24 bytes from +16) and five of paragraph formatting (52 bytes from
 //! +160), laid out as in the runs. Slide text carries its formatting in full, as copies of these.
 
+use std::cell::Cell;
+
 use craft_pptx::text::{Align, Anchor, BodyProps, Bullet, LevelStyle, ListStyle, ParaProps, RunKind, Spacing};
 use craft_pptx::{ColorRef, Fill, Paragraph, Rgba, Run, RunProps, TextBody};
 
@@ -71,6 +73,10 @@ pub(super) const OTHER: usize = 4;
 /// Characters read from one text at most: far beyond what PowerPoint 95 puts in a shape, so a
 /// huge character atom can't make a huge text body.
 pub(super) const MAX_CHARS: usize = 1 << 20;
+/// Paragraphs and runs made from the whole document's text at most. Each is about 2 to 4 KB, so
+/// a text of nothing but paragraph or line breaks would otherwise make gigabytes from a megabyte
+/// of file. That is far more than any PowerPoint 95 file probed holds.
+pub(super) const MAX_TEXT_ITEMS: usize = 1 << 16;
 /// Font and ruler slots read at most.
 const MAX_SLOTS: usize = 4096;
 /// Indent levels: PowerPoint 95 has five.
@@ -86,9 +92,22 @@ pub(super) struct Env {
     rulers: Vec<Option<Ruler>>,
     /// The master's text styles by text type: each level's character and paragraph formatting.
     styles: Vec<Option<[(CharRun, ParaRun); LEVELS]>>,
+    /// Paragraphs and runs made so far, against [`MAX_TEXT_ITEMS`].
+    items: Cell<usize>,
 }
 
 impl Env {
+    /// Counts one more paragraph or run; `false` once the document's text has made
+    /// [`MAX_TEXT_ITEMS`], when the rest of its text is left out.
+    fn take_item(&self) -> bool {
+        let n = self.items.get();
+        if n == MAX_TEXT_ITEMS {
+            log::warn!("ppt: PowerPoint 95 text passes {MAX_TEXT_ITEMS} paragraphs and runs; the rest is left out");
+        }
+        self.items.set(n.saturating_add(1));
+        n < MAX_TEXT_ITEMS
+    }
+
     pub(super) fn new(document: &Rec) -> Env {
         let Some(environment) = document.child(rt::ENVIRONMENT) else { return Env::default() };
         // There may be more than one font list; the first that holds fonts is the table.
@@ -104,7 +123,7 @@ impl Env {
             .child(rt::STYLES)
             .map(|list| list.children().filter(|r| r.kind == rt::STYLE).take(STYLE_TYPES).map(|r| style(&r)).collect())
             .unwrap_or_default();
-        Env { fonts, rulers, styles }
+        Env { fonts, rulers, styles, items: Cell::new(0) }
     }
 }
 
@@ -329,12 +348,18 @@ fn paragraphs(chars: &[char], char_runs: &[CharRun], para_runs: &[ParaRun], rule
     let mut out = vec![];
     let mut start = 0usize;
     loop {
+        if !env.take_item() {
+            break;
+        }
         let end = chars.get(start..).and_then(|rest| rest.iter().position(|&c| c == '\r')).map_or(total, |e| start + e);
         let pr = run_at(&para_starts, start).and_then(|i| para_runs.get(i));
         let level = pr.map_or(0, |r| r.level.min(LEVELS as u8 - 1));
         let mut para = Paragraph { level, props: para_props(pr, ruler.and_then(|r| r.get(usize::from(level)))), ..Default::default() };
         let mut i = start;
         while i < end {
+            if !env.take_item() {
+                break;
+            }
             let props = props_at(i);
             if chars.get(i) == Some(&'\u{b}') {
                 para.runs.push(Run { text: String::new(), props, kind: RunKind::Break });
