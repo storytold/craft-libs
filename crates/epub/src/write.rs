@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
-use craft_xml::{esc, esc_attr, is_name};
+use craft_xml::{esc, esc_attr, is_name, is_xml_char};
 
 use crate::text::{valid_language_tag, w3cdtf};
 use crate::{Error, MIMETYPE};
@@ -178,6 +178,32 @@ fn invalid<T>(msg: String) -> Result<T, Error> {
 }
 
 fn check(book: &Book) -> Result<(), Error> {
+    // `esc` and `esc_attr` discard characters XML 1.0 cannot represent. Reject them
+    // here so that a successful write cannot silently change caller-supplied fields.
+    let xml_text = |field: &str, value: &str| {
+        if value.chars().all(is_xml_char) { Ok(()) } else { invalid(format!("{field} contains a character XML cannot represent")) }
+    };
+    let m = &book.metadata;
+    for (field, value) in [
+        ("identifier", m.identifier.as_str()),
+        ("title", m.title.as_str()),
+        ("language", m.language.as_str()),
+        ("description", m.description.as_deref().unwrap_or("")),
+        ("generator", m.generator.as_deref().unwrap_or("")),
+        ("navigation heading", book.nav.heading.as_str()),
+    ] {
+        xml_text(field, value)?;
+    }
+    for value in &m.creators {
+        xml_text("creator", value)?;
+    }
+    for value in &m.subjects {
+        xml_text("subject", value)?;
+    }
+    for item in &book.nav.items {
+        xml_text("navigation href", &item.href)?;
+        xml_text("navigation label", &item.label)?;
+    }
     if book.metadata.identifier.trim().is_empty() {
         return invalid("the identifier is blank".into());
     }
@@ -192,6 +218,8 @@ fn check(book: &Book) -> Result<(), Error> {
     // are refused as well.
     let mut paths = HashSet::from([OPF.to_string(), NAV.to_string(), NCX.to_string()]);
     for r in &book.resources {
+        xml_text("resource media type", &r.media_type)?;
+        xml_text("resource properties", &r.properties)?;
         if !is_name(&r.id) || r.id.contains(':') {
             return invalid(format!("resource id `{}` is not an XML name", r.id));
         }
@@ -364,7 +392,8 @@ fn ncx_document(book: &Book) -> String {
 
 /// `book` as an EPUB 3 package: the stored `mimetype`, `META-INF/container.xml`, then under
 /// `OEBPS/` the package document, the navigation document, `toc.ncx` when [`Book::ncx`] asks for
-/// it, and the resources in their order.
+/// it, and the resources in their order. Returns [`Error::Invalid`] if metadata, manifest or
+/// navigation fields contain characters that XML 1.0 cannot represent.
 pub fn write(book: &Book) -> Result<Vec<u8>, Error> {
     check(book)?;
     let modified =
