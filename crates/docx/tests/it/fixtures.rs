@@ -283,6 +283,78 @@ fn run_defaults_naming_only_a_latin_font_leave_the_other_slots_words() {
     assert!(defaults.contains(r#"w:cstheme="minorBidi""#) && !defaults.contains(r#"w:cs="Aptos""#), "{defaults}");
 }
 
+/// The complex-script and East Asian fonts a run's text is drawn in stay the same across a save
+/// and reopen, in a document whose run defaults leave those slots to the Latin font (WordCraft's
+/// own): a run's own Latin font, a paragraph style's, a character style's, and a tracked change's
+/// before copy. Where nothing changes, nothing more is written.
+#[test]
+fn script_fonts_a_run_draws_in_survive_a_save() {
+    use craft_wordmodel::props::{CharProps, PropChange};
+    use craft_wordmodel::styles::{Style, StyleKind};
+    use craft_wordmodel::{Revision, RevisionKind};
+    let s = |f: &str| Some(f.to_string());
+    let mut d = Document::new();
+    let sheet = Arc::make_mut(&mut d.styles);
+    let style = |id: &str, kind: StyleKind, font: Option<String>| Style {
+        id: id.into(),
+        name: id.into(),
+        kind,
+        chr: CharProps { font, ..Default::default() },
+        ..Default::default()
+    };
+    sheet.upsert(style("Serif", StyleKind::Paragraph, s("Georgia")));
+    sheet.upsert(style("Mono", StyleKind::Character, s("Consolas")));
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "A".into(), date: String::new(), move_name: None });
+    let para = |style: Option<&str>, run: CharProps| {
+        let mut p = Paragraph::with_text("ไทย 中文", run);
+        p.props.style = style.map(str::to_string);
+        craft_wordmodel::para_block(p)
+    };
+    let latin = |f: &str| CharProps { font: s(f), ..Default::default() };
+    d.body = vec![
+        // CodeRabbit's case: a run with its own Latin font only.
+        para(None, latin("Verdana")),
+        // A paragraph style's Latin font, and a run's own over it.
+        para(Some("Serif"), CharProps::default()),
+        para(Some("Serif"), latin("Verdana")),
+        // A character style's Latin font.
+        para(None, CharProps { style: s("Mono"), ..Default::default() }),
+        // A tracked change whose before copy had a Latin font of its own.
+        para(None, CharProps { fmt_change: PropChange::boxed(0, latin("Tahoma")), ..Default::default() }),
+    ];
+    let fonts = |d: &Document| -> Vec<(String, String, String)> {
+        paras(d)
+            .iter()
+            .flat_map(|p| {
+                let r = &p.runs[0].props;
+                let rc = d.styles.resolve_char(p.props.style.as_deref(), r);
+                let old = r.fmt_change.as_ref().map(|c| d.styles.resolve_char(p.props.style.as_deref(), &c.old));
+                let ea = |rc: &craft_wordmodel::resolve::ResolvedChar| rc.font_ea.clone().unwrap_or_else(|| rc.font.clone());
+                std::iter::once((rc.font.clone(), rc.font_cs.clone(), ea(&rc))).chain(old.map(|o| (o.font.clone(), o.font_cs.clone(), ea(&o))))
+            })
+            .collect()
+    };
+    let before = fonts(&d);
+    assert_eq!(before[0], ("Verdana".into(), "Verdana".into(), "Verdana".into()), "in WordCraft the Latin font draws the other scripts");
+    let bytes = craft_docx::write(&d).unwrap();
+    let again = craft_docx::read(&bytes).unwrap();
+    assert_eq!(fonts(&again), before, "the same after a save");
+    // The paragraph style names its slots; its runs that use its font name nothing.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let second = xml.split("<w:p>").nth(2).and_then(|p| p.split("</w:p>").next()).unwrap_or_else(|| panic!("{xml}"));
+    assert!(!second.contains("w:cs="), "a Serif run drawn in Georgia names nothing: {second}");
+    // Run defaults that name the slots already: nothing is added.
+    let mut named = d.clone();
+    let dc = &mut Arc::make_mut(&mut named.styles).default_chr;
+    dc.font_cs = s("Tahoma");
+    dc.font_ea = s("SimSun");
+    let again = craft_docx::read(&craft_docx::write(&named).unwrap()).unwrap();
+    assert_eq!(fonts(&again), fonts(&named));
+    assert_eq!(paras(&again)[0].runs[0].props.font_cs, None, "{:?}", paras(&again)[0].runs[0].props);
+}
+
 /// A theme's font names are bounded as the run fonts are: an over-long `a:latin` or `a:cs`
 /// typeface is left out, so it doesn't become the document's theme font or, where the run
 /// defaults are left out, every run's complex-script font.

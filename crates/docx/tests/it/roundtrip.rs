@@ -299,9 +299,10 @@ fn styles_and_lists_round_trip() {
     d.body = ps.into_iter().map(para_block).collect();
     let r = rt(&d);
     assert_eq!(r.numbering, d.numbering);
-    assert_eq!(r.styles.default_chr, slots_named(&d.styles.default_chr));
+    let want = as_saved(&d.styles);
+    assert_eq!(r.styles.default_chr, want.default_chr);
     assert_eq!(r.styles.default_para, d.styles.default_para);
-    for s in &d.styles.styles {
+    for s in &want.styles {
         assert_eq!(r.styles.get(&s.id), Some(s), "style {}", s.id);
     }
     assert_eq!(r.styles.styles.len(), d.styles.styles.len());
@@ -1926,9 +1927,7 @@ fn flat_opc_round_trip_equals_docx() {
 fn builtin_stylesheet_survives() {
     let d = Document::new();
     let r = rt(&d);
-    let mut want = (*d.styles).clone();
-    want.default_chr = slots_named(&want.default_chr);
-    assert_eq!(*r.styles, want);
+    assert_eq!(*r.styles, as_saved(&d.styles));
     assert_eq!(r.body, d.body);
     assert_eq!(r.last_section, d.last_section);
 }
@@ -3052,16 +3051,31 @@ fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
     assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:proofState"), "{saved}");
 }
 
-/// Run defaults as a save writes them: each font slot WordCraft draws in the Latin font, named.
-/// (Word draws a slot the run defaults leave out in Times New Roman.)
-fn slots_named(c: &CharProps) -> CharProps {
-    let latin = c.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
-    let mut c = c.clone();
-    if c.font_cs.is_none() && c.font_cs_theme.is_none() {
-        c.font_cs = Some(latin.clone());
+/// The styles as a save writes them where the run defaults leave the complex-script and East Asian
+/// slots to the Latin font: those slots named with it, in the run defaults and in each paragraph
+/// style that sets a Latin font where nothing it is based on names them. (Word draws a slot the
+/// run defaults leave out in Times New Roman.)
+fn as_saved(s: &craft_wordmodel::styles::StyleSheet) -> craft_wordmodel::styles::StyleSheet {
+    let names_cs = |c: &CharProps| c.font_cs.is_some() || c.font_cs_theme.is_some();
+    let names_ea = |c: &CharProps| c.font_ea.is_some() || c.font_ea_theme.is_some();
+    let (open_cs, open_ea) = (!names_cs(&s.default_chr), !names_ea(&s.default_chr));
+    let mut out = s.clone();
+    let latin = s.default_chr.font.clone().unwrap_or_else(|| craft_wordmodel::styles::BODY_FONT.to_string());
+    if open_cs {
+        out.default_chr.font_cs = Some(latin.clone());
     }
-    if c.font_ea.is_none() && c.font_ea_theme.is_none() {
-        c.font_ea = Some(latin);
+    if open_ea {
+        out.default_chr.font_ea = Some(latin);
     }
-    c
+    for (st, o) in s.styles.iter().zip(out.styles.iter_mut()) {
+        let Some(font) = st.chr.font.clone().filter(|_| st.kind == StyleKind::Paragraph) else { continue };
+        let up = s.chain(&st.id);
+        if open_cs && !up.iter().any(|x| names_cs(&x.chr)) {
+            o.chr.font_cs = Some(font.clone());
+        }
+        if open_ea && !up.iter().any(|x| names_ea(&x.chr)) {
+            o.chr.font_ea = Some(font);
+        }
+    }
+    out
 }
