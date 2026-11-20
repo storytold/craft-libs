@@ -83,7 +83,17 @@ pub(crate) fn decode_content<'a>(stream: &Stream<'a>) -> Option<DecodedContent<'
         warn!("page content budget exceeded");
         return None;
     }
-    let data = stream.decoded_within(left).ok()?;
+    let filtered = !stream.filters().is_empty();
+    let limit = if filtered { left.min(stream.decode_limits().max_decoded_stream()) } else { left };
+    let Ok(data) = stream.decoded_within(limit) else {
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+        return None;
+    };
+    // The whole-stream decoders do not expose completion. Conservatively report a
+    // filtered form, pattern or Type 3 procedure reaching its effective budget.
+    if filtered && data.len() >= limit {
+        CONTENT_TRUNCATED.with(|truncated| truncated.set(true));
+    }
     let held = match &data {
         Cow::Owned(v) => v.len(),
         Cow::Borrowed(_) => 0,
