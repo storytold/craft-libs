@@ -16,11 +16,11 @@ use craft_theme::Srgba;
 use std::sync::Arc;
 
 mod background;
-mod bar;
-mod overlay;
-mod properties;
-#[cfg(feature = "screen-testing")]
-mod stories;
+pub(crate) mod bar;
+pub(crate) mod overlay;
+pub(crate) mod properties;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod tool;
 mod words;
 

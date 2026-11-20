@@ -1,8 +1,8 @@
 //! `StartScreen`: the page an app shows with no document open: New and Open, the recent files as a grid or a list,
 //! pinned folders and templates.
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use super::recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
 use super::recent_list::{RecentList, recent_body};

@@ -20,8 +20,8 @@ use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 mod words;
 
 pub use words::PaintBarWords;

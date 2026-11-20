@@ -3,8 +3,8 @@
 //! share one stroking function over `kit::outline` (halo and line) and `kit::dashed`.
 
 mod hover;
-#[cfg(feature = "testing")]
-pub(super) mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use crate::canvas::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role};

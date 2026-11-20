@@ -1,14 +1,18 @@
 //! The integration binary of craft-ui: every test is a registered trial.
 
-mod api_map;
-mod canvas;
-mod components_index;
-mod form_dialogs;
+pub(crate) mod api_map;
+pub(crate) mod canvas;
+pub(crate) mod components_index;
+pub(crate) mod form_dialogs;
 
-mod shell;
+pub(crate) mod shell;
 
-use craft_ui::testing::registered;
+craft_ui::registry!();
 
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &registered());
+    craft_ui::testing::run(
+        module_path!(),
+        env!("CARGO_PKG_NAME"),
+        &craft_ui::testing::Registry::of(&[register, craft_ui::testing::register_library]),
+    );
 }

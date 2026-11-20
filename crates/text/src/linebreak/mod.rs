@@ -23,7 +23,7 @@
 mod greedy;
 mod knuth_plass;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::ops::Range;
 

@@ -4,20 +4,20 @@
 mod words;
 
 // The browser.
-mod browser;
+pub(crate) mod browser;
 
 // Preset data, footer, files and panel menu.
 mod event;
 mod files;
-mod footer;
+pub(crate) mod footer;
 mod model;
 mod panel_menu;
 mod state;
 
 // The picker and the named row.
-mod manager;
-mod named;
-mod picker;
+pub(crate) mod manager;
+pub(crate) mod named;
+pub(crate) mod picker;
 
 pub use browser::{BrowserTools, PresetBrowser, PresetItemCommands, PresetReorder, ThumbPainter};
 pub use event::{PresetEvent, PresetOutput};

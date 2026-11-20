@@ -10,8 +10,8 @@ use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{ColumnWidth, Insets, Metrics, Sense};
 use egui::{Response, Ui};
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 /// The style of the layout components: no minimum size, and padding only at the start edge, one
 /// `space.pad.regular` per level of indent.
@@ -59,7 +59,7 @@ macro_rules! layout_component {
     ($(#[$doc:meta])* $name:ident, $key:ident, [$($fwd:ident),*] $(, <$life:lifetime> { $($field:ident: $ty:ty),* })?) => {
         $(#[$doc])*
         #[derive(crate::contract::Component, crate::contract::Props)]
-        #[component(container)]
+        #[component(container, unregistered)]
         pub struct $name $(<$life>)? {
             #[common]
             common: Common,
@@ -188,6 +188,13 @@ macro_rules! layout_component {
         impl_container!($name $(<$life>)?);
     };
 }
+
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Stack<'static>; container, purpose = "Children one under another");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Row; container, purpose = "Children side by side");
+#[cfg(feature = "suite")]
+crate::contract::register_contract!(Grid; container, purpose = "Children row-major over a column list: a child in flow takes the next cell");
 
 layout_component!(
     /// Children one under another. A header and a footer sit outside the body: the footer stays in the room under

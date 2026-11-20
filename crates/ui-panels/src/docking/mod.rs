@@ -9,20 +9,20 @@ pub mod divider;
 mod drop;
 mod event;
 pub mod frame;
-mod group;
+pub(crate) mod group;
 
-mod floating;
+pub(crate) mod floating;
 mod panels;
 mod placed;
-mod root;
+pub(crate) mod root;
 mod spec;
-mod splitter;
+pub(crate) mod splitter;
 pub mod stack;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 pub mod targets;
 pub mod tree;
-mod window_menu;
+pub(crate) mod window_menu;
 mod words;
 
 mod commands;
@@ -53,9 +53,9 @@ pub use commands::{
     dock_states, move_actions, run_workspace, workspace_states,
 };
 
-mod dock_column;
+pub(crate) mod dock_column;
 mod flyout;
-mod iconic;
+pub(crate) mod iconic;
 
 pub use dock_column::{
     ColumnArrow, ColumnBar, DockColumn, DockColumnOutput, DockColumnStyle, GroupSize, GroupView, column_cells, fit_widths, group_heights,

@@ -702,7 +702,7 @@ fn hdiutil_busy_replies_are_recognized() {
 }
 
 #[cfg(target_os = "macos")]
-mod macos_checks {
+pub(crate) mod macos_checks {
     use craft_ui::testing::trial;
 
     use super::macos::{CheckTurn, Expect, Signature, TEAM_ID, signed_by};

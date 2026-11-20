@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 mod options;
 mod panes;
 
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use panes::WebPane;
 

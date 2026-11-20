@@ -44,11 +44,11 @@
 //! [`FullWindowSide`]: craft_ui::dialog::FullWindowSide
 //! [`EditHistory`]: craft_behavior::EditHistory
 
-mod canvas;
+pub(crate) mod canvas;
 mod commands;
-mod panel;
+pub(crate) mod panel;
 mod session;
-#[cfg(feature = "screen-testing")]
+#[cfg(feature = "suite")]
 pub(crate) mod stories;
 mod tools;
 mod words;
