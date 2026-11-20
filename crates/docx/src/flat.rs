@@ -387,7 +387,12 @@ fn root_tag_start(frag: &[u8]) -> Option<usize> {
 
 /// Write `doc` as a Word XML Document (Flat OPC).
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
-    let parts = crate::write::write_parts(doc, Flavor::Document)?;
+    write_with_options(doc, crate::WriteOptions::default())
+}
+
+/// Write Flat OPC using explicit save options.
+pub fn write_with_options(doc: &Document, options: crate::WriteOptions) -> Result<Vec<u8>, DocxError> {
+    let parts = crate::write::write_parts(doc, Flavor::Document, options)?;
     let types = parts
         .iter()
         .find(|(n, _)| n == "[Content_Types].xml")
