@@ -173,6 +173,10 @@ pub struct LayerInfo {
     /// The mark in the layer thumbnail's corner that tells a smart object or a shape layer from a
     /// pixel layer, whose pictures look alike; the app picks which layers carry one.
     pub thumb_badge: Option<ThumbBadge>,
+    /// An override icon for the layer's kind tile (the thumbnail when it has no picture) and compact row icon;
+    /// `None` falls back to the standard glyph for [`LayerInfo::kind`]. An app sets this for distinct icons per
+    /// adjustment or shape variant.
+    pub kind_icon: Option<IconId>,
     /// The app's own words, added to the row's description for a screen reader.
     pub description: Option<String>,
 }
@@ -204,6 +208,7 @@ impl LayerInfo {
             warning: None,
             thumb_loads_selection: true,
             thumb_badge: None,
+            kind_icon: None,
             description: None,
         }
     }
