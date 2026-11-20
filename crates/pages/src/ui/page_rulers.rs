@@ -1,6 +1,6 @@
 //! The rulers around one page of a [`PageView`](super::PageView): [`VerticalRuler`] with table row grips, and
-//! [`PageRulers`], which joins a [`TextRuler`](craft_text::ui::ruler::TextRuler), a [`VerticalRuler`] and
-//! [`MarginHandles`](super::MarginHandles) around the page.
+//! [`PageRulers`], which joins a [`TextRuler`], a [`VerticalRuler`] and
+//! [`MarginHandles`] around the page.
 
 #[cfg(feature = "screen-testing")]
 mod stories;

@@ -5,7 +5,7 @@
 //!   replacing what the user copied ([`Clipboard::set_synthetic`]), and remembers what it wrote
 //!   last so the app can tell its own copy from one made in another app
 //!   ([`Clipboard::holds_ours`]).
-//! - [`ClipboardBackend`]: where the bytes go. [`SystemClipboard`] is the OS clipboard on the
+//! - [`ClipboardBackend`]: where the bytes go. `SystemClipboard` is the OS clipboard on the
 //!   desktop (feature `clipboard-system`, opened on first use); [`EventClipboard`] is the
 //!   browser's, fed from paste events, with a queue for pastes that arrive between passes
 //!   ([`LateOffers`]); [`MemoryClipboard`] holds flavours in memory for tests and hosts without

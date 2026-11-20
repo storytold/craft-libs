@@ -528,7 +528,7 @@ pub struct TextMarks<'a> {
     areas: &'a [MarkArea],
 }
 
-/// What a [`MarkArea`] marks; each kind has its [`MarkLook`] fill.
+/// What a [`MarkArea`] marks; each kind has its `MarkLook` fill.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarkKind {

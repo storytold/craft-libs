@@ -16,21 +16,21 @@ use super::types::{ClipboardError, ClipboardImage, Flavor};
 pub enum Written {
     /// The clipboard holds the new contents.
     Written,
-    /// Dropped: the write came from synthetic input ([`Clipboard::set_synthetic`]), and the
+    /// Dropped: the write came from synthetic input ([`Clipboard::set_synthetic`](crate::clipboard::Clipboard::set_synthetic)), and the
     /// clipboard keeps what the user copied.
     Fenced,
 }
 
 /// Where clipboard bytes go: the OS clipboard, the browser's, or a test's.
 ///
-/// `Send` so a [`ClipboardProbe`] can own one on its worker thread. Every method may block on a
+/// `Send` so a [`ClipboardProbe`](crate::clipboard::ClipboardProbe) can own one on its worker thread. Every method may block on a
 /// slow clipboard owner (an X11 client that never answers); the UI thread calls only
-/// [`Clipboard`]'s reads and writes, on a user's copy or paste.
+/// [`Clipboard`](crate::clipboard::Clipboard)'s reads and writes, on a user's copy or paste.
 pub trait ClipboardBackend: Send {
     /// Replaces the clipboard's contents with `flavors`, best first, as one offer; none empties
     /// it. A backend may hold fewer flavours than an app offers, so it answers the index in
     /// `flavors` of the one it wrote (`0` when it emptied the clipboard);
-    /// [`Clipboard::holds_ours`] compares that one.
+    /// [`Clipboard::holds_ours`](crate::clipboard::Clipboard::holds_ours) compares that one.
     fn write(&mut self, flavors: &[Flavor]) -> Result<usize, ClipboardError>;
     /// The first of `mimes` the clipboard holds, at most `limit` bytes of it (more is
     /// [`ClipboardError::TooLarge`]). `BITMAP` matches any bitmap, returned as an `RGBA8` flavor.
@@ -42,7 +42,7 @@ pub trait ClipboardBackend: Send {
     /// Does the clipboard hold one of `mimes`? Cheap enough to ask a few times a second.
     fn has(&mut self, mimes: &[&str]) -> bool;
     /// The flavours of a paste the host delivered as an event (the browser's Paste). Only
-    /// [`EventClipboard`] keeps them; the system clipboard ignores them.
+    /// [`EventClipboard`](crate::clipboard::EventClipboard) keeps them; the system clipboard ignores them.
     fn offer(&mut self, _flavors: Vec<Flavor>) {}
     /// The MIME names of the formats on offer.
     fn formats(&mut self) -> Vec<String> {
@@ -107,7 +107,7 @@ impl SystemClipboard {
         Self { handle: None, unreadable: false, decode: None, offer: offer::Offer::new(), owner: owner_token() }
     }
 
-    /// Decodes a `image/png` flavor to pixels for [`ClipboardBackend::write`], which hands the
+    /// Decodes a `image/png` flavor to pixels for [`ClipboardBackend::write`](crate::clipboard::ClipboardBackend::write), which hands the
     /// platform pixels only. Without one, a write offers no PNG.
     pub fn decoder(mut self, decode: impl Fn(&[u8]) -> Option<ClipboardImage> + Send + 'static) -> Self {
         self.decode = Some(Box::new(decode));

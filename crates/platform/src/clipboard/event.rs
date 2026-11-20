@@ -14,7 +14,7 @@ use super::types::{BITMAP, ClipboardError, ClipboardImage, Flavor, RGBA8, URI_LI
 ///
 /// [`offer`](Self::offer) holds one paste's flavours for the pass it was offered in. The
 /// clipboard counts passes itself (`pass`), so a menu Paste in a later pass finds nothing and
-/// [`Clipboard::has`] is false: the browser can't be read outside a paste event. The app does
+/// [`Clipboard::has`](crate::clipboard::Clipboard::has) is false: the browser can't be read outside a paste event. The app does
 /// nothing at the end of a pass.
 pub struct EventClipboard {
     pasted: Vec<Flavor>,
@@ -30,7 +30,7 @@ struct LateInner {
     wake: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
-/// The queue of an [`EventClipboard`] for a paste the browser delivers outside a pass; `Send + Sync`.
+/// The queue of an [`EventClipboard`](crate::clipboard::EventClipboard) for a paste the browser delivers outside a pass; `Send + Sync`.
 #[derive(Clone)]
 pub struct LateOffers {
     inner: Arc<LateInner>,
@@ -49,13 +49,13 @@ impl LateOffers {
 /// The number of the host's current pass; it changes when a pass ends.
 pub(super) type PassClock = Box<dyn Fn() -> u64 + Send>;
 
-/// Where an [`EventClipboard`]'s writes go.
+/// Where an [`EventClipboard`](crate::clipboard::EventClipboard)'s writes go.
 pub(super) type CopyOut = Box<dyn FnMut(&[Flavor]) -> Result<usize, ClipboardError> + Send>;
 
 impl EventClipboard {
     /// `pass` answers the host's pass number (any counter that changes when a pass ends). `out`
     /// puts the flavours where the host's copy goes and answers the index of the one it wrote
-    /// ([`ClipboardBackend::write`]).
+    /// ([`ClipboardBackend::write`](crate::clipboard::ClipboardBackend::write)).
     pub fn new(pass: impl Fn() -> u64 + Send + 'static, out: impl FnMut(&[Flavor]) -> Result<usize, ClipboardError> + Send + 'static) -> Self {
         let late = LateOffers { inner: Arc::new(LateInner { queue: Mutex::new(VecDeque::new()), wake: Mutex::new(None) }) };
         Self { pasted: Vec::new(), offered_in: 0, pass: Box::new(pass), out: Box::new(out), late }

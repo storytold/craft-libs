@@ -121,7 +121,7 @@ impl Clipboard {
     }
 
     /// Does the clipboard hold one of `mimes`? For Paste's enabled state on the web and in
-    /// tests; on the desktop a [`ClipboardProbe`] asks off the UI thread.
+    /// tests; on the desktop a [`ClipboardProbe`](crate::clipboard::ClipboardProbe) asks off the UI thread.
     pub fn has(&mut self, mimes: &[&str]) -> bool {
         self.backend.has(mimes)
     }
@@ -172,8 +172,8 @@ impl Clipboard {
         matches!(self.ours, Some(Ours::Image(signature)) if signature == image_signature(image.width, image.height, &image.rgba))
     }
 
-    /// A paste event's flavours for the backend ([`ClipboardBackend::offer`]); the web shell
-    /// calls it with [`flavors_from_event`] before the paste command runs.
+    /// A paste event's flavours for the backend ([`ClipboardBackend::offer`](crate::clipboard::ClipboardBackend::offer)); the web shell
+    /// calls it with `flavors_from_event` before the paste command runs.
     pub fn offer_paste(&mut self, flavors: Vec<Flavor>) {
         self.backend.offer(flavors);
     }

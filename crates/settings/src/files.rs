@@ -85,7 +85,7 @@ impl SettingsFiles for DiskFiles {
 
     /// An advisory lock on `.<file>.lock` beside `path`, so two processes saving at once (logging out closes every
     /// window together) take turns at checking, merging and replacing the file instead of one losing the other's
-    /// changes. `None` (save unlocked) when the lock file cannot be opened or is not free within [`LOCK_WAIT`].
+    /// changes. `None` (save unlocked) when the lock file cannot be opened or is not free within `LOCK_WAIT`.
     fn lock(&self, path: &Path) -> Option<Box<dyn Any + Send>> {
         let name = path.file_name().map_or_else(|| "config.toml".into(), |n| n.to_string_lossy().into_owned());
         let lock = path.with_file_name(format!(".{name}.lock"));

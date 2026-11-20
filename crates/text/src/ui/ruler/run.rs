@@ -43,7 +43,7 @@ pub fn ruler_text(unit: DocUnit, units: &Units) -> RulerText {
 /// (1/16 in for inches), so it does not change with the zoom the ruler is shown at.
 const SNAP_ZOOM: f64 = 2.0;
 
-/// The distance a snapping drag moves by: the ruler's smallest tick at [`SNAP_ZOOM`], in points.
+/// The distance a snapping drag moves by: the ruler's smallest tick at `SNAP_ZOOM`, in points.
 pub fn snap_step(text: &RulerText, unit: DocUnit) -> f32 {
     let ticks = Rulers::ticks(&text.units, TickRule::of_unit(unit.kind), SNAP_ZOOM, 0.0..=0.0);
     let gap = ticks.windows(2).find_map(|pair| match pair {

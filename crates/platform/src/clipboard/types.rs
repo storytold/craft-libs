@@ -20,10 +20,10 @@ pub const PDF: &str = "application/pdf";
 /// `text/uri-list`: copied files, one `file://` URI per line (CRLF line ends, RFC 2483).
 pub const URI_LIST: &str = "text/uri-list";
 /// Any bitmap the clipboard holds (`image/png`, `image/bmp`, a TIFF on macOS…). A read returns it
-/// as an [`RGBA8`] flavor (never PNG: this crate has no PNG encoder); [`ClipboardBackend::read_image`]
-/// returns it as [`ClipboardImage`]. Also for [`ClipboardBackend::has`] and [`Clipboard::has`].
+/// as an [`RGBA8`] flavor (never PNG: this crate has no PNG encoder); [`ClipboardBackend::read_image`](crate::clipboard::ClipboardBackend::read_image)
+/// returns it as [`ClipboardImage`]. Also for [`ClipboardBackend::has`](crate::clipboard::ClipboardBackend::has) and [`Clipboard::has`](crate::clipboard::Clipboard::has).
 pub const BITMAP: &str = "image/*";
-/// A raw bitmap as [`EventClipboard`] carries it: width and height as little-endian `u32`s, then
+/// A raw bitmap as [`EventClipboard`](crate::clipboard::EventClipboard) carries it: width and height as little-endian `u32`s, then
 /// the straight RGBA8 pixels. The form an `RGBA8` flavour carries.
 pub const RGBA8: &str = "image/x-rgba8";
 
@@ -77,7 +77,7 @@ pub struct ClipboardImage {
 
 impl ClipboardImage {
     /// True when the size is not zero and `rgba` holds exactly `width * height * 4` bytes.
-    /// [`Clipboard::read_image`] drops images that fail this (PhotoCraft
+    /// [`Clipboard::read_image`](crate::clipboard::Clipboard::read_image) drops images that fail this (PhotoCraft
     /// `import_os_clipboard`'s filter).
     // pc: crates/ui-egui/src/app/clipboard.rs:60 image.filter
     pub fn is_whole(&self) -> bool {

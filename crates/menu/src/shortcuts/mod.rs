@@ -402,7 +402,7 @@ impl<'a> ShortcutsDialog<'a> {
 
     /// Sets the value `field` names in `state`, as the user editing that control would
     /// (`search`, `area`, `command`, `pressed`; `assign` true presses Assign; `remove` takes the text
-    /// of one of the command's keys, as [`DialogSnapshot::keys`] reports it), for automation. It builds the words `Env` that [`DialogState::set_field`] needs. `Err` says why
+    /// of one of the command's keys, as [`DialogSnapshot::keys`] reports it), for automation. It builds the words `Env` that `DialogState::set_field` needs. `Err` says why
     /// the field was refused.
     pub fn set_json_field(self, ui: &Ui, state: &mut DialogState, field: &str, value: &serde_json::Value) -> Result<(), String> {
         use craft_ui::dialog::FieldRefusal;

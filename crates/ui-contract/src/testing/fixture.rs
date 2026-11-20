@@ -257,7 +257,7 @@ impl Fixture {
     }
 
     /// The command input of every following pass, whole, as an app's `FrameInput.commands` gives it: the states and
-    /// gate a runner folds from the stories it shows ([`Story::command_input`]).
+    /// gate a runner folds from the stories it shows ([`Story::command_states`]).
     pub fn commands(&mut self, commands: CommandInput) -> &mut Self {
         self.commands = commands;
         self.frames.commands(self.commands.clone());
