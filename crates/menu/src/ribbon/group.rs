@@ -26,6 +26,9 @@ craft_ui::words! {
     }
 }
 
+/// The arrow of a collapsed group's button where the look sets menu arrows: the small filled triangle.
+static COLLAPSED_ARROW: craft_ui::controls::disclosure::DisclosureGlyph = craft_ui::controls::disclosure::DisclosureGlyph::new(1.0);
+
 /// The levels a group shows at, widest first: the order the row's levelled units report their widths in.
 pub(super) const LEVELS: [GroupLevel; 3] = [GroupLevel::Full, GroupLevel::Compact, GroupLevel::Collapsed];
 
@@ -145,7 +148,10 @@ impl<'a> RibbonGroup<'a> {
     /// One button with the group's icon and title; its popover holds the content at the full level. A press in a
     /// popup the content opens does not close the popover: the overlay family keeps it open.
     fn collapsed(&self, ui: &mut Ui, add: &mut dyn FnMut(&mut Ui), icons: RibbonLook) {
-        let button = Button::new(self.title.clone()).icon(self.icon.clone()).arrangement(Arrangement::Stacked).show(ui);
+        let face = Button::new(self.title.clone()).icon(self.icon.clone()).arrangement(Arrangement::Stacked);
+        // A look that sets menu arrows (`RibbonLook::arrow`) marks the collapsed group's button as the menu it opens.
+        let face = if icons.arrow > 0 { face.trailing_icon(IconSpec::glyph(&COLLAPSED_ARROW)) } else { face };
+        let button = face.show(ui);
         Popover::new(self.title.clone(), Bind::kept()).overlay(|overlay| overlay.opened_by(&button.response, Trigger::Click)).show(ui, |ui, _| {
             with_env(
                 ui,
