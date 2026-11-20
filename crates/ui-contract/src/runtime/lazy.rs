@@ -165,12 +165,13 @@ struct Settled {
 /// What changed in the frame for every settling child.
 #[derive(Default)]
 struct Changes {
-    /// Every settling child runs through this frame: an app's repaint request outside every settling child or an edit
-    /// of a given value unsettles every child for that frame and the next.
+    /// Every settling child runs through this frame: an app's repaint request outside every settling child unsettles
+    /// every child for that frame and the next.
     unsettled_through: u64,
     /// Every settling child with no content version runs through this frame: a frame with input other than pointer
-    /// motion unsettles them for that frame and the next.
-    input_through: u64,
+    /// motion, or with an edit of a given value, unsettles them for that frame and the next. Either may change app data
+    /// the framework does not track; a child with a content version sees that change as a new version.
+    unversioned_through: u64,
     /// The pass whose input was looked at.
     scanned: u64,
     /// The values changed in a frame, and the frame.
@@ -184,7 +185,7 @@ impl Changes {
         if self.scanned != pass_nr {
             self.scanned = pass_nr;
             if input {
-                self.input_through = self.input_through.max(frame + 1);
+                self.unversioned_through = self.unversioned_through.max(frame + 1);
             }
         }
     }
@@ -298,9 +299,10 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`);
 /// - its content version is the one of its last run, and its environment (theme, density, scale, language, window
 ///   active) the one it ran in;
-/// - no frame unsettled every child (`unsettle`): an app's repaint request outside every settling child or an edit of a
-///   given value, this frame or the one before;
-/// - for a child with no content version: no input other than pointer motion this frame or the one before;
+/// - no frame unsettled every child (`unsettle`): an app's repaint request outside every settling child, this frame or
+///   the one before;
+/// - for a child with no content version: no input other than pointer motion and no edit of a given value
+///   (`note_given_edit`) this frame or the one before;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
 pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
     // Keyed calls feed their 8-byte content version into the key.
@@ -320,7 +322,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         let changes = &store.changes;
         // Usually empty: only the values written this frame.
         let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
-        let unsettled = changes.unsettled_through >= frame || (content.is_none() && changes.input_through >= frame);
+        let unsettled = changes.unsettled_through >= frame || (content.is_none() && changes.unversioned_through >= frame);
         let entry = store.touch(owner, id, frame);
         let replays = match entry.replays {
             Some((decided_in, replays)) if decided_in == pass_nr => replays,
@@ -420,9 +422,9 @@ pub(crate) fn forget(ctx: &Context, id: Id) {
 /// again, and that size. It does when that run was in this pass, or in an earlier frame and since then none of the
 /// settled rules a measure reads has broken (`settled`): nothing in it moves or asked to be shown again, no value it
 /// read changed, no frame unsettled every child, and the frame and the one before had no input other than pointer
-/// motion. A measure-only child has no place on screen, no stops and no widgets, so the pointer, the focus and what a
-/// replay repeats do not count. Returns the values that run read with the size: the caller notes them as read again,
-/// so an edit of one later in the pass reruns it.
+/// motion and no edit of a given value. A measure-only child has no place on screen, no stops and no widgets, so the
+/// pointer, the focus and what a replay repeats do not count. Returns the values that run read with the size: the
+/// caller notes them as read again, so an edit of one later in the pass reruns it.
 pub(crate) fn measured(ctx: &Context, id: Id, place: Place) -> Option<(Vec2, Vec<BindKey>)> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
@@ -432,7 +434,7 @@ pub(crate) fn measured(ctx: &Context, id: Id, place: Place) -> Option<(Vec2, Vec
         store.changes.scan(pass_nr, frame, input);
         let changes = &store.changes;
         let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
-        let unsettled = changes.unsettled_through >= frame || changes.input_through >= frame;
+        let unsettled = changes.unsettled_through >= frame || changes.unversioned_through >= frame;
         let run = store.touch(None, id, frame).measured.as_ref()?;
         let same_pass = run.pass == pass_nr;
         let quiet = !unsettled && run.frame < frame && run.facts.quiet(now, edited.as_ref());
@@ -465,6 +467,13 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
 /// a child.
 pub(crate) fn unsettle(ctx: &Context) {
     with(ctx, |store, _, frame| store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1));
+}
+
+/// Unsettles the settling children with no content version for this frame and the next: an edit of a given value,
+/// which the app applies to data the framework does not track. A child with a content version sees what the edit
+/// changed in its data as a new version, as it does for input.
+pub(crate) fn note_given_edit(ctx: &Context) {
+    with(ctx, |store, _, frame| store.changes.unversioned_through = store.changes.unversioned_through.max(frame + 1));
 }
 
 /// Records the extent of a row of the collection `owner` that was built this pass. The collection places the rows it
