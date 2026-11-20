@@ -103,12 +103,6 @@ jobs:
         fi
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # A push to main builds the gate's test binaries in their own leg and saves the cache right
-      # after, so a failing test no longer keeps the cache from being saved. The same two builds
-      # the gate's nextest runs do (all features; the two crates with default features).
-      warm-command: &warm |
-        cargo test --workspace --no-run --all-features --locked
-        cargo test -p craft-image-codecs -p craft-text --no-run --locked
       command: &command |
         # The tests run once, with every feature, in parallel across test binaries; nextest skips
         # doctests, so `cargo test --doc` runs them. Examples are not built, except the two whose
@@ -138,20 +132,15 @@ jobs:
       # No debuginfo on Windows: writing PDBs for every test binary is a large part of its link
       # time. A panic still names its file and line; only backtrace frames lose theirs, and the
       # Linux and macOS legs keep line tables.
-      # rust-lld links the test binaries faster than link.exe; /OPT:NOICF skips identical-code
-      # folding and /DEBUG:NONE writes no PDB, both of which only cost link time here.
       windows-env: |
         CRAFT_PRINT_REQUIRE_QUEUE=1
         CARGO_PROFILE_DEV_DEBUG=0
-        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
-        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
       env: *env
       setup-command: *setup
       cache-paths: *cache-paths
       cache-key: *cache-key
       cache-key-files: *cache-key-files
       lint-command: *lint
-      warm-command: *warm
       command: *command
       windows-command: |
         powershell.exe -NoProfile -Command '$ErrorActionPreference = "Stop"; Start-Service Spooler; Add-PrinterDriver -Name "Generic / Text Only"'
