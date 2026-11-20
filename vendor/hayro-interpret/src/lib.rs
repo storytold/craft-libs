@@ -40,6 +40,8 @@ mod device;
 mod function;
 mod interpret;
 mod ocg;
+#[cfg(test)]
+mod self_draw_tests;
 mod soft_mask;
 mod types;
 mod x_object;

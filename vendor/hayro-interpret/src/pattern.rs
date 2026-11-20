@@ -2,7 +2,7 @@
 
 use crate::cache::Cache;
 use crate::color::{Color, ColorSpace, DefaultColorSpaces, Plate};
-use crate::context::{Context, InterpreterCache};
+use crate::context::{Context, FormsDrawing, InterpreterCache, with_forms_drawing};
 use crate::device::Device;
 use crate::font::Glyph;
 use crate::interpret::state::{ActiveTransferFunction, State};
@@ -182,6 +182,8 @@ pub struct TilingPattern<'a> {
     pub(crate) settings: InterpreterSettings,
     pub(crate) xref: &'a XRef,
     nesting_depth: u32,
+    /// Craft patch (self-draw scope): the forms being drawn where the pattern was set.
+    forms: FormsDrawing,
 }
 
 impl TilingPattern<'_> {
@@ -280,11 +282,24 @@ impl<'a> TilingPattern<'a> {
             cache: ctx.interpreter_cache.clone(),
             xref: ctx.xref,
             nesting_depth,
+            forms: FormsDrawing::current(),
         })
     }
 
     /// Interpret the contents of the pattern into the given device.
+    ///
+    /// Craft patch (self-draw scope): the cell draws inside the forms the pattern was set in,
+    /// wherever the device interprets it (see [`SoftMask::interpret`]).
     pub fn interpret(
+        &self,
+        device: &mut impl Device<'a>,
+        initial_transform: Affine,
+        is_stroke: bool,
+    ) -> Option<()> {
+        with_forms_drawing(&self.forms, || self.interpret_cell(device, initial_transform, is_stroke))
+    }
+
+    fn interpret_cell(
         &self,
         device: &mut impl Device<'a>,
         initial_transform: Affine,
