@@ -86,7 +86,12 @@ pub(crate) struct ScrollRegion {
 #[cfg(feature = "testing")]
 pub(crate) fn note_scroll_region(ctx: &Context, view: Rect, content: Rect) {
     noted::with(ctx, |pass| pass.scrolls.push(ScrollRegion { view, content }));
-    crate::runtime::replay::journal(ctx, || (view, content), |ctx, &(view, content)| note_scroll_region(ctx, view, content));
+    // The view cuts what lies outside it, as a clip does: a replay cut by the clip around it cuts the view too.
+    crate::runtime::replay::journal(
+        ctx,
+        || (crate::runtime::Clip::new(view), content),
+        |ctx, &(view, content)| note_scroll_region(ctx, view.rect(), content),
+    );
 }
 
 #[cfg(not(feature = "testing"))]
