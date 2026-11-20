@@ -11,8 +11,10 @@ a `Scene` into bytes. One Cargo feature per format, all on by default.
 | `gltf` | glTF 2.0 (`.gltf`) and GLB | yes | GLB | `serde_json` |
 | `threemf` | 3MF, core and materials extension | yes | no | `craft-opc`, `craft-xml` |
 | `fbx` | FBX 6.x and 7.x, binary and ASCII | yes | no | `miniz_oxide` |
+| `dae` | COLLADA (`.dae`), scenes, transforms, cameras | yes | no | `craft-xml` |
+| `abc` | Alembic (`.abc`), Ogawa container | yes | no | none |
 
-USD, Alembic and COLLADA are not here yet.
+USD is not here yet.
 
 ## The neutral model
 
