@@ -434,7 +434,7 @@ mod tests {
             let pq = pq_inverse_eotf(nits / 10_000.0) * 100.0;
             assert!((pq - pq_percent).abs() <= 0.5, "{nits} nits: PQ {pq}% vs {pq_percent}%");
             // The BT.2100 HLG OOTF has a system gamma of 1.2 on a 1 000 cd/m² display, so a
-            // neutral grey shown at `nits` comes from scene light (nits / 1000)^(1 / 1.2).
+            // neutral gray shown at `nits` comes from scene light (nits / 1000)^(1 / 1.2).
             let hlg = hlg_oetf((nits / 1000.0).powf(1.0 / 1.2)) * 100.0;
             assert!((hlg - hlg_percent).abs() <= 0.5, "{nits} nits: HLG {hlg}% vs {hlg_percent}%");
         }
