@@ -70,16 +70,9 @@ impl Outcome for SyncedViewsOutput {
 ///         Lead::Left => ("Old", &old_pages),
 ///         Lead::Right => ("New", &new_pages),
 ///     };
-///     // Each half runs the Hand tool in its own canvas body.
-///     let mut reply = None;
-///     let out = PageView::new(label, pages, &mut *state, paper).show_at(ui, rect, |ui, body| {
-///         if let Some(pass) = body.pass {
-///             reply = Some(ToolHost::new().run(ui, pass, &mut hand));
-///         }
-///     });
-///     if let Some(view) = reply.and_then(|reply| reply.view) {
-///         out.adopt(state, &view);
-///     }
+///     let out = PageView::new(label, pages, &mut *state, paper).show_at_with(ui, rect, &mut hand,
+///         |ui, body, hand| body.pass.and_then(|pass| ToolHost::new().run(ui, pass, hand).view),
+///         |_, _, _| ());
 ///     Some(out)
 /// });
 /// ```

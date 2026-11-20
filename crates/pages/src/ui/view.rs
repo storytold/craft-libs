@@ -2,20 +2,13 @@
 //! through its [`Pasteboard`] page frames, with the page pictures the app renders through craft-ui's texture
 //! contract ([`ThumbSource`]).
 //!
-//! The view is a canvas: the app's body runs its [`ToolHost`](craft_ui::canvas::ToolHost) with the page tools
-//! (Select Text, `HandTool` and `ZoomTool`) on the canvas's [`PageBody::pass`], after its canvas controls and before
-//! the overlays that show what the tool did, then hands the view the host reports back with
-//! [`PageViewOutput::adopt`].
+//! The pre-draw callback registers canvas controls and runs the app's tool host. Its returned view is folded in
+//! before the page pictures and the overlay callback are drawn.
 //!
 //! ```ignore
-//! let mut reply = None;
-//! let out = PageView::new("Pages", &doc_pages, &mut view_state, paper).options(LayoutOptions::ACROBAT).show(ui, |ui, body| {
-//!     if let Some(pass) = body.pass {
-//!         reply = Some(ToolHost::new().run(ui, pass, &mut tool));
-//!     }
-//!     TextMarks::new(&body.pages, &marks).show_at(ui, body.rect);
-//! });
-//! if let Some(view) = reply.and_then(|reply| reply.view) { out.adopt(&mut view_state, &view); }
+//! PageView::new("Pages", &doc_pages, &mut view_state, paper).show_with(ui, &mut tool,
+//!     |ui, body, tool| body.pass.and_then(|pass| ToolHost::new().run(ui, pass, tool).view),
+//!     |ui, body, _| { TextMarks::new(body.pages, &marks).show_at(ui, body.rect); });
 //! ```
 
 mod pager;
@@ -34,7 +27,7 @@ use craft_behavior::{CanvasView, NavMove, PressPhase, ZoomLadder};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardOutput, ToolPass,
-    canvas_space, tool_pass,
+    canvas_space, tool_pass, with_canvas_space,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::PaintSlot;
@@ -238,7 +231,7 @@ pub struct PlacedPage {
     pub scale: f64,
     /// The part of the page's height that shows (screen points from its top).
     pub band: (f32, f32),
-    /// What the page's picture shows this pass.
+    /// What the page's picture shows this pass; `Missing` during the geometry-only pre-draw callback.
     pub picture: TextureState,
 }
 
@@ -271,8 +264,7 @@ pub struct PageBody<'b> {
     pub pages: &'b [PlacedPage],
     /// The view the canvas shows this pass.
     pub view: CanvasView,
-    /// The canvas's tool input of this pass, which the app's tool host runs on; `None` in a measuring run, where no
-    /// tool runs.
+    /// The canvas's tool input of this pass; `None` in a measuring run. Run the tool host only in the pre-draw callback.
     pub pass: Option<&'b ToolPass>,
 }
 
@@ -303,25 +295,6 @@ pub struct PageViewOutput {
     pub textures: TextureStatistics,
     /// The spacing the pass laid the pages out with.
     pub spacing: PageSpacing,
-    frame: Frame,
-}
-
-impl PageViewOutput {
-    /// Takes the view a tool host reported (`ToolHostResponse::view`, from the Hand and Zoom tools) into `state`:
-    /// the scroll offset, and the zoom when it changed (a fit ends). In a continuous view the current page follows
-    /// the offset.
-    pub fn adopt(&self, state: &mut PageViewState, view: &CanvasView) {
-        let frame = self.frame;
-        if (view.zoom - frame.zoom).abs() > frame.zoom * 1e-9 {
-            state.fit = Fit::None;
-            state.zoom = (view.zoom).clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end());
-        }
-        let size = view.rect.size();
-        state.offset = frame.offset_of(view.center, f64::from(size.x), f64::from(size.y));
-        if state.continuous && !self.layout.rects.is_empty() {
-            state.current = shown_most(&self.layout, state.current, state.offset.1, f64::from(size.y));
-        }
-    }
 }
 
 /// The page view, built per pass over the app's [`PageSource`] and [`PageViewState`].
@@ -335,13 +308,13 @@ impl PageViewOutput {
 /// - Layout: a scale the fit or the app changes keeps the document point at the centre of the view in place; a new
 ///   room keeps the current page's top where it was. Pages (a page or spread, or a scrolling column) shorter than
 ///   the view without their margins sit in its middle.
-/// - Keys: the arrows go to the app's tool host first ([`PageBody::pass`]); the view moves with those it leaves, in
+/// - Keys: the arrows go to the app's pre-draw tool host first ([`PageBody::pass`]); the view moves with those it leaves, in
 ///   the same pass.
 /// - Scrolling: the canvas folds in the wheel (the wheel scrolls, Shift or Ctrl/Cmd + wheel scrolls sideways, Alt +
 ///   wheel and a pinch zoom about the pointer, as [`NavigationOptions`] say) and the view commands; the view
 ///   reads the result back into its state. [`CanvasScrollbars`] land in their own pass. Not continuous, a page
 ///   that fits turns with the wheel instead, and one zoomed in far enough to pan pans and turns the page at its
-///   edge. Space-drag and the Hand and Zoom tools run in the app's `ToolHost`, in its body ([`PageBody::pass`]).
+///   edge. Space-drag and the Hand and Zoom tools run in the app's pre-draw `ToolHost` ([`PageBody::pass`]).
 /// - Current page: the page whose rectangle holds the view's middle line (ties at half a point go to the earlier
 ///   page).
 /// - AccessKit: a canvas named by the app; pages-b's describer adds the text under it.
@@ -419,21 +392,33 @@ impl<'a> PageView<'a> {
         self
     }
 
-    /// Shows the view in the room left in `ui`, and runs `body` for the app's canvas controls (margins, zones,
-    /// marks, grids), which it shows with `show_at(ui, body.rect)`, and its tool host, which runs on `body.pass`.
+    /// Shows the view in the room left in `ui`, and runs `body` for the app's overlays.
     /// `body` runs on every run of the canvas body (the measuring run and the real one), so it builds what it shows
     /// each time and consumes nothing.
-    pub fn show(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
+    pub fn show(self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
         let rect = ui.available_rect_before_wrap();
-        self.run(ui, rect, true, body)
+        self.run(ui, rect, true, &mut (), |_, _, _| None, |ui, page, _| body(ui, page))
     }
 
     /// Shows the view at `rect` without allocating (a pane of split views).
-    pub fn show_at(self, ui: &mut Ui, rect: Rect, body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
-        self.run(ui, rect, false, body)
+    pub fn show_at(self, ui: &mut Ui, rect: Rect, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
+        self.run(ui, rect, false, &mut (), |_, _, _| None, |ui, page, _| body(ui, page))
     }
 
-    fn run(self, ui: &mut Ui, rect: Rect, take_room: bool, mut body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
+    /// Shows the view at `rect`, registering controls and running tools in `before` before drawing.
+    /// Return the view reported by the tool host; `body` receives the resulting placement for overlays.
+    /// Both callbacks borrow `session` in sequence and run on measuring and real passes.
+    pub fn show_at_with<T>(self, ui: &mut Ui, rect: Rect, session: &mut T, before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
+        self.run(ui, rect, false, session, before, body)
+    }
+
+    /// Shows the view in the available room with a pre-draw tool callback and an overlay callback.
+    pub fn show_with<T>(self, ui: &mut Ui, session: &mut T, before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
+        let rect = ui.available_rect_before_wrap();
+        self.run(ui, rect, true, session, before, body)
+    }
+
+    fn run<T>(self, ui: &mut Ui, rect: Rect, take_room: bool, session: &mut T, mut before: impl FnMut(&mut Ui, &PageBody<'_>, &mut T) -> Option<CanvasView>, mut body: impl FnMut(&mut Ui, &PageBody<'_>, &mut T)) -> PageViewOutput {
         let PageView { label, source, state, options, navigation, bodies, describer, paper, border, keep } = self;
         let spacing = PageMetrics::new().show_at(ui, Rect::from_min_size(rect.min, Vec2::ZERO)).spacing;
         let count = source.page_count();
@@ -460,9 +445,9 @@ impl<'a> PageView<'a> {
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let inputs = Inputs { source, describer, build: &build, rect, given, paper, navigation, border, keep };
-            let (mut next, pending) = run_pass(ui, cx, &mut held, &inputs)?;
+            let (mut next, pending) = run_pass(ui, cx, &mut held, &inputs, |ui, page| before(ui, page, session))?;
             let pass = tool_pass(&cx.env);
-            body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
+            with_canvas_space(ui, pending.space, |ui| body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() }, session));
             // The body's tool host took the arrows a tool claims; the view moves with the keys it left.
             pending.finish(ui.ctx(), &mut next, &inputs);
             let decided = next.next.clone();
@@ -498,7 +483,6 @@ impl<'a> PageView<'a> {
             pasteboard: seen.pasteboard,
             textures: seen.textures,
             spacing,
-            frame: seen.frame,
         }
     }
 }
@@ -623,15 +607,15 @@ impl Frame {
 /// One pass of the canvas body up to the app's body: layout, the wheel, a pinch and a pan folded into the state; the
 /// pasteboard, the pictures and the scroll bars drawn. The keys, the turns and the go-to wait for [`Pending::finish`],
 /// after the app's body.
-fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>) -> Option<(Seen, Pending)> {
+fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>, inputs: &Inputs<'_>, mut before: impl FnMut(&mut Ui, &PageBody<'_>) -> Option<CanvasView>) -> Option<(Seen, Pending)> {
     let Inputs { source, describer, build, rect, given, paper, navigation, border, keep } = *inputs;
     let mut state = held.read(cx)?;
     let started = state.clone();
     state.normalise();
-    let space = canvas_space(&cx.env)?;
+    let mut space = canvas_space(&cx.env)?;
     // The canvas's settled view decides the zoom and the pan; the view on screen, part way there while a zoom eases,
     // draws.
-    let (target, shown) = (space.target(), space.view);
+    let (target, mut shown) = (space.target(), space.view);
     let wheel = space.wheel();
     let env = Env::of(ui);
     let words = env.words::<PageViewWords>();
@@ -696,6 +680,36 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     let wheel_turned = wheel
         .filter(|_| !state.continuous)
         .and_then(|wheel| wheel_turn(&wheel, edge_ahead(&geo, state.offset.1, vh, wheel.scroll.y < 0.0), f64::from(navigation.wheel_line)));
+
+    let preliminary_view = shown.visible();
+    let preliminary_view = DocRect::new(
+        preliminary_view.x0 * drawn_frame.zoom + drawn_frame.origin.x, preliminary_view.y0 * drawn_frame.zoom + drawn_frame.origin.y,
+        preliminary_view.x1 * drawn_frame.zoom + drawn_frame.origin.x, preliminary_view.y1 * drawn_frame.zoom + drawn_frame.origin.y,
+    );
+    let preliminary: Vec<PlacedPage> = drawn.row.clone().filter_map(|page| {
+        if !overlaps(band_rect(&drawn.layout, page), preliminary_view) { return None; }
+        let r = drawn_frame.document_rect(&drawn.layout.rects[page]);
+        let rect = Rect::from_min_max(shown.to_screen(Point::new(r.x0, r.y0)), shown.to_screen(Point::new(r.x1, r.y1)));
+        let ratio = shown.zoom / drawn_frame.zoom;
+        let band = (drawn.layout.bands[page].0 as f32 * ratio as f32, drawn.layout.bands[page].1 as f32 * ratio as f32);
+        Some(PlacedPage::new(page, rect, drawn.scale * ratio, band, TextureState::Missing))
+    }).collect();
+    let slot = PaintSlot::reserve(&ui.painter_at(cx.rect));
+    let pass = tool_pass(&cx.env);
+    let tool_view = before(ui, &PageBody { rect: cx.rect, pages: &preliminary, view: shown, pass: pass.as_ref() });
+    let pre_shapes = slot.take_after(ui.ctx());
+    if let Some(view) = tool_view {
+        space.set_view(view);
+        shown = space.view;
+        if (view.zoom - drawn_frame.zoom).abs() > drawn_frame.zoom * 1e-9 {
+            state.fit = Fit::None;
+            state.zoom = view.zoom.clamp(*ZOOM_RANGE.start(), *ZOOM_RANGE.end());
+            geo = build.of(&state);
+        }
+        want = Frame::of(&geo).offset_of(view.center, vw, vh);
+    }
+
+    with_canvas_space(ui, space, |ui| {
 
     // The pasteboard and the pictures are drawn through the view the canvas shows; a zoom still
     // under way draws the layout the view was made for, scaled. A pointer zoom runs while the canvas zooms this pass
@@ -784,7 +798,9 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
     };
     let pending =
         Pending { started, state, mem, geo, want, bar_want, wheel_turned, pointer_zoom, started_on, space, edit: words.edit.as_str().to_owned() };
+    PaintSlot::reserve(&ui.painter_at(cx.rect)).extend(&ctx, pre_shapes);
     Some((seen, pending))
+    })
 }
 
 /// What a pass decides after the app's body ran in it: the keys the body's tool host left, the turns, the go-to and
