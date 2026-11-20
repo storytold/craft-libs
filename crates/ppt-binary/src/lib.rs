@@ -78,7 +78,7 @@ pub fn import_checked(bytes: &[u8], defaults: &dyn Defaults) -> Result<(Presenta
     // PowerPoint 97 path, which refuses older formats as too old.
     if let Some(document) = ppt95::document(&stream) {
         let p = ppt95::convert(&document, defaults);
-        let lost = ppt95::lost(&document, &p);
+        let lost = ppt95::lost(&document);
         return Ok((p, lost));
     }
     let current_user = file.read_path_capped("Current User", cap).unwrap_or_default();
