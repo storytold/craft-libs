@@ -4,9 +4,7 @@ Easing curves, keyed tracks, constant-speed motion paths and damped springs for 
 Craft apps. The crate depends only on the standard library, with `serde` as an optional feature
 (on by default). It builds for `wasm32-unknown-unknown`.
 
-Moved from StudioCraft's `craft-ease`
-([`crates/craft-ease`](https://github.com/blamejs/StudioCraft/tree/b1ead5a9db0d478bf7171ce9e942e600ca500fea/crates/craft-ease)).
-Parts of it started in other Craft apps:
+Its parts come from AniCraft and EffectCraft:
 
 - `Easing`, `CustomEase`, `SampledEase` and the curve editing came from AniCraft's `anicraft-doc`
   (`crates/doc/src/easing.rs`). They now use `f64` and the crate's own `Vec2`, the Back and

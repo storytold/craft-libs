@@ -118,7 +118,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-ease`](crates/ease/README.md): easing curves, keyed tracks, constant-speed motion paths
   and damped springs for animation: named eases, CSS `cubic-bezier()`, speed and influence,
   editable custom and sampled curves, hold keys and a spring stepped by its exact solution.
-  From StudioCraft, AniCraft and EffectCraft. No dependencies without the optional `serde` feature.
+  From AniCraft and EffectCraft. No dependencies without the optional `serde` feature.
 - [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
 - [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
