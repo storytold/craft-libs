@@ -35,7 +35,7 @@ const DOCUMENT_STREAM: &str = "PowerPoint Document";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PptError {
-    #[error("not a PowerPoint 97-2003 presentation")]
+    #[error("not a PowerPoint 95 or 97-2003 presentation")]
     NotPpt,
     #[error("the presentation is password-protected")]
     Encrypted,
