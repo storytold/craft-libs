@@ -26,9 +26,8 @@ fn text_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = *data.choice("size", ControlSize::Md, &SIZES);
     let placeholder = data.value("placeholder", String::from("Layer name")).clone();
     let out = FieldGroup::new("Text field states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
-        let first = row("Empty").show(ui, |ui, _| {
-            TextField::new("Name", data.bind("name", String::new())).placeholder(placeholder.clone()).size(size).show(ui)
-        });
+        let first = row("Empty")
+            .show(ui, |ui, _| TextField::new("Name", data.bind("name", String::new())).placeholder(placeholder.clone()).size(size).show(ui));
         row("Filled").show(ui, |ui, _| {
             TextField::new("Layer", Bind::bound(&mut String::from("Background"))).placeholder(placeholder.clone()).size(size).show(ui);
         });
@@ -127,11 +126,7 @@ fn text_field_search_filled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
 fn text_field_adorned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    TextField::new("Font", data.bind("font", "Inter".to_owned()))
-        .leading(IconSpec::svg(IconId::new("search")))
-        .trailing_arrow()
-        .show(ui)
-        .into()
+    TextField::new("Font", data.bind("font", "Inter".to_owned())).leading(IconSpec::svg(IconId::new("search"))).trailing_arrow().show(ui).into()
 }
 
 /// Completes spreadsheet functions: each candidate marked "ƒ", with what it does under the list.

@@ -52,9 +52,5 @@ fn range_slider_ticks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(RangeSlider<'static>, covers = [], drive = Drive::Never)]
 fn range_slider_track_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    RangeSlider::new(data.bind("range", LEVEL), RANGE)
-        .track_face(TrackFace::new(Progress::new(1.0).label("Track")))
-        .label("Hue")
-        .show(ui)
-        .into()
+    RangeSlider::new(data.bind("range", LEVEL), RANGE).track_face(TrackFace::new(Progress::new(1.0).label("Track"))).label("Hue").show(ui).into()
 }

@@ -85,10 +85,7 @@ fn print_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]
 fn print_dialog_discovering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = sheet(ui, false);
-    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()), &sheet)
-        .discovering(true)
-        .show(ui)
-        .into()
+    PrintDialog::new(data.bind("settings", Settings::default()), &[], Bind::given(DialogFields::default()), &sheet).discovering(true).show(ui).into()
 }
 
 #[story(PrintDialog<'static>, covers = [], drive = Drive::Never)]

@@ -36,8 +36,7 @@ fn with_readout(data: &mut StoryData, shown: SwatchTableOutput) -> StoryOutput {
 #[story(SwatchTable<'static>, covers = [Default, Many], drive = Drive::Never)]
 fn swatch_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
-    let shown =
-        SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(5usize))).per_row(16).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(5usize))).per_row(16).show_all(ui);
     with_readout(data, shown)
 }
 
@@ -45,8 +44,7 @@ fn swatch_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
-    let shown =
-        SwatchTable::new("Color Table", &entries).multiple(true).selection(data.bind("selected", start)).per_row(16).show_all(ui);
+    let shown = SwatchTable::new("Color Table", &entries).multiple(true).selection(data.bind("selected", start)).per_row(16).show_all(ui);
     with_readout(data, shown)
 }
 

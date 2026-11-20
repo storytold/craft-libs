@@ -302,10 +302,10 @@ fn mask_thumb(cx: &ContentPainterCx, rect: Rect) {
 fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let linked = *data.value("linked", [true; 2]);
     let target = *data.value("target", ThumbTarget::Extra(0));
-    let out = List::<usize>::new("Layers")
-        .natural_height(true)
-        .selection(data.bind("selection", Selection::single(0_usize)))
-        .show_items(ui, &Labels(&MASK_ROWS), &mut |key, icx| {
+    let out = List::<usize>::new("Layers").natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &Labels(&MASK_ROWS),
+        &mut |key, icx| {
             let row = ListRow::new(MASK_ROWS[*key]).state(icx.row.clone()).thumb(ThumbSize::Medium, layer_thumb);
             match *key {
                 0 => row
@@ -317,7 +317,8 @@ fn list_masks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 1 => row.clipped(true),
                 _ => row.italic(true),
             }
-        });
+        },
+    );
     for event in &out.events {
         match event {
             CollectionEvent::Item(0, RowEvent::LinkToggled { thumb, linked: on, .. }) => {
@@ -420,11 +421,10 @@ impl ItemSource<usize> for TreeNodes<'_> {}
 fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let open = data.value("open", first_open()).clone();
     let shown = shown_nodes(&open);
-    let out = List::<usize>::new("Layers")
-        .tree(true)
-        .natural_height(true)
-        .selection(data.bind("selection", Selection::single(0_usize)))
-        .show_items(ui, &TreeNodes { shown: &shown, open: &open }, &mut |key, _| {
+    let out = List::<usize>::new("Layers").tree(true).natural_height(true).selection(data.bind("selection", Selection::single(0_usize))).show_items(
+        ui,
+        &TreeNodes { shown: &shown, open: &open },
+        &mut |key, _| {
             let (name, depth) = TREE[*key];
             let row = ListRow::new(name).depth(depth);
             if is_group(*key) {
@@ -432,7 +432,8 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             } else {
                 row.icon(IconSpec::svg(IconId::new("check")))
             }
-        });
+        },
+    );
     let groups: Vec<usize> = (0..TREE.len()).filter(|&at| is_group(at)).collect();
     for event in &out.events {
         if let CollectionEvent::Open(change) = event {
@@ -447,11 +448,11 @@ fn list_tree_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(List<'static, usize>, covers = [], drive = Drive::Never)]
 fn list_row_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let names = names(4);
-    let out = List::<usize>::new("Layers")
-        .rename(true)
-        .row_menu()
-        .selection(data.bind("selection", Selection::single(1_usize)))
-        .show_items(ui, &Names(&names), &mut |key, _| ListRow::new(names[*key].clone()));
+    let out = List::<usize>::new("Layers").rename(true).row_menu().selection(data.bind("selection", Selection::single(1_usize))).show_items(
+        ui,
+        &Names(&names),
+        &mut |key, _| ListRow::new(names[*key].clone()),
+    );
     let menu_row = data.value("menu", None::<usize>);
     for event in &out.events {
         if let CollectionEvent::ContextMenu(request) = event {

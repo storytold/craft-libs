@@ -76,20 +76,10 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             NumberField::new("Columns", data.bind("invalid", Some(7.0)).check(refuse_all)).range(COLUMNS).size(size).show(ui);
         });
         row("Pop-up slider").show(ui, |ui, _| {
-            NumberField::new("Opacity", data.bind("opacity", Some(100.0)))
-                .range(RANGE)
-                .unit("%")
-                .popup_slider(RANGE)
-                .size(size)
-                .show(ui);
+            NumberField::new("Opacity", data.bind("opacity", Some(100.0))).range(RANGE).unit("%").popup_slider(RANGE).size(size).show(ui);
         });
         row("Zoom stops").show(ui, |ui, _| {
-            NumberField::new("Zoom", data.bind("zoom", Some(100.0)))
-                .range(0.1..=12_800.0)
-                .unit("%")
-                .stepper(zoom_step)
-                .size(size)
-                .show(ui);
+            NumberField::new("Zoom", data.bind("zoom", Some(100.0))).range(0.1..=12_800.0).unit("%").stepper(zoom_step).size(size).show(ui);
         });
         row("Disabled").show(ui, |ui, _| {
             NumberField::new("Disabled", Bind::bound(&mut Some(64.0)))

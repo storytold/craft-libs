@@ -97,7 +97,8 @@ fn select_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Select<'static, u8>, covers = [Invalid], drive = Drive::Never)]
 fn select_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = modes();
-    let bind = data.bind("invalid", 2u8)
+    let bind = data
+        .bind("invalid", 2u8)
         .check(|mode| if *mode == 2 { Validity::Refuse(Message::new("Screen is not available here")) } else { Validity::Ok });
     Select::new("Blend mode", bind, &entries).show(ui).into()
 }

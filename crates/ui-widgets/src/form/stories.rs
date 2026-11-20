@@ -17,10 +17,7 @@ const SIZE: f64 = 12.0;
 
 #[story(Field, covers = [Default], drive = Drive::Never)]
 fn field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Field::new("Size")
-        .help(Help::Text("In points".into()))
-        .show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(SIZE))).show(ui))
-        .into()
+    Field::new("Size").help(Help::Text("In points".into())).show(ui, |ui, _| NumberField::new("Size", data.bind("size", Some(SIZE))).show(ui)).into()
 }
 
 #[story(Field, covers = [], drive = Drive::Never)]
@@ -73,9 +70,10 @@ fn field_with_cross_field_error(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let mut out = None;
     FieldGroup::new("Period").show(ui, |ui, _| {
         Field::new("Start day").show(ui, |ui, _| NumberField::new("Start day", data.bind("start_day", Some(20.0))).show(ui));
-        out = Some(Field::new("End day").show(ui, |ui, _| {
-            NumberField::new("End day", data.bind("end_day", Some(5.0)).check_with(start, end_before_start)).show(ui)
-        }));
+        out = Some(
+            Field::new("End day")
+                .show(ui, |ui, _| NumberField::new("End day", data.bind("end_day", Some(5.0)).check_with(start, end_before_start)).show(ui)),
+        );
     });
     out.map(StoryOutput::from).unwrap_or_default()
 }
@@ -107,9 +105,7 @@ fn field_inspector_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 }
             });
             for (label, key, value) in [("Opacity", "opacity", 100.0), ("Angle", "angle", 0.0)] {
-                Field::new(label)
-                    .side(SideLabel::new().scrub(true))
-                    .show(ui, |ui, _| NumberField::new(label, data.bind(key, Some(value))).show(ui));
+                Field::new(label).side(SideLabel::new().scrub(true)).show(ui, |ui, _| NumberField::new(label, data.bind(key, Some(value))).show(ui));
             }
             Field::new("Fill").show(ui, |ui, _| Swatch::new("Fill", FILL).show(ui));
         })

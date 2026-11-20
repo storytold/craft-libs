@@ -18,8 +18,5 @@ fn path_field_filled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(PathField<'static>, covers = [], drive = Drive::Never)]
 fn path_field_missing_file(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    PathField::new("Open", data.bind("missing", "/photos/trip/missing.png".to_owned()), PickRequest::open("import"))
-        .must_exist(true)
-        .show(ui)
-        .into()
+    PathField::new("Open", data.bind("missing", "/photos/trip/missing.png".to_owned()), PickRequest::open("import")).must_exist(true).show(ui).into()
 }

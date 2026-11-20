@@ -54,9 +54,7 @@ static ENTRIES: LazyLock<Vec<HelpEntry>> = LazyLock::new(|| {
 fn palette(ui: &mut Ui, data: &mut StoryData, recents: Vec<CommandRef>) -> StoryOutput {
     // The palette binds two story values; it edits a copy of `open`, which goes back after the pass.
     let mut open = *data.value("open", true);
-    let out = CommandPalette::new("Command palette", ENTRIES.as_slice(), Bind::bound(&mut open))
-        .recents(data.bind("recents", recents))
-        .show(ui);
+    let out = CommandPalette::new("Command palette", ENTRIES.as_slice(), Bind::bound(&mut open)).recents(data.bind("recents", recents)).show(ui);
     *data.value("open", true) = open;
     let last = data.value("last", None::<String>);
     if let Some(picked) = &out.picked

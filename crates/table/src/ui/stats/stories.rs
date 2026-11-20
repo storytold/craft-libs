@@ -33,9 +33,7 @@ fn no_statistic_shown_is_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     let refuse_none = |shown: &StatsShown| {
         if *shown == StatsShown::default() { Validity::Refuse(Message::new("Show at least one statistic")) } else { Validity::Ok }
     };
-    SelectionStatsReadout::new("Selection statistics", &parts, data.bind("shown", StatsShown::default()).check(refuse_none))
-        .show(ui)
-        .into()
+    SelectionStatsReadout::new("Selection statistics", &parts, data.bind("shown", StatsShown::default()).check(refuse_none)).show(ui).into()
 }
 
 fn open_menu(fixture: &mut Fixture) {

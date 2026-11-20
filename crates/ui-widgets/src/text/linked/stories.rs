@@ -50,7 +50,5 @@ fn linked_fields_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Mixed::Same(Some(width)) if width > 500.0 => Validity::Refuse(Message::new("Too wide")),
         _ => Validity::Ok,
     };
-    LinkedFields::new("Size", data.bind("wide", Mixed::each([Some(900.0), Some(50.0)])).check(too_wide), Bind::given(false))
-        .show(ui)
-        .into()
+    LinkedFields::new("Size", data.bind("wide", Mixed::each([Some(900.0), Some(50.0)])).check(too_wide), Bind::given(false)).show(ui).into()
 }

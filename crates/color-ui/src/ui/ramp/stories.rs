@@ -39,10 +39,7 @@ fn color_ramp_web_safe(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn color_ramp_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_dark = |pick: &RampPick| if pick.color.b < 0.5 { Validity::Refuse(Message::new("Too dark")) } else { Validity::Ok };
     let dark = RampPick::new(Srgba::rgb(0.1, 0.1, 0.1), false);
-    ColorRamp::new("Color ramp", RampKind::Spectrum, data.bind("pick", dark).check(refuse_dark))
-        .kind_name("RGB Spectrum")
-        .show(ui)
-        .into()
+    ColorRamp::new("Color ramp", RampKind::Spectrum, data.bind("pick", dark).check(refuse_dark)).kind_name("RGB Spectrum").show(ui).into()
 }
 
 #[story(ColorRamp<'static>, covers = [], drive = Drive::Never, title = "Disabled")]

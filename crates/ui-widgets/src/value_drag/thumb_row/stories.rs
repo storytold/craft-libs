@@ -49,13 +49,7 @@ fn thumb_row_wrapping(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         Thumb::new("Hue to").face(DataColor::new(Color32::from_rgb(60, 160, 220))),
         Thumb::new("Hue to").face(DataColor::new(Color32::from_rgb(160, 60, 220))),
     ];
-    ThumbRow::new(data.bind("hues", Mixed::each([330.0, 40.0, 120.0, 250.0])), HUES)
-        .step(1.0)
-        .wrap()
-        .thumbs(thumbs)
-        .label("Hues")
-        .show(ui)
-        .into()
+    ThumbRow::new(data.bind("hues", Mixed::each([330.0, 40.0, 120.0, 250.0])), HUES).step(1.0).wrap().thumbs(thumbs).label("Hues").show(ui).into()
 }
 
 #[story(ThumbRow<'static, 4>, covers = [], drive = Drive::Never)]

@@ -110,10 +110,8 @@ fn panel_menu(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     };
     let opener = IconButton::new(IconId::new("menu")).popup(PopupKind::Menu).popup_mark(PopupMark::Menu).label("Panel menu").show(ui);
     let mut picked = None;
-    let shown = Menu::new("Panel menu")
-        .open(data.bind("open", false))
-        .opened_by(&opener, Trigger::Click)
-        .show(ui, |ui, _| picked = panel().show(ui).picked);
+    let shown =
+        Menu::new("Panel menu").open(data.bind("open", false)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| picked = panel().show(ui).picked);
     let chosen = data.note("chosen", None::<GroupItem>);
     if picked.is_some() {
         *chosen = picked;

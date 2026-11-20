@@ -134,11 +134,7 @@ fn slider_value_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(Slider<'static>, covers = [], drive = Drive::Never, group = "Looks", title = "Track face")]
 fn slider_track_face(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Slider::new(data.bind("value", 40.0), RANGE)
-        .track_face(TrackFace::new(Progress::new(1.0).label("Track")))
-        .label("Hue")
-        .show(ui)
-        .into()
+    Slider::new(data.bind("value", 40.0), RANGE).track_face(TrackFace::new(Progress::new(1.0).label("Track"))).label("Hue").show(ui).into()
 }
 
 /// A slider shown in a field: the story's subject is the slider, and its value changes through its own thumb.
