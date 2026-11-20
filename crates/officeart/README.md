@@ -28,12 +28,18 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 - `props`: a property table's entries (id, operand, complex bytes), and `Props`, a merged property
   set (a shape's tables, its master shape's and the drawing defaults') with boolean words merged
   flag by flag, at most 1024 properties and 4096 UTF-16 units a string.
-- `blip`: the BLIP store and its pictures (EMF and WMF inflated, PNG, JPEG, TIFF and DIBs as BMP
-  files) within a byte budget, locating an FBSE's picture record (embedded or in a delay stream),
-  and a decode budget charged before inflating or decoding.
+- `record` also sets the limits of a drawing walk: groups nested at most 12 deep, at most 200,000
+  records.
+- `blip`: BLIP records read (only the two instances [MS-ODRAW] gives each type; a metafile
+  deflated or stored, cut to its saved size and at most 64 MiB), the BLIP store (at most 4096
+  entries; an entry of size 0 holds nothing; its picture embedded or in a delay stream), and a
+  budget charged before every byte a picture produces, inflated or copied. Each reader sets the
+  budget's total.
 - `dib`: a DIB decoded within limits and re-encoded as a PNG, or kept as a BMP placeholder.
 - `wmf`: a WMF's placeable header, which the BLIP store leaves out, rebuilt from the BLIP's
   metafile header.
 
-Each reader still keeps some picture handling and limits of its own; making them one set is
-storytold/craft-libs#2484's next step.
+All three readers read BLIPs, property tables and drawings with these rules and limits. Each keeps
+the total of its budget and what it makes of a picture: `craft-doc-binary` turns DIBs into PNG and
+keeps PICT as a placeholder, `craft-xls` gives a WMF its placeable header back and doesn't read
+PICT or TIFF, and `craft-ppt-binary` keeps DIBs as BMP.
