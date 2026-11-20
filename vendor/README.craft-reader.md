@@ -466,6 +466,15 @@ refused-mask handling in `hayro-syntax` and `hayro-interpret` (0ed33990, 4aa732e
 the decoded-image cache of 558ffd7f (a performance change). Tests: those that came with the patches in
 `hayro-jbig2`, and PdfCraft's raster tests adapted in `hayro-jbig2/src/pdfcraft_tests.rs`.
 
+Image-decoding and decryption fixes, ported from PdfCraft pull requests by mtlcl410 that were
+open when they were ported (craft-libs #2673). Only their `hayro-syntax`, `hayro-jbig2` and
+`hayro-interpret` parts are ported. Code comments keep each pull request's `PdfCraft patch` label
+and number. The tests are in the files they name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#7323](https://github.com/storytold/pdfcraft/pull/7323) | hayro-syntax `filter/dct.rs` | Patch 56: DCTDecode data is read from its first start-of-image marker (`FF D8 FF`), so bytes before it are skipped (ISO 32000-2 §7.4.8): an inline image with more white space after `ID` than §8.9.7's one character, or an XObject whose data starts with a newline. Data with no marker is read as before and still fails | `filter::dct::pdfcraft_tests::bytes_before_the_start_of_image_marker_are_skipped`, `an_inline_jpeg_after_more_white_space_than_one_decodes`, `data_without_a_start_of_image_marker_does_not_decode` |
+
 ## Craft review note: the one direct `unsafe`
 
 `hayro-syntax/src/page.rs` holds the snapshot's only direct `unsafe` block: a
