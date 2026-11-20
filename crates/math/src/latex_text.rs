@@ -333,12 +333,26 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                     }
                 }
                 None if c.is_control() => {}
-                None => o.push(c),
+                None => {
+                    // A letter after a control word would extend it. The lookahead above only sees
+                    // the next input character, so a character dropped in between (an unmatched
+                    // `〖` or `〗`, a control character) would join `\in` and `put` into `\input`.
+                    if c.is_ascii_alphabetic() && ends_with_control_word(&o) {
+                        o.push(' ');
+                    }
+                    o.push(c);
+                }
             },
         }
         i += 1;
     }
     o.trim().to_string()
+}
+
+/// Does `o` end in a control word (`\` and letters), which a following letter would extend?
+fn ends_with_control_word(o: &str) -> bool {
+    let head = o.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    head.len() < o.len() && head.ends_with('\\')
 }
 
 fn escape_math_text(s: &str) -> String {
@@ -636,5 +650,19 @@ mod tests {
         for linear in ["a^^5cinput", "x^(^^5cinput)"] {
             assert!(!linear_to_latex(linear).contains("^^"), "{linear}");
         }
+    }
+
+    /// A character the export drops (an unmatched invisible bracket, a control character) must not
+    /// join a control word to the letters after it: `\in〗put` would otherwise be `\input`.
+    #[test]
+    fn a_dropped_character_does_not_join_a_command_to_the_next_letters() {
+        for linear in ["\\in〗put x", "\\in〖put x", "∈〗put x", "∈〖put x", "\\in\u{1}put x", "∈\u{1}put x", "\\in〗〗〖put"] {
+            let tex = linear_to_latex(linear);
+            assert!(!tex.contains("\\input"), "{linear:?} → {tex}");
+            assert!(tex.starts_with("\\in put"), "{linear:?} → {tex}");
+        }
+        // A command followed by a letter directly is still separated, and grouping still works.
+        assert_eq!(linear_to_latex("∈x"), "\\in x");
+        assert_eq!(linear_to_latex("〖a+b〗^2"), "{a+b}^2");
     }
 }
