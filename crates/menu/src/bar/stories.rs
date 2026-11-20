@@ -1,6 +1,6 @@
 //! Stories of the in-window bar over a small model.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use craft_ui::contract::Tracked;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -40,15 +40,15 @@ fn build() -> MenuBar {
     layout(&bar, Target::Linux, &LayoutOptions::new("Sample")).bar
 }
 
-/// The story's model, kept in the story's memory: a model made again each pass is a new source, and the bar would run each time.
-fn model(ui: &Ui) -> Arc<Tracked<MenuBar>> {
-    let id = ui.scope_id().with("model");
-    ui.data_mut(|data| data.get_temp_mut_or_insert_with(id, || Arc::new(Tracked::new(build()))).clone())
+/// The stories' model, made once: a model made again each pass is a new source, and the bar would run each time.
+fn model() -> Arc<Tracked<MenuBar>> {
+    static MODEL: LazyLock<Arc<Tracked<MenuBar>>> = LazyLock::new(|| Arc::new(Tracked::new(build())));
+    MODEL.clone()
 }
 
 #[story(MenuBarUi<'static>, covers = [Default], drive = Drive::Never)]
 fn menu_bar_ui(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model(ui)).target(Target::Linux).show(ui);
+    MenuBarUi::new(&model()).target(Target::Linux).show(ui);
     StoryOutput::default()
 }
 
@@ -60,12 +60,12 @@ fn open_window(fixture: &mut Fixture) {
 
 #[story(MenuBarUi<'static>, covers = [Open], drive = Drive::Custom(open_window))]
 fn menu_bar_ui_with_documents(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model(ui)).target(Target::Linux).show(ui);
+    MenuBarUi::new(&model()).target(Target::Linux).show(ui);
     StoryOutput::default()
 }
 
 #[story(MenuBarUi<'static>, covers = [], drive = Drive::Never)]
 fn menu_bar_ui_with_help_search(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    MenuBarUi::new(&model(ui)).target(Target::Linux).help_search(true).show(ui);
+    MenuBarUi::new(&model()).target(Target::Linux).help_search(true).show(ui);
     StoryOutput::default()
 }

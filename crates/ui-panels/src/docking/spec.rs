@@ -69,7 +69,7 @@ pub struct DockGrid {
 enum GridWidths {
     /// `first`: the content's width at one column, a cell and the content's own padding on both sides; `step`: the
     /// width each further column adds, a cell and the gap before it.
-    Points { first: f32, step: f32 },
+    Content { first: f32, step: f32 },
     /// A tool rail's cells, sized by the dock's style.
     Rail,
 }
@@ -77,7 +77,7 @@ enum GridWidths {
 impl DockGrid {
     /// A grid `first` wide at one column, `step` wider for each further column, up to `most` columns.
     pub const fn new(first: f32, step: f32, most: u16) -> Self {
-        DockGrid { widths: GridWidths::Points { first, step }, most }
+        DockGrid { widths: GridWidths::Content { first, step }, most }
     }
 
     /// The grid of a tool rail of `cells` cells: a rail button and the control padding on both sides at one column,
@@ -89,7 +89,7 @@ impl DockGrid {
     /// The grid with its widths in points: a [`rail`](Self::rail) grid takes the rail widths of `sizes`.
     pub fn resolved(self, sizes: &DockSizes) -> Self {
         match self.widths {
-            GridWidths::Points { .. } => self,
+            GridWidths::Content { .. } => self,
             GridWidths::Rail => DockGrid::new(sizes.rail_first, sizes.rail_step, self.most),
         }
     }
@@ -98,7 +98,7 @@ impl DockGrid {
     /// [`resolved`](Self::resolved).
     fn first_step(self) -> (f32, f32) {
         match self.widths {
-            GridWidths::Points { first, step } => (first, step),
+            GridWidths::Content { first, step } => (first, step),
             GridWidths::Rail => (0.0, 0.0),
         }
     }
