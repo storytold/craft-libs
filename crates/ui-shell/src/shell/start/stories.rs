@@ -95,9 +95,9 @@ fn screen(
     templates: &[Template],
     extras: Extras<'_>,
 ) -> StoryOutput {
-    let mut choice = data.value("choice", choice).clone();
+    let (choice, choice_at) = data.value_at("choice", choice);
     let thumbnails = Thumbnails::<ThumbKey>::in_context(ui.ctx(), "start-stories", ThumbnailOptions::new());
-    let mut start = StartScreen::new(Bind::bound(&mut choice.view), Bind::bound(&mut choice.sort), files)
+    let mut start = StartScreen::new(choice_at.bind(&mut choice.view), choice_at.bind(&mut choice.sort), files)
         .pinned(pinned)
         .templates(templates)
         .now(NOW)
@@ -108,9 +108,7 @@ fn screen(
     if let Some(hint) = extras.drop_hint {
         start = start.drop_hint(Label::from(hint.to_owned()));
     }
-    let shown = start.show(ui).into();
-    *data.value("choice", Choice::default()) = choice;
-    shown
+    start.show(ui).into()
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

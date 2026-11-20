@@ -52,7 +52,7 @@ fn drag_out_of_the_top_ruler(fixture: &mut Fixture) {
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_out_of_the_top_ruler))]
 fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
+    let (guides, guides_at) = data.value_at("guides", guides());
     let mut zero = Point::ZERO;
     let canvas = ui.scope_id().with("guides story canvas");
     let room = stage(ui);
@@ -63,7 +63,7 @@ fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let strips = Rulers::new("Rulers", Bind::bound(&mut zero)).interactive(true);
     let shown = Canvas::new("Document").id(canvas).view(view).with_rulers(Some(strips)).rulers(text, text).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
-        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).show_at(ui, body.rect)
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).show_at(ui, body.rect)
     });
     let mut output: StoryOutput = shown.inner.map(Into::into).unwrap_or_default();
     // A click on a strip is the rulers' to report.
@@ -73,36 +73,36 @@ fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
 fn guides_over_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
+    let (guides, guides_at) = data.value_at("guides", guides());
     on_guides_canvas(ui, |ui, at, canvas| {
-        Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).selected_guide(GuideKey::new(2)).show_at(ui, at)
+        Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).selected_guide(GuideKey::new(2)).show_at(ui, at)
     })
 }
 
 #[story(Guides<'static>, covers = [Mixed], drive = Drive::Custom(drag_first))]
 fn guides_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", Mixed::<Vec<Guide>>::Mixed);
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound_mixed(&mut *guides)).interactive(true).show_at(ui, at))
+    let (guides, guides_at) = data.value_at("guides", Mixed::<Vec<Guide>>::Mixed);
+    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind_mixed(&mut *guides)).interactive(true).show_at(ui, at))
 }
 
 #[story(Guides<'static>, covers = [Invalid], drive = Drive::Custom(drag_first))]
 fn too_many_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
+    let (guides, guides_at) = data.value_at("guides", guides());
     let few = |guides: &Vec<Guide>| {
         if guides.len() > MOST_GUIDES { Validity::Refuse(Message::new("There are too many guides")) } else { Validity::Ok }
     };
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides).check(few)).interactive(true).show_at(ui, at))
+    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides).check(few)).interactive(true).show_at(ui, at))
 }
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
 fn guides_that_only_draw(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides)).show_at(ui, at))
+    let (guides, guides_at) = data.value_at("guides", guides());
+    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).show_at(ui, at))
 }
 
 #[story(Guides<'static>, covers = [Default], drive = Drive::Custom(drag_first))]
 fn bounded_guides(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let guides = data.value("guides", guides());
+    let (guides, guides_at) = data.value_at("guides", guides());
     let page = DocRect::new(120.0, 80.0, 520.0, 320.0);
-    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, Bind::bound(&mut *guides)).interactive(true).bounds(page).show_at(ui, at))
+    on_guides_canvas(ui, |ui, at, canvas| Guides::new("Guides", canvas, guides_at.bind(&mut *guides)).interactive(true).bounds(page).show_at(ui, at))
 }

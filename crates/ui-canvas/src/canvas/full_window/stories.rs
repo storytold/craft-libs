@@ -55,7 +55,7 @@ fn liquify_shell(ui: &mut Ui, data: &mut StoryData, own_window: bool) -> StoryOu
         dialog = dialog.own_window(WindowSpec::dialog());
     }
     let shown: StoryOutput = dialog
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .buttons(buttons)
         .sides(|ui, _| {
             FullWindowSide::new("Properties").show(ui, |ui, _| {

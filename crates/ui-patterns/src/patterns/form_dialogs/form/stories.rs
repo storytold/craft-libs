@@ -70,29 +70,27 @@ fn form_dialog_body_accept(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A form without OK: Close, and the Mark (Enter) and Mark All buttons, which count what they marked.
 #[story(FormDialog<'static, bool>, covers = [], drive = Drive::Never)]
 fn form_dialog_close(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let mut open = *data.value("open", false);
+    let ((open, open_at), (entry, entry_at)) = data.pair_at(("open", false), ("entry", "Craft".to_owned()));
     if clicked(&Button::new("Mark Entry…").show(ui)) {
-        open = true;
+        *open = true;
     }
-    let mut entry = data.value("entry", "Craft".to_owned()).clone();
-    let output = FormDialog::new("Mark Entry", Bind::bound(&mut entry))
-        .opened(Bind::bound(&mut open))
+    let output = FormDialog::new("Mark Entry", entry_at.bind(&mut *entry))
+        .opened(open_at.bind(&mut *open))
         .buttons(FormButtons::Close)
         .extra_buttons([FooterButton::new("Mark", DialogRole::Accept), FooterButton::new("Mark All", DialogRole::Other)])
         .show(ui, |ui, _, value| {
             TextField::new("Entry", Bind::bound(value)).show(ui);
             true
         });
+    if let Some(value) = output.value {
+        *entry = value;
+    }
     let marked = match output.picked {
         Some(2) => 1,
         Some(3) => 10,
         _ => 0,
     };
     *data.value("marked", 0_u32) += marked;
-    *data.value("open", false) = open;
-    if let Some(value) = output.value {
-        *data.value("entry", String::new()) = value;
-    }
     output.response.into()
 }
 
@@ -100,7 +98,7 @@ fn form_dialog_close(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn form_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let ok_enabled = *data.value("ok_enabled", true);
     FormDialog::own("Options")
-        .opened(Bind::bound(data.value("open", true)))
+        .opened(data.bind("open", true))
         .show(ui, |ui, _, value| {
             Checkbox::new(Bind::bound(value)).label(Label::from("Smooth")).show(ui);
             ok_enabled

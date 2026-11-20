@@ -73,12 +73,12 @@ impl GallerySettings {
             direction: DIRECTIONS.name(env.direction).to_owned(),
             workspace: workspace_name(viewer.workspace).to_owned(),
             preview: preview_name(viewer.preview).to_owned(),
-            level: browser.level.clone(),
+            level: (*browser.level).clone(),
             stories: browser.story_of.iter().map(|(component, story)| ((*component).to_owned(), (*story).to_owned())).collect(),
-            filter: browser.filter.clone(),
+            filter: (*browser.filter).clone(),
             selected: viewer.selected_type().unwrap_or_default().to_owned(),
             open_levels: viewer.open_levels(),
-            dock: layout::save(&browser.dock),
+            dock: layout::save(&viewer.dock),
             theme_dock: layout::save(&viewer.theme_dock),
         }
     }

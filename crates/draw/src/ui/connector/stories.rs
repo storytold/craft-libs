@@ -71,7 +71,7 @@ fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, targets: &[ConnectionTarget], mu
 #[story(ConnectorHandles<'static>, covers = [Default], drive = Drive::Drag(Grip::part(super::handles::END.at(0)).toward(vec2(0.0, 1.0))))]
 fn connector_glued_at_both_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let targets = targets();
-    let item = data.value(
+    let (item, item_at) = data.value_at(
         "item",
         ConnectorItem {
             id: 9,
@@ -81,7 +81,7 @@ fn connector_glued_at_both_ends(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
             path: None,
         },
     );
-    on_canvas(ui, &targets, |ui, at| ConnectorHandles::new("Connector", Bind::bound(&mut *item), &targets).show_at(ui, at))
+    on_canvas(ui, &targets, |ui, at| ConnectorHandles::new("Connector", item_at.bind(&mut *item), &targets).show_at(ui, at))
 }
 
 /// The arrowhead previews of the cap choices, at the line's start or end.

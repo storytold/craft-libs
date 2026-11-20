@@ -14,7 +14,7 @@ use std::sync::Arc;
 mod stories;
 
 /// Which drawings an [`InspectOverlay`] shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, crate::contract::MemoProps, crate::contract::PlainData)]
 #[non_exhaustive]
 pub struct InspectLayers {
     /// Each element's box, its padding filled.

@@ -162,8 +162,9 @@ fn show_places(ui: &mut Ui, data: &mut StoryData, setup: Setup) -> StoryOutput {
         })
         .clone();
     let mut demo = demo.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // The framework's repaint runs the story's view again, where the next jobs run.
     if !setup.slow && demo.jobs.run_all() > 0 {
-        ctx.request_repaint();
+        craft_ui::runtime::frame::request_repaint(&ctx);
     }
     let current = demo.current.clone();
     let places = {

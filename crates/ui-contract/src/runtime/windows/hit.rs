@@ -35,6 +35,8 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
+crate::stays!(WindowHit);
+
 /// What a part of the window does for the operating system: a press on it moves the window, resizes it from an edge,
 /// or is a caption button. A component tags a part with it through `PartBuilder::exclusive`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -307,8 +309,8 @@ pub(super) fn with_exclusive<R>(ctx: &Context, viewport: ViewportId, f: impl FnO
     )
 }
 
-/// Records that `part` of the component `owner` is, over `rect`, what `hit` says for the running viewport's window.
-/// A part declared again in the same pass replaces its entry. A settled region that replays its last run declares
+/// Records that `part` of the component `owner` is, over `rect`, what `hit` says for the running viewport's window. A
+/// part declared again in the same pass replaces its entry. A settled memoized view that replays its last run declares
 /// its parts again, so a settled title bar keeps its caption regions.
 pub(crate) fn note_exclusive(ctx: &Context, owner: Id, part: PartRef, hit: WindowHit, rect: Rect) {
     crate::runtime::replay::journal(ctx, || (owner, part, hit, rect), |ctx, &(owner, part, hit, rect)| note_exclusive(ctx, owner, part, hit, rect));

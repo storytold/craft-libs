@@ -2087,6 +2087,8 @@ dependencies = [
  "craft-host",
  "craft-keymap",
  "craft-theme",
+ "craft-tracked",
+ "craft-ui-macros",
  "emath",
  "kurbo",
  "serde",
@@ -4333,6 +4335,7 @@ dependencies = [
  "smallvec",
  "syn 2.0.119",
  "toml",
+ "typeid",
  "web-time",
 ]
 
@@ -12939,6 +12942,12 @@ name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+
+[[package]]
+name = "typeid"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
 
 [[package]]
 name = "typenum"

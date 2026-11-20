@@ -12,16 +12,16 @@ use egui::Ui;
 
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn page_setup(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let setup = data.value("setup", PageSetup::default());
-    PageSetupDialog::new(Bind::bound(setup)).layout().direction().opened(Bind::given(true)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", PageSetup::default());
+    PageSetupDialog::new(setup_at.bind(setup)).layout().direction().opened(Bind::given(true)).show(ui);
     StoryOutput::default()
 }
 
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn document_setup(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = PageSetup { pages: Some(8), mirrored: true, ..PageSetup::default() };
-    let setup = data.value("setup", start);
-    PageSetupDialog::new(Bind::bound(setup)).document_setup().unit(UnitKind::Millimetres).opened(Bind::given(true)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", start);
+    PageSetupDialog::new(setup_at.bind(setup)).document_setup().unit(UnitKind::Millimetres).opened(Bind::given(true)).show(ui);
     StoryOutput::default()
 }
 
@@ -35,8 +35,8 @@ fn gridded() -> PageSetup {
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn page_setup_word(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = PageSetup { grid: Some(DocumentGrid::new(GridKind::None, 36, 39)), ..PageSetup::default() };
-    let setup = data.value("setup", start);
-    PageSetupDialog::new(Bind::bound(setup)).layout().direction().opened(Bind::given(true)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", start);
+    PageSetupDialog::new(setup_at.bind(setup)).layout().direction().opened(Bind::given(true)).show(ui);
     StoryOutput::default()
 }
 
@@ -47,8 +47,8 @@ fn page_setup_grid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     if clicked(&Button::new("Page Setup\u{2026}").show(ui)) {
         open = true;
     }
-    let setup = data.value("setup", gridded());
-    PageSetupDialog::new(Bind::bound(setup)).opened(Bind::bound(&mut open)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", gridded());
+    PageSetupDialog::new(setup_at.bind(setup)).opened(Bind::bound(&mut open)).show(ui);
     *data.value("open", false) = open;
     StoryOutput::default()
 }

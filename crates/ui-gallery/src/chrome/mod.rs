@@ -15,6 +15,6 @@ pub use card::{BodyShown, Card, CardEvents, CardStory, Look, StoryBody};
 pub use inspect::{Inspect, Inspected, region_key};
 pub use options::options_bar;
 pub use overview::{Spec, SpecStory, overview_card};
-pub use panels::Panels;
+pub use panels::ThemePanels;
 pub use persist::Persisted;
 pub use shell::Gallery;

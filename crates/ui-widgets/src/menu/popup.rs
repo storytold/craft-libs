@@ -353,7 +353,7 @@ impl Component for Menu<'_> {
         level.resume(cx.core.ctx.cumulative_pass_nr());
         while let Some((mv, _)) = cx.intents().take_move() {
             if level.step_active(mv) {
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
         // Enter routed from the field arrives as the menu's own activation by key: the row it names runs, and the run
@@ -363,7 +363,7 @@ impl Component for Menu<'_> {
         {
             cx.keep_open();
             level.run(row);
-            frame::request_own_repaint(&cx.core.ctx);
+            frame::request_repaint(&cx.core.ctx);
         }
         // The rows run after this, so the pass that moved the pointer onto a row paints it, and the row it left, as the
         // level now has them.
@@ -393,7 +393,7 @@ impl Component for Menu<'_> {
             cx.claim(chord);
             if cx.take_claimed(chord) {
                 level.run(row);
-                frame::request_own_repaint(&cx.core.ctx);
+                frame::request_repaint(&cx.core.ctx);
             }
         }
     }
