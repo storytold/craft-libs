@@ -310,6 +310,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-opc`](crates/opc/README.md): Open Packaging Conventions, the ZIP container of DOCX, XLSX and PPTX
   files: bounded readers (every part up front, or on demand), part names, relationships, content
   types and a deterministic package writer. What the parts hold stays with each format's crate.
+- [`craft-plugin-abi`](crates/plugin-abi/README.md): "craft-abi 1" for WebAssembly plugins: the manifest, permission names, host call numbers and the install-time policy gate that checks a package before any guest code runs. No engine. Builds for `wasm32`.
 - [`craft-pcraft-format`](crates/pcraft-format/README.md): the envelope of PhotoCraft's `.pcraft`
   bundle: `Manifest<D>` with the document as a type parameter, `TileRef`, the entry paths, the
   manifest decode limits and the migration runner. The document model stays in PhotoCraft.
