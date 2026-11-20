@@ -1634,6 +1634,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media",
  "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
@@ -1793,9 +1794,13 @@ dependencies = [
 name = "craft-develop"
 version = "0.1.0"
 dependencies = [
+ "craft-color-transform",
  "craft-develop-model",
+ "craft-render-parity",
  "proptest",
+ "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2086,6 +2091,7 @@ dependencies = [
  "craft-dxf",
  "craft-eps",
  "craft-file-formats",
+ "craft-image-codecs",
  "craft-pdf 0.1.0",
  "craft-raster-codecs",
  "craft-svg",
@@ -2968,6 +2974,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ppt-binary"
+version = "0.1.0"
+dependencies = [
+ "craft-cfb",
+ "craft-drawingml",
+ "craft-pptx",
+ "image",
+ "log",
+ "miniz_oxide 0.8.9",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-pptx"
 version = "0.1.0"
 dependencies = [
@@ -3258,6 +3277,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sqlite"
+version = "0.1.0"
+
+[[package]]
 name = "craft-ssip"
 version = "0.1.0"
 
@@ -3486,6 +3509,7 @@ dependencies = [
 name = "craft-usd"
 version = "0.1.0"
 dependencies = [
+ "half",
  "lz4_flex",
  "thiserror 2.0.21",
 ]

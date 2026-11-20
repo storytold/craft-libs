@@ -21,6 +21,7 @@ craft-xfdf = { path = "crates/xfdf" }
 craft-jsonc = { path = "crates/jsonc" }
 craft-palette = { path = "crates/palette" }
 craft-score = { path = "crates/score" }
+craft-sqlite = { path = "crates/sqlite" }
 craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
@@ -161,6 +162,7 @@ craft-opc = { path = "crates/opc" }
 craft-openpgp = { path = "crates/openpgp" }
 craft-ora = { path = "crates/ora" }
 craft-pptx = { path = "crates/pptx" }
+craft-ppt-binary = { path = "crates/ppt-binary" }
 craft-penpot = { path = "crates/penpot" }
 craft-pcraft-format = { path = "crates/pcraft-format" }
 craft-pcraft-bundle = { path = "crates/pcraft-bundle" }
