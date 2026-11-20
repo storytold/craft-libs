@@ -240,9 +240,7 @@ impl Outcome for AboutOutput {
 ///
 /// The name mode, the sort order and the view are kept in the dialog's container while it is open, and so is the tab
 /// unless [`tab`](AboutDialog::tab) binds it. Links are reported
-/// in [`AboutOutput::link`] and never opened from here. Enter and Escape close the dialog. With
-/// [`enter_requires_no_focus`](Self::enter_requires_no_focus), Enter on a body control stays with that control;
-/// an Enter with no focused widget or one activating the footer button still closes.
+/// in [`AboutOutput::link`] and never opened from here. Enter and Escape close the dialog.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct AboutDialog<'a> {
@@ -260,21 +258,17 @@ pub struct AboutDialog<'a> {
     /// How the About tab lays out the info, and the footer button that goes with it.
     #[prop]
     layout: AboutLayout,
-    /// Only an Enter with no focused widget falls through to the default close action. A focused footer
-    /// button still activates normally. Off by default, preserving the usual default-button policy.
-    #[prop]
-    enter_requires_no_focus: bool,
 }
 
 impl<'a> AboutDialog<'a> {
     /// The dialog over `info` and `credits`, opening on the About tab.
     pub fn new(info: &'a AboutInfo, credits: &'a Credits) -> Self {
-        AboutDialog { info, credits, open: None, tab: None, app_tabs: None, layout: AboutLayout::default(), enter_requires_no_focus: false }
+        AboutDialog { info, credits, open: None, tab: None, app_tabs: None, layout: AboutLayout::default() }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> AboutOutput {
-        let AboutDialog { info, credits, open, tab, mut app_tabs, layout, enter_requires_no_focus } = self;
+        let AboutDialog { info, credits, open, tab, mut app_tabs, layout } = self;
         // The strip shows the titles while the body draws a tab, so it reads its own copy of them.
         let app_titles: Vec<Label> = app_tabs.as_deref().unwrap_or_default().iter().map(|app| app.title.clone()).collect();
         let env = Env::of(ui);
@@ -292,8 +286,7 @@ impl<'a> AboutDialog<'a> {
             AboutLayout::Centred => common.ok.clone(),
             AboutLayout::Listed => words.close.clone(),
         };
-        let enter = !enter_requires_no_focus || crate::runtime::egui::focus::focused(ui.ctx()).is_none();
-        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(enter).buttons([FooterButton::new(button, DialogRole::Accept)]);
+        let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(true).buttons([FooterButton::new(button, DialogRole::Accept)]);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
@@ -585,7 +578,6 @@ pub struct HostedAbout {
     open: bool,
     app_tabs: Vec<AboutAppTab>,
     layout: AboutLayout,
-    enter_requires_no_focus: bool,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -602,7 +594,6 @@ impl HostedAbout {
             open: true,
             app_tabs: Vec::new(),
             layout: AboutLayout::default(),
-            enter_requires_no_focus: false,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -626,13 +617,6 @@ impl HostedAbout {
     #[must_use]
     pub fn layout(mut self, layout: AboutLayout) -> Self {
         self.layout = layout;
-        self
-    }
-
-    /// Uses [`AboutDialog::enter_requires_no_focus`] for Enter's default close action. Off by default.
-    #[must_use]
-    pub fn enter_requires_no_focus(mut self, on: bool) -> Self {
-        self.enter_requires_no_focus = on;
         self
     }
 
@@ -703,7 +687,6 @@ impl StackDialog for HostedAbout {
             tab: Some(Bind::bound(&mut self.tab)),
             app_tabs: Some(&mut self.app_tabs[..]),
             layout: self.layout,
-            enter_requires_no_focus: self.enter_requires_no_focus,
         }
         .show(ui);
         #[cfg(feature = "testing")]
