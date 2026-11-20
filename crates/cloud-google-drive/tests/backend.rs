@@ -89,7 +89,7 @@ fn client() -> ClientConfig {
 
 fn signed_in_store() -> Memory {
     let store = Memory::new();
-    store.put(&oauth::token_handle(&client().client_id), &Secret::new("refresh-1")).unwrap();
+    store.put(&oauth::token_handle(&client()), &Secret::new("refresh-1")).unwrap();
     store
 }
 
@@ -416,8 +416,14 @@ fn sign_out_revokes_at_google_and_forgets_the_token() {
     let (mut app, ctx) = wired(Ok(client()), &google, store.clone());
     cloud::sign_out(&mut app);
     let start = Instant::now();
-    while store.get(&oauth::token_handle(&client().client_id)).unwrap().is_some() {
+    while store.get(&oauth::token_handle(&client())).unwrap().is_some() {
         assert!(start.elapsed() < Duration::from_secs(10), "the token was never removed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The token goes first; the revoke follows on the worker.
+    let start = Instant::now();
+    while !google.seen().iter().any(|r| r.url == oauth::REVOKE_ENDPOINT) {
+        assert!(start.elapsed() < Duration::from_secs(10), "never revoked at Google");
         std::thread::sleep(Duration::from_millis(5));
     }
     let _ = ctx;
@@ -456,7 +462,7 @@ fn signing_in_opens_the_browser_and_ends_with_the_account() {
 
     settle(&mut app, &ctx, |a| a.cloud().account.is_some());
     assert_eq!(app.cloud().account.as_ref().unwrap().display, "Test Person");
-    let kept = store.get(&oauth::token_handle(&client().client_id)).unwrap().unwrap();
+    let kept = store.get(&oauth::token_handle(&client())).unwrap().unwrap();
     assert_eq!(kept.expose(), "refresh-new", "the refresh token went to the keychain");
     // The badge's sign-in lists My Drive again, in place of the cold start's "not linked".
     settle(&mut app, &ctx, |a| a.cloud().mine.loaded && a.cloud().mine.error.is_none() && !a.cloud().mine.entries.is_empty());
@@ -515,7 +521,7 @@ fn signing_out_during_a_long_transfer_removes_the_token_at_once() {
     }
     cloud::sign_out(&mut app);
     let start = Instant::now();
-    while store.get(&oauth::token_handle(&client().client_id)).unwrap().is_some() {
+    while store.get(&oauth::token_handle(&client())).unwrap().is_some() {
         assert!(start.elapsed() < Duration::from_secs(5), "the token waited for the transfer");
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -529,4 +535,50 @@ fn a_link_refused_before_the_browser_opens_says_why() {
     let (mut app, ctx) = wired(Err(Error::NotConfigured("no client".into())), &google, Memory::new());
     cloud::link(&mut app);
     settle(&mut app, &ctx, |a| matches!(a.cloud().link, Some(Link::Failed(_))));
+}
+
+#[test]
+fn a_file_changed_during_its_download_opens_at_the_revision_it_has() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let google = Google::new();
+    drive_with_files(&google);
+    // The first download lands while somebody saves rev-2; the second is stable.
+    let downloads = Arc::new(AtomicUsize::new(0));
+    let seen = downloads.clone();
+    google.on(move |r| {
+        r.url.contains("/files/x1?fields").then(|| {
+            let rev = if seen.load(Ordering::SeqCst) == 0 { "rev-1" } else { "rev-2" };
+            json_reply(200, file("x1", "Q3.xlsx", XLSX, rev))
+        })
+    });
+    let count = downloads.clone();
+    google.on(move |r| {
+        r.url.contains("/files/x1?alt=media").then(|| {
+            let n = count.fetch_add(1, Ordering::SeqCst);
+            (200, if n == 0 { b"PKold".to_vec() } else { b"PKnew".to_vec() })
+        })
+    });
+    let (mut app, ctx) = wired(Ok(client()), &google, signed_in_store());
+    cloud::browse(&mut app, "/Reports");
+    settle(&mut app, &ctx, |a| a.cloud().mine.loaded);
+    let entry = app.cloud().mine.entries[0].clone();
+    cloud::submit(&app, Job::Read { entry, into: None });
+    settle(&mut app, &ctx, |a| !a.opened.lock().unwrap().is_empty());
+    assert_eq!(app.opened.lock().unwrap()[0].1, b"PKnew".to_vec(), "the bytes of the revision it is said to be");
+    assert_eq!(app.cloud().origins.get(&1).and_then(|o| o.entry.etag.clone()).as_deref(), Some("rev-2"));
+    assert_eq!(downloads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_folder_past_the_listed_part_isnt_called_missing() {
+    let google = Google::new();
+    google.on(|r| {
+        decode(&r.url)
+            .contains("'root' in parents")
+            .then(|| json_reply(200, json!({"files": [{"id": "fold1", "name": "A", "mimeType": FOLDER}], "nextPageToken": "more"})))
+    });
+    let (mut app, ctx) = wired(Ok(client()), &google, signed_in_store());
+    cloud::browse(&mut app, "/Zed");
+    settle(&mut app, &ctx, |a| a.cloud().mine.loaded);
+    assert!(matches!(&app.cloud().mine.error, Some(Fault::Refused(m)) if m.contains("first entries")), "{:?}", app.cloud().mine.error);
 }

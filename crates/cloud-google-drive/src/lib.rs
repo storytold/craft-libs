@@ -1,3 +1,7 @@
+// Desktop only. A browser can't listen on a loopback port for Google's redirect, and the suite's
+// keychain store doesn't build there, so on wasm the whole crate is empty and an app's web build
+// connects no backend.
+#![cfg(not(target_arch = "wasm32"))]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 //! Google Drive as a [`craft_ui::cloud::CloudBackend`]: the shared Open and Save pages, against a
@@ -22,32 +26,19 @@
 //!
 //! Written from Google's public OAuth 2.0 and Drive v3 REST documentation.
 
-// Desktop only. A browser can't listen on a loopback port for Google's redirect, and the suite's
-// keychain store doesn't build there, so the web build of an app compiles this crate to nothing
-// and connects no backend.
-#[cfg(not(target_arch = "wasm32"))]
 mod backend;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod drive;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod encode;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod http;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod loopback;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod oauth;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod pkce;
 
 #[cfg(test)]
 mod tests;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use backend::GoogleDriveBackend;
-#[cfg(not(target_arch = "wasm32"))]
 pub use drive::{Drive, DriveFile, SaveTarget};
-#[cfg(not(target_arch = "wasm32"))]
 pub use oauth::{Auth, ClientConfig, Tokens, downloads_dir, import_client, newest_client_file, write_client};
 
 /// Errors from signing in or talking to Drive. Messages are English; an application translates

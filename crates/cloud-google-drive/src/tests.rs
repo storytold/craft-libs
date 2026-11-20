@@ -18,8 +18,19 @@ const XLSX: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 const ODT: &str = "application/vnd.oasis.opendocument.text";
 const GOOGLE_DOC: &str = "application/vnd.google-apps.document";
 const GOOGLE_SHEET: &str = "application/vnd.google-apps.spreadsheet";
-/// The environment prefix the tests read: no machine sets it.
-const ENV: &str = "CRAFT_CLOUD_GOOGLE_DRIVE_TEST";
+/// An environment prefix nobody has set: fresh for each call, so a variable on the machine running
+/// the tests can't stand in for the file under test.
+fn unset_env() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    format!("CRAFT_GDRIVE_TEST_{}_{nanos}_{n}", std::process::id())
+}
+
+/// The client file in `dir`, parsed as it is (no environment involved).
+fn read_back(dir: &std::path::Path) -> ClientConfig {
+    ClientConfig::from_json(&std::fs::read(dir.join(oauth::CONFIG_FILE)).unwrap()).unwrap()
+}
 
 /// Answers scripted responses in order and records every request.
 #[derive(Default)]
@@ -53,7 +64,7 @@ fn cfg() -> ClientConfig {
 }
 
 fn handle() -> String {
-    oauth::token_handle(&cfg().client_id)
+    oauth::token_handle(&cfg())
 }
 
 fn signed_in(fake: &Arc<Fake>) -> Auth {
@@ -145,9 +156,9 @@ fn config_rejects_junk() {
 #[test]
 fn missing_config_file_is_not_configured() {
     let dir = tempfile::tempdir().unwrap();
-    if std::env::var(oauth::env_names(ENV).0).is_err() {
-        assert!(matches!(ClientConfig::load(Some(dir.path()), ENV), Err(Error::NotConfigured(_))));
-    }
+    let env = unset_env();
+    assert!(std::env::var(oauth::env_names(&env).0).is_err());
+    assert!(matches!(ClientConfig::load(Some(dir.path()), &env), Err(Error::NotConfigured(_))));
 }
 
 // ---- consent URL and redirect
@@ -372,9 +383,9 @@ fn re_entering_only_the_client_id_keeps_its_secret() {
     let dir = tempfile::tempdir().unwrap();
     oauth::write_client(dir.path(), "123-abc.apps.googleusercontent.com", Some("s3cret")).unwrap();
     oauth::write_client(dir.path(), "123-abc.apps.googleusercontent.com", None).unwrap();
-    assert_eq!(ClientConfig::load(Some(dir.path()), ENV).unwrap().client_secret.as_deref(), Some("s3cret"), "same client: secret kept");
+    assert_eq!(read_back(dir.path()).client_secret.as_deref(), Some("s3cret"), "same client: secret kept");
     oauth::write_client(dir.path(), "456-def.apps.googleusercontent.com", None).unwrap();
-    assert_eq!(ClientConfig::load(Some(dir.path()), ENV).unwrap().client_secret, None, "another client: not kept");
+    assert_eq!(read_back(dir.path()).client_secret, None, "another client: not kept");
 }
 
 #[test]
@@ -385,7 +396,7 @@ fn write_client_checks_the_id_keeps_the_scope_and_reads_back() {
     std::fs::create_dir_all(dir.path()).unwrap();
     std::fs::write(dir.path().join(oauth::CONFIG_FILE), br#"{"client_id": "old", "scope": "file"}"#).unwrap();
     oauth::write_client(dir.path(), " 123-abc.apps.googleusercontent.com ", Some("s3cret")).unwrap();
-    let cfg = ClientConfig::load(Some(dir.path()), ENV).unwrap();
+    let cfg = read_back(dir.path());
     assert_eq!(cfg.client_id, "123-abc.apps.googleusercontent.com");
     assert_eq!(cfg.client_secret.as_deref(), Some("s3cret"));
     assert_eq!(cfg.scope, oauth::SCOPE_DRIVE_FILE, "the file's scope is kept");
@@ -408,19 +419,22 @@ fn a_downloaded_client_file_is_found_and_imported() {
     std::fs::write(downloads.join("notes.json"), b"{}").unwrap();
     let older = downloads.join("client_secret_1-old.apps.googleusercontent.com.json");
     std::fs::write(&older, br#"{"installed": {"client_id": "1-old.apps.googleusercontent.com", "client_secret": "a"}}"#).unwrap();
-    std::thread::sleep(Duration::from_millis(20));
     let newer = downloads.join("client_secret_2-new.apps.googleusercontent.com.json");
     std::fs::write(&newer, br#"{"installed": {"client_id": "2-new.apps.googleusercontent.com", "client_secret": "b"}}"#).unwrap();
+    // Times set apart explicitly: some file systems keep them to two seconds.
+    let base = std::time::SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options().write(true).open(&older).unwrap().set_modified(base).unwrap();
+    std::fs::File::options().write(true).open(&newer).unwrap().set_modified(base + Duration::from_secs(60)).unwrap();
     assert_eq!(oauth::newest_client_file(&downloads).as_deref(), Some(newer.as_path()), "the newest client file, never other JSON");
 
     let cfg = oauth::import_client(&profile, &newer).unwrap();
     assert_eq!(cfg.client_id, "2-new.apps.googleusercontent.com");
-    assert_eq!(ClientConfig::load(Some(&profile), ENV).unwrap().client_secret.as_deref(), Some("b"));
+    assert_eq!(read_back(&profile).client_secret.as_deref(), Some("b"));
 
     // A file that isn't a client changes nothing.
     std::fs::write(downloads.join("client_secret_bad.json"), b"{\"web\": 1}").unwrap();
     assert!(oauth::import_client(&profile, &downloads.join("client_secret_bad.json")).is_err());
-    assert_eq!(ClientConfig::load(Some(&profile), ENV).unwrap().client_id, "2-new.apps.googleusercontent.com");
+    assert_eq!(read_back(&profile).client_id, "2-new.apps.googleusercontent.com");
 }
 
 // ---- the parts the shared pages need
@@ -451,8 +465,17 @@ fn exchange_sends_verifier_and_stores_refresh_token() {
 
 #[test]
 fn each_client_has_its_own_keychain_entry() {
-    assert_eq!(oauth::token_handle(" 123-abc.apps.googleusercontent.com "), "google-drive.refresh-token.123-abc.apps.googleusercontent.com");
-    assert_ne!(oauth::token_handle("a"), oauth::token_handle("b"));
+    let c = |id: &str, scope: Option<&str>| ClientConfig::new(id, None, scope).unwrap();
+    assert_eq!(
+        oauth::token_handle(&c(" 123-abc.apps.googleusercontent.com ", None)),
+        "google-drive.refresh-token.123-abc.apps.googleusercontent.com"
+    );
+    assert_ne!(oauth::token_handle(&c("a", None)), oauth::token_handle(&c("b", None)));
+    assert_ne!(
+        oauth::token_handle(&c("a", Some("drive"))),
+        oauth::token_handle(&c("a", Some("file"))),
+        "a narrower scope never reuses the wider grant"
+    );
 }
 
 #[test]
@@ -697,4 +720,167 @@ fn same_named_folders_are_numbered_by_id_whatever_order_drive_answers_in() {
         [("a1".into(), "/Top/Reports".into()), ("b2".into(), "/Top/Reports (3)".into()), ("c3".into(), "/Top/Reports (2)".into())],
         "a real folder named Reports (2) keeps its name; the duplicate moves on"
     );
+}
+
+// ---- review round 2
+
+#[test]
+fn size_is_written_back_the_way_drive_sends_it() {
+    for f in [file_json("f1", "a.docx", DOCX, "1"), json!({"id": "f2", "name": "Doc", "mimeType": GOOGLE_DOC})] {
+        let read: DriveFile = serde_json::from_value(f).unwrap();
+        let again: DriveFile = serde_json::from_value(serde_json::to_value(&read).unwrap()).unwrap();
+        assert_eq!(read, again);
+    }
+    let sized: DriveFile = serde_json::from_value(file_json("f1", "a.docx", DOCX, "1")).unwrap();
+    assert_eq!(serde_json::to_value(&sized).unwrap()["size"], json!("1234"));
+}
+
+#[test]
+fn a_save_with_no_version_is_refused_before_anything_is_sent() {
+    let fake = Fake::with(vec![]);
+    let mut d = Drive::new(signed_in(&fake));
+    let target = SaveTarget::Existing { id: "f1".into(), name: "Essay.docx".into(), version: " ".into() };
+    assert!(matches!(d.save(&target, b"PK"), Err(Error::Invalid(_))));
+    assert!(fake.seen().is_empty());
+}
+
+#[test]
+fn a_retry_after_a_401_checks_the_revision_again() {
+    let fake = Fake::with(vec![
+        token_reply(),
+        (200, file_json("f1", "Essay.docx", DOCX, "7")),
+        (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}})),
+        (200, json!({"access_token": "access-2", "expires_in": 3599})),
+        // Somebody saved while the token was refreshed.
+        (200, file_json("f1", "Essay.docx", DOCX, "8")),
+    ]);
+    let mut d = Drive::new(signed_in(&fake));
+    let target = SaveTarget::Existing { id: "f1".into(), name: "Essay.docx".into(), version: "7".into() };
+    assert!(matches!(d.save(&target, b"PK"), Err(Error::Conflict { .. })));
+    assert_eq!(fake.seen().iter().filter(|r| r.method == Method::Patch).count(), 1, "no second upload over the newer revision");
+}
+
+#[test]
+fn a_name_lookup_follows_empty_pages_and_never_guesses_absence() {
+    let fake = Fake::with(vec![token_reply(), (200, json!({"files": [], "nextPageToken": "t1"})), (200, json!({"files": [{"id": "x1"}]}))]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.child_named("root", "Budget.xlsx"), Ok(Some("x1".into())));
+    assert!(decode_url(&fake.seen()[2].url).contains("pageToken=t1"));
+
+    let mut endless = vec![token_reply()];
+    endless.extend((0..drive::MAX_PAGES).map(|i| (200, json!({"files": [], "nextPageToken": format!("t{i}")}))));
+    let fake = Fake::with(endless);
+    let mut d = Drive::new(signed_in(&fake));
+    assert!(d.child_named("root", "Budget.xlsx").is_err(), "an unfinished lookup isn't \"not there\"");
+}
+
+#[test]
+fn a_listing_cut_off_at_the_page_limit_says_so() {
+    let mut pages = vec![token_reply()];
+    pages.extend(
+        (0..drive::MAX_PAGES).map(|i| (200, json!({"files": [file_json(&format!("f{i}"), "a.docx", DOCX, "1")], "nextPageToken": format!("t{i}")}))),
+    );
+    let fake = Fake::with(pages);
+    let mut d = Drive::new(signed_in(&fake));
+    let listing = d.listing(&drive::folder_query("root").unwrap()).unwrap();
+    assert_eq!(listing.files.len(), drive::MAX_PAGES);
+    assert!(!listing.complete);
+}
+
+#[test]
+fn a_wrong_client_secret_keeps_the_sign_in() {
+    let fake = Fake::with(vec![(401, json!({"error": "invalid_client", "error_description": "Unauthorized"}))]);
+    let mut auth = signed_in(&fake);
+    assert!(matches!(auth.access_token(Instant::now()), Err(Error::Api { status: 401, .. })));
+    assert!(auth.signed_in(), "fixing the client restores the session");
+    let fake = Fake::with(vec![]);
+    let mut again = Auth::new(
+        cfg(),
+        fake,
+        Arc::new({
+            let store = Memory::new();
+            store.put(&handle(), &Secret::new("refresh-1")).unwrap();
+            store
+        }),
+    );
+    assert!(again.restore().unwrap());
+}
+
+#[test]
+fn a_renewed_refresh_token_is_kept() {
+    let fake = Fake::with(vec![(200, json!({"access_token": "a2", "refresh_token": "refresh-2", "expires_in": 3599}))]);
+    let store = Memory::new();
+    store.put(&handle(), &Secret::new("refresh-1")).unwrap();
+    let mut auth = Auth::new(cfg(), fake, Arc::new(store.clone()));
+    assert!(auth.restore().unwrap());
+    assert_eq!(auth.access_token(Instant::now()).unwrap(), "a2");
+    assert_eq!(store.get(&handle()).unwrap().map(|s| s.expose().to_owned()).as_deref(), Some("refresh-2"));
+}
+
+#[test]
+fn a_session_only_sign_in_removes_the_earlier_one() {
+    // Another account's sign-in is stored; this one comes back with no refresh token.
+    let fake = Fake::with(vec![(200, json!({"access_token": "a", "expires_in": 3599}))]);
+    let store = Memory::new();
+    store.put(&handle(), &Secret::new("refresh-other-account")).unwrap();
+    let mut auth = Auth::new(cfg(), fake, Arc::new(store.clone()));
+    auth.exchange("CODE", "V", "http://127.0.0.1:1", Instant::now()).unwrap();
+    assert!(auth.signed_in());
+    assert_eq!(store.get(&handle()).unwrap(), None, "the next launch doesn't sign the other account back in");
+}
+
+#[test]
+fn an_imported_client_keeps_the_scope_it_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("client.json");
+    std::fs::write(&src, br#"{"client_id": "1-a.apps.googleusercontent.com", "client_secret": "s", "scope": "file"}"#).unwrap();
+    let profile = dir.path().join("profile");
+    let cfg = oauth::import_client(&profile, &src).unwrap();
+    assert_eq!(cfg.scope, oauth::SCOPE_DRIVE_FILE);
+    assert_eq!(read_back(&profile), cfg, "what a later load reads is what was returned");
+}
+
+#[test]
+fn a_body_exactly_at_the_limit_is_accepted() {
+    assert_eq!(crate::http::bounded(vec![7; 10], 10).map(|b| b.len()), Ok(10));
+    assert!(matches!(crate::http::bounded(vec![7; 11], 10), Err(Error::Protocol(_))));
+}
+
+#[test]
+fn a_refused_revoke_still_signs_out_here() {
+    let fake = Fake::with(vec![(400, json!({"error": "invalid_token"}))]);
+    let store = Memory::new();
+    store.put(&handle(), &Secret::new("refresh-1")).unwrap();
+    let mut auth = Auth::new(cfg(), fake, Arc::new(store.clone()));
+    assert!(auth.restore().unwrap());
+    assert_eq!(auth.sign_out(), Ok(()));
+    assert_eq!(store.get(&handle()).unwrap(), None);
+}
+
+#[test]
+fn numbering_doesnt_depend_on_answer_order_with_a_real_numbered_name() {
+    let folder = |id: &str, name: &str| DriveFile { id: id.into(), name: name.into(), mime_type: drive::MIME_FOLDER.into(), ..DriveFile::default() };
+    let sorted = |files: &[DriveFile]| -> Vec<(String, String)> {
+        let mut v: Vec<_> = files.iter().map(|f| f.id.clone()).zip(crate::backend::child_paths("", files)).collect();
+        v.sort();
+        v
+    };
+    let a = [folder("a", "Reports"), folder("b", "Reports"), folder("c", "Reports"), folder("d", "Reports (2)")];
+    let b = [a[0].clone(), a[2].clone(), a[1].clone(), a[3].clone()];
+    let c = [a[3].clone(), a[2].clone(), a[1].clone(), a[0].clone()];
+    assert_eq!(sorted(&a), sorted(&b));
+    assert_eq!(sorted(&a), sorted(&c));
+    assert_eq!(
+        sorted(&a),
+        [
+            ("a".into(), "/Reports".into()),
+            ("b".into(), "/Reports (3)".into()),
+            ("c".into(), "/Reports (4)".into()),
+            ("d".into(), "/Reports (2)".into())
+        ]
+    );
+}
+
+fn decode_url(url: &str) -> String {
+    encode::parse_query(url.split_once('?').map_or("", |(_, q)| q), 64).into_iter().map(|(k, v)| format!("{k}={v}&")).collect()
 }

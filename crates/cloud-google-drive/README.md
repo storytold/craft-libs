@@ -17,20 +17,27 @@ a person's own Google Drive directly, with no service in between and no OAuth cl
 | `SignOut` | Revokes the grant at Google and removes the token. |
 
 - **Conflicts.** Drive v3 has no conditional update, so the check reads the file's revision and
-  then uploads. A change landing in the fraction of a second between the two isn't caught.
+  then uploads (and reads it again before a retry after a refreshed token). A change landing in
+  the fraction of a second between the check and the upload isn't caught. Open reads the
+  revision before and after the download, so the bytes and the revision a save checks against
+  match.
   Renaming or sharing a file doesn't count as a change: only its content does.
 - **Trash.** A file someone moved to the trash is never saved over: Save As keeps a copy.
 - **Native Google files** are never overwritten. They list as not writable, so Save points to
   Save As, which writes an Office copy.
 - **Paths.** Paths come from listings: two folders with one name in the same folder get
-  distinct paths, numbered in id order (`Reports`, `Reports (2)`), and a `/` in a name shows as
-  `∕`, so the same folder always gets the same path. A path the backend hasn't seen is found by
-  listing its parents, never by searching for a name.
+  distinct paths, numbered in id order (`Reports`, `Reports (2)`) whatever order Drive answers
+  in, and a `/` in a name shows as `∕`. A path the backend hasn't seen is found by listing its
+  parents, never by searching for a name. The numbers are positions, not identities: when one
+  of two same-named folders is removed or renamed, the other's path can change.
 - **Tokens.** The refresh token is kept in the system keychain through `craft-suite-account`'s
-  `TokenStore`, one entry per OAuth client. It is never written to a file. With no keychain on the machine,
+  `TokenStore`, one entry per OAuth client and scope: narrowing `"drive"` to `"file"` asks for
+  consent again rather than reusing the wider grant. It is never written to a file. With no keychain on the machine,
   a sign-in lasts until the app quits. **Sign out** removes the token first, even during a
   transfer.
 - **Limits.** 256 MB per document; a folder lists its first 5,000 entries.
+- **Logging.** `ureq` logs the wire at `TRACE` level without redacting it, bearer tokens
+  included. Don't enable `TRACE` for the `ureq` and `ureq_proto` log targets.
 - **Desktop only.** On the web the crate compiles to nothing: a browser can't receive Google's
   loopback redirect.
 

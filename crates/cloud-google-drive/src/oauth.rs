@@ -30,9 +30,11 @@ pub fn env_names(prefix: &str) -> (String, String) {
 }
 
 /// The keychain entry (a [`TokenStore`] handle) for a client's refresh token: one per OAuth
-/// client, so another registration never picks up, or deletes, this one's sign-in.
-pub fn token_handle(client_id: &str) -> String {
-    format!("google-drive.refresh-token.{}", client_id.trim())
+/// client and scope, so another registration never picks up, or deletes, this one's sign-in, and
+/// a grant for all of Drive is never used after the scope was narrowed to `drive.file`.
+pub fn token_handle(cfg: &ClientConfig) -> String {
+    let id = cfg.client_id.trim();
+    if cfg.scope == SCOPE_DRIVE { format!("google-drive.refresh-token.{id}") } else { format!("google-drive.refresh-token.{id}.drive-file") }
 }
 
 /// Refresh an access token this long before Google says it expires.
@@ -157,19 +159,27 @@ pub fn import_client(dir: &Path, file: &Path) -> Result<ClientConfig> {
         Err(e) => return Err(Error::NotConfigured(format!("couldn't read {}: {e}", file.display()))),
     };
     let cfg = ClientConfig::from_json(&text)?;
-    write_client(dir, &cfg.client_id, cfg.client_secret.as_deref())?;
-    Ok(cfg)
+    // A scope the imported file names is kept; a Google Cloud download names none.
+    let named = serde_json::from_slice::<serde_json::Value>(&text).ok().and_then(|v| v.get("scope").and_then(|x| x.as_str()).map(str::to_owned));
+    write_client_scoped(dir, &cfg.client_id, cfg.client_secret.as_deref(), named.as_deref())
 }
 
 /// Writes `google-drive.json` in `dir`: the client ID and secret,
 /// checked first, keeping a `scope` the file already had. Owner-only on Unix.
 pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) -> Result<()> {
+    write_client_scoped(dir, client_id, client_secret, None).map(|_| ())
+}
+
+/// [`write_client`] with a scope (`"drive"` or `"file"`) that replaces the file's; `None` keeps
+/// it. Returns the configuration a later [`ClientConfig::load`] reads back.
+fn write_client_scoped(dir: &Path, client_id: &str, client_secret: Option<&str>, scope: Option<&str>) -> Result<ClientConfig> {
     let path = dir.join(CONFIG_FILE);
     let old = read_small(&path).ok().flatten();
-    let scope = old
-        .as_deref()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
-        .and_then(|v| v.get("scope").and_then(|x| x.as_str()).map(str::to_string));
+    let scope = scope.map(str::to_owned).or_else(|| {
+        old.as_deref()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+            .and_then(|v| v.get("scope").and_then(|x| x.as_str()).map(str::to_string))
+    });
     // No secret given for the same client: keep the one on file (Google needs it for a
     // Desktop client), so re-entering just the ID doesn't break the next sign-in.
     let kept = old.as_deref().and_then(|b| ClientConfig::from_json(b).ok()).filter(|k| k.client_id == client_id.trim()).and_then(|k| k.client_secret);
@@ -187,8 +197,8 @@ pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) ->
     std::fs::create_dir_all(dir).map_err(io)?;
     // Written whole to a new owner-only file, then renamed over the old one: a failed write
     // leaves the old registration as it was, and the secret is never in a file others can read.
-    let tmp = dir.join(format!(".{CONFIG_FILE}.{}.tmp", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
+    // Its own staging file per write (exclusively created), so two writes never share one.
+    let tmp = dir.join(format!(".{CONFIG_FILE}.{}.{}.tmp", std::process::id(), crate::pkce::random_token(9)?));
     let written = (|| {
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
@@ -205,7 +215,8 @@ pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) ->
     if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    written.map_err(io)
+    written.map_err(io)?;
+    Ok(cfg)
 }
 
 /// The consent page URL. `redirect` is the loopback address that will receive the code.
@@ -292,7 +303,7 @@ pub struct Auth {
 
 impl Auth {
     pub fn new(cfg: ClientConfig, http: Arc<dyn Transport>, store: Store) -> Self {
-        let handle = token_handle(&cfg.client_id);
+        let handle = token_handle(&cfg);
         Self { cfg, http, store, handle, tokens: None }
     }
 
@@ -330,13 +341,17 @@ impl Auth {
         self.tokens.is_some()
     }
 
-    fn token_request<'a>(&'a self, mut pairs: Vec<(&'a str, &'a str)>) -> Result<serde_json::Value> {
+    fn token_response<'a>(&'a self, mut pairs: Vec<(&'a str, &'a str)>) -> Result<crate::http::Response> {
         pairs.push(("client_id", &self.cfg.client_id));
         if let Some(s) = &self.cfg.client_secret {
             pairs.push(("client_secret", s));
         }
         let req = Request::new(Method::Post, TOKEN_ENDPOINT).body("application/x-www-form-urlencoded", form(&pairs).into_bytes());
-        self.http.send(req)?.json()
+        self.http.send(req)
+    }
+
+    fn token_request<'a>(&'a self, pairs: Vec<(&'a str, &'a str)>) -> Result<serde_json::Value> {
+        self.token_response(pairs)?.json()
     }
 
     /// Exchanges an authorization code (with its PKCE verifier and the exact redirect URI used)
@@ -345,14 +360,21 @@ impl Auth {
         let v =
             self.token_request(vec![("grant_type", "authorization_code"), ("code", code), ("code_verifier", verifier), ("redirect_uri", redirect)])?;
         let tokens = parse_tokens(&v, now)?;
-        match &tokens.refresh_token {
+        let kept = match &tokens.refresh_token {
             Some(r) => {
-                if let Err(e) = self.store.put(&self.handle, &Secret::new(r.as_str())) {
-                    // Signed in for this session only; say so, don't fail the sign-in.
-                    log::warn!("Google Drive: refresh token not kept: {e}");
-                }
+                self.store.put(&self.handle, &Secret::new(r.as_str())).map_err(|e| log::warn!("Google Drive: refresh token not kept: {e}")).is_ok()
             }
-            None => log::warn!("Google Drive: no refresh token returned; sign-in lasts this session"),
+            None => {
+                log::warn!("Google Drive: no refresh token returned; sign-in lasts this session");
+                false
+            }
+        };
+        // Signed in for this session only. A token kept from an earlier sign-in, maybe another
+        // account's, must not come back on the next launch in this one's place.
+        if !kept && self.store.available().is_ok() {
+            self.store
+                .remove(&self.handle)
+                .map_err(|e| Error::Keychain(format!("the earlier Google sign-in couldn't be replaced or removed: {e}")))?;
         }
         self.tokens = Some(tokens);
         Ok(())
@@ -368,20 +390,28 @@ impl Auth {
             self.tokens = None;
             return Err(Error::NotSignedIn);
         };
-        let v = match self.token_request(vec![("grant_type", "refresh_token"), ("refresh_token", &refresh)]) {
-            Ok(v) => v,
-            // Revoked or expired: forget it so the UI offers Sign in again.
-            Err(Error::Api { status: 400 | 401, message }) => {
-                log::info!("Google Drive: refresh refused ({message}); signing out");
-                self.forget();
-                return Err(Error::NotSignedIn);
-            }
-            Err(e) => return Err(e),
-        };
+        let resp = self.token_response(vec![("grant_type", "refresh_token"), ("refresh_token", &refresh)])?;
+        // Only a grant Google calls invalid (revoked, expired) is forgotten. A wrong client
+        // secret (`invalid_client`) or any other refusal keeps the token: fixing the client
+        // restores the session.
+        if !resp.ok() && oauth_error(&resp).as_deref() == Some("invalid_grant") {
+            log::info!("Google Drive: the stored sign-in was revoked or expired; signing out");
+            self.forget();
+            return Err(Error::NotSignedIn);
+        }
+        let v = resp.json()?;
         let mut fresh = parse_tokens(&v, now)?;
-        // Google usually omits the refresh token on refresh; keep the one we have.
-        if fresh.refresh_token.is_none() {
-            fresh.refresh_token = Some(refresh);
+        match &fresh.refresh_token {
+            // Google usually omits the refresh token on refresh; keep the one we have.
+            None => fresh.refresh_token = Some(refresh),
+            // A replacement: the old one may stop working, so it isn't kept as a fallback.
+            Some(new) if *new != refresh => {
+                if let Err(e) = self.store.put(&self.handle, &Secret::new(new.as_str())) {
+                    log::warn!("Google Drive: the renewed sign-in wasn't kept ({e}); it lasts this session");
+                    let _ = self.store.remove(&self.handle);
+                }
+            }
+            Some(_) => {}
         }
         let token = fresh.access_token.clone();
         self.tokens = Some(fresh);
@@ -418,8 +448,24 @@ impl Auth {
             return;
         }
         let req = Request::new(Method::Post, REVOKE_ENDPOINT).body("application/x-www-form-urlencoded", form(&[("token", token)]).into_bytes());
-        if let Err(e) = self.http.send(req) {
-            log::info!("Google Drive: revoke failed ({e}); removing the local token anyway");
+        match self.http.send(req) {
+            Ok(resp) if resp.ok() => {}
+            Ok(resp) => {
+                log::info!(
+                    "Google Drive: Google refused the revoke ({}, {}); removing the local token anyway",
+                    resp.status,
+                    oauth_error(&resp).unwrap_or_default()
+                );
+            }
+            Err(e) => log::info!("Google Drive: revoke failed ({e}); removing the local token anyway"),
         }
     }
+}
+
+/// The OAuth error code of a token or revoke endpoint answer (`{"error": "invalid_grant", …}`),
+/// short and without the description.
+fn oauth_error(resp: &crate::http::Response) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(&resp.body).ok()?;
+    let code = v.get("error")?.as_str()?;
+    (code.len() <= 64 && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then(|| code.to_owned())
 }

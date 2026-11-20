@@ -1,6 +1,8 @@
 //! The HTTP seam. [`Transport`] sends one request and returns the whole (bounded) response.
 
+use std::io::Read;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::{Error, Result};
 
@@ -28,8 +30,11 @@ pub struct Request {
     pub headers: Vec<(String, String)>,
     /// Shared, so a retry after a refreshed token doesn't copy a large upload again.
     pub body: Arc<[u8]>,
-    /// The most response bytes to accept.
+    /// The most response bytes to accept, after decompression.
     pub limit: u64,
+    /// The longest the whole call may take, body included: a server trickling bytes can't hold
+    /// the backend's lock for ever.
+    pub deadline: Duration,
 }
 
 impl std::fmt::Debug for Request {
@@ -41,7 +46,7 @@ impl std::fmt::Debug for Request {
 
 impl Request {
     pub fn new(method: Method, url: impl Into<String>) -> Self {
-        Self { method, url: url.into(), headers: Vec::new(), body: Arc::from(Vec::new()), limit: JSON_LIMIT }
+        Self { method, url: url.into(), headers: Vec::new(), body: Arc::from(Vec::new()), limit: JSON_LIMIT, deadline: CALL_DEADLINE }
     }
     pub fn header(mut self, k: &str, v: impl Into<String>) -> Self {
         self.headers.push((k.to_owned(), v.into()));
@@ -53,6 +58,10 @@ impl Request {
     }
     pub fn limit(mut self, limit: u64) -> Self {
         self.limit = limit;
+        self
+    }
+    pub fn deadline(mut self, deadline: Duration) -> Self {
+        self.deadline = deadline;
         self
     }
     pub fn bearer(self, token: &str) -> Self {
@@ -102,6 +111,11 @@ impl Response {
 
 /// Default limit for JSON responses.
 pub const JSON_LIMIT: u64 = 4 << 20;
+/// Default deadline for one call (OAuth, metadata, a listing page).
+pub const CALL_DEADLINE: Duration = Duration::from_secs(120);
+/// Deadline for a document download or upload: long enough for the largest document on a slow
+/// link, short enough that a stalled one ends.
+pub const TRANSFER_DEADLINE: Duration = Duration::from_secs(60 * 60);
 
 pub trait Transport: Send + Sync {
     fn send(&self, req: Request) -> Result<Response>;
@@ -109,6 +123,10 @@ pub trait Transport: Send + Sync {
 
 /// `ureq` with rustls and the platform's certificate verifier; HTTP error statuses are returned
 /// as responses so [`Response::api_error`] can read Google's message.
+///
+/// `ureq` logs requests on the wire at `TRACE` level, unredacted: bearer tokens and the token
+/// endpoint's form bodies with them. A host must not enable `TRACE` for the `ureq` and
+/// `ureq_proto` log targets.
 pub struct Ureq {
     agent: ureq::Agent,
 }
@@ -125,6 +143,8 @@ impl Ureq {
             .timeout_per_write(Some(std::time::Duration::from_secs(60)))
             .timeout_recv_response(Some(std::time::Duration::from_secs(120)))
             .user_agent(user_agent)
+            // The operating system's trust store, so a CA a managed machine installed is trusted.
+            .tls_config(ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
             .build();
         Self { agent: config.into() }
     }
@@ -137,12 +157,21 @@ impl Transport for Ureq {
             b = b.header(k.as_str(), v.as_str());
         }
         let r = b.body(&*req.body).map_err(|e| Error::Invalid(format!("bad request: {e}")))?;
+        let r = self.agent.configure_request(r).timeout_global(Some(req.deadline)).build();
         let mut resp = self.agent.run(r).map_err(|e| Error::Network(e.to_string()))?;
         let status = resp.status().as_u16();
-        let body = resp.body_mut().with_config().limit(req.limit).read_to_vec().map_err(|e| match e {
-            ureq::Error::BodyExceedsLimit(n) => Error::Protocol(format!("response larger than {n} bytes")),
-            e => Error::Network(e.to_string()),
-        })?;
-        Ok(Response { status, body })
+        // Bounded after decompression, with one byte of room to tell "exactly the limit" from
+        // "over it".
+        let mut body = Vec::new();
+        resp.body_mut().as_reader().take(req.limit.saturating_add(1)).read_to_end(&mut body).map_err(|e| Error::Network(e.to_string()))?;
+        bounded(body, req.limit).map(|body| Response { status, body })
     }
+}
+
+/// `body` when it holds at most `limit` bytes.
+pub(crate) fn bounded(body: Vec<u8>, limit: u64) -> Result<Vec<u8>> {
+    if body.len() as u64 > limit {
+        return Err(Error::Protocol(format!("response larger than {limit} bytes")));
+    }
+    Ok(body)
 }

@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use craft_cloud::{Capability, Entry, EntryKind};
 use craft_ui::cloud::{Account, CloudBackend, Event, Fault, Job, Post};
 
-use crate::drive::{Drive, DriveFile, SHARED_QUERY, SaveTarget, folder_query};
+use crate::drive::{Drive, DriveFile, Listing, SHARED_QUERY, SaveTarget, folder_query};
 use crate::http::Transport;
 use crate::oauth::{Auth, ClientConfig, SCOPE_DRIVE, Store, auth_url, token_handle};
 use crate::{Error, Result};
@@ -31,6 +31,8 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// The most folder paths remembered. Past this the map starts again before the next listing;
 /// a forgotten path is found again by listing its parents.
 const MAX_FOLDERS: usize = 10_000;
+/// Downloads of a file that keeps changing before Open gives up.
+const READ_ATTEMPTS: usize = 3;
 /// The most sign-ins remembered between their start and the page's poll.
 const MAX_LINKS: usize = 16;
 
@@ -132,37 +134,37 @@ fn child_path(parent: &str, name: &str) -> String {
     format!("{}/{}", parent.trim_end_matches('/'), segment(name))
 }
 
-/// The path of every entry of the folder at `parent`. Same-named folders are numbered in id
-/// order, so the numbering doesn't depend on the order Drive answered in; a number that would
-/// collide with a real name moves on to the next free one.
+/// The path of every entry of the folder at `parent`, in `files`' order. Same-named folders
+/// are numbered in id order, and the numbers are handed out in (name, id) order, so the paths
+/// don't depend on the order Drive answered in. A number that would collide with a real name
+/// moves on to the next free one.
 pub(crate) fn child_paths(parent: &str, files: &[DriveFile]) -> Vec<String> {
-    let mut alike: HashMap<String, Vec<&str>> = HashMap::new();
-    for f in files.iter().filter(|f| f.is_folder()) {
-        alike.entry(child_path(parent, &f.name)).or_default().push(&f.id);
+    let mut folders: Vec<(String, &str)> = files.iter().filter(|f| f.is_folder()).map(|f| (child_path(parent, &f.name), f.id.as_str())).collect();
+    folders.sort_unstable();
+    let mut taken: HashSet<String> = folders.iter().map(|(base, _)| base.clone()).collect();
+    let mut by_id: HashMap<&str, String> = HashMap::new();
+    let mut previous: Option<&str> = None;
+    for (base, id) in &folders {
+        if previous != Some(base.as_str()) {
+            previous = Some(base.as_str());
+            by_id.insert(id, base.clone());
+            continue;
+        }
+        let mut n = 2;
+        loop {
+            let at = format!("{base} ({n})");
+            if taken.insert(at.clone()) {
+                by_id.insert(id, at);
+                break;
+            }
+            n += 1;
+        }
     }
-    for ids in alike.values_mut() {
-        ids.sort_unstable();
-    }
-    let mut taken: HashSet<String> = files.iter().filter(|f| f.is_folder()).map(|f| child_path(parent, &f.name)).collect();
     files
         .iter()
-        .map(|f| {
-            let base = child_path(parent, &f.name);
-            if !f.is_folder() {
-                return base;
-            }
-            let rank = alike.get(&base).and_then(|ids| ids.iter().position(|id| *id == f.id)).unwrap_or(0);
-            if rank == 0 {
-                return base;
-            }
-            let mut n = rank + 1;
-            loop {
-                let at = format!("{base} ({n})");
-                if taken.insert(at.clone()) {
-                    return at;
-                }
-                n += 1;
-            }
+        .map(|f| match f.is_folder().then(|| by_id.get(f.id.as_str())).flatten() {
+            Some(at) => at.clone(),
+            None => child_path(parent, &f.name),
         })
         .collect()
 }
@@ -234,7 +236,12 @@ impl Inner {
     /// One folder's files and their paths, remembering the id of every subfolder's path. Called
     /// with the Drive lock held, so a sign-out can't clear the map in the middle.
     fn children(&self, drive: &mut Drive, path: &str, id: &str) -> Result<Vec<(String, DriveFile)>> {
-        let files = drive.search(&folder_query(id)?)?;
+        self.children_listed(drive, path, id).map(|(children, _)| children)
+    }
+
+    /// [`Self::children`], and whether the listing was complete.
+    fn children_listed(&self, drive: &mut Drive, path: &str, id: &str) -> Result<(Vec<(String, DriveFile)>, bool)> {
+        let Listing { files, complete } = drive.listing(&folder_query(id)?)?;
         let paths = child_paths(path, &files);
         let mut folders = lock(&self.folders);
         for (at, file) in paths.iter().zip(&files) {
@@ -242,7 +249,7 @@ impl Inner {
                 folders.insert(at.clone(), file.id.clone());
             }
         }
-        Ok(paths.into_iter().zip(files).collect())
+        Ok((paths.into_iter().zip(files).collect(), complete))
     }
 
     /// The id of the folder at `path`, listing each parent not yet known.
@@ -263,8 +270,18 @@ impl Inner {
             id = match known {
                 Some(known) => known,
                 None => {
-                    self.children(drive, &parent, &id)?;
-                    lock(&self.folders).get(&here).cloned().ok_or_else(|| Error::Invalid(format!("there is no folder {here} in Google Drive")))?
+                    let (_, complete) = self.children_listed(drive, &parent, &id)?;
+                    let found = lock(&self.folders).get(&here).cloned();
+                    match found {
+                        Some(found) => found,
+                        // Not in the part that was read: maybe further down, maybe not there.
+                        None if !complete => {
+                            return Err(Error::Invalid(format!(
+                                "{here} isn't among the first entries Google Drive listed; open its folder to find it"
+                            )));
+                        }
+                        None => return Err(Error::Invalid(format!("there is no folder {here} in Google Drive"))),
+                    }
                 }
             };
         }
@@ -297,9 +314,18 @@ impl Inner {
     /// read, not what was listed.
     fn read(&self, wanted: &Entry) -> std::result::Result<(Entry, Vec<u8>), Fault> {
         self.drive(|d| {
-            let file = d.metadata(&wanted.id)?;
-            let bytes = d.download(&file)?;
-            Ok((entry(&file, wanted.path.clone()), bytes))
+            // The revision is read again after the download: the bytes are only said to be that
+            // revision when it didn't move during the download.
+            let mut file = d.metadata(&wanted.id)?;
+            for _ in 0..READ_ATTEMPTS {
+                let bytes = d.download(&file)?;
+                let after = d.metadata(&wanted.id)?;
+                if after.content_version() == file.content_version() {
+                    return Ok((entry(&after, wanted.path.clone()), bytes));
+                }
+                file = after;
+            }
+            Err(Error::Invalid(format!("{} kept changing in Google Drive while it was being opened; try again", wanted.name)))
         })
     }
 
@@ -377,7 +403,7 @@ impl Inner {
         // The stored token goes first, so quitting during a long transfer doesn't leave the
         // person signed in on the next launch. It is kept in memory to be revoked below.
         let stored = self.config.as_ref().and_then(|cfg| {
-            let handle = token_handle(&cfg.client_id);
+            let handle = token_handle(cfg);
             let stored = self.store.get(&handle).ok().flatten();
             if let Err(e) = self.store.remove(&handle) {
                 log::warn!("Google Drive: sign-out didn't remove the stored token: {e}");

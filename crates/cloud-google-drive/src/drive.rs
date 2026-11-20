@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use crate::encode::{drive_literal, form, pct};
-use crate::http::{Method, Request, Response};
+use crate::http::{Method, Request, Response, TRANSFER_DEADLINE};
 use crate::oauth::Auth;
 use crate::{Error, Result};
 
@@ -62,7 +62,7 @@ pub struct DriveFile {
     #[serde(default)]
     pub version: String,
     /// Bytes; absent for native Google files and folders.
-    #[serde(default, deserialize_with = "opt_u64_str")]
+    #[serde(default, deserialize_with = "opt_u64_str", serialize_with = "opt_u64_as_str")]
     pub size: Option<u64>,
     /// The folders it is in (one, in practice); empty when the folder isn't visible, such as a
     /// file shared with the person.
@@ -86,6 +86,23 @@ pub struct DriveFile {
 fn opt_u64_str<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
     let s: Option<String> = serde::Deserialize::deserialize(d)?;
     Ok(s.and_then(|s| s.parse().ok()))
+}
+
+/// Written the way Drive sends it (and [`opt_u64_str`] reads it): a decimal string.
+fn opt_u64_as_str<S: serde::Serializer>(v: &Option<u64>, s: S) -> std::result::Result<S::Ok, S::Error> {
+    match v {
+        Some(n) => s.serialize_some(&n.to_string()),
+        None => s.serialize_none(),
+    }
+}
+
+/// A listing, and whether it is all of it: [`MAX_PAGES`] pages can end before Drive does.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Listing {
+    pub files: Vec<DriveFile>,
+    /// `false` when Drive had more pages than were read: a name missing from `files` may still
+    /// be there.
+    pub complete: bool,
 }
 
 impl DriveFile {
@@ -253,6 +270,11 @@ impl Drive {
     /// Every file matching `q`, folders first and then by name, at most [`MAX_PAGES`] pages.
     /// Entries with an id that isn't one are dropped.
     pub fn search(&mut self, q: &str) -> Result<Vec<DriveFile>> {
+        self.listing(q).map(|l| l.files)
+    }
+
+    /// [`Drive::search`], saying whether the listing is complete.
+    pub fn listing(&mut self, q: &str) -> Result<Listing> {
         let size = PAGE_SIZE.to_string();
         let fields = format!("nextPageToken,files({FIELDS})");
         let mut files = Vec::new();
@@ -274,24 +296,40 @@ impl Drive {
             }
             next = v.get("nextPageToken").and_then(|t| t.as_str()).filter(|t| !t.is_empty() && t.len() <= 4096).map(str::to_owned);
             if next.is_none() {
-                break;
+                return Ok(Listing { files, complete: true });
             }
         }
-        Ok(files)
+        Ok(Listing { files, complete: false })
     }
 
-    /// The id of something named `name` directly in `parent`, when there is one.
+    /// The id of something named `name` directly in `parent`, when there is one. Drive can
+    /// answer a page with no files and a continuation token, so pages are followed; a lookup that
+    /// can't finish is an error, never "not there".
     pub fn child_named(&mut self, parent: &str, name: &str) -> Result<Option<String>> {
         let q = child_query(parent, name)?;
-        let pairs = [("q", q.as_str()), ("fields", "files(id)"), ("pageSize", "1"), ("spaces", "drive")];
-        let v = self.send(Request::new(Method::Get, format!("{API}/files?{}", form(&pairs))))?.json()?;
-        Ok(v.get("files")
-            .and_then(|f| f.as_array())
-            .and_then(|a| a.first())
-            .and_then(|f| f.get("id"))
-            .and_then(|i| i.as_str())
-            .filter(|i| check_id(i).is_ok())
-            .map(str::to_owned))
+        let mut next: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let mut pairs = vec![("q", q.as_str()), ("fields", "nextPageToken,files(id)"), ("pageSize", "10"), ("spaces", "drive")];
+            if let Some(t) = next.as_deref() {
+                pairs.push(("pageToken", t));
+            }
+            let v = self.send(Request::new(Method::Get, format!("{API}/files?{}", form(&pairs))))?.json()?;
+            let found = v
+                .get("files")
+                .and_then(|f| f.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|f| f.get("id").and_then(|i| i.as_str()))
+                .find(|i| check_id(i).is_ok());
+            if let Some(id) = found {
+                return Ok(Some(id.to_owned()));
+            }
+            next = v.get("nextPageToken").and_then(|t| t.as_str()).filter(|t| !t.is_empty() && t.len() <= 4096).map(str::to_owned);
+            if next.is_none() {
+                return Ok(None);
+            }
+        }
+        Err(Error::Protocol(format!("Google Drive didn't finish saying whether {name} exists")))
     }
 
     pub fn metadata(&mut self, id: &str) -> Result<DriveFile> {
@@ -314,7 +352,7 @@ impl Drive {
             }
             None => format!("{API}/files/{id}?alt=media"),
         };
-        let resp = self.send(Request::new(Method::Get, url).limit(MAX_DOCUMENT))?;
+        let resp = self.send(Request::new(Method::Get, url).limit(MAX_DOCUMENT).deadline(TRANSFER_DEADLINE))?;
         if !resp.ok() {
             return Err(resp.api_error());
         }
@@ -334,33 +372,60 @@ impl Drive {
         match target {
             SaveTarget::Existing { id, name, version } => {
                 let id = check_id(id)?;
-                let now = self.metadata(id)?;
-                if now.is_native() || now.is_folder() {
-                    return Err(Error::Invalid(format!("{} is a Google Drive file of its own type; save a copy instead", now.name)));
+                // Nothing to compare with: the check would pass against a file with no revision.
+                if version.trim().is_empty() {
+                    return Err(Error::Invalid(format!("{name} has no Google Drive version to check against; save a copy instead")));
                 }
-                if now.trashed {
-                    return Err(Error::Invalid(format!("{} is in the Google Drive trash; save a copy instead", now.name)));
-                }
-                if now.content_version() != version {
-                    return Err(Error::Conflict { name: name.clone(), opened: version.clone(), remote: now.content_version().to_string() });
-                }
+                self.check_unchanged(id, name, version)?;
                 let url = format!("{UPLOAD_API}/files/{id}?uploadType=media&fields={}", pct(FIELDS));
-                let req = Request::new(Method::Patch, url).body(mime_for(&now.name), content);
-                Self::file(self.send(req)?)
-            }
-            SaveTarget::New { name, parent } => {
-                let name = check_name(name)?;
-                let mime = mime_for(name);
-                let mut meta = serde_json::json!({ "name": name, "mimeType": mime });
-                if let Some(p) = parent {
-                    meta["parents"] = serde_json::json!([check_id(p)?]);
+                // Sent once per check: a 401 refreshes the token, and the revision is checked
+                // again before the retry, so a retry never skips the check.
+                let body: std::sync::Arc<[u8]> = std::sync::Arc::from(content);
+                for attempt in 0..2 {
+                    if attempt > 0 {
+                        self.check_unchanged(id, name, version)?;
+                    }
+                    let token = self.auth.access_token(Instant::now())?;
+                    let req = Request::new(Method::Patch, url.clone()).body(mime_for(name), body.clone()).deadline(TRANSFER_DEADLINE).bearer(&token);
+                    let resp = self.auth.http().send(req)?;
+                    if resp.status != 401 {
+                        return Self::file(resp);
+                    }
+                    self.auth.invalidate_access();
                 }
-                let boundary = format!("craft-{}", crate::pkce::random_token(18)?);
-                let body = multipart(&boundary, &meta, mime, content);
-                let url = format!("{UPLOAD_API}/files?uploadType=multipart&fields={}", pct(FIELDS));
-                let req = Request::new(Method::Post, url).body(&format!("multipart/related; boundary={boundary}"), body);
-                Self::file(self.send(req)?)
+                Err(Error::NotSignedIn)
             }
+            SaveTarget::New { name, parent } => self.create(name, parent.as_deref(), content),
         }
+    }
+
+    /// Refuses a save over `id` unless it is still the uploaded file at `version` that was
+    /// opened: not a native Google file, a folder or in the trash.
+    fn check_unchanged(&mut self, id: &str, name: &str, version: &str) -> Result<()> {
+        let now = self.metadata(id)?;
+        if now.is_native() || now.is_folder() {
+            return Err(Error::Invalid(format!("{} is a Google Drive file of its own type; save a copy instead", now.name)));
+        }
+        if now.trashed {
+            return Err(Error::Invalid(format!("{} is in the Google Drive trash; save a copy instead", now.name)));
+        }
+        if now.content_version() != version {
+            return Err(Error::Conflict { name: name.to_owned(), opened: version.to_owned(), remote: now.content_version().to_string() });
+        }
+        Ok(())
+    }
+
+    fn create(&mut self, name: &str, parent: Option<&str>, content: &[u8]) -> Result<DriveFile> {
+        let name = check_name(name)?;
+        let mime = mime_for(name);
+        let mut meta = serde_json::json!({ "name": name, "mimeType": mime });
+        if let Some(p) = parent {
+            meta["parents"] = serde_json::json!([check_id(p)?]);
+        }
+        let boundary = format!("craft-{}", crate::pkce::random_token(18)?);
+        let body = multipart(&boundary, &meta, mime, content);
+        let url = format!("{UPLOAD_API}/files?uploadType=multipart&fields={}", pct(FIELDS));
+        let req = Request::new(Method::Post, url).body(&format!("multipart/related; boundary={boundary}"), body).deadline(TRANSFER_DEADLINE);
+        Self::file(self.send(req)?)
     }
 }

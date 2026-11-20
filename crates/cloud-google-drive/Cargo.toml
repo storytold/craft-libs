@@ -10,11 +10,9 @@ description = "Google Drive as a craft-ui CloudBackend: OAuth sign-in for instal
 [lints]
 workspace = true
 
-[dependencies]
-thiserror = { workspace = true }
-
-# Desktop only: see the note in `lib.rs`.
+# Desktop only: see the note in `lib.rs`. On wasm the crate is empty and depends on nothing.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+thiserror = { workspace = true }
 craft-cloud = { workspace = true }
 craft-ui = { workspace = true, features = ["cloud"] }
 # The refresh token goes in the suite's keychain namespace through its TokenStore, so the suite
