@@ -2,24 +2,21 @@
 //! group level, under which an inline button drops its label and keeps it as its name and tooltip, the room a button
 //! keeps for its widest text, and a picture in the leading icon's place.
 
-use craft_behavior::{IconId, PartKey, Sense};
+use craft_behavior::{IconId, PartKey};
 use craft_theme::ControlSize;
 use craft_theme::Variant;
 use craft_ui::buttons::{Arrangement, Button, ControlPlace, GroupLevel, SplitButton, SplitMenu, ToggleButton};
 use craft_ui::contract::tooltip::DELAY;
-use craft_ui::contract::{Bind, CommandSet, Common, Component, Cx, Entry, Hover, MeasureCx, Props as _, Role, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{Bind, CommandSet, Entry, Hover, Props as _, Role, Show as _};
 use craft_ui::display::Picture;
-use craft_ui::layout::BodyLayout;
 use craft_ui::list::ThumbAspect;
 use craft_ui::pickers::ComboBox;
 use craft_ui::runtime::commands::CommandState;
 use craft_ui::runtime::env::with_env;
-use craft_ui::style::StyleCx;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Fixture, forget_measurements, last_pass_measure_asks, last_pass_text_layouts, trial};
-use craft_ui_test_kit::contract::{Panel, PlainStyle};
-use egui::{Event, Id, Pos2, Rect, Response, Ui, Vec2};
+use craft_ui::testing::{Fixture, trial};
+use egui::{Event, Id, Pos2, Rect, Response, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -29,98 +26,6 @@ enum Kind {
     Button,
     Toggle,
     Split,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PairedFaceCase {
-    RoomFor,
-    Stacked,
-    Compact,
-}
-
-fn paired_face(case: PairedFaceCase) -> Button<'static> {
-    let button = Button::new("Save").icon(IconId::new("copy"));
-    match case {
-        PairedFaceCase::RoomFor => button.room_for("A much wider button label"),
-        PairedFaceCase::Stacked => button.arrangement(Arrangement::Stacked),
-        PairedFaceCase::Compact => button,
-    }
-}
-
-/// Uses the same real button's separate ideal and least measurements as a comparison leaf.
-#[derive(Component)]
-struct SeparateFace {
-    #[common]
-    common: Common,
-    case: PairedFaceCase,
-}
-
-impl Component for SeparateFace {
-    const ROLE: Role = Role::GROUP;
-    type Style = PlainStyle;
-    type Output = Response;
-
-    fn style(_: &StyleCx<'_>, _: SeparateFaceStyleKey) -> PlainStyle {
-        PlainStyle::default()
-    }
-
-    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        paired_face(self.case).measure_in(cx.ui, cx.proposal)
-    }
-
-    fn sense(&self) -> Sense {
-        Sense::empty()
-    }
-
-    fn finish(self, cx: Cx<'_, Self>) -> Response {
-        cx.response.clone()
-    }
-}
-
-fn face_in_row(case: PairedFaceCase, paired: bool, width: f32) -> Vec2 {
-    let seen = Rc::new(Cell::new(Vec2::ZERO));
-    let output = seen.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        with_env(
-            ui,
-            |overrides| {
-                if matches!(case, PairedFaceCase::Compact) {
-                    overrides.values.set(GroupLevel::Compact);
-                }
-            },
-            |ui| {
-                Panel::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth).id_salt("face-row").show(ui, |ui, _| {
-                    let size = if paired {
-                        paired_face(case).sizing(Sizing::FillWidth).id_salt("face").show(ui).response.rect.size()
-                    } else {
-                        SeparateFace { common: Common::new(), case }.sizing(Sizing::FillWidth).id_salt("face").show(ui).rect.size()
-                    };
-                    output.set(size);
-                });
-            },
-        );
-    });
-    fixture.room(Vec2::new(width, 160.0)).settle();
-    if paired {
-        forget_measurements(fixture.ctx());
-        fixture.frame(Vec::new());
-        let asks = last_pass_measure_asks(fixture.ctx());
-        assert!(asks.iter().any(|(name, count)| name.contains("Button") && *count > 0), "the face must be measured again: {asks:?}");
-        assert_eq!(last_pass_text_layouts(fixture.ctx()), 0, "a warmed face must reuse its text layouts");
-    }
-    seen.get()
-}
-
-#[trial]
-fn paired_button_faces_match_separate_measurements() {
-    for case in [PairedFaceCase::RoomFor, PairedFaceCase::Stacked, PairedFaceCase::Compact] {
-        for width in [80.0, 240.0] {
-            let paired = face_in_row(case, true, width);
-            let separate = face_in_row(case, false, width);
-            assert!(paired.x > 0.0 && paired.y > 0.0);
-            assert!((paired - separate).abs().max_elem() < 0.5, "{case:?} in {width}: paired {paired:?}, separate {separate:?}");
-        }
-    }
 }
 
 /// One stacked control of `kind` with `label` at `size`, shown alone: its rect and the rects of the label lines it

@@ -1025,6 +1025,7 @@ Box geometry of transform boxes: where the box goes when a part of it is dragged
   - `pub const fn new(along: Axis, position: f64, kind: SnapKind) -> Self`. A full-height line of `kind` running `along` an axis, at `position` across it: a line along `Axis::Y`
 - `craft_behavior::geometry::snap::SnapTargets`: `pub struct SnapTargets`. The snap targets of one gesture.
   - `pub fn new() -> Self`. No targets.
+  - `pub fn reach_past_spans(mut self) -> Self`. These targets with every span reaching past its extent: a target catches a point or box anywhere along its
   - `pub fn add(&mut self, target: SnapTarget)`. Add one target.
   - `pub fn add_rect(&mut self, rect: Rect, edge: SnapKind, center: SnapKind)`. Add a rectangle's four edges as `edge` targets and its two centre lines as `center`
   - `pub fn with_document(self, options: &SnapOptions, bounds: Rect, guides: impl IntoIterator<Item =(Axis, f64)>, grid: Option<(Point, Vec2)>,) -> Self`. Guides as full-height targets, grid lines of `spacing` from `origin` over `bounds`, the
@@ -1777,10 +1778,10 @@ The base of the craft UI library: runtime, style, fonts, primitives, the compone
 
 - `craft_ui::bind_tracked!`: `macro_rules! bind_tracked`. Write-through bindings to fields of a [`Tracked`](crate::contract::Tracked) value: `bind_tracked!(doc => size)`
 - `craft_ui::stays!`: `macro_rules! stays`. Types with no place: they stay as they are at any place.
-- `craft_ui::testing_registered!`: `macro_rules! testing_registered`. Writes `pub fn registered()` for the invoking package: its library crate's registrations in the running binary.
 - `craft_ui::InstallError`: re-export of `craft_ui::runtime::install::InstallError`.
 - `craft_ui::InstallSpec`: re-export of `craft_ui::runtime::install::InstallSpec`.
 - `craft_ui::install`: re-export of `craft_ui::contract::install`.
+- `craft_ui::registry`: re-export of `craft_ui_macros::registry` (outside these crates).
 - `craft_ui::words`: re-export of `craft_ui_macros::words` (outside these crates).
 
 ## `craft_ui::contract`
@@ -3058,7 +3059,9 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
 - `craft_ui::primitives::TextKey`: `pub struct TextKey<V>`. A text part's key, typed by the value its codec gives.
   - `pub const fn new(key: PartKey) -> Self`. The key of the text part `key`.
   - `pub const fn key(self) -> PartKey`. The part key.
-- `craft_ui::primitives::TextLayout`: `pub struct TextLayout { pub galley: Arc<Galley>, pub elided: bool, pub full: String, pub first_baseline: f32, pub runs: Vec<LayoutRun>, pub rotation: f32 }`. A laid-out run.
+- `craft_ui::primitives::TextLayout`: `pub struct TextLayout { pub galley: Arc<Galley>, pub elided: bool, pub first_baseline: f32, pub rotation: f32 }`. A laid-out run.
+  - `pub fn full(&self) -> &str`. The full text, as the tooltip and accessible name of an elided run.
+  - `pub fn runs(&self) -> &[LayoutRun]`. The bidi runs of a single-row layout; empty for a wrapped one.
   - `pub fn size(&self) -> egui::Vec2`. The galley size.
   - `pub fn char_x(&self, chars: usize) -> f32`. Where a caret before character `chars` (counted from the start of the text) stands, from the layout's left edge:
 - `craft_ui::primitives::TextOptions`: `pub struct TextOptions { pub placeholder: Option<Label>, pub lines: Option<usize>, pub limit: Option<usize>, pub mask: bool, pub live: bool, pub clear_on_escape: bool, pub mono: bool, pub role: TypeRole, pub ink: Option<Ink>, pub tab: TabKey, pub caret: Option<usize>, pub complete: Option<Arc<dyn Completer>>, pub complete_on_enter: bool, pub replace_selection: Option<String>, pub commit_on: &'static [char], pub enabled: bool, pub steps_value: bool, pub select_on_focus: bool, pub submits: bool, pub mixed: bool, pub centred: bool, pub arrows_from_end: bool, pub unparsed: Option<Message>, pub own_menu: bool, pub holds_drafts: bool }`. How a text part behaves beyond its codec.
@@ -4435,13 +4438,24 @@ The fixture, the suite runner and the story helpers.
   - `pub const fn new(module: &'static str, name: &'static str, run: fn()) -> Trial`. A registration, as `#[trial]` writes it.
   - `pub const fn ignored(module: &'static str, name: &'static str, run: fn()) -> Trial`. The registration of an `#[ignore]`d trial, as `#[trial]` writes it.
   - `pub fn full_name(&self) -> String`. The name filters match: the module path below the crate, then the function.
-- `craft_ui::testing::registered_in`: `pub fn registered_in(crate_name: &str) -> Vec<&'static Registration>`. Every registration declared in the library crate of the package `crate_name` and linked into the running
-- `craft_ui::testing::run`: `pub fn run(crate_root: &str, package: &'static str, registered: &[&'static Registration]) ->!`. Runs a test executable and exits: the `#[trial]`s declared in the crate whose root module is `crate_root` or in
-- `craft_ui::testing::trials`: `pub fn trials() -> Vec<&'static Trial>`. Every `#[trial]` linked into the running binary, by full name.
+- `craft_ui::testing::run`: `pub fn run(crate_root: &str, package: &'static str, registry: &Registry) ->!`. Runs a test executable and exits: the `#[trial]`s declared in the crate whose root module is `crate_root` or in
 - `craft_ui::testing::Fixture`: re-export of `craft_ui::testing::fixture::Fixture`.
 - `craft_ui::testing::Frames`: re-export of `craft_ui::testing::frames::Frames`.
 - `craft_ui::testing::Impure`: re-export of `craft_ui::testing::fixture::Impure`.
 - `craft_ui::testing::MemoRun`: re-export of `craft_ui::runtime::measure::MemoRun` (defined outside these crates).
+- `craft_ui::testing::Registered`: `pub trait Registered`. A component or pattern whose derive supplies its suite registration.
+  - `fn registration() -> Registration`. The registration for this concrete type.
+- `craft_ui::testing::Registry`: `pub struct Registry`. The suite items selected by a caller.
+  - `pub fn of(crates: &[fn(&mut Registry)]) -> Self`. Collects the items contributed by each selected crate.
+  - `pub fn add_registration(&mut self, registration: Registration)`. Adds a component or pattern registration.
+  - `pub fn add_story(&mut self, story: StoryRegistration)`. Adds a story.
+  - `pub fn add_trial(&mut self, trial: Trial)`. Adds a trial.
+  - `pub fn add_story_set(&mut self, set: SetEntry)`. Adds a command set used by stories.
+  - `pub fn registrations(&self) -> &[Registration]`. The selected components and patterns.
+  - `pub fn stories(&self) -> &[StoryRegistration]`. The selected stories.
+  - `pub fn trials(&self) -> &[Trial]`. The selected trials.
+  - `pub fn install_story_sets(&self) -> bool`. Selects story command sets for contexts created on the current thread.
+  - `pub fn story_sets(&self) -> &[SetEntry]`. The selected story command sets.
 - `craft_ui::testing::Room`: re-export of `craft_ui::testing::fixture::Room`.
 - `craft_ui::testing::Target`: re-export of `craft_ui::testing::fixture::Target`.
 - `craft_ui::testing::audit_replays`: `pub fn set(ctx: &Context, on: bool)`. Turns the audit on or off in `ctx`, in place of `CRAFT_UI_AUDIT_REPLAY`.
@@ -4784,8 +4798,8 @@ A fixed-rate frame driver over a context.
 
 The components index: every registered component type, grouped by gallery level, with its module and the purpose its derive recorded
 
-- `craft_ui::testing::index::components_index`: `pub fn components_index(root: &Path, registered: &[&'static Registration]) -> String`. The text of `docs/components-index.md` for the workspace at `root` and the types of `registered`.
-- `craft_ui::testing::index::types_without_purpose`: `pub fn types_without_purpose(registered: &[&'static Registration]) -> Vec<String>`. The types of `registered` that have no purpose: their types lack a doc comment.
+- `craft_ui::testing::index::components_index`: `pub fn components_index(root: &Path, registered: &[&Registration]) -> String`. The text of `docs/components-index.md` for the workspace at `root` and the types of `registered`.
+- `craft_ui::testing::index::types_without_purpose`: `pub fn types_without_purpose(registered: &[&Registration]) -> Vec<String>`. The types of `registered` that have no purpose: their types lack a doc comment.
 
 ## `craft_ui::testing::input`
 
@@ -5025,7 +5039,7 @@ Style and paint helpers: token sets, a `StyleCx`, the style cache and a `Draw` o
 
 The suite runner: one trial per registered type and group of cases, running the group's shared cases over the
 
-- `craft_ui::testing::suite::trials`: `pub fn trials(package: &'static str, registered: &[&'static Registration]) -> Vec<Trial>`. The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`; the same for
+- `craft_ui::testing::suite::trials`: `pub fn trials(package: &'static str, registry: &Registry) -> Vec<Trial>`. The trials of one package: a trial per registered type and group of cases, `suite::<type>::<group>`; the same for
 - `craft_ui::testing::suite::measure_pure_case`: `pub fn measure_pure_case(probe: &Probe, story: &Story) -> Result<(), String>`. The `measure-pure` case over one story of the type `probe` describes: settled and then driven by each way of its
 - `craft_ui::testing::suite::reflowed`: `pub fn reflowed(base: &[(&str, Rect)], grown: &[(&str, Rect)]) -> bool`. Whether the layout reflowed from `base` to `grown`: two texts lie beside each other in `base` and one above the
 - `craft_ui::testing::suite::required_states`: `pub fn required_states(probe: &Probe) -> Vec<Required>`. The states a registered type must show, from the facts of its probe, less the states it is exempt from.
