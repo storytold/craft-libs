@@ -588,11 +588,22 @@ fn resolve_links(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("cannot save {}: too many levels of symbolic links", path.display())))
 }
 
+/// The most bytes of the destination name that a temporary name keeps.
+const TEMP_STEM_BYTES: usize = 64;
+
 /// Generates a unique, hidden temporary file name beside `file`.
+///
+/// The name keeps at most the first 64 bytes of `file`, cut at a character boundary, so the
+/// temporary name stays within the 255-byte name limit of common file systems for any
+/// destination name.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let stem: String = file.chars().take(64).collect();
+    let mut end = file.len().min(TEMP_STEM_BYTES);
+    while !file.is_char_boundary(end) {
+        end -= 1;
+    }
+    let stem = &file[..end];
     #[cfg(not(target_arch = "wasm32"))]
     let pid = std::process::id();
     #[cfg(target_arch = "wasm32")]
@@ -1338,6 +1349,35 @@ mod tests {
         let name = temp_name("document.craft");
         assert!(name.starts_with(".document.craft."));
         assert!(name.ends_with(".craft_tmp"));
+    }
+
+    #[test]
+    fn temp_name_keeps_long_non_latin_names_under_the_name_limit() {
+        // 62 four-byte characters plus ".json" is a valid 253-byte name.
+        let file = format!("{}.json", "\u{1F600}".repeat(62));
+        assert_eq!(file.len(), 253);
+        let name = temp_name(&file);
+        assert!(name.len() <= 255, "{} bytes", name.len());
+        assert!(name.starts_with(&format!(".{}.", "\u{1F600}".repeat(16))));
+        assert!(name.ends_with(".craft_tmp"));
+    }
+
+    #[test]
+    fn temp_name_cuts_at_a_character_boundary() {
+        // 63 ASCII bytes then a two-byte character that would end at byte 65.
+        let file = format!("{}\u{e9}tail", "a".repeat(63));
+        let name = temp_name(&file);
+        assert!(name.starts_with(&format!(".{}.", "a".repeat(63))));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn saves_a_long_non_latin_name() {
+        let d = TempDir::new("long-name");
+        let p = d.0.join(format!("{}.json", "\u{1F600}".repeat(62)));
+        assert!(atomic_write(&p, b"saved").is_ok());
+        assert_eq!(std::fs::read(&p).ok(), Some(b"saved".to_vec()));
+        assert_no_temp(&d.0);
     }
 
     #[cfg(target_arch = "wasm32")]
