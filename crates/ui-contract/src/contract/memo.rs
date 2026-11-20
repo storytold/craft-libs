@@ -958,6 +958,13 @@ impl MemoProps for craft_theme::variant::Tone {
     }
 }
 
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::LabelColor {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 impl MemoProps for craft_behavior::IconId {
     fn key(&self, key: &mut MemoKey) {
         // The name is the whole id.

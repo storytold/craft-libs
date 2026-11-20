@@ -127,7 +127,6 @@ pub struct LayerInfo {
     /// Whether the row draws faint: hidden itself or inside a hidden group (the app decides).
     pub dimmed: bool,
     /// The label colour that fills the eye cell; `None` for none.
-    #[plain_data(assume = "a plain Copy enum of colours")]
     pub label: Option<LabelColor>,
     /// The layer's locks: any of them shows the lock indicator.
     pub locks: LayerLocks,

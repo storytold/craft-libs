@@ -354,7 +354,6 @@ pub struct LayerFilter {
     /// Color: the label colour; `None` (no label) at first. Serialized by name (`"none"`, `"red"`,
     /// … `"gray"`).
     #[serde(with = "label_name")]
-    #[memo_props(hash = "a plain enum with a derived Hash")]
     pub color: Option<LabelColor>,
     /// Smart Object: the kinds toggled on, in the order they were toggled.
     pub smart: Vec<SmartKind>,
