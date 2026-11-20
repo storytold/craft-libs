@@ -564,7 +564,7 @@ fn outline(at: Rect, style: &SwatchPairStyle) -> PaintShape {
 
 /// The glyphs of the pair's buttons, drawn on a square grid of `GRID` units; they picture the pair, so they mirror
 /// with it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, craft_ui::contract::MemoProps)]
 enum PairGlyph {
     /// Default colours: a black square over a white one, as the wells stand.
     Defaults,

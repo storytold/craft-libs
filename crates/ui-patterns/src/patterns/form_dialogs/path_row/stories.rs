@@ -23,10 +23,10 @@ fn path_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// A row whose Browse is off, with the reason as the button's tooltip.
 #[story(PathRow<'static>, covers = [], drive = Drive::Never)]
 fn path_row_browse_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let path = data.value("path", "/photos/trip/sunrise.png".to_owned());
+    let (path, path_at) = data.value_at("path", "/photos/trip/sunrise.png".to_owned());
     let mut shown = StoryOutput::default();
     Field::new("Image").show(ui, |ui, _| {
-        shown = PathRow::new("Image", Bind::bound(&mut *path)).browse_reason("Browsing needs the file service.").show(ui).into();
+        shown = PathRow::new("Image", path_at.bind(&mut *path)).browse_reason("Browsing needs the file service.").show(ui).into();
     });
     shown
 }

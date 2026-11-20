@@ -33,14 +33,14 @@ fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, B
 
 /// [`on_canvas`] with the box's whole output.
 fn shown_on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> Option<TransformBoxOutput> {
-    let state = data.value("box", BoxState::from_rect(PICTURE));
+    let (state, state_at) = data.value_at("box", BoxState::from_rect(PICTURE));
     let room = craft_ui::testing::stage(ui);
     let view = craft_ui::testing::canvas_story::story_view(room, ui.pixels_per_point(), PICTURE.center(), 100.0);
     let layer = layer();
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
         show_quad(ui, body.rect, "Layer", state.quad, &layer);
-        make(Bind::bound(&mut *state)).show_at(ui, body.rect)
+        make(state_at.bind(&mut *state)).show_at(ui, body.rect)
     });
     shown.inner
 }

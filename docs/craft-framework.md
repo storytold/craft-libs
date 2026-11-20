@@ -323,6 +323,8 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 
 **Layout memory.** A record of layout memory holds a measure or a text. A body whose inputs did not change takes its kept measurement instead of running a measuring run. A text that a measuring run found for content outside the body (a value readout beside a story, for example) is kept with the measurement: `layout_memory::emit_text` hands it forward, `layout_memory::text` reads it, and a body that takes its kept measurement gives the text its measuring run found. A real run that finds another text marks the kept transcript as changed.
 
+**Memoized views.** A memoized view (`MemoView::new(id, props, show).show(ui)`) runs only when one of its inputs changed, and otherwise adds its last real run to the pass again: its paint, widgets, accessibility nodes, focus stops and the other per-pass registrations, and the value its run returned. Its content is a `fn` that captures nothing, and its props (`#[derive(MemoProps)]`) hold every app input it reads, so the compiler checks that the framework sees them; large app data goes in a `Tracked<T>`, which keys by revision. The view runs when its props key differs from its last run's, when its place or environment differs (room, clip, layer, scale, theme, density, language, the scope's inherited values), when a framework input it read moved (modifiers, pointer, keymap, focus, a bound value, a command state), when it is engaged (the pointer over it, focus in it, a press or drag in it, an intent routed to it), and while something in it still moves (an animation, a loading texture, a repaint asked in its run with `frame::request_repaint`, a wake time). Input elsewhere in the window and repaint requests outside every view run no view: what changed reaches a view through its props. Content outside every memoized view runs in every pass.
+
 **Out-of-view content.** Content inside a scroll area that is out of view this pass does not run. It keeps what it last showed: the extent it had in the last pass that showed it, which changes only in a pass that shows the content, and the stops it registered there. One mechanism (`runtime::lazy`, one store) serves every use:
 
 - Only content that meets the view runs. A `Lazy` child out of view registers the focus records of its last real run again in its place (its stops, the scopes it pushed and the roving groups of its stops; `focus::Transcript`), so Tab and F6 reach its stops; Tab onto one runs the child and the reveal scrolls it in.
@@ -353,7 +355,7 @@ Content runs in every pass, and its sizes come from this pass. Layouts also read
 - `Context::set_layer_order`, which moves unlisted sublayers with their listed parent
 - OpenType features per text section (epaint)
 - `IdTypeMap::insert_temp_boxed` keeps the allocation of a value taken out, and `Context::ptr_eq`
-- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled region replays its last pass's records
+- `Context::pass_mark`, `pass_records_since` and `replay_pass_records`: a settled memoized view replays its last run's records
 - `Event::SystemTheme` reports the OS's light or dark preference
 - `egui_kittest`'s eframe harness runs `App::raw_input_hook` before each pass, as eframe does, so an app's `embed::before_input` runs in its tests
 

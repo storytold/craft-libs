@@ -2,7 +2,7 @@
 
 use super::{Swatch, SwatchShape};
 use crate::choice::RadioGroup;
-use crate::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::{Row, Stack};
 use crate::testing::{Drive, StoryData, StoryOutput, show_as_only_item, story};
 use craft_behavior::Mixed;
@@ -50,7 +50,7 @@ fn swatch_states(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 /// Twelve swatches in a `RadioGroup`: one Tab stop, arrows move, Space picks.
 #[story(Swatch<u8>, covers = [], drive = Drive::Never)]
 fn swatch_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    RadioGroup::new("Palette", Bind::bound(data.value("palette", 8u8)))
+    RadioGroup::new("Palette", data.bind("palette", 8u8))
         .show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 for (n, color) in (0u8..).zip(PALETTE) {

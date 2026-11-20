@@ -555,7 +555,7 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     };
     // A secondary press inside the selection keeps the selection for the edit menu it opens, as native fields do;
     // egui's widget moves the caret to any press, so the selection from before the press is put back.
-    let secondary = crate::runtime::pointer::frame(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
+    let secondary = crate::runtime::pointer::frame_raw(ctx).press.is_some_and(|press| press.button == craft_behavior::PointerButton::Secondary);
     let kept = selection(ctx, widget).filter(|(caret, anchor)| secondary && caret != anchor);
     let shown = text_edit::show(input.ui, edit);
     crate::runtime::pointer::record_text_widget(ctx, widget, input.id);

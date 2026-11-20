@@ -5,4 +5,5 @@ pub(crate) mod breadcrumb;
 pub(crate) mod constraint_fields;
 pub(crate) mod edit_focus;
 pub(crate) mod items;
+pub(crate) mod memo;
 pub(crate) mod overflow;

@@ -4,6 +4,7 @@
 mod appkit;
 pub(crate) mod keytips;
 pub(crate) mod layout;
+pub(crate) mod memo;
 pub(crate) mod mnemonic;
 pub(crate) mod native;
 pub(crate) mod ribbon;

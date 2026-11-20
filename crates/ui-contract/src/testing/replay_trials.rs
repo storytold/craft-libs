@@ -71,6 +71,26 @@ fn journal_entries_compare_by_their_call_and_arguments() {
     assert_ne!(first.journal[1], other_call.journal[1], "another call with the same arguments");
 }
 
+/// A registration whose `again` notes itself, as the services' public registration calls do.
+fn renote(ctx: &egui::Context, args: &(egui::Id, u32)) {
+    replay::journal(ctx, || *args, renote);
+}
+
+// A record replayed inside the run of another record is part of that run: the outer record holds each of its journal
+// entries once, whether the entry's call notes itself again or not, so the outer record's own replay registers them.
+#[trial]
+fn a_record_replayed_inside_another_run_is_in_its_journal() {
+    let mut frames = Frames::new();
+    let id = fixture::named_id("owner");
+    let inner = record(&mut frames, |ctx| {
+        replay::journal(ctx, || (id, 1), note_a);
+        renote(ctx, &(id, 2));
+    });
+    assert_eq!(inner.journal.len(), 2, "both notes are in the inner record");
+    let outer = record(&mut frames, |ctx| replay::replay(ctx, &inner, &egui::RecordShift::none(Rect::EVERYTHING)));
+    assert_eq!(outer.journal, inner.journal, "the outer record holds the replayed journal, each entry once");
+}
+
 // A focus transcript with one changed stop compares unequal to the run before it; one with the same stops equal.
 #[trial]
 fn a_transcript_with_one_changed_stop_compares_unequal() {
@@ -117,7 +137,7 @@ fn layer_scope_record(frames: &mut Frames, outer: Option<egui::Id>, entering: bo
         }
         replay::open(&ctx);
         focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
-        focus::push_scope_from(&ctx, scope, FocusPolicy::NONE, None, None, false, Some(entering));
+        focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(entering));
         focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
         focus::pop_scope(&ctx);
         record = Some(replay::close(&ctx, fixture::layer_of(ui)));
@@ -167,7 +187,7 @@ fn a_replayed_member_stacks_above_the_members_before_it() {
     let shown = |ui: &mut egui::Ui, replayed: bool| {
         sensing::sense_members(ui, arena, &[spec(before, Rect::from_min_size(Pos2::ZERO, Vec2::splat(10.0))), spec(cover, rect)]);
         if replayed {
-            replay::replay(ui.ctx(), &recorded);
+            replay::replay(ui.ctx(), &recorded, &egui::RecordShift::none(Rect::EVERYTHING));
             return None;
         }
         let ctx = ui.ctx().clone();
@@ -188,4 +208,28 @@ fn a_replayed_member_stacks_above_the_members_before_it() {
         let _ = shown(ui, true);
     });
     assert_eq!(hovered, Some([true, false]), "the replayed child is above the member that covers it");
+}
+
+// A popup scope that appears with nothing focused has no opener, and keeps none once focus moved into it: the opener is
+// taken when the scope first appears, never from a later pass's focus, which is a stop inside the scope itself. A
+// recorded first pass, the next real run and a replay then register the same.
+#[trial]
+fn a_scope_keeps_the_opener_of_the_pass_it_appeared_in() {
+    let mut frames = Frames::new();
+    let [scope, stop] = [fixture::named_id("popup"), fixture::named_id("inside")];
+    let mut openers = Vec::new();
+    let mut focused = Vec::new();
+    for first in [true, false, false] {
+        frames.frame(Vec::new(), |ui| {
+            let ctx = ui.ctx().clone();
+            focused.push(focus::focused_stop(&ctx));
+            focus::register_stop(&ctx, Stop::new(fixture::named_id("beside"), KeyUse::CODE));
+            focus::push_scope_from(&ctx, scope, FocusPolicy::POPUP, None, None, false, Some(first));
+            focus::register_stop(&ctx, Stop::new(stop, KeyUse::CODE));
+            focus::pop_scope(&ctx);
+            openers.push(focus::with(&ctx, |state| state.scopes.get(&scope).map(|rec| rec.opener)));
+        });
+    }
+    assert_eq!(focused[1], Some((stop, None)), "focus moved into the popup after its first pass");
+    assert_eq!(openers, vec![Some(None); 3], "the popup keeps the opener of its first pass");
 }

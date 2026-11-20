@@ -130,7 +130,7 @@ pub enum RowPressed {
 /// takes a box wider than its line, a select fits its widest entry up to a field length, a rule shows only with the
 /// member after it, and a row too long for its room narrows its last units first. A layer or pane opened from the bar
 /// starts without it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, crate::contract::MemoProps)]
 #[doc(hidden)]
 pub struct InBar(pub bool);
 

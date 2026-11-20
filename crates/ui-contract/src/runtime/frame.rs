@@ -28,7 +28,7 @@ pub struct FrameInput {
     pub commands: CommandInput,
     /// The app's `Host`, read through `EnvView::host`. The app keeps one `Arc<Host>` across frames and installs a
     /// new one only to switch the language or a service: the scope's words are built again for a new host, and a new
-    /// language runs every settling region again (`Lazy::settles`).
+    /// language runs every memoized view again (the language is part of its place).
     pub host: Option<Arc<Host>>,
     /// The modifiers the app's own tablet or latched-key reader holds down beyond the window's input.
     pub latched: Mods,
@@ -447,23 +447,11 @@ pub(crate) fn announce(ctx: &Context, text: String) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.announcements.push(text));
 }
 
-/// Asks for another pass of the viewport the running pass belongs to. Asked inside a settling child
-/// (`Lazy::settles`), that child runs again; asked outside every one, the app says data it shows changed, so every
-/// settling child runs.
+/// Asks for another pass of the viewport the running pass belongs to. Asked in a memoized view's run, that view runs in
+/// the next pass, and so do the views around it, whose replay would hold its old run. Asked outside every view, every
+/// view replays: app data a view shows reaches it through its props.
 #[doc(hidden)]
 pub fn request_repaint(ctx: &Context) {
-    if crate::runtime::replay::recording(ctx) {
-        crate::runtime::replay::note_unsettled(ctx);
-    } else {
-        crate::runtime::lazy::unsettle(ctx);
-    }
-    raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
-}
-
-/// Asks for another pass of the viewport the running pass belongs to, to move what the caller itself shows (a tool's
-/// preview, a view that eases): no app data changed, so only the settling child it is asked in runs again.
-#[doc(hidden)]
-pub fn request_own_repaint(ctx: &Context) {
     crate::runtime::replay::note_unsettled(ctx);
     raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
 }
@@ -588,7 +576,24 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
     })
 }
 
-/// The running pass's time in seconds, read once by the begin hook.
+/// The pass clock in seconds rounded down to a multiple of `step`, for content that changes with time (a rescan every
+/// few seconds, a "5 minutes ago"): the running view is shown again at the next multiple. Between two steps a run
+/// shows what the last one showed, so a memoized view that reads it replays until the next step and runs then. A
+/// `step` of zero or less returns the clock and shows the view again in every pass.
+pub fn stepped_clock(ctx: &Context, step: f64) -> f64 {
+    let now = clock(ctx);
+    if step <= 0.0 {
+        crate::runtime::motion::note_unsettled(ctx);
+        return now;
+    }
+    let at = (now / step).floor() * step;
+    crate::runtime::motion::wake_at(ctx, at + step);
+    at
+}
+
+/// The running pass's time in seconds, read once by the begin hook. Content that changes with time reads
+/// [`stepped_clock`], which shows it again when the value it read changes; this read notes nothing, for timing
+/// events in the component that has the pointer or the focus.
 #[doc(hidden)]
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {

@@ -35,7 +35,7 @@ pub use config::{DockConfig, DockSides};
 pub use drop::{Arrangement, end_replaced_drags};
 pub use drop::{DockDrag, DockDropTarget, DockDropped, DragUnit, float_drop, resolve_drop, start_group_drag, start_icon_drag};
 pub use event::{DockEvent, FloatSpace, HidePanels};
-pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook};
+pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook, MenuRows};
 
 pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle, WindowColumn};
 pub use panels::{DockPanels, request_actions};
@@ -84,7 +84,7 @@ use tree::{FrameRules, SplitHandle};
 const HANDLE: PartKey = PartKey::new("handle");
 
 /// The stable key of a panel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PanelKey(pub u64);
 
@@ -103,7 +103,7 @@ impl PanelKey {
 }
 
 /// A panel as its group's strip shows it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PanelTitle {
     /// The panel.
