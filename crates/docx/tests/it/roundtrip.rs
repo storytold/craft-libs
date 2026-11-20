@@ -234,6 +234,8 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ParaProps { align: Some(Align::KhmerJustify), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
@@ -3049,4 +3051,30 @@ fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
     assert_eq!(saved.matches("<w:gutterAtTop/>").count(), 1, "{saved}");
     let at = |tag: &str| saved.find(tag).unwrap_or_else(|| panic!("{tag} missing: {saved}"));
     assert!(at("<w:mirrorMargins") < at("<w:gutterAtTop") && at("<w:gutterAtTop") < at("<w:proofState"), "{saved}");
+}
+
+/// Thai Distributed is `w:jc="thaiDistribute"`; Khmer Justify is the same value plus the ignorable
+/// `wc:khmer` mark, so Word shows Thai Distributed and a reader that knows the mark shows Khmer Justify.
+#[test]
+fn thai_distributed_and_khmer_justify_stay_apart() {
+    let mut a = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    a.props = ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() };
+    let mut b = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    b.props = ParaProps { align: Some(Align::KhmerJustify), ..Default::default() };
+    let r = rt(&doc_with(vec![a, b]));
+    let got = paras(&r);
+    assert_eq!(got[0].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(got[1].props.align, Some(Align::KhmerJustify));
+}
+
+/// A file Word wrote has no `wc:khmer` mark: its Thai Distributed stays Thai Distributed, and the
+/// writer names the mark's namespace and lists it as ignorable so Word opens the file.
+#[test]
+fn khmer_justify_is_written_as_thai_distributed_with_an_ignorable_mark() {
+    let mut p = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    p.props = ParaProps { align: Some(Align::KhmerJustify), ..Default::default() };
+    let bytes = craft_docx::write(&doc_with(vec![p])).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(r#"<w:jc w:val="thaiDistribute" wc:khmer="1"/>"#), "{xml}");
+    assert!(xml.contains(r#"xmlns:wc="urn:wordcraft:ext""#) && xml.contains("mc:Ignorable=\"w14 w15 wp14 wc\""), "{xml}");
 }

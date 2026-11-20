@@ -193,6 +193,7 @@ impl Reader {
             "qr" => self.st.align = Some(self.side_align(Align::Right)),
             "qj" => self.st.align = Some(Align::Justify),
             "qd" => self.st.align = Some(Align::Distribute),
+            "qt" => self.st.align = Some(Align::ThaiDistribute),
             // `\rtldir`/`\ltrdir` are not paragraph words (they set a table's or section's
             // direction in RTF); some writers used them for paragraphs, so they are read too.
             "rtlpar" | "rtldir" => self.st.rtldir = Some(true),
