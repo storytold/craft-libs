@@ -108,6 +108,13 @@ impl<'a> Readable<'a> for Operator<'a> {
 const MAX_EI_CANDIDATES: u32 = 256;
 const MAX_EI_LOOKAHEAD_STEPS: u32 = 256;
 
+/// PdfCraft patch (50): failed array operands in one stream may read, together, this many times
+/// the stream's length, and at least `MIN_RECOVERY_BUDGET` bytes. Each `[` left open re-reads up to
+/// the rest of the stream when its array fails, and recovery tries the next one, so without a bound
+/// a stream of unclosed brackets would take time quadratic in its length.
+const RECOVERY_BYTES_PER_BYTE: usize = 8;
+const MIN_RECOVERY_BUDGET: usize = 1 << 20;
+
 /// A source of PDF content instructions.
 ///
 /// The tokenizer owns any state needed to assemble one instruction and may choose how bytes are
@@ -147,6 +154,9 @@ pub struct UntypedIter<'a> {
     needs_more: bool,
     /// PdfCraft patch: the offset just after the instruction `next` returned last.
     committed: usize,
+    /// PdfCraft patch (50): how many more bytes failed array operands may read before recovery
+    /// from them stops (see `skip_unclosed_bracket`).
+    recovery_budget: usize,
 }
 
 impl<'a> UntypedIter<'a> {
@@ -166,6 +176,10 @@ impl<'a> UntypedIter<'a> {
             complete,
             needs_more: false,
             committed: 0,
+            recovery_budget: data
+                .len()
+                .saturating_mul(RECOVERY_BYTES_PER_BYTE)
+                .max(MIN_RECOVERY_BUDGET),
         }
     }
 
@@ -203,6 +217,7 @@ impl<'a> UntypedIter<'a> {
                 // no operator that starts with a number). In order to preserve
                 // similar behavior to Acrobat and Chromium, we try to consume
                 // such an operator and then simply skip it.
+                self.reader.clear_nesting_refused();
                 if let Some(object) = self.reader.read_without_context::<Object<'_>>() {
                     if self.undecided() {
                         return None;
@@ -220,13 +235,17 @@ impl<'a> UntypedIter<'a> {
                     // in `/C#2 gs` -- used to end the stream, losing the rest of the page. Step
                     // over it and carry on, as the edit reader and other readers do (#3568).
                     //
-                    // Only a name. An operand that is well formed but refused by a resource cap
+                    // Only a name here (an array is `skip_unclosed_bracket`, patch 50). An
+                    // operand that is well formed but refused by a resource cap
                     // (a dictionary nested past the limit) still ends the stream, which is what
                     // `dictionaries_nested_without_keys_are_read_up_to_the_nesting_cap` in
                     // pdfcraft's renderer asserts: reading on there would draw a page whose
                     // content was deliberately not parsed.
                     warn!("skipped an unreadable name in content stream");
                     self.stack.clear();
+                    continue;
+                } else if !self.lookahead && self.skip_unclosed_bracket() {
+                    warn!("skipped a `[` whose array is never closed in content stream");
                     continue;
                 } else {
                     return None;
@@ -542,6 +561,32 @@ impl<'a> UntypedIter<'a> {
         // Land on the next token, as the end of the loop in `next` does.
         self.reader.skip_white_spaces_and_comments();
         self.reader.offset() > before
+    }
+
+    /// PdfCraft patch (50): step over the `[` of an array operand that cannot be read, typically one
+    /// never closed (`[(a) 1 [(a) 1 (b)] TJ`). Content readers skip operator keywords inside an
+    /// array (see `Object::skip`), so an array left open ran to the end of the stream, failed, and
+    /// ended it there: the rest of the page was lost. Its items now read as operands of the next
+    /// operator, which takes the operands nearest to it (the inner, closed array of `TJ` above), and
+    /// reading carries on after it, so the damage stays with that operator (ISO 32000-2 §7.8.2).
+    ///
+    /// Not an array refused for its nesting: that is a resource cap, and the stream still ends there
+    /// (see the `/` case in `next`). Nor once the failed arrays of this stream have read
+    /// `recovery_budget` bytes; each is charged the rest of the stream, as far as it may have read.
+    /// The operands already read are kept. Returns whether the `[` was stepped over.
+    fn skip_unclosed_bracket(&mut self) -> bool {
+        if self.reader.peek_byte() != Some(b'[') || self.reader.nesting_refused() {
+            return false;
+        }
+        let rest = self.reader.data.len().saturating_sub(self.reader.offset());
+        let Some(budget) = self.recovery_budget.checked_sub(rest) else {
+            warn!("recovery budget spent; content stream ends at an unreadable array");
+            return false;
+        };
+        self.recovery_budget = budget;
+        self.reader.forward();
+        self.reader.skip_white_spaces_and_comments();
+        true
     }
 
     /// PdfCraft patch: whether the instruction being read ran into the end of a window, so it
@@ -1170,6 +1215,87 @@ mod tests {
             result.push(instruction.operator.as_ref().to_vec());
         }
         result
+    }
+
+    /// The operators read from `data`, as text.
+    fn operator_names(data: &[u8]) -> Vec<String> {
+        operators(data).iter().map(|op| String::from_utf8_lossy(op).into_owned()).collect()
+    }
+
+    /// PdfCraft patch (50, storytold/pdfcraft#7392): the operators after an array operand that is
+    /// never closed are read, and `TJ` takes the operand nearest it, the closed array, not the
+    /// abandoned items before it (ISO 32000-2 §7.8.2, §9.4.3). Well-formed arrays, nested or
+    /// holding an operator keyword, read as before.
+    #[test]
+    fn the_operators_after_an_unclosed_array_are_read() {
+        use crate::content::ops::{ShowTexts, TypedInstruction};
+        use crate::content::TypedIter;
+        use crate::object::Object;
+
+        assert_eq!(operator_names(b"q [(a)75(b) [(a)75(b)(c)] TJ 0 -9 Td [(d)] TJ Q"), ["q", "TJ", "Td", "TJ", "Q"]);
+        assert_eq!(operator_names(b"[ 1 2 q [ Q"), ["q", "Q"]);
+        assert_eq!(operator_names(b"q [(a) Tj Q"), ["q", "Tj", "Q"]);
+        assert_eq!(operator_names(b"1 0 0 rg 0 0 4 4 re f [ 1 2 0 0 1 rg 100 40 10 10 re f"), ["rg", "re", "f", "rg", "re", "f"]);
+        assert_eq!(operator_names(b"[(a) [1 [2]] (b)] TJ [(a) Tf (b)] TJ q"), ["TJ", "TJ", "q"]);
+
+        let mut iter = TypedIter::new(b"[(a)75(b) [(c)-100(d)] TJ");
+        let Some(TypedInstruction::ShowTexts(ShowTexts(array))) = iter.next() else {
+            panic!("TJ reads its closed array");
+        };
+        assert_eq!(array.iter::<Object<'_>>().count(), 3);
+        assert!(iter.next().is_none());
+    }
+
+    /// PdfCraft patch (50): an array nested past the reader's cap is refused as a resource limit,
+    /// not repaired: the stream still ends there, closed or not. Up to the cap, a closed array is
+    /// read and an unclosed one stepped over.
+    #[test]
+    fn an_array_nested_past_the_cap_still_ends_the_stream() {
+        let cap = 64;
+        for (depth, closed) in [(cap, true), (cap, false), (cap + 1, true), (cap + 1, false)] {
+            let close = if closed { "]".repeat(depth) } else { String::new() };
+            let data = format!("q {}{close} discard Q", "[".repeat(depth));
+            let expected: &[&str] = if depth <= cap { &["q", "discard", "Q"] } else { &["q"] };
+            assert_eq!(operator_names(data.as_bytes()), expected, "depth {depth}, closed {closed}");
+        }
+    }
+
+    /// PdfCraft patch (50): each unclosed `[` re-reads the rest of the stream when its array
+    /// fails, so recovery shares a budget of eight times the stream's length, and at least 1 MiB.
+    /// Once it is spent the stream ends at the next unclosed `[`, instead of taking quadratic time.
+    #[test]
+    fn unclosed_arrays_share_a_bounded_recovery_budget() {
+        // 60 unclosed brackets (within the nesting cap), each with a `q` and 128 KiB of operands:
+        // about 7.7 MiB, so the first brackets alone spend the budget of about 61 MiB.
+        let filler = "0 ".repeat(64 * 1024);
+        let data: String = (0..60).map(|_| format!("[ q {filler}")).collect();
+        let read = operators(data.as_bytes()).len();
+        assert!(read > 0, "the first brackets are recovered from");
+        assert!(read < 60, "recovery stops once its budget is spent ({read} of 60 read)");
+
+        // A short stream gets the floor, so a handful of brackets is always recovered from.
+        assert_eq!(operators("[ q ".repeat(60).as_bytes()).len(), 60);
+    }
+
+    /// PdfCraft patch (50): random runs of brackets, strings, numbers, names and operators: the
+    /// reader never panics, ends, and returns at most one instruction per operator keyword.
+    #[test]
+    fn random_bracket_soup_is_read_to_the_end_without_panicking() {
+        const TOKENS: [&str; 14] = ["[", "]", "[", "(a)", "(", ")", "1", "-2.5", "/N", "<41>", "TJ", "Tj", "q", "Q"];
+        let mut state: u64 = 0x5207;
+        let mut next = || {
+            // A 64-bit linear congruential generator (Knuth's MMIX constants).
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        for _ in 0..2000 {
+            let len = next() % 40;
+            let picks: Vec<&str> = (0..len).map(|_| TOKENS[next() % TOKENS.len()]).collect();
+            let keywords = picks.iter().filter(|t| t.bytes().all(|b| b.is_ascii_alphabetic())).count();
+            let data = picks.join(" ");
+            let read = operators(data.as_bytes());
+            assert!(read.len() <= keywords, "{data:?}: {read:?}");
+        }
     }
 
     #[test]

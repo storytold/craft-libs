@@ -19,6 +19,10 @@ pub struct Reader<'a> {
     // PdfCraft patch: bound direct-object nesting while skipping arrays and dictionaries
     // and while parsing dictionaries (`Dict::skip`, `Array::skip`, `parse_dict_with`).
     skip_depth: usize,
+    /// PdfCraft patch (50): set when [`Reader::enter_container`] refused a container nested past
+    /// `MAX_CONTAINER_DEPTH`, so content-stream recovery can tell a refused operand from a
+    /// malformed one (see `content::UntypedIter::skip_unclosed_bracket`).
+    nesting_refused: bool,
     control: Option<crate::cancel::Control>,
     next_check: Cell<usize>,
 }
@@ -33,7 +37,7 @@ impl<'a> Reader<'a> {
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, control: None, next_check: Cell::new(0) }
+        Self { data, offset, past_end: Cell::new(false), skip_depth: 0, nesting_refused: false, control: None, next_check: Cell::new(0) }
     }
 
     pub(crate) fn set_control(&mut self, control: Option<crate::cancel::Control>) {
@@ -70,10 +74,22 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn enter_container(&mut self) -> Option<()> {
         if self.skip_depth >= MAX_CONTAINER_DEPTH {
+            self.nesting_refused = true;
             return None;
         }
         self.skip_depth += 1;
         Some(())
+    }
+
+    /// PdfCraft patch (50): whether a container was refused for its nesting since the flag was last
+    /// cleared.
+    pub(crate) fn nesting_refused(&self) -> bool {
+        self.nesting_refused
+    }
+
+    /// PdfCraft patch (50): clears the flag read by [`Reader::nesting_refused`].
+    pub(crate) fn clear_nesting_refused(&mut self) {
+        self.nesting_refused = false;
     }
 
     pub(crate) fn leave_container(&mut self) {
