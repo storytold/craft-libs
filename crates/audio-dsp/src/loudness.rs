@@ -78,7 +78,7 @@ pub fn k_rlb(sample_rate: f64) -> Coeffs {
 /// Default BS.1770 channel weights for a channel count, in the WAV channel order: 5.0 is
 /// L R C Ls Rs, 5.1 is L R C LFE Ls Rs, 7.1 is L R C LFE Lb Rb Ls Rs, and 7.1.4 adds four height
 /// channels. The weights are those [`channel_weights`] gives for those speaker positions. Any other
-/// count weights every channel 1.0.
+/// count weights every channel 1.0. At most [`crate::MAX_CHANNELS`] weights are returned.
 pub fn default_channel_weights(channels: usize) -> Vec<f64> {
     let s = |az: f32, el: f32, lfe: bool| SpeakerPos { az, el, lfe };
     let bed = [s(-30.0, 0.0, false), s(30.0, 0.0, false), s(0.0, 0.0, false)];
@@ -87,7 +87,7 @@ pub fn default_channel_weights(channels: usize) -> Vec<f64> {
     let back = [s(-150.0, 0.0, false), s(150.0, 0.0, false)];
     let side = [s(-90.0, 0.0, false), s(90.0, 0.0, false)];
     let height = [s(-45.0, 45.0, false), s(45.0, 45.0, false), s(-135.0, 45.0, false), s(135.0, 45.0, false)];
-    let layout: Vec<SpeakerPos> = match channels {
+    let layout: Vec<SpeakerPos> = match channels.min(crate::MAX_CHANNELS) {
         5 => [&bed[..], &surround].concat(),
         6 => [&bed[..], &lfe, &surround].concat(),
         8 => [&bed[..], &lfe, &back, &side].concat(),
@@ -781,6 +781,12 @@ mod tests {
         assert_eq!(only(8, 3), f64::NEG_INFINITY);
         assert_eq!(default_channel_weights(12), vec![1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.41, 1.41, 1.0, 1.0, 1.0, 1.0]);
         assert_eq!(default_channel_weights(3), vec![1.0; 3]);
+    }
+
+    #[test]
+    fn default_channel_weights_caps_oversized_counts() {
+        assert!(default_channel_weights(0).is_empty());
+        assert_eq!(default_channel_weights(crate::MAX_CHANNELS + 1), vec![1.0; crate::MAX_CHANNELS]);
     }
 
     #[test]
