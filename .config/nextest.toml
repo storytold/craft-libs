@@ -26,7 +26,7 @@ print = { max-threads = 1 }
 video-integration = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(craft-video) & binary(h264_decode)'
+filter = 'package(craft-video) & binary(it) & test(/^h264_decode::/)'
 test-group = 'video-fixtures'
 
 [[profile.default.overrides]]

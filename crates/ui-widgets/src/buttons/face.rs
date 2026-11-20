@@ -418,7 +418,7 @@ pub(crate) fn measure<C: Component>(cx: &MeasureCx<'_, C>, spec: &FaceSpec<'_>) 
         Vec2::ZERO
     } else if cx.proposal == Proposal::Min {
         let run = spec.run();
-        Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y)
+        cx.least(&run).size()
     } else {
         cx.layout_at(&spec.run(), cx.room.map_or(f32::INFINITY, |room| (room - fixed).max(0.0))).size()
     };

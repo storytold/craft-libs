@@ -221,7 +221,7 @@ impl TextRun<'_> {
     /// `Line` run ignores it.
     pub(crate) fn layout(&self, ctx: &Context, env: &TextEnv<'_>, max_width: f32) -> TextLayout {
         let full = self.full_text();
-        // Every cut goes through the one cut that `least_width` measures, so a run shown at its least keeps its
+        // Every cut goes through the one cut that `least` measures, so a run shown at its least keeps its
         // readable characters.
         let galley = match self.wrap {
             Wrap::Elide | Wrap::ElideStart | Wrap::ElideMiddle | Wrap::ElidePath => self.layout_cut(ctx, env, &full, max_width),
@@ -233,15 +233,16 @@ impl TextRun<'_> {
         layout
     }
 
-    /// The width of the run at its readable least: cut where its wrap says, keeping
-    /// [`READABLE_CHARACTERS`](Self::READABLE_CHARACTERS) and the ellipsis, or whole when it has no more than one
-    /// character beyond them.
-    pub(crate) fn least_width(&self, ctx: &Context, env: &TextEnv<'_>) -> f32 {
+    /// The run laid out whole in unbounded room, and its width at its readable least: cut where its wrap says,
+    /// keeping [`READABLE_CHARACTERS`](Self::READABLE_CHARACTERS) and the ellipsis, or whole when it has no more than
+    /// one character beyond them.
+    pub(crate) fn least(&self, ctx: &Context, env: &TextEnv<'_>) -> LeastLayout {
         let full = self.full_text();
-        let whole = text_layout::layout(ctx, self.job(env, self.spans.iter().map(|s| (s, s.text.as_ref())), f32::INFINITY)).size().x;
+        let laid = self.layout(ctx, env, f32::INFINITY);
+        let whole = laid.size().x;
         let ends: Vec<usize> = full.char_indices().map(|(at, _)| at).chain([full.len()]).collect();
         if ends.len() - 1 <= Self::READABLE_CHARACTERS + 1 {
-            return whole;
+            return LeastLayout { width: whole, whole: laid };
         }
         let rtl_text = !self.is_rtl(env) && craft_i18n::base_direction(&full) == Some(Direction::Rtl);
         let width = |pieces: &[Piece]| text_layout::layout(ctx, self.job_cut(env, &full, pieces, rtl_text)).size().x;
@@ -260,7 +261,7 @@ impl TextRun<'_> {
         } else {
             width(&cut_pieces(&full, &ends, 0..full.len(), self.wrap, Self::READABLE_CHARACTERS))
         };
-        least.min(whole)
+        LeastLayout { width: least.min(whole), whole: laid }
     }
 
     /// Whether the paragraph runs right to left: the env's direction, unless the run is fixed left to right.
@@ -434,6 +435,24 @@ pub struct LayoutRun {
 pub(crate) fn note_painted(ctx: &Context, layout: &TextLayout) {
     if layout.elided {
         crate::runtime::egui::painted::note_elided(ctx, &layout.galley, &layout.full);
+    }
+}
+
+/// A run laid out whole on its line, and its width at its readable least: what a text that elides measures at
+/// `Proposal::Min`.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct LeastLayout {
+    /// The run laid out whole, as a layout in unbounded room lays it out.
+    pub whole: TextLayout,
+    /// The width at its readable least; never wider than `whole`.
+    pub width: f32,
+}
+
+impl LeastLayout {
+    /// The size the run takes at its least: its least width and its whole line's height.
+    pub fn size(&self) -> egui::Vec2 {
+        egui::Vec2::new(self.width, self.whole.size().y)
     }
 }
 

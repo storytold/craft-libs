@@ -41,6 +41,8 @@ pub mod windows;
 pub use crate::contract::{Exemption, PatternKind, PatternProbe, Probe, Registration};
 #[cfg(feature = "testing")]
 pub use crate::runtime::layout_memory::forget_kept as forget_measurements;
+#[cfg(feature = "testing")]
+pub use crate::runtime::layout_memory::kept_leaves as kept_measurement_leaves;
 pub use crate::runtime::measure::{
     Settle, active as is_measuring, body_runs as measuring_runs, contributions as measured_contributions,
     last_pass_body_runs as last_pass_measuring_runs, last_pass_measure_asks, last_pass_memo_key_bytes, last_pass_runs, last_pass_settles,

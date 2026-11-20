@@ -213,7 +213,7 @@ impl Component for Text {
         // At its least an elided line is at its readable least.
         if cx.proposal == Proposal::Min {
             let run = self.run(role, cx.resolved.label);
-            return Vec2::new(cx.least_width(&run), cx.layout_at(&run, f32::INFINITY).size().y);
+            return cx.least(&run).size();
         }
         let band = wrap.unwrap_or(f32::INFINITY);
         let mut layout = cx.layout_at(&self.run(role, cx.resolved.label), band);
