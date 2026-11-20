@@ -13,7 +13,7 @@ use super::scroll::{
     strips_of, view_within,
 };
 use super::size::MeasureKey;
-use super::window::{WindowMode, os_window, window_instance};
+use super::window::{WindowMode, os_window, top_band, window_instance};
 use super::{BodyHooks, BodyView};
 use crate::contract::cx::CxCore;
 use crate::contract::cx::{BodyCx, BodyOwner, RegionShare};
@@ -301,7 +301,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.overflow = self.wanted_width(props).map_or(0.0, |wanted| (wanted - room.max(0.0)).max(0.0));
         let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
         let height = self.regions_size(props, body, header, self.measured_footer, end).y;
-        Vec2::new(width, height) + 2.0 * self.pads(props, scx.tokens)
+        Vec2::new(width, height) + self.frame_size(props, scx.tokens, top_band(props, ui.ctx(), id, scx.tokens))
     }
 
     /// The regions run once in an invisible sizing pass over the room, as `content` runs them, and the container takes
@@ -437,8 +437,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
         let tokens = cx.tokens;
         let pad = self.pads(&props, tokens);
-        let inner = content.shrink2(pad);
-        let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes());
+        let band = top_band(&props, cx.ui.ctx(), cx.id, tokens);
+        let inner = self.inner_rect(&props, tokens, content, band);
+        let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes()).below(content.min.y + band);
         let (_, slots) = self.header_line(regions.header, pad_of(tokens, header.inset), parts, rtl);
         Some(std::rc::Rc::new(slots))
     }
@@ -449,9 +450,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let rtl = pcx.flow.is_rtl();
         let tokens = pcx.tokens;
         let pad = self.pads(&props, tokens);
-        let inner = pcx.content_rect.shrink2(pad);
+        let band = top_band(&props, &ctx, pcx.id, tokens);
+        let inner = self.inner_rect(&props, tokens, pcx.content_rect, band);
         let room = self.room_size(rect, inner);
-        let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
+        let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes()).below(pcx.content_rect.min.y + band);
         let scroll = scroll_of(&props);
         if self.open && scroll.is_some() {
             let at = regions.body;
@@ -822,7 +824,7 @@ impl BodyHooks<'_> {
     fn end_measure_run(&mut self, at: &Measuring<'_, '_>, id: Id, key: MeasureKey, content: Option<Vec2>) -> Vec2 {
         let props = Arc::clone(&self.props);
         let ctx = at.ui.ctx();
-        let pad = 2.0 * self.pads(&props, at.scx.tokens);
+        let pad = self.frame_size(&props, at.scx.tokens, top_band(&props, ctx, id, at.scx.tokens));
         let record = |key: Id, took: Vec2| layout_memory::emit_record(ctx, key, layout_memory::Measured::new(self.room, took));
         record(id, self.body_size.unwrap_or(Vec2::ZERO));
         if let Some(first) = self.first_line {
@@ -1027,9 +1029,10 @@ impl BodyHooks<'_> {
         let rtl = env.direction.is_rtl();
         let scroll = scroll_of(props);
         let pad = self.pads(props, &env.tokens);
-        let inner = core.content_rect.shrink2(pad);
+        let band = top_band(props, &ctx, id, &env.tokens);
+        let inner = self.inner_rect(props, &env.tokens, core.content_rect, band);
         let room = self.room_size(rect, inner);
-        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes());
+        let regions = self.regions(props, inner, pad, room, rtl, self.measured_sizes()).below(core.content_rect.min.y + band);
         let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
         let band_slot = ui.painter().add(Shape::Noop);
         // A measuring run lays out and measures: it registers no instance, focus body, scroll region or body layer,
@@ -1795,7 +1798,7 @@ impl BodyHooks<'_> {
     fn measure_plan(&mut self, at: &Measuring<'_, '_>, id: Id, scrolled_share: bool) -> MeasurePlan {
         let props = Arc::clone(&self.props);
         let ctx = at.ui.ctx().clone();
-        let pad = 2.0 * self.pads(&props, at.scx.tokens);
+        let pad = self.frame_size(&props, at.scx.tokens, top_band(&props, &ctx, id, at.scx.tokens));
         let vertical = scroll_of(&props).is_some_and(|scroll| scroll.vertical_on());
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
         // A record a run of this pass left serves as before; a kept one serves only while the inputs it was measured

@@ -204,9 +204,9 @@ impl Flyouts {
         StyleCx::with_root(self.fixture.ctx(), DockSizes::style)
     }
 
-    /// Half the side of a resize grip, which straddles the edge it moves.
+    /// How far a resize grip reaches in from the edge it moves.
     fn grip_reach(&self) -> f32 {
-        StyleCx::with_root(self.fixture.ctx(), |cx| cx.tokens.size.handle.sm) / 2.0
+        StyleCx::with_root(self.fixture.ctx(), |cx| crate::contract::grip_band(cx.tokens))
     }
 }
 
@@ -257,7 +257,7 @@ fn flyout_top_edge_and_free_top_corner_grow_it_upward() {
     }
 }
 
-/// The top grip is the standard one, straddling the edge: a press inside it resizes; a press below it reaches the
+/// The top grip is the standard one, inside the edge: a press inside it resizes; a press below it reaches the
 /// tab strip and drags the group.
 #[trial]
 fn the_flyout_top_handle_is_a_band_that_leaves_the_strip_its_drags() {

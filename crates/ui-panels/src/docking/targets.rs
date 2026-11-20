@@ -51,9 +51,12 @@ pub struct DockSizes {
     pub strip: f32,
     /// The height of a column bar (a small control).
     pub bar: f32,
-    /// The height of a floating window's title row, which is the bar of the column the window holds: every height of
-    /// a window's body or content is the window's height less this.
+    /// The height of a floating window's title row, which is the bar of the column the window holds.
     pub title_row: f32,
+    /// The band a floating window in the app window keeps clear over its title row for its top grip
+    /// (`contract::grip_band`); an OS window keeps none. Every height of a window's body or content is the window's
+    /// height less its chrome ([`Self::window_chrome`]).
+    pub top_band: f32,
     /// The least body size of a column's group and the least width of an expanded column (the panel header height).
     pub least: f32,
     /// How thick a divider is across its boundary (the least hit size).
@@ -93,6 +96,7 @@ impl DockSizes {
             strip: size.panel_header,
             bar: size.control.sm,
             title_row: super::floating::title_row(cx.tokens),
+            top_band: crate::contract::grip_band(cx.tokens),
             least: size.panel_header,
             reach: size.hit.target,
             step: cx.control().gap,
@@ -100,6 +104,12 @@ impl DockSizes {
             iconic_least: size.rail.width,
             column: size.dock.column,
         }
+    }
+
+    /// The height above a floating window's body: its title row and, for a window in the app window (`in_app`), the
+    /// band over it.
+    pub fn window_chrome(&self, in_app: bool) -> f32 {
+        self.title_row + if in_app { self.top_band } else { 0.0 }
     }
 
     /// The width bounds of an expanded column from the limits of its panels.

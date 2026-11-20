@@ -52,6 +52,7 @@ pub use crate::runtime::pending::{Job, Pending, Progress};
 #[doc(hidden)]
 pub use body::REORDER_BAND;
 #[doc(hidden)]
+pub use body::grip_band;
 pub use body::pad_of;
 #[doc(hidden)]
 pub use body::{STRIP_BACK, STRIP_FORWARD};

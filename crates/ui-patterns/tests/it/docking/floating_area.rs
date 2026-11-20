@@ -67,8 +67,8 @@ struct Bed {
     second: Rc<Cell<bool>>,
     /// The tallest a floated panel opens (`FloatSpace::default_size`), as the area reported it.
     float_height: Rc<Cell<f32>>,
-    /// The height of a floating window's title row (`FloatSpace::title_row`), as the area reported it.
-    title_row: Rc<Cell<f32>>,
+    /// The height above a floating window's body (`FloatSpace::chrome`), as the area reported it.
+    chrome: Rc<Cell<f32>>,
 }
 
 fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
@@ -76,9 +76,9 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
     let actions: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
     let second = Rc::new(Cell::new(false));
     let float_height = Rc::new(Cell::new(0.0));
-    let title_row = Rc::new(Cell::new(0.0));
+    let chrome = Rc::new(Cell::new(0.0));
     let (held, seen_actions, shows_second, seen_height) = (Rc::clone(&workspace), Rc::clone(&actions), Rc::clone(&second), Rc::clone(&float_height));
-    let seen_title_row = Rc::clone(&title_row);
+    let seen_chrome = Rc::clone(&chrome);
     let mut other = Workspace::new(Layout::new(Some(Node::tabs(vec![SECOND], 0)), Vec::new()));
     let mut fixture = Fixture::new(move |ui| {
         let mut workspace = held.borrow().clone();
@@ -88,14 +88,14 @@ fn bed(layout: Layout<usize>, rights: fn(&usize) -> Permissions) -> Bed {
         seen_actions.borrow_mut().extend(out.actions);
         if let Some(space) = out.float_space {
             seen_height.set(space.default_size.y);
-            seen_title_row.set(space.title_row);
+            seen_chrome.set(space.chrome);
         }
         if shows_second.get() {
             DockArea::new("Second dock", Bind::bound(&mut other), &mut panels, DockConfig::default()).show(ui);
         }
     });
     fixture.settle();
-    Bed { fixture, workspace, actions, second, float_height, title_row }
+    Bed { fixture, workspace, actions, second, float_height, chrome }
 }
 
 /// A point on the floating window's title row, on its band: clear of the actions and the double arrow at its end.
@@ -235,10 +235,10 @@ fn a_floating_windows_drag_bar_shows_no_title() {
     assert_eq!(named, 1, "only the tab names the panel: {:?}", bed.fixture.texts());
 }
 
-/// The title row the area keeps a dropped window's under the pointer and adds to a floated unit's height is the
-/// one the window draws: the window's group starts right under it.
+/// The chrome the area keeps a dropped window's under the pointer and adds to a floated unit's height is the one the
+/// window draws: the window's group starts right under it.
 #[trial]
-fn a_floating_windows_group_starts_under_the_title_row_the_area_sizes_windows_by() {
+fn a_floating_windows_group_starts_under_the_chrome_the_area_sizes_windows_by() {
     let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
     let group = bed
         .fixture
@@ -247,14 +247,78 @@ fn a_floating_windows_group_starts_under_the_title_row_the_area_sizes_windows_by
         .find(|group| WINDOW_AT.expand(SLACK).contains_rect(group.rect))
         .expect("the window shows its group")
         .rect;
-    let title_row = bed.title_row.get();
-    assert!(title_row > 0.0, "the area reported its float space");
+    let chrome = bed.chrome.get();
+    assert!(chrome > 0.0, "the area reported its float space");
     assert!(
-        (group.top() - WINDOW_AT.top() - title_row).abs() <= SLACK,
-        "the group starts at {} in a window from {} with a title row of {title_row}",
+        (group.top() - WINDOW_AT.top() - chrome).abs() <= SLACK,
+        "the group starts at {} in a window from {} with a chrome of {chrome}",
         group.top(),
         WINDOW_AT.top()
     );
+}
+
+/// The window's rect while a press at `from` drags by `by`, before the release, which would dock a window moved over
+/// the docked group.
+fn dragged_from(from: Pos2, by: Vec2) -> Rect {
+    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    press_and_move(&mut bed.fixture, from, by);
+    bed.workspace.borrow().layout.floating[0].rect
+}
+
+/// A floating window's title row is a drag bar, shorter than the panel header of the tab strip under it, as
+/// production's 18 pt bar over its tabs was.
+#[trial]
+fn a_floating_windows_title_row_is_shorter_than_its_tab_strip() {
+    let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let in_window = |role| bed.fixture.by_role(role).into_iter().find(|node| WINDOW_AT.expand(SLACK).contains_rect(node.rect)).map(|node| node.rect);
+    let row = in_window(Role::HEADING).expect("the window shows its title row");
+    let tab = in_window(Role::TAB).expect("the window shows its tab");
+    assert!(row.height() < tab.height(), "the title row ({row:?}) is shorter than the tab strip ({tab:?})");
+}
+
+/// The grips of a floating window lie inside its frame and reach at least as far as production's: a corner 12 pt
+/// along each of its edges, an edge 4 pt in from it.
+#[trial]
+fn a_floating_windows_corner_and_edge_grips_reach_as_far_in_as_productions() {
+    let corner = dragged_from(Pos2::new(WINDOW_AT.right() - 11.0, WINDOW_AT.bottom() - 11.0), Vec2::new(20.0, 20.0));
+    assert!(
+        corner.width() > WINDOW_AT.width() + SLACK && corner.height() > WINDOW_AT.height() + SLACK && corner.min == WINDOW_AT.min,
+        "a press 11 pt in from the corner resizes from the corner: {corner:?}"
+    );
+    let edge = dragged_from(Pos2::new(WINDOW_AT.left() + 3.5, WINDOW_AT.center().y), Vec2::new(-20.0, 0.0));
+    assert!(
+        edge.width() > WINDOW_AT.width() + SLACK && (edge.height() - WINDOW_AT.height()).abs() <= SLACK && edge.right() == WINDOW_AT.right(),
+        "a press 3.5 pt in from the left edge resizes from that edge: {edge:?}"
+    );
+}
+
+/// The top grip never lies over the title row: a press just inside the row's top moves the window, at its size.
+#[trial]
+fn the_top_of_a_floating_windows_title_row_moves_it_and_never_resizes_it() {
+    let bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let row =
+        bed.fixture.by_role(Role::HEADING).into_iter().find(|node| WINDOW_AT.expand(SLACK).contains_rect(node.rect)).expect("the title row").rect;
+    let by = Vec2::new(-30.0, 20.0);
+    let rect = dragged_from(Pos2::new(WINDOW_AT.min.x + 40.0, row.top() + 1.0), by);
+    assert!((rect.size() - WINDOW_AT.size()).length() <= SLACK, "the press on the row at {row:?} resizes nothing: {rect:?}");
+    assert!((rect.min - (WINDOW_AT.min + by)).length() <= SLACK, "it moves the window: {rect:?}");
+}
+
+/// A click on the title row neither moves nor docks the window; a press-drag on it moves the window. A guard of
+/// production's behaviour, which the move already had.
+#[trial]
+fn a_click_on_a_floating_windows_bar_neither_moves_nor_docks_it_and_a_drag_moves_it() {
+    let mut bed = bed(with_window(Some(Node::tabs(vec![DOCKED], 0))), |_| Permissions::ALL);
+    let at = window_title();
+    bed.fixture.frame(vec![moved(at)]);
+    bed.fixture.frame(vec![press(at)]);
+    bed.fixture.frame(vec![release(at)]);
+    bed.fixture.settle();
+    assert_eq!(bed.workspace.borrow().layout.floating.first().map(|window| window.rect), Some(WINDOW_AT), "a click moves nothing");
+    assert_eq!(bed.workspace.borrow().layout.floating.len(), 1, "and docks nothing");
+    let by = Vec2::new(-40.0, 30.0);
+    let rect = dragged_from(at, by);
+    assert!((rect.min - (WINDOW_AT.min + by)).length() <= SLACK, "a drag moves the window: {rect:?}");
 }
 
 /// A tab dragged out of the window floats at the width its group had where it was docked, not a default size.
@@ -365,7 +429,7 @@ fn a_collapsed_window_dragged_across_the_middle_keeps_its_strip_under_the_pointe
         let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
         let by = Vec2::new(middle.map_or(-250.0, |x: f32| x - icon.center().x), 0.0);
         // The title row's band, clear of the double arrow at the end the window keeps to.
-        let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
+        let band = Pos2::new(icon.left() + 4.0, window_title().y);
         bed.fixture.drag_hold_at(band, by);
         let held = button_rect(&bed, &title(WINDOW)).expect("the icon shows while the window moves");
         assert!((held.left() - (icon.left() + by.x)).abs() <= SLACK, "by {by:?}: the strip follows the pointer: {icon:?}, then {held:?}");
@@ -426,13 +490,13 @@ fn a_floating_collapsed_columns_flyout_opens_towards_the_room() {
 #[trial]
 fn a_double_click_on_a_floating_windows_band_collapses_and_expands_its_column() {
     let mut bed = bed(with_window(None), |_| Permissions::ALL);
-    let band = Pos2::new(WINDOW_AT.left() + 40.0, WINDOW_AT.top() + 6.0);
+    let band = Pos2::new(WINDOW_AT.left() + 40.0, window_title().y);
     bed.fixture.click_at(band).click_at(band).settle();
     let window = bed.workspace.borrow().layout.floating[0].clone();
     assert!(window.column.iconic, "the band's double click collapsed the column: {:?}", bed.actions.borrow());
     assert!(window.groups().iter().all(|group| !group.minimized), "no group minimized");
     let icon = button_rect(&bed, &title(WINDOW)).expect("the collapsed window shows its icon");
-    let band = Pos2::new(icon.left() + 4.0, WINDOW_AT.top() + 6.0);
+    let band = Pos2::new(icon.left() + 4.0, window_title().y);
     bed.fixture.click_at(band).click_at(band).settle();
     assert!(!bed.workspace.borrow().layout.floating[0].column.iconic, "a second double click expanded it: {:?}", bed.actions.borrow());
 }

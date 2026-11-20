@@ -34,9 +34,9 @@ use std::hash::Hash;
 #[cfg(feature = "testing")]
 mod stories;
 
-/// The height of a floating group's title row: a strong `TitleRow`, which is as tall as a panel header.
+/// The height of a floating group's title row: a `TitleRow` of the `Bar` strength, one text row high.
 pub(crate) fn title_row(tokens: &UiTokens) -> f32 {
-    tokens.size.panel_header
+    tokens.size.row.text
 }
 
 /// The actions a floating group's title row shows unless `actions` says otherwise: Close alone, as a floating panel's
@@ -92,19 +92,19 @@ impl WindowColumn {
         self
     }
 
-    /// Where a window that keeps `rect` shows while its column is collapsed: the collapsed column under a title row
-    /// `header` tall, at the top of `rect` and against the edge the window keeps to. `None` while the column is
-    /// expanded.
-    pub fn shown(self, rect: Rect, header: f32, rtl: bool) -> Option<Rect> {
-        let size = self.collapsed? + Vec2::new(0.0, header);
+    /// Where a window that keeps `rect` shows while its column is collapsed: the collapsed column under the window's
+    /// chrome, `chrome` tall (`DockSizes::window_chrome`), at the top of `rect` and against the edge the window keeps
+    /// to. `None` while the column is expanded.
+    pub fn shown(self, rect: Rect, chrome: f32, rtl: bool) -> Option<Rect> {
+        let size = self.collapsed? + Vec2::new(0.0, chrome);
         let left = if at_left(self.edge, rtl) { rect.left() } else { rect.right() - size.x };
         Some(Rect::from_min_size(Pos2::new(left, rect.top()), size))
     }
 
     /// The rect a window that keeps `rect` keeps when it shows at `shown`: while collapsed, `rect` moved with the
     /// collapsed column ([`Self::shown`]), so it keeps its expanded size; while expanded, `shown`.
-    pub fn kept(self, shown: Rect, rect: Rect, header: f32, rtl: bool) -> Rect {
-        self.shown(rect, header, rtl).map_or(shown, |at| rect.translate(shown.min - at.min))
+    pub fn kept(self, shown: Rect, rect: Rect, chrome: f32, rtl: bool) -> Rect {
+        self.shown(rect, chrome, rtl).map_or(shown, |at| rect.translate(shown.min - at.min))
     }
 
     /// The edge of `bounds`, in reading order, nearer the window at `rect`: the start edge when the window's centre is
@@ -234,8 +234,10 @@ pub struct FloatingGroup<'a> {
     /// The double arrow was declared this pass, and whether it was clicked.
     chevron_declared: bool,
     chevron: bool,
-    /// The title row's height and the layout direction, read when the group shows.
+    /// The title row's height, the height above the body (`DockSizes::window_chrome`) and the layout direction, read
+    /// when the group shows.
     header: f32,
+    chrome: f32,
     rtl: bool,
     placed: Option<PlacementChange>,
     /// Starts the window-unit drag; set by `window_of`.
@@ -280,6 +282,7 @@ impl<'a> FloatingGroup<'a> {
             chevron_declared: false,
             chevron: false,
             header: 0.0,
+            chrome: 0.0,
             rtl: false,
             placed: None,
             start_drag: None,
@@ -329,21 +332,24 @@ impl<'a> FloatingGroup<'a> {
     pub fn show_group<R>(mut self, ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>) -> R) -> Inner<FloatingGroupOutput, R> {
         let env = Env::of(ui);
         let header = title_row(&env.tokens);
-        (self.header, self.rtl) = (header, env.direction.is_rtl());
-        let mount = self.mount(header);
+        // A window in the app window keeps the band over its title row that a layer the user moves keeps for its top
+        // grip; an OS window's grips lie over its title row.
+        let band = if self.native.is_none() { crate::contract::grip_band(&env.tokens) } else { 0.0 };
+        (self.header, self.chrome, self.rtl) = (header, header + band, env.direction.is_rtl());
+        let mount = self.mount();
         self.props = self.props.mount(mount);
         let minimized = self.minimized;
         let shown = self.show(ui, |ui, cx| (!minimized).then(|| body(ui, cx)));
         Inner { output: shown.output, inner: shown.inner.flatten(), settle: shown.settle }
     }
 
-    /// The layer or window the group shows in. `header` is the height of the title row.
+    /// The layer or window the group shows in.
     ///
     /// A minimized group, and one with `Sizing::Content`, is placed by its position and width; its height is its
-    /// content's, which is the title row alone while minimized.
-    fn mount(&self, header: f32) -> Mount {
-        // The frame's limits are the body's with the title row on top.
-        let frame = self.limits.around(Vec2::new(0.0, header));
+    /// content's, which is the chrome alone while minimized.
+    fn mount(&self) -> Mount {
+        // The frame's limits are the body's with the chrome on top.
+        let frame = self.limits.around(Vec2::new(0.0, self.chrome));
         let collapsed = self.collapsed_rect();
         let mut overlay =
             Overlay::floating().movable(true).resizable(!self.minimized && collapsed.is_none()).opacity(self.opacity).body_scroll(false);
@@ -351,7 +357,7 @@ impl<'a> FloatingGroup<'a> {
             overlay.placed(shown).size_limits(SizeLimits::new(shown.size(), shown.size()))
         } else if let Some(size) = self.column.and_then(|column| column.fitted) {
             // The host turns a resize into the column's steps, and the window takes the size they make.
-            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, header))).sized_by_caller()
+            overlay.placed(Rect::from_min_size(self.rect.min, size + Vec2::new(0.0, self.chrome))).sized_by_caller()
         } else if self.minimized {
             let width = self.rect.width();
             overlay.placed_at(self.rect.min).size_limits(SizeLimits::new(Vec2::new(width, 0.0), Vec2::new(width, f32::INFINITY)))
@@ -374,10 +380,10 @@ impl<'a> FloatingGroup<'a> {
         }
     }
 
-    /// Where the group shows while its column is collapsed: the collapsed column under the title row, at the top of
-    /// the rect and against its edge the window keeps to. `None` while the column is expanded.
+    /// Where the group shows while its column is collapsed: the collapsed column under the chrome, at the top of the
+    /// rect and against its edge the window keeps to. `None` while the column is expanded.
     fn collapsed_rect(&self) -> Option<Rect> {
-        self.column?.shown(self.rect, self.header, self.rtl)
+        self.column?.shown(self.rect, self.chrome, self.rtl)
     }
 
     /// The double arrow's square at the end of the title row the window keeps to.
@@ -487,7 +493,7 @@ impl Container for FloatingGroup<'_> {
         // the band and the double arrow; the menu, which a context request on the band opens, keeps its rows.
         let collapsed = self.column.is_some_and(|column| column.collapsed.is_some());
         let actions = if collapsed { &[][..] } else { &self.actions[..] };
-        let shown = TitleRow::new("").strength(HeaderStrength::Strong).actions(actions.iter().copied()).show(ui);
+        let shown = TitleRow::new("").strength(HeaderStrength::Bar).actions(actions.iter().copied()).show(ui);
         self.taken = shown.action.or(self.taken);
         if let Some(rows) = self.menu.as_mut() {
             self.menu_opener = rows.hang(ui, &shown, cx.words::<DockWords>().panel_menu.clone());
@@ -500,7 +506,7 @@ impl Container for FloatingGroup<'_> {
         let fitted = self.column.is_some_and(|column| column.fitted.is_some());
         if let Some(column) = self.column.filter(|column| column.collapsed.is_some()) {
             // The collapsed window moves; the rect keeps its expanded size.
-            change.rect = column.kept(change.rect, self.rect, self.header, self.rtl);
+            change.rect = column.kept(change.rect, self.rect, self.chrome, self.rtl);
         } else if (fitted || self.sized == Sizing::Content) && change.kind == PlacementKind::Move {
             // A window its content sizes moves (a cancel too, which reports the rect from before the gesture); the
             // rect keeps the size the caller gave, not the one measured from the body.
