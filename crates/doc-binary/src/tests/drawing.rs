@@ -505,8 +505,9 @@ fn store_entries_aliasing_one_delayed_metafile_decode_it_once() {
     pics.work = officeart::Decode::new(8 << 20);
     let keys: Vec<_> = (1..=store.len() as u32).map(|pib| pics.bse(pib, &store, &delay)).collect();
     assert!(keys.iter().all(|k| k.is_some() && *k == keys[0]), "every entry shares one picture");
-    // Its compressed bytes and what they inflated to, once.
-    assert_eq!(pics.work.left, (8 << 20) - wmf.len() - packed.len(), "inflated once");
+    // Its compressed bytes, what they inflated to and its placeable header, once.
+    let header = craft_officeart::wmf::PLACEABLE_HEADER;
+    assert_eq!(pics.work.left, (8 << 20) - wmf.len() - packed.len() - header, "inflated once");
 }
 
 /// #3711: distinct metafiles that fail to inflate are charged their declared size (and the bytes
@@ -543,10 +544,17 @@ fn dib_decoding_is_charged_its_declared_pixels() {
     let mut work = officeart::Decode::new(3);
     assert!(officeart::blip(&one, 512, &mut work).is_none(), "not even the copy fits: nothing is copied");
     assert_eq!(work.left, 3, "nothing decoded, nothing charged");
-    let dib_len = one.data.len() - 17;
-    let mut work = officeart::Decode::new(dib_len);
-    assert_eq!(officeart::blip(&one, 512, &mut work).map(|b| (b.ext, b.placeholder)), Some(("png", false)));
+    // The BMP copy (the DIB and a 14-byte file header) fits, its pixels don't: a placeholder, the
+    // whole copy charged.
+    let bmp_len = one.data.len() - 17 + 14;
+    let mut work = officeart::Decode::new(bmp_len);
+    assert_eq!(officeart::blip(&one, 512, &mut work).map(|b| (b.ext, b.placeholder)), Some(("bmp", true)));
     assert_eq!(work.left, 0, "the copy is charged, not just 4 bytes a pixel");
+    // Room for the copy, the pixels and the PNG: decoded, each charged.
+    let mut work = officeart::Decode::new(1 << 20);
+    let png = officeart::blip(&one, 512, &mut work).unwrap();
+    assert_eq!((png.ext, png.placeholder), ("png", false));
+    assert!((1 << 20) - work.left >= bmp_len + 4 + png.bytes.len());
 
     // 8-bit RLE declaring 16384 × 16384 (1 GiB decoded) in a few bytes.
     let mut big = [40u32, 16_384, 16_384].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
@@ -562,7 +570,7 @@ fn dib_decoding_is_charged_its_declared_pixels() {
     let (big, _) = officeart::record(&big).unwrap();
     let mut work = officeart::Decode::new(512 << 20);
     assert_eq!(officeart::blip(&big, 1 << 20, &mut work).map(|b| (b.ext, b.placeholder)), Some(("bmp", true)));
-    assert_eq!(work.left, (512 << 20) - (big.data.len() - 17), "only the copy of the DIB was charged, not its declared pixels");
+    assert_eq!(work.left, (512 << 20) - (big.data.len() - 17 + 14), "only the BMP copy was charged, not its declared pixels");
 }
 
 /// An EMF `OfficeArtBlip` record (compressed) with `raw` as its stream, claiming `cb_size`.
@@ -675,16 +683,17 @@ fn the_decode_budget_scales_with_the_input_but_still_caps_bombs() {
 fn a_dib_with_a_large_tail_is_charged_for_its_copy() {
     let big = dib_record(&dib_1bpp(1, 1 << 20)); // 1 pixel declared, 1 MB of trailing bytes
     let (big, _) = officeart::record(&big).unwrap();
-    let dib_len = big.data.len() - 17;
+    // The BMP copy: the DIB and a 14-byte file header.
+    let bmp_len = big.data.len() - 17 + 14;
     let mut work = officeart::Decode::new(10 << 20);
     assert!(!officeart::blip(&big, 64 << 20, &mut work).unwrap().placeholder);
-    assert_eq!(10 << 20, work.left + dib_len, "charged for the bytes, not just 4 per pixel");
-    // Room for the copy: decoded. Not even that: nothing is copied.
-    let mut work = officeart::Decode::new(dib_len + 1);
+    assert!((10 << 20) - work.left >= bmp_len, "charged for the bytes, not just 4 per pixel");
+    // Room for the copy: kept, at least as a placeholder. Not even that: nothing is copied.
+    let mut work = officeart::Decode::new(bmp_len);
     assert!(officeart::blip(&big, 64 << 20, &mut work).is_some());
-    let mut work = officeart::Decode::new(dib_len - 1);
+    let mut work = officeart::Decode::new(bmp_len - 1);
     assert!(officeart::blip(&big, 64 << 20, &mut work).is_none());
-    assert_eq!(work.left, dib_len - 1);
+    assert_eq!(work.left, bmp_len - 1);
 }
 
 /// A shape's primary property table wins over its secondary one, wherever each sits, as the other

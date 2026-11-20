@@ -628,7 +628,7 @@ impl<'a> Ctx<'a> {
     /// held in the property's own complex bytes.
     fn picture(&mut self, props: &Props<'a>, id: u16) -> Option<MediaId> {
         let Some(bytes) = props.complex(id) else {
-            return props.get(id).filter(|&i| i > 0).and_then(|i| self.media(i as usize));
+            return props.simple(id).filter(|&i| i > 0).and_then(|i| self.media(i as usize));
         };
         let key = bytes.as_ptr() as usize;
         if let Some(m) = self.inline_media.get(&key) {
