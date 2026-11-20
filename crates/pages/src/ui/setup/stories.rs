@@ -10,16 +10,16 @@ use egui::Ui;
 
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn page_setup(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let setup = data.value("setup", PageSetup::default());
-    PageSetupDialog::new(Bind::bound(setup)).layout().direction().opened(Bind::given(true)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", PageSetup::default());
+    PageSetupDialog::new(setup_at.bind(setup)).layout().direction().opened(Bind::given(true)).show(ui);
     StoryOutput::default()
 }
 
 #[story(PageSetupDialog<'static>, covers = [], drive = Drive::Never)]
 fn document_setup(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let start = PageSetup { pages: Some(8), mirrored: true, ..PageSetup::default() };
-    let setup = data.value("setup", start);
-    PageSetupDialog::new(Bind::bound(setup)).document_setup().unit(UnitKind::Millimetres).opened(Bind::given(true)).show(ui);
+    let (setup, setup_at) = data.value_at("setup", start);
+    PageSetupDialog::new(setup_at.bind(setup)).document_setup().unit(UnitKind::Millimetres).opened(Bind::given(true)).show(ui);
     StoryOutput::default()
 }
 

@@ -12,8 +12,8 @@ use egui::Ui;
 #[story(AdjustSliders<'static>, covers = [Default], drive = Drive::Never)]
 fn adjust_sliders(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let fields = AdjustField::exposure(&AdjustWords::default());
-    let values = data.value("values", vec![0.0, 0.0, 1.0]);
-    AdjustSliders::new("Exposure", &fields, Bind::bound(values)).show(ui).into()
+    let (values, values_at) = data.value_at("values", vec![0.0, 0.0, 1.0]);
+    AdjustSliders::new("Exposure", &fields, values_at.bind(values)).show(ui).into()
 }
 
 /// A table with two-colour tracks.
@@ -27,6 +27,6 @@ fn adjust_sliders_color_tracks(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
             .unit_kind(UnitKind::Percent)
             .track(AdjustTrack::Colors(vec![tones::BLACK, mix::RANGES[0]])),
     ];
-    let values = data.value("colors", vec![0.0, 40.0]);
-    AdjustSliders::new("Colors", &fields, Bind::bound(values)).show(ui).into()
+    let (values, values_at) = data.value_at("colors", vec![0.0, 40.0]);
+    AdjustSliders::new("Colors", &fields, values_at.bind(values)).show(ui).into()
 }

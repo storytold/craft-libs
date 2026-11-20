@@ -30,8 +30,8 @@ fn palette(ui: &mut Ui, data: &mut StoryData, view: PresetView) -> StoryOutput {
     let recent = [pair([0.2, 0.8, 0.4], [0.1, 0.2, 0.6])];
     let mut initial = PresetState::new();
     initial.view = view;
-    let state = data.value("state", initial);
-    let shown = GradientPalette::new("Gradients", &groups, Bind::bound(&mut *state))
+    let (state, state_at) = data.value_at("state", initial);
+    let shown = GradientPalette::new("Gradients", &groups, state_at.bind(&mut *state))
         .recent(&recent)
         .selected(GradientRef::Item { group: 0, item: 1 })
         .show(ui);

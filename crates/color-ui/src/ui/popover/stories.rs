@@ -21,10 +21,10 @@ fn closed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(ColorPopover<'static>, covers = [], drive = Drive::Never)]
 fn open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let color = data.value("color", picked());
+    let (color, color_at) = data.value_at("color", picked());
     let shown = Stack::new().show(ui, |ui, _| {
         let opener = Button::new("Stop").show(ui);
-        ColorPopover::new("Stop colour", Bind::bound(&mut *color)).anchor(&opener, Bind::given(true)).show(ui)
+        ColorPopover::new("Stop colour", color_at.bind(&mut *color)).anchor(&opener, Bind::given(true)).show(ui)
     });
     match shown.inner {
         Some(output) => StoryOutput::from(output),

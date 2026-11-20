@@ -36,8 +36,8 @@ const BLUE: Srgba = Srgba::rgb(0.2, 0.4, 0.8);
 
 fn chip(ui: &mut Ui, data: &mut StoryData, paint: Paint) -> StoryOutput {
     let stops = vec![(0.0, BLUE), (1.0, Srgba::rgb(1.0, 1.0, 1.0))];
-    let held = data.value("paint", paint);
-    PaintChip::new("Fill", Bind::bound(held), BLUE).gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui).into()
+    let (held, held_at) = data.value_at("paint", paint);
+    PaintChip::new("Fill", held_at.bind(held), BLUE).gradient_editor(GradientPreview::new(stops), |_: &mut Ui| None).show(ui).into()
 }
 
 /// A fill, a gradient fill and a stroke with no colour, in one column; the drives use the first.
@@ -60,8 +60,8 @@ fn paint_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(PaintChip<'static>, covers = [Mixed], drive = Drive::Never)]
 fn paint_chip_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let held = data.value("mixed", Mixed::<Paint>::Mixed);
-    PaintChip::new("Fill", Bind::bound_mixed(held), BLUE).show(ui).into()
+    let (held, held_at) = data.value_at("mixed", Mixed::<Paint>::Mixed);
+    PaintChip::new("Fill", held_at.bind_mixed(held), BLUE).show(ui).into()
 }
 
 #[story(PaintChip<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
@@ -81,8 +81,8 @@ fn paint_chip_open_with_recents_and_swatches(ui: &mut Ui, data: &mut StoryData) 
         SwatchGroup { name: "Pastels".to_owned(), entries: vec![entry("Rose", [1.0, 0.8, 0.85]), entry("Mint", [0.75, 1.0, 0.85])] },
     ];
     let recent = [BLUE, Srgba::rgb(0.9, 0.5, 0.1), Srgba::rgb(0.1, 0.6, 0.3)];
-    let (held, folders) = data.value("state", (Paint::Solid(BLUE), PresetState::<SwatchKey>::new()));
-    PaintChip::new("Fill", Bind::bound(held), BLUE).recent(&recent).swatches(&groups, Bind::bound(folders)).full_picker(true).show(ui).into()
+    let ((held, folders), state_at) = data.value_at("state", (Paint::Solid(BLUE), PresetState::<SwatchKey>::new()));
+    PaintChip::new("Fill", state_at.bind(held), BLUE).recent(&recent).swatches(&groups, state_at.bind(folders)).full_picker(true).show(ui).into()
 }
 
 #[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
@@ -102,8 +102,8 @@ fn paint_chip_pattern(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
 fn paint_chip_disabled(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let held = data.value("paint", Paint::Solid(Srgba { r: 0.9, g: 0.2, b: 0.2, a: 0.6 }));
-    PaintChip::new("Fill", Bind::bound(held), BLUE).enabled(false).show(ui).into()
+    let (held, held_at) = data.value_at("paint", Paint::Solid(Srgba { r: 0.9, g: 0.2, b: 0.2, a: 0.6 }));
+    PaintChip::new("Fill", held_at.bind(held), BLUE).enabled(false).show(ui).into()
 }
 
 fn paints() -> Vec<(String, Paint)> {

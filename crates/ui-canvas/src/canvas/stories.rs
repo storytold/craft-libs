@@ -65,9 +65,9 @@ fn under_a_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         }
     };
     let stage = Stack::new().fill().footer(row).footer_gap(Gap::Stack).show_at(ui, room, |ui, stack| {
-        let view = data.value("view", StoryDocument::STANDARD.view(stack.rect, pixels_per_point, 100.0));
+        let (view, view_at) = data.value_at("view", StoryDocument::STANDARD.view(stack.rect, pixels_per_point, 100.0));
         Canvas::new("Document")
-            .view(Bind::bound(view))
+            .view(view_at.bind(view))
             .show_at(ui, stack.rect, |ui, body| show_document(ui, body.rect, &StoryDocument::STANDARD))
             .output
     });

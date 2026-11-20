@@ -58,8 +58,8 @@ fn preview_sheet(ui: &Ui) -> PrintSheet {
 #[story(PrintPreview<'static>, covers = [Default])]
 fn print_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let sheet = preview_sheet(ui);
-    let position = data.value("position", sheet.image.min);
-    PrintPreview::new("Print preview", &sheet, Bind::bound(position)).show(ui).into()
+    let (position, position_at) = data.value_at("position", sheet.image.min);
+    PrintPreview::new("Print preview", &sheet, position_at.bind(position)).show(ui).into()
 }
 
 /// The image box hangs over the paper's right edge, a position the host refuses.

@@ -4,7 +4,7 @@ use super::{Levels, LevelsEditor};
 use crate::ui::curve::stories::story_bins;
 use crate::ui::histogram::{ChannelColor, HistogramData};
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::display::{Shade, Text};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, story};
@@ -19,8 +19,8 @@ fn identity() -> Levels {
 fn levels_editor(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let bins = story_bins(0.0);
     let histogram = HistogramData::tone(&bins, ChannelColor::Neutral);
-    let levels = data.value("levels", identity());
-    let output = LevelsEditor::new("Levels", Bind::bound(&mut *levels)).histogram(&histogram).value("RGB channel").show(ui);
+    let (levels, levels_at) = data.value_at("levels", identity());
+    let output = LevelsEditor::new("Levels", levels_at.bind(&mut *levels)).histogram(&histogram).value("RGB channel").show(ui);
     let facts = output.into();
     let l = *levels;
     let readout = format!("Input {:.3} / {:.2} / {:.3}, output {:.3} / {:.3}", l.in_black, l.gamma, l.in_white, l.out_black, l.out_white);

@@ -7,8 +7,8 @@ use egui::Ui;
 
 #[story(TransportBar<'static>, covers = [Default], drive = Drive::Never)]
 fn transport_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let settings = data.value("settings", TransportBarSettings::default());
-    TransportBar::new("Program transport", &TransportButton::PROGRAM).playing(true).looping(true).settings(Bind::bound(settings)).show(ui).into()
+    let (settings, settings_at) = data.value_at("settings", TransportBarSettings::default());
+    TransportBar::new("Program transport", &TransportButton::PROGRAM).playing(true).looping(true).settings(settings_at.bind(settings)).show(ui).into()
 }
 
 #[story(MediaControls, covers = [Default], drive = Drive::Never)]

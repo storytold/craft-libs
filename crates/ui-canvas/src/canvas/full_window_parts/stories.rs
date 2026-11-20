@@ -2,7 +2,7 @@
 
 use super::{FullWindowCanvas, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowZoomBar, RasterOverlay};
 use crate::canvas::{PixelRect, RasterSource};
-use crate::contract::{Bind, Show as _, ShowContainer as _};
+use crate::contract::{Show as _, ShowContainer as _};
 use crate::display::Text;
 use crate::layout_components::Stack;
 use crate::primitives::{Checker, Revision};
@@ -72,8 +72,8 @@ const PREVIEWS: [(&str, Option<Option<f32>>); 3] = [("Idle", None), ("Pending", 
 #[story(FullWindowZoomBar, covers = [], drive = Drive::Never)]
 fn zoom_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let note = *data.value("note", true);
-    let view = data.value("view", FullWindowView::new());
-    let bar = FullWindowZoomBar::new(Bind::bound(view));
+    let (view, view_at) = data.value_at("view", FullWindowView::new());
+    let bar = FullWindowZoomBar::new(view_at.bind(view));
     let bar = if note { bar.note("Preview 120 ms") } else { bar };
     bar.show(ui).into()
 }
@@ -81,8 +81,8 @@ fn zoom_bar(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FullWindowZoomBar, covers = [], drive = Drive::Never)]
 fn zoom_bar_with_progress(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let progress = *data.choice("preview", Some(Some(0.4)), &PREVIEWS);
-    let view = data.value("view", FullWindowView::new());
-    FullWindowZoomBar::new(Bind::bound(view)).progress(progress).show(ui).into()
+    let (view, view_at) = data.value_at("view", FullWindowView::new());
+    FullWindowZoomBar::new(view_at.bind(view)).progress(progress).show(ui).into()
 }
 
 #[story(FullWindowTitle, covers = [], drive = Drive::Never)]
@@ -109,8 +109,8 @@ fn canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let checkerboard = *data.value("checkerboard", true);
     let overlay = *data.value("overlay", true);
     let tint = *data.value("tint", true);
-    let view = data.value("view", FullWindowView::new());
-    let mut canvas = FullWindowCanvas::new(Bind::bound(view), &IMAGE_SOURCE);
+    let (view, view_at) = data.value_at("view", FullWindowView::new());
+    let mut canvas = FullWindowCanvas::new(view_at.bind(view), &IMAGE_SOURCE);
     if checkerboard {
         canvas = canvas.checkerboard(Checker::new());
     }

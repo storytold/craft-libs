@@ -223,8 +223,8 @@ fn panel_off(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(BrushSectionList<'static, u8>, covers = [Default], drive = Drive::Never)]
 fn section_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let brush = data.value("brush", Brush::new(true));
-    let output = BrushSectionList::new("Brush settings sections", &brush.sections, Bind::bound(&mut brush.shown)).link_row().show(ui);
+    let (brush, brush_at) = data.value_at("brush", Brush::new(true));
+    let output = BrushSectionList::new("Brush settings sections", &brush.sections, brush_at.bind(&mut brush.shown)).link_row().show(ui);
     let events = output.events.clone();
     let facts = StoryOutput::from(output);
     for event in events {
@@ -263,12 +263,12 @@ fn tip_ellipse_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn dynamic_control_row(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let words = Env::of(ui).words::<BrushSettingsStoryWords>();
     let controls = controls();
-    let (rows, size) = data.value("rows", ((ControlRow::new(Control::Fade), ControlRow::new(Control::PenPressure)), SIZE));
+    let ((rows, size), rows_at) = data.value_at("rows", ((ControlRow::new(Control::Fade), ControlRow::new(Control::PenPressure)), SIZE));
     let (fade, curve) = rows;
     Stack::new().show(ui, |ui, _| {
         fade.show(ui, &controls);
         curve.show(ui, &controls);
-        let _ = BrushSizeField::new("Size", Bind::bound(&mut *size), MAX_SIZE).restore(ORIGINAL).show(ui);
+        let _ = BrushSizeField::new("Size", rows_at.bind(&mut *size), MAX_SIZE).restore(ORIGINAL).show(ui);
     });
     let output = StoryOutput::default();
     if curve.curve_open { output.readout(words.curve_open.as_str().to_owned()) } else { output }

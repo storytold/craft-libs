@@ -33,9 +33,9 @@ fn groups() -> Vec<IconPickerGroup<u8>> {
 fn icon_picker_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let groups = groups();
     let opener = Button::new("Choose an icon").show(ui);
-    let open = data.value("open", false);
+    let (open, open_at) = data.value_at("open", false);
     let mut picked = None;
-    let shown = Popover::new("Icons", Bind::bound(open)).opened_by(&opener).show(ui, |ui, _| {
+    let shown = Popover::new("Icons", open_at.bind(open)).opened_by(&opener).show(ui, |ui, _| {
         picked = IconPicker::new("Tool", Bind::bound(&mut None), &groups).show(ui).picked;
     });
     if picked.is_some() {

@@ -1,7 +1,7 @@
 //! Stories of `Segmented`.
 
 use super::Segmented;
-use crate::contract::{Bind, Entry, Props as _, Show as _, Validity};
+use crate::contract::{Entry, Props as _, Show as _, Validity};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use craft_behavior::{IconId, Mixed};
@@ -29,16 +29,16 @@ fn tools(count: u8) -> Vec<Entry<u8>> {
 /// The text row of the first `count` modes at `size`, starting on mode `first`, over its "Selected" readout.
 fn text_row(ui: &mut Ui, data: &mut StoryData, count: u8, first: u8, size: ControlSize) -> StoryOutput {
     let entries = modes(count);
-    let picked = data.value("mode", first);
-    let shown: StoryOutput = Segmented::new(format!("Combine ({count})"), Bind::bound(&mut *picked), &entries).size(size).show(ui).into();
+    let (picked, picked_at) = data.value_at("mode", first);
+    let shown: StoryOutput = Segmented::new(format!("Combine ({count})"), picked_at.bind(&mut *picked), &entries).size(size).show(ui).into();
     shown.readout(format!("Selected: {}", MODES[usize::from(*picked)]))
 }
 
 /// The icon row of the first `count` tools, starting on tool `first`, over its "Selected" readout.
 fn icon_row(ui: &mut Ui, data: &mut StoryData, count: u8, first: u8) -> StoryOutput {
     let entries = tools(count);
-    let picked = data.value("tool", first);
-    let shown: StoryOutput = Segmented::new(format!("Tool ({count})"), Bind::bound(&mut *picked), &entries).show(ui).into();
+    let (picked, picked_at) = data.value_at("tool", first);
+    let shown: StoryOutput = Segmented::new(format!("Tool ({count})"), picked_at.bind(&mut *picked), &entries).show(ui).into();
     shown.readout(format!("Selected: {}", TOOLS[usize::from(*picked)].1))
 }
 

@@ -57,10 +57,10 @@ fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let disabled = *data.value("disabled", false);
     let fit = *data.value("fit", false);
     let units = units();
-    let unit = data.choice("unit", 0u8, &[("Pixels", 0), ("Inches", 1), ("Centimetres", 2), ("Points", 3)]);
+    let (unit, unit_at) = data.choice_at("unit", 0u8, &[("Pixels", 0), ("Inches", 1), ("Centimetres", 2), ("Points", 3)]);
     let out = FieldGroup::new("Select states").labels(LabelScheme::Inspector).show(ui, |ui, _| {
         let first =
-            row("Units").show(ui, |ui, _| fitted(Select::new("Units", Bind::bound(unit), &units).size(size).enabled(!disabled), fit).show(ui));
+            row("Units").show(ui, |ui, _| fitted(Select::new("Units", unit_at.bind(unit), &units).size(size).enabled(!disabled), fit).show(ui));
         row("Resampling").show(ui, |ui, _| {
             fitted(Select::new("Resampling", Bind::bound(&mut 1u8), &resampling()).size(size).enabled(!disabled), fit).show(ui);
         });

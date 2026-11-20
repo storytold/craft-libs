@@ -4,7 +4,7 @@ use super::{AppearancePage, ThemeChip};
 use crate::{SelectionChange, SuiteClient};
 use craft_theme::{ThemeId, builtins};
 use craft_ui::choice::RadioGroup;
-use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Row;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -33,8 +33,8 @@ fn theme_chips(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let themes = builtins();
     let mut favorites = data.value("favorites", themes.iter().take(4).skip(2).map(|theme| theme.id.clone()).collect::<Vec<_>>()).clone();
     let mut flipped = None;
-    let chosen = data.value("chosen", Some(themes[1].id.clone()));
-    let shown = RadioGroup::new("Light Theme", Bind::bound(chosen)).show(ui, |ui, _| {
+    let (chosen, chosen_at) = data.value_at("chosen", Some(themes[1].id.clone()));
+    let shown = RadioGroup::new("Light Theme", chosen_at.bind(chosen)).show(ui, |ui, _| {
         Row::new().show(ui, |ui, _| {
             for theme in themes.iter().take(4) {
                 let chip = ThemeChip::new(theme, false).favorite(favorites.contains(&theme.id)).id_salt(theme.id.as_str()).show(ui);

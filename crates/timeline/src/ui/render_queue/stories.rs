@@ -12,8 +12,8 @@ fn item(id: u64, status: RenderStatus) -> RenderQueueItem {
 }
 
 fn queue(ui: &mut Ui, data: &mut StoryData, items: &[RenderQueueItem], running: bool) -> StoryOutput {
-    let selection = data.value("selection", Selection::<RenderItemId>::default());
-    RenderQueueList::new("Destinations", items, Bind::bound(selection)).running(running).show(ui).into()
+    let (selection, selection_at) = data.value_at("selection", Selection::<RenderItemId>::default());
+    RenderQueueList::new("Destinations", items, selection_at.bind(selection)).running(running).show(ui).into()
 }
 
 #[story(RenderQueueList<'static>, covers = [Default, Many], drive = Drive::Never)]

@@ -19,8 +19,8 @@ fn tile(cx: &ContentPainterCx<'_>, rect: Rect, _: &PatternSwatch) {
 }
 
 fn editor(ui: &mut Ui, data: &mut StoryData, start: PatternFillOptions, library: &[PatternSwatch]) -> StoryOutput {
-    let options = data.value("options", start);
-    let out = PatternFillEditor::new("Pattern fill", Bind::bound(options), library).thumbnails(tile).show(ui);
+    let (options, options_at) = data.value_at("options", start);
+    let out = PatternFillEditor::new("Pattern fill", options_at.bind(options), library).thumbnails(tile).show(ui);
     StoryOutput::from(out)
 }
 

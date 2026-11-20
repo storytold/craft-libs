@@ -6,8 +6,8 @@ use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
 fn button(ui: &mut Ui, data: &mut StoryData, kind: DropperKind, armed: bool) -> StoryOutput {
-    let armed = data.value("armed", armed);
-    StoryOutput::from(DropperButton::new("Sample in image", Bind::bound(armed)).kind(kind).show(ui))
+    let (armed, armed_at) = data.value_at("armed", armed);
+    StoryOutput::from(DropperButton::new("Sample in image", armed_at.bind(armed)).kind(kind).show(ui))
 }
 
 #[story(DropperButton<'static>, covers = [], drive = Drive::Never)]

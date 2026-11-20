@@ -575,9 +575,9 @@ fn event_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 /// actions a pick undoes, or Cancel while none is marked.
 fn undo_list(ui: &mut Ui, data: &mut StoryData, count: usize, mark: UndoMark) -> StoryOutput {
     let labels: Vec<String> = (1..=count).rev().map(|n| format!("Step {n}")).collect();
-    let mark = data.value("mark", mark);
+    let (mark, mark_at) = data.value_at("mark", mark);
     let rows = UndoRows::new(&labels);
-    let out = UndoList::new("Undo History").selection(Bind::bound(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
+    let out = UndoList::new("Undo History").selection(mark_at.bind(&mut *mark)).show_items(ui, &rows, &mut |key, _| rows.row(*key));
     let env = Env::of(ui);
     let words = env.words::<UndoWords>();
     let footer = footer_text(&words, env.format(), mark).map_or_else(|| words.cancel.clone(), Label::from);

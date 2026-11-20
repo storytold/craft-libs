@@ -60,25 +60,25 @@ fn drag_handle(fixture: &mut Fixture) {
 
 #[story(SplitArea<'static, usize>, covers = [Default], drive = Drive::Custom(drag_handle))]
 fn columns(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", two_columns());
+    let (layout, layout_at) = data.value_at("dock", two_columns());
     let shown = layout.clone();
-    dock(ui, Bind::bound(layout), &shown)
+    dock(ui, layout_at.bind(layout), &shown)
 }
 
 #[story(SplitArea<'static, usize>, covers = [Mixed], drive = Drive::Custom(drag_handle))]
 fn layouts_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", Mixed::<Layout<usize>>::Mixed);
-    dock(ui, Bind::bound_mixed(layout), &two_columns())
+    let (layout, layout_at) = data.value_at("dock", Mixed::<Layout<usize>>::Mixed);
+    dock(ui, layout_at.bind_mixed(layout), &two_columns())
 }
 
 #[story(SplitArea<'static, usize>, covers = [Invalid], drive = Drive::Custom(drag_handle))]
 fn a_dock_of_one_group(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let layout = data.value("dock", Layout::new(Some(Node::tabs(vec![LAYERS], 0)), Vec::new()));
+    let (layout, layout_at) = data.value_at("dock", Layout::new(Some(Node::tabs(vec![LAYERS], 0)), Vec::new()));
     let shown = layout.clone();
     let needs_two = |layout: &Layout<usize>| {
         if layout.panels().len() < 2 { Validity::Refuse(Message::new("A dock needs two panels")) } else { Validity::Ok }
     };
-    dock(ui, Bind::bound(layout).check(needs_two), &shown)
+    dock(ui, layout_at.bind(layout).check(needs_two), &shown)
 }
 
 #[story(DockGroup<'static, usize>, covers = [Default])]

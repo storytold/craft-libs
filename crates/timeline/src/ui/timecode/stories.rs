@@ -6,7 +6,7 @@ use crate::rates::FrameRate;
 use crate::time::Tick;
 use crate::timecode::{TimeDisplay, TimeFormat};
 use craft_behavior::Mixed;
-use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::contract::{Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -41,8 +41,8 @@ fn timecode_field_past_the_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
     let before_the_limit = |time: &Tick| {
         if *time > Tick::from_seconds_f64(LATEST_SECONDS) { Validity::Refuse(Message::new("The time is past the limit")) } else { Validity::Ok }
     };
-    let time = data.value("late", Tick::from_seconds_f64(LATEST_SECONDS + 60.0));
-    TimecodeField::new("Current time", Bind::bound(time).check(before_the_limit), drop_frame()).show(ui).edit.into()
+    let (time, time_at) = data.value_at("late", Tick::from_seconds_f64(LATEST_SECONDS + 60.0));
+    TimecodeField::new("Current time", time_at.bind(time).check(before_the_limit), drop_frame()).show(ui).edit.into()
 }
 
 #[story(TimecodeField<'static>, covers = [LongText], drive = Drive::Never)]

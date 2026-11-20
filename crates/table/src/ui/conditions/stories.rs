@@ -66,6 +66,6 @@ fn rules() -> ConditionGroup {
 
 #[story(ConditionBuilder<'static>, covers = [Default], drive = Drive::Never)]
 fn condition_builder(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let group = data.value("group", rules());
-    ConditionBuilder::new("Rules", Bind::bound(group), &Photos).show(ui).into()
+    let (group, group_at) = data.value_at("group", rules());
+    ConditionBuilder::new("Rules", group_at.bind(group), &Photos).show(ui).into()
 }
