@@ -61,6 +61,11 @@ impl Cells {
         self.0.iter_mut().filter(|(index, _)| indices.contains(index)).map(|(index, state)| (*index, state)).collect()
     }
 
+    /// Every kept story's state, in index order.
+    pub fn states_mut(&mut self) -> impl Iterator<Item = &mut CardState> {
+        self.0.values_mut()
+    }
+
     /// Forgets every story's state.
     pub fn clear(&mut self) {
         self.0.clear();

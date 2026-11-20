@@ -291,7 +291,7 @@ fn card(frames: &mut Frames, spec: &Spec, options: &Options) -> (Option<Rect>, b
     };
     settle(frames, options.width, &mut |ui| rect = show(ui, &mut cells));
     let mut opened = false;
-    for state in cells.values_mut().filter(|state| state.dialog.hidden) {
+    for state in cells.states_mut().filter(|state| state.dialog.hidden) {
         state.show_dialog();
         opened = true;
     }
