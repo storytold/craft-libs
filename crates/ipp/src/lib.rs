@@ -280,6 +280,7 @@ fn open_tcp_overlapping(
     let mut pending = addrs.next();
     let mut active = 0usize;
     let mut immediate = true;
+    let mut last_attempted = None;
     let mut last_error: Option<(usize, std::io::Error)> = None;
     let mut remember_error = |index, error| {
         if last_error.as_ref().is_none_or(|(last_index, _)| index >= *last_index) {
@@ -295,6 +296,7 @@ fn open_tcp_overlapping(
             && (immediate || last_launch.elapsed() >= STAGGER)
             && let Some((index, addr)) = pending.take()
         {
+            last_attempted = Some(index);
             pending = addrs.next();
             let open = std::sync::Arc::clone(&open);
             let send = send.clone();
@@ -337,7 +339,10 @@ fn open_tcp_overlapping(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    let cause = last_error.map(|(_, error)| error.to_string()).unwrap_or_else(|| "connection timed out".into());
+    let cause = last_error
+        .filter(|(index, _)| Some(*index) == last_attempted)
+        .map(|(_, error)| error.to_string())
+        .unwrap_or_else(|| "connection timed out".into());
     Err(Error::Unreachable(format!("{host}:{port}: {cause}")))
 }
 

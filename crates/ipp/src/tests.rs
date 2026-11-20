@@ -22,6 +22,15 @@ impl ConnectTrace {
     fn finish(&mut self) {
         self.active -= 1;
     }
+
+    fn assert_addresses(&self, expected: &[SocketAddr]) {
+        // Callback entry order depends on worker scheduling, not resolver order.
+        let mut actual: Vec<_> = self.calls.iter().map(|(addr, _)| *addr).collect();
+        let mut expected = expected.to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
 }
 
 /// What the fake received: op, attributes, document.
@@ -864,7 +873,7 @@ fn a_failed_address_does_not_hide_a_reachable_print_server() {
     });
     assert!(result.is_ok(), "the second address was not tried");
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [refused, reachable]);
+    trace.assert_addresses(&[refused, reachable]);
     assert!(trace.calls.iter().all(|(_, timeout)| !timeout.is_zero() && *timeout <= CONNECT));
     listener.accept().unwrap();
 }
@@ -891,6 +900,47 @@ fn failed_addresses_keep_the_last_error_and_empty_resolution_stays_clear() {
     assert_eq!(*completed.lock().unwrap(), [last, first], "completion order must not choose the final error");
     let result = open_tcp("printserver", 631, [], |_, _| panic!("an empty resolution must not connect"));
     assert!(matches!(result, Err(Error::Unreachable(message)) if message == "printserver:631: no address"));
+}
+
+#[test]
+fn a_shared_deadline_does_not_report_an_earlier_connection_refusal() {
+    let refused: SocketAddr = "192.0.2.1:631".parse().unwrap();
+    let stalled: SocketAddr = "192.0.2.2:631".parse().unwrap();
+    let (release, held) = mpsc::channel();
+    let held = Mutex::new(held);
+    let (finished, done) = mpsc::channel();
+    let result = open_tcp("printserver", 631, [refused, stalled], move |addr, _timeout| {
+        if addr == refused {
+            return Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "earlier address refused"));
+        }
+        // Keep the later attempt pending until the coordinator has returned its deadline error.
+        let _ = held.lock().unwrap().recv_timeout(CONNECT + Duration::from_secs(1));
+        let _ = finished.send(());
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "later address did not answer"))
+    });
+    let _ = release.send(());
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(result.err(), Some(Error::Unreachable("printserver:631: connection timed out".into())));
+}
+
+#[test]
+fn a_shared_deadline_keeps_a_received_error_from_the_last_attempt() {
+    let stalled: SocketAddr = "192.0.2.1:631".parse().unwrap();
+    let refused: SocketAddr = "192.0.2.2:631".parse().unwrap();
+    let (release, held) = mpsc::channel();
+    let held = Mutex::new(held);
+    let (finished, done) = mpsc::channel();
+    let result = open_tcp("printserver", 631, [stalled, refused], move |addr, _timeout| {
+        if addr == refused {
+            return Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "last address refused"));
+        }
+        let _ = held.lock().unwrap().recv_timeout(CONNECT + Duration::from_secs(1));
+        let _ = finished.send(());
+        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "earlier address did not answer"))
+    });
+    let _ = release.send(());
+    done.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(result.err(), Some(Error::Unreachable("printserver:631: last address refused".into())));
 }
 
 #[test]
@@ -924,7 +974,7 @@ fn a_slow_address_leaves_time_for_a_reachable_print_server() {
     assert!(result.is_ok(), "a timed-out first address hid a reachable second address");
     assert!(elapsed < Duration::from_secs(2), "the winner waited for a blocked losing worker: {elapsed:?}");
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [blackholed, reachable]);
+    trace.assert_addresses(&[blackholed, reachable]);
     assert!(trace.calls.iter().all(|(_, timeout)| !timeout.is_zero() && *timeout <= CONNECT));
     assert_eq!(trace.active, 0);
     listener.accept().unwrap();
@@ -1269,13 +1319,13 @@ fn a_slow_reachable_first_address_keeps_its_full_connection_window() {
     });
     assert!(result.is_ok(), "the viable first address lost its original timeout window");
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, refused]);
+    trace.assert_addresses(&[first, refused]);
     assert_eq!(trace.active, 0);
     listener.accept().unwrap();
 }
 
 #[test]
-fn failed_attempts_immediately_advance_in_resolver_order() {
+fn failed_attempts_immediately_advance_to_the_next_resolved_address() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let reachable = listener.local_addr().unwrap();
     let blocked: SocketAddr = "192.0.2.1:631".parse().unwrap();
@@ -1311,7 +1361,7 @@ fn failed_attempts_immediately_advance_in_resolver_order() {
     done.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(result.is_ok());
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [blocked, refused, reachable]);
+    trace.assert_addresses(&[blocked, refused, reachable]);
     assert_eq!(trace.peak, 2, "a quick refusal must advance without another stagger delay");
     assert_eq!(trace.active, 0);
     listener.accept().unwrap();
@@ -1341,7 +1391,11 @@ fn overlapping_attempts_share_one_deadline() {
     let trace = trace.lock().unwrap();
     assert!(count >= 3, "later addresses never received a chance");
     assert!(count <= 12, "the shared deadline and stagger must not fan out indefinitely");
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), addresses[..count]);
+    assert!(trace.calls.iter().all(|(addr, _)| addresses.contains(addr)));
+    let mut called: Vec<_> = trace.calls.iter().map(|(addr, _)| *addr).collect();
+    called.sort_unstable();
+    called.dedup();
+    assert_eq!(called.len(), count, "a resolved address was attempted more than once");
     assert!(trace.peak <= 12);
     assert_eq!(trace.active, 0);
 }
@@ -1359,12 +1413,20 @@ fn two_blocked_addresses_do_not_hide_a_reachable_third_address() {
     let (release_second, held_second) = mpsc::channel();
     let held_second = Mutex::new(held_second);
     let (finished, done) = mpsc::channel();
+    let (entered, wait_entered) = mpsc::channel();
+    let wait_entered = Mutex::new(wait_entered);
     let started = std::time::Instant::now();
     let result = open_tcp("printserver", 631, [first, second, third], move |addr, timeout| {
+        if addr == third {
+            for _ in 0..2 {
+                wait_entered.lock().unwrap().recv_timeout(timeout).unwrap();
+            }
+        }
         record.lock().unwrap().start(addr, timeout);
         let result = if addr == third {
             TcpStream::connect_timeout(&addr, timeout)
         } else {
+            entered.send(()).unwrap();
             if addr == first {
                 let _ = held_first.lock().unwrap().recv_timeout(timeout);
             } else {
@@ -1386,7 +1448,7 @@ fn two_blocked_addresses_do_not_hide_a_reachable_third_address() {
     assert!(result.is_ok(), "two stalled addresses hid the reachable third address");
     assert!(elapsed < Duration::from_secs(2), "the third address waited for the blocked attempts: {elapsed:?}");
     let trace = trace.lock().unwrap();
-    assert_eq!(trace.calls.iter().map(|(addr, _)| *addr).collect::<Vec<_>>(), [first, second, third]);
+    trace.assert_addresses(&[first, second, third]);
     assert_eq!(trace.peak, 3);
     assert_eq!(trace.active, 0);
     listener.accept().unwrap();
@@ -1409,7 +1471,18 @@ fn a_socket_connecting_after_another_attempt_wins_is_closed() {
     let _ = release.send(());
     assert!(result.is_ok());
     winner.accept().unwrap();
-    let (mut late, _) = loser.accept().unwrap();
+    loser.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + CONNECT;
+    let mut late = loop {
+        match loser.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => panic!("the losing connection did not arrive before the deadline: {error}"),
+        }
+    };
+    late.set_nonblocking(false).unwrap();
     late.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
     let mut byte = [0];
     assert_eq!(late.read(&mut byte).unwrap(), 0, "the losing socket was retained after the coordinator returned");
