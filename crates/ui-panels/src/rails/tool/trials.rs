@@ -6,6 +6,7 @@ use super::stories::tools;
 use super::{LastUsed, ToolRail, ToolSlot};
 use crate::buttons::Button;
 use crate::contract::Props as _;
+use crate::contract::Tracked;
 use crate::contract::Show as _;
 use crate::contract::ShowContainer as _;
 use crate::docking::{DockGrid, DockSizes};
@@ -48,9 +49,8 @@ fn columns_of(fixture: &Fixture) -> usize {
 fn rail_in(width: f32, height: f32) -> (Fixture, Rc<Cell<Vec2>>) {
     let measured = Rc::new(Cell::new(Vec2::ZERO));
     let report = Rc::clone(&measured);
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
-        let slots = slots();
-        let last = LastUsed::default();
         let size = ToolRail::new("Tools", &slots, &0, &last).measure_rail(ui, width, |ui, _| {
             Button::new("Foot").show(ui);
         });
@@ -137,10 +137,10 @@ fn the_tool_rail_shows_its_buttons_icons_in_its_glyph_role() {
     use crate::buttons::IconButton;
     use craft_behavior::IconId;
     let glyphs = |rail: bool| {
+        let (slots, last) = (Tracked::new(vec![ToolSlot::new(0, tools(&[0, 1]))]), Tracked::new(LastUsed::default()));
         let mut fixture = Fixture::new(move |ui| {
             if rail {
-                let slots = vec![ToolSlot::new(0, tools(&[0, 1]))];
-                ToolRail::new("Tools", &slots, &0, &LastUsed::default()).show_rail(ui, |_, _| {});
+                ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |_, _| {});
             } else {
                 IconButton::new(IconId::new("move")).label("Alone").show(ui);
             }
@@ -168,9 +168,8 @@ struct Seen {
 fn memo_rail() -> (Fixture, Rc<RefCell<Seen>>) {
     let seen = Rc::new(RefCell::new(Seen::default()));
     let shared = Rc::clone(&seen);
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
-        let slots = slots();
-        let last = LastUsed::default();
         let current = shared.borrow().current;
         let footer = &shared;
         let out = ToolRail::new("Tools", &slots, &current, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |ui, _| {
@@ -253,10 +252,9 @@ fn a_rail_in_another_density_counts_its_columns_in_that_density() {
     let width = grid.width(2);
     assert_eq!(root.steps_within(width), 1, "the root's rail fits one column in two compact steps: {grid:?}, root {root:?}");
 
+    let (slots, last) = (Tracked::new(slots()), Tracked::new(LastUsed::default()));
     let mut fixture = Fixture::new(move |ui| {
         Stack::new().theme(compact()).show(ui, |ui, _| {
-            let slots = slots();
-            let last = LastUsed::default();
             ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {
                 Button::new("Foot").show(ui);
             });
@@ -288,12 +286,13 @@ fn an_open_flyout_builds_no_derived_values() {
 
 /// The key bytes of an idle pass of a rail of `count` slots, a quarter of whose tools are hidden and half remembered.
 fn idle_key_bytes(count: u8) -> usize {
-    let slots: Vec<ToolSlot<u8>> = (0..count).map(|id| ToolSlot::new(u32::from(id), tools(&[id]))).collect();
-    let hidden: Vec<u8> = (0..count / 4).collect();
+    let slots = Tracked::new((0..count).map(|id| ToolSlot::new(u32::from(id), tools(&[id]))).collect::<Vec<_>>());
+    let hidden = Tracked::new((0..count / 4).collect::<Vec<u8>>());
     let mut last = LastUsed::default();
     for id in 0..count / 2 {
         last.set(u32::from(id), id);
     }
+    let last = Tracked::new(last);
     let mut fixture = Fixture::new(move |ui| {
         ToolRail::new("Tools", &slots, &0, &last).hidden(&hidden).show_rail(ui, |_, _| {});
     });

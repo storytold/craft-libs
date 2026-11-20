@@ -13,7 +13,7 @@ use craft_ui::canvas::{
     tool_pass,
 };
 use craft_ui::canvas_controls::{Guides, Marquee};
-use craft_ui::contract::SizeLimits;
+use craft_ui::contract::{SizeLimits, Tracked};
 use craft_ui::contract::{
     Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, MemoProps, MemoView, Props as _, Remember as _, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
@@ -22,7 +22,7 @@ use craft_ui::docking::{DockGrid, DockPanels, GroupAt, PanelSpec, PanelSpecs};
 use craft_ui::list::{ListRow, ToggleCell};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::primitives::textures::Revision;
-use craft_ui::rails::{LastUsed, ToolRail};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::shell::CanvasPanel;
 use craft_ui::table::Table;
@@ -45,7 +45,9 @@ pub(super) struct Panels<'a> {
     pub(super) tool: Tool,
     pub(super) tools: &'a mut Tools,
     /// The tool each toolbar slot showed last; the toolbar writes it.
-    pub(super) last_used: &'a mut LastUsed<Tool>,
+    pub(super) last_used: &'a mut Tracked<LastUsed<Tool>>,
+    /// The toolbar's slots.
+    pub(super) slots: &'a Tracked<Vec<ToolSlot<Tool>>>,
     /// The tool the toolbar picked in this pass.
     pub(super) picked: Option<Tool>,
 }
@@ -58,9 +60,8 @@ impl Panels<'_> {
     /// The toolbar's rail in the rect the dock gives it, or its height at a width: as many tool columns as the width
     /// holds. The rail's own padding surrounds the buttons, so no group padding applies.
     fn toolbar(&mut self, ui: &mut Ui, at: GroupAt) -> f32 {
-        let slots = Tool::slots();
-        let (current, last_used) = (self.tool, self.last_used.clone());
-        let rail = ToolRail::new("Tools", &slots, &current, &last_used);
+        let current = self.tool;
+        let rail = ToolRail::new("Tools", self.slots, &current, self.last_used);
         match at {
             GroupAt::Measure(width) => rail.measure_rail(ui, width, |_, _| {}).y,
             GroupAt::Show(rect) => {
@@ -69,7 +70,7 @@ impl Panels<'_> {
                     self.picked = output.select;
                 }
                 if let Some(next) = output.last_used {
-                    *self.last_used = next;
+                    **self.last_used = next;
                 }
                 rect.height()
             }

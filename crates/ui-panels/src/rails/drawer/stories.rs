@@ -1,6 +1,7 @@
 //! Stories of `ToolbarDrawer`.
 
 use super::{DrawerGroup, ToolbarDrawer};
+use crate::contract::Tracked;
 use crate::rails::tool::stories::{BRUSH, tools};
 use crate::rails::tool::{LastUsed, ToolRail, ToolSlot};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -11,8 +12,8 @@ use egui::Ui;
 #[story(ToolbarDrawer<'static, u8>, covers = [], drive = Drive::Never)]
 fn toolbar_drawer(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let groups = [DrawerGroup::new("Drawing", tools(&[0, 1, 2])), DrawerGroup::new("Retouching", tools(&[3, 4]))];
-    let slots = [ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))];
-    let last = LastUsed::default();
+    let slots = Tracked::new(vec![ToolSlot::new(0, tools(&[0])), ToolSlot::new(1, tools(&[BRUSH, BRUSH + 1]))]);
+    let last = Tracked::new(LastUsed::default());
     let rail = ToolRail::new("Tools", &slots, &BRUSH, &last).edit_toolbar("Edit Toolbar").show_rail(ui, |_, _| {});
     let open = data.value("open", false);
     let Some(opener) = rail.edit_toolbar.as_ref() else { return rail.into() };

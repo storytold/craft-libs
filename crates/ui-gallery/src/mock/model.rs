@@ -33,7 +33,7 @@ const TOOLS_DOCK_WIDTH: f32 = 120.0;
 
 /// The tools of the rail. Each is a command of the `tools` group; a tool alone in its slot carries its letter, and the
 /// letter of a slot with several is the pick command of [`ToolKey`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet, craft_ui::contract::MemoProps)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet, craft_ui::contract::MemoProps, craft_ui::contract::PlainData)]
 #[command(prefix = "mockTool")]
 #[non_exhaustive]
 pub enum Tool {
@@ -414,7 +414,9 @@ pub struct MockState {
     /// The current tool.
     pub tool: Tool,
     /// The tool each rail slot showed last.
-    pub last_used: LastUsed<Tool>,
+    pub last_used: Tracked<LastUsed<Tool>>,
+    /// The rail's slots.
+    pub slots: Tracked<Vec<ToolSlot<Tool>>>,
     /// The status bar's item.
     pub status_item: StatusItem,
     /// The status bar's message: the newest thing the mock had to say.
@@ -442,7 +444,8 @@ impl Default for MockState {
             specs: Tracked::new(MockSpecs),
             document: Document::default(),
             tool: Tool::Move,
-            last_used: LastUsed::default(),
+            last_used: Tracked::new(LastUsed::default()),
+            slots: Tracked::new(Tool::slots()),
             status_item: StatusItem::DocumentDimensions,
             status: None,
             colors: ColorPair::default(),

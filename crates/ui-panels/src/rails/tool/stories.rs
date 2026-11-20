@@ -1,5 +1,6 @@
 //! Stories of `ToolRail`, and the commands its stories and the flyout's use as tools.
 
+use crate::contract::Tracked;
 use super::{LastUsed, RailTool, ToolRail, ToolSlot};
 use crate::docking::{DockGrid, DockSizes};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -51,8 +52,9 @@ fn tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let short = *data.choice("room", false, &[("Tall", false), ("Short", true)]);
     let hidden =
         data.choice("hidden", Vec::<u8>::new(), &[("None", Vec::new()), ("Pencil", vec![2]), ("Stamp", vec![4]), ("Eraser", vec![3])]).clone();
-    let slots = slots();
-    let last = LastUsed::default();
+    let hidden = Tracked::new(hidden);
+    let slots = Tracked::new(slots());
+    let last = Tracked::new(LastUsed::default());
     let width = DockGrid::rail(slots.len() + 1).resolved(&DockSizes::of_scope(ui)).width(u16::from(columns));
     // design: allow[contract/memory](the story gives the rail the width of its chosen columns, as a dock column does)
     let out = ui
