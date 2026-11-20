@@ -757,6 +757,9 @@ pub fn chart_xml(c: &Chart) -> (Vec<u8>, bool) {
     let mut w = Writer::document();
     w.tag("c:chartSpace").attr("xmlns:c", NS_C).attr("xmlns:a", NS_A).attr("xmlns:r", NS_R).open();
     w.tag("c:date1904").attr("val", u8::from(c.date_1904)).empty();
+    if let Some(lang) = c.lang.as_deref() {
+        w.tag("c:lang").attr("val", lang).empty();
+    }
     w.tag("c:roundedCorners").attr("val", 0).empty();
     w.tag("c:style").attr("val", c.style.clamp(1, 48)).empty();
     if let Some(pivot) = c.pivot_source.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -1267,6 +1270,27 @@ mod tests {
         let back = crate::chart::read::read_chart_xml(&out).unwrap();
         assert_eq!(back.text_color, Some(grey));
         assert_eq!(back.title.as_deref(), Some("Units"));
+    }
+
+    #[test]
+    fn rebuilt_chart_preserves_language_and_axis_label() {
+        let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:lang val="ru-RU"/><c:chart><c:plotArea><c:barChart><c:barDir val="col"/></c:barChart><c:valAx><c:numFmt formatCode="0.0" sourceLinked="0"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#;
+        let mut chart = crate::chart::read::read_chart_xml(xml.as_bytes()).unwrap();
+        let label = chart.axis_label(false, 2.5);
+        assert_eq!(label, "2,5");
+        chart.title = Some("Edited".into());
+        let (out, kept) = super::chart_xml(&chart);
+        assert!(!kept);
+        let rebuilt = String::from_utf8(out.clone()).unwrap();
+        assert!(rebuilt.contains(r#"<c:lang val="ru-RU"/>"#), "{rebuilt}");
+        let date_position = rebuilt.find("<c:date1904").unwrap();
+        let language_position = rebuilt.find(r#"<c:lang val="ru-RU"/>"#).unwrap();
+        let rounded_position = rebuilt.find("<c:roundedCorners").unwrap();
+        assert!(date_position < language_position && language_position < rounded_position, "{rebuilt}");
+        let back = crate::chart::read::read_chart_xml(&out).unwrap();
+        assert_eq!(back.title.as_deref(), Some("Edited"));
+        assert_eq!(back.lang.as_deref(), Some("ru-RU"));
+        assert_eq!(back.axis_label(false, 2.5), label);
     }
 
     #[test]
