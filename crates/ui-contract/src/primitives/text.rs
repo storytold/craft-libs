@@ -986,7 +986,7 @@ pub(crate) mod memo_tests {
         let mut output = ctx.run_pass(Default::default(), |ctx| {
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0);
             let cached = run.layout(ctx, &env, 100.0);
-            assert!(Arc::ptr_eq(first.as_ref().unwrap(), &cached.galley));
+            assert!(first.as_ref().is_some_and(|first| Arc::ptr_eq(first, &cached.galley)));
             assert_eq!(ctx.fonts(|fonts| fonts.num_galleys_in_cache()), 0, "a memo hit must not call egui layout_job");
         });
         output.textures_delta.clear();
