@@ -67,7 +67,7 @@ fn guide_dragged_out_of_a_ruler(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     });
     let mut output: StoryOutput = shown.inner.map(Into::into).unwrap_or_default();
     // A click on a strip is the rulers' to report.
-    output.clicked |= shown.output.rulers.map_or(false, |rulers| StoryOutput::from(rulers).clicked);
+    output.clicked |= shown.output.rulers.is_some_and(|rulers| StoryOutput::from(rulers).clicked);
     output
 }
 
