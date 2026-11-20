@@ -17,6 +17,7 @@ mod fidelity;
 mod gif_frames;
 mod heif;
 mod jpeg_inks;
+mod jpeg_photoshop;
 mod jpegls_oracle;
 mod limits;
 mod malformed;
