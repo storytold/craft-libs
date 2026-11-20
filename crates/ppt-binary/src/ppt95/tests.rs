@@ -586,8 +586,7 @@ fn hostile_powerpoint_95_streams_never_panic() {
     assert_eq!(p.slides.len(), 1);
     assert_eq!((p.slide_size.width, p.slide_size.height), (720.0, 540.0), "an out-of-range size falls back");
     // Many slides stop at the limit.
-    let empty = rec(rt::SLIDE, NONE, 0x10, &[]);
-    let many = vec![empty; super::MAX_SLIDES + 5];
+    let many = vec![slide(&SlideSpec::new(0x100, 0)); super::MAX_SLIDES + 5];
     let p = import(&stream_of(document_atom(5760, 4320, 0), &many, &[])).unwrap();
     assert_eq!(p.slides.len(), super::MAX_SLIDES);
     // Many masters stop at their own, lower limit: each is a copy of the default master.
@@ -767,7 +766,7 @@ fn paragraphs_keep_their_spacing() {
         [
             (Some(Spacing::Pct(1.5)), Some(Spacing::Pct(0.5)), Some(Spacing::Pct(0.0))),
             (Some(Spacing::Pts(36.0)), Some(Spacing::Pts(12.0)), Some(Spacing::Pts(6.0))),
-            (Some(Spacing::Pct(100.0)), Some(Spacing::Pts(4000.0)), Some(Spacing::Pts(1.0))),
+            (Some(Spacing::Pct(100.0)), Some(Spacing::Pts(1584.0)), Some(Spacing::Pts(1.0))),
         ]
     );
 }
@@ -938,6 +937,20 @@ fn master_placeholders_move_the_layout_boxes() {
     }
     let own: Vec<_> = m.shapes.iter().filter(|s| s.ph.is_none()).map(|s| body_of(s).text()).collect();
     assert_eq!(own, ["Logo"]);
+}
+
+/// An empty footer on the master still gives every layout's footer its size and colour: those of
+/// its end mark.
+#[test]
+fn an_empty_footer_keeps_its_look() {
+    let empty = text(b"", &[char_run(1, 0, 10, 0, [0xFF, 0, 0, 0xFE])], &[para_run(1, false, 0, 2, 0)], 1, [0; 4], MASTER_BODY);
+    let p = deck_of(vec![], &[placeholder_95(8, 1, 2, [-816, 1776, 816, 2064], Some(empty))]);
+    for l in &p.masters[0].layouts {
+        let footer = l.shapes.iter().find(|s| s.ph_type() == Some(PhType::Footer)).unwrap();
+        let level = body_of(footer).list_style.level(0).unwrap();
+        assert_eq!((level.para.align, level.run.size), (Some(Align::Right), Some(10.0)), "{}", l.name);
+        assert_eq!(level.run.fill, Some(Fill::solid(ColorRef::rgb(Rgba::rgb(0xFF, 0, 0)))), "{}", l.name);
+    }
 }
 
 /// The characters, a font's face and a bullet character are Windows-1252, 0x80–0x9F included.
@@ -2637,27 +2650,32 @@ fn check_object_sample(name: &str, shapes: &[Shape]) {
 /// four corners) in points on a slide of size `slide`: the WMF PowerPoint 95 saved a slide as is in
 /// master units about the slide's centre, y down.
 fn wmf_polygons(b: &[u8], slide: craft_pptx::Size) -> Vec<Vec<(f64, f64)>> {
-    let word = |at: usize| b.get(at..at + 2).map(|w| i16::from_le_bytes([w[0], w[1]]));
     let mut polygons = vec![];
     // The placeable header (22 bytes), then the standard one (18).
     let mut at = 40;
-    while let (Some(size), Some(func)) = (b.get(at..at + 4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])), word(at + 4)) {
-        if size < 3 {
-            break;
-        }
+    // Each record is read only within its size (in 16-bit words), so a short one can't take its
+    // values from the next.
+    while let Some(size) = b.get(at..at + 4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) as usize) {
+        let Some(rec) = b.get(at..at + size * 2).filter(|_| size >= 3) else { break };
+        let word = |i: usize| rec.get(i..i + 2).map(|w| i16::from_le_bytes([w[0], w[1]]));
         let pt = |x: i16, y: i16| (f64::from(x) / 8.0 + slide.width / 2.0, f64::from(y) / 8.0 + slide.height / 2.0);
-        if func == 0x0324 {
-            let n = word(at + 6).unwrap_or(0).max(0) as usize;
-            let point = |i: usize| Some(pt(word(at + 8 + 4 * i)?, word(at + 10 + 4 * i)?));
-            polygons.push((0..n).filter_map(point).collect());
+        match word(4).map(|f| f as u16) {
+            // META_POLYGON: a count, then that many points; one whose points don't fit is skipped.
+            Some(0x0324) => {
+                let n = word(6).unwrap_or(0).max(0) as usize;
+                if 8 + 4 * n <= rec.len() {
+                    polygons.push((0..n).filter_map(|i| Some(pt(word(8 + 4 * i)?, word(10 + 4 * i)?))).collect());
+                }
+            }
+            // META_RECTANGLE: bottom, right, top and left, in that order.
+            Some(0x041B) => {
+                if let (Some(bottom), Some(right), Some(top), Some(left)) = (word(6), word(8), word(10), word(12)) {
+                    polygons.push(vec![pt(left, top), pt(right, top), pt(right, bottom), pt(left, bottom)]);
+                }
+            }
+            _ => {}
         }
-        // Its parameters are in reverse order: bottom, right, top, left.
-        if func == 0x041B
-            && let (Some(bottom), Some(right), Some(top), Some(left)) = (word(at + 6), word(at + 8), word(at + 10), word(at + 12))
-        {
-            polygons.push(vec![pt(left, top), pt(right, top), pt(right, bottom), pt(left, bottom)]);
-        }
-        at += size as usize * 2;
+        at += size * 2;
     }
     polygons
 }
@@ -2705,15 +2723,18 @@ fn outline_corners(s: &Shape) -> Option<Vec<(f64, f64)>> {
 fn outline_matches(corners: &[(f64, f64)], polygon: &[(f64, f64)], width: f64) -> bool {
     let tol = width / 2.0 + 1.0;
     let same = |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol;
-    // Each vertex once: no repeats in a row, and no closing repeat of the first.
+    // Each vertex once: no repeats in a row, and no closing repeat of the first. Only a vertex
+    // repeated is dropped; the pen's tolerance is for comparing the two outlines, not for merging
+    // the close corners of a narrow one.
+    let repeat = |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
     let ring = |v: &[(f64, f64)]| {
         let mut out: Vec<(f64, f64)> = vec![];
         for p in v {
-            if out.last().is_none_or(|q| !same(p, q)) {
+            if out.last().is_none_or(|q| !repeat(p, q)) {
                 out.push(*p);
             }
         }
-        if out.len() > 1 && same(&out[0], &out[out.len() - 1]) {
+        if out.len() > 1 && repeat(&out[0], &out[out.len() - 1]) {
             out.pop();
         }
         out
@@ -2731,6 +2752,33 @@ fn outlines_match_in_order() {
     assert!(outline_matches(&square, &[(10.0, 10.0), (10.0, 0.0), (0.0, 0.0), (0.0, 10.0), (10.0, 10.0)], 1.0));
     assert!(!outline_matches(&square, &[(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)], 1.0));
     assert!(!outline_matches(&square, &square[..3], 1.0));
+    // A 2 pt-wide rectangle drawn with a 1 pt pen: the drawn corners sit half a point inside, and
+    // its short edges' corners are within the tolerance of each other but stay four vertices.
+    let narrow = [(0.0, 0.0), (2.0, 0.0), (2.0, 10.0), (0.0, 10.0)];
+    assert!(outline_matches(&narrow, &[(0.5, 0.5), (1.5, 0.5), (1.5, 9.5), (0.5, 9.5)], 1.0));
+}
+
+/// The WMF reader takes each record's values from within its own size: a polygon whose points
+/// don't fit, and a rectangle cut short, are skipped rather than read from the next record.
+#[test]
+fn the_wmf_reader_stays_in_each_record() {
+    let record = |func: u16, words: &[i16]| {
+        let mut r = ((3 + words.len()) as u32).to_le_bytes().to_vec();
+        r.extend_from_slice(&func.to_le_bytes());
+        r.extend(words.iter().flat_map(|w| w.to_le_bytes()));
+        r
+    };
+    let wmf = |records: &[Vec<u8>]| {
+        let mut b = vec![0u8; 40];
+        b.extend(records.concat());
+        b.extend(record(0, &[]));
+        wmf_polygons(&b, craft_pptx::Size::new(720.0, 540.0))
+    };
+    // A polygon of 2 points that says it has 3, and a rectangle without its left.
+    assert!(wmf(&[record(0x0324, &[3, 0, 0, 8, 8]), record(0x041B, &[8, 8, 0])]).is_empty());
+    // Whole, both read.
+    let got = wmf(&[record(0x0324, &[3, 0, 0, 8, 8, 16, 0]), record(0x041B, &[8, 8, 0, 0])]);
+    assert_eq!(got, [vec![(360.0, 270.0), (361.0, 271.0), (362.0, 270.0)], vec![(360.0, 270.0), (361.0, 270.0), (361.0, 271.0), (360.0, 271.0)]]);
 }
 
 /// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
@@ -2753,8 +2801,9 @@ fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
     checked
 }
 
-/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position;
-/// a whole file names none.
+/// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,
+/// and so does one cut just after a slide's header, which leaves that slide out; a whole file
+/// names none.
 #[test]
 fn slides_the_count_says_are_missing_are_named() {
     let one = slide(&SlideSpec::new(0x100, 16));
@@ -2765,6 +2814,11 @@ fn slides_the_count_says_are_missing_are_named() {
     assert!(checked(1).1.is_empty());
     // A huge count names no more slides than the reader could have read.
     assert_eq!(checked(u32::MAX).1.len(), super::MAX_SLIDES);
+    // Two slides, the stream cut just after the second one's header (its stated length kept).
+    let two = stream_of(document_atom(5760, 4320, 2), &[one.clone(), one.clone()], &[]);
+    let second = two.windows(one.len()).rposition(|w| w == one).unwrap();
+    let (p, lost) = crate::import_checked(&file_of(&two[..second + 16]), &AppDefaults).unwrap();
+    assert_eq!((p.slides.len(), lost), (1, vec!["slide 2".to_string()]));
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
