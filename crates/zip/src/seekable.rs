@@ -456,11 +456,16 @@ mod tests {
         let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         writer.start_file("notes.txt", options).unwrap();
         writer.write_all(b"first").unwrap();
-        writer.start_file("notes.txt", options).unwrap();
+        writer.start_file("notes.tx2", options).unwrap();
         writer.write_all(b"second").unwrap();
         writer.start_file("Cat.lrcat", options).unwrap();
         writer.write_all(b"catalog").unwrap();
-        let bytes = writer.finish().unwrap().into_inner();
+        let mut bytes = writer.finish().unwrap().into_inner();
+        for window in 0..=bytes.len() - 9 {
+            if &bytes[window..window + 9] == b"notes.tx2" {
+                bytes[window..window + 9].copy_from_slice(b"notes.txt");
+            }
+        }
 
         let limits = SeekableLimits { max_entries: 10, max_metadata_bytes: 16_384, max_total_bytes: 4096 };
         let mut archive = SeekableArchive::open(Cursor::new(bytes), limits).unwrap();
