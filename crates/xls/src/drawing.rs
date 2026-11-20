@@ -52,72 +52,248 @@ fn fbse_blip(fbse: &[u8], work: &mut Decode) -> Bytes {
     Some((p.data, p.content_type))
 }
 
-/// A picture shape: its BLIP (1-based) and client anchor.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Where a picture shape sits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Place {
+    /// Its own client anchor: cells and fractions of them.
+    Cells(ClientAnchor),
+    /// Inside a shape group: its rectangle as fractions (left, top, right, bottom) of the box of
+    /// the top-level group, whose client anchor is `group`. [`Grid::anchor`] makes it cells.
+    InGroup { group: ClientAnchor, frac: [f64; 4] },
+}
+
+/// A picture shape: its BLIP (1-based) and where it sits.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PictureShape {
     pub pib: u32,
-    pub anchor: ClientAnchor,
+    pub place: Place,
 }
 
 /// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
-/// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with).
+/// `budget` records more (one budget for the whole workbook,
+/// [`craft_officeart::record::MAX_RECORDS`] to start with). A picture inside a shape group is
+/// placed through the group's coordinate spaces, nested groups included.
 pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> Vec<PictureShape> {
     let mut out = Vec::new();
-    walk(dg, 0, &mut out, budget);
+    walk(dg, 0, None, &mut out, budget);
     out
 }
 
-/// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, reading at most `budget`
-/// records more (shared by the whole drawing).
-fn walk(b: &[u8], depth: usize, out: &mut Vec<PictureShape>, budget: &mut usize) {
+/// A group's coordinate space mapped to its top-level group's: per axis, a coordinate `v` is
+/// `v * scale + offset` there. `space` is the top-level group's own space (its `OfficeArtFSPGR`)
+/// and `anchor` its client anchor.
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    anchor: ClientAnchor,
+    space: [f64; 4],
+    scale: [f64; 2],
+    offset: [f64; 2],
+}
+
+impl Frame {
+    /// The frame of a group nested in this one: its child anchor `child` (in this frame's space)
+    /// holds its own coordinate space `space`.
+    fn nested(&self, child: [f64; 4], space: [f64; 4]) -> Frame {
+        let mut f = *self;
+        for axis in 0..2 {
+            let (c0, c1, s0, s1) = (child[axis], child[axis + 2], space[axis], space[axis + 2]);
+            let k = if s1 != s0 { (c1 - c0) / (s1 - s0) } else { 0.0 };
+            f.scale[axis] = self.scale[axis] * k;
+            f.offset[axis] = self.scale[axis] * (c0 - s0 * k) + self.offset[axis];
+        }
+        f
+    }
+
+    /// A rectangle in this frame's space as fractions of the top-level group's box.
+    fn fractions(&self, r: [f64; 4]) -> Option<[f64; 4]> {
+        let mut out = [0.0; 4];
+        for (i, v) in r.iter().enumerate() {
+            let axis = i % 2;
+            let (lo, hi) = (self.space[axis], self.space[axis + 2]);
+            out[i] = (v * self.scale[axis] + self.offset[axis] - lo) / (hi - lo);
+        }
+        out.iter().all(|v| v.is_finite()).then_some(out)
+    }
+}
+
+/// The picture shapes in containers nested at most [`MAX_DEPTH`] deep, in `frame` (`None` outside
+/// any group), reading at most `budget` records more (shared by the whole workbook).
+fn walk(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    for r in Records::new(b) {
-        if *budget == 0 {
-            return;
-        }
-        *budget -= 1;
-        if r.kind == rt::SP_CONTAINER {
-            if let Some(p) = shape(r.data, budget) {
-                out.push(p);
-            }
-        } else if r.is_container() {
-            walk(r.data, depth + 1, out, budget);
+    let mut recs = Records::new(b);
+    while let Some(r) = take(&mut recs, budget) {
+        match r.kind {
+            rt::SP_CONTAINER => out.extend(place(&shape(r.data, budget), frame)),
+            rt::SPGR_CONTAINER => group(r.data, depth + 1, frame, out, budget),
+            _ if r.is_container() => walk(r.data, depth + 1, frame, out, budget),
+            _ => {}
         }
     }
 }
 
-/// A shape container's BLIP and anchor, when it has both.
-fn shape(sp: &[u8], budget: &mut usize) -> Option<PictureShape> {
-    let (mut pib, mut anchor) = (None, None);
-    for r in Records::new(sp) {
-        if *budget == 0 {
-            break;
+/// The next record, if the budget has one left for it.
+fn take<'a>(recs: &mut Records<'a>, budget: &mut usize) -> Option<craft_officeart::record::Rec<'a>> {
+    if *budget == 0 {
+        return None;
+    }
+    let r = recs.next()?;
+    *budget -= 1;
+    Some(r)
+}
+
+/// A group container: its first shape is the group itself (its coordinate space and its anchor),
+/// the rest its members. The drawing's top group (its patriarch) and a container whose first shape
+/// isn't a group's hold their shapes in the frame they are in.
+fn group(b: &[u8], depth: usize, frame: Option<Frame>, out: &mut Vec<PictureShape>, budget: &mut usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let mut recs = Records::new(b);
+    let mut inner = frame;
+    if let Some(head) = recs.clone().next().filter(|r| r.kind == rt::SP_CONTAINER) {
+        let _ = take(&mut recs, budget);
+        let s = shape(head.data, budget);
+        match s.space.filter(|_| !s.patriarch) {
+            Some(space) => {
+                inner = match frame {
+                    None => s.client.map(|anchor| Frame { anchor, space, scale: [1.0; 2], offset: [0.0; 2] }),
+                    Some(f) => s.child.map(|child| f.nested(child, space)),
+                };
+                // A group that can't be placed places none of its members.
+                if inner.is_none() {
+                    return;
+                }
+            }
+            None => out.extend(place(&s, frame)),
         }
-        *budget -= 1;
+    }
+    while let Some(r) = take(&mut recs, budget) {
+        match r.kind {
+            rt::SP_CONTAINER => out.extend(place(&shape(r.data, budget), inner)),
+            rt::SPGR_CONTAINER => group(r.data, depth + 1, inner, out, budget),
+            _ if r.is_container() => walk(r.data, depth + 1, inner, out, budget),
+            _ => {}
+        }
+    }
+}
+
+/// What a shape container says about where it is.
+#[derive(Default)]
+struct Sp {
+    pib: Option<u32>,
+    client: Option<ClientAnchor>,
+    /// Its child anchor (left, top, right, bottom) in its group's space.
+    child: Option<[f64; 4]>,
+    /// A group's own coordinate space (`OfficeArtFSPGR`).
+    space: Option<[f64; 4]>,
+    /// The drawing's top group (`fPatriarch`).
+    patriarch: bool,
+}
+
+/// A picture shape in `frame`: a picture with its client anchor outside any group, or its child
+/// anchor inside one.
+fn place(s: &Sp, frame: Option<Frame>) -> Option<PictureShape> {
+    let pib = s.pib.filter(|p| *p > 0)?;
+    let place = match (frame, s.client, s.child) {
+        (_, Some(anchor), _) => Place::Cells(anchor),
+        (Some(f), None, Some(child)) => Place::InGroup { group: f.anchor, frac: f.fractions(child)? },
+        _ => return None,
+    };
+    Some(PictureShape { pib, place })
+}
+
+/// A rectangle of four i32s (left, top, right, bottom).
+fn rect(b: &[u8]) -> Option<[f64; 4]> {
+    let v = |at: usize| Some(f64::from(i32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?)));
+    Some([v(0)?, v(4)?, v(8)?, v(12)?])
+}
+
+/// A shape container's picture, anchors and group space.
+fn shape(sp: &[u8], budget: &mut usize) -> Sp {
+    let mut s = Sp::default();
+    let mut recs = Records::new(sp);
+    while let Some(r) = take(&mut recs, budget) {
         let body = r.data;
         match r.kind {
             // Properties: `instance` of them, six bytes each (id with flags, value).
             rt::FOPT => {
                 if let Some(e) = entries(body, usize::from(r.instance)).filter(|e| e.pid == prop::PIB).last() {
-                    pib = Some(e.op);
+                    s.pib = Some(e.op);
                 }
             }
+            rt::FSP => s.patriarch = body.get(4).is_some_and(|f| f & 0x04 != 0),
+            rt::FSPGR => s.space = rect(body),
+            rt::CHILD_ANCHOR => s.child = rect(body),
             // Client anchor: flags, then eight 16-bit values.
             rt::CLIENT_ANCHOR => {
-                let mut v = [0u16; 8];
-                for (i, slot) in v.iter_mut().enumerate() {
-                    let at = 2 + i * 2;
-                    *slot = u16::from_le_bytes([*body.get(at)?, *body.get(at + 1)?]);
+                let v: Option<Vec<u16>> = (0..8).map(|i| Some(u16::from_le_bytes([*body.get(2 + i * 2)?, *body.get(3 + i * 2)?]))).collect();
+                if let Some([col1, dx1, row1, dy1, col2, dx2, row2, dy2]) = v.as_deref().and_then(|v| <[u16; 8]>::try_from(v).ok()) {
+                    s.client = Some(ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 });
                 }
-                let [col1, dx1, row1, dy1, col2, dx2, row2, dy2] = v;
-                anchor = Some(ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 });
             }
             _ => {}
         }
     }
-    Some(PictureShape { pib: pib.filter(|p| *p > 0)?, anchor: anchor? })
+    s
+}
+
+/// A sheet's grid, to make a picture inside a group cells: where each column and row starts, in
+/// column-width units (1/256 of a character) and twips, as running totals built once.
+pub(crate) struct Grid {
+    cols: Vec<f64>,
+    rows: Vec<f64>,
+}
+
+impl Grid {
+    /// The grid of a sheet whose column `c` is `col_width(c)` wide and row `r` `row_height(r)` high.
+    pub(crate) fn new(col_width: impl Fn(u16) -> f64, row_height: impl Fn(u16) -> f64) -> Grid {
+        let sums = |n: usize, size: &dyn Fn(usize) -> f64| {
+            let mut v = Vec::with_capacity(n + 1);
+            let mut at = 0.0;
+            for i in 0..n {
+                v.push(at);
+                at += size(i).max(0.0);
+            }
+            v.push(at);
+            v
+        };
+        let width = |i: usize| u16::try_from(i).map_or(0.0, &col_width);
+        let height = |i: usize| u16::try_from(i).map_or(0.0, &row_height);
+        Grid { cols: sums(1 << 16, &width), rows: sums(1 << 16, &height) }
+    }
+
+    /// A picture's cells: its own, or those its fractions of its group's box fall in.
+    pub(crate) fn anchor(&self, place: &Place) -> ClientAnchor {
+        let (g, f) = match place {
+            Place::Cells(a) => return *a,
+            Place::InGroup { group, frac } => (group, frac),
+        };
+        let (x0, x1) = (at(&self.cols, g.col1, g.dx1, 1024.0), at(&self.cols, g.col2, g.dx2, 1024.0));
+        let (y0, y1) = (at(&self.rows, g.row1, g.dy1, 256.0), at(&self.rows, g.row2, g.dy2, 256.0));
+        let (col1, dx1) = cell(&self.cols, x0 + f[0] * (x1 - x0), 1024.0);
+        let (row1, dy1) = cell(&self.rows, y0 + f[1] * (y1 - y0), 256.0);
+        let (col2, dx2) = cell(&self.cols, x0 + f[2] * (x1 - x0), 1024.0);
+        let (row2, dy2) = cell(&self.rows, y0 + f[3] * (y1 - y0), 256.0);
+        ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 }
+    }
+}
+
+/// Where cell `i` plus `d` of `parts` of it is, along running totals `sums`.
+fn at(sums: &[f64], i: u16, d: u16, parts: f64) -> f64 {
+    let i = usize::from(i);
+    let (start, end) = (sums.get(i).copied().unwrap_or(0.0), sums.get(i + 1).copied().unwrap_or(0.0));
+    start + (end - start) * f64::from(d.min(parts as u16)) / parts
+}
+
+/// The cell `v` falls in along running totals `sums`, and how many `parts` of it in.
+fn cell(sums: &[f64], v: f64, parts: f64) -> (u16, u16) {
+    let last = sums.len().saturating_sub(2);
+    let i = sums.partition_point(|&s| s <= v).saturating_sub(1).min(last);
+    let (start, end) = (sums.get(i).copied().unwrap_or(0.0), sums.get(i + 1).copied().unwrap_or(0.0));
+    let d = if end > start { ((v - start) / (end - start) * parts).round().clamp(0.0, parts - 1.0) } else { 0.0 };
+    (u16::try_from(i).unwrap_or(u16::MAX), d as u16)
 }
 
 #[cfg(test)]
@@ -161,7 +337,7 @@ mod tests {
         let sp = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &sp));
         let anchor = ClientAnchor { col1: 1, dx1: 512, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 4, dy2: 0 };
-        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), vec![PictureShape { pib: 1, anchor }]);
+        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), vec![PictureShape { pib: 1, place: Place::Cells(anchor) }]);
         // Truncated or nonsense drawings give nothing, never a panic.
         for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..], &fbse_of(&[0xFF; 60])[..]] {
             let _ = fbse_blip(bad, &mut Decode::new(usize::MAX));
@@ -229,5 +405,67 @@ mod tests {
         let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
         assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).len(), 1);
         assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).is_empty(), "past the depth limit");
+    }
+
+    fn rect_rec(ty: u16, r: [i32; 4]) -> Vec<u8> {
+        rec(0x0000, ty, &r.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>())
+    }
+
+    fn client(a: [u16; 8]) -> Vec<u8> {
+        rec(0x0000, 0xF010, &[0u16].iter().chain(&a).flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>())
+    }
+
+    fn pib(n: u32) -> Vec<u8> {
+        rec(0x0013, 0xF00B, &[&0x4104u16.to_le_bytes()[..], &n.to_le_bytes()].concat())
+    }
+
+    fn fsp(flags: u32) -> Vec<u8> {
+        rec(0x0002, 0xF00A, &[1024u32.to_le_bytes(), flags.to_le_bytes()].concat())
+    }
+
+    /// A picture inside a group is placed by its child anchor, as a fraction of the top-level
+    /// group's box, through any nested group's space; one outside a group keeps its cells, and the
+    /// drawing's patriarch holds its shapes as they are.
+    #[test]
+    fn pictures_inside_groups_are_placed_through_their_groups() {
+        let anchor = [1, 0, 1, 0, 5, 0, 9, 0];
+        let head = rec(0x000F, 0xF004, &[fsp(0x1), rect_rec(0xF009, [0, 0, 1000, 1000]), client(anchor)].concat());
+        let a = rec(0x000F, 0xF004, &[pib(1), rect_rec(0xF00F, [0, 0, 500, 500])].concat());
+        let inner_head = rec(0x000F, 0xF004, &[fsp(0x3), rect_rec(0xF009, [0, 0, 100, 100]), rect_rec(0xF00F, [500, 0, 1000, 500])].concat());
+        let b = rec(0x000F, 0xF004, &[pib(2), rect_rec(0xF00F, [0, 0, 100, 100])].concat());
+        let inner = rec(0x000F, 0xF003, &[inner_head, b].concat());
+        let group = rec(0x000F, 0xF003, &[head, a, inner].concat());
+        let outside = rec(0x000F, 0xF004, &[pib(3), client([7, 0, 7, 0, 8, 0, 8, 0])].concat());
+        let patriarch = rec(0x000F, 0xF004, &[fsp(0x5), rect_rec(0xF009, [0, 0, 0, 0])].concat());
+        let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &[patriarch, group, outside].concat()));
+        let [col1, dx1, row1, dy1, col2, dx2, row2, dy2] = anchor;
+        let group = ClientAnchor { col1, dx1, row1, dy1, col2, dx2, row2, dy2 };
+        let got = picture_shapes(&dg, &mut MAX_RECORDS.clone());
+        let outside = ClientAnchor { col1: 7, dx1: 0, row1: 7, dy1: 0, col2: 8, dx2: 0, row2: 8, dy2: 0 };
+        assert_eq!(
+            got,
+            [
+                PictureShape { pib: 1, place: Place::InGroup { group, frac: [0.0, 0.0, 0.5, 0.5] } },
+                PictureShape { pib: 2, place: Place::InGroup { group, frac: [0.5, 0.0, 1.0, 0.5] } },
+                PictureShape { pib: 3, place: Place::Cells(outside) },
+            ]
+        );
+    }
+
+    /// A fraction of a group's box falls in the cell the grid's column widths and row heights put
+    /// it in: half way across columns of equal width is a column boundary, and a wider column
+    /// moves it.
+    #[test]
+    fn the_grid_turns_fractions_into_cells() {
+        let group = ClientAnchor { col1: 1, dx1: 0, row1: 1, dy1: 0, col2: 5, dx2: 0, row2: 9, dy2: 0 };
+        let place = Place::InGroup { group, frac: [0.0, 0.0, 0.5, 0.5] };
+        let even = Grid::new(|_| 1000.0, |_| 100.0).anchor(&place);
+        assert_eq!(even, ClientAnchor { col1: 1, dx1: 0, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 5, dy2: 0 });
+        // Column 1 three times as wide: half way (4000 of 1000..7000) is the start of column 2.
+        let wide = Grid::new(|c| if c == 1 { 3000.0 } else { 1000.0 }, |_| 100.0).anchor(&place);
+        assert_eq!((wide.col2, wide.dx2), (2, 0));
+        // A quarter of the way into a column is 256 of its 1024 parts.
+        let quarter = Place::InGroup { group, frac: [0.0, 0.0, 0.3125, 0.5] };
+        assert_eq!(Grid::new(|_| 1000.0, |_| 100.0).anchor(&quarter).dx2, 256);
     }
 }

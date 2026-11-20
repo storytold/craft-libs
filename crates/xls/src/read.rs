@@ -695,16 +695,36 @@ fn worksheet<'g>(
 /// Attaches a sheet's shared and array formulas (their definitions follow the first cell that
 /// uses them). Run for every sheet only after all sheets' mandatory text is charged, so the
 /// optional shared-formula text can't use up the allowance a later sheet's strings need.
+/// The width taken for a column the sheet gives none, in 1/256 of a character: 9 characters, near
+/// Excel's standard width. Only where pictures in a group fall depends on it.
+const DEFAULT_COLUMN_WIDTH: f64 = 9.0 * 256.0;
+/// The height taken for a row when the sheet gives no default, in twips: 12.75 pt.
+const DEFAULT_ROW_HEIGHT: u16 = 255;
+
 fn finish_sheet(mut st: SheetState<'_>, budget: &mut Budget, report: &mut Report) -> Sheet {
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, budget, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
     let mut skipped_pictures = false;
-    for shape in drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records) {
+    let shapes = drawing::picture_shapes(&std::mem::take(&mut st.drawing), &mut budget.drawing_records);
+    // The sheet's grid, built only when a picture sits inside a group and must be made cells.
+    let grid = shapes.iter().any(|s| matches!(s.place, drawing::Place::InGroup { .. })).then(|| {
+        let default_row = f64::from(st.sheet.default_row_height.unwrap_or(DEFAULT_ROW_HEIGHT));
+        drawing::Grid::new(
+            |c| st.sheet.columns.get(&c).map_or(DEFAULT_COLUMN_WIDTH, |c| if c.hidden { 0.0 } else { f64::from(c.width) }),
+            |r| st.sheet.rows.get(&u32::from(r)).map_or(default_row, |r| if r.hidden { 0.0 } else { f64::from(r.height) }),
+        )
+    });
+    for shape in shapes {
         let blip = usize::try_from(shape.pib).ok().and_then(|i| i.checked_sub(1)).and_then(|i| st.g.blips.get(i)).cloned().flatten();
+        let anchor = match (&shape.place, &grid) {
+            (drawing::Place::Cells(a), _) => *a,
+            (place, Some(grid)) => grid.anchor(place),
+            (drawing::Place::InGroup { group, .. }, None) => *group,
+        };
         match blip {
-            Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor: shape.anchor, data, mime }),
+            Some((data, mime)) if st.sheet.pictures.len() < MAX_PICTURES => st.sheet.pictures.push(Picture { anchor, data, mime }),
             _ => skipped_pictures = true,
         }
     }

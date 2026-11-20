@@ -217,6 +217,27 @@ fn reads_pictures() {
     assert!(report.warnings.iter().any(|w| w.contains("pictures were damaged")), "{:?}", report.warnings);
 }
 
+/// A picture inside a shape group (with a child anchor in the group's space) is read, at the
+/// cells its share of the group's box falls in.
+#[test]
+fn reads_pictures_inside_groups() {
+    let png = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], b"png"]));
+    let rect = |ty: u16, r: [i32; 4]| od(0, ty, &r.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+    let a: Vec<u8> = [0u16, 1, 0, 1, 0, 3, 0, 3, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let head = od(
+        0x000F,
+        0xF004,
+        &cat(&[&od(0x0002, 0xF00A, &cat(&[&1024u32.to_le_bytes(), &1u32.to_le_bytes()])), &rect(0xF009, [0, 0, 1000, 1000]), &od(0, 0xF010, &a)]),
+    );
+    let opt = od(0x0013, 0xF00B, &cat(&[&0x4104u16.to_le_bytes(), &1u32.to_le_bytes()]));
+    let member = od(0x000F, 0xF004, &cat(&[&opt, &rect(0xF00F, [0, 0, 500, 500])]));
+    let (wb, report) = pictures(&[png], &od(0x000F, 0xF003, &cat(&[&head, &member])));
+    let p = &wb.sheets[0].pictures;
+    assert_eq!(p.len(), 1, "{:?}", report.warnings);
+    // The group covers B2:D4 on columns and rows of the default size: its top-left quarter is B2:C3.
+    assert_eq!(p[0].anchor, ClientAnchor { col1: 1, dx1: 0, row1: 1, dy1: 0, col2: 2, dx2: 0, row2: 2, dy2: 0 });
+}
+
 #[test]
 fn pictures_past_the_cap_are_skipped() {
     let png = od(0x6E00, 0xF01E, &cat(&[&[0u8; 17], b"png"]));
