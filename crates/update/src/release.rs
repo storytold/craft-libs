@@ -137,8 +137,10 @@ pub fn expected_download_url(repo: &str, tag: &str, name: &str) -> Option<String
 /// Whether `url` is `expected`, an [`expected_download_url`], with each `%2B` in either read as
 /// `+`. GitHub serves a `+` in a download path the same either way, and links built before
 /// `%2B` (an older launcher's feed, or a release saved by an older version) write it plainly.
-/// No other escape is read, so `%2b` or `%2e` still has to match as written.
+/// No other escape is read, so `%2b` or `%2e` still has to match as written. Only the GitHub
+/// owner/repository identity is case-insensitive; the origin and remaining path stay exact.
 pub fn same_download_url(url: &str, expected: &str) -> bool {
+    let (url, expected) = github_paths(url, expected).unwrap_or((url, expected));
     url == expected || url.replace("%2B", "+") == expected.replace("%2B", "+")
 }
 
@@ -151,8 +153,22 @@ pub fn same_download_url(url: &str, expected: &str) -> bool {
 /// segments with no traversal (`.`/`..`), no additional slashes, no query or fragment, and no
 /// backslash or percent-encoded separators that a client could later re-interpret.
 pub fn download_url_under(url: &str, prefix: &str) -> bool {
-    let Some(rest) = url.strip_prefix(prefix) else { return false };
+    let Some((path, expected)) = github_paths(url, prefix) else { return false };
+    if expected != "releases/download/" {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix(expected) else { return false };
     download_suffix_ok(rest)
+}
+
+/// Compare only the GitHub identity without changing the route, tag or filename. In particular,
+/// never lowercase an entire URL: release tags and asset names are case-sensitive.
+fn github_paths<'a>(url: &'a str, expected: &'a str) -> Option<(&'a str, &'a str)> {
+    let (owner, path) = url.strip_prefix("https://github.com/")?.split_once('/')?;
+    let (repo, path) = path.split_once('/')?;
+    let (expected_owner, expected) = expected.strip_prefix("https://github.com/")?.split_once('/')?;
+    let (expected_repo, expected) = expected.split_once('/')?;
+    (owner.eq_ignore_ascii_case(expected_owner) && repo.eq_ignore_ascii_case(expected_repo)).then_some((path, expected))
 }
 
 /// Whether `url` sits under a developer mirror `base` (ending in `/`) without escaping it.
@@ -226,7 +242,8 @@ pub fn parse_github_release_list(json: &str, repo: &str, allow_prerelease: bool)
 }
 
 /// One release object of the GitHub API, with every text capped and only the assets whose name is
-/// a plain file name and whose link is exactly [`expected_download_url`]. An API error object
+/// a plain file name and whose link is [`expected_download_url`] (case-insensitive GitHub identity,
+/// exact route, tag, name and encoding). An API error object
 /// (`message`) becomes its text.
 fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, String> {
     if let Some(msg) = v["message"].as_str() {
@@ -241,8 +258,13 @@ fn release_from_value(v: &serde_json::Value, repo: &str) -> Result<Release, Stri
             list.iter()
                 .filter_map(|a| {
                     let name = a["name"].as_str().filter(|n| valid_file_name(n))?.to_string();
-                    let url =
-                        a["browser_download_url"].as_str().filter(|u| expected_download_url(repo, &tag, &name).as_deref() == Some(*u))?.to_string();
+                    let url = a["browser_download_url"]
+                        .as_str()
+                        .filter(|u| {
+                            expected_download_url(repo, &tag, &name)
+                                .is_some_and(|expected| github_paths(u, &expected).is_some_and(|(path, expected)| path == expected))
+                        })?
+                        .to_string();
                     let sha256 = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).filter(|h| is_hex64(h)).map(str::to_ascii_lowercase);
                     Some(Asset { name, size: a["size"].as_u64().unwrap_or(0), url, sha256 })
                 })
@@ -574,6 +596,45 @@ mod tests {
         // A plain, confined download still passes.
         let prefix = download_prefix(REPO);
         assert!(download_url_under("https://github.com/storytold/photocraft/releases/download/v0.5.0/photocraft-0.5.0-macos-universal.dmg", &prefix));
+    }
+
+    #[test]
+    fn repository_casing_preserves_assets_without_weakening_confinement() {
+        let prefix = download_prefix("StoryTold/PhotoCraft");
+        let asset = "https://github.com/storytold/photocraft/releases/download/v0.5.0/PhotoCraft-Linux.tar.gz";
+        assert!(download_url_under(asset, &prefix));
+        let mut api: serde_json::Value = serde_json::from_str(&api_json(asset)).unwrap();
+        api["assets"][0]["name"] = serde_json::json!("PhotoCraft-Linux.tar.gz");
+        let release = parse_github_release(&api.to_string(), "StoryTold/PhotoCraft").unwrap();
+        assert_eq!(release.assets.len(), 1);
+        assert_eq!(release.assets[0].url, asset, "tag and filename spelling is preserved");
+        assert!(download_url_under(
+            "https://github.com/StoryTold/PhotoCraft/releases/download/V1/Artifact.ZIP",
+            &download_prefix("storytold/photocraft")
+        ));
+        for bad in [
+            "https://github.com/storytold/photocraft-other/releases/download/v1/a.zip",
+            "https://github.com/other/photocraft/releases/download/v1/a.zip",
+            "https://github.com.evil.example/storytold/photocraft/releases/download/v1/a.zip",
+            "http://github.com/storytold/photocraft/releases/download/v1/a.zip",
+            "https://github.com/storytold/photocraft/releases/download/../a.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/../../../other/repo/a.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/a%2f.zip",
+            "https://github.com/storytold/photocraft/releases/download/v1/a.zip?x=1",
+            "https://github.com/storytold/photocraft/releases/download/v1/a.zip#fragment",
+            "https://github.com/storytold/photocraft/RELEASES/download/v1/a.zip",
+        ] {
+            assert!(!download_url_under(bad, &prefix), "{bad}");
+        }
+        let expected = expected_download_url("StoryTold/PhotoCraft", "v0.5.0", "PhotoCraft-Linux.tar.gz").unwrap();
+        assert!(same_download_url(asset, &expected), "the install check accepts the API's preserved link");
+        assert!(!same_download_url(&asset.replace("v0.5.0", "V0.5.0"), &expected), "tag spelling stays exact");
+        assert!(!same_download_url(&asset.replace("PhotoCraft-Linux", "photocraft-linux"), &expected), "file spelling stays exact");
+        for bad in [asset.replace("/releases/", "/RELEASES/"), asset.replace("https://", "http://"), asset.replace("/photocraft/", "/foreign/")] {
+            assert!(!same_download_url(&bad, &expected), "{bad}");
+        }
+        // Local mirrors retain their filesystem's case-sensitive path semantics.
+        assert!(!download_url_under_mirror("https://mirror.example/Repo/v1/a.zip", "https://mirror.example/repo/"));
     }
 
     #[test]
