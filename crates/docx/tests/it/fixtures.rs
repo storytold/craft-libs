@@ -5650,6 +5650,14 @@ fn run_defaults_naming_only_theme_slots_take_the_themes_fonts() {
     let ea = read(r#"<w:rFonts w:eastAsiaTheme="minorEastAsia"/>"#, true);
     assert_eq!(ea, (tnr.clone(), None, tnr.clone(), Some(craft_wordmodel::props::ThemeFont::MinorEastAsia)));
     assert_eq!(read("", true), (tnr.clone(), tnr.clone(), tnr.clone(), None));
+    // A fixed complex-script font beside a theme slot: the theme's font, as Word draws it.
+    for bidi in [true, false] {
+        assert_eq!(
+            read(r#"<w:rFonts w:cs="Arial" w:cstheme="minorBidi"/>"#, bidi),
+            (tnr.clone(), tnr.clone(), s("Tahoma"), None),
+            "bidi language {bidi}"
+        );
+    }
     // Drawn: the Thai in the theme's Thai font.
     let styles = format!(
         r#"<w:styles {W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:cstheme="minorBidi"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
@@ -5658,4 +5666,36 @@ fn run_defaults_naming_only_theme_slots_take_the_themes_fonts() {
     let parts = [("word/styles.xml", styles.as_str()), ("word/theme/theme1.xml", theme)];
     let d = craft_docx::read(&docx("<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>", &rels, &parts)).unwrap();
     assert_eq!(d.styles.resolve_char(None, &Default::default()).complex().font, "Tahoma");
+}
+
+/// A package without a styles part has Word's own defaults, as one whose styles part names none
+/// (measured in Word for Windows): the theme's body font (Aptos without a theme) at 12 pt, 15 pt
+/// complex script in the theme's Thai font (Cordia New without a theme), 8 pt after, single
+/// spacing. And a run naming a fixed complex-script font beside a `w:cstheme` slot draws in the
+/// theme's font, minor or major.
+#[test]
+fn a_package_without_a_styles_part_has_words_own_defaults() {
+    use craft_wordmodel::props::{LineSpacing, ParaProps};
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Georgia"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Angsana UPC"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/><a:ea typeface=""/><a:cs typeface=""/><a:font script="Thai" typeface="Leelawadee UI"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let settings = format!(r#"<w:settings {W_NS}><w:themeFontLang w:val="en-US" w:bidi="th-TH"/></w:settings>"#);
+    let body = r#"<w:p><w:r><w:rPr><w:cs/></w:rPr><w:t>ไทย</w:t></w:r><w:r><w:rPr><w:rFonts w:cs="Tahoma" w:cstheme="majorBidi"/><w:cs/></w:rPr><w:t>ไทย</w:t></w:r></w:p>"#;
+    for (with_theme, latin, thai) in [(false, "Aptos", "Cordia New"), (true, "Verdana", "Leelawadee UI")] {
+        let (rels, parts): (Vec<(&str, &str, &str)>, Vec<(&str, &str)>) = if with_theme {
+            (
+                vec![("rId1", "theme", "theme/theme1.xml"), ("rId2", "settings", "settings.xml")],
+                vec![("word/theme/theme1.xml", theme), ("word/settings.xml", settings.as_str())],
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let d = craft_docx::read(&docx(body, &rels, &parts)).unwrap();
+        let c = d.styles.resolve_char(None, &Default::default());
+        assert_eq!((c.font.as_str(), c.size, c.complex().font.as_str(), c.complex().size), (latin, 12.0, thai, 15.0), "theme {with_theme}");
+        let p = d.styles.resolve_para(&ParaProps::default());
+        assert_eq!((p.space_after, p.line_spacing), (8.0, LineSpacing::Multiple(1.0)), "theme {with_theme}");
+        if with_theme {
+            let run = &paras(&d)[0].runs[1].props;
+            assert_eq!(d.styles.resolve_char(None, run).complex().font, "Angsana UPC", "majorBidi over Tahoma");
+        }
+    }
 }

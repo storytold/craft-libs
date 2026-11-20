@@ -100,13 +100,13 @@ impl Reader<'_> {
                 if c.font.is_none() {
                     c.font = unset();
                 }
-                if c.font_cs.is_none() {
-                    c.font_cs = match c.font_cs_theme {
-                        Some(t @ (ThemeFont::MajorBidi | ThemeFont::MinorBidi)) => Some(self.pc.default_bidi_theme_font(t.is_major())),
-                        Some(t) => self.pc.theme_font(t.as_str()).or_else(unset),
-                        None => unset(),
-                    };
-                }
+                // A theme slot supersedes a fixed font beside it (measured in Word for Windows:
+                // `w:cs="Tahoma" w:cstheme="minorBidi"` draws Thai in the theme's Thai font).
+                c.font_cs = match c.font_cs_theme {
+                    Some(t @ (ThemeFont::MajorBidi | ThemeFont::MinorBidi)) => Some(self.pc.default_bidi_theme_font(t.is_major())),
+                    Some(t) => self.pc.theme_font(t.as_str()).or(c.font_cs.take()).or_else(unset),
+                    None => c.font_cs.take().or_else(unset),
+                };
                 if c.font_ea.is_none() && c.font_ea_theme.is_none() {
                     c.font_ea = unset();
                 }
@@ -130,9 +130,23 @@ impl Reader<'_> {
     }
 
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
+        let Some(root) = self.xml(path)? else { return Ok(()) };
+        self.styles_from(&root);
+        Ok(())
+    }
+
+    /// A package without a styles part has Word's own defaults, as one whose styles part names none
+    /// (measured in Word for Windows: the theme's body font at 12 pt, 15 pt complex script in the
+    /// theme's Thai font, 8 pt after, single spacing), not the model's built-in ones.
+    pub(super) fn read_no_styles(&mut self) {
+        if let Ok(root) = crate::xml::parse(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#) {
+            self.styles_from(&root);
+        }
+    }
+
+    fn styles_from(&mut self, root: &El) {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
-        let Some(root) = self.xml(path)? else { return Ok(()) };
         // The default paragraph style must be called `Normal` in our model.
         let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
         if !has_normal
@@ -268,7 +282,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
-        self.no_default_table_style = !self.has_default_table_style(&root);
+        self.no_default_table_style = !self.has_default_table_style(root);
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
@@ -317,7 +331,6 @@ impl Reader<'_> {
             sheet.add_default_gallery();
         }
         self.doc.styles = Arc::new(sheet);
-        Ok(())
     }
 
     /// A table style's table-level formatting and conditional formats. The `wholeTable` region

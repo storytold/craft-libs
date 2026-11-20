@@ -308,9 +308,12 @@ impl PropCtx {
                     // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
                     // `docDefaults` font, and so does a hinted run, as in Word.
                     c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
-                    // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
-                    // left to inherit: the theme's per-script fonts aren't read.
-                    c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // The complex-script font (Thai, Persian, Arabic, Hebrew text). A `w:cstheme` slot
+                    // supersedes the fixed font beside it, as the Latin slots do (measured in Word for
+                    // Windows: a run naming `w:cs` and `w:cstheme` draws in the theme's font, minor or
+                    // major).
+                    let fixed_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    c.font_cs = k.attr("w:cstheme").filter(|t| ThemeFont::parse(t).is_some()).and_then(|t| self.theme_font(t)).or(fixed_cs);
                     // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
                     // is left to inherit, like `w:cstheme`.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);

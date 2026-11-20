@@ -154,7 +154,11 @@ fn every_char_prop_round_trips() {
     let p = paras(&r)[0];
     assert_eq!(p.text, "plain everything auto");
     assert_eq!(p.runs.len(), 3);
-    assert_eq!(p.runs[1].props, all);
+    // A `w:cstheme` slot supersedes the fixed complex-script font beside it, as in Word: the run
+    // comes back with the theme's font there.
+    let back = &p.runs[1].props;
+    assert!(back.font_cs.is_some() && back.font_cs != all.font_cs, "{:?}", back.font_cs);
+    assert_eq!(*back, CharProps { font_cs: back.font_cs.clone(), ..all.clone() });
     assert_eq!(p.runs[2].props, auto);
     assert_eq!(p.runs[0].props, CharProps::default());
 }
