@@ -174,6 +174,9 @@ impl Type1Font {
             Kind::Cff(c) => c.code_to_ps_name(code),
             Kind::Type1(t) => t.code_to_ps_name(code),
         }
+    }
+
+    fn char_code_to_unicode(&self, code: u8) -> Option<BfString> {
         // PdfCraft patch (#3169, #3170): a name outside the glyph list still reads by the
         // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
         // numbers the glyph (`C39`, `c251`) says nothing about the character and reads as

@@ -451,13 +451,6 @@ impl ColorSpace {
         matches!(self.0.as_ref(), ColorSpaceType::DeviceRgb)
     }
 
-    // PdfCraft patch (63).
-    /// Whether this is `/DeviceCMYK` itself, not an ICC-based or default colour space that
-    /// stands in for it.
-    pub(crate) fn is_device_cmyk(&self) -> bool {
-        matches!(self.0.as_ref(), ColorSpaceType::DeviceCmyk)
-    }
-
     /// Get the number of components of the color space.
     pub(crate) fn num_components(&self) -> u8 {
         match self.0.as_ref() {
@@ -2374,7 +2367,8 @@ impl ColorSpace {
         };
         count_tint_transform_runs(1);
         function
-            .eval(components.iter().copied().collect())
+            .as_ref()
+            .and_then(|f| f.eval(components.iter().copied().collect()))
             .unwrap_or(alternate.initial_color())
     }
 
@@ -2742,16 +2736,6 @@ impl ToRgb for PlateSpace {
     }
 }
 
-/// PdfCraft patch (70): `input`, 8-bit `DeviceCMYK` pixels (four bytes each), converted to
-/// 8-bit sRGB in `output` (three bytes each) through the CMYK profile pages are drawn with,
-/// so a colour blended in CMYK lands where the same colour painted directly does.
-pub fn cmyk_to_srgb8(input: &[u8], output: &mut [u8]) -> Option<()> {
-    if input.len() % 4 != 0 || output.len() != input.len() / 4 * 3 {
-        return None;
-    }
-    CMYK_TRANSFORM.convert_u8(input, output)
-}
-
 /// The CMYK profile pages are drawn with.
 pub(crate) const CMYK_PROFILE: &[u8] = include_bytes!("../assets/CGATS001Compat-v2-micro.icc");
 
@@ -2934,7 +2918,7 @@ impl ColorSpace {
             _ => return None,
         };
         if alternate.is_device_cmyk()
-            && let Some(cmyk) = transform.eval(components.clone())
+            && let Some(cmyk) = transform.as_ref().and_then(|f| f.eval(components.clone()))
             && let [c, m, y, k] = cmyk[..]
         {
             return Some(SpotAlternate::Cmyk([c, m, y, k].map(unit)));

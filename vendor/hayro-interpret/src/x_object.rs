@@ -284,70 +284,13 @@ pub(crate) fn interpret_form_contents<'a>(
     });
 
     interpret(
-        iter,
+        TypedIter::new(x_object.decoded.as_ref()),
         &Resources::from_scope(x_object.resources.clone(), resources.clone()),
         context,
         device,
     );
 
     device.pop_clip_path();
-}
-
-/// PdfCraft patch (67): draws a non-isolated knockout group entered at full opacity, without a
-/// soft mask and with Normal blending, once per blend mode its elements use. The Normal pass
-/// finds the other modes; there are at most as many passes as blend modes.
-fn draw_knockout_passes<'a>(
-    x_object: &FormXObject<'a>,
-    resources: &Resources<'a>,
-    context: &mut Context<'a>,
-    device: &mut impl Device<'a>,
-) {
-    let clip = ClipPath {
-        path: context.get().ctm
-            * Rect::new(
-                x_object.bbox[0] as f64,
-                x_object.bbox[1] as f64,
-                x_object.bbox[2] as f64,
-                x_object.bbox[3] as f64,
-            )
-            .to_path(0.1),
-        fill: FillRule::NonZero,
-    };
-    // Each pass starts from the same marked-content state, also after a stream that leaves a
-    // `BDC` open.
-    let visibility = context.ocg_state.visibility();
-    let mut modes = vec![BlendMode::Normal];
-    let mut pass = 0;
-    while let Some(&mode) = modes.get(pass) {
-        context.ocg_state.set_visibility(visibility.clone());
-        context.save_state();
-        device.push_transparency_group(1.0, None, mode);
-        device.set_knockout();
-        device.begin_knockout_pass(mode);
-        device.set_soft_mask(None);
-        device.set_blend_mode(BlendMode::Normal);
-        device.push_clip_path(&clip);
-        interpret(
-            TypedIter::new(x_object.decoded.as_ref()),
-            &Resources::for_form(x_object.resources.clone(), resources.clone()),
-            context,
-            device,
-        );
-        device.pop_clip_path();
-        let others = device.end_knockout_pass();
-        device.pop_transparency_group();
-        context.restore_state(device);
-        context.path_mut().truncate(0);
-        if pass == 0 {
-            for other in others {
-                if !modes.contains(&other) {
-                    modes.push(other);
-                }
-            }
-        }
-        pass += 1;
-    }
-    context.ocg_state.set_visibility(visibility);
 }
 
 /// Knockout patch (pdfcraft #4898): draws a non-isolated knockout group entered at full opacity,

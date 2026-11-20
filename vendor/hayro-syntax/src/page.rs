@@ -1143,12 +1143,12 @@ mod page_tree_tests {
             let (width, height) = page.render_dimensions();
             assert!((1.0..=1.000001).contains(&width) && (1.0..=1.000001).contains(&height), "unit={unit}: {width} by {height}");
         }
-        // A nearly-zero crop box still falls back to A4.
+        // A nearly-zero crop box still falls back to US Letter (PdfCraft patch 44).
         for unit in [1.0, 4096.0, 75000.0] {
             for side in [0.0, 0.0001] {
                 let pdf = Pdf::new(raw_crop_unit_page(unit, [0.0, 0.0, side, side])).unwrap();
                 let page = &pdf.pages()[0];
-                let expected = (595.2755905511812_f64 as f32, 841.8897637795277_f64 as f32);
+                let expected = (LETTER.width() as f32, LETTER.height() as f32);
                 assert_eq!(page.base_dimensions(), expected, "unit={unit}, side={side}");
                 assert_eq!(page.render_dimensions(), (expected.0 * unit as f32, expected.1 * unit as f32));
             }

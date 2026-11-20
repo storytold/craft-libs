@@ -876,10 +876,18 @@ impl XRef {
                 let data = repr.data.get_with(obj_stream_id, &ctx)?;
                 // PdfCraft patch: the offset table is parsed once per stream (see Data).
                 let offsets = repr.data.object_offsets(obj_stream_id, || {
-                    let stream = self.object_stream(obj_stream_id, &ctx)?;
-                    ObjectStream::offsets(stream, data)
+                    let _loading = repr.data.enter_loading(obj_stream_id)?;
+                    let Fetched::Object(dict) = self.fetch::<Dict<'_>>(obj_stream_id, &ctx)? else {
+                        return None;
+                    };
+                    let num_objects = dict.get::<usize>(N)?;
+                    let first_offset = dict.get::<usize>(FIRST)?;
+                    read_object_stream_index(num_objects, first_offset, data)
                 })?;
                 let object_stream = ObjectStream::with_offsets(offsets, data, &ctx);
+                if let Some(next) = object_stream.reference(index) {
+                    return Some(Fetched::Reference(next));
+                }
                 object_stream.get(index).map(Fetched::Object)
             }
         }
