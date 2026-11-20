@@ -660,6 +660,32 @@ fn a_bulleted_body_keeps_levels_bullets_and_margins() {
 
 /// Character runs: bold, italic and underline bits, the font by slot, the size, and an RGB or a
 /// scheme slot of the slide's scheme as the colour.
+/// A run of no characters is skipped: it neither formats the text nor uses up the runs read, so a
+/// run after it still formats the text.
+#[test]
+fn zero_length_runs_are_skipped() {
+    let runs = [plain(0), plain(0), plain(0), plain(0), char_run(4, 1, 40, 1, [0, 0, 0, 1])];
+    let body = text(b"abc", &runs, &[para_run(0, false, 0, 2, 0), para_run(4, false, 0, 1, 0)], 1, [0; 4], BODY);
+    let p = deck_of(vec![shape_95([-2362, -1613, -518, -1325], Some(body))], &[]);
+    let para = &body_of(&p.slides[0].shapes[0]).paragraphs[0];
+    let r = &para.runs[0].props;
+    assert_eq!((para.runs[0].text.as_str(), r.font.as_deref(), r.size, r.bold), ("abc", Some("Arial"), Some(40.0), Some(true)));
+    assert_eq!(para.props.align, Some(Align::Center));
+}
+
+/// The font table is the first font list holding a face: a list whose only face is cut short
+/// gives way to a later one.
+#[test]
+fn the_font_table_is_the_first_list_with_a_face() {
+    let cut = container(4022, 9, &[rec(4023, 0, 0, &[0; 8])]);
+    let lists = [container(2005, 0x19, &[cut, slot_end(0)]), container(2005, 0x19, &[font(b"Arial"), slot_end(0)])];
+    let mut s = SlideSpec::new(0x100, 16);
+    s.objects = vec![shape_95([-2362, -1613, -518, -1325], Some(simple_text(b"Hi", [-2362, -1613, -518, -1325], BODY)))];
+    let stream = stream_with(document_atom(5760, 4320, 1), &[slide(&s)], &[master(MASTER, DEFAULT, [0; 4])], container(1010, 0x15, &lists));
+    let p = import(&stream).unwrap();
+    assert_eq!(body_of(&p.slides[0].shapes[0]).paragraphs[0].runs[0].props.font.as_deref(), Some("Arial"));
+}
+
 #[test]
 fn character_runs_keep_their_formatting() {
     let runs = [
@@ -931,7 +957,7 @@ fn hostile_text_never_panics() {
     let t = one(text(b"Hi", &[plain(1000)], &[para_run(u32::MAX, true, 0, 7, 200)], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "Hi");
     assert_eq!(t.paragraphs[0].level, 4, "the level is capped at PowerPoint 95's fifth");
-    // Many zero-length runs: no more are read than the text has characters (plus its end).
+    // Many zero-length runs: skipped, and the text is all there.
     let many = vec![plain(0); 100_000];
     let t = one(text(b"abc", &many, &vec![para_run(0, false, 0, 0, 0); 50_000], 1, [0; 4], BODY)).unwrap();
     assert_eq!(t.text(), "abc");
