@@ -143,6 +143,7 @@ pub fn render_into<'a>(
             options.background[2],
             options.background[3],
         ),
+        ..Default::default()
     };
     catch_unwind(AssertUnwindSafe(|| hayro::render_into(page, cache, &settings, &rs, buffer))).map_err(|_| Error::BackendPanic)?;
     if cancelled() {

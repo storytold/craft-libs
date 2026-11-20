@@ -15,6 +15,8 @@
 //! - [`decode`]: bounded part listing, flat decoding (scan lines and tiles, every compression the
 //!   `exr` crate reads) and writing, on top of the `exr` crate.
 //! - [`deep`]: deep scan lines and tiles (NONE, RLE, ZIPS) and their flattening.
+//! - [`seek`]: any channels, display rows and reduced resolution of a file's flat parts, read from
+//!   a seekable source and delivered band by band (or collected into planes).
 //! - [`stream`]: one flat scan-line part read block by block, for pictures larger than memory.
 //! - [`cryptomatte_samples`]: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
 
@@ -35,5 +37,11 @@ mod decode_tests;
 pub mod deep;
 #[cfg(all(test, feature = "decode"))]
 mod deep_tests;
+#[cfg(feature = "decode")]
+mod dwa_guard;
+#[cfg(feature = "decode")]
+pub mod seek;
+#[cfg(all(test, feature = "decode"))]
+mod seek_tests;
 #[cfg(feature = "decode")]
 pub mod stream;

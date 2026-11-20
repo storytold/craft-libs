@@ -250,12 +250,21 @@ pub fn unpack(bytes: &[u8], w: usize, h: usize, spp: usize, bits: u32, big_endia
 /// The most samples decoding chunk `c` may allocate, charged against the aggregate budget before
 /// anything is decoded: the samples themselves when uncompressed; for lossless JPEG the coded rows
 /// with an eighth of slack (the frame may be coded a little larger than its chunk); for lossy JPEG
-/// the chunk rounded up to the 32-pixel MCU padding `tiffraw` accepts.
+/// the frame its header declares when that fits the chunk rounded up to the 32-pixel MCU padding
+/// `tiffraw` accepts (a 16-row strip is charged 16 rows, not 32), else that padded chunk (decoding
+/// then refuses the frame).
 fn decode_budget(c: &Chunk, l: &RawLayout) -> Option<usize> {
     let spp = l.samples_per_pixel;
     match l.compression {
         1 => c.w.checked_mul(c.h)?.checked_mul(spp),
-        34892 => c.w.checked_next_multiple_of(32)?.checked_mul(c.coded_h.checked_next_multiple_of(32)?)?.checked_mul(spp),
+        34892 => {
+            let (max_w, max_h) = (c.w.checked_next_multiple_of(32)?, c.coded_h.checked_next_multiple_of(32)?);
+            let padded = max_w.checked_mul(max_h)?.checked_mul(spp)?;
+            match crate::tiffraw::lossy_jpeg_dimensions(c.bytes) {
+                Some((w, h)) if w <= max_w && h <= max_h => Some(w.checked_mul(h)?.checked_mul(spp)?.min(padded)),
+                _ => Some(padded),
+            }
+        }
         _ => {
             let coded = c.w.checked_mul(c.coded_h)?.checked_mul(spp)?;
             coded.checked_add(coded / 8)?.checked_add(64)
@@ -333,7 +342,13 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
     for c in &chunks {
         let n = c.w.checked_mul(c.h).and_then(|v| v.checked_mul(spp)).ok_or(Error::TooLarge)?;
         let budget = decode_budget(c, &l).filter(|&b| b <= MAX_SAMPLES).ok_or(Error::TooLarge)?;
-        decoded_samples = decoded_samples.checked_add(budget).ok_or(Error::TooLarge)?;
+        // the chunk's own `w` × `h` × `spp` output is allocated whatever its coded frame declares
+        // (a lossy JPEG smaller than its tile still fills a whole tile), so it is charged too
+        let alloc = budget.max(n);
+        if alloc > MAX_SAMPLES {
+            return Err(Error::TooLarge);
+        }
+        decoded_samples = decoded_samples.checked_add(alloc).ok_or(Error::TooLarge)?;
         if decoded_samples > MAX_DECODED_TILE_SAMPLES {
             return Err(Error::TooLarge);
         }

@@ -646,9 +646,15 @@ pub fn write(scene: &Scene, mtllib: Option<&str>, limits: &Limits) -> Result<Str
     Ok(text)
 }
 
+/// The scene as OBJ text and its MTL material library (`(obj, mtl)`), with `mtllib` naming
+/// the material library file to write next to the OBJ.
+pub fn write_with_mtl(scene: &Scene, mtllib: &str, limits: &Limits) -> Result<(String, String)> {
+    Ok((write(scene, Some(mtllib), limits)?, write_mtl(scene)))
+}
+
 /// The scene's materials as an MTL library, named as [`write`] names them: `Kd`, `d`, `Ke`,
-/// `Ns` (for readers without the PBR extension) with `Pr` and `Pm`, and `map_Kd`, `map_Ke`
-/// and `norm` for images that have a [`Image::uri`].
+/// `Ns` (for readers without the PBR extension) with `Pr` and `Pm`, and `map_Kd`, `map_Ke`,
+/// `norm`, `map_Pc`, and `map_Pcr` for images that have an [`Image::uri`].
 pub fn write_mtl(scene: &Scene) -> String {
     let mut mtl = String::new();
     for (m, name) in scene.materials.iter().zip(material_names(scene)) {
@@ -661,7 +667,13 @@ pub fn write_mtl(scene: &Scene) -> String {
             "newmtl {name}\nKd {} {} {}\nd {}\nKe {} {} {}\nNs {ns}\nPr {r}\nPm {}",
             kd[0], kd[1], kd[2], m.base_color[3], ke[0], ke[1], ke[2], m.metallic
         );
-        for (key, tex) in [("map_Kd", m.base_color_texture), ("map_Ke", m.emissive_texture), ("norm", m.normal_texture)] {
+        for (key, tex) in [
+            ("map_Kd", m.base_color_texture),
+            ("map_Ke", m.emissive_texture),
+            ("norm", m.normal_texture),
+            ("map_Pc", m.clearcoat_texture),
+            ("map_Pcr", m.clearcoat_roughness_texture),
+        ] {
             if let Some(uri) = tex.and_then(|t| scene.images.get(t.image)).and_then(|i| i.uri.as_deref()) {
                 let _ = writeln!(mtl, "{key} {}", uri.replace(['\n', '\r'], " "));
             }
