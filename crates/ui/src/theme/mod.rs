@@ -5,6 +5,9 @@
 
 use egui::{Color32, CornerRadius, Stroke, style::Widgets};
 
+mod glow;
+pub use glow::edge_glow;
+
 /// Background colors for egui's five widget interaction states.
 ///
 /// These are rendering inputs, not a theme schema: applications construct them from their own
