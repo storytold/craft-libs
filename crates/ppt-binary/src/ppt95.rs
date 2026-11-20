@@ -164,18 +164,25 @@ struct Page<'a> {
     master_id: u32,
     /// The [MS-PPT] `SlideLayoutType` number.
     layout: Option<u32>,
+    /// The slide box's flags (1005 +16, +17, +20): whether the slide shows the master's objects,
+    /// uses the master's colour scheme and uses the master's background. A missing box follows.
+    follow_objects: bool,
+    follow_scheme: bool,
     follow_background: bool,
     scheme: Option<Scheme>,
 }
 
 fn page(rec: Rec<'_>) -> Page<'_> {
     let atom = rec.child(rt::SLIDE_ATOM);
+    let flag = |at: usize| rec.child(rt::SLIDE_BOX).and_then(|b| b.u8(at)).is_none_or(|f| f != 0);
     Page {
         rec,
         id: atom.and_then(|a| a.u32(0)).unwrap_or(0),
         master_id: atom.and_then(|a| a.u32(4)).unwrap_or(0),
         layout: rec.child(rt::LAYOUT).and_then(|l| l.u32(0)),
-        follow_background: rec.child(rt::SLIDE_BOX).and_then(|b| b.u8(20)).is_none_or(|f| f != 0),
+        follow_objects: flag(16),
+        follow_scheme: flag(17),
+        follow_background: flag(20),
         scheme: rec.child(rt::SCHEME).and_then(|s| s.child(rt::COLOR_SCHEME)).map(|s| scheme_of(&s)),
     }
 }
@@ -374,14 +381,16 @@ pub fn convert(document: &Rec, app: &dyn Defaults) -> Presentation {
         let Some((kinds, first)) = layouts.get(index) else { continue };
         let kind: Option<LayoutType> = s.layout.map(layout_kind);
         let Some(layout) = kind.and_then(|k| kinds.iter().find(|(lk, _)| *lk == k).map(|(_, id)| *id)).or(*first) else { continue };
-        let scheme = s.scheme.unwrap_or(master_scheme);
+        // A slide following the master's scheme holds a copy of it; its own is used only when it
+        // doesn't follow.
+        let scheme = if s.follow_scheme { master_scheme } else { s.scheme.unwrap_or(master_scheme) };
         let background = if s.follow_background { None } else { background(&s.rec, &scheme).map(|fill| Background::Fill { fill }) };
         let Some(id) = p.alloc_id() else { break };
         let mut shapes = vec![];
         for o in objects(&s.rec).filter_map(|r| object(&r, &env, &scheme, size)) {
             shapes.extend(shape(&mut p, o));
         }
-        p.slides.push(Arc::new(Slide { id: SlideId(id), layout, background, shapes, show_master_shapes: true, ..Default::default() }));
+        p.slides.push(Arc::new(Slide { id: SlideId(id), layout, background, shapes, show_master_shapes: s.follow_objects, ..Default::default() }));
     }
     p
 }
