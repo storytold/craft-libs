@@ -129,18 +129,13 @@ impl<'a> Iterator for ArrayIter<'a> {
         self.reader.skip_white_spaces_and_comments();
 
         if !self.reader.at_end() {
-            // PdfCraft patch (46): the first pass validated each item by skipping it, but a lone
-            // sign (`+`, `++`) is skipped as a number and no number is read from it. Such an item
-            // reads as null in its slot instead of unwrapping the failed read.
-            let start = self.reader.clone();
-            if let Some(item) = self
-                .reader
-                .read_with_context::<MaybeRef<Object<'_>>>(&self.ctx)
-            {
-                return Some(item);
+            // Validation and object parsing can differ on malformed input. End
+            // iteration on failure rather than relying on that parser invariant.
+            let item = self.reader.read_with_context::<MaybeRef<Object<'_>>>(&self.ctx);
+            if item.is_none() {
+                self.reader.jump_to_end();
             }
-            self.reader = skip_unreadable_item(start, &self.ctx)?;
-            return Some(MaybeRef::NotRef(Object::Null(Null)));
+            return item;
         }
 
         None

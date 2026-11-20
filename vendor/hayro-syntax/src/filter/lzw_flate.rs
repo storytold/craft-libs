@@ -1206,7 +1206,7 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                 return None;
             }
 
-            if is_png_predictor {
+            if is_png_predictor && params.control.is_none() {
                 // PdfCraft patch: PNG predictors work on bytes whatever the bit depth, so they are
                 // undone a row at a time on byte slices instead of through the bit-level readers.
                 // In usize (the u8 product overflowed).
@@ -1215,7 +1215,11 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
                 return Some(unfilter_png(&data, row_len, bpp));
             }
 
-            if i == 2 && matches!(params.bits_per_component, 8 | 16) && !bit_level_only() {
+            if i == 2
+                && matches!(params.bits_per_component, 8 | 16)
+                && params.control.is_none()
+                && !bit_level_only()
+            {
                 // PdfCraft patch: whole-byte samples are undone a row at a time on byte slices
                 // instead of through the bit-level readers, which packed samples need.
                 let sample_len = usize::from(params.bits_per_component / 8);
