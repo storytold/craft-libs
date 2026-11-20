@@ -280,7 +280,11 @@ mod x11 {
                         let cookies: Vec<_> =
                             reply.value32()?.take(MAX_TARGETS as usize).filter_map(|atom| self.conn.get_atom_name(atom).ok()).collect();
                         return Some(
-                            cookies.into_iter().filter_map(|cookie| cookie.reply().ok()).filter_map(|name| String::from_utf8(name.name).ok()).collect(),
+                            cookies
+                                .into_iter()
+                                .filter_map(|cookie| cookie.reply().ok())
+                                .filter_map(|name| String::from_utf8(name.name).ok())
+                                .collect(),
                         );
                     }
                     Some(_) => {}
@@ -305,8 +309,20 @@ mod x11 {
             let (conn, screen) = RustConnection::connect(None).ok()?;
             let root = conn.setup().roots.get(screen)?.root;
             let window = conn.generate_id().ok()?;
-            conn.create_window(COPY_DEPTH_FROM_PARENT, window, root, 0, 0, 1, 1, 0, WindowClass::INPUT_ONLY, COPY_FROM_PARENT, &CreateWindowAux::new())
-                .ok()?;
+            conn.create_window(
+                COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .ok()?;
             let (clipboard, property) = (atom(&conn, b"CLIPBOARD")?, atom(&conn, b"CRAFT_CLIPBOARD_PASTE")?);
             Some(Self { conn, window, clipboard, property, deadline: Instant::now() + READ_WAIT })
         }

@@ -363,7 +363,6 @@ pub(crate) fn arrow(pen: &Pen, hollow: bool, toward: Option<Vec2>) {
     let turned: Vec<Vec2> = match toward {
         None => points,
         Some(dir) => {
-
             // The base art's tip points up and left along the bisector of its two edges: 247.5 degrees, y down.
             let base = Vec2::angled(ARROW_TIP_ANGLE);
             let u = unit(dir, base);

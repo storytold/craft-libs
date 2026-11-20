@@ -157,11 +157,7 @@ fn ruler_numbers_skip_margins_and_markers_thin_out_mirror_for_rtl_and_keep_clear
             let stage = craft_ui::testing::stage(ui);
             let (strip, _) = Rulers::strips(ui, stage);
             let origin = if rtl { strip.max.x - ORIGIN * scale } else { strip.min.x + ORIGIN * scale };
-            TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH)
-                .origin(origin)
-                .scale(scale)
-                .right_to_left(rtl)
-                .show_at(ui, strip);
+            TextRuler::new("Ruler", Bind::bound(&mut *values.borrow_mut()), WIDTH).origin(origin).scale(scale).right_to_left(rtl).show_at(ui, strip);
         });
         fixture.settle();
         fixture

@@ -23,13 +23,10 @@ fn a_fill_height_menu_takes_its_content_width_and_the_rows_height() {
         let row = Row::new().fill().show(ui, |ui, _| {
             let footer = Cell::new(Rect::NOTHING);
             let widest = Cell::new(Rect::NOTHING);
-            let menu = Stack::new()
-                .sizing(Sizing::FillHeight)
-                .footer(|ui, _| footer.set(Button::new("About").show(ui).rect))
-                .show(ui, |ui, _| {
-                    Button::new("Home").show(ui);
-                    widest.set(Button::new("Save As a copy").show(ui).rect);
-                });
+            let menu = Stack::new().sizing(Sizing::FillHeight).footer(|ui, _| footer.set(Button::new("About").show(ui).rect)).show(ui, |ui, _| {
+                Button::new("Home").show(ui);
+                widest.set(Button::new("Save As a copy").show(ui).rect);
+            });
             let page = Stack::new().fill().show(ui, |ui, _| {
                 Button::new("Browse").show(ui);
             });

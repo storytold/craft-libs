@@ -96,13 +96,7 @@ fn page_wide(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     } else {
         (strip.min.x + PAGE_MARGIN, egui::Rangef::new(strip.min.x, strip.min.x + PAGE))
     };
-    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN)
-        .unit(inches())
-        .origin(origin)
-        .extent(extent)
-        .scale(1.0)
-        .show_at(ui, strip)
-        .into()
+    TextRuler::new("Ruler", Bind::bound(&mut *values), COLUMN).unit(inches()).origin(origin).extent(extent).scale(1.0).show_at(ui, strip).into()
 }
 
 #[story(TextRuler<'static>, covers = [], drive = Drive::Never)]

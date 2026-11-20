@@ -20,8 +20,8 @@ use craft_ui::contract::{Bind, CanvasGesture, CollectionEvent, Props as _, Sampl
 use craft_ui::dialog::{
     ButtonPlace, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
-use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::layout_components::Stack;
+use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::overlay::CloseReason;
@@ -247,9 +247,8 @@ impl TabbedBody<'_> {
     fn custom_page(&self, ui: &mut Ui, memory: &mut ColorPickerMemory, held: &mut Mixed<PickedColor>) {
         let models: Vec<&dyn ColorModel> = builtin_models().into_iter().filter(|model| model.default_on().compact).collect();
         let mut model: Option<&'static str> = memory.model.as_deref().and_then(|id| models.iter().map(|known| known.id()).find(|known| *known == id));
-        let mut picker = ColorPicker::new(self.title.clone(), Bind::bound_mixed(held))
-            .layout(ColorPickerLayout::Compact)
-            .shown_model(Bind::bound(&mut model));
+        let mut picker =
+            ColorPicker::new(self.title.clone(), Bind::bound_mixed(held)).layout(ColorPickerLayout::Compact).shown_model(Bind::bound(&mut model));
         if let Some(compare) = self.compare {
             picker = picker.compare(compare);
         }

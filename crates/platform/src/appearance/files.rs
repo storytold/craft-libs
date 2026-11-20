@@ -19,7 +19,8 @@ const CAP: u64 = 256 * 1024;
 /// reduced motion wins. A file that is absent, over 256 KiB or not UTF-8 says nothing.
 pub(crate) fn reduced_motion_from_files(config_home: &Path) -> Option<bool> {
     let text = |file: &str| read_capped(&config_home.join(file));
-    let kde = text("kdeglobals").and_then(|t| ini_value(&t, "KDE", "AnimationDurationFactor").and_then(|v| v.parse::<f64>().ok()).and_then(kde_factor_reduces));
+    let kde = text("kdeglobals")
+        .and_then(|t| ini_value(&t, "KDE", "AnimationDurationFactor").and_then(|v| v.parse::<f64>().ok()).and_then(kde_factor_reduces));
     let gtk = ["gtk-4.0/settings.ini", "gtk-3.0/settings.ini"]
         .map(|file| text(file).and_then(|t| ini_value(&t, "Settings", "gtk-enable-animations").and_then(gtk_switch_reduces)));
     let mut answer = None;

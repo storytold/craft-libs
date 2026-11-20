@@ -5,8 +5,7 @@ use std::rc::Rc;
 
 use craft_behavior::Mixed;
 use craft_color_ui::ui::{
-    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning,
-    PickedColor,
+    ColorPicker, ColorPickerDialog, ColorPickerDialogLayout, ColorPickerLayout, ColorPickerTab, ColorPopover, ColorReadout, ColorWarning, PickedColor,
 };
 use craft_host::{AppInfo, Host};
 use craft_theme::{ColorModel, HsbModel, LabModel, ModelValues, OklchModel, RgbModel, Rgba, Size, Srgba, ThemeId};
@@ -409,8 +408,11 @@ fn the_tabbed_colors_dialog_opens_on_its_tab_and_answers_from_either_page() {
     let ctx = fixture.ctx().clone();
     let id = dialog_id(("color-picker", "fill"));
     let colour = |hex: &str| Srgba::from_hex(hex).expect("a colour");
-    let cells: Vec<(Label, Srgba)> =
-        ["#ff0000", "#00ff00", "#0000ff", "#ffff00"].iter().enumerate().map(|(at, hex)| (Label::from(format!("Standard {at}")), colour(hex))).collect();
+    let cells: Vec<(Label, Srgba)> = ["#ff0000", "#00ff00", "#0000ff", "#ffff00"]
+        .iter()
+        .enumerate()
+        .map(|(at, hex)| (Label::from(format!("Standard {at}")), colour(hex)))
+        .collect();
     let greys = vec![(Label::from("Gray 1"), colour("#808080"))];
 
     dialogs.borrow_mut().open(

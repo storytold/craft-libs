@@ -838,8 +838,7 @@ fn run_pass(ui: &mut Ui, cx: &mut BodyCx<'_>, held: &mut Held<'_, PageViewState>
         in_view.x1 + in_view.width(),
         in_view.y1 + reach * in_view.height(),
     );
-    let mut keep: Vec<usize> =
-        drawn.row.clone().filter(|&p| p < drawn.layout.rects.len() && overlaps(band_rect(&drawn.layout, p), around)).collect();
+    let mut keep: Vec<usize> = drawn.row.clone().filter(|&p| p < drawn.layout.rects.len() && overlaps(band_rect(&drawn.layout, p), around)).collect();
     keep.extend(rows.iter().copied().chain(near.iter().map(|&(page, _)| page)));
     keep.sort_unstable();
     keep.dedup();

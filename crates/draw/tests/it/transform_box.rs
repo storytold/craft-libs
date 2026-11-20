@@ -1087,7 +1087,12 @@ fn the_rotate_handle_turns_the_box_about_its_reference_point_and_the_rest_of_the
 #[trial]
 fn with_alt_as_the_snap_key_alt_suspends_snapping_and_no_alt_press_moves_the_reference_point() {
     // (os, the keys held, whether the corner snaps onto 310)
-    let cases = [(Platform::Mac, None, true), (Platform::Mac, Some(Mods::ALT), false), (Platform::Mac, Some(Mods::CTRL), true), (Platform::Windows, Some(Mods::ALT), false)];
+    let cases = [
+        (Platform::Mac, None, true),
+        (Platform::Mac, Some(Mods::ALT), false),
+        (Platform::Mac, Some(Mods::CTRL), true),
+        (Platform::Windows, Some(Mods::ALT), false),
+    ];
     for (os, held, snaps) in cases {
         let mut h = harness(BoxState::from_rect(RECT), |config| {
             config.snap = true;
@@ -1133,7 +1138,9 @@ fn a_turned_box_shows_resize_arrows_along_its_own_axes() {
     let level = BoxState::from_rect(RECT);
     let turned = level.turned_about_pivot(30f64.to_radians());
     // Level: the corner's arrow at 45°, the edge's at 0°. Turned by 30°: 75° and 30°.
-    for (state, corner, edge) in [(level, CursorIcon::ResizeNwSe, CursorIcon::ResizeHorizontal), (turned, CursorIcon::ResizeVertical, CursorIcon::ResizeNwSe)] {
+    for (state, corner, edge) in
+        [(level, CursorIcon::ResizeNwSe, CursorIcon::ResizeHorizontal), (turned, CursorIcon::ResizeVertical, CursorIcon::ResizeNwSe)]
+    {
         let mut h = harness(state, |_| {});
         let at_corner = state.quad[2];
         let at_edge = state.quad[1].midpoint(state.quad[2]);

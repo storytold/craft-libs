@@ -356,7 +356,8 @@ impl<'a> ListManager<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ListManagerOutput {
-        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, name_box, open, name_check, cancel_label, under } = self;
+        let ListManager { title, name_label, entries, actions, empty, note, searchable, name, name_box, open, name_check, cancel_label, under } =
+            self;
         let under = RefCell::new(under);
         // The dialog keeps the text unless the caller binds it; a kept text starts each open from `name`.
         let kept = name_box.is_none();

@@ -12,9 +12,9 @@ use crate::contract::{
     Show as _, WordSetCx as _,
 };
 use crate::primitives::{DataMode, DataWidth, PaintShape};
-use crate::runtime::access::{Name, SubDecl, SubNode, report_sub};
 use crate::primitives::{IconSpec, TextRun};
 use crate::runtime::access::items::{HeaderCell, report_header};
+use crate::runtime::access::{Name, SubDecl, SubNode, report_sub};
 use crate::runtime::commands::{self, CommandRef, CommandSet, CommandState};
 use crate::runtime::egui::{alloc, child};
 use crate::runtime::env::{Env, Label};
@@ -414,9 +414,7 @@ impl Header {
             }
             let part = pcx.part(HEADER.at(hash), shown(rect)).sense(sense);
             let part = if hosted { part } else { part.focusable() };
-            part.priority(HitPriority::new(HitLevel::Body, 0))
-                .state_layer()
-                .tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
+            part.priority(HitPriority::new(HitLevel::Body, 0)).state_layer().tooltip(spec.tip.clone().unwrap_or_else(|| help.clone()));
             if spec.resizable {
                 let edge = if rtl {
                     Rect::from_min_size(rect.min, Vec2::new(grip, rect.height()))
@@ -584,7 +582,8 @@ impl Header {
             cx.active_part().filter(|part| part.key == HEADER).and_then(|part| self.cells.iter().position(|cell| Some(cell.hash) == part.index));
         let keyed = active.is_some() && (cx.core.intents.take(Intent::Activate) || cx.activation().is_some_and(|activation| activation.by_key));
         let remove_at = cx.active_part().filter(|part| part.key == REMOVE).and_then(|part| part.index);
-        let keyed_remove = remove_at.is_some() && (cx.core.intents.take(Intent::Activate) || cx.activation().is_some_and(|activation| activation.by_key));
+        let keyed_remove =
+            remove_at.is_some() && (cx.core.intents.take(Intent::Activate) || cx.activation().is_some_and(|activation| activation.by_key));
         for at in 0..self.cells.len() {
             let (rect, hash, spec) = (self.cells[at].rect, self.cells[at].hash, self.cells[at].spec);
             let (key, sortable, movable, resizable) = {

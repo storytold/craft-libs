@@ -171,7 +171,9 @@ pub(crate) fn run(core: &super::CxCore<'_>, input: TipIn<'_>) {
             part.hovered || keyboard,
             Some(part.part),
         ),
-        None => (text_of(core, input.shows_label, input.canvas_control, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None),
+        None => {
+            (text_of(core, input.shows_label, input.canvas_control, input.message), own_spec, core.rect, core.response.hovered() || keyboard, None)
+        }
     };
     let call = TipCall {
         ctx: &core.ctx,

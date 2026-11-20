@@ -168,29 +168,33 @@ fn stand_in_print_helper() {
         }
     }
     let refuses = mode == "sending";
-    let result = isolated::helper(&directory, move |token| if refuses { false } else { token.cancel() }, |pdf, job, _token| {
-        assert_eq!(pdf, PDF);
-        assert_eq!(job.printer.as_deref(), Some("test queue"));
-        std::fs::write(marks.join("driver"), b"driver entered").unwrap();
-        match mode.as_str() {
-            "held" => {
-                let provider = Mutex::new(());
-                let _held = provider.lock();
-                loop {
-                    std::thread::park();
+    let result = isolated::helper(
+        &directory,
+        move |token| if refuses { false } else { token.cancel() },
+        |pdf, job, _token| {
+            assert_eq!(pdf, PDF);
+            assert_eq!(job.printer.as_deref(), Some("test queue"));
+            std::fs::write(marks.join("driver"), b"driver entered").unwrap();
+            match mode.as_str() {
+                "held" => {
+                    let provider = Mutex::new(());
+                    let _held = provider.lock();
+                    loop {
+                        std::thread::park();
+                    }
                 }
-            }
-            "crash" => std::process::exit(7),
-            "sending" => {
-                std::fs::write(marks.join("sending"), b"sending").unwrap();
-                while !marks.join("release").exists() {
-                    std::thread::sleep(Duration::from_millis(5));
+                "crash" => std::process::exit(7),
+                "sending" => {
+                    std::fs::write(marks.join("sending"), b"sending").unwrap();
+                    while !marks.join("release").exists() {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Ok("spooled synthetic job".into())
                 }
-                Ok("spooled synthetic job".into())
+                _ => Ok("spooled synthetic job".into()),
             }
-            _ => Ok("spooled synthetic job".into()),
-        }
-    });
+        },
+    );
     std::process::exit(i32::from(result.is_err()));
 }
 
@@ -220,11 +224,7 @@ fn wait_for(path: &Path) {
 }
 
 /// Runs `submission` on a thread with the child in `mode`; the receiver gets its input folder.
-fn submit_in(
-    submission: &Submission,
-    marks: &Path,
-    mode: &'static str,
-) -> (std::thread::JoinHandle<Result<String, String>>, Receiver<PathBuf>) {
+fn submit_in(submission: &Submission, marks: &Path, mode: &'static str) -> (std::thread::JoinHandle<Result<String, String>>, Receiver<PathBuf>) {
     let worker = submission.clone();
     let marks = marks.to_path_buf();
     let (folder, folders) = channel();
@@ -353,8 +353,13 @@ fn helper_crashes_are_errors_and_inputs_are_bounded() {
     let folder = tempfile::tempdir().unwrap();
     std::fs::write(folder.path().join("job.json"), serde_json::to_vec(&Request::from_job(&job())).unwrap()).unwrap();
     std::fs::write(folder.path().join("input.pdf"), PDF).unwrap();
-    let mut child =
-        helper_command(folder.path(), marks.path(), "held").unwrap().stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+    let mut child = helper_command(folder.path(), marks.path(), "held")
+        .unwrap()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
     let mut input = child.stdin.take().unwrap();
     input.write_all(b"start\n").and_then(|_| input.flush()).unwrap();
     wait_for(&marks.path().join("driver"));

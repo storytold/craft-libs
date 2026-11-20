@@ -168,7 +168,12 @@ impl Submission {
 
     /// Publish a terminal state on every result, waking a cancellation caller awaiting an ack.
     /// `command` makes the helper process for the private input folder.
-    pub(crate) fn submit_with(&self, pdf: &[u8], job: &crate::Job, command: impl FnOnce(&Path) -> std::io::Result<Command>) -> Result<String, String> {
+    pub(crate) fn submit_with(
+        &self,
+        pdf: &[u8],
+        job: &crate::Job,
+        command: impl FnOnce(&Path) -> std::io::Result<Command>,
+    ) -> Result<String, String> {
         let result = self.run(pdf, job, command);
         let mut state = self.state();
         if !matches!(*state, State::Cancelled) {
@@ -364,9 +369,7 @@ pub fn helper_main() -> Option<i32> {
         return None;
     }
     let result = args.next().ok_or_else(|| "print helper directory missing".to_owned()).and_then(|dir| {
-        helper(Path::new(&dir), crate::Cancel::cancel, |pdf, job, cancel| {
-            crate::submit_cancellable(pdf, job, &mut |_, _| {}, cancel).map_err(error)
-        })
+        helper(Path::new(&dir), crate::Cancel::cancel, |pdf, job, cancel| crate::submit_cancellable(pdf, job, &mut |_, _| {}, cancel).map_err(error))
     });
     if let Err(message) = &result {
         let _ = emit(&Event::Done(Err(message.clone())));

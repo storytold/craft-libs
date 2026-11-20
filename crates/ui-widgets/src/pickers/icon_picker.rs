@@ -196,8 +196,9 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + 'static> IconPicker<'a, K> {
         let mut category = 0;
         if group_display == IconPickerGroups::Filter {
             category = cx.memory::<Category>().0.min(groups.len());
-            let tabs: Vec<(usize, String)> =
-                std::iter::once((0, words.all.as_str().to_owned())).chain(groups.iter().enumerate().map(|(at, group)| (at + 1, group.name.clone()))).collect();
+            let tabs: Vec<(usize, String)> = std::iter::once((0, words.all.as_str().to_owned()))
+                .chain(groups.iter().enumerate().map(|(at, group)| (at + 1, group.name.clone())))
+                .collect();
             let source = keyed(&tabs, |tab: &(usize, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
             let strip = TabStrip::new(label.clone())
                 .kind(TabKind::Text)

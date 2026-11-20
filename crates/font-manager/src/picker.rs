@@ -14,11 +14,11 @@ use craft_behavior::{Codec, EditEvent, IconId, Mixed, NotAValue, PartKey, Sense,
 use craft_behavior::{HitLevel, HitPriority, NavMove, Preview};
 use craft_font_catalog::Catalog;
 use craft_host::Section;
+use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::contract::{
     Bind, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, MeasureCx, Outcome, OverlayUi, Overlays as _, PaintUi, PartsCx,
     Pointer as _, Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::buttons::{ControlPlace, IconButton};
 use craft_ui::list::{ThumbSize, TrailingPart};
 use craft_ui::primitives::{IconSpec, TextKey, TextOptions, TextRun};
 use craft_ui::runtime::env::{EnvView, Label};

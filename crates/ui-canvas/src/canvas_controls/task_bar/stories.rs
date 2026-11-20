@@ -61,9 +61,7 @@ fn selection_bar_on_the_other_side(ui: &mut Ui, _: &mut StoryData) -> StoryOutpu
 #[story(TaskBar<'static>, covers = [], drive = Drive::Never)]
 fn selection_bar_kept_while_selected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let corners = turned_frame();
-    on_canvas(ui, |ui, area, _| {
-        TaskBar::selection("Selection", &corners).dismiss(TaskBarDismiss::Keep).show(ui, area, |ui, _| formatting(ui)).output
-    })
+    on_canvas(ui, |ui, area, _| TaskBar::selection("Selection", &corners).dismiss(TaskBarDismiss::Keep).show(ui, area, |ui, _| formatting(ui)).output)
 }
 
 /// The Crop tool's bar: three buttons, the More menu, then Cancel and Done after it.

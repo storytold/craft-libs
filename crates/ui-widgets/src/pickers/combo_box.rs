@@ -104,16 +104,8 @@ impl<'a> ComboBox<'a> {
     /// A combo box named `label` over the text `value`, offering `options`; an option's value is the text it puts in
     /// the field.
     pub fn new(label: impl Into<Label>, value: Bind<'a, String>, options: &'a [Entry<String>]) -> Self {
-        ComboBox {
-            common: Common::new(),
-            value,
-            options,
-            placeholder: None,
-            decorate: None,
-            empty: String::new(),
-            preview: Preview::Unchanged,
-        }
-        .label(label)
+        ComboBox { common: Common::new(), value, options, placeholder: None, decorate: None, empty: String::new(), preview: Preview::Unchanged }
+            .label(label)
     }
 
     /// Previews `text`, led by the pointer or by the keys. The pass reports it only when the previewed text changes,

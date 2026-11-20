@@ -137,7 +137,15 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 // menu level's, then the registered menu bar's (keytips hold their letters with no focus).
                 let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
                 let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
-                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or_else(|| held(menu)).or_else(|| held(menu_bar)).or(focused).map(|id| (id, *chord)));
+                claimed.extend(
+                    owner
+                        .or_else(|| held(focused))
+                        .or_else(|| held(root))
+                        .or_else(|| held(menu))
+                        .or_else(|| held(menu_bar))
+                        .or(focused)
+                        .map(|id| (id, *chord)),
+                );
             }
         }
     }

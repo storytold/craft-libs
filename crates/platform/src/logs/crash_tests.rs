@@ -62,7 +62,10 @@ fn a_panic_report_leaves_out_quoted_text() {
     assert!(take_last().is_none(), "a caught quoted panic is reported once, by the caller");
     let caught = catch(|| -> u8 { panic!("of `half a sentence that {secret} wrote") });
     let message = caught.expect_err("the closure panicked").message;
-    assert!(message.starts_with("of `") && !message.contains("half a sentence") && !message.contains(secret), "an unpaired backtick hides the rest: {message}");
+    assert!(
+        message.starts_with("of `") && !message.contains("half a sentence") && !message.contains(secret),
+        "an unpaired backtick hides the rest: {message}"
+    );
     assert!(take_last().is_none());
     let plain = "index out of bounds: the len is 3 but the index is 5";
     let caught = catch(|| -> u8 { panic!("{plain}") });

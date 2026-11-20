@@ -754,4 +754,3 @@ fn a_pre_edit_and_a_refused_deletion_in_one_frame_interrupt_the_composition() {
         assert_eq!(interrupted, marks, "marks {marks}, split {split}: the composition is interrupted only by an editor that shows marked text");
     }
 }
-

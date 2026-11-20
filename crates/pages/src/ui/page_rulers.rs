@@ -14,8 +14,8 @@ use craft_text::ui::DocUnit;
 use craft_text::ui::ruler::{RulerValues, TabAlign, TextRuler, TextRulerOutput, nudge_size, ruler_text, snap_step, snap_stop};
 use craft_ui::canvas::{RulerTick, Rulers, TickRule};
 use craft_ui::contract::{
-    Access, Bind, Common, Component, Cx, Focus as _, IdSource, Input, MeasureCx, Name, Numeric, Outcome, NoValue, PaintUi, PartsCx, Pointer as _, Props as _, Remember as _,
-    Role, Show as _, Styled as _, WordSetCx as _,
+    Access, Bind, Common, Component, Cx, Focus as _, IdSource, Input, MeasureCx, Name, NoValue, Numeric, Outcome, PaintUi, PartsCx, Pointer as _,
+    Props as _, Remember as _, Role, Show as _, Styled as _, WordSetCx as _,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth, TextRun, Tick, TickEdge, TickRank};
 use craft_ui::runtime::env::{Env, Label};
@@ -28,7 +28,6 @@ use super::view::PlacedPage;
 
 /// One table row border grip, `GRIP.at(i)` for the bottom border of row `i`.
 const GRIP: PartKey = PartKey::new("row");
-
 
 /// The three grip lines across a row grip, in grip-gap steps from its middle.
 const GRIP_LINES: [f32; 3] = [-1.0, 0.0, 1.0];
@@ -319,12 +318,8 @@ impl Component for VerticalRuler<'_> {
         }
         let grips: Vec<Rect> = self.rows.iter().map(|row| self.grip_rect(rect, style, *row)).collect();
         let (lo, hi) = (((page.min.y - self.y(0.0)) / scale).max(0.0), ((page.max.y - self.y(0.0)) / scale).max(0.0));
-        let ticks: Vec<RulerTick> = Rulers::ticks(
-            &text.units,
-            TickRule::of_unit(self.unit.kind),
-            f64::from(scale),
-            (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc),
-        );
+        let ticks: Vec<RulerTick> =
+            Rulers::ticks(&text.units, TickRule::of_unit(self.unit.kind), f64::from(scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
         let marks: Vec<Tick> = ticks
             .iter()
             .map(|tick| self.y((tick.value / per_doc) as f32))
@@ -350,7 +345,11 @@ impl Component for VerticalRuler<'_> {
             let middle = grip.center();
             for step in GRIP_LINES {
                 let at: Pos2 = pos2(middle.x, middle.y + step * style.grip_gap);
-                draw.stroke(&PaintShape::Path(vec![at - vec2(style.grip_reach, 0.0), at + vec2(style.grip_reach, 0.0)]), StrokeWidth::Thin, style.marker);
+                draw.stroke(
+                    &PaintShape::Path(vec![at - vec2(style.grip_reach, 0.0), at + vec2(style.grip_reach, 0.0)]),
+                    StrokeWidth::Thin,
+                    style.marker,
+                );
             }
         }
     }
@@ -488,8 +487,23 @@ impl<'a> PageRulers<'a> {
 
     /// Shows the rulers over the canvas at `canvas_rect`.
     pub fn show_at(self, ui: &mut Ui, canvas_rect: Rect) -> PageRulersOutput {
-        let PageRulers { label, page, mut edges, ruler, column, unit, kind, right_to_left, columns, gaps, rows, gutter, mirrored_even, id, gaps_draggable } =
-            self;
+        let PageRulers {
+            label,
+            page,
+            mut edges,
+            ruler,
+            column,
+            unit,
+            kind,
+            right_to_left,
+            columns,
+            gaps,
+            rows,
+            gutter,
+            mirrored_even,
+            id,
+            gaps_draggable,
+        } = self;
         let (words, interface_rtl) = {
             let env = Env::of(ui);
             (env.words::<PageRulersWords>(), env.view().direction().is_rtl())
@@ -525,10 +539,12 @@ impl<'a> PageRulers<'a> {
         let ruler_out = horizontal.show_at(ui, top_strip);
 
         let vertical_label = Label::from(words.vertical.fill(&[("name", label.as_str())]));
-        let vertical = VerticalRuler::new(vertical_label, page).text(Rangef::new(top as f32, bottom as f32)).unit(unit).rows(rows).show_at(ui, left_strip);
+        let vertical =
+            VerticalRuler::new(vertical_label, page).text(Rangef::new(top as f32, bottom as f32)).unit(unit).rows(rows).show_at(ui, left_strip);
 
         let margins_label = Label::from(words.margins.fill(&[("name", label.as_str())]));
-        let margins = MarginHandles::new(margins_label, page, edges).gutter(gutter).mirrored_even(mirrored_even).unit(unit.kind).show_at(ui, canvas_rect);
+        let margins =
+            MarginHandles::new(margins_label, page, edges).gutter(gutter).mirrored_even(mirrored_even).unit(unit.kind).show_at(ui, canvas_rect);
         PageRulersOutput { ruler: ruler_out, margins, row: vertical.row }
     }
 }

@@ -662,9 +662,8 @@ impl ParagraphDialog {
         ];
         let source = keyed(&tabs[..], |tab: &(ParagraphTab, String)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let strip = TabStrip::new(words.title.clone()).kind(TabKind::Text).shown(self.tab).natural_height(true);
-        let out = strip.show_items(ui, &source, &mut |key, _| {
-            Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone()))
-        });
+        let out = strip
+            .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(String::new, |tab| tab.1.clone())));
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                 && let Some(chosen) = keys.last()
@@ -682,10 +681,8 @@ impl ParagraphDialog {
         RadioGroup::new(words.direction.clone(), Bind::bound(&mut picked)).show(ui, |ui, _| {
             Stack::new().show(ui, |ui, cx| {
                 Text::new(words.direction.clone()).show(ui);
-                let options = [
-                    (super::ParagraphDirection::LeftToRight, &words.left_to_right),
-                    (super::ParagraphDirection::RightToLeft, &words.right_to_left),
-                ];
+                let options =
+                    [(super::ParagraphDirection::LeftToRight, &words.left_to_right), (super::ParagraphDirection::RightToLeft, &words.right_to_left)];
                 for (at, (direction, label)) in options.into_iter().enumerate() {
                     cx.labelled(ui, at, label.clone(), SideLabel::new().layout(FieldLayout::After), Radio::new(Some(direction)));
                 }

@@ -69,7 +69,8 @@ fn honeycomb_cells_touch_without_overlap_and_arrows_follow_neighbours() {
     assert!((first(1) - first(2) - width / 2.0).abs() < 0.5, "the middle row starts half a cell earlier again");
     assert!((first(3) - first(2) - width / 2.0).abs() < 0.5, "the short last row continues the lattice, half a cell after the row above");
     for (at, rect) in rects.iter().enumerate() {
-        let distances: Vec<f32> = rects.iter().enumerate().filter(|(other, _)| *other != at).map(|(_, o)| (o.center() - rect.center()).length()).collect();
+        let distances: Vec<f32> =
+            rects.iter().enumerate().filter(|(other, _)| *other != at).map(|(_, o)| (o.center() - rect.center()).length()).collect();
         let nearest = distances.iter().copied().fold(f32::MAX, f32::min);
         assert!(distances.iter().all(|d| *d >= width - 0.5), "no two cells overlap: cell {at}");
         assert!((nearest - width).abs() < 0.5, "every cell touches a neighbour: cell {at} is {nearest} from the nearest");
@@ -110,7 +111,7 @@ fn the_cell_under_the_pointer_is_previewed_once_until_the_pointer_leaves() {
     let cell = fixture.by_label("Cell 2").expect("a cell").rect;
     fixture.frame(vec![moved(cell.center())]);
     fixture.settle();
-    assert_eq!(reported(&log), vec![Preview::Shows(2)],"moving onto a cell previews it, in one pass");
+    assert_eq!(reported(&log), vec![Preview::Shows(2)], "moving onto a cell previews it, in one pass");
 
     fixture.frame(Vec::new());
     fixture.settle();
@@ -120,5 +121,5 @@ fn the_cell_under_the_pointer_is_previewed_once_until_the_pointer_leaves() {
     let last = fixture.by_label("Cell 7").expect("a cell").rect;
     fixture.frame(vec![moved(Pos2::new(cell.center().x, last.max.y + 40.0))]);
     fixture.settle();
-    assert_eq!(reported(&log), vec![Preview::Ended],"leaving the cells ends the preview, once");
+    assert_eq!(reported(&log), vec![Preview::Ended], "leaving the cells ends the preview, once");
 }

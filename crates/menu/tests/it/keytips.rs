@@ -46,7 +46,8 @@ enum Trial {
 
 /// The controls in the order they show, with their fixed badges: `FB` and `FI` share a first letter, so `Find` takes
 /// `I`, the first free letter of its label.
-const CONTROLS: [(Trial, &str, Option<&str>); 3] = [(Trial::Bold, "Bold", Some("FB")), (Trial::Italic, "Italic", Some("FI")), (Trial::Find, "Find", None)];
+const CONTROLS: [(Trial, &str, Option<&str>); 3] =
+    [(Trial::Bold, "Bold", Some("FB")), (Trial::Italic, "Italic", Some("FI")), (Trial::Find, "Find", None)];
 
 /// The letters whose presses the trials follow into egui.
 const FOLLOWED: [Key; 7] = [Key::F, Key::H, Key::I, Key::Q, Key::T, Key::V, Key::Z];
@@ -124,8 +125,10 @@ impl Rig {
             }
             let places: Vec<Arc<Recorded>> = recorded.iter().cloned().collect();
             let tabs = [(Label::from("Home"), "H", tab_id("Home")), (Label::from("Insert"), "N", tab_id("Insert"))];
-            let controls: Vec<KeytipControl<'_>> =
-                CONTROLS.iter().map(|(command, label, letters)| KeytipControl { command: CommandRef::from(*command), label: *label, letters: *letters }).collect();
+            let controls: Vec<KeytipControl<'_>> = CONTROLS
+                .iter()
+                .map(|(command, label, letters)| KeytipControl { command: CommandRef::from(*command), label: *label, letters: *letters })
+                .collect();
             let sequences = [("VZ", CommandRef::from(Trial::Zoom)), ("TW", CommandRef::from(Trial::WordCount))];
             let output = Keytips::new(true).tabs(&tabs).controls(&controls).sequences(&sequences).places(&places).show(ui);
             if shown_rerun.take() {

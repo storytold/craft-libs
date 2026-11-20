@@ -353,7 +353,12 @@ fn a_groups_title_sits_under_its_body_and_the_group_ends_with_it() {
     fixture.settle();
     let run = |title: &str| fixture.texts().iter().find(|run| run.text == title).cloned().expect("the title shows");
     let (plain, launched) = (run("Plain"), run("Launched"));
-    assert!((plain.baseline - launched.baseline).abs() < 0.5, "a launcher does not move its group's title: {} against {}", plain.baseline, launched.baseline);
+    assert!(
+        (plain.baseline - launched.baseline).abs() < 0.5,
+        "a launcher does not move its group's title: {} against {}",
+        plain.baseline,
+        launched.baseline
+    );
     let third = fixture.by_label("Third").expect("the third row").rect;
     assert!(plain.rect.top() >= third.bottom() - 0.5, "the title {:?} is under the body {third:?}", plain.rect);
     assert!(plain.rect.top() - third.bottom() < plain.rect.height(), "the title {:?} sits directly under the body {third:?}", plain.rect);
@@ -361,7 +366,9 @@ fn a_groups_title_sits_under_its_body_and_the_group_ends_with_it() {
     assert!((launcher.center().y - launched.rect.center().y).abs() <= 1.0, "the launcher {launcher:?} is on the title's line {:?}", launched.rect);
     assert!(launcher.left() >= launched.rect.right() - 0.5, "the launcher {launcher:?} is after the title {:?}", launched.rect);
     let foot = plain.rect.bottom().max(launcher.bottom());
-    for group in fixture.by_role(Role::GROUP).iter().filter(|group| group.rect.contains(plain.rect.center()) || group.rect.contains(launched.rect.center())) {
+    for group in
+        fixture.by_role(Role::GROUP).iter().filter(|group| group.rect.contains(plain.rect.center()) || group.rect.contains(launched.rect.center()))
+    {
         assert!(group.rect.bottom() <= foot + 2.0, "the group {:?} ends with its title (at {foot}), not further down the room", group.rect);
     }
 }

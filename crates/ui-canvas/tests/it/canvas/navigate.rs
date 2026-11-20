@@ -331,7 +331,8 @@ fn ctrl_equals(document: bool, dropped: bool) -> (Vec<String>, bool) {
     });
     fixture.os(Platform::Linux);
     let binding = Binding::parse("Cmd+=").expect("the trial's chord parses");
-    let catalog = AppCatalog::new(vec![CommandDef::new(SUBSCRIPT, "Subscript", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
+    let catalog =
+        AppCatalog::new(vec![CommandDef::new(SUBSCRIPT, "Subscript", Scope::app()).with_default(binding)], 1).expect("the catalog is valid");
     let catalog = if dropped { catalog.replace_defaults(ViewCommands::ZoomIn.id(), Vec::new()) } else { catalog };
     fixture.commands(CommandInput::new().catalog(catalog));
     fixture.settle();

@@ -16,8 +16,8 @@ use craft_keymap::CommandRef;
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::overlay::Anchor;
 use craft_ui::contract::{
-    Access, Bind, BodyCx, CollectionEvent, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Props as _, Role,
-    Scroll, Show as _, ShowCollection as _, ShowContainer as _, Sizing, Trigger, clicked, scroll_step,
+    Access, Bind, BodyCx, CollectionEvent, Common, Component, Container, ContainerProps, Cx, NoValue, Outcome, Props as _, Role, Scroll, Show as _,
+    ShowCollection as _, ShowContainer as _, Sizing, Trigger, clicked, scroll_step,
 };
 use craft_ui::layout_components::Row;
 use craft_ui::menu::Menu;
@@ -31,8 +31,8 @@ use egui::{Id, Pos2, Rect, Response, Ui, Vec2, vec2};
 
 pub use craft_ui::buttons::GroupLevel;
 pub use gallery::{Gallery, GalleryFace, GalleryItem, GalleryMore, GalleryOutput};
-pub use group::RibbonGroup;
 use group::BodyHeight;
+pub use group::RibbonGroup;
 pub use plan::{GroupWidths, plan};
 
 craft_ui::words! {
@@ -307,7 +307,8 @@ fn chevrons(ui: &mut Ui, owner: Id, view: Rect, groups: &[Rect], width: f32, lea
         if !on {
             continue;
         }
-        let at = if right_side { Rect::from_min_size(Pos2::new(edges.max.x - width, edges.min.y), size) } else { Rect::from_min_size(edges.min, size) };
+        let at =
+            if right_side { Rect::from_min_size(Pos2::new(edges.max.x - width, edges.min.y), size) } else { Rect::from_min_size(edges.min, size) };
         let button = IconButton::new(IconId::new(icon)).label(name).focusable(false).show_at(ui, at);
         if clicked(&button.response) {
             scroll_step(ui.ctx(), owner, view, groups, right_side);
@@ -324,7 +325,11 @@ fn row_request(region: &RegionOutput, recorded: Option<&inspect::Recorded>) -> O
             .requests
             .iter()
             .filter_map(|(asked, rect)| {
-                recorded.elements.iter().find(|element| element.id == *asked && element.part.is_none() && element.command.is_some()).map(|element| (element, *rect))
+                recorded
+                    .elements
+                    .iter()
+                    .find(|element| element.id == *asked && element.part.is_none() && element.command.is_some())
+                    .map(|element| (element, *rect))
             })
             .max_by_key(|(element, _)| element.depth)
     });

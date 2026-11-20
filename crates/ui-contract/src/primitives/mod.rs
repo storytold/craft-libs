@@ -53,9 +53,9 @@ pub use state_layer::{StateLayer, StateLayerKind};
 pub use surface::Surface;
 pub(crate) use surface::SurfaceSlot;
 pub use surround::paint_surround;
-pub use svg_set::{AppIcons, register_app_icons};
 #[cfg(feature = "testing")]
 pub(crate) use svg_set::Layer;
+pub use svg_set::{AppIcons, register_app_icons};
 pub use text::{ChordText, HAlign, LayoutRun, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
 pub use text_input::{
     Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, TabKey, TextKey, TextOptions,

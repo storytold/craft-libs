@@ -2,13 +2,13 @@
 
 use super::{FormButtons, FormDialog};
 use crate::buttons::Button;
-use crate::sections::{DialogRole, FooterButton};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, clicked};
 use crate::dialog::HeldAnswer;
 use crate::runtime::env::Label;
-use crate::text::TextField;
+use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::text::TextField;
 use egui::Ui;
 
 /// A held OK the app refused for the name `"Untitled"`: the dialog shows the reason until the name changes.
@@ -20,13 +20,10 @@ fn form_dialog_held(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         open = true;
     }
     let held = data.note("held", HeldAnswer::<String>::new());
-    let output = FormDialog::new("Rename", Bind::bound(&mut name))
-        .opened(Bind::bound(&mut open))
-        .held(&mut *held)
-        .show(ui, |ui, _, value| {
-            TextField::new("Name", Bind::bound(value)).show(ui);
-            true
-        });
+    let output = FormDialog::new("Rename", Bind::bound(&mut name)).opened(Bind::bound(&mut open)).held(&mut *held).show(ui, |ui, _, value| {
+        TextField::new("Name", Bind::bound(value)).show(ui);
+        true
+    });
     if let Some(filed) = held.take() {
         let answer = if filed == "Untitled" { Err(Label::from("That name is taken.")) } else { Ok(()) };
         held.file(filed);
@@ -48,11 +45,9 @@ fn form_dialog_body_accept(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         open = true;
     }
     let held = data.note("held", HeldAnswer::<String>::new());
-    let output = FormDialog::own("Insert Symbol")
-        .opened(Bind::bound(&mut open))
-        .held(&mut *held)
-        .accept_stays_open(true)
-        .show(ui, |ui, cx, value: &mut String| {
+    let output = FormDialog::own("Insert Symbol").opened(Bind::bound(&mut open)).held(&mut *held).accept_stays_open(true).show(
+        ui,
+        |ui, cx, value: &mut String| {
             for cell in ["Sun", "Moon", "Star"] {
                 let shown = Button::new(cell).show(ui);
                 if clicked(&shown) {
@@ -63,7 +58,8 @@ fn form_dialog_body_accept(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 }
             }
             !value.is_empty()
-        });
+        },
+    );
     if let Some(filed) = held.take() {
         held.answer(if filed == "Moon" { Err(Label::from("The moon is not in this font.")) } else { Ok(()) });
     }

@@ -256,7 +256,11 @@ enum Picture {
         factor: u32,
     },
     /// A picture on the shared page `page` of a packed store, its top-left texel at `origin`.
-    Packed { page: usize, origin: [u32; 2], size: PixelSize },
+    Packed {
+        page: usize,
+        origin: [u32; 2],
+        size: PixelSize,
+    },
     Empty,
     Failed(LoadFailure),
 }
@@ -735,7 +739,13 @@ impl<K: TextureKey> Inner<K> {
     /// starts over while its pictures are on screen.
     fn spot(&mut self, size: PixelSize, frame: u64, side: u32) -> Option<Spot> {
         let on = |index: usize, page: &mut Page| {
-            page.place(size).map(|origin| Spot::On { page: index, origin, handle: page.handle.clone(), side: page.side, clear: std::mem::take(&mut page.stale) })
+            page.place(size).map(|origin| Spot::On {
+                page: index,
+                origin,
+                handle: page.handle.clone(),
+                side: page.side,
+                clear: std::mem::take(&mut page.stale),
+            })
         };
         if let Some(spot) = self.pages.iter_mut().enumerate().find_map(|(index, page)| on(index, page)) {
             return Some(spot);

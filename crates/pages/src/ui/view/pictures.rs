@@ -139,13 +139,7 @@ pub(super) struct PagePictures<'a> {
 }
 
 impl<'a> PagePictures<'a> {
-    pub(super) fn new(
-        source: &'a dyn PageSource,
-        pages: &'a [PlacedPage],
-        near: &'a [(usize, Vec2)],
-        keep: &'a [usize],
-        paper: DataColor,
-    ) -> Self {
+    pub(super) fn new(source: &'a dyn PageSource, pages: &'a [PlacedPage], near: &'a [(usize, Vec2)], keep: &'a [usize], paper: DataColor) -> Self {
         PagePictures { common: Common::new(), source, pages, near, keep, paper, hold: false, describer: None }
     }
 }

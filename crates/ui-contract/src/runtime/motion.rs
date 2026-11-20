@@ -462,7 +462,14 @@ impl Driver<'_> {
     /// frame the name is first driven every key starts at its target, as `anim` does; a key that appears later
     /// enters from closed. Two passes of one frame step to the same value, because a tween's value depends only on
     /// the pass clock.
-    pub(crate) fn presence_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str, key: Id, open: bool, payload: P, spec: MotionSpec) -> Presence {
+    pub(crate) fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: Id,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
         let ctx = self.stage.ctx();
         let (now, frame) = (frame::clock(ctx), self.frame());
         let mut keyed = self.load_keyed::<P>(name).unwrap_or_else(|| {
@@ -597,7 +604,14 @@ pub trait Animate: crate::runtime::memory::sealed::Sealed {
     /// that enter and leave. `payload` is kept with the key while it is visible, so a thing its owner no longer has
     /// can still be drawn while it fades out (`exiting`). The first frame of `name` starts every key at its target;
     /// a key that appears later enters from closed.
-    fn presence_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str, key: impl Hash, open: bool, payload: P, spec: MotionSpec) -> Presence;
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence;
     /// The keys of `name` that no pass of this frame drove open through `presence_keyed`, fading out, each with the
     /// payload it was last given; a key is forgotten once it has faded out. Call it after driving the frame's open
     /// keys.
@@ -642,7 +656,14 @@ impl<X: Drives + crate::runtime::memory::sealed::Sealed> Animate for X {
         self.driver().presence(name, open, spec)
     }
 
-    fn presence_keyed<P: Clone + Send + Sync + 'static>(&self, name: &'static str, key: impl Hash, open: bool, payload: P, spec: MotionSpec) -> Presence {
+    fn presence_keyed<P: Clone + Send + Sync + 'static>(
+        &self,
+        name: &'static str,
+        key: impl Hash,
+        open: bool,
+        payload: P,
+        spec: MotionSpec,
+    ) -> Presence {
         self.driver().presence_keyed(name, key_id(&key), open, payload, spec)
     }
 

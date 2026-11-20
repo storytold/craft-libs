@@ -394,8 +394,16 @@ impl<'a> ColorPicker<'a> {
         let full = layout == ColorPickerLayout::Full;
         let models: Vec<&'a dyn ColorModel> = models
             .unwrap_or_else(|| builtin_models().into_iter().filter(|m| if full { m.default_on().full } else { m.default_on().compact }).collect());
-        let parts =
-            compact::Body { layout, models: models.clone(), warnings, compare: compare.is_some(), alpha, dynamic_tracks, eyedropper, eyedropper_busy };
+        let parts = compact::Body {
+            layout,
+            models: models.clone(),
+            warnings,
+            compare: compare.is_some(),
+            alpha,
+            dynamic_tracks,
+            eyedropper,
+            eyedropper_busy,
+        };
         let mut run = Run {
             name: Arc::from(label.as_str()),
             full,

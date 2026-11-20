@@ -257,12 +257,8 @@ impl<'a> TaskBar<'a> {
                 let _ = shown.settle(|cx, _| place.reborrow().write(cx, &event));
             }
         }
-        let output = TaskBarOutput {
-            response: shown.output.response,
-            hide: pick == Some(MenuPick::Hide),
-            rect,
-            closed: shown.output.closed.is_some(),
-        };
+        let output =
+            TaskBarOutput { response: shown.output.response, hide: pick == Some(MenuPick::Hide), rect, closed: shown.output.closed.is_some() };
         match shown.inner {
             Some(bar) => Inner { output, inner: bar.inner, settle: bar.settle },
             None => Inner { output, inner: None, settle: None },

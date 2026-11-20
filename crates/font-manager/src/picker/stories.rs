@@ -148,7 +148,13 @@ fn font_picker_expanded_styles(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
 #[story(FontPicker<'static>, covers = [Open], drive = Drive::Custom(open_list))]
 fn font_picker_served(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let served = ["Gotham".to_owned(), "Proxima Nova".to_owned()];
-    show_with(ui, data, demo("Hack", FontPickerSettings::default(), FontFilters::default()), &catalog(), &Extras { served: &served, ..Extras::default() })
+    show_with(
+        ui,
+        data,
+        demo("Hack", FontPickerSettings::default(), FontFilters::default()),
+        &catalog(),
+        &Extras { served: &served, ..Extras::default() },
+    )
 }
 
 /// The preview banner above the filters.

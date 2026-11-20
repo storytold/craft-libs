@@ -31,7 +31,8 @@ use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
 use crate::setup::{
-    DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MAX_PAGE_SIDE, MIN_PAGE_SIDE, MarginPreset, Orientation, PAPER_SIZES, PageSetup, PageVerticalAlign, PaperSize, paper_named,
+    DocumentGrid, GridKind, MARGIN_PRESETS, MAX_GRID_COUNT, MAX_PAGE_SIDE, MIN_PAGE_SIDE, MarginPreset, Orientation, PAPER_SIZES, PageSetup,
+    PageVerticalAlign, PaperSize, paper_named,
 };
 
 /// The margin and paper fields' scrub step, page points (WordCraft's 0.05 in).
@@ -284,11 +285,7 @@ impl Rows<'_> {
         section(ui, &words.margins, |ui| {
             let mut valid = true;
             Grid::new(&PAIRS).show(ui, |ui, _| {
-                let mut side_cells = |ui: &mut Ui,
-                                      key: &'static str,
-                                      label: Label,
-                                      get: fn(&PageSetup) -> f64,
-                                      set: fn(&mut PageSetup, f64)| {
+                let mut side_cells = |ui: &mut Ui, key: &'static str, label: Label, get: fn(&PageSetup) -> f64, set: fn(&mut PageSetup, f64)| {
                     valid &= self.length(ui, form, setup, Length { key, label, get, set, range: side.clone() });
                 };
                 side_cells(ui, "top", words.top.clone(), |s| s.margins.top, |s, v| s.margins.top = v);

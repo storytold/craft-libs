@@ -132,7 +132,11 @@ fn a_row_grip_drag_reports_one_gesture_with_alt_free_and_the_arrow_nudges() {
         let full = craft_ui::testing::stage(ui);
         let page = demo_placed(1, pos2(full.min.x + 40.0, full.min.y + 30.0)).remove(0);
         let strip = Rect::from_min_size(full.min, vec2(40.0, full.height()));
-        let out = VerticalRuler::new("Vertical", &page).text(Rangef::new(72.0, 720.0)).unit(DocUnit::new(UnitKind::Inches, 96.0)).rows(&[100.0, 150.0]).show_at(ui, strip);
+        let out = VerticalRuler::new("Vertical", &page)
+            .text(Rangef::new(72.0, 720.0))
+            .unit(DocUnit::new(UnitKind::Inches, 96.0))
+            .rows(&[100.0, 150.0])
+            .show_at(ui, strip);
         if let Some(row) = out.row {
             log.borrow_mut().push(row);
         }

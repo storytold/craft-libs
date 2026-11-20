@@ -44,8 +44,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The pixels per point of the images unless `--scale` gives another.
 const PIXELS_PER_POINT: f32 = 2.0;

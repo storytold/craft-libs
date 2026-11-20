@@ -7,10 +7,7 @@ use craft_ui::testing::trial;
 #[trial]
 fn a_portal_answer_falls_back_only_when_it_failed() {
     let nothing: HashMap<String, OwnedValue> = HashMap::new();
-    let file = HashMap::from([(
-        "uris".to_owned(),
-        Value::from(vec!["file:///s/a.txt".to_owned()]).try_to_owned().expect("an owned value"),
-    )]);
+    let file = HashMap::from([("uris".to_owned(), Value::from(vec!["file:///s/a.txt".to_owned()]).try_to_owned().expect("an owned value"))]);
     let (quick, slow) = (Duration::ZERO, TOO_QUICK);
     assert_eq!(classify(2, quick, false, false, &nothing), Decision::Retry, "a dialog that closed at once never showed");
     assert_eq!(classify(2, slow, false, false, &nothing), Decision::Cancelled, "Esc in GNOME's dialog is a cancel");

@@ -127,7 +127,8 @@ fn an_oversized_face_run_is_drawn_smaller_than_the_atlas_cap() {
     let cap = (side / 4.0).min(1024.0) / 2.0;
     assert_eq!(font_of(&shape).size, cap, "the run is drawn at a quarter of the atlas side, at most 1,024 pixels");
     assert!(shape.galley.rows.iter().all(|row| row.row.size.y * 2.0 < side), "each row fits the atlas");
-    let (nan, infinite) = (FaceRun::new("x", KEY, f32::NAN, DataColor::new(Color32::BLACK)), FaceRun::new("x", KEY, f32::INFINITY, DataColor::new(Color32::BLACK)));
+    let (nan, infinite) =
+        (FaceRun::new("x", KEY, f32::NAN, DataColor::new(Color32::BLACK)), FaceRun::new("x", KEY, f32::INFINITY, DataColor::new(Color32::BLACK)));
     assert_eq!(nan.drawn_size(&frames.ctx), 1.0, "a NaN size draws at 1 point");
     assert_eq!(infinite.drawn_size(&frames.ctx), FaceRun::largest_size(&frames.ctx), "an infinite size at the cap");
 }

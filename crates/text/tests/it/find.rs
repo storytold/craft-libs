@@ -42,7 +42,8 @@ fn go_to_steps_on_an_empty_page_and_names_a_bookmark() {
     assert_eq!(dialog.borrow_mut().take_request(), Some(FindRequest::go_to(0, "12")));
 
     // A kind change clears the typed target.
-    let (mut fixture, dialog) = open(vec![GoToKind::typed("Page", "Enter a page number", true), GoToKind::typed("Line", "Enter a line number", false)]);
+    let (mut fixture, dialog) =
+        open(vec![GoToKind::typed("Page", "Enter a page number", true), GoToKind::typed("Line", "Enter a line number", false)]);
     let field = fixture.by_label("Page").expect("the target field");
     fixture.click(&field).type_text("7").idle(4);
     let kinds = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the Go to what choice");

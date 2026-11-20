@@ -86,12 +86,18 @@ fn the_adapter_behind_the_displays_is_chosen() {
     // The measured laptop: Intel HD 530 behind the panel, a Quadro M4000M offered first with nothing connected.
     const HD530: (u32, u32, &str) = (0x8086, 0x191b, "0000:00:02.0");
     const M4000M: (u32, u32, &str) = (0x10de, 0x13f9, "0000:01:00.0");
-    let measured = [vulkan("Quadro M4000M", M4000M, DeviceType::DiscreteGpu), vulkan("Intel(R) HD Graphics 530 (SKL GT2)", HD530, DeviceType::IntegratedGpu)];
+    let measured =
+        [vulkan("Quadro M4000M", M4000M, DeviceType::DiscreteGpu), vulkan("Intel(R) HD Graphics 530 (SKL GT2)", HD530, DeviceType::IntegratedGpu)];
     assert_eq!(choose(&measured, &[card(M4000M, 0, false), card(HD530, 1, true)], &none), Some((1, Why::BuiltInPanel)), "Intel and NVIDIA laptop");
 
     // A desktop with its only monitor on one card (a low-power default can't start the window there).
-    let desktop = [vulkan("Intel(R) Graphics (RPL-S)", INTEL, DeviceType::IntegratedGpu), vulkan("NVIDIA GeForce RTX", NVIDIA, DeviceType::DiscreteGpu)];
-    assert_eq!(choose(&desktop, &[card(INTEL, 0, false), card(NVIDIA, 1, false)], &none), Some((1, Why::OnlyGpuWithDisplays)), "monitor on the discrete card");
+    let desktop =
+        [vulkan("Intel(R) Graphics (RPL-S)", INTEL, DeviceType::IntegratedGpu), vulkan("NVIDIA GeForce RTX", NVIDIA, DeviceType::DiscreteGpu)];
+    assert_eq!(
+        choose(&desktop, &[card(INTEL, 0, false), card(NVIDIA, 1, false)], &none),
+        Some((1, Why::OnlyGpuWithDisplays)),
+        "monitor on the discrete card"
+    );
     assert_eq!(choose(&desktop, &[card(INTEL, 2, false), card(NVIDIA, 0, false)], &none), Some((0, Why::OnlyGpuWithDisplays)), "monitor on the iGPU");
     // A monitor on each card: the discrete GPU (an iGPU choice there lost its surface).
     assert_eq!(choose(&desktop, &[card(INTEL, 1, false), card(NVIDIA, 1, false)], &none), Some((1, Why::Fallback)), "monitors on two cards");
@@ -107,20 +113,28 @@ fn the_adapter_behind_the_displays_is_chosen() {
     assert_eq!(choose(&laptop, &panel_on_amd, &asked(None, Some(PowerPreference::LowPower))), Some((0, Why::AskedPower)));
     assert_eq!(choose(&laptop, &panel_on_amd, &asked(None, Some(PowerPreference::None))), Some((0, Why::AskedPower)));
     assert_eq!(choose(&laptop, &panel_on_amd, &asked(Some("nvidia"), None)), Some((1, Why::AskedByName)));
-    assert_eq!(choose(&laptop, &panel_on_amd, &asked(Some("RadeonSI"), Some(PowerPreference::HighPerformance))), Some((2, Why::AskedByName)), "the name beats the power");
+    assert_eq!(
+        choose(&laptop, &panel_on_amd, &asked(Some("RadeonSI"), Some(PowerPreference::HighPerformance))),
+        Some((2, Why::AskedByName)),
+        "the name beats the power"
+    );
     // A name nothing has, or an empty one: the usual choice, not a failure.
     assert_eq!(choose(&laptop, &panel_on_amd, &asked(Some("matrox"), None)), Some((0, Why::BuiltInPanel)));
     assert_eq!(choose(&laptop, &panel_on_amd, &asked(Some(""), None)), Some((0, Why::BuiltInPanel)));
 
     // Under GL there's no PCI address or device id: the vendor finds the card only when no other card shares it.
-    let gl_adapters = [gl("NVIDIA GeForce RTX 3050", 0x10de, DeviceType::Other), gl("AMD Radeon Graphics (radeonsi)", 0x1002, DeviceType::IntegratedGpu)];
+    let gl_adapters =
+        [gl("NVIDIA GeForce RTX 3050", 0x10de, DeviceType::Other), gl("AMD Radeon Graphics (radeonsi)", 0x1002, DeviceType::IntegratedGpu)];
     assert_eq!(choose(&gl_adapters, &panel_on_amd, &none), Some((1, Why::BuiltInPanel)), "GL, one AMD card");
     let two_amd = [card((0x1002, 0x73df, "0000:03:00.0"), 0, false), card(AMD, 1, true)];
     let gl_two_amd = [gl("AMD Radeon RX 6700", 0x1002, DeviceType::Other), gl("AMD Radeon Graphics", 0x1002, DeviceType::IntegratedGpu)];
     assert_eq!(choose(&gl_two_amd, &two_amd, &none), Some((1, Why::Fallback)), "GL, two AMD cards");
 
     // Two adapters for the panel's card: Vulkan, whatever the order.
-    let gl_first = [gl("AMD Radeon Graphics (radeonsi)", 0x1002, DeviceType::IntegratedGpu), vulkan("AMD Radeon Graphics (RADV RENOIR)", AMD, DeviceType::IntegratedGpu)];
+    let gl_first = [
+        gl("AMD Radeon Graphics (radeonsi)", 0x1002, DeviceType::IntegratedGpu),
+        vulkan("AMD Radeon Graphics (RADV RENOIR)", AMD, DeviceType::IntegratedGpu),
+    ];
     assert_eq!(choose(&gl_first, &[card(AMD, 1, true)], &none), Some((1, Why::BuiltInPanel)), "Vulkan before GL");
 
     // A closed laptop with a monitor on the NVIDIA card: the switched-off panel isn't one (`drm` skips it).
@@ -134,7 +148,6 @@ fn the_adapter_behind_the_displays_is_chosen() {
     let without: Vec<Candidate> = with_slots.iter().cloned().map(|c| Candidate { pci_slot: String::new(), ..c }).collect();
     assert_eq!(choose(&without, &twins, &none), Some((0, Why::Fallback)), "twins without PCI addresses");
 }
-
 
 fn add_card(dir: &Path, card: &str, id: &str, slot: &str) {
     let device = dir.join(card).join("device");

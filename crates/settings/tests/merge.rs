@@ -201,6 +201,10 @@ fn a_bad_list_entry_is_dropped_not_carried() {
     let out = merged_ruled(&recent(&[]), &recent(&["x"]), "schema_version = 1\nrecent = 3\n");
     assert_eq!(out.recent, ["x"]);
 
-    let out = merged_ruled(&autocorrect(&[]), &autocorrect(&[["teh", "the"]]), "schema_version = 1\nautocorrect = [[\"ok\", \"fine\"], \"bare\", [3, 4]]\n");
+    let out = merged_ruled(
+        &autocorrect(&[]),
+        &autocorrect(&[["teh", "the"]]),
+        "schema_version = 1\nautocorrect = [[\"ok\", \"fine\"], \"bare\", [3, 4]]\n",
+    );
     assert_eq!(out.autocorrect, pairs(&[["teh", "the"], ["ok", "fine"]]));
 }

@@ -1272,9 +1272,7 @@ impl BodyHooks<'_> {
         let mut bars = Vec2::ZERO;
         let mut end = |ui: &mut Ui, bcx: &mut BodyCx<'_>| comp.body_end(ui, bcx);
         self.body_size = match props.transform {
-            Some(transform) => {
-                self.run_transformed(&run, ui, (transform, cx.core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars, &mut end)
-            }
+            Some(transform) => self.run_transformed(&run, ui, (transform, cx.core.root_sense, plan.rect, body_rect), &mut bcx, &mut bars, &mut end),
             None => self.run_body(&run, ui, body_rect, &mut bcx, &mut bars, &mut end),
         };
         plan.close = plan.close.or(bcx.close_requested());

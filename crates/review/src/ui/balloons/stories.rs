@@ -58,9 +58,11 @@ fn beside_page(
         let anchor = |at: usize| Pos2::new(40.0, 30.0 + 80.0 * at as f32);
         let mut items: Vec<BalloonItem<'_>> =
             threads.iter().enumerate().map(|(at, thread)| BalloonItem::Thread { thread, page: 0, anchor: anchor(at) }).collect();
-        items.extend(
-            revisions.iter().enumerate().map(|(at, revision)| BalloonItem::Revision { revision, page: 0, anchor: anchor(threads.len() + at) }),
-        );
+        items.extend(revisions.iter().enumerate().map(|(at, revision)| BalloonItem::Revision {
+            revision,
+            page: 0,
+            anchor: anchor(threads.len() + at),
+        }));
         CommentBalloons::new("Comments", &pages, &items, &mut *state).place(place).now(Some(NOW)).read_only(read_only).show(ui)
     })
 }

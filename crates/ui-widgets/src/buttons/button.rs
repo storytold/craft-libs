@@ -303,12 +303,12 @@ impl Component for Button<'_> {
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let (area, rtl) = (cx.content_rect, cx.flow.is_rtl());
         if self.loading {
-            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, cx.style),&cx.style.face, cx.style.icon.side, area, rtl);
+            let spinner = face::spinner_rect(cx, &self.spec(cx.resolved.label, cx.style), &cx.style.face, cx.style.icon.side, area, rtl);
             if let Some(rect) = spinner {
                 cx.part(SPINNER, rect);
             }
         } else if self.picture.is_some()
-            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style),&cx.style.face, cx.style.icon.side, area, rtl)
+            && let Some(rect) = face::lead_rect(cx, &self.spec(cx.resolved.label, cx.style), &cx.style.face, cx.style.icon.side, area, rtl)
         {
             cx.part(PICTURE, rect);
         }

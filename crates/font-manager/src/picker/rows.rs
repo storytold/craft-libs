@@ -24,8 +24,8 @@ use egui::Rect;
 
 use super::rank::{Infos, Language, Listing, list, shown_name};
 use super::{
-    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos, read, ui_language,
-    write,
+    FamilyRow, FontClass, FontFilters, FontFormat, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, POPUP, STAR, Typing, infos, read,
+    ui_language, write,
 };
 use crate::panel::faces::{Owner, Shown, paint_sample, shown};
 use craft_ui::style::DataColor;

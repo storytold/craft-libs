@@ -742,7 +742,9 @@ fn alt_shift_minus(enabled: bool) -> (Vec<String>, String) {
     };
     let state = crate::runtime::commands::CommandState::new().enabled(enabled);
     let mut frames = Frames::new();
-    frames.commands(CommandInput::new().catalog(catalog.typing_rule(TypingRule::PlainKeysWait)).state(COLLAPSE, state));
+    let mut states = crate::runtime::commands::CommandStates::new();
+    states.set(COLLAPSE, state);
+    frames.commands(CommandInput::new().catalog(catalog.typing_rule(TypingRule::PlainKeysWait)).states(&crate::contract::Tracked::new(states)));
     frames.frame(Vec::new(), &mut show);
     focus_stop(&mut frames, &mut show, field);
     take_output(&frames.ctx);

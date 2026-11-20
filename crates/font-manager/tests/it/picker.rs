@@ -12,9 +12,9 @@ use craft_font_manager::picker::{
     FontFilters, FontPicker, FontPickerKind, FontPickerSettings, FontPickerWords, MissingAdvice, SIMILAR_COUNT, family_rows,
 };
 use craft_font_manager::{Catalog, FontEnv};
+use craft_ui::buttons::ControlPlace;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
-use craft_ui::buttons::ControlPlace;
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::moved;
@@ -360,4 +360,3 @@ fn a_squeezed_ribbon_font_box_keeps_a_short_fields_name() {
     assert!(squeezed > short, "the squeezed font box keeps a name field {short} wide and its arrow: {squeezed}");
     assert!(squeezed <= picker_width("Inter", true) + 0.5, "and is no wider than where the room allows");
 }
-

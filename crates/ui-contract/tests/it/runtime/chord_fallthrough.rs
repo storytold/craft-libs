@@ -3,17 +3,20 @@
 //! word processor's Alt+F7 (next misspelling) against the framework's `window.move` default, pressed inside a
 //! floating window.
 
+use craft_behavior::Input;
 use craft_behavior::{GesturePhase, Sense};
 use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
 use craft_ui::contract::{
-    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _, Sizing,
+    BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _,
+    ShowContainer as _, Sizing,
 };
-use craft_behavior::Input;
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandSet, CommandState, Commands as _, Scope, TypingRule, WindowCommand};
+use craft_ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandSet, CommandState, Commands as _, Scope, TypingRule, WindowCommand,
+};
 use craft_ui::runtime::focus::{FocusTarget, KeyUse, request};
-use craft_ui::testing::focus::{Stop, named_id, register_stop, widget};
 use craft_ui::runtime::frame::take_output;
 use craft_ui::style::StyleCx;
+use craft_ui::testing::focus::{Stop, named_id, register_stop, widget};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, trial};

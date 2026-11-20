@@ -3,7 +3,9 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{DialogHost, StackDialog as _};
-use craft_ui::patterns::form_dialogs::{AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit};
+use craft_ui::patterns::form_dialogs::{
+    AboutAppTab, AboutDialog, AboutInfo, AboutLayout, AboutLink, AboutTab, Contributor, Credits, HostedAbout, ModelCredit,
+};
 use craft_ui::testing::{Fixture, access, trial};
 use egui::Vec2;
 use serde_json::json;

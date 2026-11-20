@@ -149,8 +149,9 @@ pub(crate) fn input_hook(ctx: &Context, events: &mut Vec<Arrived>, viewport: Vie
     with(ctx, viewport, |engine| {
         let take = engine.owner.is_some() || engine.reset.is_some();
         let guarded = engine.composing || engine.guard > 0;
-        let ends_composition =
-            |event: &Event| matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. });
+        let ends_composition = |event: &Event| {
+            matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Backspace | Key::Delete | Key::Space, pressed: true, .. })
+        };
         let taken = os::take_events(events, take, |event| guarded && ends_composition(event));
         engine.queue.extend(taken);
         engine.guard = engine.guard.saturating_sub(1);

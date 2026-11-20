@@ -371,9 +371,10 @@ impl Shown<'_> {
             AboutLayout::Listed => TabKind::Panel,
             AboutLayout::Centred => TabKind::Text,
         };
-        let out = TabStrip::new(title.clone()).kind(kind).shown(shown).natural_height(true).show_items(ui, &source, &mut |key, _| {
-            Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
-        });
+        let out =
+            TabStrip::new(title.clone()).kind(kind).shown(shown).natural_height(true).show_items(ui, &source, &mut |key, _| {
+                Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
+            });
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                 && let Some(picked) = keys.last()

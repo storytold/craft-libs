@@ -74,7 +74,11 @@ enum Primary {
 impl<'a> Plan<'a> {
     fn new(flavors: &'a [Flavor], decode: Option<&Decode>) -> Self {
         let part = |mime: &str| {
-            flavors.iter().enumerate().find(|(_, flavor)| flavor.mime == mime).map(|(index, flavor)| Part { index, text: String::from_utf8_lossy(&flavor.data) })
+            flavors
+                .iter()
+                .enumerate()
+                .find(|(_, flavor)| flavor.mime == mime)
+                .map(|(index, flavor)| Part { index, text: String::from_utf8_lossy(&flavor.data) })
         };
         let png = flavors.iter().find(|flavor| flavor.mime == PNG).map(|flavor| flavor.data.as_slice());
         let picture = flavors.iter().enumerate().find_map(|(index, flavor)| {

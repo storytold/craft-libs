@@ -112,12 +112,8 @@ impl TextRuler<'_> {
         let text = ruler_text(self.unit, &numbers);
         let per_doc = text.units.per_doc;
         let (lo, hi) = g.shown_span();
-        let ticks: Vec<RulerTick> = Rulers::ticks(
-            &text.units,
-            TickRule::of_unit(self.unit.kind),
-            f64::from(g.scale),
-            (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc),
-        );
+        let ticks: Vec<RulerTick> =
+            Rulers::ticks(&text.units, TickRule::of_unit(self.unit.kind), f64::from(g.scale), (f64::from(lo) * per_doc)..=(f64::from(hi) * per_doc));
         // The tick rule adds a labelled step beyond each end; a ruler cut to its extent (a page's) shows none past it.
         let covered = g.visible().x_range();
         let marks: Vec<Tick> = ticks

@@ -236,8 +236,5 @@ fn a_tooltip_shown_from_inside_a_body_keeps_its_rect_frame_to_frame() {
         frames.push((fixture.passes(), fixture.texts().iter().find(|run| run.text == "Lock").map(|run| run.rect)));
     }
     let first = frames[0].1;
-    assert!(
-        first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first),
-        "one pass a frame and one rect: {frames:?}"
-    );
+    assert!(first.is_some() && frames.iter().all(|(passes, rect)| *passes == 1 && *rect == first), "one pass a frame and one rect: {frames:?}");
 }

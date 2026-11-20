@@ -83,11 +83,8 @@ fn list_manager_bookmark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         ListManagerAction::new("goTo", "Go To", ActionEnabled::OnEntry { kind: None }).keeps_open(),
         ListManagerAction::delete(&words),
     ];
-    let marks: Vec<ListManagerEntry> = ["Cover", "Chapter 1", "Index"]
-        .iter()
-        .map(|name| ListManagerEntry::new(*name, *name))
-        .filter(|entry| !gone.contains(&entry.id))
-        .collect();
+    let marks: Vec<ListManagerEntry> =
+        ["Cover", "Chapter 1", "Index"].iter().map(|name| ListManagerEntry::new(*name, *name)).filter(|entry| !gone.contains(&entry.id)).collect();
     let shown = ListManager::new("Bookmarks", "Bookmark name:", marks, actions)
         .empty("There are no bookmarks.".into())
         .name_check(bookmark_name)

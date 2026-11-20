@@ -6,11 +6,11 @@
 
 use craft_behavior::{IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_ui::buttons::{Button, IconButton};
-use craft_ui::display::Text;
 use craft_ui::contract::{
     Access, Animate as _, Common, Component, Cx, DisabledLook, Focus as _, Input, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _, clicked, spec,
 };
+use craft_ui::display::Text;
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::textures::{Priority, TextureStoreOptions, ThumbPaint, ThumbRequest, ThumbnailOptions, Thumbnails, texture_side};
 use craft_ui::primitives::{PaintShape, ReadingMeasure};

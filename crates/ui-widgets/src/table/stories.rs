@@ -4,8 +4,8 @@ use super::{Table, sort_rows};
 use crate::contract::{Bind, CollectionEvent, ColumnEvent, ColumnKind, ColumnSort, ColumnSpec, ShowCollection as _, ToggleColumn};
 use crate::list::{ListRow, ToggleCell};
 use crate::testing::pointer::{moved, secondary};
-use crate::text::TextField;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::text::TextField;
 use craft_behavior::{ColumnKey, ColumnWidth, DisplayOrder, ItemSource, Selection};
 use craft_i18n::{AgeStyle, FileSize, SizeUnit};
 use egui::Ui;
@@ -186,10 +186,11 @@ fn table_editable_grid(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .header_field(NAME, TextField::new("Name title", Bind::kept()), |_| {})
         .header_field(PAGES, TextField::new("Pages title", Bind::kept()), |_| {})
         .show_items(ui, &Files(&rows), &mut |key, icx| {
-            ListRow::new(rows[*key].name.clone())
-                .cells(icx.cells())
-                .cell_field(NAME, TextField::new("Name", Bind::kept()), |_| {})
-                .cell_field(PAGES, TextField::new("Pages", Bind::kept()), |_| {})
+            ListRow::new(rows[*key].name.clone()).cells(icx.cells()).cell_field(NAME, TextField::new("Name", Bind::kept()), |_| {}).cell_field(
+                PAGES,
+                TextField::new("Pages", Bind::kept()),
+                |_| {},
+            )
         })
         .into()
 }

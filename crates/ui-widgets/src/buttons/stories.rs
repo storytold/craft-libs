@@ -120,7 +120,11 @@ fn icon_button_bar_mark(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let shown = Row::new().show(ui, |ui, _| {
         for enabled in [true, false] {
             for (name, mark) in marks {
-                IconButton::new(IconSpec::svg(IconId::new("eyedropper")).with_mark(mark)).label(name).enabled(enabled).id_salt((name, enabled)).show(ui);
+                IconButton::new(IconSpec::svg(IconId::new("eyedropper")).with_mark(mark))
+                    .label(name)
+                    .enabled(enabled)
+                    .id_salt((name, enabled))
+                    .show(ui);
             }
         }
     });
@@ -368,12 +372,7 @@ fn split_button_open(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 #[story(SplitButton<'static, u8>, covers = [], drive = Drive::Never, title = "Stacked")]
 fn split_button_stacked(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let entries = presets();
-    SplitButton::new("Trace", &entries)
-        .icon(IconId::new("image"))
-        .arrow_label("Tracing presets")
-        .arrangement(Arrangement::Stacked)
-        .show(ui)
-        .into()
+    SplitButton::new("Trace", &entries).icon(IconId::new("image")).arrow_label("Tracing presets").arrangement(Arrangement::Stacked).show(ui).into()
 }
 
 /// The rows a split button's body shows.

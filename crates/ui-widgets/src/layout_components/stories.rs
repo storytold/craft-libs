@@ -12,7 +12,11 @@ use egui::Ui;
 /// The gap and padding tier the Row and Stack stories edit.
 fn spacing(data: &mut StoryData, gap: Gap, gaps: &'static [(&'static str, Gap)]) -> (Gap, Pad) {
     let gap = *data.choice("gap", gap, gaps);
-    let pad = *data.choice("pad", Pad::Regular, &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy), ("Page", Pad::Page)]);
+    let pad = *data.choice(
+        "pad",
+        Pad::Regular,
+        &[("None", Pad::None), ("Control", Pad::Control), ("Regular", Pad::Regular), ("Roomy", Pad::Roomy), ("Page", Pad::Page)],
+    );
     (gap, pad)
 }
 
@@ -39,7 +43,12 @@ fn stack_fill_height(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     outlined(ui, |ui| {
         ui.allocate_ui(egui::vec2(360.0, 200.0), |ui| {
             Row::new().fill().show(ui, |ui, _| {
-                Stack::new().sizing(Sizing::FillHeight).gap(Gap::Tight).pad(Pad::Regular).footer(|ui, _| words(ui, 2..3)).show(ui, |ui, _| words(ui, 0..2));
+                Stack::new()
+                    .sizing(Sizing::FillHeight)
+                    .gap(Gap::Tight)
+                    .pad(Pad::Regular)
+                    .footer(|ui, _| words(ui, 2..3))
+                    .show(ui, |ui, _| words(ui, 0..2));
                 Stack::new().fill().pad(Pad::Regular).show(ui, |ui, _| words(ui, 3..4));
             })
         })

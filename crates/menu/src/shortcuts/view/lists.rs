@@ -3,7 +3,9 @@
 use craft_behavior::{ColumnWidth, Selection, SelectionChange};
 use craft_keymap::CommandRef;
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, BodyCx, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked};
+use craft_ui::contract::{
+    Bind, BodyCx, CollectionEvent, Props as _, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing, clicked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Grid, Row, Stack};

@@ -134,7 +134,8 @@ fn a_row_that_resets_drops_its_dependents_when_its_value_changes() {
 // side with no caption, and still pick the value.
 #[trial]
 fn a_radio_row_in_a_row_stands_its_options_side_by_side_without_a_caption() {
-    let layouts = || ParamKind::radio(vec![("diagonal".into(), "Diagonal".into()), ("horizontal".into(), "Horizontal".into())], Some("diagonal".into()));
+    let layouts =
+        || ParamKind::radio(vec![("diagonal".into(), "Diagonal".into()), ("horizontal".into(), "Horizontal".into())], Some("diagonal".into()));
     let painted = |fixture: &Fixture, text: &str| fixture.texts().iter().any(|painted| painted.text == text);
 
     let values = Rc::new(RefCell::new(DialogFields::new()));

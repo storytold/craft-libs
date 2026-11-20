@@ -139,11 +139,7 @@ fn a_browser_post_never_reaches_the_app() {
     assert_eq!(refused["ok"], false, "{refused}");
     assert_eq!(refused["error"], "authentication required", "{refused}");
     // The rest of what the browser sends; the server may already have closed.
-    let _ = write!(
-        stream,
-        "Host: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
-        body.len()
-    );
+    let _ = write!(stream, "Host: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
     let _ = stream.flush();
     let mut rest = String::new();
     let closed = match reader.read_line(&mut rest) {

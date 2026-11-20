@@ -23,15 +23,15 @@ use std::sync::{Arc, Mutex};
 use craft_host::{FileError, Files, PickAnswer, PickId, PickRequest, Wake};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use craft_host::{PickKind, Picked};
 #[cfg(feature = "ui")]
 use craft_browse::places::{FolderCache, SystemDirectories};
 #[cfg(feature = "ui")]
 use craft_host::ThreadJobs;
+use craft_host::{PickKind, Picked};
 
-use crate::{Answer, Dialogs, FileDialog, Filter, Kind, Message, MessageButtons, MessageLevel, MessageResult, probe};
 #[cfg(feature = "ui")]
 use crate::ui::FileChooser;
+use crate::{Answer, Dialogs, FileDialog, Filter, Kind, Message, MessageButtons, MessageLevel, MessageResult, probe};
 
 /// The words of the Replace question: a native message box, so they come from the app's catalog
 /// (see `ReplaceLabels` in the `ui` feature) instead of `words!` at draw time.
@@ -389,8 +389,7 @@ impl FilePanels {
                 // forgotten or is settling a replace question.
                 let answer = match answer {
                     Answer::Unavailable(why) => {
-                        let unsettled =
-                            lock(&self.inner).pending.get(&id).filter(|p| p.awaiting_replace.is_none()).map(|p| p.request.clone());
+                        let unsettled = lock(&self.inner).pending.get(&id).filter(|p| p.awaiting_replace.is_none()).map(|p| p.request.clone());
                         match unsettled {
                             Some(request) => {
                                 self.choosers.push(AskedChooser { id, request, cause: Some(why), dialog: None });

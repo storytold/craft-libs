@@ -1,8 +1,8 @@
 //! The size dialogs `ImageSize` and `CanvasSize`: the rows, the readouts and the dialog around them that the two share,
 //! and the `Resample` and `CanvasExtension` choices.
 
-use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
 use super::FormDialog;
+use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogResult, FieldRefusal, HeldAnswer};
 use crate::display::Text;

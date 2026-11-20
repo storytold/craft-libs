@@ -629,7 +629,13 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> Component for Gallery<'_, K> 
         for at in 0..visible.min(len) {
             if let Some(item) = self.items.get(start + at) {
                 let caption = self.captioned().then(|| item.label.clone());
-                let tile = GalleryTile::of(item.face.picture(self.aspect, self.thumb_size), current == Some(start + at), self.aspect, self.thumb_size, caption);
+                let tile = GalleryTile::of(
+                    item.face.picture(self.aspect, self.thumb_size),
+                    current == Some(start + at),
+                    self.aspect,
+                    self.thumb_size,
+                    caption,
+                );
                 ui.face(TILE.at(at as u64), tile);
             }
         }

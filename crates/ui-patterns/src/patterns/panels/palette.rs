@@ -228,11 +228,7 @@ impl<'a> CommandPalette<'a> {
             // The closed face is the search field's own look at its own size, so what sits beside it does not shift on open.
             let closed_face = !is_open
                 && clicked(
-                    &TextField::search(label.clone(), Bind::given(String::new()))
-                        .placeholder(face_hint.clone())
-                        .id(field_id)
-                        .show(ui)
-                        .response,
+                    &TextField::search(label.clone(), Bind::given(String::new())).placeholder(face_hint.clone()).id(field_id).show(ui).response,
                 );
             if closed_face {
                 let name: Arc<str> = Arc::from(label.as_str());
@@ -253,11 +249,8 @@ impl<'a> CommandPalette<'a> {
                     focus::request(&ctx, FocusTarget::Id(field_id));
                 }
                 let session = inner.memory::<Session>();
-                let field = TextField::search(label.clone(), Bind::bound(&mut session.query))
-                    .placeholder(face_hint.clone())
-                    .id(field_id)
-                    .show(ui)
-                    .response;
+                let field =
+                    TextField::search(label.clone(), Bind::bound(&mut session.query)).placeholder(face_hint.clone()).id(field_id).show(ui).response;
                 let popup = PopupList::new(label.clone(), open.reborrowed()).opened_by(&field).show(ui, |ui, popup| {
                     let recent = recent_of(&mut recents, popup);
                     let input = RowsInput {

@@ -129,8 +129,8 @@ pub(crate) use run::BarRules;
 pub(crate) use run::measure_under;
 #[cfg(feature = "testing")]
 pub(crate) use steps::queue_reveal;
-pub(crate) use steps::{child_reveal, peek_reveal, queue_child_reveal, take_reveal};
 pub use steps::scroll_step;
+pub(crate) use steps::{child_reveal, peek_reveal, queue_child_reveal, take_reveal};
 pub(crate) use steps::{draft, keeping_ids};
 
 /// Adds the runtime to `ctx`: `runtime::install` with the overlay host's ghost-layer painter in the end hook.

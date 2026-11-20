@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use craft_host::InlineJobs;
 use craft_ui::contract::Show as _;
-use craft_ui::primitives::textures::Revision;
-use craft_ui::primitives::{FakeThumbSource, Thumbnails, ThumbnailOptions};
 use craft_ui::list::{ThumbAspect, ThumbSize};
+use craft_ui::primitives::textures::Revision;
+use craft_ui::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::env::{Label, with_env};
-use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::testing::pictures::sample_picture;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use craft_ui::tile_grid::CaptionPlace;
 use egui::Ui;
 
 use super::{Gallery, GalleryFace, GalleryItem, GalleryMore};
@@ -37,7 +37,11 @@ fn pictured(ui: &mut Ui) -> StoryOutput {
     let items: Vec<GalleryItem<'_, usize>> = images
         .iter()
         .enumerate()
-        .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
+        .map(|(at, image)| GalleryItem {
+            key: at,
+            label: name(at),
+            face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image },
+        })
         .collect();
     let current = 2;
     Gallery::new("Styles", &items, Some(&current)).tiles(6, 3).more(GalleryMore::Grid).show(ui).into()
@@ -56,15 +60,14 @@ fn gallery_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let items: Vec<GalleryItem<'_, usize>> = images
         .iter()
         .enumerate()
-        .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
+        .map(|(at, image)| GalleryItem {
+            key: at,
+            label: name(at),
+            face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image },
+        })
         .collect();
     let current = 2;
-    Gallery::new("Styles", &items, Some(&current))
-        .tiles(6, 3)
-        .aspect(ThumbAspect::new(2, 1))
-        .caption(CaptionPlace::Below)
-        .show(ui)
-        .into()
+    Gallery::new("Styles", &items, Some(&current)).tiles(6, 3).aspect(ThumbAspect::new(2, 1)).caption(CaptionPlace::Below).show(ui).into()
 }
 
 /// A gallery of small pages at the large thumbnail size: each preview (a style set's title, heading and paragraph)
@@ -76,7 +79,11 @@ fn gallery_large(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let items: Vec<GalleryItem<'_, usize>> = images
         .iter()
         .enumerate()
-        .map(|(at, image)| GalleryItem { key: at, label: name(at), face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image } })
+        .map(|(at, image)| GalleryItem {
+            key: at,
+            label: name(at),
+            face: GalleryFace::Image { key: at as u64, revision: Revision::default(), image: &**image },
+        })
         .collect();
     Gallery::new("Style Sets", &items, None).tiles(7, 4).thumb(ThumbSize::Large).aspect(ThumbAspect::new(12, 11)).show(ui).into()
 }

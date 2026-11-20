@@ -437,14 +437,7 @@ impl<'a> TextRuler<'a> {
             egui::Rangef::new(a.min(b), a.max(b))
         });
         Layout {
-            g: Geometry {
-                strip,
-                scale,
-                right_to_left,
-                width: self.width,
-                origin,
-                extent,
-            },
+            g: Geometry { strip, scale, right_to_left, width: self.width, origin, extent },
             shapes: Shapes { width: style.marker_width, column: style.column_width, tip: style.marker_height, stem: style.stem, foot: style.foot },
             corner,
         }

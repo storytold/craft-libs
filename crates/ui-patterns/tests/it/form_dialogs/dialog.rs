@@ -3,10 +3,12 @@
 //! request slots, disabled options and the remembered values a row refuses.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::choice::Checkbox;
+use craft_ui::contract::{Bind, Outcome as _, Props as _, Role, SaveKey, Show as _, clicked};
 use craft_ui::dialog::{DialogHost, DialogResult, HeldAnswer, HeldOk, dialog_id};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
+use craft_ui::patterns::form_dialogs::{
+    DialogFields, FieldValue, FormButtons, FormDialog, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult,
+};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::overlay::CloseReason;

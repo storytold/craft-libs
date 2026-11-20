@@ -105,9 +105,7 @@ pub(crate) fn install(ctx: &Context, clipboard: Option<Clipboard>) {
 pub(crate) fn with<R>(ctx: &Context, f: impl FnOnce(&mut Clipboard) -> R) -> R {
     let (shared, copies) = pass_state::with::<Installed, _>(ctx, |installed| {
         let copies = Arc::clone(&installed.copies);
-        let clipboard = installed
-            .clipboard
-            .get_or_insert_with(|| Arc::new(Mutex::new(Clipboard::new(EguiClipboard::new(Arc::clone(&copies))))));
+        let clipboard = installed.clipboard.get_or_insert_with(|| Arc::new(Mutex::new(Clipboard::new(EguiClipboard::new(Arc::clone(&copies))))));
         (Arc::clone(clipboard), copies)
     });
     let result = {
@@ -154,7 +152,6 @@ fn color_image(image: &ClipboardImage) -> Option<ColorImage> {
     let size = [usize::try_from(image.width).ok()?, usize::try_from(image.height).ok()?];
     Some(ColorImage::from_rgba_unmultiplied(size, &image.rgba))
 }
-
 
 /// Puts `text` on the installed clipboard.
 pub(crate) fn copy_text(ctx: &Context, text: String) {

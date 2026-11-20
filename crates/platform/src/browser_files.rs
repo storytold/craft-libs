@@ -218,10 +218,8 @@ fn open_save_picker(name: &str, ext: Option<&str>, mime: &str) -> Result<Option<
 
 /// Calls `target.method(arg)` and awaits the promise it answers.
 async fn await_call(target: &JsValue, method: &str, arg: Option<&JsValue>) -> Result<JsValue, String> {
-    let function: Function = Reflect::get(target, &JsValue::from_str(method))
-        .map_err(|e| js_text(&e))?
-        .dyn_into()
-        .map_err(|_| format!("{method} is not a function"))?;
+    let function: Function =
+        Reflect::get(target, &JsValue::from_str(method)).map_err(|e| js_text(&e))?.dyn_into().map_err(|_| format!("{method} is not a function"))?;
     let value = match arg {
         Some(arg) => function.call1(target, arg),
         None => function.call0(target),

@@ -7,9 +7,9 @@ use craft_menu::{Gallery, GalleryFace, GalleryItem, GroupLevel};
 use craft_ui::contract::Show as _;
 use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::primitives::ContentPainterCx;
-use craft_ui::tile_grid::CaptionPlace;
 use craft_ui::runtime::env::{Label, with_env};
 use craft_ui::testing::{Fixture, trial};
+use craft_ui::tile_grid::CaptionPlace;
 use egui::Rect;
 
 /// The tiles of a gallery over `items`, six at the full level and three at the compact one: which of the first
@@ -27,13 +27,17 @@ fn the_tile_count_follows_the_group_level_and_stepping_stays_in_range_when_the_i
         let (level, count, picks) = (Rc::clone(&level), Rc::clone(&count), Rc::clone(&picks));
         Fixture::new(move |ui| {
             let paint = |_: &ContentPainterCx, _: Rect| {};
-            let items: Vec<GalleryItem<'_, usize>> =
-                (0..count.get()).map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) }).collect();
+            let items: Vec<GalleryItem<'_, usize>> = (0..count.get())
+                .map(|at| GalleryItem { key: at, label: Label::from(format!("Tile {at}")), face: GalleryFace::Paint(&paint) })
+                .collect();
             let at_level = level.get();
-            let out = with_env(ui, |set| {
+            let out = with_env(
+                ui,
+                |set| {
                     set.values.set(at_level);
                 },
-                |ui| Gallery::new("Styles", &items, None).tiles(6, 3).show(ui));
+                |ui| Gallery::new("Styles", &items, None).tiles(6, 3).show(ui),
+            );
             if let Some(key) = out.picked {
                 picks.borrow_mut().push(key);
             }

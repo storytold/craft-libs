@@ -43,7 +43,14 @@ impl Shown {
     }
 
     /// [`Shown::new`] with the balloons `read_only` or not.
-    fn with(threads: Vec<(CommentThread, f32)>, state: CommentsPanelState, place: BalloonPlace, room: Vec2, direction: Direction, read_only: bool) -> Shown {
+    fn with(
+        threads: Vec<(CommentThread, f32)>,
+        state: CommentsPanelState,
+        place: BalloonPlace,
+        room: Vec2,
+        direction: Direction,
+        read_only: bool,
+    ) -> Shown {
         let state = Rc::new(RefCell::new(state));
         let edits = Rc::new(RefCell::new(Vec::new()));
         let cards = Rc::new(RefCell::new(Vec::new()));
@@ -90,7 +97,8 @@ fn cards_stack_down_a_page_in_anchor_order_without_overlap_and_a_late_anchor_kee
 fn a_floating_card_sits_beside_the_page_when_there_is_room_and_over_its_edge_when_not() {
     let page = page().rect;
     let at = |width: f32| {
-        let shown = Shown::new(vec![(thread(1, "Hello"), 100.0)], CommentsPanelState::default(), BalloonPlace::Floating, vec2(width, 600.0), Direction::Ltr);
+        let shown =
+            Shown::new(vec![(thread(1, "Hello"), 100.0)], CommentsPanelState::default(), BalloonPlace::Floating, vec2(width, 600.0), Direction::Ltr);
         shown.card(1)
     };
     let wide = at(900.0);
@@ -160,7 +168,10 @@ fn an_edit_that_opens_takes_the_keyboard() {
     shown.fixture.settle();
     shown.fixture.type_text("!").settle();
     let draft = shown.state.borrow().editing.as_ref().map(|(.., text)| text.clone());
-    assert!(draft.as_deref().is_some_and(|text| text.contains('!') && text.len() == "First!".len()), "typing reaches the edit that opened: {draft:?}");
+    assert!(
+        draft.as_deref().is_some_and(|text| text.contains('!') && text.len() == "First!".len()),
+        "typing reaches the edit that opened: {draft:?}"
+    );
 
     // The reply field takes the keyboard; the open edit does not take it back.
     let reply = shown.fixture.by_label(words.reply.as_str()).expect("the selected card's reply field");
@@ -182,11 +193,7 @@ fn a_read_only_card_takes_no_typing() {
     shown.fixture.click_at(card.center()).settle();
     shown.fixture.type_text("Thanks").settle();
     assert!(shown.state.borrow().reply.is_empty(), "typing reaches no reply: {:?}", shown.state.borrow().reply);
-    assert!(
-        !shown.edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Reply { .. })),
-        "no reply is reported: {:?}",
-        shown.edits.borrow()
-    );
+    assert!(!shown.edits.borrow().iter().any(|edit| matches!(edit, CommentEdit::Reply { .. })), "no reply is reported: {:?}", shown.edits.borrow());
 }
 
 /// The selected card's buttons: Reply puts the focus in the reply field, Resolve and Reopen report `Resolve`, Delete reports

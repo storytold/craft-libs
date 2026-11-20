@@ -470,13 +470,7 @@ impl Component for Keytips<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> KeytipsOutput {
         let pending = (self.state.active() && !self.state.typed.is_empty()).then(|| self.state.typed.clone());
-        KeytipsOutput {
-            tab: self.reported.tab,
-            fired: self.reported.fired,
-            pending,
-            active: self.state.active(),
-            response: cx.response.clone(),
-        }
+        KeytipsOutput { tab: self.reported.tab, fired: self.reported.fired, pending, active: self.state.active(), response: cx.response.clone() }
     }
 }
 

@@ -470,8 +470,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             std::iter::once(FooterButton::new(label, DialogRole::Cancel)).chain(extra_buttons.iter().cloned()).collect::<Vec<_>>()
         });
         let reset = ResetFooter::new(ui, cancel_label, alt_resets).extra(extra_buttons);
-        let mut accept =
-            FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept).enabled(ok_enabled).stays_open(accept_stays_open_button);
+        let mut accept = FooterButton::new(ok_label.unwrap_or_else(|| common.ok.clone()), DialogRole::Accept)
+            .enabled(ok_enabled)
+            .stays_open(accept_stays_open_button);
         if let (false, Some(reason)) = (ok_enabled, &ok_reason) {
             accept = accept.disabled_reason(reason.clone());
         }

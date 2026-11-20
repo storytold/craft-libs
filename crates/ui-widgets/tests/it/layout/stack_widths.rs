@@ -60,16 +60,23 @@ fn a_side_menu_in_a_row_keeps_its_least_width() {
                 if least {
                     stack = stack.least_width(LeastWidth::SideMenu);
                 }
-                menu.set(stack.show(ui, |ui, _| {
-                    let _ = Button::new("Home").sizing(Sizing::FillWidth).show(ui);
-                })
-                .output
-                .rect);
-                page.set(Stack::new().fill().show(ui, |ui, _| {
-                    let _ = Text::new("Page").show(ui);
-                })
-                .output
-                .rect);
+                menu.set(
+                    stack
+                        .show(ui, |ui, _| {
+                            let _ = Button::new("Home").sizing(Sizing::FillWidth).show(ui);
+                        })
+                        .output
+                        .rect,
+                );
+                page.set(
+                    Stack::new()
+                        .fill()
+                        .show(ui, |ui, _| {
+                            let _ = Text::new("Page").show(ui);
+                        })
+                        .output
+                        .rect,
+                );
             });
             if !ui.is_sizing_pass() {
                 out.set((menu.get(), page.get()));

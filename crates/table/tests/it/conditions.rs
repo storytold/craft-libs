@@ -3,7 +3,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use craft_table::ui::{Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout, ConditionValue, Join, Match};
+use craft_table::ui::{
+    Condition, ConditionBuilder, ConditionFields, ConditionGroup, ConditionItem, ConditionKind, ConditionLayout, ConditionValue, Join, Match,
+};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 
@@ -68,7 +70,8 @@ fn joined_rules_show_a_join_after_the_first_and_removing_the_first_drops_it() {
     fixture.click(&join).settle();
     let or = fixture.by_label("Or").expect("the Or entry");
     fixture.click(&or).settle();
-    let joins: Vec<Join> = group.borrow().items.iter().filter_map(|item| if let ConditionItem::Rule(rule) = item { Some(rule.join) } else { None }).collect();
+    let joins: Vec<Join> =
+        group.borrow().items.iter().filter_map(|item| if let ConditionItem::Rule(rule) = item { Some(rule.join) } else { None }).collect();
     assert_eq!(joins.iter().filter(|join| **join == Join::Or).count(), 1, "one rule took Or");
     assert_eq!(joins[0], Join::And, "the first rule was not touched");
 

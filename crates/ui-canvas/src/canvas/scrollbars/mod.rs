@@ -19,12 +19,12 @@ use crate::contract::{
     PartsCx, Pointer as _, Props as _, Role, Show as _, THUMB, WordSetCx as _,
 };
 use crate::display::Text;
-use craft_behavior::overlay::{Align, Side};
 use crate::runtime::access::Numeric;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, ScrollBarKind, ScrollBarLook, StyleCx};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_behavior::overlay::{Align, Side};
 use craft_behavior::scroll::ScrollSpan;
 use craft_behavior::{Axis, CanvasView, Metrics, PartKey, PartRef, PressPhase};
 use egui::{Pos2, Rect, Response, Vec2};
@@ -303,8 +303,7 @@ impl Component for CanvasScrollbars<'_> {
     /// tooltip pipeline hides a tip while its subject is pressed, and here the press is the point.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup(TIP);
-        let (Some(tip), Some(view), Some(thumb)) =
-            (self.tip, cx.value().copied(), cx.part_if_declared(thumb_of(VERTICAL)).map(|result| result.rect))
+        let (Some(tip), Some(view), Some(thumb)) = (self.tip, cx.value().copied(), cx.part_if_declared(thumb_of(VERTICAL)).map(|result| result.rect))
         else {
             return;
         };

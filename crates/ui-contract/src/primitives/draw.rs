@@ -1,13 +1,13 @@
 //! `Draw`: what a component paints content with. It takes only `StyleColor` or `DataColor`.
 
 use super::content::{DocRun, DocText, FaceRun};
-use crate::fonts::document::DocumentFaces;
-use crate::fonts::{FaceBytes, FaceState, FontRef};
 use super::record::PaintRecord;
 use super::rule::{RectSide, RuleKind};
 use super::surface::Surface;
 use super::text::{TextEnv, TextLayout, TextRun};
+use crate::fonts::document::DocumentFaces;
 use crate::fonts::stack_facts;
+use crate::fonts::{FaceBytes, FaceState, FontRef};
 use crate::style::{Corners, DataColor, Ink, StyleColor, SurfaceKind, SurfaceStyle, TypeRole, UiTokens, ink_color, rule_look, surface_style};
 use craft_i18n::Direction;
 use craft_theme::Srgba;

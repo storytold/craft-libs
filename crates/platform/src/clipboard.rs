@@ -32,7 +32,6 @@ pub use memory::MemoryClipboard;
 pub use probe::*;
 pub use types::*;
 
-
 // The probe's backend lives on its worker.
 const _: () = {
     const fn sendable<T: Send>() {}

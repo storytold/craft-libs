@@ -31,8 +31,7 @@ use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
 use craft_behavior::fit::{FitItem, fit_items};
 use craft_behavior::{
-    Flow, HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, SelectionChange,
-    Sense,
+    Flow, HitLevel, HitPriority, IconId, ItemLayout, ItemSource, Metrics, NavShape, PartKey, PressPhase, ScrollPos, Selection, SelectionChange, Sense,
 };
 use egui::{Id, Pos2, Rect, Response, Vec2};
 use std::cell::RefCell;
@@ -642,7 +641,11 @@ impl<'a, K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> TabStri
         }
         drop(texts);
         // The same keys in the same order as the layout reserved their slots from (`reserved`).
-        self.ghosts = cx.exiting::<Ghost>(LEAVE, spec::OPEN_FADE).into_iter().map(|(presence, ghost)| Fading { label: ghost.label, alpha: presence.t }).collect();
+        self.ghosts = cx
+            .exiting::<Ghost>(LEAVE, spec::OPEN_FADE)
+            .into_iter()
+            .map(|(presence, ghost)| Fading { label: ghost.label, alpha: presence.t })
+            .collect();
     }
 
     /// The menus of the end items that open one, each below its item.

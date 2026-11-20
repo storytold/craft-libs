@@ -2,8 +2,8 @@
 //! lays its children out (6.3).
 
 use crate::contract::{
-    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme, LeastWidth,
-    Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
+    Access, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, FooterPlace, FooterRegion, Gap, HeaderRegion, LabelScheme,
+    LeastWidth, Pad, Role, Scroll, Sizing, ThemeScope, WrapWidth,
 };
 use crate::layout::{BodyLayout, CellAlign, GridFit, RowAlign};
 use crate::style::{ComponentStyle, StyleCx};

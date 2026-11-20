@@ -5,8 +5,9 @@ use super::level::{LevelMemory, MenuLevel, level_env};
 use super::words::MenuWords;
 use crate::contract::overlay::{Anchor, Dismiss, Outside, Place, Popup};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue, Outcome,
-    Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec, Trigger,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, EndRegion, Entry, Focus as _, Gap, InMenu, LeastWidth, Mount, NoValue,
+    Outcome, Overlay, POPUP_PAD, Pad, Pointer as _, Props as _, Remember as _, Role, Scroll, Show as _, ShowContainer as _, Sizing, TooltipSpec,
+    Trigger,
 };
 use crate::display::Divider;
 use crate::runtime::env::{Env, Label};

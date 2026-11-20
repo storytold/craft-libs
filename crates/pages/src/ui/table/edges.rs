@@ -10,8 +10,8 @@ use craft_ui::contract::{
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
-use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use craft_ui::style::DataColor;
+use craft_ui::style::{ComponentStyle, Flags, FocusLook, Stateful, StyleColor, StyleCx, SurfaceKind, SurfaceLook};
 use egui::{Color32, CornerRadius, Pos2, Rect, Vec2, pos2};
 
 const EDGE: PartKey = PartKey::new("edge");
@@ -497,8 +497,7 @@ impl EdgePicker<'_> {
                 continue;
             }
             let (a, b) = lines[key as usize];
-            let (width, color) =
-                if chosen { (StrokeWidth::Thick, cx.resolve(&cx.style.on)) } else { (StrokeWidth::Thin, cx.resolve(&cx.style.off)) };
+            let (width, color) = if chosen { (StrokeWidth::Thick, cx.resolve(&cx.style.on)) } else { (StrokeWidth::Thin, cx.resolve(&cx.style.off)) };
             let width = if hovered == Some(key) && chosen { StrokeWidth::Heavy } else { width };
             draw.stroke(&PaintShape::Path(vec![a, b]), width, color);
         }

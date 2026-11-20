@@ -4,7 +4,7 @@
 use craft_behavior::{Input, Metrics, Proposal};
 use craft_pages::ui::PlacedPage;
 use craft_ui::contract::{
-    Common, Component, Cx, ItemOutput, Outcome, PaintUi, Pattern, Role, SetPosition, clicked, measure_item, show_item, Show as _,
+    Common, Component, Cx, ItemOutput, Outcome, PaintUi, Pattern, Role, SetPosition, Show as _, clicked, measure_item, show_item,
 };
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
@@ -151,8 +151,11 @@ impl<'a> CommentBalloons<'a> {
         let now = now.unwrap_or(0);
 
         // The stacking is right only over items in this order, whatever order the caller listed them in.
-        let mut order: Vec<(usize, &PlacedPage)> =
-            items.iter().enumerate().filter_map(|(index, item)| pages.iter().find(|page| page.page == item.page()).map(|page| (index, page))).collect();
+        let mut order: Vec<(usize, &PlacedPage)> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| pages.iter().find(|page| page.page == item.page()).map(|page| (index, page)))
+            .collect();
         order.sort_by(|&(a, _), &(b, _)| {
             let (a, b) = (items[a], items[b]);
             a.page().cmp(&b.page()).then(a.anchor().y.total_cmp(&b.anchor().y)).then(a.anchor().x.total_cmp(&b.anchor().x))
@@ -191,7 +194,8 @@ impl<'a> CommentBalloons<'a> {
                 let rect = Rect::from_min_size(Pos2::new(x_of(page), anchor.y.max(floor)), vec2(width, height));
                 stacked = Some((page.page, rect.bottom()));
                 // A card over the page's edge has no solid stretch: the dashed one runs to the card.
-                let (edge, attach) = if rtl { (page.rect.left().max(rect.right()), rect.right()) } else { (page.rect.right().min(rect.left()), rect.left()) };
+                let (edge, attach) =
+                    if rtl { (page.rect.left().max(rect.right()), rect.right()) } else { (page.rect.right().min(rect.left()), rect.left()) };
                 leaders.push(Leader { anchor, edge: Pos2::new(edge, anchor.y), card: Pos2::new(attach, anchor.y.clamp(rect.top(), rect.bottom())) });
                 rows.push((row, thread, rect));
             }
@@ -242,10 +246,8 @@ fn card<'r, 't: 'r>(
 ) -> (CommentRow<'r>, Option<&'t CommentThread>) {
     match item {
         BalloonItem::Thread { thread, .. } => {
-            let name = thread
-                .messages
-                .first()
-                .map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
+            let name =
+                thread.messages.first().map_or_else(String::new, |first| words.card_name.fill(&[("author", &first.author), ("text", &first.text)]));
             let selected = state.selected == Some(thread.id);
             let editing = state.editing.as_ref().filter(|(id, ..)| *id == thread.id).map(|(_, index, text)| (*index, text.as_str()));
             let row = CommentRow::card(thread, name)

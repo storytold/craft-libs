@@ -258,8 +258,7 @@ impl TextRuler<'_> {
         let (lo, hi) = g.span();
         for (index, position) in self.columns.iter().copied().enumerate() {
             let press = cx.part(COLUMN.at(index as u64)).press;
-            let report =
-                |phase: GesturePhase, position: f32| Some(ColumnDrag { phase, border: ColumnBorder { index, position }, mods: press.mods });
+            let report = |phase: GesturePhase, position: f32| Some(ColumnDrag { phase, border: ColumnBorder { index, position }, mods: press.mods });
             match press.phase {
                 PressPhase::DragStart { start, .. } if start.button == PointerButton::Primary => {
                     held.columns = Some(self.columns.to_vec());

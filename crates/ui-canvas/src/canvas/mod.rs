@@ -118,8 +118,8 @@ use craft_behavior::{
     CanvasTransform, CanvasView, CursorPriority, EditEvent, EditorInput, HitLevel, HitPriority, HitShape, Input, Intent, Metrics, Mixed, PartKey,
     PointerButton, PressPhase, PressState, Sense, WheelNotch,
 };
-use navigate::MiddleAutoscroll;
 use egui::{Context, Pos2, Rect, Response, Vec2};
+use navigate::MiddleAutoscroll;
 use std::sync::Arc;
 use zoom_motion::{Steer, ViewMotion};
 
@@ -542,14 +542,7 @@ impl<'a> Canvas<'a> {
     /// and shares the frame's clock, so it steps zero): `keyed` for any key (`runtime/keys/input.rs`), the background
     /// press or the frame's press for a press, egui's window focus (winit `Focused`, the web's blur) and a pointer
     /// position of `None` (winit `CursorLeft`, egui `PointerGone`) for leaving the window.
-    fn autoscroll(
-        &self,
-        cx: &mut Cx<'_, Self>,
-        run: &mut MiddleAutoscroll,
-        view: &mut CanvasView,
-        size: Size,
-        wheeled: bool,
-    ) -> (bool, bool) {
+    fn autoscroll(&self, cx: &mut Cx<'_, Self>, run: &mut MiddleAutoscroll, view: &mut CanvasView, size: Size, wheeled: bool) -> (bool, bool) {
         let ctx = cx.core.ctx.clone();
         let input = crate::runtime::pointer::frame(&ctx);
         let phase = self.raw_press(cx).phase;
@@ -612,8 +605,7 @@ impl<'a> Canvas<'a> {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys, settled.zoom_anchor),
             None => (self.given?, self.given?, false, BodyKeys::default(), None),
         };
-        let mut space =
-            CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer).with_zoom_anchor(zoom_anchor);
+        let mut space = CanvasSpace::new(target, pixels_per_point).with_follows_pointer(self.follows_pointer).with_zoom_anchor(zoom_anchor);
         space.set_view(target);
         if easing {
             space.ease_through(shown);

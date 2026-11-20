@@ -502,14 +502,9 @@ fn merge_entries(base: &[Value], ours: &[Value], theirs: &[Value], key: EntryKey
     let (base_ids, ours_ids, theirs_ids) = (entry_ids(base, key), entry_ids(ours, key), entry_ids(theirs, key));
     let ids = |list: &[(EntryId, Value)]| -> Vec<EntryId> { list.iter().map(|(id, _)| id.clone()).collect() };
     let (base_order, ours_order, theirs_order) = (ids(&base_ids), ids(&ours_ids), ids(&theirs_ids));
-    let lists = EntryLists {
-        base: base_ids.into_iter().collect(),
-        ours: ours_ids.into_iter().collect(),
-        theirs: theirs_ids.into_iter().collect(),
-    };
-    let common = |order: &[EntryId], other: &HashMap<EntryId, Value>| -> Vec<EntryId> {
-        order.iter().filter(|id| other.contains_key(*id)).cloned().collect()
-    };
+    let lists = EntryLists { base: base_ids.into_iter().collect(), ours: ours_ids.into_iter().collect(), theirs: theirs_ids.into_iter().collect() };
+    let common =
+        |order: &[EntryId], other: &HashMap<EntryId, Value>| -> Vec<EntryId> { order.iter().filter(|id| other.contains_key(*id)).cloned().collect() };
     let reordered = common(&ours_order, &lists.base) != common(&base_order, &lists.ours);
     let (first, second) = if reordered { (&ours_order, &theirs_order) } else { (&theirs_order, &ours_order) };
     anchored(&lists, first, second)

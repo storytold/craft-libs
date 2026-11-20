@@ -467,7 +467,8 @@ fn end_view(room: f32) -> EndView {
     use craft_ui::runtime::commands::{CommandRef, EditCommands};
     use craft_ui::tabs::StripEnd;
     let rows: [Entry<CommandRef>; 1] = [Entry::new(EditCommands::Paste.into(), "Show comments")];
-    let items = [StripEnd::command("Share", IconId::new("link").into(), EditCommands::Copy), StripEnd::menu("Comments", IconId::new("list").into(), &rows)];
+    let items =
+        [StripEnd::command("Share", IconId::new("link").into(), EditCommands::Copy), StripEnd::menu("Comments", IconId::new("list").into(), &rows)];
     let mut frames = Frames::new();
     let mut show = |ui: &mut Ui| {
         ui.set_max_width(room);

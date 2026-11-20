@@ -164,10 +164,9 @@ fn image(drawn: Result<tiny_skia::Pixmap, String>, px: u32, as_drawn: bool, labe
     let size = [px as usize; 2];
     match drawn {
         // Both tiny-skia's pixels and egui's colours are premultiplied.
-        Ok(pixmap) if as_drawn => ColorImage::new(
-            size,
-            pixmap.pixels().iter().map(|p| Color32::from_rgba_premultiplied(p.red(), p.green(), p.blue(), p.alpha())).collect(),
-        ),
+        Ok(pixmap) if as_drawn => {
+            ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_rgba_premultiplied(p.red(), p.green(), p.blue(), p.alpha())).collect())
+        }
         Ok(pixmap) => ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_white_alpha(p.alpha())).collect()),
         Err(error) => {
             log::error!("{}: {error}", label());

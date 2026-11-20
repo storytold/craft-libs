@@ -3,10 +3,10 @@
 
 use craft_behavior::{Selection, keyed};
 use craft_ui::contract::{Bind, BodyCx, PaneEdge, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
-use craft_ui::patterns::dock::{PaneArea, PaneContent, PaneSpec, PaneState};
 use craft_ui::display::{Picture, PictureSize, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, ThumbAspect, ThumbSize};
+use craft_ui::patterns::dock::{PaneArea, PaneContent, PaneSpec, PaneState};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::tile_grid::{Tile, TileGrid};
@@ -123,7 +123,8 @@ fn a_picker_dialog_opened_as_a_pane_closes_settles() {
 /// bracketed words.
 #[trial]
 fn a_picker_dialog_settles_after_opening() {
-    let pseudo: fn(&str) -> String = |text| format!("⟦{}{}⟧", text.replace('a', "á").replace('e', "é").replace('o', "ö"), "~".repeat(text.len() * 2 / 5));
+    let pseudo: fn(&str) -> String =
+        |text| format!("⟦{}{}⟧", text.replace('a', "á").replace('e', "é").replace('o', "ö"), "~".repeat(text.len() * 2 / 5));
     for (name, say) in [("English", (|text: &str| text.to_owned()) as fn(&str) -> String), ("pseudo", pseudo)] {
         let (passes, warned) = opening(say);
         assert!(passes[2..].iter().all(|&n| n == 1), "{name}: every frame from the third runs one pass: {passes:?}; {warned:?}");

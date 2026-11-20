@@ -9,8 +9,8 @@ use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::{
-    BorderEdges, CellAlign, CellSelectionOverlay, EdgeKey, EdgeLook, EdgePicker, RowHeight, SampleArea, TableGeometry, TableProperties, TableSizePicker, TableValues,
-    TextDirection,
+    BorderEdges, CellAlign, CellSelectionOverlay, EdgeKey, EdgeLook, EdgePicker, RowHeight, SampleArea, TableGeometry, TableProperties,
+    TableSizePicker, TableValues, TextDirection,
 };
 
 fn mixed_edges() -> BorderEdges {

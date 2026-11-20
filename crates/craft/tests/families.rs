@@ -65,12 +65,18 @@ fn family_ui_depends_on_no_other_family() {
     let mut offenders = Vec::new();
     for m in members().iter().filter(|m| FAMILIES.contains(&m.dir.as_str()) && !COMPOSITION.contains(&m.dir.as_str())) {
         for dep in ui_edges(m) {
-            if dep != m.dir && FAMILIES.contains(&dep.as_str()) && !BASE.contains(&dep.as_str())
+            if dep != m.dir
+                && FAMILIES.contains(&dep.as_str())
+                && !BASE.contains(&dep.as_str())
                 && !ALLOWED.iter().any(|(from, to, _)| *from == m.dir && *to == dep)
             {
                 offenders.push(format!("craft-{}'s ui depends on craft-{dep}", m.dir));
             }
         }
     }
-    assert!(offenders.is_empty(), "family ui crates may depend only on craft-color-ui's ui, not on each other (beyond ALLOWED):\n{}", offenders.join("\n"));
+    assert!(
+        offenders.is_empty(),
+        "family ui crates may depend only on craft-color-ui's ui, not on each other (beyond ALLOWED):\n{}",
+        offenders.join("\n")
+    );
 }

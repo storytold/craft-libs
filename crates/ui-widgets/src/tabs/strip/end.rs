@@ -94,7 +94,6 @@ impl<'a> StripEnd<'a> {
     /// The item as the fit sees it: its full width, and its icon-only width as the short form. It never leaves the
     /// strip, since the tabs overflow before the end items give up their room.
     pub(super) fn fit_item(&self, cx: &StyleCx<'_>) -> FitItem {
-
         let full = cx.face(self.full_face()).x;
         let short = cx.face(self.short_face()).x;
         FitItem::new(full, 0, FitKeep::Pinned).short(short)

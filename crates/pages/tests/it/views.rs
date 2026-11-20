@@ -220,11 +220,8 @@ fn ctrl_wheel_zoom_out(room: egui::Vec2, top: f64, least: usize, nudge: egui::Ve
     let start = seen.borrow().clone();
     // The page under the pointer, else the nearest; a reflow can put another page there, so each notch asks again.
     let page_under = |seen: &ZoomSeen| {
-        let (page, _) = *seen
-            .pages
-            .iter()
-            .min_by(|(_, a), (_, b)| a.distance_to_pos(pointer).total_cmp(&b.distance_to_pos(pointer)))
-            .expect("pages show");
+        let (page, _) =
+            *seen.pages.iter().min_by(|(_, a), (_, b)| a.distance_to_pos(pointer).total_cmp(&b.distance_to_pos(pointer))).expect("pages show");
         page
     };
     let mut page = page_under(&start);
@@ -513,11 +510,8 @@ fn tips_around_a_thumb_drag(hide_white_space: bool, fraction: f32) -> (Option<us
     });
     fixture.room(vec2(900.0, 600.0));
     fixture.settle();
-    let bar = fixture
-        .by_role(Role::SCROLL_BAR)
-        .into_iter()
-        .find(|bar| bar.rect.height() > bar.rect.width())
-        .expect("the view has a vertical scroll bar");
+    let bar =
+        fixture.by_role(Role::SCROLL_BAR).into_iter().find(|bar| bar.rect.height() > bar.rect.width()).expect("the view has a vertical scroll bar");
     assert_eq!(page_tip(&fixture, &expected.borrow()), None, "no tip while no thumb drags");
     let from = pos2(bar.rect.center().x, bar.rect.min.y + 3.0);
     let mut during = None;
@@ -677,9 +671,8 @@ fn a_reading_column_turn_eases_and_lands_exactly_on_the_column_start() {
     fixture.room(vec2(900.0, 1400.0));
     fixture.settle();
     // The leading edge of the leftmost painted page: with the column at the start, page 0 sits there; once on column 1, page 1 does.
-    let leading = |fixture: &Fixture| {
-        fixture.shape_bounds().iter().filter(|rect| (rect.height() - tall).abs() < 1.0).map(|rect| rect.min.x).reduce(f32::min)
-    };
+    let leading =
+        |fixture: &Fixture| fixture.shape_bounds().iter().filter(|rect| (rect.height() - tall).abs() < 1.0).map(|rect| rect.min.x).reduce(f32::min);
     let start = leading(&fixture).expect("page 0's paper is painted");
     state.borrow_mut().turn(1, 6);
     let mut seen = Vec::new();

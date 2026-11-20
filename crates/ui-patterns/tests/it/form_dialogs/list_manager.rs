@@ -1,9 +1,9 @@
 //! `ListManager`'s action rules: a name check, a button that never enables, the Cancel label and the section under
 //! the list; a name box the caller binds.
 
-use craft_ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerEntry};
-use craft_ui::display::Text;
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::display::Text;
+use craft_ui::patterns::form_dialogs::{ActionEnabled, ListManager, ListManagerAction, ListManagerEntry};
 use craft_ui::testing::{Fixture, trial};
 use std::cell::RefCell;
 use std::rc::Rc;

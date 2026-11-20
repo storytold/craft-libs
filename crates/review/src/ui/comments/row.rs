@@ -489,7 +489,6 @@ impl Sink for Measure<'_, '_, '_> {
     fn push(&mut self, _: Slot, _: Rect, _: &Label, _: bool) {}
 }
 
-
 /// Where the push button `slot`'s measured size is kept.
 fn push_index(slot: Slot) -> usize {
     match slot {
