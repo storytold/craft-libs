@@ -1676,6 +1676,11 @@ fn text_in_a_turned_box_keeps_its_own_angle() {
             (0.0, None, None, (15.125, 11.375, 15.125, 14.375)),
         ]
     );
+    // A mirrored trapezoid (orientation bits 0x40) takes a half-turn as its own outline; its text,
+    // at its own angle of 0, stays upright rather than turning with it.
+    let p = deck_of(vec![shape(4 | 0x4000, wide, 0, 0, [66, 37, 66, 37])], &[]);
+    let (x, b) = (p.slides[0].shapes[0].xfrm.unwrap(), &body_of(&p.slides[0].shapes[0]).body);
+    assert_eq!((x.rot, x.flip_h, b.upright, b.rot), (180.0, false, Some(true), None));
     // A balloon turned a quarter counter-clockwise: its body is cut from the shape's bottom, the
     // held box's right, where its tail is.
     let p = deck_of(vec![shape(13 | 0x1000, [-576, -576, 576, 576], 0, 0, [91, 121, 307, 121])], &[]);
@@ -2427,6 +2432,12 @@ fn check_text_frame_sample(name: &str, shapes: &[Shape]) -> bool {
         // whole angle, and the text turns with the shape.
         "wrap-none" | "wrap-after" | "rotmix" | "rot30text" => assert_eq!(upright(&shapes[0]), (None, None), "{name}"),
         "wrap-before" => assert_eq!(upright(&shapes[0]), (Some(true), None)),
+        // Trapezoids with text, turned or flipped before or after it was typed: the shape ends at the
+        // text's own angle, upright or upside down as PowerPoint 95 drew it, so nothing more is set.
+        "traptext" | "trap180before" | "traptexthflip" | "traptextvflip" | "traptexthflipafter" | "trap180after" | "traptextvflipafter" => {
+            let rot = if matches!(name, "trap180after" | "traptextvflipafter") { 180.0 } else { 0.0 };
+            assert_eq!((shapes[0].xfrm.unwrap().rot, upright(&shapes[0])), (rot, (None, None)), "{name}");
+        }
         "wrap-mix" | "rotmix2" => assert_eq!(upright(&shapes[0]), (Some(true), Some(330.0)), "{name}"),
         // A balloon's box is its body (the square's top 120 of 144 pt); its text's bottom edge,
         // 307 units above the square's, is 14.375 pt above the body's.
