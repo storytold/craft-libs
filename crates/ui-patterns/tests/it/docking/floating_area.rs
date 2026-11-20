@@ -21,6 +21,8 @@ const SECOND: usize = 3;
 const SHORT: usize = 4;
 /// A panel whose content fills its body.
 const FILL: usize = 5;
+/// A panel whose floating window stays the size its host gives it.
+const FIXED: usize = 6;
 /// Inside the fixture's room, so the area's bounds clamp neither the window nor the moves and resizes made of it.
 const WINDOW_AT: Rect = Rect { min: Pos2::new(130.0, 90.0), max: Pos2::new(330.0, 210.0) };
 const SLACK: f32 = 1.5;
@@ -35,7 +37,7 @@ struct Panels {
 
 impl DockPanels<usize> for Panels {
     fn spec(&self, panel: &usize) -> PanelSpec {
-        PanelSpec::new(title(*panel))
+        PanelSpec::new(title(*panel)).allow_float_resize(*panel != FIXED)
     }
 
     fn permissions(&self, panel: &usize) -> Permissions {
@@ -117,6 +119,25 @@ fn press_and_move(fixture: &mut Fixture, from: Pos2, by: Vec2) {
     for step in 1..=4 {
         fixture.frame(vec![moved(from + by * (step as f32 / 4.0))]);
     }
+}
+
+#[trial]
+fn a_fixed_floating_window_ignores_edge_drags_and_still_moves_by_its_title() {
+    let layout = Layout::new(Some(Node::tabs(vec![DOCKED], 0)), vec![Floating::single(vec![FIXED], 0, WINDOW_AT)]);
+    let mut bed = bed(layout, |_| Permissions::ALL);
+    let right = Pos2::new(WINDOW_AT.right() - 1.0, WINDOW_AT.center().y);
+    let bottom = Pos2::new(WINDOW_AT.center().x, WINDOW_AT.bottom() - 1.0);
+    for (from, by) in [(right, Vec2::new(40.0, 0.0)), (bottom, Vec2::new(0.0, 40.0))] {
+        press_and_move(&mut bed.fixture, from, by);
+        bed.fixture.frame(vec![release(from + by)]);
+        bed.fixture.settle();
+        assert_eq!(bed.workspace.borrow().layout.floating[0].rect, WINDOW_AT);
+    }
+
+    let by = Vec2::new(-35.0, 20.0);
+    press_and_move(&mut bed.fixture, window_title(), by);
+    assert!(dragging(&bed));
+    assert_ne!(bed.workspace.borrow().layout.floating[0].rect.min, WINDOW_AT.min);
 }
 
 #[trial]
