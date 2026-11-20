@@ -100,6 +100,10 @@ pub struct MenuItemOutput {
 }
 
 impl MenuItemOutput {
+    pub(super) fn sibling_submenu_open(&self) -> bool {
+        self.level.sibling_submenu_open(self.id)
+    }
+
     /// A submenu row's menu was shown at `rect` (`open`), or closed itself (`!open`).
     pub(crate) fn note_submenu(&self, open: bool, rect: Rect) {
         self.level.note_submenu(self.id, open, rect);
@@ -474,8 +478,15 @@ impl Component for MenuItem<'_> {
         let asked = enabled && (typed || cx.activation().is_some());
         if self.submenu {
             self.opens = asked || (enabled && forward) || (enabled && takes_over);
-            if self.opens && level.open_submenu(cx.id) {
-                frame::request_own_repaint(&ctx);
+            if self.opens {
+                let replaces_sibling = level.sibling_submenu_open(cx.id);
+                if level.open_submenu(cx.id) {
+                    // An earlier row may already have drawn the old submenu in this pass.
+                    if replaces_sibling && frame::discardable(&ctx) {
+                        frame::discard_pass(&ctx, "menu: a sibling replaced the open submenu");
+                    }
+                    frame::request_own_repaint(&ctx);
+                }
             }
             self.open = level.submenu_open(cx.id);
             // The active row is in the open submenu: this row keeps only the open-submenu tint.
