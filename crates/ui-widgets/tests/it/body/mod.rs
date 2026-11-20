@@ -5,4 +5,3 @@ pub(crate) mod memo_reads;
 pub(crate) mod memo_settled;
 pub(crate) mod memo_view;
 pub(crate) mod scroll;
-pub(crate) mod settle;
