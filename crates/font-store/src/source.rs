@@ -403,7 +403,7 @@ fn check(raw: Raw, origin: Origin<'_>) -> Result<Index, IndexError> {
                     .iter()
                     .filter(|f| is_collection(&f.path))
                     .take(3)
-                    .map(|f| format!("`{}`", short(&f.path)))
+                    .map(|f| format!("`{}`", short(f.path.rsplit('/').next().unwrap_or(&f.path))))
                     .collect::<Vec<_>>()
                     .join(", ");
                 fam.files.retain(|f| !is_collection(&f.path));
