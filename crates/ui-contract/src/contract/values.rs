@@ -833,7 +833,7 @@ pub(crate) enum Checked {
 /// let mut name = Tracked::new(String::from("a"));
 /// let before = name.revision();
 /// let whole = bind_tracked!(name);
-/// # let _ = whole;
+/// # drop(whole);
 /// assert_eq!(name.revision(), before, "binding leaves the revision");
 /// ```
 ///
