@@ -1000,6 +1000,26 @@ fn perspective_push(
     v: Point,
     mid: Point,
 ) -> Option<[Point; 4]> {
+    let centre = push_centre(start, first, edge, mid)?;
+    let homog = |p: Point| [p.x, p.y, 1.0];
+    let along = cross3(homog(v), homog(mid));
+    let mut out = first;
+    for i in dragged {
+        let p = cross3(cross3(centre, homog(offset[i])), along);
+        if p[2].abs() <= 1e-12 {
+            return None;
+        }
+        out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
+    }
+    // A push past this is a runaway, so the first step stands; bottom drags on boxes in strong perspective move their
+    // corners several edge lengths on the reference.
+    let reach = first[dragged[0]].distance(first[dragged[1]]) * if edge == 2 { 6.0 } else { 2.0 };
+    (out.iter().all(|c| c.is_finite()) && dragged.iter().all(|&i| out[i].distance(first[i]) <= reach)).then_some(out)
+}
+
+/// The push's centre (homogeneous) for a drag of `edge` on `start` whose first step put the dragged edge's middle at
+/// `mid`; see [`perspective_push`].
+fn push_centre(start: [Point; 4], first: [Point; 4], edge: u8, mid: Point) -> Option<[f64; 3]> {
     // (s, t, w) of the drag's frame as (u, v, w) of the unit square.
     let unit = |s: f64, t: f64, w: f64| match edge {
         1 => [s, t, w],
@@ -1032,19 +1052,28 @@ fn perspective_push(
         let spread = row * (1.0 - row);
         let drift_row = spread * lean * (0.75 - 0.25 * rho);
         let drift_place = 2.0 * spread * lean * lean;
+        // On a box whose top and bottom converge too (after a distort), `side` = ln of the opposite side's weight over
+        // the dragged side's: the row is that of `rho e^(side + side² - 0.31 side x)` and 1/s grows by
+        // `e^(-0.41 side + 0.87 side² + 1.23 side ln rho + 1.90 side² ln rho)` (fitted on nine such boxes; zero, and
+        // the law unchanged, where top and bottom are parallel).
+        let side = (apply(&h, unit(0.0, 0.5, 1.0))[2] / apply(&h, unit(1.0, 0.5, 1.0))[2]).ln();
+        let side = if side.is_finite() { side } else { 0.0 };
+        let turned = rho * (side + side * side - 0.31 * side * x).exp();
+        let row = turned * turned / (1.0 + turned * turned);
+        let grow = (-0.41 * side + 0.87 * side * side + 1.23 * side * lean + 1.90 * side * side * lean).exp();
         // Past the opposite edge (x < -1, the middle flipped) the factor levels off at place * e^(-ln² rho / 2) and the
         // row drifts further with 1 / s_m = x + 1 (measured on five boxes, rho 0.5 to 1.66).
         // A shrink (x > 0) bends 1/s to `place * x / (1 - kappa x)`, kappa at least the linear law's slope and larger
         // on boxes in strong perspective (measured on six boxes, rho 0.5 to 2.5). Homogeneous `(w, row * lam, lam)`.
         let (w, lam, row) = if x < -1.0 {
             let extra = drift_row * lean * lean * (0.8 - 0.3 * lean);
-            (1.0, place * (-lean * lean / 2.0).exp() * x, row + drift_row * x + extra * (x + 1.0))
+            (1.0, place * (-lean * lean / 2.0).exp() * x * grow, row + drift_row * x + extra * (x + 1.0))
         } else if x > 0.0 {
             let strong = if lean > 0.0 { 0.3734 - 0.179 * lean } else { 0.4215 - 0.1735 * lean };
             let kappa = (drift_place / place).max(lean * lean * strong);
-            (1.0 - kappa * x, place * x, row + drift_row * x)
+            (1.0 - kappa * x, place * x * grow, row + drift_row * x)
         } else {
-            (1.0, (place + drift_place * x) * x, row + drift_row * x)
+            (1.0, (place + drift_place * x) * x * grow, row + drift_row * x)
         };
         apply(&h, unit(w, row * lam, lam))
     } else if edge == 2 {
@@ -1065,20 +1094,7 @@ fn perspective_push(
         let inv_s = (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across);
         apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s))
     };
-    let homog = |p: Point| [p.x, p.y, 1.0];
-    let along = cross3(homog(v), homog(mid));
-    let mut out = first;
-    for i in dragged {
-        let p = cross3(cross3(centre, homog(offset[i])), along);
-        if p[2].abs() <= 1e-12 {
-            return None;
-        }
-        out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
-    }
-    // A push past this is a runaway, so the first step stands; bottom drags on boxes in strong perspective move their
-    // corners several edge lengths on the reference.
-    let reach = first[dragged[0]].distance(first[dragged[1]]) * if edge == 2 { 6.0 } else { 2.0 };
-    (out.iter().all(|c| c.is_finite()) && dragged.iter().all(|&i| out[i].distance(first[i]) <= reach)).then_some(out)
+    Some(centre)
 }
 
 /// The reference levels a side beside the dragged edge that a drag in perspective leaves less than 1 px from level (or

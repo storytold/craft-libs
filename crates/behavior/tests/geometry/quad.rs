@@ -842,3 +842,52 @@ fn an_alt_drag_about_a_moved_reference_point_centres_on_the_scaled_middle() {
         assert!(within(&got, want, tol), "pivot {pivot:?} edge {edge} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// Side drags on boxes that converge both ways, as after a distort (measured on the reference): the push's centre
+/// shifts with how much heavier the opposite side's weight is than the dragged side's, toward the dragged side for a
+/// right side and away for a left one.
+#[test]
+fn a_side_drag_on_a_box_converging_both_ways_follows_the_reference() {
+    let cases = [
+        // Was 3.5 px off.
+        (
+            [(180.0, 125.0), (422.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            1,
+            (437.0, 256.0),
+            (357.0, 256.0),
+            [(172.3824, 155.7244), (357.9561, 205.6191), (366.7337, 281.2844), (157.6176, 296.2756)],
+            0.5,
+        ),
+        // Was 0.31 px off.
+        (
+            [(210.0, 125.0), (392.0, 165.0), (452.0, 327.0), (150.0, 327.0)],
+            3,
+            (180.0, 226.0),
+            (140.0, 226.0),
+            [(190.827, 99.7214), (396.7292, 143.4821), (447.2708, 348.5179), (90.6773, 340.7576)],
+            0.05,
+        ),
+        // Was 2.4 px off.
+        (
+            [(210.0, 125.0), (392.0, 185.0), (452.0, 327.0), (150.0, 327.0)],
+            1,
+            (422.0, 256.0),
+            (382.0, 256.0),
+            [(203.4635, 144.8275), (372.7844, 204.3379), (403.5524, 297.4795), (156.5365, 307.1725)],
+            0.7,
+        ),
+        // Was 11.7 px off.
+        (
+            [(210.0, 125.0), (392.0, 165.0), (452.0, 327.0), (150.0, 327.0)],
+            1,
+            (422.0, 246.0),
+            (342.0, 246.0),
+            [(200.5416, 168.0358), (343.5701, 216.9779), (353.6293, 275.2077), (159.4584, 283.9642)],
+            4.0,
+        ),
+    ];
+    for (quad, edge, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), edge, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "{quad:?} edge {edge} to {to:?}: {:?}", got.quad);
+    }
+}
