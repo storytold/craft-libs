@@ -90,6 +90,8 @@ pub(crate) struct Placed {
     /// along, as the area had them when the run began. They are the area's own state, not inputs of its children, so
     /// a replayed child reports against the area's current ones.
     names: (Option<Id>, Option<Id>, (bool, bool)),
+    /// The view the run lays the content out for (`begin`), which a child's rect is placed from.
+    view: Option<View>,
     /// The place and extent of the child the area's anchor names, when the run reached it.
     pub(crate) anchor: Option<(Vec2, Vec2)>,
     /// The first child, in flow order, that starts at or after the view's start, and its place.
@@ -680,46 +682,29 @@ pub(crate) fn reading<R>(ctx: &Context, owner: Id, f: impl FnOnce(&dyn Fn(Id) ->
     })
 }
 
-/// Starts the real run that lays out the content of the scroll area `owner`, which names `anchor` as its scroll
-/// position, glides to `reveal` and scrolls along `axes`: the children it places report to it.
-pub(crate) fn begin(ctx: &Context, owner: Id, anchor: Option<Id>, reveal: Option<Id>, axes: (bool, bool)) {
+/// Starts the real run that lays out the content of the scroll area of `view`, which names `anchor` as its scroll
+/// position and glides to `reveal`: the children it places report to it.
+pub(crate) fn begin(ctx: &Context, view: View, anchor: Option<Id>, reveal: Option<Id>) {
     with(ctx, |store, _, _| {
-        store.placed.insert(owner, Placed::named(anchor, reveal, axes));
+        store.placed.insert(view.owner, Placed { view: Some(view), ..Placed::named(anchor, reveal, view.axes) });
     });
 }
 
 /// Reports, in the real run that lays out the content of `view`'s area, that the child `id` took `rect`, run or not.
 pub(crate) fn place(ctx: &Context, view: &View, id: Id, rect: Rect) {
-    note_place(ctx, view.owner, id, ChildPlace { at: view.start_of(rect) - view.start_of(view.rect), extent: rect.size(), rtl: view.rtl });
+    note_place(ctx, view.owner, id, rect);
 }
 
-/// Where a child of a scroll area took its place: `at` from the view's start edge (the right one in a right-to-left
-/// area), `extent` long.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ChildPlace {
-    at: Vec2,
-    extent: Vec2,
-    rtl: bool,
-}
-
-/// A replay at another place moves the child within the view it ran in; the extent is a size. For an area inside the
-/// replayed run the note is dropped: the area does not run in that pass, and its places were taken (`placed`).
-impl crate::runtime::Shift for ChildPlace {
-    fn shifted(&self, by: &RecordShift) -> Self {
-        let along = Vec2::new(if self.rtl { -by.offset.x } else { by.offset.x }, by.offset.y);
-        ChildPlace { at: self.at + along, ..*self }
-    }
-}
-
-/// Reports that the child `id` of the area `owner` took its place `place`. A settled run around the child that is
-/// replayed later reports it again, moved with the run, so the area's anchor and first child are where the replay
-/// put them.
-fn note_place(ctx: &Context, owner: Id, id: Id, place: ChildPlace) {
-    replay::journal(ctx, || (owner, id, place), |ctx, &(owner, id, place)| note_place(ctx, owner, id, place));
-    let ChildPlace { at, extent, .. } = place;
+/// Reports that the child `id` of the area `owner` took `rect`. A settled run around the child that is replayed later
+/// reports it again, moved with the run, and the area takes its place from the view it shows then; an area inside the
+/// replayed run does not lay out in that pass, and its places were taken (`placed`).
+fn note_place(ctx: &Context, owner: Id, id: Id, rect: Rect) {
+    replay::journal(ctx, || (owner, id, rect), |ctx, &(owner, id, rect)| note_place(ctx, owner, id, rect));
     with(ctx, |store, _, _| {
-        if let Some(placed) = store.placed.get_mut(&owner) {
-            placed.note(id, at, extent);
+        if let Some(placed) = store.placed.get_mut(&owner)
+            && let Some(view) = placed.view
+        {
+            placed.note(id, view.start_of(rect) - view.start_of(view.rect), rect.size());
         }
     });
 }

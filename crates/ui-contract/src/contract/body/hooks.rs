@@ -1449,7 +1449,7 @@ impl BodyHooks<'_> {
         // own question.
         let lays_out = run.real && !crate::runtime::measure::active(ctx);
         if lays_out {
-            crate::runtime::lazy::begin(ctx, id, self.anchor.map(|anchor| anchor.child), self.glide.map(|glide| glide.child), view.axes);
+            crate::runtime::lazy::begin(ctx, view, self.anchor.map(|anchor| anchor.child), self.glide.map(|glide| glide.child));
         }
         let env = run.env.derive_local(|scoped| scoped.lazy = Some(view));
         let installed = Env::install_for(&region_ui, env.clone());
