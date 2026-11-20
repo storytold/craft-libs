@@ -183,6 +183,26 @@ fn a_huge_title_is_capped() {
 }
 
 #[test]
+fn modification_times_keep_their_instant_when_converted_to_utc() {
+    for (input, expected) in [
+        ("2026-10-13T09:30:00.123+02:00", "2026-10-13T07:30:00Z"),
+        ("2026-01-01T00:15:00+02:00", "2025-12-31T22:15:00Z"),
+        ("2026-12-31T23:30:00-02:00", "2027-01-01T01:30:00Z"),
+        ("2026-06-01T18:00:00.999-05:30", "2026-06-01T23:30:00Z"),
+    ] {
+        let mut book = book();
+        book.metadata.modified = input.into();
+        let bytes = write(&book).unwrap();
+        assert!(text(&bytes, "OEBPS/content.opf").contains(&format!("<meta property=\"dcterms:modified\">{expected}</meta>")));
+    }
+    for input in ["2026-02-30T09:30:00Z", "2026-10-13T09:30:00+99:99", "2026-10-13T09:30:00junk", "2026-10-13T09:30:00"] {
+        let mut book = book();
+        book.metadata.modified = input.into();
+        assert!(write(&book).is_err(), "{input}");
+    }
+}
+
+#[test]
 fn a_language_that_is_not_a_tag_is_written_as_undetermined() {
     let mut b = book();
     b.metadata.language = "en\"><script>".into();
