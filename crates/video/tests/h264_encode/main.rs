@@ -8,5 +8,6 @@ mod crf_level_and_note;
 mod ffmpeg_oracle;
 mod high10_oracle;
 mod pinned_decisions;
+mod semi_planar_oracle;
 mod thread_count;
 mod vbr_overshoot;
