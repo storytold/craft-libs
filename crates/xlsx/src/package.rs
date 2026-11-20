@@ -157,19 +157,19 @@ impl<'a> Package<'a> {
             let (mut wb, mut links, names) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
             if let Some(links) = links.as_mut() {
                 self.index_tables(&wb, links)?;
-                let read = self.read_binary_external_links(&wb)?;
+                let (by_part, infos) = self.read_binary_external_links(&wb)?;
                 // A reference that could not be read keeps its place, so these match unless
                 // the cap was reached.
-                if read.len() == links.external_count() {
-                    for (k, (_, info)) in read.iter().enumerate() {
+                if infos.len() == links.external_count() {
+                    for (k, info) in infos.into_iter().enumerate() {
                         if let Some(info) = info {
-                            links.set_external(k, info.clone());
+                            links.set_external(k, info);
                         }
                     }
                 } else {
                     self.warn("XLSB: the external links could not be matched to their parts; formulas through them keep their saved results");
                 }
-                self.binary_external = Some(read.into_iter().map(|((part, link), _)| (part, link)).collect());
+                self.binary_external = Some(by_part);
             }
             // Both table and external metadata must precede defined-name decoding.
             xlsb::read_names(&mut wb, names, links.as_mut(), &self.limits, &self.budget, &mut self.warnings);
@@ -509,23 +509,27 @@ impl<'a> Package<'a> {
         Ok(self.optional_xml(part)?.map(|root| ExternalLink::read(&root, &rels)))
     }
 
-    /// Reads each of a binary workbook's external link parts once: the link, and what formulas
-    /// need of it. A part that is missing or does not read is `None`, with a warning: formulas
-    /// through it keep their saved results.
+    /// Reads each of a binary workbook's external link parts once: the unique links by part name
+    /// and the formula metadata in reference order. A part that is missing or does not read is
+    /// `None`, with a warning: formulas through it keep their saved results.
     #[allow(clippy::type_complexity)]
-    fn read_binary_external_links(&mut self, wb: &Workbook) -> Result<Vec<((String, Option<ExternalLink>), Option<xlsb::ExternalInfo>)>, Error> {
+    fn read_binary_external_links(
+        &mut self,
+        wb: &Workbook,
+    ) -> Result<(std::collections::BTreeMap<String, Option<ExternalLink>>, Vec<Option<xlsb::ExternalInfo>>), Error> {
         let rels = self.workbook_rels()?;
-        let mut out = Vec::with_capacity(wb.external_references.len());
-        let mut seen: std::collections::BTreeMap<String, (Option<ExternalLink>, Option<xlsb::ExternalInfo>)> = Default::default();
+        let mut by_part: std::collections::BTreeMap<String, Option<ExternalLink>> = Default::default();
+        let mut infos_by_part: std::collections::BTreeMap<String, Option<xlsb::ExternalInfo>> = Default::default();
+        let mut infos = Vec::with_capacity(wb.external_references.len());
         for id in &wb.external_references {
             let Some(rel) = rels.by_id(id).filter(|r| !r.external) else {
                 self.warn(format!("external link {id}: the relationship is missing"));
-                out.push(((String::new(), None), None));
+                infos.push(None);
                 continue;
             };
             let part = rel.target.clone();
-            if let Some((link, info)) = seen.get(&part) {
-                out.push(((part, link.clone()), info.clone()));
+            if let Some(info) = infos_by_part.get(&part) {
+                infos.push(info.clone());
                 continue;
             }
             let read = (|| {
@@ -536,7 +540,7 @@ impl<'a> Package<'a> {
                 let part_rels = self.opc.rels(&part)?;
                 xlsb::external_link(&bytes, &part_rels, &self.limits, &self.budget, &mut self.warnings)
             })();
-            let entry = match read {
+            let (link, info) = match read {
                 Ok((link, info)) => (Some(link), Some(info)),
                 Err(Error::TooLarge(m)) => return Err(Error::TooLarge(m)),
                 Err(e) => {
@@ -544,10 +548,11 @@ impl<'a> Package<'a> {
                     (None, None)
                 }
             };
-            seen.insert(part.clone(), entry.clone());
-            out.push(((part, entry.0), entry.1));
+            by_part.insert(part.clone(), link);
+            infos_by_part.insert(part, info.clone());
+            infos.push(info);
         }
-        Ok(out)
+        Ok((by_part, infos))
     }
 
     /// A part of a binary workbook, checked against its content type.
