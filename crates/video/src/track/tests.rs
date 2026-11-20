@@ -20,6 +20,16 @@ fn a_codec_without_a_decoder_is_unsupported() {
         CodecId::Theora,
         CodecId::Aac,
         CodecId::Unknown,
+        #[cfg(not(feature = "prores"))]
+        CodecId::ProRes,
+        #[cfg(not(feature = "dnx"))]
+        CodecId::Dnxhd,
+        #[cfg(not(feature = "apv-decode"))]
+        CodecId::Apv,
+        #[cfg(not(feature = "ffv1"))]
+        CodecId::Ffv1,
+        #[cfg(not(feature = "vp8-decode"))]
+        CodecId::Vp8,
         #[cfg(not(feature = "h264-decode"))]
         CodecId::H264,
         #[cfg(not(feature = "hevc-decode"))]
@@ -39,8 +49,16 @@ fn a_codec_without_a_decoder_is_unsupported() {
 }
 
 #[test]
-fn every_built_decoder_starts_without_configuration() {
+fn decoders_other_than_ffv1_start_without_configuration() {
     let on = [
+        #[cfg(feature = "prores")]
+        CodecId::ProRes,
+        #[cfg(feature = "dnx")]
+        CodecId::Dnxhd,
+        #[cfg(feature = "apv-decode")]
+        CodecId::Apv,
+        #[cfg(feature = "vp8-decode")]
+        CodecId::Vp8,
         #[cfg(feature = "h264-decode")]
         CodecId::H264,
         #[cfg(feature = "hevc-decode")]
@@ -262,5 +280,194 @@ mod held {
         assert!(dec.output(vec![picture(8, 1), picture(0, 2)], None).is_err());
         dec.reset().unwrap();
         assert!(dec.flush().unwrap().is_empty());
+    }
+}
+
+#[cfg(any(feature = "prores", feature = "dnx", feature = "apv", feature = "ffv1", feature = "vp8"))]
+fn check_packet(params: CodecParams, packet: &[u8], mut expected: VideoFrame) {
+    let mut dec = TrackDecoder::new(&params).unwrap();
+    assert_eq!(dec.codec(), params.codec);
+    for pts in [-17, 91] {
+        expected.pts = Some(pts);
+        assert_eq!(dec.decode(packet, pts).unwrap(), [expected.clone()]);
+        assert!(dec.flush().unwrap().is_empty());
+        assert!(dec.flush().unwrap().is_empty());
+        assert!(matches!(dec.decode(&[], 0), Err(VideoError::Malformed(_))));
+        dec.reset().unwrap();
+        assert!(dec.flush().unwrap().is_empty());
+    }
+}
+
+#[cfg(feature = "prores")]
+#[test]
+fn prores_packet_timestamps_and_reset() {
+    use crate::prores::*;
+    let frame = Frame::new(32, 32, ChromaFormat::Yuv422, 10, false).unwrap();
+    let mut enc = Encoder::new(Profile::Proxy, 32, 32);
+    let packet = enc.encode(&frame).unwrap();
+    check_packet(enc.codec_params(), &packet, decode_frame(&packet).unwrap().try_into().unwrap());
+}
+
+#[cfg(feature = "dnx")]
+#[test]
+fn dnx_packet_timestamps_and_reset() {
+    use crate::dnx::*;
+    let frame = Frame::new(64, 64, ChromaFormat::Yuv422, 8, false);
+    let mut enc = Encoder::new(Profile::Lb, 64, 64).unwrap();
+    let packet = enc.encode(&frame).unwrap();
+    check_packet(enc.codec_params(), &packet, decode_frame(&packet).unwrap().try_into().unwrap());
+}
+
+#[cfg(feature = "apv")]
+#[test]
+fn apv_packet_timestamps_and_reset() {
+    use crate::apv::*;
+    let frame = Frame::new(32, 32, ChromaFormat::Yuv422, 10, false);
+    let mut enc = Encoder::new(Profile::P422_10, 32, 32).unwrap();
+    let packet = enc.encode(&frame).unwrap();
+    check_packet(params(CodecId::Apv, &enc.decoder_config_record()), &packet, decode_frame(&packet).unwrap().try_into().unwrap());
+}
+
+#[cfg(feature = "ffv1")]
+#[test]
+fn ffv1_configuration_dimensions_timestamps_and_reset() {
+    use crate::ffv1::*;
+    let frame = Frame {
+        width: 16,
+        height: 16,
+        colorspace: Colorspace::Rgb,
+        bit_depth: 10,
+        chroma_shift: (0, 0),
+        planes: vec![vec![128; 256], vec![512; 256], vec![768; 256], vec![1023; 256]],
+    };
+    let enc = Encoder::new(&frame, EncoderConfig::default()).unwrap();
+    let config = enc.config_record();
+    let packet = enc.encode(&frame).unwrap();
+    let p = params(CodecId::Ffv1, &config).with_size(16, 16);
+    check_packet(p.clone(), &packet, frame.try_into().unwrap());
+    for (width, height) in [(None, Some(16)), (Some(16), None), (Some(0), Some(16)), (Some(16), Some(0))] {
+        let mut bad = p.clone();
+        bad.width = width;
+        bad.height = height;
+        assert!(matches!(TrackDecoder::new(&bad), Err(VideoError::Malformed(_))));
+    }
+    for config in [&[][..], &config[..config.len() - 1]] {
+        assert!(matches!(TrackDecoder::new(&params(CodecId::Ffv1, config).with_size(16, 16)), Err(VideoError::Malformed(_))));
+    }
+}
+
+#[cfg(feature = "vp8")]
+#[test]
+fn vp8_hidden_frames_timestamps_and_reset() {
+    use crate::vp8::*;
+    let packet = encode_rgba(&vec![128; 32 * 32 * 4], 32, 32, &Vp8Params::default()).unwrap().data;
+    let expected = Decoder::new().decode(&packet, 0).unwrap().unwrap().try_into().unwrap();
+    check_packet(params(CodecId::Vp8, &[]), &packet, expected);
+    let mut dec = TrackDecoder::new(&params(CodecId::Vp8, &[])).unwrap();
+    let mut hidden = packet.clone();
+    hidden[0] &= !0x10; // show_frame = 0: updates references, produces no displayed picture.
+    assert!(dec.decode(&hidden, 33).unwrap().is_empty());
+    assert!(dec.flush().unwrap().is_empty());
+    dec.reset().unwrap();
+    // An inter-frame tag with one byte of first partition must fail for missing references
+    // before its payload is parsed. Keeping the previous key frame would give a syntax error.
+    let err = dec.decode(&[0x31, 0, 0, 0], 34).unwrap_err();
+    assert!(err.to_string().contains("missing reference frame"), "{err}");
+    assert_eq!(dec.decode(&packet, 35).unwrap()[0].pts, Some(35));
+}
+
+#[test]
+fn new_codec_errors_keep_their_category() {
+    #[cfg(feature = "prores")]
+    assert!(matches!(VideoError::from(crate::prores::Error::Unsupported("profile")), VideoError::Unsupported(_)));
+    #[cfg(feature = "dnx")]
+    assert!(matches!(VideoError::from(crate::dnx::Error::UnknownCid(0)), VideoError::Unsupported(_)));
+    #[cfg(feature = "apv-decode")]
+    assert!(matches!(VideoError::from(crate::apv::Error::Truncated), VideoError::Malformed(_)));
+    #[cfg(feature = "ffv1")]
+    assert!(matches!(VideoError::from(crate::ffv1::Error::Unsupported("inter frames")), VideoError::Unsupported(_)));
+    #[cfg(feature = "vp8-decode")]
+    assert!(matches!(VideoError::from(crate::vp8::Error::Invalid("header".into())), VideoError::Malformed(_)));
+}
+
+#[test]
+#[allow(irrefutable_let_patterns, clippy::cognitive_complexity)]
+fn track_decoder_options_and_draft_persist_across_reset() {
+    #[allow(unused_variables)]
+    let opts = TrackDecoderOptions { threads: Some(0), draft: true };
+    #[cfg(feature = "h264-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::H264, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        } else {
+            panic!("expected H264 inner");
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
+        dec.set_draft(false);
+        assert!(!dec.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec.inner {
+            assert!(!inner.draft());
+        }
+        let dec2 = TrackDecoder::with_threads(&params(CodecId::H264, &[]), 2).unwrap();
+        assert_eq!(dec2.threads(), Some(2));
+        assert!(!dec2.draft());
+        if let Inner::H264 { dec: inner, .. } = &dec2.inner {
+            let expected = if cfg!(all(feature = "threads", not(target_arch = "wasm32"))) { 2 } else { 1 };
+            assert_eq!(inner.threads(), expected);
+            assert!(!inner.draft());
+        }
+    }
+    #[cfg(feature = "hevc-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Hevc, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Hevc { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Hevc { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+    }
+    #[cfg(feature = "av1-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Av1, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Av1 { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Av1 { dec: inner, .. } = &dec.inner {
+            assert!(inner.draft());
+        }
+    }
+    #[cfg(feature = "vp9-decode")]
+    {
+        let mut dec = TrackDecoder::with_options(&params(CodecId::Vp9, &[]), opts).unwrap();
+        assert_eq!(dec.threads(), Some(1));
+        assert!(dec.draft());
+        if let Inner::Vp9(inner) = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
+        dec.reset().unwrap();
+        assert!(dec.draft());
+        if let Inner::Vp9(inner) = &dec.inner {
+            assert_eq!(inner.threads(), 1);
+            assert!(inner.draft());
+        }
     }
 }

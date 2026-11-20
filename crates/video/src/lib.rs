@@ -29,7 +29,8 @@
 //! they all convert into (`VideoFrame::try_from`).
 //!
 //! `TrackDecoder` picks the decoder for a track from its `craft_media::CodecParams` and returns
-//! `VideoFrame`s, for H.264, HEVC, VP9, AV1 and MPEG-2 (built with any of their decoder features).
+//! `VideoFrame`s, for H.264, HEVC, VP9, AV1, MPEG-2, ProRes, DNx, APV, FFV1 and VP8
+//! (built with any of their decoder features).
 //!
 //! Containers and bit-level I/O are in `craft-media`; the codecs here share its `bitstream`
 //! module and describe their streams with `craft_media::CodecParams`.
@@ -40,10 +41,32 @@ pub mod frame;
 
 pub use error::VideoError;
 
-#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "vp9-decode", feature = "av1-decode", feature = "mpeg2-decode"))]
+#[cfg(any(
+    feature = "h264-decode",
+    feature = "hevc-decode",
+    feature = "vp9-decode",
+    feature = "av1-decode",
+    feature = "mpeg2-decode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-decode",
+    feature = "ffv1",
+    feature = "vp8-decode"
+))]
 mod track;
-#[cfg(any(feature = "h264-decode", feature = "hevc-decode", feature = "vp9-decode", feature = "av1-decode", feature = "mpeg2-decode"))]
-pub use track::TrackDecoder;
+#[cfg(any(
+    feature = "h264-decode",
+    feature = "hevc-decode",
+    feature = "vp9-decode",
+    feature = "av1-decode",
+    feature = "mpeg2-decode",
+    feature = "prores",
+    feature = "dnx",
+    feature = "apv-decode",
+    feature = "ffv1",
+    feature = "vp8-decode"
+))]
+pub use track::{TrackDecoder, TrackDecoderOptions};
 
 #[cfg(any(feature = "apv-decode", feature = "apv-encode"))]
 pub mod apv;

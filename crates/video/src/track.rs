@@ -31,6 +31,16 @@ enum Inner {
     Av1 { dec: Box<av1::decode::Decoder>, config_obus: Vec<u8> },
     #[cfg(feature = "mpeg2-decode")]
     Mpeg2(Box<mpeg2::Decoder>),
+    #[cfg(feature = "prores")]
+    ProRes,
+    #[cfg(feature = "dnx")]
+    Dnx,
+    #[cfg(feature = "apv-decode")]
+    Apv,
+    #[cfg(feature = "ffv1")]
+    Ffv1(Box<crate::ffv1::Decoder>),
+    #[cfg(feature = "vp8-decode")]
+    Vp8(Box<crate::vp8::Decoder>),
 }
 
 /// A decoder for one video track, whatever its codec: built from the track's [`CodecParams`],
@@ -43,6 +53,11 @@ enum Inner {
 /// | VP9 | `vp9-decode` | ignored (the frame headers repeat the `vpcC` values) |
 /// | AV1 | `av1-decode` | an `av1C` record, or empty |
 /// | MPEG-2 and MPEG-1 video | `mpeg2-decode` | a sequence header and its extensions, or empty |
+/// | ProRes | `prores` | ignored (frame headers carry the format) |
+/// | DNxHD / DNxHR | `dnx` | ignored (frame headers carry the format) |
+/// | APV | `apv-decode` | ignored (access units carry the format) |
+/// | FFV1 | `ffv1` | required version 3 configuration record; container width and height are required too |
+/// | VP8 | `vp8-decode` | ignored (key frames carry the format) |
 ///
 /// With an `avcC` or `hvcC` record, packets are length-prefixed NAL units, as MP4 and Matroska
 /// store them. Otherwise they are Annex B, as MPEG-TS and AVI store them, and the parameter sets
@@ -51,6 +66,11 @@ enum Inner {
 /// parameter sets, SEI and access unit delimiters, `av1C` config OBUs are sequence headers and
 /// metadata, and MPEG-2 `extradata` holds sequence headers, their extensions, user data and GOP
 /// headers.
+///
+/// ProRes, DNx, APV and FFV1 return one frame per packet. APV selects the first decodable
+/// primary frame and its alpha, as the codec's default decoder does. FFV1 supports version 3,
+/// range-coded key frames. VP8 hidden frames update references without returning a picture.
+/// These five decoders have no delayed output; reset keeps FFV1 configuration and dimensions.
 ///
 /// Other codecs are [`VideoError::Unsupported`], as is a codec whose decoder feature is off.
 ///
@@ -72,32 +92,102 @@ enum Inner {
 /// }
 /// # Ok(()) }
 /// ```
+/// Options for [`TrackDecoder::with_options`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrackDecoderOptions {
+    /// Worker threads for codecs that decode in parallel (`None` uses the codec default;
+    /// `Some(1)` decodes on the calling thread). Values of `0` are clamped to `1`.
+    pub threads: Option<usize>,
+    /// Draft mode (approximate, for reduced-resolution playback only; never for export).
+    pub draft: bool,
+}
+
 pub struct TrackDecoder {
     inner: Inner,
     codec: CodecId,
+    threads: Option<usize>,
+    draft: bool,
     /// Frames finished by a call that then failed, which the next call returns first.
     held: Vec<VideoFrame>,
 }
 
 impl std::fmt::Debug for TrackDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrackDecoder").field("codec", &self.codec).field("held", &self.held.len()).finish_non_exhaustive()
+        f.debug_struct("TrackDecoder")
+            .field("codec", &self.codec)
+            .field("threads", &self.threads)
+            .field("draft", &self.draft)
+            .field("held", &self.held.len())
+            .finish_non_exhaustive()
     }
 }
 
 impl TrackDecoder {
-    /// A decoder for the track `params` describes. Only `codec` and `extradata` are read; the
-    /// picture size and format come from the stream.
+    /// A decoder for the track `params` describes. `codec` and `extradata` select and configure it;
+    /// FFV1 also requires nonzero `width` and `height` from the container. Other codecs get the
+    /// picture size and format from the stream.
     ///
-    /// Configuration that the codec refuses, or that holds picture data, is
-    /// [`VideoError::Malformed`].
+    /// Invalid configuration, or configuration containing picture data where only headers are
+    /// allowed, is [`VideoError::Malformed`]. Unsupported codec features are
+    /// [`VideoError::Unsupported`].
     pub fn new(params: &CodecParams) -> Result<TrackDecoder, VideoError> {
-        Ok(TrackDecoder { inner: Inner::new(params.codec, &params.extradata)?, codec: params.codec, held: Vec::new() })
+        Self::with_options(params, TrackDecoderOptions::default())
+    }
+
+    /// Like [`TrackDecoder::new`], capped at `threads` worker threads (`1` decodes on the calling
+    /// thread; `0` is clamped to `1`) for codecs that decode in parallel.
+    pub fn with_threads(params: &CodecParams, threads: usize) -> Result<TrackDecoder, VideoError> {
+        Self::with_options(params, TrackDecoderOptions { threads: Some(threads), draft: false })
+    }
+
+    /// Like [`TrackDecoder::new`], with explicit threading and draft options.
+    pub fn with_options(params: &CodecParams, options: TrackDecoderOptions) -> Result<TrackDecoder, VideoError> {
+        let threads = options.threads.map(|t| t.max(1));
+        let normalized = TrackDecoderOptions { threads, draft: options.draft };
+        Ok(TrackDecoder { inner: Inner::new(params, normalized)?, codec: params.codec, threads, draft: options.draft, held: Vec::new() })
     }
 
     /// The track's codec, as `params` gave it.
     pub fn codec(&self) -> CodecId {
         self.codec
+    }
+
+    /// The explicit worker-thread cap, or `None` when using the codec's default.
+    pub fn threads(&self) -> Option<usize> {
+        self.threads
+    }
+
+    /// Whether draft mode is enabled (for reduced-resolution playback only; never for export).
+    pub fn draft(&self) -> bool {
+        self.draft
+    }
+
+    /// Toggle draft mode (skipping non-reference loop/deblocking filters on codecs that support
+    /// it). Approximate, for reduced-resolution playback only; never use for export.
+    pub fn set_draft(&mut self, on: bool) {
+        self.draft = on;
+        match &mut self.inner {
+            #[cfg(feature = "h264-decode")]
+            Inner::H264 { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "hevc-decode")]
+            Inner::Hevc { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "vp9-decode")]
+            Inner::Vp9(dec) => dec.set_draft(on),
+            #[cfg(feature = "av1-decode")]
+            Inner::Av1 { dec, .. } => dec.set_draft(on),
+            #[cfg(feature = "mpeg2-decode")]
+            Inner::Mpeg2(_) => {}
+            #[cfg(feature = "prores")]
+            Inner::ProRes => {}
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => {}
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => {}
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => {}
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(_) => {}
+        }
     }
 
     /// Decode one packet (an access unit, a VP9 frame or superframe, an AV1 temporal unit) with
@@ -141,6 +231,22 @@ impl TrackDecoder {
                 let pics = dec.decode(packet, pts)?;
                 self.output(pics, None)
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => self.single(crate::prores::decode_frame(packet)?, pts),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => self.single(crate::dnx::decode_frame(packet)?, pts),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => self.single(crate::apv::decode_frame(packet)?, pts),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(dec) => {
+                let pic = dec.decode(packet)?;
+                self.single(pic, pts)
+            }
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(dec) => {
+                let pic = dec.decode(packet, pts)?;
+                self.output(pic.into_iter().collect(), None)
+            }
         }
     }
 
@@ -177,6 +283,16 @@ impl TrackDecoder {
                 let pics = dec.flush();
                 self.output(pics, None)
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => Ok(std::mem::take(&mut self.held)),
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(_) => Ok(std::mem::take(&mut self.held)),
         }
     }
 
@@ -199,7 +315,8 @@ impl TrackDecoder {
             #[cfg(feature = "hevc-decode")]
             Inner::Hevc { dec, config } => {
                 // The HEVC decoder has no reset of its own: a new one starts from nothing.
-                let mut fresh = Box::new(hevc::decode::Decoder::new());
+                let mut fresh = Box::new(self.threads.map_or_else(hevc::decode::Decoder::new, hevc::decode::Decoder::with_threads));
+                fresh.set_draft(self.draft);
                 configure_hevc(&mut fresh, config)?;
                 *dec = fresh;
                 Ok(())
@@ -212,7 +329,8 @@ impl TrackDecoder {
             #[cfg(feature = "av1-decode")]
             Inner::Av1 { dec, config_obus } => {
                 // The AV1 decoder has no reset of its own: a new one starts from nothing.
-                let mut fresh = Box::new(av1::decode::Decoder::new());
+                let mut fresh = Box::new(self.threads.map_or_else(av1::decode::Decoder::new, av1::decode::Decoder::with_threads));
+                fresh.set_draft(self.draft);
                 configure_av1(&mut fresh, config_obus)?;
                 *dec = fresh;
                 Ok(())
@@ -222,11 +340,45 @@ impl TrackDecoder {
                 dec.reset();
                 Ok(())
             }
+            #[cfg(feature = "prores")]
+            Inner::ProRes => Ok(()),
+            #[cfg(feature = "dnx")]
+            Inner::Dnx => Ok(()),
+            #[cfg(feature = "apv-decode")]
+            Inner::Apv => Ok(()),
+            #[cfg(feature = "ffv1")]
+            Inner::Ffv1(_) => Ok(()),
+            #[cfg(feature = "vp8-decode")]
+            Inner::Vp8(dec) => {
+                dec.reset();
+                Ok(())
+            }
         }
+    }
+
+    /// Frame-only decoders do not take timestamps; attach the packet timestamp after conversion.
+    #[cfg(any(feature = "prores", feature = "dnx", feature = "apv-decode", feature = "ffv1"))]
+    fn single<P>(&mut self, pic: P, pts: i64) -> Result<Vec<VideoFrame>, VideoError>
+    where
+        VideoFrame: TryFrom<P, Error = FrameError>,
+    {
+        let mut frame = VideoFrame::try_from(pic)?;
+        frame.pts = Some(pts);
+        let mut frames = std::mem::take(&mut self.held);
+        frames.push(frame);
+        Ok(frames)
     }
 
     /// The frames kept from a failed call, then `pics` converted. On `err`, or on a picture that
     /// does not convert, the frames are kept for the next call and the (first) error returned.
+    #[cfg(any(
+        feature = "h264-decode",
+        feature = "hevc-decode",
+        feature = "vp9-decode",
+        feature = "av1-decode",
+        feature = "mpeg2-decode",
+        feature = "vp8-decode"
+    ))]
     fn output<P>(&mut self, pics: Vec<P>, err: Option<VideoError>) -> Result<Vec<VideoFrame>, VideoError>
     where
         VideoFrame: TryFrom<P, Error = FrameError>,
@@ -253,39 +405,67 @@ impl TrackDecoder {
 }
 
 impl Inner {
-    fn new(codec: CodecId, extradata: &[u8]) -> Result<Inner, VideoError> {
-        #[cfg(not(any(feature = "h264-decode", feature = "hevc-decode", feature = "av1-decode", feature = "mpeg2-decode")))]
-        let _ = extradata;
+    fn new(params: &CodecParams, options: TrackDecoderOptions) -> Result<Inner, VideoError> {
+        let codec = params.codec;
+        let extradata = &params.extradata;
+        let _ = (extradata, options);
         match codec {
             #[cfg(feature = "h264-decode")]
             CodecId::H264 => {
-                let mut dec = Box::new(h264::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(h264::decode::Decoder::new, h264::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_h264(&mut dec, extradata)?;
                 Ok(Inner::H264 { dec, config: extradata.to_vec() })
             }
             #[cfg(feature = "hevc-decode")]
             CodecId::Hevc => {
-                let mut dec = Box::new(hevc::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(hevc::decode::Decoder::new, hevc::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_hevc(&mut dec, extradata)?;
                 Ok(Inner::Hevc { dec, config: extradata.to_vec() })
             }
             #[cfg(feature = "vp9-decode")]
-            CodecId::Vp9 => Ok(Inner::Vp9(Box::default())),
+            CodecId::Vp9 => {
+                let mut dec = Box::new(options.threads.map_or_else(vp9::decode::Decoder::new, vp9::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
+                Ok(Inner::Vp9(dec))
+            }
             #[cfg(feature = "av1-decode")]
             CodecId::Av1 => {
                 let config_obus = av1c_config_obus(extradata)?.to_vec();
-                let mut dec = Box::new(av1::decode::Decoder::new());
+                let mut dec = Box::new(options.threads.map_or_else(av1::decode::Decoder::new, av1::decode::Decoder::with_threads));
+                dec.set_draft(options.draft);
                 configure_av1(&mut dec, &config_obus)?;
                 Ok(Inner::Av1 { dec, config_obus })
             }
             #[cfg(feature = "mpeg2-decode")]
             CodecId::Mpeg2Video => {
                 let mut dec = Box::new(mpeg2::Decoder::new());
+                if let Some(threads) = options.threads {
+                    dec.set_threads(threads > 1);
+                }
                 if !extradata.is_empty() {
                     check_mpeg2_config(extradata)?;
                     dec.decode(extradata, 0)?;
                 }
                 Ok(Inner::Mpeg2(dec))
+            }
+            #[cfg(feature = "prores")]
+            CodecId::ProRes => Ok(Inner::ProRes),
+            #[cfg(feature = "dnx")]
+            CodecId::Dnxhd => Ok(Inner::Dnx),
+            #[cfg(feature = "apv-decode")]
+            CodecId::Apv => Ok(Inner::Apv),
+            #[cfg(feature = "vp8-decode")]
+            CodecId::Vp8 => Ok(Inner::Vp8(Box::default())),
+            #[cfg(feature = "ffv1")]
+            CodecId::Ffv1 => {
+                let (width, height) = params
+                    .width
+                    .zip(params.height)
+                    .filter(|&(w, h)| w > 0 && h > 0)
+                    .ok_or_else(|| VideoError::Malformed("FFV1: container dimensions are required".into()))?;
+                Ok(Inner::Ffv1(Box::new(crate::ffv1::Decoder::new(extradata, width, height)?)))
             }
             other => Err(VideoError::Unsupported(format!("no {} decoder in this build", other.name()))),
         }

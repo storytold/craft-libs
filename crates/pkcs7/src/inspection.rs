@@ -7,6 +7,8 @@
 
 use crate::der::{Tlv, tag};
 
+pub mod cms;
+
 /// Maximum siblings read by one cursor, matching the inspection consumer's bound.
 pub const MAX_CHILDREN: usize = 4096;
 /// Maximum nesting accepted when obtaining child cursors. Root elements have depth zero.
