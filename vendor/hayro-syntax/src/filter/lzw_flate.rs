@@ -1228,9 +1228,19 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
             }
 
             #[cfg(all(test, feature = "std"))]
-            BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
+            if i == 2 {
+                BIT_LEVEL_TIFF_ROWS.with(|rows| rows.set(rows.get().saturating_add(num_rows)));
+            }
 
-            let (bit_size, chunk_len) = (params.bits_per_component, params.colors as usize);
+            let (bit_size, chunk_len) = if is_png_predictor {
+                (
+                    8,
+                    // PdfCraft patch: in usize (the u8 product overflowed).
+                    (usize::from(params.colors) * usize::from(params.bits_per_component)).div_ceil(8),
+                )
+            } else {
+                (params.bits_per_component, params.colors as usize)
+            };
             let zero_row = vec![0; row_len];
             let mut prev_row = BitChunks::new(&zero_row, bit_size, chunk_len)?;
             let zero_col = BitChunk::new(0, chunk_len);
@@ -1240,7 +1250,56 @@ fn apply_predictor(data: Vec<u8>, params: &PredictorParams) -> Option<Vec<u8>> {
 
             for in_row in data.chunks_exact(total_row_len) {
                 crate::cancel::check(params.control.as_ref())?;
-                if i == 2 {
+                if is_png_predictor {
+                    let predictor = in_row[0];
+                    let in_data = &in_row[1..];
+                    let in_data_chunks = BitChunks::new(in_data, bit_size, chunk_len)?;
+
+                    match predictor {
+                        1 => apply::<Sub>(
+                            prev_row,
+                            zero_col.clone(),
+                            zero_col.clone(),
+                            in_data_chunks,
+                            &mut writer,
+                            run,
+                        )?,
+                        2 => apply::<Up>(
+                            prev_row,
+                            zero_col.clone(),
+                            zero_col.clone(),
+                            in_data_chunks,
+                            &mut writer,
+                            run,
+                        )?,
+                        3 => apply::<Avg>(
+                            prev_row,
+                            zero_col.clone(),
+                            zero_col.clone(),
+                            in_data_chunks,
+                            &mut writer,
+                            run,
+                        )?,
+                        4 => apply::<Paeth>(
+                            prev_row,
+                            zero_col.clone(),
+                            zero_col.clone(),
+                            in_data_chunks,
+                            &mut writer,
+                            run,
+                        )?,
+                        _ => {
+                            // Just copy the data.
+                            let mut reader = BitReader::new(in_data);
+                            let mut checks = crate::cancel::Checkpoints::new(params.control.as_ref());
+
+                            while let Some(data) = reader.read(bit_size) {
+                                checks.at(writer.cur_pos())?;
+                                writer.write(data);
+                            }
+                        }
+                    }
+                } else if i == 2 {
                     apply::<Sub>(
                         prev_row,
                         zero_col.clone(),
