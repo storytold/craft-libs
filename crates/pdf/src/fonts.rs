@@ -4,6 +4,8 @@
 pub mod encodings;
 mod std14;
 mod std14_metrics;
+#[cfg(feature = "cos")]
+pub mod wire;
 
 pub use std14::{Match as Std14Match, Std14};
 
