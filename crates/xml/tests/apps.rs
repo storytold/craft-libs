@@ -700,3 +700,26 @@ fn pull_reader_exposes_scoped_namespace_declarations() {
     assert_eq!(events.scope().uri(""), None);
     assert_eq!(events.scope().declarations().next_back(), Some(("", "")));
 }
+
+#[test]
+fn lenient_event_readers_keep_namespace_scope() {
+    let xml = br#"<root xmlns:p='urn:svg'><p:svg/></root>"#;
+    for options in [Options::default(), Options::local()] {
+        let mut events = options.events(xml);
+        assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+        assert!(matches!(events.next().unwrap(), Some(Event::Start { .. })));
+        assert_eq!(events.scope().uri("p"), Some("urn:svg"));
+        assert_eq!(events.scope().declarations().collect::<Vec<_>>(), [("p", "urn:svg")]);
+    }
+}
+
+#[test]
+fn lenient_tree_readers_do_not_acquire_the_event_scope_limit() {
+    let xml = br#"<r xmlns:a='a'><x xmlns:b='b'><y xmlns:c='c'/></x></r>"#;
+    let options = Options::default().with_limits(Limits { max_attrs: 2, ..Limits::DEFAULT });
+    assert!(options.parse(xml).is_ok());
+    let mut events = options.events(xml);
+    assert!(events.next().is_ok());
+    assert!(events.next().is_ok());
+    assert!(matches!(events.next(), Err(Error::TooManyAttrs(2))));
+}
