@@ -45,7 +45,8 @@
 //!   ([`LayoutOptions::extra_shortcuts`]).
 //!
 //! The labels the layout writes itself are English unless the app passes its translations in
-//! [`LayoutOptions::label`].
+//! [`LayoutOptions::label`]. `mac::install_app_menu_with` takes the same translations for the
+//! minimal app menu.
 //!
 //! **Keys stay with egui.** AppKit runs a menu's key equivalents before the window sees the key,
 //! which would skip the app's own key rules (a focused text field keeps ⌘C, ⌘V and ⌘Z, dialogs

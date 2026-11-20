@@ -162,6 +162,46 @@ fn an_untagged_quit_is_craft_quits_and_labels_are_translated() {
     assert_eq!(ids(&l.bar.menu(MenuRole::Window).unwrap().children), ["<Minimize>", "<Zoom>", "---", "<BringAllToFront>", "---", "doc.0"]);
 }
 
+/// The minimal app menu is English by default and takes the app's translations through the keys
+/// the Mac layout uses for the same items.
+#[test]
+fn the_minimal_app_menu_labels_are_translated() {
+    use crate::layout::{AppMenuLabels, app_menu_labels};
+
+    let english = app_menu_labels(&LayoutOptions::new("Sample"));
+    let expected = AppMenuLabels {
+        title: "Sample".into(),
+        about: "About Sample".into(),
+        services: "Services".into(),
+        hide: "Hide Sample".into(),
+        hide_others: "Hide Others".into(),
+        show_all: "Show All".into(),
+        quit: "Quit Sample".into(),
+    };
+    assert_eq!(english, expected);
+
+    let german = |s: &'static str| match s {
+        "About {app}" => "Über {app}".to_string(),
+        "Services" => "Dienste".into(),
+        "Hide {app}" => "{app} ausblenden".into(),
+        "Hide Others" => "Andere ausblenden".into(),
+        "Show All" => "Alle einblenden".into(),
+        "Quit {app}" => "{app} beenden".into(),
+        other => panic!("no app menu label {other:?}"),
+    };
+    let labels = app_menu_labels(&LayoutOptions { label: &german, ..LayoutOptions::new("Sample") });
+    let expected = AppMenuLabels {
+        title: "Sample".into(),
+        about: "Über Sample".into(),
+        services: "Dienste".into(),
+        hide: "Sample ausblenden".into(),
+        hide_others: "Andere ausblenden".into(),
+        show_all: "Alle einblenden".into(),
+        quit: "Sample beenden".into(),
+    };
+    assert_eq!(labels, expected);
+}
+
 /// App commands keep ⌘H, ⌘M, ⌘W and ⌘,: the system items give way, and each clash is reported.
 #[test]
 fn clashes_are_resolved_in_the_apps_favour() {

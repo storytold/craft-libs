@@ -93,6 +93,33 @@ fn english(s: &'static str) -> String {
     s.into()
 }
 
+/// The labels of the minimal macOS app menu (`mac::install_app_menu_with`), translated through
+/// the keys [`mac_layout`] uses for its own app menu. The menu's title is the app's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) struct AppMenuLabels {
+    pub(crate) title: String,
+    pub(crate) about: String,
+    pub(crate) services: String,
+    pub(crate) hide: String,
+    pub(crate) hide_others: String,
+    pub(crate) show_all: String,
+    pub(crate) quit: String,
+}
+
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+pub(crate) fn app_menu_labels(options: &LayoutOptions) -> AppMenuLabels {
+    AppMenuLabels {
+        title: options.app_name.to_string(),
+        about: options.text("About {app}"),
+        services: options.text(Standard::Services.english()),
+        hide: options.text("Hide {app}"),
+        hide_others: options.text("Hide Others"),
+        show_all: options.text(Standard::ShowAll.english()),
+        quit: options.text("Quit {app}"),
+    }
+}
+
 /// A system or browser shortcut the app also uses for one of its commands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clash {

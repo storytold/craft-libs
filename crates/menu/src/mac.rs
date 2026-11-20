@@ -45,7 +45,9 @@ use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
 
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 
+use crate::LayoutOptions;
 use crate::driver::{Backend, Dispatch, Event, NativeMenu, native_ok};
+use crate::layout::app_menu_labels;
 use crate::model::{Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, native_id, structure_key, window_key};
 
 /// Set by [`install`]: there is one full menu bar per process.
@@ -117,7 +119,8 @@ pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> 
 
 /// Replace winit's default macOS app menu with a minimal one whose Quit (⌘Q) asks the app first,
 /// for an app without a [`MenuBar`] of its own: About, Services, Hide, Hide Others, Show All and
-/// Quit, labelled in English with `app_name` ("Quit WordCraft").
+/// Quit, labeled in English with `app_name` ("Quit WordCraft"). [`install_app_menu_with`] takes
+/// the app's translations.
 ///
 /// winit's Quit ends the process without asking, so unsaved work is lost. This Quit has the id
 /// [`craft_quit::QUIT_MENU_ID`] and runs [`craft_quit::on_menu_event`]: it asks the root window to
@@ -128,22 +131,32 @@ pub fn install_with(ctx: &egui::Context, bar: &MenuBar, options: MacOptions) -> 
 /// Does nothing when this menu or a full menu bar ([`install`]) is already installed. On error
 /// winit's menu stays: the app still runs, but ⌘Q quits without asking.
 pub fn install_app_menu(ctx: &egui::Context, app_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    install_app_menu_with(ctx, &LayoutOptions::new(app_name))
+}
+
+/// [`install_app_menu`] with the app's translations. [`LayoutOptions::label`] names the items
+/// through the keys [`crate::mac_layout`] uses for its app menu: `About {app}`, `Services`,
+/// `Hide {app}`, `Hide Others`, `Show All` and `Quit {app}`, with `{app}` replaced by
+/// [`LayoutOptions::app_name`], which also titles the menu. [`LayoutOptions::extra_shortcuts`]
+/// is not used.
+pub fn install_app_menu_with(ctx: &egui::Context, options: &LayoutOptions) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if MainThreadMarker::new().is_none() {
         return Err("craft_menu::mac::install_app_menu runs on the main thread".into());
     }
     if INSTALLED.load(Ordering::SeqCst) || APP_MENU.with_borrow(Option::is_some) {
         return Ok(());
     }
-    let quit = MenuItem::with_id(craft_quit::QUIT_MENU_ID, format!("Quit {app_name}"), true, Some(Accelerator::new(Modifiers::META, Code::KeyQ)));
-    let app_menu = Submenu::new(app_name, true);
+    let labels = app_menu_labels(options);
+    let quit = MenuItem::with_id(craft_quit::QUIT_MENU_ID, labels.quit, true, Some(Accelerator::new(Modifiers::META, Code::KeyQ)));
+    let app_menu = Submenu::new(labels.title, true);
     app_menu.append_items(&[
-        &PredefinedMenuItem::about(Some(&format!("About {app_name}")), None),
+        &PredefinedMenuItem::about(Some(&labels.about), None),
         &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::services(None),
+        &PredefinedMenuItem::services(Some(&labels.services)),
         &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::hide(Some(&format!("Hide {app_name}"))),
-        &PredefinedMenuItem::hide_others(None),
-        &PredefinedMenuItem::show_all(None),
+        &PredefinedMenuItem::hide(Some(&labels.hide)),
+        &PredefinedMenuItem::hide_others(Some(&labels.hide_others)),
+        &PredefinedMenuItem::show_all(Some(&labels.show_all)),
         &PredefinedMenuItem::separator(),
         &quit,
     ])?;
