@@ -112,6 +112,8 @@ craft_ui::words! {
         optimized_box: "saveForWeb.optimizedBox" = "Optimized";
         lossless: "saveForWeb.lossless" = "Lossless";
         embed_profile: "saveForWeb.embedProfile" = "Embed Color Profile";
+        /// Under AVIF's settings: the panes show the image unencoded, and the file has no profile or metadata.
+        avif_note: "saveForWeb.avifNote" = "The preview shows the image before compression. AVIF files carry no color profile or metadata.";
         matte: "saveForWeb.matte" = "Matte";
         matte_hex: "saveForWeb.matteHex" = "Matte color";
         convert_srgb: "saveForWeb.convertSrgb" = "Convert to sRGB";
@@ -332,6 +334,10 @@ pub struct SaveForWebDialog<'a> {
     /// The Preset list.
     #[prop]
     presets: Vec<WebPreset>,
+    /// The formats the Format list offers, in its order; [`WebFormat::STANDARD`] unless set. Settings in a format
+    /// not offered (one remembered from a build that could write it) open as the default format.
+    #[prop]
+    formats: Vec<WebFormat>,
     /// The document is an animation: the play row shows and the frame advances while playing.
     #[prop]
     animation: Option<Animation>,
@@ -368,6 +374,7 @@ impl<'a> SaveForWebDialog<'a> {
             options,
             open: None,
             presets: Vec::new(),
+            formats: WebFormat::STANDARD.to_vec(),
             animation: None,
             remember: None,
             saving: false,
@@ -380,7 +387,8 @@ impl<'a> SaveForWebDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> SaveForWebOutput {
-        let SaveForWebDialog { name, size, pictures, options, open, presets, animation, remember, saving, answers, slices, view, frame } = self;
+        let SaveForWebDialog { name, size, pictures, options, open, presets, formats, animation, remember, saving, answers, slices, view, frame } =
+            self;
         let mut view_held = view.map(Held::new);
         let mut frame_held = frame.map(Held::new);
         let env = Env::of(ui);
@@ -415,6 +423,10 @@ impl<'a> SaveForWebDialog<'a> {
                     *options = SaveForWebOptions { percent: 100.0, ..last.options.without_document_fields() };
                     restored = true;
                 }
+            }
+            if !formats.contains(&options.format) {
+                options.format = SaveForWebOptions::default().format;
+                options.palette_edits.clear();
             }
             // A measuring run reads the view but never writes it, as `FormDialog` does for its own bind.
             let measuring = crate::runtime::measure::active(ui.ctx());
@@ -477,8 +489,15 @@ impl<'a> SaveForWebDialog<'a> {
                     panes::show(ui, &reads, &mut live, &mut slice_click)
                 });
                 Stack::new().id_salt("settings").show(ui, |ui, _| {
-                    let kit =
-                        options::Kit { words: &words, sizing: &sizing, units: &units, presets: &presets, palette, has_slices: !slices.is_empty() };
+                    let kit = options::Kit {
+                        words: &words,
+                        sizing: &sizing,
+                        units: &units,
+                        presets: &presets,
+                        palette,
+                        has_slices: !slices.is_empty(),
+                        formats: &formats,
+                    };
                     options::show(ui, &kit, options, &mut live.link, &mut live.table, &mut live.editing, &mut ask)
                 });
             });
@@ -607,13 +626,13 @@ pub(crate) fn advance_frame(frame: u32, frames: u32, fps: f32, last: f64, now: f
     ((frame + delta) % frames, now - (elapsed - steps) / fps)
 }
 
-/// 4-Up's two extra panes: JPEG and lossy WebP at half and a quarter of the quality; GIF and PNG-8 at half and a
+/// 4-Up's two extra panes: JPEG, lossy WebP and AVIF at half and a quarter of the quality; GIF and PNG-8 at half and a
 /// quarter of the colours; any other format as PNG-8 at 128 colours and GIF at 64 colours.
 pub(crate) fn four_up_variants(settings: &SaveForWebOptions) -> [SaveForWebOptions; 2] {
     [2u16, 4].map(|divisor| {
         let mut variant = settings.clone();
         match settings.format {
-            WebFormat::Jpeg | WebFormat::WebP if !(settings.format == WebFormat::WebP && settings.lossless) => {
+            WebFormat::Jpeg | WebFormat::Avif | WebFormat::WebP if !(settings.format == WebFormat::WebP && settings.lossless) => {
                 variant.quality = (f64::from(settings.quality) / f64::from(divisor)).round().max(1.0) as u8;
             }
             WebFormat::Gif | WebFormat::Png8 => {

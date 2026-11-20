@@ -30,13 +30,20 @@ pub enum WebFormat {
     Jpeg,
     /// WebP, lossy or lossless.
     WebP,
+    /// AVIF, lossy. The list offers it only when the host says it can write it ([`SaveForWebDialog::formats`]).
+    Avif,
     /// Wireless bitmap: one bit per pixel.
     Wbmp,
 }
 
 impl WebFormat {
     /// Every format, in the order of the format list.
-    pub const ALL: [WebFormat; 6] = [WebFormat::Gif, WebFormat::Png8, WebFormat::Png24, WebFormat::Jpeg, WebFormat::WebP, WebFormat::Wbmp];
+    pub const ALL: [WebFormat; 7] =
+        [WebFormat::Gif, WebFormat::Png8, WebFormat::Png24, WebFormat::Jpeg, WebFormat::WebP, WebFormat::Avif, WebFormat::Wbmp];
+
+    /// The formats the list offers unless the host names its own: all but AVIF, which needs an encoder not every
+    /// app builds with.
+    pub const STANDARD: [WebFormat; 6] = [WebFormat::Gif, WebFormat::Png8, WebFormat::Png24, WebFormat::Jpeg, WebFormat::WebP, WebFormat::Wbmp];
 
     /// The extension of a file in this format, without the dot.
     pub fn extension(self) -> &'static str {
@@ -45,6 +52,7 @@ impl WebFormat {
             WebFormat::Png8 | WebFormat::Png24 => "png",
             WebFormat::Jpeg => "jpg",
             WebFormat::WebP => "webp",
+            WebFormat::Avif => "avif",
             WebFormat::Wbmp => "wbmp",
         }
     }
@@ -57,6 +65,7 @@ impl WebFormat {
             WebFormat::Png24 => "PNG-24",
             WebFormat::Jpeg => "JPEG",
             WebFormat::WebP => "WebP",
+            WebFormat::Avif => "AVIF",
             WebFormat::Wbmp => "WBMP",
         }
     }
@@ -147,7 +156,7 @@ impl WebView {
 pub struct SaveForWebOptions {
     /// The file format.
     pub format: WebFormat,
-    /// 0 to 100 (JPEG, lossy WebP).
+    /// 0 to 100 (JPEG, lossy WebP, AVIF).
     pub quality: u8,
     /// The palette method; used by indexed formats.
     pub color_table: ColorTable,
@@ -286,13 +295,18 @@ impl SaveForWebOptions {
 
     /// Whether the matte row shows: the matte fills the transparency of formats that cannot keep it.
     pub fn has_matte(&self) -> bool {
-        !matches!(self.format, WebFormat::Png24 | WebFormat::WebP) || !self.transparency
+        !matches!(self.format, WebFormat::Png24 | WebFormat::WebP | WebFormat::Avif) || !self.transparency
+    }
+
+    /// Whether the Metadata row shows: the AVIF writer embeds none, so AVIF offers no choice of it.
+    pub fn has_metadata(&self) -> bool {
+        self.format != WebFormat::Avif
     }
 
     /// Whether the quality row shows.
     pub fn has_quality(&self) -> bool {
         match self.format {
-            WebFormat::Jpeg => true,
+            WebFormat::Jpeg | WebFormat::Avif => true,
             WebFormat::WebP => !self.lossless,
             _ => false,
         }

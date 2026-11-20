@@ -225,3 +225,32 @@ fn four_up_webp_halves_the_quality_until_lossless() {
     let [half, quarter] = four_up_options(&host);
     assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
 }
+
+/// AVIF is offered only by a host that names it. It has Quality and Transparency, no Metadata row and no matte while
+/// transparency is kept, its 4-Up panes halve the quality, and its settings in a dialog that doesn't offer it open
+/// as JPEG.
+#[trial]
+fn avif_is_offered_when_the_host_names_it() {
+    const NOTE: &str = "The preview shows the image before compression. AVIF files carry no color profile or metadata.";
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::Avif;
+    options.quality = 80;
+    let formats = [WebFormat::Jpeg, WebFormat::Avif].to_vec();
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options.clone()).formats(formats));
+    assert_eq!(current(&host).format, WebFormat::Avif);
+    assert!(fixture.by_label(NOTE).is_some(), "the AVIF note shows");
+    assert!(fixture.by_label("Quality").is_some(), "AVIF has Quality");
+    assert!(fixture.by_label("Transparency").is_some(), "AVIF has Transparency");
+    assert!(fixture.by_label("Metadata").is_none(), "AVIF offers no Metadata choice");
+    assert!(fixture.by_label("Matte").is_none(), "AVIF keeps transparency, so no matte");
+    let four_up = fixture.by_label("4-Up").expect("the 4-Up view");
+    fixture.click(&four_up).idle(4);
+    let [half, quarter] = four_up_options(&host);
+    assert_eq!((half.format, half.quality, quarter.quality), (WebFormat::Avif, 40, 20));
+
+    let (host, fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options));
+    assert_eq!(current(&host).format, WebFormat::Jpeg, "a dialog without AVIF opens its settings as JPEG");
+    assert!(fixture.by_label(NOTE).is_none());
+    assert!(fixture.by_label("Metadata").is_some());
+    assert!(fixture.by_label("Matte").is_some(), "JPEG has a matte");
+}
