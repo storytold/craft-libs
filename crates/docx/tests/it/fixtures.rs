@@ -1641,6 +1641,39 @@ fn body_cell_vml_picture_stays_in_its_cell() {
     assert_eq!(floats, vec![false]);
 }
 
+/// A VML shape in a body table cell with Layout in table cell off (`o:allowincell="f"`, which
+/// Word writes for such a shape in a document in Word 2003 compatibility mode, user-checked) is
+/// placed outside its cell, as Word draws it: beside the table, and the cell's text doesn't wrap
+/// around it. Without the attribute, or with it on, the shape stays laid out in its cell. Both
+/// survive save and reopen.
+#[test]
+fn body_cell_vml_shape_with_layout_in_cell_off_is_placed_outside_the_cell() {
+    let shape = |allow: &str| {
+        format!(
+            r##"<w:r><w:pict><v:shape id="Box1" type="#_x0000_t202" style="position:absolute;margin-left:-60pt;margin-top:4pt;width:48pt;height:40pt;z-index:251659264;mso-position-horizontal-relative:text;mso-position-vertical-relative:text" {allow} filled="f"><v:textbox><w:txbxContent><w:p><w:r><w:t>ICON</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="topAndBottom"/></v:shape></w:pict></w:r>"##
+        )
+    };
+    let floats = |d: &Document| -> Vec<(bool, Wrap)> {
+        let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+        t.rows[0].cells[0]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| (f.outside_cell, f.wrap)))
+            .collect()
+    };
+    for (allow, outside) in [(r#"o:allowincell="f""#, true), (r#"o:allowincell="false""#, true), (r#"o:allowincell="t""#, false), ("", false)] {
+        let run = shape(allow);
+        let body = format!(
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="7200"/></w:tblGrid><w:tr><w:tc><w:p>{run}<w:r><w:t>Box title</w:t></w:r></w:p><w:p><w:r><w:t>Box text</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
+        );
+        let d = craft_docx::read(&docx(&body, &[], &[])).unwrap();
+        assert_eq!(floats(&d), vec![(outside, Wrap::TopAndBottom)], "{allow}");
+        let d2 = craft_docx::read(&craft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(floats(&d2), vec![(outside, Wrap::TopAndBottom)], "saved: {allow}");
+    }
+}
+
 /// Issue #149: an absolutely positioned VML text box in a header floats where its style puts it
 /// (relative to the page here, behind the text at a negative z-index, no wrapping) instead of
 /// sitting inline in the header's flow, and it keeps that placement when saved and read back.
