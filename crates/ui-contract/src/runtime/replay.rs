@@ -318,7 +318,7 @@ impl Record {
 
 impl Facts {
     /// Whether the run these facts are of still holds at `now`, after the values `edited` changed in the frame: nothing
-    /// in it moves, the time it asked to be shown again has not come, and it read none of them, nor a part of one.
+    /// in it moves, the time it asked to be shown again has not come, and it read none of them, nor a value overlapping one.
     pub(crate) fn quiet(&self, now: f64, edited: Option<&HashSet<BindKey>>) -> bool {
         !self.unsettled && self.wake.is_none_or(|at| at > now) && edited.is_none_or(|edited| !edited.iter().any(|edit| self.read(*edit)))
     }

@@ -34,12 +34,13 @@ pub(crate) enum BindKey {
 }
 
 impl BindKey {
-    /// Whether an edit of `self` changes the value a reader of `read` read: the same value, or a part inside the edited
-    /// one, as a whole story value's edit changes each field of it a story binds (`StoryData::value_at`).
+    /// Whether an edit of `self` changes the value a reader of `read` read: the same value, or, within one source, a
+    /// value whose span overlaps the edited one's. A whole story value's edit changes each field of it a story binds
+    /// (`StoryData::value_at`), and a field's edit changes the whole value the Properties editor reads.
     pub(crate) fn reaches(self, read: BindKey) -> bool {
         match (self, read) {
-            (BindKey::Tracked(source, offset, size, _), BindKey::Tracked(read_source, at, ..)) if size > 0 => {
-                source == read_source && at.wrapping_sub(offset) < size
+            (BindKey::Tracked(source, offset, size, _), BindKey::Tracked(read_source, at, read_size, _)) if size > 0 && read_size > 0 => {
+                source == read_source && (at.wrapping_sub(offset) < size || offset.wrapping_sub(at) < read_size)
             }
             _ => self == read,
         }

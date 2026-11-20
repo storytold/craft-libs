@@ -2,9 +2,12 @@
 //! editing component's size follows the value.
 
 use super::kit::{AT, INITIAL, Scrub, Seen};
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_behavior::Mixed;
+use craft_ui::choice::{Radio, RadioGroup};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft_ui::layout_components::Stack;
 use craft_ui::testing::pointer::{moved, press, release};
-use craft_ui::testing::{Frames, StoryData, trial};
+use craft_ui::testing::{Fixture, Frames, StoryData, trial};
 use egui::{Pos2, Rect, Ui, Vec2};
 use std::any::TypeId;
 use std::cell::Cell;
@@ -115,5 +118,47 @@ fn a_whole_story_value_edit_shows_in_a_field_bound_earlier_in_the_same_frame() {
     edit.set(true);
     let passes = frames.frame(Vec::new(), &mut show);
     assert_eq!(seen.shown.get(), Some(EDITED), "the field shows the whole value's edit in the frame of the edit");
+    assert_eq!(passes, 2, "the frame runs again once");
+}
+
+/// A reader of the whole story value (the Properties editor's read) runs before the story's field bind, which a click
+/// edits: the frame runs again, and the whole value's reader shows the new field in it.
+#[trial]
+fn a_story_field_edit_shows_in_a_whole_value_read_earlier_in_the_same_frame() {
+    let data = std::rc::Rc::new(std::cell::RefCell::new(StoryData::default()));
+    let held = std::rc::Rc::clone(&data);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut data = held.borrow_mut();
+        let start = Pair { level: 1.0, other: 0.0 };
+        RadioGroup::new("Whole", data.bind("pair", start.clone())).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                for (level, label) in [(1.0, "Whole 1"), (2.0, "Whole 2")] {
+                    Radio::new(Pair { level, other: 0.0 }).label(label).show(ui);
+                }
+            });
+        });
+        let (value, at) = data.value_at("pair", start);
+        RadioGroup::new("Field", at.bind(&mut value.level)).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                for (level, label) in [(1.0_f32, "Field 1"), (2.0, "Field 2")] {
+                    Radio::new(level).label(label).show(ui);
+                }
+            });
+        });
+    });
+    fixture.settle();
+    let field = fixture.by_label("Field 2").expect("the field's radio").center();
+    let level = || data.borrow_mut().value_at("pair", Pair { level: 1.0, other: 0.0 }).0.level;
+    fixture.frame(vec![moved(field)]);
+    // The frame in which the click edits the field: the press or the release.
+    let edited = [vec![press(field)], vec![release(field)]].into_iter().find_map(|events| {
+        fixture.frame(events);
+        (level() == 2.0).then(|| {
+            let whole = fixture.by_label("Whole 2").expect("the whole value's radio");
+            (fixture.tree().toggled_of(whole.node), fixture.passes())
+        })
+    });
+    let (toggled, passes) = edited.expect("the click edits the field");
+    assert_eq!(toggled, Some(Mixed::Same(true)), "the whole value shows the field's edit in that frame");
     assert_eq!(passes, 2, "the frame runs again once");
 }
