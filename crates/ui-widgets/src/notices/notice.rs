@@ -407,7 +407,8 @@ impl<'a> Notice<'a> {
         let column = if width.is_finite() { (width - icon_width - dismiss_width - action_width).max(0.0) } else { f32::INFINITY };
         let run = |text: &str, role: TypeRole| cx.layout_at(&self.run(text, role), column).size();
         let title_role = self.title_look(cx.style).role;
-        let mut title = texts.title.as_deref().map(|title| run(title, title_role));
+        let title_layout = texts.title.as_deref().map(|title| cx.layout_at(&self.run(title, title_role), column));
+        let mut title = title_layout.as_ref().map(|layout| layout.size());
         let brand = title.zip(texts.byline.as_deref()).map(|(name, byline)| {
             let byline = run(byline, cx.style.byline.role);
             let beside = name.x + gap + byline.x <= column;
@@ -417,7 +418,8 @@ impl<'a> Notice<'a> {
             title = Some(if beside { Vec2::new(name.x + gap + byline.x, name.y) } else { Vec2::new(name.x.max(byline.x), name.y + gap + byline.y) });
         }
         let message_role = if self.title.is_some() { cx.style.detail.role } else { cx.style.message.role };
-        let message = if texts.message.is_empty() { Vec2::ZERO } else { run(texts.message, message_role) };
+        let message_layout = (!texts.message.is_empty()).then(|| cx.layout_at(&self.run(texts.message, message_role), column));
+        let message = message_layout.as_ref().map_or(Vec2::ZERO, |layout| layout.size());
         let bullet = if texts.lines.is_empty() { 0.0 } else { cx.layout(&TextRun::new(BULLET).role(cx.style.line.role)).size().x + gap };
         // The bullet lines run under the icon and the dismiss button as well, across the whole width.
         let line_column = if width.is_finite() { (width - bullet).max(0.0) } else { f32::INFINITY };
@@ -442,12 +444,7 @@ impl<'a> Notice<'a> {
         let column_width = if row { 0.0 } else { actions_width.max(content_width) };
         let text_width = title.map_or(0.0, |size| size.x).max(message.x).max(column_width);
         // The head line: the icon, the first line of the text and the dismiss button share its centre line.
-        let first_role = match (&texts.title, texts.message.is_empty()) {
-            (Some(_), _) => Some(title_role),
-            (None, false) => Some(cx.style.message.role),
-            (None, true) => None,
-        };
-        let first = first_role.map_or(0.0, |role| cx.tokens.typography.get(role).line_height);
+        let first = title_layout.as_ref().or(message_layout.as_ref()).and_then(|layout| layout.galley.rows.first()).map_or(0.0, |row| row.row.size.y);
         let action_line = if inline_actions { actions.iter().map(|size| size.y).fold(0.0, f32::max) } else { 0.0 };
         let line = icon.unwrap_or(0.0).max(dismiss.map_or(0.0, |size| size.y)).max(first).max(action_line);
         let text_offset = (line - first) / 2.0;

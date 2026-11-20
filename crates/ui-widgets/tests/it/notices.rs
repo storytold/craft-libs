@@ -143,5 +143,6 @@ fn a_wide_notice_wraps_its_message_beside_its_actions() {
     let text = fixture.texts().iter().find(|run| run.text == message).expect("message painted").rect;
     let action = fixture.by_label("Security settings").expect("action").rect;
     assert!(text.right() <= action.left(), "the message leaves room for the actions: {text:?}, {action:?}");
+    assert!(text.top() >= action.top(), "the message begins within the action line: {text:?}, {action:?}");
     assert!(text.top() < action.bottom() && action.top() < text.bottom(), "the actions share the message's first line");
 }
