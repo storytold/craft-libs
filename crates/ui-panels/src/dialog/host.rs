@@ -532,11 +532,25 @@ impl DialogHost {
         // A windowed dialog that is not modeless blocks the document window behind it.
         if self.open.iter().any(|dialog| dialog.windowed() && !dialog.modeless()) {
             let screen = ctx.content_rect();
-            let backdrop = egui::Area::new(egui::Id::unique(("craft_windowed_modal", ctx.viewport_id())))
+            let viewport = ctx.viewport_id();
+            let backdrop = egui::Area::new(egui::Id::unique(("craft_windowed_modal", viewport)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(screen.min)
                 .show(ctx, |ui| ui.allocate_rect(screen, egui::Sense::CLICK | egui::Sense::DRAG))
                 .inner;
+            // The panel is a separate window, so it covers no caption area of this one, but the
+            // backdrop does: a drag started on a caption move area still moves the window, as
+            // behind an in-window modal.
+            let on_caption = ctx.input(|i| {
+                i.pointer.press_origin().is_some_and(|p| {
+                    crate::runtime::windows::WindowHost::of(ctx)
+                        .caption_regions(viewport)
+                        .is_some_and(|regions| regions.moves.iter().any(|moves| moves.contains(p)))
+                })
+            });
+            if backdrop.drag_started() && on_caption {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
             ctx.move_to_top(backdrop.layer_id);
             ctx.memory_mut(|m| m.set_modal_layer(backdrop.layer_id));
         }

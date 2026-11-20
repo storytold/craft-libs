@@ -203,6 +203,21 @@ fn a_windowed_dialog_runs_in_its_own_window_and_stores_its_result() {
     assert_eq!(host.take::<Windowed>(), Some(DialogResult::Ok(7)));
 }
 
+/// While a windowed dialog that is not modeless is open, the document window behind it is blocked:
+/// the modal layer sits on the context, and lifts when the dialog closes.
+#[trial]
+fn a_windowed_dialog_blocks_the_document_window_behind_it() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Windowed { key: "panel", shows: 0, finish: None });
+    let ctx = frames.ctx.clone();
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert!(ctx.memory(|m| m.top_modal_layer().is_some()), "the document window is blocked behind the panel");
+    host.close_by_id(id);
+    frames.frame(Vec::new(), |_ui| host.run_windowed(&ctx));
+    assert!(ctx.memory(|m| m.top_modal_layer().is_none()), "the block lifts when the panel closes");
+}
+
 /// A windowed dialog asked to close without a `Context` (`close_by_id`, as closing its window would
 /// arrive) is cancelled at the next `run_windowed`.
 #[trial]
