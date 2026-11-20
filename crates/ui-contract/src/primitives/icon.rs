@@ -12,7 +12,7 @@ use egui::{Color32, Painter, Rect, pos2, vec2};
 pub use super::svg_set::IconSet;
 
 /// Whether a directional icon flips under right-to-left.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, crate::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Mirror {
     /// Flips a directional icon under right-to-left.

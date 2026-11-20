@@ -10,6 +10,8 @@
 //! Written from the public Standard MIDI Files 1.0 specification.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Live MIDI 1.0 channel-voice message decoding.
+pub mod live;
 mod sequence;
 mod smf;
 pub mod source_timed;

@@ -68,6 +68,19 @@ pub fn alternate_spot_colors(data: &[u8]) -> impl ExactSizeIterator<Item = Alter
     })
 }
 
+/// Encode unpadded legacy Pascal channel names (resource 1006).
+///
+/// Each name is encoded with [`crate::resources::encode_legacy_name`] (printable ASCII, max 255
+/// bytes) and prefixed with its 1-byte length without per-string padding.
+pub fn pascal_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for name in names {
+        let legacy = crate::io::encode_legacy_name(name);
+        crate::io::write_pascal(&mut out, &legacy, 1);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +120,11 @@ mod tests {
         assert_eq!(alternate_spot_colors(&bytes).len(), 1);
         bytes[2..4].copy_from_slice(&0u16.to_be_bytes());
         assert_eq!(alternate_spot_colors(&bytes).len(), 0);
+    }
+
+    #[test]
+    fn pascal_names_encodes_unpadded_legacy_strings() {
+        assert_eq!(pascal_names(["Spot Color 1"]), b"\x0cSpot Color 1");
+        assert_eq!(pascal_names(["café", "A\nB"]), b"\x04caf?\x03A?B");
     }
 }

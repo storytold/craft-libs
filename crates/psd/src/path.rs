@@ -252,6 +252,24 @@ impl VectorMaskBlock {
     }
 }
 
+/// Extract the raw Pascal-string path name bytes from a Clipping Path Name resource (2999).
+///
+/// Returns `None` if the resource is empty or truncated before the declared name length.
+pub fn clipping_path_name(data: &[u8]) -> Option<&[u8]> {
+    let len = usize::from(*data.first()?);
+    data.get(1..1 + len)
+}
+
+/// Encode a Clipping Path Name resource (2999): legacy Pascal name followed by 16.16 unsigned
+/// fixed-point flatness.
+pub fn clipping_path_resource(name: &str, flatness: f32) -> Vec<u8> {
+    let legacy = crate::io::encode_legacy_name(name);
+    let mut out = Vec::with_capacity(1 + legacy.len() + 4);
+    crate::io::write_pascal(&mut out, &legacy, 1);
+    out.extend_from_slice(&((flatness.max(0.0) * 65536.0) as u32).to_be_bytes());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +356,14 @@ mod tests {
         let s = p.subpaths();
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].knots.len(), 3);
+    }
+
+    #[test]
+    fn clipping_path_resource_roundtrip_and_truncation() {
+        let bytes = clipping_path_resource("Outline", 1.5);
+        assert_eq!(bytes, b"\x07Outline\x00\x01\x80\x00");
+        assert_eq!(clipping_path_name(&bytes), Some(b"Outline".as_slice()));
+        assert_eq!(clipping_path_name(&[]), None);
+        assert_eq!(clipping_path_name(&[5, b'a', b'b']), None);
     }
 }
