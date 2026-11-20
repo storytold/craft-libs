@@ -125,6 +125,7 @@ craft_ui::words! {
         image_size: "saveForWeb.imageSize" = "Image Size";
         width: "saveForWeb.width" = "Width";
         height: "saveForWeb.height" = "Height";
+        constrain: "saveForWeb.constrainProportions" = "Constrain proportions";
         size_unit: "saveForWeb.sizeUnit" = "Unit";
         percent: "saveForWeb.percent" = "Percent";
         fit: "saveForWeb.fit" = "Fit";
@@ -432,8 +433,7 @@ impl<'a> SaveForWebDialog<'a> {
                 let saved = remember.as_ref().and_then(|key| cx.saved::<Option<Last>>(key).clone());
                 live = Live::open(size, saved.as_ref());
                 if let Some(last) = &saved {
-                    // The slices and palette edits belong to one document, so a remembered set leaves them at their defaults.
-                    *options = SaveForWebOptions { percent: 100.0, ..last.options.without_document_fields() };
+                    *options = last.options.without_document_fields();
                     restored = true;
                 }
             }
@@ -470,6 +470,7 @@ impl<'a> SaveForWebDialog<'a> {
                 }
             }
             let before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            options.apply_size(&mut live.link);
             // A frame the host set is a change from the one the last pass showed: the panes are encoded again.
             if let Some(bound) = frame_held.as_mut().and_then(|held| held.read(&mut **cx)) {
                 live.frame = bound;
@@ -510,9 +511,6 @@ impl<'a> SaveForWebDialog<'a> {
                 options.slices.select(number, add);
             }
 
-            if live.link.pixels() != before.1 {
-                options.percent = percent_of(live.link.pixels(), live.link.original());
-            }
             if (options.clone(), live.link.pixels(), live.view, live.frame) != before {
                 live.revision += 1;
             }
