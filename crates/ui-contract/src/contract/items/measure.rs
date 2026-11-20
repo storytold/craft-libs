@@ -291,28 +291,31 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
                 let (width_id, height_id) = (rows::measured_width_id(id, &key), rows::measured_id(id, &key));
                 let installed = (id, env.view(), &env);
                 // The rows' measure is the collection's own, as its largest-row probe is: no transcript around takes it.
-                layout_memory::boundary(&ctx, true, || {
+                // It runs as a measure; the layout takes its results in the run that called it, so the run's own
+                // placement (a strip's report of its tabs) follows them.
+                let row_width = layout.rect(at, ScrollPos::default()).width();
+                let (widths, height) = layout_memory::boundary(&ctx, true, || {
                     crate::contract::steps::measuring(&ctx, || {
                         self.measure_row(comp, measuring.ui, installed, memory, row_measure, |measure| {
                             // A row of auto widths takes its ideal width unless the fit over every row's widths shrinks it:
                             // its height is measured there, and again only where the fit settles on another width.
-                            let mut row_width = layout.rect(at, ScrollPos::default()).width();
-                            if wide {
-                                let (ideal, min) = (measure(Proposal::Ideal).0.x, measure(Proposal::Min).0.x);
-                                rows::record_measure(&ctx, id, width_id, Vec2::new(ideal, min));
-                                layout.set_width(at, ideal, min);
-                                row_width = ideal;
-                            }
-                            if high || wide {
-                                let height = measure(Proposal::Width(row_width)).0.y;
-                                #[cfg(feature = "testing")]
-                                crate::runtime::measure::count_row_measure(&ctx, height_id);
-                                rows::record_measure(&ctx, id, height_id, Vec2::new(row_width, height));
-                                layout.set_height(at, height);
-                            }
-                        });
-                    });
+                            let widths = wide.then(|| Vec2::new(measure(Proposal::Ideal).0.x, measure(Proposal::Min).0.x));
+                            let row_width = widths.map_or(row_width, |widths| widths.x);
+                            let height = (high || wide).then(|| Vec2::new(row_width, measure(Proposal::Width(row_width)).0.y));
+                            (widths, height)
+                        })
+                    })
                 });
+                if let Some(widths) = widths {
+                    rows::record_measure(&ctx, id, width_id, widths);
+                    layout.set_width(at, widths.x, widths.y);
+                }
+                if let Some(height) = height {
+                    #[cfg(feature = "testing")]
+                    crate::runtime::measure::count_row_measure(&ctx, height_id);
+                    rows::record_measure(&ctx, id, height_id, height);
+                    layout.set_height(at, height.y);
+                }
             }
         }
     }

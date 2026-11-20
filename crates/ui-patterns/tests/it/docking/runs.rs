@@ -297,11 +297,14 @@ fn a_tab_switch_runs_only_its_group() {
 }
 
 /// A new label for one panel runs only its group's tab row, once: the other groups' menus, which name it, are built
-/// only while open.
+/// only while open. The row fits its tabs to the new label's width in that frame: a label too long for the group
+/// moves the group's other tab to the overflow menu.
 #[trial]
 fn a_label_change_runs_only_its_groups_chrome() {
+    const RENAMED: &str = "A renamed panel whose title is far too long to share its group's tab row with the other panel";
     let MemoDock { mut fixture, labels, .. } = memo_dock(side_by_side(3), None);
-    labels.borrow_mut()[4] = "Renamed".to_owned();
+    assert!(fixture.by_label("More tabs").is_none(), "every group's tabs fit before the change");
+    labels.borrow_mut()[4] = RENAMED.to_owned();
     fixture.frame(Vec::new());
     let rows_ran = frame_ran_ids(&fixture, "TabRow");
     assert_eq!(
@@ -313,9 +316,12 @@ fn a_label_change_runs_only_its_groups_chrome() {
     assert_eq!(fixture.passes(), 1, "the frame runs once");
     assert_eq!(memo_of(&fixture, "TabRow"), (1, 2), "the other tab rows replay: {:?}", memo_runs(&fixture));
     assert_eq!(body_runs(), Vec::<usize>::new(), "no body ran");
-    assert!(fixture.texts().iter().any(|text| text.text == "Renamed"), "the tab shows the new label");
+    assert!(fixture.texts().iter().any(|text| text.text == RENAMED), "the tab shows the new label");
+    assert!(fixture.by_label("Panel 5").is_none(), "the group's other tab no longer fits");
+    assert!(fixture.by_label("More tabs").is_some(), "the group's overflow menu button shows in the frame of the change");
     fixture.idle(SETTLE).frame(Vec::new());
     assert_eq!(ran(&fixture), 0, "and it settles at it: {:?}", memo_runs(&fixture));
+    assert!(fixture.by_label("More tabs").is_some(), "the overflow menu button stays");
 }
 
 /// A body the host does not memoize runs every pass while the memoized views replay.
