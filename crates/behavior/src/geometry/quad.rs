@@ -991,8 +991,16 @@ fn perspective_push(
         let spread = row * (1.0 - row);
         let drift_row = spread * lean * (0.75 - 0.25 * rho);
         let drift_place = 2.0 * spread * lean * lean;
-        let inv_s = (place + drift_place * x) * x;
-        apply(&h, unit(1.0, (row + drift_row * x) * inv_s, inv_s))
+        // Past the opposite edge (x < -1, the middle flipped) the factor levels off at place * e^(-ln² rho / 2) and the
+        // row drifts further with 1 / s_m = x + 1 (measured on five boxes, rho 0.5 to 1.66).
+        let (factor, row) = if x < -1.0 {
+            let extra = drift_row * lean * lean * (0.8 - 0.3 * lean);
+            (place * (-lean * lean / 2.0).exp(), row + drift_row * x + extra * (x + 1.0))
+        } else {
+            (place + drift_place * x, row + drift_row * x)
+        };
+        let inv_s = factor * x;
+        apply(&h, unit(1.0, row * inv_s, inv_s))
     } else if edge == 2 {
         // A bottom drag, in the start box's frame: the centre's row sits at `frac` of the middle row in document
         // units and drifts with `x` by a term odd in ln rho; its 1/s bends away from the side drags' `place * x` as x

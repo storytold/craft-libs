@@ -633,3 +633,26 @@ fn a_long_bottom_drag_on_a_box_in_perspective_follows_the_reference() {
         assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
     }
 }
+
+/// A side dragged past the opposite one on a box whose sides converge (measured on the reference): the flipped push
+/// levels its factor off, so the far corners land where the reference puts them, for sides narrowing either way.
+#[test]
+fn a_side_dragged_past_the_opposite_one_in_perspective_follows_the_reference() {
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let narrow_bottom = [(150.0, 125.0), (452.0, 125.0), (376.0, 327.0), (226.0, 327.0)];
+    let gentle_bottom = [(150.0, 125.0), (452.0, 125.0), (412.0, 327.0), (190.0, 327.0)];
+    let cases = [
+        // Was 23.5 px off.
+        (narrow_top, (422.0, 226.0), (72.0, 226.0), [(210.0, 319.23), (-22.01, 393.24), (108.84, 160.46), (150.0, 132.77)], 1.0),
+        // Was 18 px off.
+        (narrow_top, (422.0, 226.0), (92.0, 226.0), [(210.0, 308.13), (28.76, 349.26), (124.79, 162.09), (150.0, 143.87)], 0.5),
+        // Was 19.4 px off.
+        (narrow_bottom, (414.0, 226.0), (-22.0, 226.0), [(150.0, 270.81), (20.7, 265.7), (-82.57, 169.68), (226.0, 181.19)], 0.5),
+        // Was 1.8 px off.
+        (gentle_bottom, (432.0, 226.0), (20.0, 226.0), [(150.0, 262.79), (37.15, 266.36), (6.32, 193.8), (190.0, 189.21)], 0.15),
+    ];
+    for (quad, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), 1, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
+    }
+}
