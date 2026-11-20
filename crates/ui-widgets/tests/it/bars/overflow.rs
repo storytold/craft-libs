@@ -155,14 +155,15 @@ fn a_member_the_bar_shows_in_part_is_not_shown_until_it_is_whole() {
     assert!(checked > 0, "no width put a button across the bar's end");
 }
 
-/// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the two buttons' rects.
-/// Icon buttons keep their width, so nothing in the line narrows to make room.
+/// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the parts of the two
+/// buttons the bar shows (their interact rects). Icon buttons keep their width, so nothing in the line narrows to
+/// make room.
 fn rule_bar(ui: &mut Ui, width: f32, rects: &std::cell::Cell<(Rect, Rect)>) {
     in_region(ui, Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 80.0)), |ui| {
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-            let first = IconButton::new(IconId::new("plus")).label("First").show(ui).rect;
+            let first = IconButton::new(IconId::new("plus")).label("First").show(ui).interact_rect;
             Divider::vertical().show(ui);
-            let second = IconButton::new(IconId::new("minus")).label("Second").show(ui).rect;
+            let second = IconButton::new(IconId::new("minus")).label("Second").show(ui).interact_rect;
             rects.set((first, second));
         });
     });

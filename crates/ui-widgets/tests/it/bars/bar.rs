@@ -237,9 +237,9 @@ fn filling_bar(room: f32, column: f32, fields: Sizing, pages: usize) -> Filling 
             Block::new(Vec2::new(column, 20.0)).show(ui);
             let mut shown = empty;
             let bar = Bar::new("Filters", BarKind::Tool).show(ui, |ui, _| {
-                shown.fields[0] = TextField::search("Name", Bind::bound(&mut name)).sizing(fields).show(ui).response.rect;
-                shown.fields[1] = TextField::search("Kind", Bind::bound(&mut kind)).sizing(fields).show(ui).response.rect;
-                shown.button = Button::new("Apply").show(ui).rect;
+                shown.fields[0] = TextField::search("Name", Bind::bound(&mut name)).sizing(fields).show(ui).response.interact_rect;
+                shown.fields[1] = TextField::search("Kind", Bind::bound(&mut kind)).sizing(fields).show(ui).response.interact_rect;
+                shown.button = Button::new("Apply").show(ui).interact_rect;
             });
             shown.bar = bar.output.response.rect;
             out.set(shown);
@@ -264,7 +264,7 @@ fn filling_bar_members_keep_their_natural_width_and_the_bar_scrolls() {
     let (lead, trail) = (held.fields[0].min.x - held.bar.min.x, held.bar.max.x - held.button.max.x);
     assert!((lead - trail).abs() < 1.0, "the button reaches the bar's end, as the first field its start: {dump}");
     // Narrowed, the members keep their widths and the bar scrolls. A member's shown rect is the part the bar's view
-    // shows, so the bar is paged toward its end: on some page each field shows at least its natural width and the
+    // shows (its interact rect), so the bar is paged toward its end: on some page each field shows at least its natural width and the
     // button shows whole, and on no page do two members overlap.
     let button = held.button.width();
     let (mut widest, mut button_whole) = ([0.0_f32; 2], Vec::new());
