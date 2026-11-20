@@ -294,18 +294,6 @@ impl Component for Button<'_> {
         }
     }
 
-    const PAIRED_MEASURE: bool = true;
-
-    fn measure_pair(&mut self, ideal: &MeasureCx<'_, Self>, least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
-        let (mut whole, mut narrow) = face::measure_pair(ideal, least, &self.spec(ideal.resolved.label, ideal.style));
-        if let Some(room) = &self.room_for {
-            let (room_whole, room_narrow) = face::measure_pair(ideal, least, &self.face_of(room.as_str(), ideal.style));
-            whole = whole.max(room_whole);
-            narrow = narrow.max(room_narrow);
-        }
-        Some((whole, narrow))
-    }
-
     fn sense(&self) -> Sense {
         if self.loading { Sense::FOCUS } else { Sense::CLICK | Sense::FOCUS }
     }
