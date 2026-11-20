@@ -3,7 +3,8 @@
 //! no count.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
+use craft_ui::style::SurfaceKind;
 use craft_ui::testing::layout::{allocate, in_region};
 use craft_ui::testing::pointer::{moved, wheel};
 use craft_ui::testing::{
@@ -236,21 +237,24 @@ fn a_view_whose_body_measured_in_its_run_replays_as_a_run_in_a_pass_that_does_no
     assert!(ran.is_empty(), "the view settles: {ran:?}");
 }
 
-/// A card: one pressable member of the arena around it.
+/// A card, as the gallery's: a raised surface (painted snapped to the pixel grid) holding one pressable member of the
+/// arena around it.
 #[derive(MemoProps)]
 struct Card {
     at: usize,
 }
 
 fn card(props: &mut Card, ui: &mut Ui) {
-    Button::new(format!("Card {}", props.at)).show(ui);
+    Slab::new(ContainerProps::new().surface(SurfaceKind::Raised)).id_salt(("card", props.at)).show(ui, |ui, _| {
+        Button::new(format!("Card {}", props.at)).show(ui);
+    });
 }
 
-/// A card holding a scrolling body of its own, whose rows report their places to it.
+/// A card holding a scrolling body of its own, sized to its content, whose rows report their places to it.
 fn scrolling_card(props: &mut Card, ui: &mut Ui) {
     let room = allocate(ui, Vec2::new(100.0, 80.0));
     in_region(ui, room, |ui| {
-        Slab::new(ContainerProps::new().scroll(Scroll::vertical()).sizing(Sizing::Fill)).id_salt(("inner", props.at)).show(ui, |ui, _| {
+        Slab::new(ContainerProps::new().surface(SurfaceKind::Raised).scroll(Scroll::vertical())).id_salt(("inner", props.at)).show(ui, |ui, _| {
             for at in 0..6 {
                 Lazy::new(at, 20.0).show(ui, |ui| {
                     Button::new(format!("Row {at}")).show(ui);
@@ -264,14 +268,17 @@ fn scrolling_card(props: &mut Card, ui: &mut Ui) {
 /// the narrow ones).
 const BESIDE: Pos2 = Pos2::new(140.0, 50.0);
 
-/// Cards shown by `body` in a scrolling arena body, under a lead of `lead` points.
+/// Cards shown by `body` in a scrolling arena body under a lead of `lead` points, as the gallery's grid shows them: each
+/// in a row that runs only in view (`Lazy`).
 fn cards(lead: f32, body: fn(&mut Card, &mut Ui)) -> impl FnMut(&mut Ui) {
     move |ui: &mut Ui| {
         in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(160.0, 200.0)), |ui| {
             Slab::new(ContainerProps::new().scroll(Scroll::vertical()).arena(true)).id_salt("cards").show(ui, |ui, _| {
                 ui.add_space(lead);
                 for at in 0..12 {
-                    MemoView::new(("card", at), Card { at }, body).show(ui);
+                    Lazy::new(("row", at), 40.0).show(ui, |ui| {
+                        MemoView::new(("card", at), Card { at }, body).show(ui);
+                    });
                 }
             });
         });

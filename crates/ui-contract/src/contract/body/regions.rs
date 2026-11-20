@@ -1,6 +1,7 @@
 //! Where the header, body, footer and end regions sit inside the container, and the rules between them.
 
 use super::BodyHooks;
+use super::scroll::scroll_of;
 use crate::contract::cx::BodyCx;
 use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PadEdges, Sizing};
 use crate::layout::{ColumnGroup, Columns, Reached};
@@ -380,7 +381,11 @@ impl<'b> BodyHooks<'b> {
             let line_h = if inline { body_h.max(header_h) } else { body_h };
             // A full-height end region stands beside the footer too, so only the part of it under the line counts.
             let end_line = if full { (end_h - across_h).max(0.0) } else { end_h };
-            (top + body_room, top + line_h.max(end_line).min(body_room))
+            let line_bottom = top + line_h.max(end_line).min(body_room);
+            // A scrolling body offered no bound (a content-sized container in a body that scrolls) shows all of its
+            // content: its view is the line this pass measured, never an unbounded band.
+            let bottom = if body_room.is_finite() || scroll_of(props).is_none() { top + body_room } else { line_bottom };
+            (bottom, line_bottom)
         } else {
             // A fill-width body is offered the room the parent gives this pass, never the height its content took last
             // pass: a collection that scrolls takes its rows up to that room, and from zero it would stay at zero.
