@@ -17,6 +17,7 @@ harness = false
 workspace = true
 
 [features]
+suite = ["screen-testing", "craft-ui/suite"]
 default = []
 # The page widgets (`craft_pages::ui`), on craft-ui.
 ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:craft-theme", "dep:egui", "craft-text/ui"]
@@ -35,6 +36,6 @@ craft-theme = { workspace = true, optional = true }
 egui = { workspace = true, optional = true }
 
 [dev-dependencies]
-craft-ui = { workspace = true, features = ["testing"] }
+craft-ui = { workspace = true, features = ["suite"] }
 egui = { workspace = true }
 craft-i18n = { workspace = true }

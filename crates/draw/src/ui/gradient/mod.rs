@@ -8,13 +8,13 @@
 //! there.
 
 mod fill;
-mod fill_editor;
+pub(crate) mod fill_editor;
 pub mod gradient_line;
 pub mod gradient_overlay;
 pub mod map;
-mod palette;
-mod swatch;
-mod tile;
+pub(crate) mod palette;
+pub(crate) mod swatch;
+pub(crate) mod tile;
 
 pub use fill::{GradientFill, GradientStyle};
 pub use fill_editor::{GradientFillEditor, GradientFillEditorOutput, GradientFillWords};

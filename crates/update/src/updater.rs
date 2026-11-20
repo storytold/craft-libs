@@ -1139,4 +1139,4 @@ pub fn download_action(app: &App, release: &Release) -> Action {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

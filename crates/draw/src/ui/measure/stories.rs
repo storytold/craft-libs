@@ -62,16 +62,16 @@ fn ruler_overlay_with_a_protractor_arm(ui: &mut Ui, data: &mut StoryData) -> Sto
 
 #[story(RulerBar<'static>, covers = [], drive = Drive::Never)]
 fn ruler_bar_with_a_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let use_scale = data.value("scale", false);
+    let (use_scale, use_scale_at) = data.value_at("scale", false);
     let mut output = None;
-    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(RulerBar::new(Some(line()), Bind::bound(&mut *use_scale)).show(ui)));
+    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(RulerBar::new(Some(line()), use_scale_at.bind(&mut *use_scale)).show(ui)));
     output.map(StoryOutput::from).unwrap_or_default()
 }
 
 #[story(RulerBar<'static>, covers = [], drive = Drive::Never)]
 fn ruler_bar_without_a_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let use_scale = data.value("none", false);
+    let (use_scale, use_scale_at) = data.value_at("none", false);
     let mut output = None;
-    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(RulerBar::new(None, Bind::bound(&mut *use_scale)).show(ui)));
+    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(RulerBar::new(None, use_scale_at.bind(&mut *use_scale)).show(ui)));
     output.map(StoryOutput::from).unwrap_or_default()
 }

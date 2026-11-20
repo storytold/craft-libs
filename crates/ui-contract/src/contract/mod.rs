@@ -13,15 +13,16 @@ pub mod ghost;
 mod group;
 mod held;
 mod hosted;
-mod items;
-mod label;
+pub(crate) mod items;
+pub(crate) mod label;
 mod lazy;
-#[cfg(feature = "testing")]
-mod level;
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
+pub(crate) mod level;
+#[cfg(feature = "suite")]
 mod level_table;
 mod looks;
 mod memo;
+mod memo_view;
 mod mount;
 pub mod overlay;
 mod pages;
@@ -92,23 +93,21 @@ pub use label::colon_of;
 pub use label::{CellWidth, FieldLabelRole, FieldLayout, GlyphLabel, InsideLabel, LabelKind, LabelScheme, Scrub, SideLabel};
 pub use lazy::Lazy;
 #[doc(hidden)]
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub use level::{Catalog, CatalogEntry, Level, StoryLayout, Surface, catalog, stale_table_rows, story_title};
 pub use looks::Looks;
 pub use memo::{MemoKey, MemoProps, Stateless};
+pub use memo_view::{MemoView, Outbox};
 pub use overlay::{Overlay, OverlayUi, Overlays, Popup, PopupHandle, SizeLimits, Trigger};
 pub use pages::Pages;
 pub use paint_ui::PaintUi;
 pub use props::{Common, Props, Resolved, Tooltip, TooltipAt, TooltipSpec, TooltipWhen};
 #[doc(hidden)]
-#[cfg(feature = "testing")]
-pub use registry::registrations;
-#[doc(hidden)]
 pub use registry::{CollectionEntry, ContainerEntry, Exemption, LeafEntry, PatternKind, PatternProbe, Probe, Registration, ShowEntry};
 pub use sampler::{CanvasGesture, Sampler};
 pub use settle::SettleCx;
 pub use text::EDIT_MENU;
-pub use values::{Bind, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
+pub use values::{Bind, BindCheck, BindMut, EditResponse, Hover, ItemOutput, NoValue, Outcome, Validity, ValueOf, clicked, pressed};
 
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
@@ -121,7 +120,7 @@ use std::hash::Hash;
 use std::ops::Deref;
 
 pub use crate::runtime::drag::{DragPreview, DropMark, DropTarget, DropZone, OsFile, OsFiles, WindowDropTarget};
-#[cfg(feature = "testing")]
+#[cfg(feature = "suite")]
 pub(crate) use body::MOVE_BAND;
 pub use craft_behavior::ColumnKey;
 pub use craft_behavior::DropOperation;
@@ -419,6 +418,19 @@ pub trait Component: Meta + Sized {
         Vec2::ZERO
     }
 
+    /// Set when `measure_pair` may answer a paired request. The default avoids calling the hook for legacy components.
+    const PAIRED_MEASURE: bool = false;
+
+    /// Optionally answers an ideal and a least content measure together. The answers must match `measure` under
+    /// the two supplied contexts, including the external inputs each reads, and leave the component as those calls
+    /// would. The component's fill declaration and label-scope reads must not change during either measure. Both
+    /// answers are replayed under the union of those inputs, so use this only when that preserves each answer. Return
+    /// `None` without reading either context or changing state to keep the ordinary separate calls;
+    /// that is the default.
+    fn measure_pair(&mut self, _ideal: &MeasureCx<'_, Self>, _least: &MeasureCx<'_, Self>) -> Option<(Vec2, Vec2)> {
+        None
+    }
+
     /// The axis along which the component takes all the room the flow offers when that is more than it measured,
     /// as a container with `Sizing::Fill` does: the width when its caller set `Sizing::FillWidth` (a search field
     /// before a count) or `Sizing::Fill` (which takes the height as well). A component that fills by what it is
@@ -653,7 +665,8 @@ pub trait Collection: Component + HasProps + Meta<Shape = shape::Items> {
         None
     }
 
-    /// Adjusts the item the closure built for a row, from the row's state.
+    /// Adjusts the item the closure built for a row, from the row's state. An auto row's measure reads the item this
+    /// makes, under the row-hook contract on `ItemCx`.
     fn dress<'r>(&self, item: Self::Item<'r>, _row: &RowState) -> Self::Item<'r> {
         item
     }

@@ -9,18 +9,18 @@ use egui::Ui;
 
 #[story(Disclosure<'static>, covers = [Default])]
 fn disclosure(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let out = Disclosure::new(Bind::bound(data.value("open", false))).label("Details").show(ui);
+    let out = Disclosure::new(data.bind("open", false)).label("Details").show(ui);
     Disclosure::new(Bind::bound(&mut false)).label("Details, disabled").enabled(false).show(ui);
     out.into()
 }
 
 #[story(Disclosure<'static>, covers = [Mixed], drive = Drive::Never)]
 fn disclosure_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    Disclosure::new(Bind::bound_mixed(data.value("mixed", Mixed::Mixed))).label("Details").show(ui).into()
+    Disclosure::new(data.bind_mixed("mixed", Mixed::Mixed)).label("Details").show(ui).into()
 }
 
 #[story(Disclosure<'static>, covers = [Invalid], drive = Drive::Never)]
 fn disclosure_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_open = |open: &bool| if *open { Validity::Refuse(Message::new("Nothing to show")) } else { Validity::Ok };
-    Disclosure::new(Bind::bound(data.value("open", true)).check(refuse_open)).label("Details").show(ui).into()
+    Disclosure::new(data.bind("open", true).check(refuse_open)).label("Details").show(ui).into()
 }

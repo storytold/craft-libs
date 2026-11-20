@@ -2,16 +2,16 @@
 //! the `xml` and `otio` features the interchange round trips.
 
 #[cfg(all(feature = "xml", feature = "otio"))]
-mod fcp7;
+pub(crate) mod fcp7;
 #[cfg(all(feature = "xml", feature = "otio"))]
-mod fcpxml;
-mod features;
-mod lanes;
+pub(crate) mod fcpxml;
+pub(crate) mod features;
+pub(crate) mod lanes;
 #[cfg(all(feature = "xml", feature = "otio"))]
-mod otio;
-mod panel;
-mod ruler;
+pub(crate) mod otio;
+pub(crate) mod panel;
+pub(crate) mod ruler;
 #[cfg(all(feature = "xml", feature = "otio"))]
 mod support;
-mod timecode;
-mod transport;
+pub(crate) mod timecode;
+pub(crate) mod transport;

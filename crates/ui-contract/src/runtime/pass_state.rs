@@ -116,7 +116,7 @@ pass_state! {
         #[cfg(feature = "testing")]
         type_runs: crate::runtime::measure::TypeRuns,
         #[cfg(feature = "testing")]
-        settle_log: crate::runtime::measure::SettleLog,
+        memo_log: crate::runtime::measure::MemoLog,
         #[cfg(feature = "testing")]
         pass_totals: crate::runtime::measure::PassTotals,
     }
@@ -321,8 +321,8 @@ fn park(held: Held) {
     Service::<Parked>::run(&held.ctx, |parked| parked.0 = Some(held.state));
 }
 
-#[cfg(feature = "testing")]
-mod binding_tests {
+#[cfg(all(feature = "testing", any(test, feature = "suite")))]
+pub(crate) mod binding_tests {
     use super::{PassState, bound, hold, in_component_tree, visit, with_component_tree};
     use crate::testing::trial;
     use egui::Context;

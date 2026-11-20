@@ -447,54 +447,89 @@ fn gen_clip() -> impl Strategy<Value = G> {
     )
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
-    #[trial]
-    fn xmeml_roundtrip(clips in prop::collection::vec(gen_clip(), 1..20), ri in 0usize..5) {
-        let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
-        let mut p = Project::new("P");
-        let ms = [media(&mut p, "/x/one.mov", true, true, rate), media(&mut p, "/x/two.mov", true, true, rate), media(&mut p, "/y/three four.mxf", true, true, rate)];
-        let s = sequence(&mut p, "S", rate, false);
-        let mut ends = [0i64; 3];
-        let mut prev: [Option<ClipId>; 3] = [None; 3];
-        let mut aends = [0i64; 3];
-        for g in &clips {
-            let t = ends[g.track] + g.gap;
-            let v = clip(&mut p, s, TrackKind::Video, g.track, ms[g.media], t..t + (g.dur), g.src);
-            {
-                let q = p.sequence_mut(s).unwrap();
-                let (_, it) = q.find_item_mut(v).unwrap();
-                it.enabled = g.enabled;
-                match g.speed {
-                    1 => it.speed = 2.0,
-                    2 => it.speed = 0.5,
-                    3 => it.reverse = true,
+#[trial]
+fn xmeml_roundtrip() {
+    let mut config = ProptestConfig::with_cases(48);
+    config.source_file = Some(file!());
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    runner
+        .run(&(prop::collection::vec(gen_clip(), 1..20), 0usize..5), |(clips, ri)| {
+            let rate = [FrameRate::FPS_23_976, FrameRate::FPS_25, FrameRate::FPS_29_97, FrameRate::FPS_59_94, FrameRate::FPS_24][ri];
+            let mut p = Project::new("P");
+            let ms = [
+                media(&mut p, "/x/one.mov", true, true, rate),
+                media(&mut p, "/x/two.mov", true, true, rate),
+                media(&mut p, "/y/three four.mxf", true, true, rate),
+            ];
+            let s = sequence(&mut p, "S", rate, false);
+            let mut ends = [0i64; 3];
+            let mut prev: [Option<ClipId>; 3] = [None; 3];
+            let mut aends = [0i64; 3];
+            for g in &clips {
+                let t = ends[g.track] + g.gap;
+                let v = clip(&mut p, s, TrackKind::Video, g.track, ms[g.media], t..t + (g.dur), g.src);
+                {
+                    let q = p.sequence_mut(s).unwrap();
+                    let (_, it) = q.find_item_mut(v).unwrap();
+                    it.enabled = g.enabled;
+                    match g.speed {
+                        1 => it.speed = 2.0,
+                        2 => it.speed = 0.5,
+                        3 => it.reverse = true,
+                        _ => {}
+                    }
+                }
+                let d = g.tr_len;
+                let adjacent = g.gap == 0 && prev[g.track].is_some();
+                match g.tr {
+                    0 if adjacent => transition(
+                        &mut p,
+                        s,
+                        (TrackKind::Video, g.track),
+                        "cross_dissolve",
+                        (prev[g.track], Some(v)),
+                        t - d / 2..t - d / 2 + (d),
+                        TransitionAlign::CenterAtCut,
+                    ),
+                    1 if adjacent => transition(
+                        &mut p,
+                        s,
+                        (TrackKind::Video, g.track),
+                        "dip_to_white",
+                        (prev[g.track], Some(v)),
+                        t..t + (d),
+                        TransitionAlign::StartAtCut,
+                    ),
+                    2 if adjacent => transition(
+                        &mut p,
+                        s,
+                        (TrackKind::Video, g.track),
+                        "push",
+                        (prev[g.track], Some(v)),
+                        t - d..t - d + (d),
+                        TransitionAlign::EndAtCut,
+                    ),
+                    3 if !adjacent => {
+                        transition(&mut p, s, (TrackKind::Video, g.track), "cross_dissolve", (None, Some(v)), t..t + (d), TransitionAlign::StartAtCut)
+                    }
                     _ => {}
                 }
+                if g.audio && aends[g.track] <= t {
+                    let a = clip(&mut p, s, TrackKind::Audio, g.track, ms[g.media], t..t + (g.dur), g.src);
+                    link(&mut p, s, &[v, a]);
+                    aends[g.track] = t + g.dur;
+                }
+                ends[g.track] = t + g.dur;
+                prev[g.track] = Some(v);
             }
-            let d = g.tr_len;
-            let adjacent = g.gap == 0 && prev[g.track].is_some();
-            match g.tr {
-                0 if adjacent => transition(&mut p, s, (TrackKind::Video, g.track), "cross_dissolve", (prev[g.track], Some(v)), t - d / 2..t - d / 2 + (d), TransitionAlign::CenterAtCut),
-                1 if adjacent => transition(&mut p, s, (TrackKind::Video, g.track), "dip_to_white", (prev[g.track], Some(v)), t..t + (d), TransitionAlign::StartAtCut),
-                2 if adjacent => transition(&mut p, s, (TrackKind::Video, g.track), "push", (prev[g.track], Some(v)), t - d..t - d + (d), TransitionAlign::EndAtCut),
-                3 if !adjacent => transition(&mut p, s, (TrackKind::Video, g.track), "cross_dissolve", (None, Some(v)), t..t + (d), TransitionAlign::StartAtCut),
-                _ => {}
-            }
-            if g.audio && aends[g.track] <= t {
-                let a = clip(&mut p, s, TrackKind::Audio, g.track, ms[g.media], t..t + (g.dur), g.src);
-                link(&mut p, s, &[v, a]);
-                aends[g.track] = t + g.dur;
-            }
-            ends[g.track] = t + g.dur;
-            prev[g.track] = Some(v);
-        }
-        let (imp, text, _) = fcp7_roundtrip(&p, s, &xopts());
-        let si = only_seq(&imp);
-        prop_assert_eq!(structure(&imp.project, si, TrackKind::Video), structure(&p, s, TrackKind::Video), "{}", text);
-        prop_assert_eq!(structure(&imp.project, si, TrackKind::Audio), structure(&p, s, TrackKind::Audio));
-        prop_assert_eq!(links(&imp.project, si), links(&p, s));
-    }
+            let (imp, text, _) = fcp7_roundtrip(&p, s, &xopts());
+            let si = only_seq(&imp);
+            prop_assert_eq!(structure(&imp.project, si, TrackKind::Video), structure(&p, s, TrackKind::Video), "{}", text);
+            prop_assert_eq!(structure(&imp.project, si, TrackKind::Audio), structure(&p, s, TrackKind::Audio));
+            prop_assert_eq!(links(&imp.project, si), links(&p, s));
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[trial]

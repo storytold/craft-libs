@@ -22,11 +22,11 @@
 mod filter;
 mod native;
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))]
-mod portal;
-mod probe;
+pub(crate) mod portal;
+pub(crate) mod probe;
 pub mod save;
 #[cfg(test)]
-mod save_tests;
+pub(crate) mod save_tests;
 pub mod service;
 #[cfg(feature = "ui")]
 pub mod ui;
@@ -34,14 +34,16 @@ pub mod ui;
 /// The registrations of this crate's UI types, for its integration binary.
 #[cfg(feature = "screen-testing")]
 pub mod testing {
-    craft_ui::testing_registered!();
+
+    #[cfg(feature = "suite")]
+    craft_ui::registry!();
 }
 
 #[cfg(target_os = "macos")]
 mod macos;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -406,9 +408,10 @@ fn panic_text(panic: &(dyn std::any::Any + Send)) -> Option<&str> {
 extern crate self as craft_dialogs;
 #[cfg(all(test, feature = "screen-testing"))]
 #[path = "../tests/it/main.rs"]
-mod integration;
+pub(crate) mod integration;
 
 #[cfg(test)]
 fn main() {
-    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
+    craft_ui::registry!();
+    craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::Registry::of(&[register]));
 }

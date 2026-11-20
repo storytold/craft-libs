@@ -20,6 +20,7 @@
 //! |---|---|---|
 //! | Settings | [`AgentSettings`], [`WhenAppClosed`], [`agents_allowed`], [`folder`] | every target |
 //! | The launcher's switch | [`AgentSwitch`], [`mcp_flag`], [`launcher_allows`], [`POLL`] | desktop, feature `agents` |
+//! | The agent folders | [`AgentFolders`], [`AgentSettings::folders`], [`default_folder`], [`FOLDERS_TOOL`], [`folders_answer`], [`folders_tool`] | desktop, feature `agents` |
 //! | The connection file | [`Connection`], [`write_connection`], [`read_connection`], [`remove_connection`], [`remove_stale_connection`], [`probe`] | desktop, feature `agents` |
 //! | The CLI's side | [`Live`], [`LiveConfig`], [`Route`], [`Window`], [`Consent`], [`HeadlessFolders`], [`find_window`], [`launcher`] | desktop, feature `agents` |
 //!
@@ -41,6 +42,10 @@
 //!    the app's process id. No restart, no agents switch of its own. There is one connection file
 //!    per settings folder: an app that runs more than one process on one folder lets only one of
 //!    them accept agents.
+//! 3. The folders agents open from and save to are `settings.folders("GridCraft")`
+//!    ([`AgentSettings::folders`]): the person's own, otherwise `Documents/ArtCraft/Agents/GridCraft`.
+//!    Its MCP server offers [`FOLDERS_TOOL`] (described by [`FOLDERS_TOOL_DESCRIPTION`] or listed
+//!    as [`folders_tool`]), answered with [`folders_answer`] for the folders it uses.
 //!
 //! Its `gridcraft-cli mcp`:
 //!
@@ -62,6 +67,8 @@ pub use settings::{AgentSettings, WhenAppClosed, agents_allowed, folder};
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 mod connection;
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
+mod folders;
+#[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 mod live;
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 mod switch;
@@ -69,6 +76,8 @@ mod switch;
 pub use connection::{
     CONNECTION_FILE, Connection, PROBE_TIMEOUT, TOKEN_FILE, probe, read_connection, remove_connection, remove_stale_connection, write_connection,
 };
+#[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
+pub use folders::{AgentFolders, DEFAULT_FOLDER_PARENTS, FOLDERS_TOOL, FOLDERS_TOOL_DESCRIPTION, default_folder, folders_answer, folders_tool};
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 pub use live::{
     ConnectFn, Consent, ConsentFn, HeadlessFn, HeadlessFolders, LAUNCH_POLL, LAUNCH_TIMEOUT, LaunchFn, Live, LiveConfig, Route, Window, find_window,

@@ -57,7 +57,7 @@ pub use surround::paint_surround;
 #[cfg(feature = "testing")]
 pub(crate) use svg_set::Layer;
 pub use svg_set::{AppIcons, register_app_icons};
-pub use text::{ChordText, HAlign, LayoutRun, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
+pub use text::{ChordText, HAlign, LayoutRun, LayoutRuns, LayoutText, LeastLayout, ReadingMeasure, Span, TextLayout, TextRun, Wrap};
 pub use text_input::{
     Completer, Completion, EditorLine, EditorPurpose, EditorRun, EditorState, EditorSurrounding, ImeStamp, TabKey, TextKey, TextOptions,
 };

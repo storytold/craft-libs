@@ -5,8 +5,8 @@
 mod keys;
 mod parts;
 mod pointer;
-#[cfg(feature = "screen-testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 use std::sync::Arc;
 

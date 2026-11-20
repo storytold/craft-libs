@@ -13,13 +13,16 @@ use egui::{Context, Id, Ui};
 /// 1. `group_view`, with the group's panels and where the group goes. When it returns a height the host took the group
 ///    itself: the dock shows no tab strip and no panel body for that group, and calls neither `group_header` nor `body`
 ///    for it. A flyout measures its group before it shows it, so a host view runs at `GroupAt::Measure` too.
-/// 2. Otherwise, when the group runs (every pass, or only when something it shows changed while its chrome settles;
-///    see `spec_version`): `panel_rows` for its shown panel, `group_header` once, inside the group's header region
-///    before its tab strip, then `body` for the panels whose bodies are shown. A floating window's menu reads
-///    `panel_rows` every pass.
+/// 2. Otherwise `group_header` once, inside the group's header before its tab strip, then `body` for the panels whose
+///    bodies are shown.
 ///
-/// A panel's `spec` is read every pass, so a host may change a label or a limit between passes; a host whose chrome
-/// settles (`spec_version`) changes that version with it. The dock's actions name a group by one of its panels.
+/// Each of these runs every pass the group shows. A host memoizes inside them: a body or view shown through a
+/// [`MemoView`](crate::contract::MemoView) runs only when its props changed or input reached it, and otherwise repaints
+/// its last run. The dock's own chrome (each group's tab row, each column's bar) is memoized on what it shows: the
+/// panels' specs, the arrangement and the look.
+///
+/// A panel's `spec` and `permissions` are read every pass, so a host may change a label or a limit between passes.
+/// `panel_rows` is read while the group's menu is open. The dock's actions name a group by one of its panels.
 pub trait DockPanels<P> {
     /// What the dock reads of `panel`.
     fn spec(&self, panel: &P) -> PanelSpec;
@@ -36,33 +39,11 @@ pub trait DockPanels<P> {
     /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
-    /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
-    /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
-    /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
-    /// otherwise repaints its last run. A [`group_view`](Self::group_view) settles the same way under the version of
-    /// the group's shown panel, its panels and its shown tab: the version covers what the view shows, and whether the
-    /// host takes the group depends only on its panels. `None` (the default) runs the body, and the view, every pass.
-    fn content(&self, _panel: &P) -> Option<u64> {
-        None
-    }
-
-    /// The version of what the dock's chrome shows of the host's panels: every panel's `spec` (its name, icon and
-    /// limits), its `permissions`, what `group_header` shows, and whether `panel_rows` gives any rows (the group
-    /// shows its panel menu button only then; the rows themselves are read when the group runs). With one, each group's header and tab strip and each
-    /// column's bar settle (`Lazy::settles` with `Lazy::content`): they run only when this version, the arrangement,
-    /// their room or something the framework tracks in them changed, the pointer is over them or focus is in them, and
-    /// otherwise repaint their last run. A group settles only when its shown panel's body has a [`content`](Self::content)
-    /// version too. `None` (the default) runs the chrome every pass.
-    fn spec_version(&self) -> Option<u64> {
-        None
-    }
-
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at
     /// `GroupAt::Measure(width)` it measures that view at `width` the way it shows it. It returns the height the view
     /// takes (at `Show`, the rect's). `None` (the default) leaves the group to the dock, at both. A canvas group uses
-    /// the panels to tell which document it holds and draws it in the room `ui` has. At `Show` the view settles when
-    /// the shown panel has a [`content`](Self::content) version: a settled view repaints its last run instead of running.
+    /// the panels to tell which document it holds and draws it in the room `ui` has.
     fn group_view(&mut self, _panels: &[P], _active: usize, _ui: &mut Ui, _at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
         None
     }
@@ -72,7 +53,8 @@ pub trait DockPanels<P> {
     fn group_header(&mut self, _panels: &[P], _active: usize, _ui: &mut Ui, _cx: &mut BodyCx<'_>) {}
 
     /// The host's rows of `panel`'s menu, shown before the dock's own rows (the default has none): command rows,
-    /// which run by themselves.
+    /// which run by themselves. Read while the menu of `panel`'s group is open, and once per pass for whether the
+    /// group shows its panel menu button.
     fn panel_rows(&mut self, _panel: &P) -> Vec<PanelRow> {
         Vec::new()
     }

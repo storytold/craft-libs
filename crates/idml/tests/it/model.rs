@@ -408,3 +408,115 @@ fn designmap_layers_sections_and_hyperlinks_roundtrip_expected_attributes() {
     assert_eq!(cg.attr("IsRootColorGroup"), Some("true"));
     assert_eq!(cg.elements().count(), 2);
 }
+
+#[test]
+fn preferences_styles_spread_and_story_schema_helpers_roundtrip() {
+    use craft_idml::Node;
+    use craft_idml::model::{
+        CellStyleValues, EpubSplitValues, GuideValues, MarginPreference, StrokeValues, TableStyleValues, TextPreferenceValues, TocStyleEntryValues,
+        TocStyleValues, ViewPreferenceValues, object_style_effects_category_settings, pasteboard_preference_el, text_variable_instance_el,
+        tracked_change_el, transparency_preference_el,
+    };
+
+    let view = ViewPreferenceValues {
+        horizontal_units: "Points".into(),
+        vertical_units: "Points".into(),
+        ruler_origin: "SpreadOrigin".into(),
+        cursor_key_increment: 1.0,
+    }
+    .to_el();
+    assert_eq!(view.attr("HorizontalMeasurementUnits"), Some("Points"));
+    assert_eq!(view.attr("PointsPerInch"), Some("72"));
+
+    let text_pref =
+        TextPreferenceValues { superscript_size: 58.3, superscript_position: 33.3, subscript_size: 58.3, subscript_position: 33.3 }.to_el();
+    assert_eq!(text_pref.attr("SuperscriptSize"), Some("58.3"));
+
+    assert_eq!(pasteboard_preference_el(72.0, 36.0).attr("PasteboardMargins"), Some("72 36"));
+    assert_eq!(transparency_preference_el("CMYK").attr("BlendingSpace"), Some("CMYK"));
+
+    let epub = EpubSplitValues { break_document: true, paragraph_style: Some("ParagraphStyle/H1".into()) };
+    assert_eq!(EpubSplitValues::from_el(&epub.to_el()), epub);
+
+    let margin = MarginPreference::to_el(2, 12.0, 36.0, 36.0, 36.0, 36.0, &[0.0, 200.0, 212.0, 412.0]);
+    let parsed_margin = MarginPreference::from_el(&margin);
+    assert_eq!(parsed_margin.column_count(), Some(2.0));
+    assert_eq!(parsed_margin.column_positions(4), Some(vec![0.0, 200.0, 212.0, 412.0]));
+
+    let guide = GuideValues {
+        self_id: "u1g0".into(),
+        horizontal: true,
+        location: 100.0,
+        fit_to_page: true,
+        locked: false,
+        page_index: 0,
+        liquid: false,
+        item_layer: Some("u2".into()),
+    }
+    .to_el();
+    assert_eq!(guide.attr("Orientation"), Some("Horizontal"));
+    assert_eq!(guide.attr("ItemLayer"), Some("u2"));
+
+    let cell_style = CellStyleValues {
+        self_id: Some("CellStyle/Header".into()),
+        name: Some("Header".into()),
+        based_on: Some("$ID/[None]".into()),
+        fill: Some("Color/Black".into()),
+        fill_tint: Some(20.0),
+        insets: [Some(4.0), Some(6.0), Some(4.0), Some(6.0)],
+        edge_strokes: [
+            StrokeValues { weight: Some(1.0), color: Some("Color/Black".into()), ..StrokeValues::default() },
+            StrokeValues::default(),
+            StrokeValues::default(),
+            StrokeValues::default(),
+        ],
+        ..CellStyleValues::default()
+    };
+    let parsed_cell = CellStyleValues::from_el(&cell_style.to_el());
+    assert_eq!(parsed_cell.insets, cell_style.insets);
+    assert_eq!(parsed_cell.edge_strokes[0].weight, Some(1.0));
+
+    let mut table_style = TableStyleValues {
+        name: Some("Grid".into()),
+        based_on: Some("$ID/[No table style]".into()),
+        space_before: Some(6.0),
+        ..TableStyleValues::default()
+    };
+    table_style.column_strokes.next.kind = Some("Solid".into());
+    let table_el = table_style.to_el("TableStyle/Grid");
+    assert_eq!(table_el.attr("EndColumnLineStyle"), Some("Solid"));
+    assert_eq!(TableStyleValues::from_el(&table_el).column_strokes.next.kind.as_deref(), Some("Solid"));
+
+    let mut n = 0;
+    let toc = TocStyleValues {
+        self_id: Some("TOCStyle/Table of Contents".into()),
+        title: Some("Contents".into()),
+        title_style: Some("ParagraphStyle/Title".into()),
+        create_bookmarks: Some(true),
+        entries: vec![TocStyleEntryValues {
+            style: Some("Heading 1".into()),
+            level: Some(1),
+            page_number_position: Some("AfterEntry".into()),
+            separator: Some("\t".into()),
+            entry_style: Some("ParagraphStyle/TOC 1".into()),
+            page_number_style: None,
+            separator_style: None,
+            sort: Some(false),
+        }],
+    }
+    .to_el("Table of Contents", || {
+        n += 1;
+        format!("u{n}")
+    });
+    assert_eq!(toc.attr("CreateBookmarks"), Some("true"));
+    assert_eq!(toc.elements().count(), 1);
+
+    let obj_fx = object_style_effects_category_settings(true, false);
+    assert_eq!(obj_fx.attr("EnableDropShadow"), Some("true"));
+    assert_eq!(obj_fx.attr("EnableFeather"), Some("false"));
+
+    let tv = text_variable_instance_el("u9", "Chapter", "1", "dTextVariablenChapter");
+    assert_eq!(tv.attr("ResultText"), Some("1"));
+    let ch = tracked_change_el("u10", "InsertedText", vec![Node::El(craft_idml::El::new("Content"))]);
+    assert_eq!(ch.attr("ChangeType"), Some("InsertedText"));
+}

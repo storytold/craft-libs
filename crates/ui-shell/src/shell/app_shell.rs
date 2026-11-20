@@ -3,8 +3,8 @@
 //! name of each region come from the pipeline.
 
 mod dialogs;
-#[cfg(feature = "testing")]
-mod stories;
+#[cfg(feature = "suite")]
+pub(crate) mod stories;
 
 pub use self::dialogs::{ShellDialogsCx, WindowDialogs};
 use super::canvas_shell::slots as keys;
@@ -15,8 +15,8 @@ use super::title_bar::PageBand;
 use super::words::ShellWords;
 use crate::contract::overlay::Resize;
 use crate::contract::{
-    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _,
-    Role, ShellPane, ShowContainer as _, Sizing,
+    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _, Role,
+    ShellPane, ShowContainer as _, Sizing,
 };
 use crate::layout_components::Stack;
 use crate::notices::ToastStack;
@@ -25,6 +25,7 @@ use crate::runtime::egui::pass;
 use crate::runtime::env::{AppValues, BodyMode, Env, Label, RevealEdge, ShellCx, ShellEntry, ShellRegions, SlotKey, WindowKey};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::frame::{note_shell, take_chrome_toggles};
+use crate::runtime::memory::sub;
 use crate::runtime::overlay::{OpenFilter, any_open};
 use crate::runtime::pointer;
 use crate::runtime::windows::{WindowAction, WindowHost};
@@ -493,15 +494,6 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
-    /// Gives the slot keyed `key`, added before, the version of the app data it shows ([`Slot::content`]), for the
-    /// slots the `options_bar` and `status` builders make.
-    pub fn content(mut self, key: SlotKey, version: u64) -> Self {
-        for placed in self.title.iter_mut().chain(self.slots.iter_mut()).filter(|placed| placed.slot.key() == key) {
-            placed.slot = placed.slot.clone().content(version);
-        }
-        self
-    }
-
     /// Lays out the slots, then the body in what is left, runs the window's dialogs over them and shows the toasts of
     /// the window. Each slot and the body get `app`, one after the other: the slots that do not cover the body, then the
     /// body, then the slots a reveal lays over it.
@@ -641,7 +633,8 @@ impl<'a, S> AppShell<'a, S> {
             let mut shell = ShellCx::new(window.clone(), if only { BodyMode::Only } else { BodyMode::Normal }, regions.clone())
                 .with_tabs(tabs)
                 .with_tab_reveal(kept.reveal.tab())
-                .with_panels_hidden(kept.reveal.panels_hidden());
+                .with_panels_hidden(kept.reveal.panels_hidden())
+                .with_reveals_key(sub(cx.id, "reveals"));
             // The room an embedded shell shows: its rect less what a scroll or a parent clips. Its dialogs are contained in
             // it.
             let region = cx.rect.intersect(ui.clip_rect());
@@ -710,16 +703,10 @@ impl<'a, S> AppShell<'a, S> {
                         if let Some(label) = slot.name().cloned().or_else(|| named.map(|name| name(&words))) {
                             region = region.label(label);
                         }
-                        let content = slot.content_version();
                         let key = slot.key();
-                        let mut fill = |ui: &mut Ui, bcx: &mut BodyCx<'_>| match content {
-                            Some(version) => {
-                                Lazy::new(("slot", key), 0.0).settles(true).content(version).show(ui, |ui| add(ui, bcx, app));
-                            }
-                            None => add(ui, bcx, app),
-                        };
+                        // The slot runs every pass; the app memoizes inside it.
                         if !by_content {
-                            region.show(ui, |ui, bcx| fill(ui, bcx));
+                            region.show(ui, |ui, bcx| add(ui, bcx, app));
                             continue;
                         }
                         // The slot's extent along its edge: what its content allocated, plus what the pane keeps
@@ -734,7 +721,7 @@ impl<'a, S> AppShell<'a, S> {
                                 let stack = if along_x { Stack::new() } else { Stack::new().fill_width() };
                                 stack
                                     .show(ui, |ui, _| {
-                                        fill(ui, bcx);
+                                        add(ui, bcx, app);
                                         let content = ui.min_rect();
                                         if along_x { content.width() } else { content.height() }
                                     })
@@ -782,7 +769,7 @@ impl<'a, S> AppShell<'a, S> {
                 if crate::runtime::frame::discardable(&ctx) {
                     crate::runtime::frame::discard_pass(&ctx, "craft_ui: a content slot's extent changed");
                 } else {
-                    crate::runtime::frame::request_own_repaint(&ctx);
+                    crate::runtime::frame::request_repaint(&ctx);
                 }
             }
             // What shows here counts for the shell around this one too, so a host reads it from its own shell.
@@ -804,7 +791,7 @@ impl<'a, S> AppShell<'a, S> {
                     slots.iter().find(|placed| placed.slot.key() == *key).and_then(|placed| placed.edge.reveal_edge()).map(|edge| (edge, *rect))
                 })
                 .collect();
-            edges.extend(scope.revealed_rects());
+            edges.extend(scope.revealed_rects(ui.ctx()));
             kept.reveal.record(edges);
             // The screen bar and the drop-down slot show by the mode, never by a reveal.
             let revealed =

@@ -140,11 +140,26 @@ const NO_GLOBAL_STATE_PREFIXES: &[&str] = &[
 /// a `static` or `thread_local!` item or [`FS`] for `std::fs`. Each group names the settled fact or environment key that
 /// covers it, or the later task of craft-libs#2336 that removes the state. A new item in these files is flagged.
 const NO_GLOBAL_STATE: &[(&str, &str)] = &[
-    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types.
+    // Compile-time registry discovery reads the defining crate's source, never a view input.
+    ("crates/ui-macros/src/registry.rs", FS),
+    // The trait's home crate: it implements `MemoProps` by hand for std and framework value types, and for the
+    // framework's own keys the derive cannot write: a binding by its source's address, its check and the check's `fn`
+    // (values.rs), an icon's glyph by the type of its `dyn Glyph` (icon.rs), and the write-only `Outbox` (memo_view.rs).
     ("crates/ui-contract/src/contract/memo.rs", "MemoProps"),
-    // Settled fact: `ModalRules` holds a closure the derive cannot take; it keys on its plain fields and the revision
-    // the app moves with every rule change, which stands for the closure.
-    ("crates/menu/src/modal.rs", "MemoProps"),
+    ("crates/ui-contract/src/contract/values.rs", "MemoProps"),
+    ("crates/ui-contract/src/contract/memo_view.rs", "MemoProps"),
+    ("crates/ui-contract/src/primitives/icon.rs", "MemoProps"),
+    // Settled fact: a card's view of a story's state keys by the story value's revision, whether the start is taken, the
+    // dialog's flags and the reset count; the view of every shown story's state is one fixed-size digest of those keys.
+    // Both are props held as `&mut`, which the derive does not take.
+    // A card keys its owned story registration by the name and show function the card reads.
+    ("crates/ui-gallery/src/chrome/card.rs", "MemoProps"),
+    ("crates/ui-gallery/src/viewer/picks.rs", "MemoProps"),
+    // Settled fact: the names of a preset group key by a walk over the group and its folders (`dyn EachName`), which
+    // the derive cannot see through.
+    ("crates/ui-patterns/src/patterns/presets/model/library.rs", "MemoProps"),
+    // Settled fact: a name check keys by its inputs and its `fn` behind `dyn NameChecker`, as `Bind::check_with` does.
+    ("crates/ui-patterns/src/patterns/presets/named.rs", "MemoProps"),
     // Settled fact: constant font bytes, decompressed once from compile-time input and immutable after init.
     ("crates/ui-contract/src/fonts/defaults.rs", "HACK"),
     ("crates/ui-contract/src/fonts/defaults.rs", "EGUI_ICONS"),
