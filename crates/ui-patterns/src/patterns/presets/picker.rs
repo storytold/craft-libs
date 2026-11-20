@@ -30,9 +30,10 @@ use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
-use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PressPhase, Sense, Value};
+use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, NumberCodec, PartKey, PressPhase, Sense, Value};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
 use std::hash::Hash;
+use std::ops::RangeInclusive;
 
 /// The face under the whole field.
 const FACE: PartKey = PartKey::new("face");
@@ -193,11 +194,12 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// A short line under the field's thumbnail (a brush's current size).
     #[prop(into)]
     caption: Option<Label>,
-    /// The captions at the two ends of what `caption` shows (a brush's least and largest size). The field holds the
-    /// wider, as a number field holds the widest value of its range, so a caption that follows a dragged value moves
-    /// nothing beside the field.
+    /// The range and decimal places of the number `caption` shows (a brush's least and largest size, whole), written
+    /// as [`NumberCodec`] writes plain numbers. The field holds the widest number of the range as a number field does
+    /// ([`NumberCodec::widest`], tabular figures), so a caption that follows a dragged value moves nothing beside the
+    /// field.
     #[prop]
-    caption_range: Option<[Label; 2]>,
+    caption_range: Option<(RangeInclusive<f64>, usize)>,
     /// The field's tooltip.
     #[prop(into)]
     tooltip: Option<Tooltip>,
@@ -542,7 +544,7 @@ struct PickerFace<'a, K: Value + Eq + Hash + 'static> {
     placeholder: Option<Label>,
     display_name: Option<Label>,
     caption: Option<Label>,
-    caption_range: Option<[Label; 2]>,
+    caption_range: Option<(RangeInclusive<f64>, usize)>,
     face_thumb: Option<PreviewPaint>,
     edit_face: bool,
     open: bool,
@@ -602,12 +604,10 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
         self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(!self.thumb_only()), caption)
     }
 
-    /// The caption the field measures with: the wider end of `caption_range`, else the caption. The caption shown is
-    /// not measured beside the ends: its measure would change with it, and the field's with it.
-    fn widest_caption(&self, cx: &MeasureCx<'_, Self>) -> Option<Label> {
-        let Some(range) = &self.caption_range else { return self.caption.clone() };
-        let width = |caption: &Label| cx.face(self.empty_thumb(SelectFace::new(Label::Empty), Some(caption))).x;
-        range.iter().map(|caption| (width(caption), caption)).max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, caption)| caption.clone())
+    /// The caption the field measures with: the widest number of `caption_range`, else the caption.
+    fn measured_caption(&self, env: &EnvView<'_>) -> Option<Label> {
+        let Some((range, decimals)) = &self.caption_range else { return self.caption.clone() };
+        Some(Label::from(NumberCodec::new(env.units().reader(None), *decimals).widest(range)))
     }
 
     /// The face of a field showing `text` over `caption`: with a `row`, its thumbnail and name as `field` says;
@@ -677,7 +677,7 @@ impl<K: Value + Eq + Hash + 'static> Component for PickerFace<'_, K> {
     /// thumbnail face for the height, each over the widest caption.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let words = cx.words::<PresetWords>();
-        let caption = self.widest_caption(cx);
+        let caption = self.measured_caption(&cx.env);
         let caption = caption.as_ref();
         let empty = SelectFace::new(Label::Empty);
         let empty = if self.field == PickerField::Name { empty } else { self.empty_thumb(empty, caption) };

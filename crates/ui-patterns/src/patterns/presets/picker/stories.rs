@@ -52,8 +52,8 @@ fn preset_picker_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     output.map(StoryOutput::from).unwrap_or_default()
 }
 
-/// The chip with a caption range: it holds the width of its widest caption ("5000"), so a caption that follows a
-/// dragged size ("7") moves nothing beside it on the bar.
+/// The chip with a caption range: it holds the width of the widest number of the range ("5000", in tabular figures),
+/// so a caption that follows a dragged size ("7") moves nothing beside it on the bar.
 #[story(PresetPicker<'static, u32>, covers = [], drive = Drive::Never)]
 fn preset_picker_chip_caption_range(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = rows();
@@ -64,7 +64,7 @@ fn preset_picker_chip_caption_range(ui: &mut Ui, data: &mut StoryData) -> StoryO
             PresetPicker::new("Swatch", Bind::bound(&mut *swatch), &rows, Bind::bound(&mut *state))
                 .field(PickerField::Chip)
                 .caption("7")
-                .caption_range(["1".into(), "5000".into()])
+                .caption_range((1.0..=5000.0, 0))
                 .show(ui),
         );
     });

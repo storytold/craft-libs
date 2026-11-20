@@ -93,9 +93,10 @@ fn a_picker_in_a_popover_opens_and_picks_with_the_popover_kept_open() {
     assert!(parent.get(), "the pick keeps the popover open");
 }
 
-/// A chip whose caption follows a dragged value (a brush size) holds the width of its widest caption: as the caption
-/// gains digits the chip and what follows it on the bar stay in place, and each frame runs one pass (a caption that
-/// changed the chip's width made the bar's kept measure stale, and the frame ran again).
+/// A chip whose caption follows a dragged value (a brush size) holds the width of the widest number of its range: as
+/// the caption gains digits, and whatever its digits are, the chip and what follows it on the bar stay in place, and
+/// each frame runs one pass (a caption that changed the chip's width made the bar's kept measure stale, and the frame
+/// ran again).
 #[trial]
 fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
     let size = Rc::new(Cell::new(9u32));
@@ -108,7 +109,7 @@ fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
             let _ = PresetPicker::new("Brush", Bind::bound(&mut value), &rows, Bind::bound(&mut state))
                 .field(PickerField::Chip)
                 .caption(shown.get().to_string())
-                .caption_range(["1".into(), "5000".into()])
+                .caption_range((1.0..=5000.0, 0))
                 .show(ui);
             let _ = Button::new("Mode").show(ui);
         });
@@ -120,7 +121,7 @@ fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
         (chip.width(), mode.left())
     };
     let first = place(&fixture);
-    for next in [10, 100, 1000, 7] {
+    for next in [10, 100, 1000, 4888, 7] {
         size.set(next);
         fixture.frame(Vec::new());
         assert_eq!(fixture.passes(), 1, "caption {next}: the frame runs one pass");

@@ -4,7 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 
-use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
+use craft_behavior::{Codec as _, EditEvent, EditEvents, IconId, Mixed, NumberCodec, Value};
 use craft_ui::buttons::IconButton;
 use craft_ui::contract::{
     Bind, BodyCx, EditResponse, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _, TooltipSpec, Trigger, clicked,
@@ -466,8 +466,8 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             };
             let mut picker = PresetPicker::new(words.picker.clone(), current.reborrowed(), rows, Bind::bound(&mut browser))
                 .field(PickerField::Chip)
-                .caption(env.units().number(values.diameter.round(), 0..=0))
-                .caption_range([1.0, max_diameter].map(|diameter| Label::from(env.units().number(diameter.round(), 0..=0))))
+                .caption(NumberCodec::new(env.units().reader(None), 0).format(&Some(values.diameter.round())))
+                .caption_range((1.0..=max_diameter.round(), 0))
                 .cell_shape(CellShape::Square)
                 .view(if parts.tip_only() { PresetView::Grid } else { PresetView::List })
                 .browser(!compact)
