@@ -721,15 +721,15 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
 /// off). In the top edge's frame about the reference point, the top and bottom turn parallel to the top edge, `k H0`
 /// apart about the reference point's row, `H0` the dragged side's height plus the top and bottom's mean run across
 /// the frame; the top keeps its middle and scales by `k = 1 + 2 d·uh / |top|`; the sides keep their runs along it.
-/// `None` for a top or bottom edge, or a box this leaves without height.
+/// `None` for a box this leaves without height.
 fn converging_side_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64) -> Option<BoxState> {
     let BoxPart::Edge(edge) = g.part else { return None };
-    if edge % 2 == 0 {
-        return None;
-    }
     let c = g.pivot0;
     let f = g.quad0.map(|x| (x - c).dot(uh));
     let v = g.quad0.map(|x| (x - c).dot(nh));
+    if edge % 2 == 0 {
+        return converging_top_scale(g, p, uh, nh, len, f, v);
+    }
     let sign = if edge == 1 { 1.0 } else { -1.0 };
     let k = 1.0 + 2.0 * sign * (p - g.start).dot(uh) / len;
     let dragged = if edge == 1 { v[2] - v[1] } else { v[3] - v[0] };
@@ -745,6 +745,39 @@ fn converging_side_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64) ->
         at(middle + half, -height / 2.0),
         at(middle + half + run_right, height / 2.0),
         at(middle - half + run_left, height / 2.0),
+    ];
+    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
+}
+
+/// An ⌥ top or bottom drag on a box whose top and bottom converge, an approximation of the reference within 5 to 25 px
+/// (the frame scaling was 40 to 240 off): in the top edge's frame about the reference point, the sides turn across
+/// the frame, `k (|top| ± m)` apart (`m` the sides' mean run along the frame, added for the bottom edge and taken off
+/// for the top one); the top and bottom keep their slopes, `k h` apart through the reference point's column, `h` the
+/// box's height there and `k = 1 + 2 d·nh / h`. (The reference turns the top and bottom a little further.)
+fn converging_top_scale(g: &Gesture, p: Point, uh: Vec2, nh: Vec2, len: f64, f: [f64; 4], v: [f64; 4]) -> Option<BoxState> {
+    let BoxPart::Edge(edge) = g.part else { return None };
+    let (top_run, bottom_run) = (f[1] - f[0], f[2] - f[3]);
+    if top_run.abs() <= 1e-9 || bottom_run.abs() <= 1e-9 {
+        return None;
+    }
+    let (top_slope, bottom_slope) = ((v[1] - v[0]) / top_run, (v[2] - v[3]) / bottom_run);
+    let (top_at, bottom_at) = (v[0] - top_slope * f[0], v[3] - bottom_slope * f[3]);
+    let height = bottom_at - top_at;
+    let sign = if edge == 2 { 1.0 } else { -1.0 };
+    let k = 1.0 + 2.0 * sign * (p - g.start).dot(nh) / height;
+    let width = k * (len + sign * ((f[3] - f[0]) + (f[2] - f[1])) / 2.0);
+    if !(height.is_finite() && height > 1e-9 && k.is_finite() && k > 0.0 && width.is_finite() && width > 1e-9) {
+        return None;
+    }
+    let middle = (top_at + bottom_at) / 2.0;
+    let (top, bottom, half) = (middle - k * height / 2.0, middle + k * height / 2.0, width / 2.0);
+    let c = g.pivot0;
+    let at = |a: f64, b: f64| c + uh * a + nh * b;
+    let quad = [
+        at(-half, top - top_slope * half),
+        at(half, top + top_slope * half),
+        at(half, bottom + bottom_slope * half),
+        at(-half, bottom - bottom_slope * half),
     ];
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
@@ -801,8 +834,8 @@ fn centred_stretch(g: &Gesture, p: Point) -> Option<BoxState> {
     quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
-/// An ⌥ edge drag (both sides move, about the reference point) on a box whose top and bottom are parallel, as the
-/// reference does it; `None` for any other box, which the frame scaling takes. In the frame of the top edge (`uh`
+/// An ⌥ edge drag (both sides move, about the reference point) as the reference does it. A box whose top and bottom
+/// converge goes to [`converging_side_scale`] and [`converging_top_scale`]; for the others, in the frame of the top edge (`uh`
 /// along it, `nh` across), with `k = 1 + d / r`, `d` the drag along the edge's axis and `r` how far the dragged edge is
 /// from the reference point along it (half the box for a centred reference point):
 /// - a left or right edge, its side and the opposite one parallel: the side-run rule ([`side_run_scale`]) about the

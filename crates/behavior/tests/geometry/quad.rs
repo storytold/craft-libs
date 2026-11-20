@@ -513,3 +513,23 @@ fn an_alt_side_drag_on_converging_top_and_bottom_levels_them() {
         assert!(within(&got, want, 3.0), "edge {edge}: {:?}", got.quad);
     }
 }
+
+/// ⌥ top or bottom drags on a box whose top and bottom converge (measured on the reference): the sides turn across
+/// the top edge's frame; the rest is approximate, within 25 px of the reference (the frame scaling was up to 240 off).
+#[test]
+fn an_alt_top_drag_on_converging_top_and_bottom_turns_the_sides_across() {
+    let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        (2, (301.0, 307.0), (301.0, 347.0), [(79.84, 67.96), (553.21, 149.57), (530.76, 319.1), (39.5, 372.57)], 12.0),
+        (2, (301.0, 307.0), (301.0, 387.0), [(10.86, 11.87), (632.0, 131.65), (603.26, 348.66), (-44.23, 427.8)], 25.0),
+        (0, (301.0, 145.0), (301.0, 115.0), [(123.76, 82.93), (507.16, 150.79), (485.52, 314.18), (87.54, 356.37)], 10.0),
+    ];
+    let alt = Mods { alt: true, ..Mods::NONE };
+    for (edge, from, to, want, tol) in cases {
+        let quad = parallel_sides.map(|(x, y)| p(x, y));
+        let start = BoxState::new(quad, p(301.0, 226.0));
+        let got = drag(&start, &start, BoxPart::Edge(edge), p(from.0, from.1), p(to.0, to.1), alt, &BoxRules::default());
+        let worst = got.quad.iter().zip(want).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
+        assert!(worst < tol, "edge {edge}: {worst} px off: {:?}", got.quad);
+    }
+}
