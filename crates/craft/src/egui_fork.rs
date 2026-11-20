@@ -3,7 +3,7 @@
 /// The egui fork the library is built and tested with. Apps patch egui to exactly this.
 pub const GIT: &str = "https://github.com/storytold/egui.git";
 /// The commit of [`GIT`].
-pub const REV: &str = "1a44fd11cdb352d564f2d6ca98d6895dee88d07e";
+pub const REV: &str = "6525c87923ca47465aac244460fe4b1139349060";
 
 /// The packages the workspace patches to the fork (the `[patch.crates-io]` entries that name [`GIT`]).
 pub const PACKAGES: &[&str] = &[
