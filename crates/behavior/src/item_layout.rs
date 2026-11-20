@@ -30,6 +30,12 @@ pub trait ItemLayout {
     /// The item under `point`.
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize>;
 
+    /// The item whose drop area contains `point`. Layouts with visible gaps can include those in a drop area while
+    /// leaving them out of ordinary pointer hits.
+    fn drop_hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
+        self.hit(point, offset)
+    }
+
     /// How arrow keys move through the items.
     fn nav(&self) -> NavShape;
 

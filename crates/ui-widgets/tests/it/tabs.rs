@@ -15,6 +15,19 @@ use std::rc::Rc;
 const TITLES: [&str; 3] = ["One", "Two", "Three"];
 
 #[trial]
+fn document_tabs_leave_space_between_neighbours() {
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let mut fixture = Fixture::new(|ui| {
+        let tabs = [DocumentTab::new(1, "One"), DocumentTab::new(2, "Two")];
+        DocumentTabs::new("Documents", &tabs).selected(1).show(ui);
+    });
+    fixture.settle();
+    let first = fixture.by_label("One").expect("first tab").rect;
+    let second = fixture.by_label("Two").expect("second tab").rect;
+    assert!(first.right() < second.left(), "neighbouring document tabs have a visible gap: {first:?}, {second:?}");
+}
+
+#[trial]
 fn document_tabs_shrink_before_overflow() {
     let fit = TabKind::Document.fit_mode().fit(&[100.0, 100.0, 100.0], 0, 240.0, 50.0, 20.0);
     assert!(fit.overflow.is_empty(), "tabs that can shrink into the strip remain visible");
@@ -296,7 +309,7 @@ fn files_dropped_between_tabs_land_before_the_tab_after_the_gap() {
     let tree = frames.tree();
     let (one, two, three) = (tab_rect(&tree, "One"), tab_rect(&tree, "Two"), tab_rect(&tree, "Three"));
 
-    drop_files_at(&mut frames, Pos2::new(two.left() + 1.0, two.center().y), &mut show);
+    drop_files_at(&mut frames, Pos2::new((one.right() + two.left()) / 2.0, two.center().y), &mut show);
     assert_eq!(files_before(&seen.borrow()), Some(Some(1)), "files in the gap go before the tab after it: {:?}", seen.borrow());
 
     seen.borrow_mut().clear();

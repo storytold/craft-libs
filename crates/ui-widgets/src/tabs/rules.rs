@@ -7,7 +7,7 @@ use craft_host::target::Os;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TabKind {
-    /// Document tabs: shrinking titles, a close button on every closable tab, every document in the overflow menu.
+    /// Document tabs: spaced apart, shrinking titles, a close button on every closable tab, every document in the overflow menu.
     #[default]
     Document,
     /// Panel tabs: tabs shrink before they overflow, no close button, only the hidden tabs in the overflow menu.

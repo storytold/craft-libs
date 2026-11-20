@@ -481,7 +481,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             return None;
         }
         let nav = layout.nav();
-        let hit = layout.hit(Self::logical(layout, rect, rtl, at), offset);
+        let hit = layout.drop_hit(Self::logical(layout, rect, rtl, at), offset);
         let across =
             !matches!(nav, NavShape::Flat | NavShape::Tree | NavShape::WrappedGrid { columns: 1, .. } | NavShape::BoundedGrid { columns: 1, .. });
         // With no item under the pointer, a point after the last item in reading order is over the last item. Across a

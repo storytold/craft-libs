@@ -116,6 +116,8 @@ pub struct StripLayout {
     min: Vec<f32>,
     width: f32,
     height: f32,
+    /// Space between document tabs; included in the fit budget but not in their hit rectangles.
+    gap: f32,
     measured_height: bool,
     selected: usize,
     mode: FitMode,
@@ -128,13 +130,15 @@ pub struct StripLayout {
 }
 
 impl StripLayout {
-    fn new(count: usize, width: f32, height: f32, selected: usize, mode: FitMode, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
+    fn new(count: usize, size: Vec2, gap: f32, selected: usize, mode: FitMode, report: Arc<Mutex<Report>>, ctx: egui::Context) -> Self {
+        let (width, height) = (size.x, size.y);
         let each = if count == 0 { 0.0 } else { width / count as f32 };
         let mut layout = StripLayout {
             ideal: vec![each; count],
             min: vec![0.0; count],
             width,
             height,
+            gap,
             measured_height: false,
             selected,
             mode,
@@ -153,18 +157,25 @@ impl StripLayout {
     fn refit(&mut self) {
         let count = self.ideal.len();
         let minimum = self.min.iter().copied().fold(0.0, f32::max);
-        let fit = self.mode.fit(&self.ideal, self.selected, self.width, minimum, self.height);
+        // Give every fitted tab a trailing gap, then return the last gap to the available width.
+        // This keeps the spaces in the shrink and overflow budget without adding one after the last tab.
+        let padded: Vec<f32> = self.ideal.iter().map(|width| width + self.gap).collect();
+        let fit = self.mode.fit(&padded, self.selected, self.width + self.gap, minimum + self.gap, self.height);
         self.shown = vec![false; count];
         self.left = vec![self.width; count];
         self.wide = vec![0.0; count];
         let mut at = 0.0;
         let mut placed = Vec::with_capacity(fit.shown.len());
-        for &(index, width) in &fit.shown {
+        for &(index, padded_width) in &fit.shown {
+            let width = (padded_width - self.gap).max(0.0);
             self.shown[index] = true;
             self.left[index] = at;
             self.wide[index] = width;
             placed.push((index, at, width));
-            at += width;
+            at += width + self.gap;
+        }
+        if !placed.is_empty() {
+            at -= self.gap;
         }
         if !crate::runtime::measure::active(&self.ctx) {
             *self.report.lock().unwrap_or_else(PoisonError::into_inner) =
@@ -188,6 +199,18 @@ impl ItemLayout for StripLayout {
 
     fn hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
         (0..self.ideal.len()).find(|&at| self.shown[at] && self.rect(at, offset).contains(point))
+    }
+
+    fn drop_hit(&self, point: Pos2, offset: ScrollPos) -> Option<usize> {
+        self.hit(point, offset).or_else(|| {
+            (0..self.ideal.len()).find(|&at| {
+                if !self.shown[at] || self.left[at] <= 0.0 {
+                    return false;
+                }
+                let rect = self.rect(at, offset);
+                point.y >= rect.top() && point.y <= rect.bottom() && point.x >= rect.left() - self.gap && point.x < rect.left()
+            })
+        })
     }
 
     fn nav(&self) -> NavShape {
@@ -572,7 +595,16 @@ impl<K: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Collection 
         let count = source.len();
         *self.texts.borrow_mut() = (0..count).map(|at| (source.key(at), source.text(at).map(|text| text.into_owned()).unwrap_or_default())).collect();
         let selected = self.shown.as_ref().and_then(|key| source.index_of(key)).unwrap_or(usize::MAX);
-        StripLayout::new(count, width, cx.tokens.size.bar.tab, selected, self.kind.fit_mode(), self.report.clone(), cx.frame_ctx().clone())
+        let gap = if self.kind == TabKind::Document { cx.tokens.space.gap.inline } else { 0.0 };
+        StripLayout::new(
+            count,
+            Vec2::new(width, cx.tokens.size.bar.tab),
+            gap,
+            selected,
+            self.kind.fit_mode(),
+            self.report.clone(),
+            cx.frame_ctx().clone(),
+        )
     }
 
     /// Every tab takes the strip's kind and size.
