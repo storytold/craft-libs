@@ -25,6 +25,10 @@ pub(crate) enum BindKey {
     Record(Id),
     /// A command's state on the board: the command's number and the instance whose state it is, `None` for the app's.
     Command(u32, Option<Id>),
+    /// A command the focused stop answers for (an edit it takes): the command's number.
+    FocusedEdit(u32),
+    /// The modifiers held, with the latched ones (`Cx::modifiers`).
+    Modifiers,
 }
 
 /// One measure a reader made from the value it read: what it was offered and the size it took.
@@ -35,7 +39,7 @@ pub(crate) struct Sample {
     pub took: Vec2,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Read {
     key: BindKey,
     reader: Id,
@@ -94,10 +98,7 @@ pub(crate) fn note(ctx: &Context, key: BindKey, reader: Id, measuring: bool, sam
     } else {
         let read = Read { key, reader, measuring, runs, samples };
         crate::runtime::replay::note_read(ctx, key);
-        crate::runtime::replay::journal(ctx, || {
-            let read = read.clone();
-            move |ctx: &Context| with(ctx, |reads| reads.reads.push(read.clone()))
-        });
+        crate::runtime::replay::journal(ctx, || read.clone(), |ctx, read| with(ctx, |reads| reads.reads.push(read.clone())));
         with(ctx, |reads| reads.reads.push(read));
     }
 }

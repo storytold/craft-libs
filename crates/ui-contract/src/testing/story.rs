@@ -2,7 +2,7 @@
 
 use super::Fixture;
 use crate::contract::{CollectionEvent, Inner, Outcome, TooltipSpec};
-use crate::runtime::commands::CommandInput;
+use crate::runtime::commands::CommandStates;
 use craft_behavior::{EditEvent, EditEvents, PartKey, PartRef, Value};
 use egui::{Id, Response, Ui, Vec2};
 use std::any::{Any, TypeId};
@@ -102,9 +102,9 @@ pub struct Story {
     pub drive: Drive,
     /// The reason a disabled control shows (`disabled_text` of its tooltip), when the story gives its control one.
     pub disabled_text: Option<&'static str>,
-    /// Adds this story's app-scope command states to the frame's command input; runners fold the shown stories'
-    /// functions over `CommandInput::new()` before the first frame.
-    pub commands: Option<fn(CommandInput) -> CommandInput>,
+    /// Sets this story's app-scope command states; runners apply the shown stories' functions in order to one
+    /// `CommandStates` before the first frame and hold it as the app's.
+    pub commands: Option<fn(&mut CommandStates)>,
     /// The caption a viewer shows over the story; `None` for the title made of its name (`contract::story_title`).
     pub title: Option<&'static str>,
     /// The group a viewer shows the story in, with the other stories of the type that name it, as the cases of one
@@ -118,16 +118,20 @@ impl Story {
         Story { name, covers: &[], show, drive: Drive::Auto, disabled_text: None, commands: None, title: None, group: None }
     }
 
-    /// Sets the function that adds the story's command states to the frame's command input.
-    pub const fn commands(mut self, add: fn(CommandInput) -> CommandInput) -> Self {
+    /// Sets the function that sets the story's app-scope command states.
+    pub const fn commands(mut self, add: fn(&mut CommandStates)) -> Self {
         self.commands = Some(add);
         self
     }
 
-    /// The command input of `stories` shown together: each story's command function applied in order over an empty
-    /// input, so a later story's state for a command replaces an earlier one's. Runners call this before the first frame.
-    pub fn command_input<'a>(stories: impl IntoIterator<Item = &'a Story>) -> CommandInput {
-        stories.into_iter().filter_map(|story| story.commands).fold(CommandInput::new(), |input, add| add(input))
+    /// The command states of `stories` shown together: each story's command function applied in order to empty
+    /// states, so a later story's state for a command replaces an earlier one's. Runners call this before the first frame.
+    pub fn command_states<'a>(stories: impl IntoIterator<Item = &'a Story>) -> CommandStates {
+        let mut states = CommandStates::new();
+        for add in stories.into_iter().filter_map(|story| story.commands) {
+            add(&mut states);
+        }
+        states
     }
 
     /// The caption a viewer shows over the story.
