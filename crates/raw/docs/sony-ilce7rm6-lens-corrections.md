@@ -326,8 +326,9 @@ registration (passes 1 and 2) against the camera JPEG, and R and B against G ins
 128 full-resolution px, ±4 px search; per corner the median radial shift of the 12 nearest blocks). px at a 1440 px
 long edge; aggregates only.
 
-The lateral CA correction before demosaic was verified the same way, with a build that has it, against those
-uncorrected renders. Every photo was rendered with Enable Lens Corrections on at half the JPEG size (Full level: AHD)
+An experimental build applied the lateral CA map before demosaic to all four measured lenses. Its results
+were compared with the uncorrected renders in the same way. Every photo was rendered with Enable Lens Corrections
+on at half the JPEG size (Full level: AHD)
 and at 2496 px (Preview level: the mosaic binned 4×; APS-C 2×, then fitted). The uncorrected 2496 px renders come
 from a build without lens corrections, because the CA map no longer follows the switch. On a synthetic sub-pixel
 shift of a render's red plane, the block measurement reads 0.86–1.10 × the shift at both sizes.
@@ -361,8 +362,9 @@ shift: the warp turns with the photo.
 
 **Lateral CA in the render, Full level** (radial R-vs-G and B-vs-G shift, median of the 12 blocks nearest each
 corner; 43 photos with enough detail at all four corners; budget 0.3 px). *Off*: no CA correction. *Three planes*:
-the earlier design, the table applied after demosaic as the warp's red and blue planes. *Before demosaic*: the
-current correction.
+the earlier design, the table applied after demosaic as the warp's red and blue planes. *Before demosaic*:
+the experimental map, including the 200–600 mm. All-lens aggregates in this section and the Preview section
+summarize that experiment.
 
 | Lens | Photos | Off: max R / B | Off: rms | Three planes: max R / B | Three planes: rms | Before demosaic: max R / B | Before demosaic: rms | Camera JPEG: max / rms |
 |---|---|---|---|---|---|---|---|---|
@@ -422,9 +424,11 @@ would read that offset as CA of alternating sign:
   the 0.75 px budget by this point measure; per block the G plane moves 0.002 px, so this is the correlation flip,
   not the geometry); that photo has 3 measured points from 305 blocks.
 
-**Ruling: lateral CA is corrected on the mosaic before demosaic, always.** This holds for verified bodies; Enable
-Lens Corrections governs distortion only. The three-plane branch of `warp_opcode` is deleted: the warp carries the G
-plane only. Optics ▸ Remove Chromatic Aberration (`optics.remove_ca`, an automatic estimate from the image) and the
+**Shipped correction.** The map runs before demosaic on eligible ILCE-7RM6 files for the three verified lenses.
+Their measured full-render corner RMS went from 0.028 to 0.024 px (24–70 mm), from 0.041 to 0.025 px
+(16–35 mm), and from 0.013 to 0.009 px (100 mm Macro). The 200–600 mm stays at the uncorrected CA baseline
+while keeping its distortion warp. Enable Lens Corrections governs distortion only. The emitted warp carries the
+G plane only. Optics ▸ Remove Chromatic Aberration (`optics.remove_ca`, an automatic estimate from the image) and the
 manual CA sliders still work after demosaic and now see only the residual. The distortion numbers above were
 measured with the three-plane warp, whose G plane is the one emitted today.
 
