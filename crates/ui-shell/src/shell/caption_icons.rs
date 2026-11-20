@@ -52,21 +52,15 @@ pub type RenderIconFn = dyn Fn(CaptionIcon, u32) -> Option<CaptionMask> + Send +
 
 /// The round buttons' glyphs from the desktop's icon theme (Linux: `window-*-symbolic`), drawn in the glyph colour
 /// as symbolic icons are. A glyph the theme lacks draws the family's own.
-#[derive(Clone)]
+#[derive(Clone, crate::contract::MemoProps)]
 pub struct CaptionIcons {
     theme: String,
     generation: u64,
+    #[memo_props(
+        covered_by = "generation",
+        reason = "the generation changes whenever `render` may answer differently (`new`), and icons read again take a new one (`for_desktop`)"
+    )]
     render: Arc<RenderIconFn>,
-}
-
-/// By the theme and the generation, which covers `render`: the generation changes whenever `render` may answer
-/// differently (`new`), and icons read again take a new one (`for_desktop`), so equal keys draw the same glyphs.
-impl crate::contract::MemoProps for CaptionIcons {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        let CaptionIcons { theme, generation, render: _ } = self;
-        crate::contract::MemoProps::key(theme, key);
-        crate::contract::MemoProps::key(generation, key);
-    }
 }
 
 impl CaptionIcons {

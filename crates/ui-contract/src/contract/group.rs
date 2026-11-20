@@ -32,6 +32,8 @@ impl<M> Default for GroupState<M> {
 
 /// A group form's handle, put into its body's env with `content_env`. Members and body code read it with
 /// `cx.env.get::<GroupHandle<..>>()`; a member outside any group gets the inert root handle.
+#[derive(crate::contract::MemoProps)]
+#[memo_props(every_pass = "a handle to group state its members write during the pass: a key cannot follow it")]
 pub struct GroupHandle<G: GroupKind> {
     state: Option<Arc<Mutex<GroupState<G::Member>>>>,
     kind: PhantomData<fn() -> G>,
@@ -50,14 +52,6 @@ impl<G: GroupKind> PartialEq for GroupHandle<G> {
             (None, None) => true,
             _ => false,
         }
-    }
-}
-
-/// A handle to group state its members write during the pass: a key cannot follow it, so a view under a group runs in
-/// every pass.
-impl<G: GroupKind> crate::contract::MemoProps for GroupHandle<G> {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        key.changes_every_pass();
     }
 }
 

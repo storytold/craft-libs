@@ -60,23 +60,16 @@ pub struct Look {
 }
 
 /// One story a card shows.
+#[derive(MemoProps)]
 #[non_exhaustive]
 pub struct CardStory<'a> {
     /// The index of the story in the catalog: the key of its state.
     pub index: usize,
     /// The story.
+    #[memo_props(address = "registrations are static items")]
     pub story: &'static StoryRegistration,
     /// The story's caption.
     pub caption: &'a str,
-}
-
-/// The story's index, its caption and which registration it is (an address: registrations are static items).
-impl MemoProps for CardStory<'_> {
-    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
-        self.index.key(key);
-        self.caption.key(key);
-        (std::ptr::from_ref(self.story) as usize).key(key);
-    }
 }
 
 impl<'a> CardStory<'a> {

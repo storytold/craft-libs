@@ -204,6 +204,102 @@
 //! }
 //! ```
 //!
+//! A field another field stands for feeds nothing: `#[memo_props(covered_by = "<field>", reason = "why")]`. The named
+//! field must be one of the same struct or variant that feeds the key itself, and the reason is required. A closure the
+//! caller's revision covers:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! use std::sync::Arc;
+//! #[derive(MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "revision", reason = "the caller moves the revision with every rule change")]
+//!     allows: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! let rules = |revision, allows: fn(&str) -> bool| Rules { allows: Arc::new(allows), revision };
+//! assert_eq!(MemoKey::of(&rules(1, |_| true)), MemoKey::of(&rules(1, |_| false)));
+//! assert_ne!(MemoKey::of(&rules(1, |_| true)), MemoKey::of(&rules(2, |_| true)));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "generation", reason = "no such field")]
+//!     allows: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Rules {
+//!     #[memo_props(covered_by = "revision")]
+//!     allows: std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>,
+//!     revision: u64,
+//! }
+//! ```
+//!
+//! A `&'static` reference to a static item feeds where it points: `#[memo_props(address = "why")]`. Any other field
+//! type is an error:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! struct Registration(&'static str);
+//! // Equal registrations at two places: two items.
+//! static FIRST: Registration = Registration("Button");
+//! static SECOND: Registration = Registration("Button");
+//! #[derive(MemoProps)]
+//! struct Card {
+//!     #[memo_props(address = "registrations are static items")]
+//!     story: &'static Registration,
+//! }
+//! assert_eq!(MemoKey::of(&Card { story: &FIRST }), MemoKey::of(&Card { story: &FIRST }));
+//! assert_ne!(MemoKey::of(&Card { story: &FIRST }), MemoKey::of(&Card { story: &SECOND }));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! struct Card<'a> {
+//!     #[memo_props(address = "a borrowed value")]
+//!     story: &'a u32,
+//! }
+//! ```
+//!
+//! A handle to state written during the pass, or a context rebuilt each pass, is keyed in every pass:
+//! `#[memo_props(every_pass = "why")]` on the type. It feeds no field (a field attribute there is an error), and a view
+//! whose key holds it runs in every pass; outside a view's key it feeds nothing:
+//!
+//! ```
+//! # extern crate craft_ui_contract as craft_ui;
+//! use craft_ui::contract::{MemoKey, MemoProps};
+//! use std::sync::{Arc, Mutex};
+//! #[derive(MemoProps)]
+//! #[memo_props(every_pass = "its members write the shared state during the pass")]
+//! struct Handle(Arc<Mutex<Vec<u32>>>);
+//! let handle = Handle(Arc::default());
+//! assert_eq!(MemoKey::of(&handle), MemoKey::of(&handle));
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! #[memo_props(every_pass = "")]
+//! struct Handle(std::sync::Arc<std::sync::Mutex<Vec<u32>>>);
+//! ```
+//!
+//! ```compile_fail
+//! # extern crate craft_ui_contract as craft_ui;
+//! #[derive(craft_ui::contract::MemoProps)]
+//! #[memo_props(every_pass = "rebuilt each pass")]
+//! struct Handle(#[memo_props(hash = "a number")] u32);
+//! ```
+//!
 //! Plain props derive, recursive types included:
 //!
 //! ```

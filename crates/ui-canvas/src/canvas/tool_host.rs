@@ -388,15 +388,9 @@ fn keys_down(ctx: &Context, holds: &[Key]) -> Vec<Key> {
 }
 
 /// The tool input a canvas publishes to its body.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InToolPass(Option<ToolPass>);
-
-/// A context the canvas rebuilds each pass: a view under it runs in every pass.
-impl crate::contract::MemoProps for InToolPass {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        key.changes_every_pass();
-    }
-}
 
 impl EnvValue for InToolPass {
     fn root() -> Self {

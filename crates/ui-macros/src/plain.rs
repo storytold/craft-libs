@@ -43,6 +43,19 @@ pub(crate) struct Escape {
     pub(crate) bound: Option<TokenStream>,
 }
 
+/// Which fields a derive does not check, and what a type parameter that only those fields name is bound by.
+pub(crate) trait EscapeRule {
+    /// `None` when `field` is checked; else `Some(bound)`: what a type parameter that only escaped fields name is bound
+    /// by instead of the derive's trait (`None` keeps the trait).
+    fn escape(&self, field: &syn::Field) -> syn::Result<Option<Option<TokenStream>>>;
+}
+
+impl EscapeRule for Escape {
+    fn escape(&self, field: &syn::Field) -> syn::Result<Option<Option<TokenStream>>> {
+        Ok(escaped(field, self)?.then(|| self.bound.clone()))
+    }
+}
+
 /// The escape a derive allows for one type parameter, `#[<attr>(<keyword>)]`: the parameter is bound by `bound`
 /// instead of the derive's trait.
 pub(crate) struct ParamEscape {
@@ -59,13 +72,13 @@ pub(crate) struct ParamEscape {
 /// `check::<Field>()` spanned at the field's type, so a rejected field (`Cell<T>` included) is an error at the derive
 /// that names the field, and a recursive type (a node holding `Vec<Self>` or `Vec<Node<T>>`) does not make its impl
 /// require itself. A field type written with `Self` is checked as the type itself. A field carrying `escape` is not
-/// checked; a type parameter that only escaped fields name is bound by the escape's `bound`, when it has one. A type
+/// checked; a type parameter that only escaped fields name is bound by the escape's bound, when it has one. A type
 /// parameter carrying `param_escape` is bound by its `bound` instead of `trait_path`; its fields are still checked under
 /// that bound.
 pub(crate) fn field_checks(
     input: &DeriveInput,
     trait_path: &TokenStream,
-    escape: Option<&Escape>,
+    escape: Option<&dyn EscapeRule>,
     param_escape: Option<&ParamEscape>,
 ) -> syn::Result<FieldChecks> {
     let fields: Vec<&syn::Field> = match &input.data {
@@ -90,12 +103,20 @@ pub(crate) fn field_checks(
     // The type parameters each kind of field names: a parameter only escaped fields name is bound by the escape's
     // bound, when it has one.
     let (mut named, mut named_escaped) = (Named::default(), Named::default());
+    // The bound of the escaped fields that name each parameter, in field order.
+    let mut escaped_bounds: Vec<(syn::Ident, TokenStream)> = Vec::new();
     for field in &fields {
-        let is_escaped = match escape {
-            Some(escape) => escaped(field, escape)?,
-            None => false,
-        };
-        syn::visit::Visit::visit_type(if is_escaped { &mut named_escaped } else { &mut named }, &field.ty);
+        match escape.map(|escape| escape.escape(field)).transpose()?.flatten() {
+            Some(bound) => {
+                let mut names = Named::default();
+                syn::visit::Visit::visit_type(&mut names, &field.ty);
+                if let Some(bound) = bound {
+                    escaped_bounds.extend(names.0.iter().map(|ident| (ident.clone(), bound.clone())));
+                }
+                named_escaped.0.extend(names.0);
+            }
+            None => syn::visit::Visit::visit_type(&mut named, &field.ty),
+        }
     }
     // Each type parameter takes the derive's bound beside its own, in one place: a second place for it is a lint in
     // the type's crate (`clippy::multiple_bound_locations`).
@@ -108,7 +129,8 @@ pub(crate) fn field_checks(
         param.attrs.clear();
         let ident = &param.ident;
         let only_escaped = named_escaped.0.contains(ident) && !named.0.contains(ident);
-        let bound = match (param_escape, escape.and_then(|escape| escape.bound.as_ref())) {
+        let escape_bound = escaped_bounds.iter().find(|(named, _)| named == ident).map(|(_, bound)| bound);
+        let bound = match (param_escape, escape_bound) {
             (Some(ParamEscape { bound, .. }), _) if escaped => quote!(#bound),
             (_, Some(bound)) if only_escaped => quote!(#bound),
             _ => quote!(#trait_path),
@@ -122,7 +144,7 @@ pub(crate) fn field_checks(
     let mut checked = Vec::new();
     for field in fields {
         if let Some(escape) = escape
-            && escaped(field, escape)?
+            && escape.escape(field)?.is_some()
         {
             continue;
         }

@@ -159,15 +159,9 @@ pub fn snap_tolerance(view: &CanvasView, mods: Mods, os: Platform, tool_reads_co
     (!snap_suspended(mods, os, tool_reads_control)).then(|| view.doc_len(SNAP_PX as f32))
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvasSnap(Option<Snap>);
-
-/// A context the canvas rebuilds each pass: a view under it runs in every pass.
-impl crate::contract::MemoProps for InCanvasSnap {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        key.changes_every_pass();
-    }
-}
 
 impl EnvValue for InCanvasSnap {
     fn root() -> Self {

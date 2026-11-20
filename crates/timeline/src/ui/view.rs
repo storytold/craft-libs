@@ -127,15 +127,9 @@ impl TimeAxis {
 }
 
 /// The env value that carries the axis of the innermost [`TimelineView`]; `None` outside one.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui::contract::MemoProps)]
+#[memo_props(every_pass = "the axis the timeline rebuilds each pass from its view")]
 struct InTimeline(Option<TimeAxis>);
-
-/// The axis the timeline rebuilds each pass from its view: a view under it runs in every pass.
-impl craft_ui::contract::MemoProps for InTimeline {
-    fn key(&self, key: &mut craft_ui::contract::MemoKey) {
-        key.changes_every_pass();
-    }
-}
 
 impl EnvValue for InTimeline {
     fn root() -> Self {

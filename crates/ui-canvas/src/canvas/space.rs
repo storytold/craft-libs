@@ -347,15 +347,9 @@ pub(crate) fn context_menu<C: Component>(cx: &mut Cx<'_, C>, part: impl Into<Par
 
 /// The env value that carries the space of the innermost canvas; `None` outside a canvas and inside a canvas that
 /// has no view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[memo_props(every_pass = "a context the canvas rebuilds each pass")]
 struct InCanvas(Option<CanvasSpace>);
-
-/// A context the canvas rebuilds each pass: a view under it runs in every pass.
-impl crate::contract::MemoProps for InCanvas {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        key.changes_every_pass();
-    }
-}
 
 impl EnvValue for InCanvas {
     fn root() -> Self {
@@ -363,20 +357,10 @@ impl EnvValue for InCanvas {
     }
 }
 
-/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The env value that carries the guide a drag out of the canvas's rulers is placing in this pass: a view under the
+/// canvas runs in every pass of the drag (`GuideDrag` keys in every pass), and replays when no drag is placing one.
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
 struct InRulerGuide(Option<super::GuideDrag>);
-
-/// A guide a ruler drag places in this pass: a view under the canvas runs in every pass of the drag, and replays when no
-/// drag is placing one.
-impl crate::contract::MemoProps for InRulerGuide {
-    fn key(&self, key: &mut crate::contract::MemoKey) {
-        match self.0 {
-            None => key.write_u32(0),
-            Some(_) => key.changes_every_pass(),
-        }
-    }
-}
 
 impl EnvValue for InRulerGuide {
     fn root() -> Self {
