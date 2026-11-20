@@ -136,6 +136,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// The next token at the top level (`None` at the end of the file).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<Token>, LexError> {
         self.immediate = false;
         let t = self.token(0)?;
