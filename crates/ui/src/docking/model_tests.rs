@@ -452,8 +452,12 @@ fn dock_validation_rejects_two_docks_per_side_nested_docks_empty_columns_and_bad
     native.floating[0].native = Some([0.0, 0.0, -1.0, 10.0]);
     assert_eq!(native.validate(), Err(DockError::InvalidGeometry));
     let mut monitor = docked();
-    monitor.floating[0].monitor = Some(super::Monitor { name: None, rect: [0.0, 0.0, 1920.0, 1080.0], scale: f32::NAN });
+    monitor.floating[0].monitor = Some(super::Monitor { name: None, rect: [0.0, 0.0, 1920.0, 1080.0], scale: f32::NAN, work_area: None });
     assert_eq!(monitor.validate(), Err(DockError::InvalidGeometry));
+    let mut work_area = docked();
+    work_area.floating[0].monitor =
+        Some(super::Monitor { name: None, rect: [0.0, 0.0, 1920.0, 1080.0], scale: 1.0, work_area: Some([0.0, 0.0, f32::NAN, 1040.0]) });
+    assert_eq!(work_area.validate(), Err(DockError::InvalidGeometry));
     let mut monitor_size = docked();
     monitor_size.floating[0].monitor_size = Some([f32::NAN, 1080.0]);
     assert_eq!(monitor_size.validate(), Err(DockError::InvalidGeometry));

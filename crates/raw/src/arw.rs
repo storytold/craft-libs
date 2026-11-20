@@ -365,9 +365,10 @@ fn read_quad_tiles(bytes: &[u8], info: &ImageInfo, limits: &Limits) -> Result<Ve
             .par_iter()
             .map(|c| {
                 let src = chunk_bytes(bytes, c).ok_or_else(|| RawError::Corrupt("tile offset past end of file".into()))?;
-                let f = ljpeg::decode(src, (c.width as usize * c.height as usize).max(1 << 16))?;
-                // a tile's frame is half its nominal width and height: a larger one (which the sample cap above would
-                // still let through when the tile is small) is no Sony tile
+                // a tile's frame is half its nominal width and height with four components, so it holds the tile's
+                // samples: no more are decoded, however small the tile (storytold/lightcraft#4024)
+                let f = ljpeg::decode(src, (c.width as usize).saturating_mul(c.height as usize))?;
+                // a frame of another shape is no Sony tile
                 if f.components != 4 || f.data.len() < f.width * f.height * 4 || f.width * 2 > c.width as usize || f.height * 2 > c.height as usize {
                     return Err(RawError::Corrupt(format!(
                         "lossless ARW tile: {} samples in a {}×{}×{} frame",
@@ -630,8 +631,8 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
 }
 
 /// The ILCE-7RM6's lateral CA as the pre-demosaic map, within the same validated scope as its distortion (CFA data,
-/// a 3:2 crop; [`crate::arw_lens_rm6::lateral_ca`], only for the lenses it measurably improves), centred on the
-/// tables' `reference` crop; marks the CA record applied when there is one.
+/// 3:2 image and reference crops; [`crate::arw_lens_rm6::lateral_ca`], only for the lenses it measurably improves),
+/// centred on the tables' `reference` crop. Marks the CA record applied when there is one.
 fn rm6_lateral_ca(
     raw: &Ifd,
     model: &str,
@@ -640,7 +641,7 @@ fn rm6_lateral_ca(
     linear_rgb: bool,
     sony_lens: &mut Option<crate::lens_metadata::SonyLensCorrections>,
 ) -> Option<crate::LateralCa> {
-    let in_scope = !linear_rgb && crate::arw_lens::is_3_2(crop);
+    let in_scope = !linear_rgb && crate::arw_lens::is_3_2(crop) && crate::arw_lens::is_3_2(reference);
     let map = in_scope.then(|| crate::arw_lens_rm6::lateral_ca(raw, model, lens, reference)).flatten();
     if map.is_some()
         && let Some(record) = sony_lens.as_mut()
@@ -1028,7 +1029,7 @@ mod tests {
     #[test]
     fn lens_tables_reach_opcode_list3() {
         use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
-        let file_lens = |model: &str, ca: bool, height: u32, lens: &str| {
+        let file_lens = |model: &str, ca: bool, height: u32, reference_height: u32, lens: &str| {
             let mut raw = IfdBuilder::new();
             raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(t::LENS_MODEL, Value::Ascii(lens.into())));
             raw.set(t::MAKE, Value::Ascii("SONY".into()));
@@ -1044,7 +1045,7 @@ mod tests {
             raw.set(CROP_TOP_LEFT, Value::Long(vec![0, 0]));
             raw.set(CROP_SIZE, Value::Long(vec![96, height]));
             raw.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![2, 1]));
-            raw.set(t::DEFAULT_CROP_SIZE, Value::Long(vec![90, 60]));
+            raw.set(t::DEFAULT_CROP_SIZE, Value::Long(vec![90, reference_height]));
             let table = vec![16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479];
             raw.set(crate::arw_lens_rm6::DISTORTION_PARAMS, Value::SShort(table));
             if ca {
@@ -1058,7 +1059,7 @@ mod tests {
             TiffWriter::default().write(&[raw]).unwrap()
         };
         // a lens the pre-demosaic map measurably improves (`arw_lens_rm6::CA_IMPROVES`)
-        let file_sized = |model: &str, ca: bool, height: u32| file_lens(model, ca, height, "FE 24-70mm F2.8 GM II");
+        let file_sized = |model: &str, ca: bool, height: u32| file_lens(model, ca, height, 60, "FE 24-70mm F2.8 GM II");
         // 3:2, the aspect the corrections are limited to
         let file = |model: &str, ca: bool| file_sized(model, ca, 64);
         let decoded = |file: &[u8], mode| decode(file, mode, &Limits::default()).unwrap();
@@ -1081,11 +1082,15 @@ mod tests {
                 assert!(other.list3.is_empty() && other.lateral_ca.is_none(), "{mode:?} {ca}");
             }
             // the FE 200–600 mm G got worse with the map, so it keeps the warp but gets no map
-            let worse = decoded(&file_lens("ILCE-7RM6", true, 64, "FE 200-600mm F5.6-6.3 G OSS"), mode).opcodes;
+            let worse = decoded(&file_lens("ILCE-7RM6", true, 64, 60, "FE 200-600mm F5.6-6.3 G OSS"), mode).opcodes;
             assert!(worse.list3.len() == 1 && worse.lateral_ca.is_none(), "{mode:?}");
             // 4:3 (an in-camera aspect crop): the map switches off with the warp
             let four_three = decoded(&file_sized("ILCE-7RM6", true, 72), mode).opcodes;
             assert!(four_three.list3.is_empty() && four_three.lateral_ca.is_none(), "{mode:?}");
+            // A 3:2 image crop is not enough when the table's reference crop has another aspect.
+            let mixed_aspect = decoded(&file_lens("ILCE-7RM6", true, 64, 50, "FE 24-70mm F2.8 GM II"), mode);
+            assert_eq!(mixed_aspect.crop, Rect::new(0, 0, 96, 64));
+            assert!(mixed_aspect.opcodes.lateral_ca.is_none(), "{mode:?}");
         }
         // the headers-only probe reads the same map
         assert_eq!(decoded(&file("ILCE-7RM6", true), Mode::Header).opcodes, decoded(&file("ILCE-7RM6", true), Mode::Full).opcodes);
@@ -1770,6 +1775,31 @@ mod tests {
         };
         assert!(is_quad_tiled(&file, &info));
         assert_eq!(read_quad_tiles(&file, &info, &Limits::default()).unwrap(), mosaic);
+    }
+
+    /// storytold/lightcraft#4024: 256 tiles of 2×2 all pointing at one frame of 64×64×4 samples are refused before the
+    /// frame is decoded (at most a tile's samples), not after each tile has decoded 16,384 samples.
+    #[test]
+    fn tiny_quad_tiles_do_not_decode_a_large_frame() {
+        let frame = ljpeg::encode(&vec![300u16; 64 * 64 * 4], 64, 64, 4, 14, 1, 0);
+        let info = ImageInfo {
+            width: 32,
+            height: 32,
+            bits_per_sample: vec![14],
+            samples_per_pixel: 1,
+            compression: 7,
+            photometric: photometric::CFA,
+            planar: 1,
+            predictor: 1,
+            sample_format: 1,
+            new_subfile_type: 0,
+            layout: Layout::Tiles { tile_width: 2, tile_height: 2 },
+            offsets: vec![0; 256],
+            byte_counts: vec![frame.len() as u64; 256],
+        };
+        // refused by the decoder's sample limit (a Limit), not by the shape check after a full decode (Corrupt)
+        let got = read_quad_tiles(&frame, &info, &Limits::default());
+        assert!(matches!(got, Err(RawError::Limit(_))), "{got:?}");
     }
 
     /// storytold/lightcraft#2561: a small file whose one-byte or packed 12-bit strip declares a large frame is refused before the full

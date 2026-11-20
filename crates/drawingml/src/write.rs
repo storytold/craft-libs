@@ -777,6 +777,10 @@ pub fn list_style(w: &mut Writer, out: &mut dyn Sink, tag: &str, ls: &ListStyle)
         return;
     }
     w.open(tag, &[]);
+    if let Some(l) = &ls.default_level {
+        let def = (l.run != RunProps::default()).then_some(&l.run);
+        ppr(w, out, "a:defPPr", None, &l.para, def);
+    }
     for (i, l) in ls.levels.iter().enumerate().take(9) {
         if let Some(l) = l {
             let t = format!("a:lvl{}pPr", i + 1);

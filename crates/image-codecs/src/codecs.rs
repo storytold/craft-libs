@@ -3,7 +3,6 @@ pub(crate) mod avif;
 pub(crate) mod avif_decode;
 pub(crate) mod bmp;
 pub(crate) mod dds;
-pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
 pub(crate) mod dicom;
 pub(crate) mod dpx;

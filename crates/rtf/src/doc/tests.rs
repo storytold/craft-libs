@@ -390,6 +390,26 @@ fn page_size_and_margins() {
 }
 
 #[test]
+fn narrow_grid_columns_keep_their_width() {
+    // Rows' edges a few points apart, as in a form exported from a spreadsheet. The table stays as
+    // wide as its source, through an export and back too.
+    let rtf = br"{\rtf1\ansi
+\trowd\cellx400\cellx800 \pard\intbl a\cell b\cell\row
+\trowd\cellx80\cellx480\cellx800 \pard\intbl c\cell d\cell e\cell\row
+\pard after\par}";
+    let table = |doc: &Document| match doc.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t.clone()) } else { None })
+    {
+        Some(t) => t,
+        None => panic!("no table"),
+    };
+    let doc = import(rtf).unwrap();
+    let t = table(&doc);
+    assert_eq!(t.grid, [4.0, 16.0, 4.0, 16.0]);
+    assert_eq!(t.rows[0].cells.iter().map(|c| c.props.width).collect::<Vec<_>>(), [Some(20.0), Some(20.0)]);
+    assert_eq!(table(&import(export(&doc).as_bytes()).unwrap()).grid, t.grid);
+}
+
+#[test]
 fn table_grid_from_cell_edges_and_borders() {
     // Rows whose cells don't line up share one grid: edges 2000, 3000, 9000.
     let rtf = br"{\rtf1\ansi
@@ -458,6 +478,141 @@ fn table_grid_from_cell_edges_and_borders() {
     let d = import(br"{\rtf1\ansi\paperw11906\margl1134\margr1134\trowd\cellx4818\cellx9638\pard\intbl a\cell b\cell\row}").unwrap();
     let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
     assert_eq!(t.grid, [240.9, 241.0]);
+}
+
+/// The table of `rtf`'s flow and every row's column spans; checks the spans fit the grid.
+fn grid_of(rtf: &[u8]) -> (Vec<f32>, Vec<Vec<u32>>) {
+    let f = parse(rtf).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    let spans: Vec<Vec<u32>> = t.rows.iter().map(|r| r.iter().map(|c| c.colspan).collect()).collect();
+    assert!(!t.widths.is_empty(), "the table kept no grid");
+    assert_eq!(t.cols(), t.widths.len(), "spans {spans:?} don't fit {} grid columns", t.widths.len());
+    assert!(t.widths.iter().all(|&w| w > 1.0), "a grid column under a point: {:?}", t.widths);
+    (t.widths.clone(), spans)
+}
+
+/// Width in points of the first `n` grid columns.
+fn first_cols(widths: &[f32], n: u32) -> f32 {
+    widths.iter().take(n as usize).sum()
+}
+
+#[test]
+fn table_grid_survives_more_than_63_edges() {
+    // A form exported from a spreadsheet: a wide title over rows whose middle edge moves by
+    // 100 twips, 80 distinct edges in all. The grid used to be dropped, giving equal columns.
+    let mut rtf = String::from(r"{\rtf1\ansi\trowd\cellx6000\cellx8000\pard\intbl Title\cell Codes\cell\row");
+    for k in 1..80 {
+        rtf.push_str(&format!(r"\trowd\cellx{}\cellx8000\pard\intbl a\cell b\cell\row", k * 100));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, spans) = grid_of(rtf.as_bytes());
+    assert!(widths.len() <= 63, "{} grid columns", widths.len());
+    assert!((widths.iter().sum::<f32>() - 400.0).abs() < 0.01, "the table keeps its 400 pt");
+    // The title keeps its 300 pt, within a grid column's merge.
+    let title = first_cols(&widths, spans[0][0]);
+    assert!((title - 300.0).abs() <= 5.0, "title {title} pt");
+    // The staircase still climbs: the 60th row's first cell is about 300 pt wide too.
+    assert!((first_cols(&widths, spans[60][0]) - 300.0).abs() <= 5.0);
+
+    // The same through import: the document table has the grid, not equal columns.
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.len(), widths.len());
+    let w = t.rows[0].cells[0].props.width.unwrap();
+    assert!((w - 300.0).abs() <= 5.0, "title cell {w} pt");
+}
+
+#[test]
+fn table_grid_survives_a_zero_width_cell_and_a_missing_cellx() {
+    // A zero-width cell (two edges at 3000) in one row: the other rows keep their grid.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx2000\cellx9000 \pard\intbl a\cell\cell c\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3, "the zero-width cell is kept: {spans:?}");
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0, "the cell before it keeps its width");
+
+    // A row with a third cell but only two `\cellx`.
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx6000\cellx9000 \pard\intbl Title\cell b\cell\row
+\trowd\cellx2000\cellx6000 \pard\intbl a\cell b\cell extra\cell\row
+\pard\par}",
+    );
+    assert_eq!(first_cols(&widths, spans[0][0]), 300.0);
+    assert_eq!(spans[1].len(), 3);
+    assert_eq!(first_cols(&widths, spans[1][0]), 100.0);
+}
+
+#[test]
+fn table_grid_merges_edges_a_few_twips_apart() {
+    // Two rows that mean the same 3000-twip edge, 5 twips apart: one grid column, not one of
+    // a quarter point (which the document model refuses, so the table got equal columns).
+    let (widths, spans) = grid_of(
+        br"{\rtf1\ansi
+\trowd\cellx3000\cellx9000 \pard\intbl a\cell b\cell\row
+\trowd\cellx3005\cellx9000 \pard\intbl c\cell d\cell\row
+\pard\par}",
+    );
+    assert_eq!(widths.len(), 2, "{widths:?}");
+    assert_eq!(spans, [[1, 1], [1, 1]]);
+    assert_eq!(widths.iter().sum::<f32>(), 450.0);
+}
+
+/// `edges` as one table row, a cell for each.
+fn rtf_row(edges: &[usize]) -> String {
+    let cells: String = edges.iter().map(|e| format!(r"\cellx{e}")).collect();
+    format!(r"\trowd{cells}\pard\intbl {}\row", r"x\cell ".repeat(edges.len()))
+}
+
+#[test]
+fn table_grid_keeps_a_column_for_each_cell_of_the_widest_row() {
+    // 64 evenly spaced edges: merging by a common gap halves them to 32 columns, too few for a
+    // row of 33 or more cells, and the table lost its grid.
+    let edges: Vec<usize> = (1..=64).map(|k| k * 100).collect();
+    for cells in [33, 40, 50, 62] {
+        let wide: Vec<usize> = edges.iter().copied().take(cells).chain([6400]).collect();
+        let rest: Vec<usize> = edges.iter().copied().skip(cells - 1).collect();
+        let rtf = format!(r"{{\rtf1\ansi {}{}\pard\par}}", rtf_row(&wide), rtf_row(&rest));
+        let (widths, spans) = grid_of(rtf.as_bytes());
+        assert!((cells + 1..=63).contains(&widths.len()), "{cells} cells, {} grid columns", widths.len());
+        assert_eq!(spans[0].len(), cells + 1, "every cell is kept");
+        assert_eq!(widths.iter().sum::<f32>(), 320.0, "the table keeps its 320 pt");
+    }
+}
+
+#[test]
+fn table_grid_keeps_narrow_columns_at_their_width() {
+    // Columns under 6 pt that no row needs keep their 3 pt: import no longer widens them, so the
+    // table keeps its 60 pt.
+    let mut rtf = String::from(r"{\rtf1\ansi ");
+    for k in 1..=20 {
+        rtf.push_str(&rtf_row(&[k * 60, 1200]));
+    }
+    rtf.push_str(r"\pard\par}");
+    let (widths, _) = grid_of(rtf.as_bytes());
+    assert_eq!(widths, [3.0; 20], "{widths:?}");
+    let d = import(rtf.as_bytes()).unwrap();
+    let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+    assert_eq!(t.grid.iter().sum::<f32>(), 60.0, "{:?}", t.grid);
+
+    // A row that needs them keeps them, narrow as they are.
+    let (widths, spans) = grid_of(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[60, 120, 180])).as_bytes());
+    assert_eq!(widths, [3.0, 3.0, 3.0]);
+    assert_eq!(spans, [[1, 1, 1]]);
+}
+
+#[test]
+fn table_grid_never_keeps_a_column_the_document_model_refuses() {
+    // Three cells within a point of each other: too narrow to keep even for a row that needs
+    // them. The row can't fit, so the table has no grid, and nothing panics.
+    let f = parse(format!(r"{{\rtf1\ansi {}\pard\par}}", rtf_row(&[5, 10, 15])).as_bytes()).unwrap();
+    let FBlock::Table(t) = &f.blocks[0] else { panic!("no table") };
+    assert!(t.widths.is_empty(), "{:?}", t.widths);
+    assert_eq!(t.rows[0].len(), 3);
 }
 
 #[test]
@@ -1944,6 +2099,25 @@ fn compound_borders_round_trip() {
     assert_eq!(tops(&back), want);
 }
 
+/// storytold/wordcraft#5764: a DOCX cell border of width 0 (`w:sz="0"`, or no `w:sz`) is a line
+/// Word draws without giving it room. RTF has no such border, so it is written at the thinnest
+/// line rather than dropped.
+#[test]
+fn a_width_0_cell_border_exports_as_the_thinnest_line() {
+    let mut d = import(br"{\rtf1\ansi\trowd\clbrdrb\brdrs\cellx2000\pard\intbl a\cell\row}").unwrap();
+    for b in d.body.iter_mut() {
+        if let craft_wordmodel::Block::Table(t) = std::sync::Arc::make_mut(b)
+            && let Some(bd) = t.rows[0].cells[0].props.borders.as_mut()
+            && let Some(bottom) = bd.bottom.as_mut()
+        {
+            bottom.width = 0.0;
+        }
+    }
+    let exported = export(&d);
+    let twips = (craft_wordmodel::props::Border::THINNEST * 20.0).round() as i64;
+    assert!(exported.contains(&format!(r"\clbrdrb\brdrs\brdrw{twips}")), "{exported}");
+}
+
 fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
     flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
 }
@@ -1985,4 +2159,153 @@ fn alignment_survives_an_export_import_round_trip() {
     assert_eq!(norm(second)[3..5], [(true, None), (true, Some(Align::Right))], "{out}");
     // The export writes the alignment before the direction, which Word reads as logical start/end.
     assert!(out.contains("\\qr\\rtlpar"), "{out}");
+}
+
+/// `export` names WordCraft as the writer; an app embedding the writer names itself, escaped as
+/// a font name is (a `;` would end the group's text early), and a blank name leaves the group out.
+#[test]
+fn the_generator_names_the_writing_application() {
+    let doc = craft_wordmodel::Document::from_text("Hello");
+    assert!(export(&doc).contains(r"{\*\generator WordCraft;}"));
+    let pdf = export_with_generator(&doc, "PdfCraft 1.2");
+    assert!(pdf.contains(r"{\*\generator PdfCraft 1.2;}") && !pdf.contains("WordCraft"), "{pdf}");
+    let odd = export_with_generator(&doc, "A;B}\u{1}C\\");
+    assert!(odd.contains(r"{\*\generator A\'3bB\}C\\;}"), "{odd}");
+    for blank in ["", "  ", "\u{1}"] {
+        assert!(!export_with_generator(&doc, blank).contains("generator"), "{blank:?}");
+    }
+    let long = export_with_generator(&doc, &"x".repeat(1000));
+    assert!(long.contains(&format!(r"{{\*\generator {};}}", "x".repeat(255))), "cut at 255 characters");
+    // Whatever the name, the text reads back.
+    let back = parse(odd.as_bytes()).expect("parses");
+    assert_eq!(texts(&back), ["Normal:Hello"]);
+}
+
+/// Original RTF: only the previous paragraph properties carry spacing and borders.
+fn prior_layout_document(words: &str) -> Document {
+    let rtf = format!(
+        r"{{\rtf1\ansi{{\colortbl;\red17\green89\blue203;}}{{\*\revtbl{{Unknown;}}{{Alice;}}}}
+\pard\qc\prauth1\prdate-2014675576{{\*\oldpprops\pard\ql{words}}}Changed\par\pard\ql Neighbor\par}}"
+    );
+    import(rtf.as_bytes()).unwrap()
+}
+
+fn prior_props(doc: &Document) -> &craft_wordmodel::props::ParaProps {
+    &doc.body[0].as_para().unwrap().props.fmt_change.as_deref().unwrap().old
+}
+
+/// Every line-spacing rule, explicit zeros and a hanging indent survive repeated RTF saves.
+#[test]
+fn saving_keeps_prior_paragraph_spacing() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, line) in [
+        (r"\sb480\sa720\sl360\slmult1\li360\ri180\fi-80", LineSpacing::Multiple(1.5)),
+        (r"\sb0\sa0\sl-360\slmult0\li0\ri0\fi0", LineSpacing::Exactly(18.0)),
+        (r"\sb100\sa0\sl400\slmult0\li360\ri180\fi-80", LineSpacing::AtLeast(20.0)),
+    ] {
+        let mut doc = prior_layout_document(words);
+        let expected = prior_props(&doc).clone();
+        assert_eq!(expected.line_spacing, Some(line));
+        assert!(expected.space_before.is_some() && expected.space_after.is_some());
+        let revisions = doc.revisions.clone();
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            let old = prior_props(&doc);
+            assert_eq!((old.space_before, old.space_after, old.line_spacing), (expected.space_before, expected.space_after, expected.line_spacing));
+            assert_eq!((old.indent_left, old.indent_right, old.indent_first), (expected.indent_left, expected.indent_right, expected.indent_first));
+            assert_eq!(doc.revisions, revisions);
+            let p = doc.body[0].as_para().unwrap();
+            assert_eq!(p.props.align, Some(Align::Center));
+            assert_eq!(p.props.space_before, None, "old properties must not become current properties");
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// An explicit old minimum of zero survives saves without leaking through resets or groups.
+#[test]
+fn prior_zero_line_spacing_is_explicit_and_scoped() {
+    use craft_wordmodel::props::LineSpacing;
+    for (words, expected) in [
+        ("", None),
+        (r"\sl0", None),
+        (r"\slmult0", None),
+        (r"\sl0\slmult0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\slmult0\sl0", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl0\slmult1", None),
+        (r"\sl0\slmult0\pard\ql\sl0", None),
+        (r"{\sl0\slmult0}\sl0", None),
+        (r"\sl0\slmult0{\slmult1}", Some(LineSpacing::AtLeast(0.0))),
+        (r"\sl300", Some(LineSpacing::AtLeast(15.0))),
+        (r"\sl360\slmult1", Some(LineSpacing::Multiple(1.5))),
+    ] {
+        let mut doc = prior_layout_document(words);
+        for _ in 0..3 {
+            assert_eq!(prior_props(&doc).line_spacing, expected, "{words}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().props.line_spacing, None);
+            doc = import(export(&doc).as_bytes()).unwrap();
+        }
+    }
+}
+
+/// Imported old exact spacing below the supported minimum retains the exact rule on save.
+#[test]
+fn prior_exact_spacing_below_the_supported_minimum_keeps_its_rule() {
+    use craft_wordmodel::props::LineSpacing;
+    for value in [0.0, 0.01, 0.05, 0.65, 0.7] {
+        let mut doc = prior_layout_document("");
+        let craft_wordmodel::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) else { panic!("expected paragraph") };
+        p.props.fmt_change.as_deref_mut().unwrap().old.line_spacing = Some(LineSpacing::Exactly(value));
+        for _ in 0..2 {
+            doc = import(export(&doc).as_bytes()).unwrap();
+            assert_eq!(prior_props(&doc).line_spacing, Some(LineSpacing::Exactly(0.7)), "{value}");
+            assert_eq!(doc.body[0].as_para().unwrap().props.line_spacing, None);
+            assert_eq!(doc.body[1].as_para().unwrap().text, "Neighbor");
+        }
+    }
+}
+
+/// Prior visible borders stay inside oldpprops and retain their colour and geometry.
+#[test]
+fn saving_keeps_prior_paragraph_borders() {
+    let mut doc = prior_layout_document(r"\brdrt\brdrs\brdrw20\brdrcf1\brdrr\brdrdb\brdrw30\brdrcf1");
+    let expected = prior_props(&doc).borders;
+    let borders = expected.unwrap();
+    assert_eq!(borders.top.unwrap().color, Some(Rgb(17, 89, 203)));
+    assert_eq!(borders.top.unwrap().width, 1.0);
+    assert_eq!(borders.top.unwrap().space, 0.0);
+    assert!(borders.right.is_some());
+    for _ in 0..2 {
+        doc = import(export(&doc).as_bytes()).unwrap();
+        assert_eq!(prior_props(&doc).borders, expected);
+        assert_eq!(doc.body[0].as_para().unwrap().props.borders, None, "old borders stay out of the current paragraph");
+        assert_eq!(doc.body[1].as_para().unwrap().props.borders, None);
+    }
+}
+
+#[test]
+fn metadata_text_survives_nested_formatting_without_reading_other_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\info{\title Before {\b bold {\i caf\u233?}}{\fonttbl{\f0 Wrong;}}{\*\bkmkstart hidden}{\pict\pngblip 00} After}{\author Author}}\f0 Body}").unwrap();
+    assert_eq!(flow.meta.title, "Before bold café After");
+    assert_eq!(flow.meta.author, "Author");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+    let FBlock::Para(body) = &flow.blocks[0] else { panic!("expected body text") };
+    assert!(matches!(&body.inlines[0], Inline::Text(_, fmt) if fmt.font.as_deref() == Some("Arial")));
+}
+
+#[test]
+fn metadata_creation_date_ignores_other_date_destinations() {
+    let flow = parse(br"{\rtf1\ansi{\info{\creatim\yr2026{\revtim\yr1999}{\b\mo11}\dy19}}Body}").unwrap();
+    assert_eq!(flow.meta.created, "2026-11-19T00:00:00Z");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
+}
+
+#[test]
+fn metadata_text_controls_keep_punctuation_and_use_the_selected_font_code_page() {
+    let flow =
+        parse(br"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}{\f1\fcharset204 Cyrillic;}}{\info{\title A\emdash {\f1 \'e0\plain \'e0}}}\f0 Body}")
+            .unwrap();
+    assert_eq!(flow.meta.title, "A—аà");
+    assert_eq!(texts(&flow), ["Normal:Body"]);
 }

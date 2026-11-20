@@ -6,12 +6,13 @@ Sony cameras record three lens-correction tables in the raw IFD of every ARW: di
 chromatic aberration (CA). LightCraft reads them and turns distortion into a DNG `WarpRectilinear` opcode, so it
 reaches the same **Optics ▸ Enable Lens Corrections** (`optics.lens_profile`) as a DNG's embedded warp and Panasonic's
 RW2 distortion data. **Lateral CA is corrected on the raw mosaic, before demosaic** ([Lateral CA before
-demosaic](#lateral-ca-before-demosaic)), for every Bayer ILCE-7RM6 file framed 3:2. Enable Lens Corrections does not
-govern it (it governs distortion only), as Lightroom applies a raw's built-in corrections whatever its profile
-switch says (inferred, as for imported presets' `LensProfileEnable=0`). As the warp's red and blue planes, after
-demosaic, it made the render's CA worse (Verification), so those planes stay off. Vignetting is read but not applied
-(below). The conversion is verified on the **ILCE-7RM6** and, for distortion only, the **ILCE-6700**
-([ILCE-6700](#ilce-6700)); the ILCE-7RM4A has its own conversion, with other conventions
+demosaic](#lateral-ca-before-demosaic)), for Bayer ILCE-7RM6 files with 3:2 image and reference crops and a verified
+lens. Enable Lens Corrections governs distortion only, as Lightroom applies a raw's built-in corrections whatever
+its profile switch says (inferred, as for imported presets' `LensProfileEnable=0`). The warp's red and blue
+planes stay off because applying them after demosaic made the render's CA worse (Verification). Vignetting is
+read but not applied (below). The conversion is verified on the **ILCE-7RM6** and, for distortion only, the
+**ILCE-6700** ([ILCE-6700](#ilce-6700)) and **ZV-E10** ([ZV-E10](#zv-e10)). The ILCE-7RM4A has its own
+conversion, with other conventions
 ([Two conventions](#two-conventions)), and other Sony bodies' tables give no correction until they are verified.
 
 The correction is on by default for new imports, as for any file with embedded lens data (`Photo::camera_defaults`).
@@ -123,9 +124,9 @@ crate only builds the map; the kernel and the stages below are LightCraft's (`li
 - **Where it runs:** LightCraft's `RawImage::normalized()`, right after `OpcodeList2`. Every demosaic (AHD, PPG, bilinear) and AI
   Denoise therefore see the corrected mosaic. Binned previews and thumbnails bin the mosaic without the map and then
   resample the binned red and blue with the same kernel (the clip mask stands in for the clip level). No path
-  corrects twice. Only Bayer ILCE-7RM6 files framed 3:2, taken with a lens the map measurably improves ([Limits](#limits)),
-  get the map: linear files (the downsized lossless M and S
-  sizes) and in-camera aspect crops get neither the map nor the distortion warp.
+  corrects twice. The map applies to Bayer ILCE-7RM6 files with 3:2 image and reference crops and a lens it
+  measurably improves ([Limits](#limits)). Linear files (the downsized lossless M and S sizes) and in-camera
+  aspect crops get neither the map nor the distortion warp.
 - **Why there:** the colour-difference demosaic (AHD) borrows green's edges for red and blue, so a full-size render
   shows only 0.29 × the lens CA measured on the raw mosaic. Applied after demosaic, the table (the earlier design: a
   warp with three colour planes) therefore overshot. A binned preview averages each colour's own sites, so it showed
@@ -138,8 +139,8 @@ crate only builds the map; the kernel and the stages below are LightCraft's (`li
 ## Which bodies get it
 
 Only bodies on one of two allowlists in `arw_lens_rm6.rs` get an opcode: `FULL_FRAME_CROP` (today `ILCE-7RM6`,
-9984 × 6656) and `APSC_BODIES` (today `ILCE-6700`, below); only `FULL_FRAME_CROP` bodies get the CA map. The unit and
-the knot spacing are verified per body; a body
+9984 × 6656) and `APSC_BODIES` (today `ILCE-6700` and `ZV-E10`, below, each with its distortion unit).
+Only `FULL_FRAME_CROP` bodies get the CA map. The unit and the knot spacing are verified per body; a body
 with another sensor size or another unit would be warped wrongly. Other bodies get no correction from this conversion;
 the ILCE-7RM4A gets its own, with other conventions (below). To add a body: collect photos of it shot with distortion
 correction on (several lenses and focal lengths), repeat the camera-JPEG registration below against the uncorrected
@@ -147,7 +148,7 @@ render, confirm the unit, the knot spacing and the zoom rule (or measure the bod
 default crop to `FULL_FRAME_CROP`, or an APS-C body whose knots span its own crop (as measured for the ILCE-6700) to
 `APSC_BODIES`, with a test; an APS-C body also needs its fit gate checked against the camera JPEG (see *ILCE-6700*).
 
-For bodies in `APSC_BODIES` (today `ILCE-6700`), the knots span the file's own default crop: spacing = its half
+For bodies in `APSC_BODIES` (today `ILCE-6700` and `ZV-E10`), the knots span the file's own default crop: spacing = its half
 diagonal / (knot count − 1). This crop-based rule applies only to that list. The ILCE-7RM6 keeps its sensor-fixed
 400 px in both modes; in full frame (16 knots) the crop-based rule gives the same 400 px, and in its APS-C mode
 (11 knots) it would give 392 px, which was only an alternative measurement there (it fits as well, above).
@@ -199,6 +200,29 @@ As rendered (`lightcraft-cli render`, Enable Lens Corrections on):
 
 At 11.7 mm and longer an exception of this kind fits worse than the body's rule (412 px / 14500 on the grid: 0.73–1.19 px against 0.48–0.69 px), so it stops at
 10.5 mm, the longest measured focal length where it helps; 10.6–11.6 mm is unmeasured and takes the body's rule.
+
+## ZV-E10
+
+The ZV-E10 (APS-C, 6000 × 4000 default crop at (12, 12) in 6048 × 4024 storage) writes 11-knot tables like the
+ILCE-6700, zero-padded to the same 17 values. Measured as above on 4 photos shot with distortion correction Auto (the
+E PZ 16-50 mm F3.5-5.6 OSS, which forces it; its owner's photos, only the summary numbers here): 2 at 16 mm, 1 at 29 mm
+(portrait) and 1 at 32 mm. Feature matches between the uncorrected render and the camera JPEG
+(LightCraft's `tools/sony_distortion_check.py`, SIFT agreement after the best similarity), the camera's map applied to the render's
+points in a scan of knot spacing 340–380 px and unit 15000–17800:
+
+| | p95 residual at 1440 px |
+|---|---|
+| Uncorrected | 2.7–18.7 px (16 mm: 18.6–18.7 px) |
+| The ILCE-6700's rule (half diagonal / 10 = 360.56 px, unit 15000), as rendered | 0.45–2.18 px: the 16 mm photos over-corrected by about 9 % |
+| Sensor-fixed 400 px, unit 16384 | 0.43–3.21 px |
+| **Half diagonal / 10 = 360.56 px, unit 16384** (exact table) | **0.27–0.61 px** |
+| The same as LightCraft renders it (`lightcraft-cli render`, Enable Lens Corrections on, fitted polynomial) | **0.26–0.64 px** (median residual 0.07–0.36 px) |
+
+At 360.56 px every unit from 16300 to 17000 lands within 0.60–0.64 px worst (the measurement's floor on these scenes);
+spacing and unit trade off along a ridge as on the ILCE-6700 (375 px / 15700 and 380 px / 15400 reach 0.59 px), so the
+body keeps the ILCE-6700's crop-based spacing and takes its own unit, 16384, in `APSC_BODIES`. The fitted polynomial
+passes the 0.5 px APS-C fit gate on all four tables, the strongest (16 mm, −1905 at the last knot) included. An HDR
+merge of a ZV-E10 bracket keeps the warp in the merged DNG's `OpcodeList3`, as for any raw with embedded corrections.
 
 ## Two conventions
 
@@ -442,7 +466,7 @@ about 55 ms more per 1920 px render and about 2.9 s more per full-size render (n
 
 ## Limits
 
-- **ILCE-7RM6 and ILCE-6700 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
+- **ILCE-7RM6, ILCE-6700 and ZV-E10 only.** Other Sony bodies record the same tags; their knot spacing (defined here by the
   full-frame crop, or an APS-C body's own crop), unit and zoom rule are unverified, so they get no correction from this conversion (the ILCE-7RM4A's distortion has
   its own: [Two conventions](#two-conventions)).
 - **ILCE-6700 at strong barrel distortion:** the body's rule leaves 1.36–1.38 px at the Sigma 10–18 mm's 10 mm end;
@@ -453,6 +477,10 @@ about 55 ms more per 1920 px render and about 2.9 s more per full-size render (n
   6656 × 4608 frame, misses the 0.5 px fit gate, so that photo stays uncorrected (5.3 px). Other wide lenses with
   similarly strong tables are unmeasured. Its vignetting and lateral CA tables are read, not applied: measured in
   #2801 (the camera JPEG doesn't compensate vignetting, as on the ILCE-7RM6).
+- **ZV-E10: one lens, four photos.** Only the E PZ 16-50 mm (16–32 mm) is measured. Its unit, 16384, differs from
+  the ILCE-6700's 15000; the ILCE-6700's own E 16–55 mm at 16 mm also fits a higher unit (16000, above), so the unit
+  may belong to the lens rather than the body. Other lenses on the ZV-E10 are unmeasured and take 16384. The
+  ZV-E10M2 (another sensor) is not covered.
 - **APS-C distortion is unverified in camera on the ILCE-7RM6:** no APS-C photo with distortion correction on was available; the APS-C
   knot spacing is verified on CA only, and the APS-C zoom follows the full-frame rule.
 - **Aspect-ratio crops** (in-camera 4:3, 16:9, 1:1) were not measured, so they get no correction: neither the
@@ -473,8 +501,8 @@ about 55 ms more per 1920 px render and about 2.9 s more per full-size render (n
 - **Previews:** binning keeps the red and blue planes offset by a fraction of a binned pixel, as before (median
   0.03 / 0.04 px at 1440 after correction). On the APS-C 16–35 mm files, a preview and a full-size render still
   differ by up to 0.1 px at a corner, as they did uncorrected (the cause is not known).
-- **Enable Lens Corrections governs distortion only.** Lateral CA is always corrected for this body's Bayer files
-  framed 3:2.
+- **Enable Lens Corrections governs distortion only.** Lateral CA correction remains on for this body's Bayer files
+  with 3:2 image and reference crops and a verified lens.
 - **DNG export, Photo → Convert to DNG and import's Copy as DNG carry distortion only.** The warp goes into
   `OpcodeList3`, as for RW2, and a DNG reader applies it like any embedded lens correction. No DNG opcode resamples
   the CFA before demosaic, so the CA correction is lost. Three-plane CFA DNGs from other converters stay corrected
