@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use craft_pptx::text::{Align, Anchor, Bullet, ListStyle, Spacing};
-use craft_pptx::{Background, ColorRef, Fill, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
+use craft_pptx::{Background, ColorRef, Fill, Geom, LayoutType, Paragraph, PhType, Presentation, Rgba, SchemeSlot, Shape, TextBody};
 
 use super::rt;
 use crate::tests::{AppDefaults, build};
@@ -869,9 +869,9 @@ fn a_masters_centred_title_gives_the_title_style_its_ruler() {
     assert_eq!((t.para.margin_left, t.para.indent), (Some(72.0), Some(-36.0)));
 }
 
-/// A shape with text is a text box with no fill or line of its own; a shape without text isn't
-/// read yet; a placeholder of a type PowerPoint 95 isn't known to write keeps its text as a text
-/// box.
+/// A shape with text and no format of its own is a text box with no fill or line; one without text
+/// draws nothing and is left out; a placeholder of a type PowerPoint 95 isn't known to write keeps
+/// its text as a text box.
 #[test]
 fn a_shape_with_text_is_a_text_box() {
     let bx = [-2362, -1613, -518, -1325];
@@ -890,11 +890,11 @@ fn a_shape_with_text_is_a_text_box() {
     assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
     assert!(p.slides[0].shapes[1].text_box && p.slides[0].shapes[1].ph.is_none());
 
-    // The box is the unturned one; the angle is in sixteenths of a degree.
+    // The box is the unturned one; the angle is in sixteenths of a degree, counter-clockwise.
     let turned = container(rt::SHAPE, 0x13, &[geometry(bx, 480), simple_text(b"Box", bx, BODY)]);
     let p = deck_of(vec![turned], &[]);
     let x = p.slides[0].shapes[0].xfrm.unwrap();
-    assert_eq!((x.x, x.w, x.rot), (64.75, 230.5, 30.0));
+    assert_eq!((x.x, x.w, x.rot), (64.75, 230.5, 330.0));
 }
 
 /// The master's placeholders place the default master's (title and body), and the footer row
@@ -1043,6 +1043,895 @@ fn hostile_text_never_panics() {
     }
 }
 
+/// A geometry record with its shape code word, adjust value, box and angle.
+fn coded_geometry(code: u32, adjust: i32, bx: [i32; 4], rot: i32) -> Vec<u8> {
+    let mut b = le32(&[code, adjust as u32, 0]);
+    b.extend(bx.iter().chain(&[rot]).flat_map(|v| v.to_le_bytes()));
+    b.extend_from_slice(&le32(&[code, 0]));
+    rec(3009, 0, 0, &b)
+}
+
+/// How a test shape is drawn: line and fill colours (R, G, B, then 0xFE or a scheme slot; `None`
+/// for none), the shadow's colour when it has one, its offset right and down and whether it is
+/// semi-transparent, the flips the user set (bit 1 horizontal, bit 2 vertical), the line's style
+/// byte (its style less one) and dash byte, and the angle the user set.
+#[derive(Clone, Copy)]
+struct Format {
+    line: Option<[u8; 4]>,
+    fill: Option<[u8; 4]>,
+    shadow: Option<[u8; 4]>,
+    offset: [i32; 2],
+    semi: bool,
+    flips: u8,
+    style: u8,
+    dash: u8,
+    turn: i32,
+}
+
+/// PowerPoint 95's defaults: lines in slot 1, fills in slot 4, no shadow (its colour in slot 2,
+/// 6 pt right and down).
+const PLAIN: Format =
+    Format { line: Some([0, 0, 0, 1]), fill: Some([0, 0, 0, 4]), shadow: None, offset: [48, 48], semi: false, flips: 0, style: 0, dash: 0, turn: 0 };
+
+fn format(f: Format) -> Vec<u8> {
+    let mut b = vec![0u8; 56];
+    b[0] = if f.line.is_some() { 0 } else { 0xFF };
+    b[1] = f.dash;
+    b[3] = f.style;
+    b[4..8].copy_from_slice(&f.line.unwrap_or([0, 0, 0, 1]));
+    b[12] = if f.fill.is_some() { 0 } else { 0xFF };
+    b[13] = 1;
+    b[20..24].copy_from_slice(&f.fill.unwrap_or([0, 0, 0, 4]));
+    // +24 stays slot 1 whatever the shadow is, as PowerPoint 95 writes it.
+    b[24..28].copy_from_slice(&[0, 0, 0, 1]);
+    b[28] = if f.shadow.is_some() { 0 } else { 0xFF };
+    b[29] = if f.semi { 2 } else { 1 };
+    b[30..34].copy_from_slice(&f.shadow.unwrap_or([0, 0, 0, 2]));
+    b[36..40].copy_from_slice(&f.offset[0].to_le_bytes());
+    b[40..44].copy_from_slice(&f.offset[1].to_le_bytes());
+    b[48..52].copy_from_slice(&f.turn.to_le_bytes());
+    b[52] = f.flips;
+    rec(rt::FORMAT, 1, 0, &b)
+}
+
+/// A shape of `code` with its adjust value, box, angle and format, its angle less than a quarter
+/// turn, so the geometry and the format agree.
+fn autoshape(code: i32, adjust: i32, bx: [i32; 4], rot: i32, f: Format) -> Vec<u8> {
+    drawn_shape(code, adjust, bx, rot, Format { turn: rot, ..f })
+}
+
+/// A shape whose geometry holds `drawn`, the box and angle as drawn, and whose format holds the
+/// angle the user set.
+fn drawn_shape(code: i32, adjust: i32, drawn: [i32; 4], rot: i32, f: Format) -> Vec<u8> {
+    container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, adjust, drawn, rot), format(f)])
+}
+
+/// A line from (x1, y1) to (x2, y2), with its format when given.
+fn line_95(ends: [i32; 4], f: Option<Format>) -> Vec<u8> {
+    arrow_line(ends, [0, 0], f)
+}
+
+/// A line with its arrowhead atom (start, end).
+fn arrow_line(ends: [i32; 4], heads: [u8; 2], f: Option<Format>) -> Vec<u8> {
+    let mut kids = vec![rec(rt::LINE_ATOM, 0, 0, &ends.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()), rec(rt::ARROWHEADS, 0, 0, &heads)];
+    kids.extend(f.map(format));
+    container(rt::LINE, 0x13, &kids)
+}
+
+/// PowerPoint 95's trapezoid outline with bottom corners inset by `a`.
+fn trapezoid_95(a: i32) -> Geom {
+    let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
+    Geom::Custom { paths: vec![craft_pptx::CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
+}
+
+fn preset_of(s: &Shape) -> (&str, &[f64]) {
+    match &s.geom {
+        Geom::Preset { name, adj } => (name, adj),
+        Geom::Custom { .. } => ("custom", &[]),
+    }
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> ColorRef {
+    ColorRef::rgb(Rgba::rgb(r, g, b))
+}
+
+/// Each shape code PowerPoint 95 wrote is its preset, with its adjust value in DrawingML terms (the
+/// probes' adjust values are DrawingML's defaults on a square), except the trapezoid, which has its
+/// own outline ([`trapezoids_are_wide_at_the_top`]); the bits above its code's low byte don't change
+/// the code.
+#[test]
+fn shape_codes_are_presets_with_their_adjust_values() {
+    let sq = [0, 0, 1152, 1152];
+    let cases: [(i32, i32, &str, &[f64]); 12] = [
+        (-3, 0, "rect", &[]),
+        (-2, 2700, "roundRect", &[12_500.0]),
+        (-1, 0, "ellipse", &[]),
+        (0, 0, "diamond", &[]),
+        (1, 10800, "triangle", &[50_000.0]),
+        (2, 0, "rtTriangle", &[]),
+        (3, 5400, "parallelogram", &[25_000.0]),
+        (0x6004, 5400, "custom", &[]),
+        (5, 5400, "hexagon", &[25_000.0]),
+        (6, 6326, "octagon", &[6326.0 / 21600.0 * 100_000.0]),
+        (7, 5400, "plus", &[25_000.0]),
+        (8, 0, "star5", &[]),
+    ];
+    let p = deck_of(cases.iter().map(|(code, adj, ..)| autoshape(*code, *adj, sq, 0, PLAIN)).collect(), &[]);
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(shapes.len(), 12);
+    for (s, (code, _, name, adj)) in shapes.iter().zip(cases) {
+        assert_eq!(preset_of(s), (name, adj), "code {code}");
+        assert_eq!(boxed(s), (360.0, 270.0, 144.0, 144.0));
+        assert!(!s.xfrm.unwrap().flip_v, "{name}");
+        assert!(!s.text_box && s.ph.is_none());
+        assert!(name == "custom" || craft_drawingml::preset::build(name, 144.0, 144.0, adj).is_some());
+    }
+    // An inset across a box twice as wide as it is tall is twice the share of its shorter side.
+    let p = deck_of(vec![autoshape(3, 5400, [0, 0, 1152, 576], 0, PLAIN), autoshape(-2, 99_999, sq, 0, PLAIN)], &[]);
+    assert_eq!(preset_of(&p.slides[0].shapes[0]), ("parallelogram", &[50_000.0][..]));
+    assert_eq!(preset_of(&p.slides[0].shapes[1]), ("roundRect", &[50_000.0][..]), "a corner past half the side is half");
+}
+
+/// A shape's fill (an RGB or a slot of the slide's scheme, or none), its line colour (or none) at
+/// PowerPoint 95's 1 pt, and its shadow when on.
+#[test]
+fn shapes_keep_their_fill_line_and_shadow() {
+    let bx = [0, 0, 1152, 576];
+    let red = Format { fill: Some([0xFF, 0, 0, 0xFE]), ..PLAIN };
+    let blue_line = Format { line: Some([0, 0, 0xFF, 0xFE]), ..PLAIN };
+    let no_fill = Format { fill: None, ..PLAIN };
+    let no_line = Format { line: None, ..PLAIN };
+    let shadow = Format { shadow: Some([0x80, 0x80, 0x80, 0xFE]), ..PLAIN };
+    let p = deck_of([PLAIN, red, blue_line, no_fill, no_line, shadow].into_iter().map(|f| autoshape(-3, 0, bx, 0, f)).collect(), &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 6);
+    // The default: slot 4 (fills) and slot 1 (text and lines) of the slide's scheme.
+    assert_eq!(s[0].fill, Some(Fill::solid(rgb(0, 0xCC, 0x99))));
+    assert_eq!(s[0].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
+    assert_eq!(s[0].effects, None);
+    assert_eq!(s[1].fill, Some(Fill::solid(rgb(0xFF, 0, 0))));
+    assert_eq!(s[2].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0xFF), 1.0)));
+    assert_eq!(s[3].fill, Some(Fill::None));
+    assert_eq!(s[3].line, s[0].line);
+    assert_eq!(s[4].line, Some(craft_pptx::Line::none()));
+    let sh = s[5].effects.as_ref().and_then(|e| e.outer_shadow.clone()).unwrap();
+    assert_eq!((sh.color, sh.dir, sh.blur), (rgb(0x80, 0x80, 0x80), 45.0, 0.0), "the shadow's colour is at +30, not +24");
+    assert!((sh.dist - 6.0 * 2f64.sqrt()).abs() < 1e-9);
+
+    // A slot of the slide's own scheme.
+    let mut spec = SlideSpec::new(0x100, 16);
+    spec.scheme[4] = 0x123456;
+    spec.follow_scheme = false;
+    spec.objects = vec![autoshape(-1, 0, bx, 0, PLAIN)];
+    let p = deck(&[spec]);
+    assert_eq!(p.slides[0].shapes[0].fill, Some(Fill::solid(rgb(0x12, 0x34, 0x56))));
+
+    // A shape with no fill, line or shadow draws nothing and is left out; with text it is a text
+    // box. A filled one with text keeps the text.
+    let none = Format { fill: None, line: None, ..PLAIN };
+    let with_text = |f: Format| container(rt::SHAPE, 0x13, &[coded_geometry(-1i32 as u32, 0, bx, 0), format(f), simple_text(b"Hi", bx, BODY)]);
+    let p = deck_of(vec![autoshape(-1, 0, bx, 0, none), with_text(none), with_text(red)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 2);
+    assert!(s[0].text_box && s[0].fill == Some(Fill::None));
+    assert!(!s[1].text_box);
+    assert_eq!((preset_of(&s[1]).0, body_of(&s[1]).text(), s[1].fill.clone()), ("ellipse", "Hi".into(), Some(Fill::solid(rgb(0xFF, 0, 0)))));
+}
+
+/// A turned shape keeps its unturned box and its angle, which PowerPoint 95 measures
+/// counter-clockwise and DrawingML clockwise: 30° there is 330° here. The flips the user set don't
+/// flip a shape: what is drawn is in its geometry ([`orientation_bits_turn_and_mirror`]).
+#[test]
+fn rotation_runs_counter_clockwise() {
+    let bx = [-2304, -1584, -1152, -1008];
+    let p = deck_of(
+        vec![
+            autoshape(-3, 0, bx, 480, PLAIN),
+            autoshape(2, 0, bx, 0, Format { flips: 1, ..PLAIN }),
+            autoshape(9, 10800, bx, 480, PLAIN),
+            autoshape(-1, 0, bx, 0, Format { flips: 3, ..PLAIN }),
+        ],
+        &[],
+    );
+    let x: Vec<_> = p.slides[0].shapes.iter().map(|s| s.xfrm.unwrap()).collect();
+    assert_eq!((x[0].x, x[0].y, x[0].w, x[0].h, x[0].rot, x[0].flip_h), (72.0, 72.0, 144.0, 72.0, 330.0, false));
+    assert_eq!((x[1].rot, x[1].flip_h, x[1].flip_v), (0.0, false, false));
+    assert_eq!((x[2].rot, x[2].flip_h, x[2].flip_v), (330.0, false, false), "the arrowrot30 probe: the tip moves up");
+    assert_eq!((x[3].rot, x[3].flip_h, x[3].flip_v), (0.0, false, false));
+}
+
+/// A line spans the box of its ends and is flipped to run from its start to its end, in its
+/// format's colour (the scheme's text and lines colour without one), never filled.
+#[test]
+fn lines_keep_their_ends_and_direction() {
+    let blue = Format { line: Some([0, 0, 0xFF, 0xFE]), ..PLAIN };
+    let p = deck_of(
+        vec![
+            line_95([-2304, -1584, -576, -432], Some(PLAIN)),
+            line_95([-576, -1584, -2304, -432], Some(blue)),
+            line_95([-576, -432, -2304, -1584], None),
+            line_95([0, 0, 576, 0], Some(Format { line: None, ..PLAIN })),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 3, "a line with no line draws nothing");
+    for l in s {
+        assert_eq!(preset_of(l).0, "line");
+        assert_eq!(boxed(l), (72.0, 72.0, 216.0, 144.0));
+        assert_eq!(l.fill, Some(Fill::None));
+    }
+    let flips: Vec<_> = s.iter().map(|l| (l.xfrm.unwrap().flip_h, l.xfrm.unwrap().flip_v)).collect();
+    assert_eq!(flips, [(false, false), (true, false), (true, true)]);
+    assert_eq!(s[0].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
+    assert_eq!(s[1].line, Some(craft_pptx::Line::solid(rgb(0, 0, 0xFF), 1.0)));
+    assert_eq!(s[2].line, s[0].line);
+}
+
+/// A shape code no probe showed is a rectangle with its fill, line and text, whatever the bits
+/// above it.
+#[test]
+fn unknown_shape_codes_are_rectangles() {
+    let bx = [0, 0, 576, 576];
+    let red = Format { fill: Some([0xFF, 0, 0, 0xFE]), ..PLAIN };
+    let mut objects: Vec<_> = [-4, 15, 0x7F, -128, 0x6015, -100].iter().map(|&c| autoshape(c, 0, bx, 0, red)).collect();
+    objects.push(container(rt::SHAPE, 0x13, &[coded_geometry(42, 0, bx, 0), format(PLAIN), simple_text(b"Kept", bx, BODY)]));
+    let p = deck_of(objects, &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 7);
+    for s in &s[..6] {
+        assert_eq!((preset_of(s), s.fill.clone(), s.text_box), (("rect", &[][..]), Some(Fill::solid(rgb(0xFF, 0, 0))), false));
+        assert_eq!(s.line, Some(craft_pptx::Line::solid(rgb(0, 0, 0), 1.0)));
+        assert_eq!(boxed(s), (360.0, 270.0, 72.0, 72.0));
+    }
+    assert_eq!((preset_of(&s[6]).0, s[6].text_box, body_of(&s[6]).text()), ("rect", false, "Kept".into()));
+}
+
+/// Damaged shapes and lines never panic: truncated geometry, format and line records, huge
+/// values, and every word of a page of them set to hostile values or cut.
+#[test]
+fn hostile_shapes_never_panic() {
+    let bx = [0, 0, 576, 576];
+    let cut = |r: Vec<u8>, keep: usize| {
+        let mut r = r;
+        r.truncate(16 + keep);
+        r[8..12].copy_from_slice(&(keep as u32).to_le_bytes());
+        r
+    };
+    let mut objects = vec![];
+    for keep in [0, 3, 8, 13, 21, 25, 29, 53] {
+        objects.push(container(rt::SHAPE, 0x13, &[coded_geometry(1, 10800, bx, 0), cut(format(PLAIN), keep)]));
+        objects.push(container(rt::SHAPE, 0x13, &[cut(coded_geometry(1, 10800, bx, 0), keep), format(PLAIN)]));
+        objects.push(container(rt::LINE, 0x13, &[cut(rec(rt::LINE_ATOM, 0, 0, &le32(&[0, 0, 8, 8])), keep.min(16))]));
+    }
+    let huge = Format {
+        line: Some([0, 0, 0, 0xFD]),
+        fill: Some([9, 9, 9, 200]),
+        shadow: Some([1, 1, 1, 8]),
+        offset: [i32::MIN, i32::MAX],
+        semi: true,
+        flips: 0xFF,
+        style: 0xFF,
+        dash: 0xFF,
+        turn: i32::MIN,
+    };
+    objects.push(autoshape(5, i32::MAX, [i32::MIN, i32::MIN, i32::MAX, i32::MAX], i32::MIN, huge));
+    objects.push(autoshape(3, i32::MIN, [0, 0, 0, 0], i32::MAX, PLAIN));
+    objects.push(line_95([i32::MIN, i32::MAX, i32::MAX, i32::MIN], Some(huge)));
+    let p = deck_of(objects.clone(), &[]);
+    for s in &p.slides[0].shapes {
+        let x = s.xfrm.unwrap();
+        assert!(x.w.is_finite() && x.h.is_finite() && x.rot.is_finite());
+        if let Geom::Preset { adj, .. } = &s.geom {
+            assert!(adj.iter().all(|a| a.is_finite()));
+        }
+    }
+
+    let mut s = SlideSpec::new(0x100, 0);
+    s.objects = vec![
+        autoshape(4, 5400, bx, 480, Format { shadow: Some([0, 0, 0, 2]), flips: 3, ..PLAIN }),
+        arrow_line([0, 0, 576, 288], [4, 1], Some(PLAIN)),
+    ];
+    let stream = stream_of(document_atom(5760, 4320, 1), &[slide(&s)], &[master_with(MASTER, DEFAULT, [0; 4], &[autoshape(-1, 0, bx, 0, PLAIN)])]);
+    for at in (0..stream.len() - 4).step_by(4) {
+        for v in [0u32, 1, 0xFE, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            let _ = import(&d);
+        }
+    }
+    for cut in 0..stream.len() {
+        let _ = import(&stream[..cut]);
+    }
+}
+
+/// A rectangle's angle is the one the format holds. The geometry holds the outline as drawn, whole
+/// quarter-turns folded into its box: after an odd number of them its box is the turned one, so it
+/// is turned back about its centre. Less than a quarter turn, or a half turn, leaves it as it is.
+/// Angles run counter-clockwise, so each is negated.
+#[test]
+fn quarter_turns_are_turned_back() {
+    // A 2 in × 1 in rectangle at 1 in, 1 in; turned a quarter, it is drawn 1 in × 2 in about the
+    // same centre (as the rot90wide probe).
+    let (wide, tall) = ([-2304, -1584, -1152, -1008], [-2016, -1872, -1440, -720]);
+    let turned = |drawn: [i32; 4], drawn_rot: i32, turn: i32| drawn_shape(-3, 0, drawn, drawn_rot, Format { turn, ..PLAIN });
+    let p = deck_of(
+        vec![
+            turned(wide, 480, 480),
+            turned(tall, 0, 1440),
+            turned(wide, 0, 2880),
+            turned(tall, 0, 4320),
+            turned(tall, 0, -1440),
+            turned(wide, 480, 3360),
+            turned(tall, 480, 1920),
+            // A right triangle at 120° keeps its unturned box and the angle (the rot120wide probe).
+            drawn_shape(2, 0, wide, 1920, Format { turn: 1920, ..PLAIN }),
+            turned(wide, 0, 480),
+        ],
+        &[],
+    );
+    let got: Vec<_> = p.slides[0].shapes.iter().map(|s| (boxed(s), s.xfrm.unwrap().rot)).collect();
+    let flat = (72.0, 72.0, 144.0, 72.0);
+    assert_eq!(
+        got,
+        [(flat, 330.0), (flat, 270.0), (flat, 180.0), (flat, 90.0), (flat, 90.0), (flat, 150.0), (flat, 240.0), (flat, 240.0), (flat, 330.0)]
+    );
+}
+
+/// For shape codes of 0 and up the byte above the code orients the outline: bits 4 and 5 turn it
+/// counter-clockwise by quarters, then bit 6 mirrors it across. In DrawingML (flip first, then turn
+/// clockwise) a turn by q is a clockwise turn by −q, and a mirror after it a horizontal flip turned
+/// clockwise by q. After an odd number of quarters the box drawn is the turned one, and is turned
+/// back. The format's angle and flips don't count for these shapes: the geometry is what is drawn.
+#[test]
+fn orientation_bits_turn_and_mirror() {
+    // 1 in × 2 in as drawn: unturned, 2 in × 1 in.
+    let tall = [-2016, -1872, -1440, -720];
+    let flat = (72.0, 72.0, 144.0, 72.0);
+    let upright = (108.0, 36.0, 72.0, 144.0);
+    // The user's flips and angle are what PowerPoint 95 wrote for these: rtrot, rthflip, rtvflip,
+    // rtboth, rthfliprot, and the arrows' up, left and down (shape14 to shape16).
+    type Box = (f64, f64, f64, f64);
+    let cases: [(u32, i32, u8, f64, bool, Box); 8] = [
+        (0x00, 0, 0, 0.0, false, upright),
+        (0x10, 1440, 1, 270.0, false, flat),
+        (0x20, 0, 3, 180.0, false, upright),
+        (0x30, 0, 2, 90.0, false, flat),
+        (0x40, 0, 0, 0.0, true, upright),
+        (0x50, 0, 0, 90.0, true, flat),
+        (0x60, 1440, 1, 180.0, true, upright),
+        (0x70, 0, 0, 270.0, true, flat),
+    ];
+    for code in [2, 9] {
+        let shapes =
+            cases.iter().map(|&(bits, turn, flips, ..)| drawn_shape(code | (bits << 8) as i32, 10800, tall, 0, Format { turn, flips, ..PLAIN }));
+        let p = deck_of(shapes.collect(), &[]);
+        assert_eq!(p.slides[0].shapes.len(), cases.len(), "code {code}");
+        for (s, (bits, _, _, rot, flip_h, bx)) in p.slides[0].shapes.iter().zip(cases) {
+            let x = s.xfrm.unwrap();
+            assert_eq!((x.rot, x.flip_h, x.flip_v, boxed(s)), (rot, flip_h, false, bx), "code {code} bits {bits:#x}");
+        }
+    }
+    // What is left of the angle turns after the mirror: bits 0x50 and 30° counter-clockwise is a
+    // mirror turned 90° − 30° clockwise; without the mirror, 120° counter-clockwise.
+    let p = deck_of(vec![drawn_shape(0x5002, 0, tall, 480, PLAIN), drawn_shape(0x1002, 0, tall, 480, PLAIN)], &[]);
+    let x: Vec<_> = p.slides[0].shapes.iter().map(|s| s.xfrm.unwrap()).map(|x| (x.rot, x.flip_h, x.w, x.h)).collect();
+    assert_eq!(x, [(60.0, true, 144.0, 72.0), (240.0, false, 144.0, 72.0)]);
+}
+
+/// The trapezoid's own outline, wide at the bottom, is DrawingML's `trapezoid`; PowerPoint 95's
+/// new trapezoid is that mirrored and turned a half-turn (0x60), a vertical flip. Whenever the
+/// transform holds a mirror it is the outline wide at the top, unflipped and turned a half-turn
+/// further, so its text stays upright; its bottom corners are inset by the adjust value (up to half
+/// the side). The user's flips don't count: shape8, traphflip and trapvflip.
+#[test]
+fn trapezoids_are_wide_at_the_top() {
+    let sq = [0, 0, 1152, 1152];
+    let p = deck_of(
+        vec![
+            autoshape(0x6004, 5400, sq, 0, PLAIN),
+            autoshape(0x6004, 2700, sq, 0, Format { flips: 1, ..PLAIN }),
+            autoshape(0x6004, 20_000, sq, 0, PLAIN),
+            autoshape(0x6004, -5, sq, 0, PLAIN),
+            autoshape(4, 5400, sq, 0, Format { flips: 2, ..PLAIN }),
+            autoshape(0x2004, 5400, sq, 0, PLAIN),
+            autoshape(0x4004, 5400, sq, 0, PLAIN),
+            autoshape(0x6004, 5400, sq, 480, PLAIN),
+            autoshape(4, 2700, [0, 0, 1152, 576], 0, PLAIN),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    let got: Vec<_> = s.iter().map(|s| (s.geom.clone(), s.xfrm.unwrap().rot, s.xfrm.unwrap().flip_h, s.xfrm.unwrap().flip_v)).collect();
+    let preset = |a: f64| Geom::Preset { name: "trapezoid".into(), adj: vec![a] };
+    let want = [
+        (trapezoid_95(5400), 0.0),
+        (trapezoid_95(2700), 0.0),
+        (trapezoid_95(10800), 0.0),
+        (trapezoid_95(0), 0.0),
+        (preset(25_000.0), 0.0),
+        (preset(25_000.0), 180.0),
+        (trapezoid_95(5400), 180.0),
+        (trapezoid_95(5400), 330.0),
+        // An inset across a box twice as wide as it is tall is twice the share of its shorter side.
+        (preset(25_000.0), 0.0),
+    ]
+    .map(|(g, rot)| (g, rot, false, false));
+    assert_eq!(got, want);
+    assert_eq!(boxed(&s[0]), (360.0, 270.0, 144.0, 144.0));
+}
+
+/// The object model's shapes 13 to 24 are codes 9 to 14: the arrow and the thick arrow (DrawingML's
+/// right arrow, its shaft half and three quarters of the height, the adjust value where its head
+/// starts), the home plate (where its point starts), the cube (its depth), the balloon and the seal.
+/// The adjust values and proportions are those PowerPoint 95 drew (shape13, shape17 and shape21 to
+/// shape24).
+#[test]
+fn the_other_autoshapes_are_presets() {
+    let sq = [0, 0, 1152, 1152];
+    let cases: [(i32, i32, &str, &[f64]); 6] = [
+        (9, 10800, "rightArrow", &[50_000.0, 50_000.0]),
+        (10, 10800, "rightArrow", &[75_000.0, 50_000.0]),
+        (11, 14400, "homePlate", &[100_000.0 / 3.0]),
+        (12, 5400, "cube", &[25_000.0]),
+        (13, 1800, "wedgeRoundRectCallout", &[-100_000.0 * 5.0 / 12.0, 70_000.0, 20_000.0]),
+        (14, 0, "star16", &[]),
+    ];
+    let p = deck_of(cases.iter().map(|(code, adj, ..)| autoshape(*code, *adj, sq, 0, PLAIN)).collect(), &[]);
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(shapes.len(), 6);
+    for (s, (code, _, name, adj)) in shapes.iter().zip(cases) {
+        let (got, got_adj) = preset_of(s);
+        assert_eq!(got, name, "code {code}");
+        assert_eq!(got_adj.len(), adj.len(), "code {code}");
+        assert!(got_adj.iter().zip(adj).all(|(a, b)| (a - b).abs() < 1e-6), "code {code}: {got_adj:?}");
+        assert!(craft_drawingml::preset::build(name, 144.0, 144.0, adj).is_some());
+        // The balloon's box is its body, the top five sixths.
+        let want = if code == 13 { (360.0, 270.0, 144.0, 120.0) } else { (360.0, 270.0, 144.0, 144.0) };
+        assert_eq!(boxed(s), want, "code {code}");
+    }
+    // A head across a box twice as wide as it is tall is twice the share of its shorter side; an
+    // adjust value past the side is clamped.
+    let wide = [0, 0, 1152, 576];
+    let p = deck_of(vec![autoshape(9, 10800, wide, 0, PLAIN), autoshape(11, -7, wide, 0, PLAIN), autoshape(12, 99_999, sq, 0, PLAIN)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(preset_of(&s[0]), ("rightArrow", &[50_000.0, 100_000.0][..]));
+    assert_eq!(preset_of(&s[1]), ("homePlate", &[200_000.0][..]));
+    assert_eq!(preset_of(&s[2]), ("cube", &[100_000.0][..]));
+    // A balloon turned a quarter counter-clockwise: its body is left of the square's centre.
+    let p = deck_of(vec![autoshape(0x100D, 1800, sq, 0, PLAIN)], &[]);
+    let x = p.slides[0].shapes[0].xfrm.unwrap();
+    assert_eq!((x.rot, x.w, x.h), (270.0, 144.0, 120.0));
+    assert!((x.x + x.w / 2.0 - 420.0).abs() < 1e-9 && (x.y + x.h / 2.0 - 342.0).abs() < 1e-9, "{x:?}");
+}
+
+/// A shadow falls as far as the format's +36 and +40 say (master units, right and down; 6 pt each
+/// by default), as a distance and a direction clockwise from the right, and is half transparent
+/// when +29 is 2 (shadow, shadowoff1, shadowoff2). An absurd offset is clamped to 10 in.
+#[test]
+fn shadows_keep_their_offset_and_transparency() {
+    let bx = [0, 0, 576, 576];
+    let on = |offset: [i32; 2], semi: bool| autoshape(-3, 0, bx, 0, Format { shadow: Some([0, 0, 0, 0xFE]), offset, semi, ..PLAIN });
+    let p = deck_of(vec![on([48, 48], false), on([24, 80], false), on([-40, -16], true), on([i32::MIN, i32::MAX], false), on([0, 0], false)], &[]);
+    let got: Vec<_> = p.slides[0].shapes.iter().map(|s| s.effects.as_ref().and_then(|e| e.outer_shadow.clone()).unwrap()).collect();
+    let want = [(6.0, 6.0), (3.0, 10.0), (-5.0, -2.0), (-720.0, 720.0), (0.0, 0.0)];
+    assert_eq!(got.len(), want.len());
+    for (sh, (dx, dy)) in got.iter().zip(want) {
+        let (x, y) = (sh.dist * sh.dir.to_radians().cos(), sh.dist * sh.dir.to_radians().sin());
+        assert!((x - dx).abs() < 1e-9 && (y - dy).abs() < 1e-9, "{dx}, {dy}: {} at {}", sh.dist, sh.dir);
+        assert!((0.0..360.0).contains(&sh.dir));
+    }
+    assert_eq!(got[0].color, rgb(0, 0, 0));
+    assert_eq!(got[2].color, rgb(0, 0, 0).with(craft_pptx::ColorTransform::Alpha(50_000)));
+}
+
+/// The line's style sets its width, 1 to 10 pt; its dash style dots or dashes it. Values no probe
+/// showed are a 1 pt solid line.
+#[test]
+fn lines_keep_their_width_and_dashes() {
+    let bx = [0, 0, 576, 576];
+    let styles = [0u8, 1, 2, 3, 4, 5, 6, 0xFF];
+    let p = deck_of(styles.iter().map(|&style| autoshape(-3, 0, bx, 0, Format { style, ..PLAIN })).collect(), &[]);
+    let widths: Vec<_> = p.slides[0].shapes.iter().map(|s| s.line.as_ref().and_then(|l| l.width)).collect();
+    assert_eq!(widths, [1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 1.0, 1.0].map(Some));
+
+    let dashes = [0u8, 1, 2, 3, 4, 5, 0xFF];
+    let mut objects: Vec<_> = dashes.iter().map(|&dash| autoshape(-3, 0, bx, 0, Format { dash, ..PLAIN })).collect();
+    objects.push(line_95([0, 0, 576, 0], Some(Format { dash: 2, style: 3, ..PLAIN })));
+    let p = deck_of(objects, &[]);
+    let got: Vec<_> = p.slides[0].shapes.iter().map(|s| s.line.as_ref().and_then(|l| l.dash.clone())).collect();
+    let preset = |n: &str| Some(craft_pptx::style::Dash::Preset { name: n.into() });
+    assert_eq!(got, [None, preset("sysDot"), preset("dash"), preset("lgDash"), preset("dashDot"), None, None, preset("dash")]);
+    let line = p.slides[0].shapes[7].line.clone().unwrap();
+    assert_eq!((line.width, line.fill), (Some(6.0), Some(Fill::solid(rgb(0, 0, 0)))));
+}
+
+/// A shadow is in its own colour at +30: an RGB, or a slot of the scheme (slot 2, the shadow
+/// colour, by default).
+#[test]
+fn shadows_keep_their_colour() {
+    let bx = [0, 0, 576, 576];
+    let mut spec = SlideSpec::new(0x100, 16);
+    spec.scheme[2] = 0x445566;
+    spec.follow_scheme = false;
+    spec.objects = vec![
+        autoshape(-3, 0, bx, 0, Format { shadow: Some([0xFF, 0, 0, 0xFE]), ..PLAIN }),
+        autoshape(-3, 0, bx, 0, Format { shadow: Some([0, 0, 0, 2]), ..PLAIN }),
+        autoshape(-3, 0, bx, 0, Format { shadow: Some([0, 0, 0, 200]), fill: None, line: None, ..PLAIN }),
+    ];
+    let p = deck(&[spec]);
+    let s = &p.slides[0].shapes;
+    let colours: Vec<_> = s.iter().map(|s| s.effects.as_ref().and_then(|e| e.outer_shadow.as_ref()).map(|sh| sh.color.clone())).collect();
+    assert_eq!(colours, [Some(rgb(0xFF, 0, 0)), Some(rgb(0x44, 0x55, 0x66))], "a shadow of no slot draws nothing");
+}
+
+/// A line's 3007 atom gives its start (DrawingML's head) and end (tail) arrowheads: 4 a small
+/// swept-back head, 1 a larger one; other values none. A cut atom keeps what is there.
+#[test]
+fn lines_keep_their_arrowheads() {
+    let ends = [0, 0, 1152, 0];
+    let cases: [[u8; 2]; 7] = [[0, 0], [0, 4], [4, 0], [4, 4], [0, 1], [1, 9], [7, 0xFF]];
+    let mut objects: Vec<_> = cases.iter().map(|&h| arrow_line(ends, h, Some(PLAIN))).collect();
+    objects.push(arrow_line(ends, [4, 4], None));
+    objects.push(container(rt::LINE, 0x13, &[rec(rt::LINE_ATOM, 0, 0, &le32(&[0, 0, 8, 8])), rec(rt::ARROWHEADS, 0, 0, &[4]), format(PLAIN)]));
+    let p = deck_of(objects, &[]);
+    let end = |kind: &str, size: &str| Some(craft_pptx::style::LineEnd { kind: kind.into(), w: size.into(), len: size.into() });
+    let (none, stealth, big) = (None, end("stealth", "med"), end("triangle", "lg"));
+    let got: Vec<_> = p.slides[0].shapes.iter().map(|s| s.line.as_ref().map(|l| (l.head.clone(), l.tail.clone())).unwrap()).collect();
+    assert_eq!(
+        got,
+        [
+            (none.clone(), none.clone()),
+            (none.clone(), stealth.clone()),
+            (stealth.clone(), none.clone()),
+            (stealth.clone(), stealth.clone()),
+            (none.clone(), big.clone()),
+            (big, none.clone()),
+            (none.clone(), none.clone()),
+            (stealth.clone(), stealth.clone()),
+            (stealth, none),
+        ]
+    );
+}
+
+/// Hostile angles, flips and line bytes never panic, and every angle is finite and in 0..360.
+#[test]
+fn hostile_angles_never_panic() {
+    let bx = [i32::MIN, i32::MIN, i32::MAX, i32::MAX];
+    let mut objects = vec![];
+    for (drawn, turn) in [(i32::MIN, i32::MAX), (i32::MAX, i32::MIN), (0, i32::MIN), (i32::MAX, i32::MAX), (-1, 1)] {
+        objects.push(drawn_shape(8, i32::MAX, bx, drawn, Format { turn, flips: 0xFF, style: 0x80, dash: 0x80, ..PLAIN }));
+    }
+    objects.push(arrow_line([i32::MIN, 0, i32::MAX, 0], [0xFF, 0x80], Some(Format { style: 0xFF, dash: 0xFF, ..PLAIN })));
+    let p = deck_of(objects, &[]);
+    assert_eq!(p.slides[0].shapes.len(), 6);
+    for s in &p.slides[0].shapes {
+        let x = s.xfrm.unwrap();
+        assert!([x.x, x.y, x.w, x.h].iter().all(|v| v.is_finite()));
+        assert!((0.0..360.0).contains(&x.rot), "{}", x.rot);
+    }
+}
+
+/// The text of a drawn shape and of a freeform keeps its anchoring, wrap, spacing and justified
+/// alignment, as a text box's does.
+/// PowerPoint 95 lays a shape's text out in the box the geometry holds, turned by the text's own
+/// angle (4003 +16): a shape turned a quarter before its text was typed holds its box turned and
+/// draws its text upright (`wrap-before`, `rot90arrowtext`), one turned on to 120° after that draws
+/// it at the 30° its geometry holds (`wrap-mix`), and one turned after its text was typed turns
+/// its text with it (`wrap-after`). The insets stay on the held box's edges, as PowerPoint lays
+/// out `upright` text. A balloon's box is its body, so the inset at its bottom is measured from
+/// the body (`balloontext`).
+#[test]
+fn text_in_a_turned_box_keeps_its_own_angle() {
+    // A text rectangle `insets` (left, top, right, bottom, in master units) inside `bx`, drawn at
+    // `angle` (sixteenths of a degree, counter-clockwise).
+    let text_in = |[l, t, r, b]: [i32; 4], [il, it, ir, ib]: [i32; 4], angle: i32| {
+        let mut t = text(b"Hi", &[plain(3)], &[para_run(3, false, 0, 0, 0)], 1, [l + il, t + it, r - ir, b - ib], BODY);
+        let at = t.windows(4).position(|w| w == 4003u32.to_le_bytes()).unwrap() + 16 + 16;
+        t[at..at + 4].copy_from_slice(&angle.to_le_bytes());
+        t
+    };
+    let shape = |code: i32, bx: [i32; 4], drawn: i32, turn: i32, insets: [i32; 4]| {
+        container(rt::SHAPE, 0x13, &[coded_geometry(code as u32, 1800, bx, drawn), format(Format { turn, ..PLAIN }), text_in(bx, insets, drawn)])
+    };
+    let (tall, wide) = ([-288, -576, 288, 576], [-576, -288, 576, 288]);
+    let p = deck_of(
+        vec![
+            // A rectangle turned a quarter counter-clockwise before its text: its box held turned.
+            shape(-3, tall, 0, 1440, [66, 37, 66, 37]),
+            // The same turned on to 120°: the geometry holds the 30° left over.
+            shape(-3, tall, 480, 1920, [66, 37, 66, 37]),
+            // An up arrow: a right arrow turned a quarter, its head at the held box's top.
+            shape(9 | 0x1000, tall, 0, 0, [209, 329, 208, 37]),
+            // Turned after its text: the geometry holds the box unturned and the whole angle.
+            shape(-3, wide, 1440, 1440, [66, 37, 66, 37]),
+            // A balloon in a 144 pt square: its body is the top 120 pt.
+            shape(13, [-576, -576, 576, 576], 0, 0, [121, 91, 121, 307]),
+        ],
+        &[],
+    );
+    let got: Vec<_> = p.slides[0]
+        .shapes
+        .iter()
+        .map(|s| {
+            let b = &body_of(s).body;
+            (s.xfrm.unwrap().rot, b.upright, b.rot, (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap()))
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (270.0, Some(true), None, (8.25, 4.625, 8.25, 4.625)),
+            (240.0, Some(true), Some(330.0), (8.25, 4.625, 8.25, 4.625)),
+            (270.0, Some(true), None, (26.125, 41.125, 26.0, 4.625)),
+            (270.0, None, None, (8.25, 4.625, 8.25, 4.625)),
+            (0.0, None, None, (15.125, 11.375, 15.125, 14.375)),
+        ]
+    );
+    // A mirrored trapezoid (orientation bits 0x40) takes a half-turn as its own outline; its text,
+    // at its own angle of 0, stays upright rather than turning with it.
+    let p = deck_of(vec![shape(4 | 0x4000, wide, 0, 0, [66, 37, 66, 37])], &[]);
+    let (x, b) = (p.slides[0].shapes[0].xfrm.unwrap(), &body_of(&p.slides[0].shapes[0]).body);
+    assert_eq!((x.rot, x.flip_h, b.upright, b.rot), (180.0, false, Some(true), None));
+    // A balloon turned a quarter counter-clockwise: its body is cut from the shape's bottom, the
+    // held box's right, where its tail is.
+    let p = deck_of(vec![shape(13 | 0x1000, [-576, -576, 576, 576], 0, 0, [91, 121, 307, 121])], &[]);
+    let b = &body_of(&p.slides[0].shapes[0]).body;
+    assert_eq!((b.upright, b.inset_l, b.inset_t, b.inset_r, b.inset_b), (Some(true), Some(11.375), Some(15.125), Some(14.375), Some(15.125)));
+}
+
+#[test]
+fn drawn_shapes_text_keeps_its_anchoring_and_spacing() {
+    let bx = [-576, -576, 576, 576];
+    let t = || text_flagged(b"A", &[plain(2)], &[spaced_run(2, false, 0, 3, 0, [150, -12, 50])], 1, bx, BODY, 1, 0x13);
+    let ellipse = container(rt::SHAPE, 0x13, &[coded_geometry(2, 0, bx, 0), format(PLAIN), t()]);
+    let square = [(-576, -576), (576, -576), (576, 576), (-576, 576)];
+    let freeform =
+        container(rt::FREEFORM, 0x13, &[freeform_atom(bx, 4, true), rec(rt::ARROWHEADS, 0, 0, &[0, 0]), format(PLAIN), points_atom(4, &square), t()]);
+    let p = deck_of(vec![ellipse, freeform], &[]);
+    let shapes = &p.slides[0].shapes;
+    assert_eq!(shapes.len(), 2);
+    for s in shapes {
+        assert!(!s.text_box, "{}", s.name);
+        let b = body_of(s);
+        assert_eq!((b.body.anchor, b.body.anchor_ctr, b.body.wrap), (Some(Anchor::Middle), Some(false), Some(false)), "{}", s.name);
+        let para = &b.paragraphs[0].props;
+        assert_eq!(para.align, Some(Align::Justify), "{}", s.name);
+        assert_eq!(
+            (para.line_spacing, para.space_before, para.space_after),
+            (Some(Spacing::Pct(1.5)), Some(Spacing::Pts(12.0)), Some(Spacing::Pct(0.5))),
+            "{}",
+            s.name
+        );
+    }
+}
+
+/// A freeform's 3017 atom: its box twice, the point count, and the closed flag in the low byte
+/// of the last word, with something else above it.
+fn freeform_atom(bx: [i32; 4], count: u32, closed: bool) -> Vec<u8> {
+    let mut b: Vec<u8> = bx.iter().chain(&bx).flat_map(|v| v.to_le_bytes()).collect();
+    b.extend_from_slice(&count.to_le_bytes());
+    b.extend_from_slice(&[u8::from(closed), 0xAD, 0xB3, 0x02]);
+    rec(rt::FREEFORM_ATOM, 0, 0, &b)
+}
+
+/// A 3035 atom: `count`, then the points.
+fn points_atom(count: u16, points: &[(i32, i32)]) -> Vec<u8> {
+    let mut b = count.to_le_bytes().to_vec();
+    b.extend(points.iter().flat_map(|(x, y)| x.to_le_bytes().into_iter().chain(y.to_le_bytes())));
+    rec(rt::POINTS, NONE, 0x1D, &b)
+}
+
+/// A freeform (3016) in `bx` through `points`, closed or open, with its arrowheads and format.
+fn freeform_95(bx: [i32; 4], points: &[(i32, i32)], closed: bool, heads: [u8; 2], f: Option<Format>) -> Vec<u8> {
+    let mut kids = vec![freeform_atom(bx, points.len() as u32, closed), rec(rt::ARROWHEADS, 0, 0, &heads)];
+    kids.extend(f.map(format));
+    kids.push(points_atom(points.len() as u16, points));
+    container(rt::FREEFORM, 0x13, &kids)
+}
+
+/// A group (3001) of `members`.
+fn group_95(members: &[Vec<u8>]) -> Vec<u8> {
+    let mut list = vec![rec(2001, 0, 0, &(members.len() as u32).to_le_bytes())];
+    list.extend_from_slice(members);
+    container(rt::GROUP, 0x13, &[rec(3002, 0, 0, &[0xD9, 0x8A, 0x06, 0x00]), container(rt::LIST, 0xF, &list)])
+}
+
+fn path_of(s: &Shape) -> (f64, f64, &str) {
+    let Geom::Custom { paths } = &s.geom else { panic!("{} is not a path", s.name) };
+    (paths[0].w, paths[0].h, &paths[0].d)
+}
+
+fn group_members(s: &Shape) -> &[Shape] {
+    let craft_pptx::ShapeKind::Group { children, child } = &s.kind else { panic!("{} is not a group", s.name) };
+    assert_eq!(Some(*child), s.xfrm, "a group's child space is its own box");
+    children
+}
+
+/// The probes' open triangle and closed square, in master units from the slide's centre.
+const TRIANGLE_BOX: [i32; 4] = [-2304, -1584, -1152, -432];
+const TRIANGLE: [(i32, i32); 3] = [(-2304, -1584), (-1152, -1584), (-1728, -432)];
+const SQUARE: [(i32, i32); 4] = [(-2304, -1584), (-1152, -1584), (-1152, -432), (-2304, -432)];
+
+/// A freeform is a path through its points in its box: open, unfilled and with its arrowheads;
+/// closed, filled and without them.
+#[test]
+fn freeforms_are_paths() {
+    let open = Format { fill: None, ..PLAIN };
+    let p = deck_of(
+        vec![
+            freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [0, 4], Some(open)),
+            freeform_95(TRIANGLE_BOX, &SQUARE, true, [0, 4], Some(PLAIN)),
+            freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [1, 0], None),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 3);
+    for f in s {
+        assert!(f.name.starts_with("Freeform"), "{}", f.name);
+        assert_eq!(boxed(f), (72.0, 72.0, 144.0, 144.0));
+    }
+    assert_eq!(path_of(&s[0]), (1152.0, 1152.0, "M 0 0 L 1152 0 L 576 1152"));
+    assert_eq!(s[0].fill, Some(Fill::None));
+    let line = s[0].line.clone().unwrap();
+    assert_eq!((line.fill, line.head, line.tail.map(|t| t.kind)), (Some(Fill::solid(rgb(0, 0, 0))), None, Some("stealth".into())));
+
+    assert_eq!(path_of(&s[1]), (1152.0, 1152.0, "M 0 0 L 1152 0 L 1152 1152 L 0 1152 Z"));
+    assert_eq!(s[1].fill, Some(Fill::solid(rgb(0x00, 0xCC, 0x99))));
+    let line = s[1].line.clone().unwrap();
+    assert_eq!((line.head, line.tail), (None, None), "a closed freeform has no ends");
+
+    // Without a format: 1 pt in the scheme's text and lines colour, unfilled.
+    assert_eq!(s[2].fill, Some(Fill::None));
+    let line = s[2].line.clone().unwrap();
+    assert_eq!((line.width, line.head.map(|h| h.kind)), (Some(1.0), Some("triangle".into())));
+}
+
+/// A freeform reads no more points than [`super::MAX_POINTS`], nor than its record holds whatever
+/// its count says; one of fewer than two points draws nothing, a closed flag on two points draws
+/// it open, and a flat box still has a path space.
+#[test]
+fn freeform_points_are_bounded() {
+    let many: Vec<(i32, i32)> = (0..10_000).map(|i| (i % 100, i / 100)).collect();
+    let bx = [0, 0, 100, 100];
+    let with_count = |count: u16, points: &[(i32, i32)]| {
+        container(rt::FREEFORM, 0x13, &[freeform_atom(bx, u32::from(count), true), format(PLAIN), points_atom(count, points)])
+    };
+    let p = deck_of(
+        vec![
+            freeform_95(bx, &many, false, [0, 0], Some(PLAIN)),
+            with_count(9, &TRIANGLE),
+            with_count(2, &SQUARE),
+            with_count(0, &SQUARE),
+            freeform_95(bx, &[(5, 5)], true, [0, 0], Some(PLAIN)),
+            freeform_95(bx, &[], true, [0, 0], Some(PLAIN)),
+            container(rt::FREEFORM, 0x13, &[freeform_atom(bx, 3, true), format(PLAIN)]),
+            freeform_95([0, 0, 0, 576], &[(0, 0), (0, 576)], false, [0, 0], Some(PLAIN)),
+        ],
+        &[],
+    );
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 4, "freeforms of fewer than two points are left out");
+    let d = path_of(&s[0]).2;
+    assert_eq!(d.matches('M').count() + d.matches('L').count(), super::MAX_POINTS);
+    assert_eq!(path_of(&s[1]).2, "M -2304 -1584 L -1152 -1584 L -1728 -432 Z", "the count is cut to the points held");
+    assert_eq!(path_of(&s[2]).2, "M -2304 -1584 L -1152 -1584", "two points are drawn open");
+    assert_eq!(path_of(&s[3]), (1.0, 576.0, "M 0 0 L 0 576"));
+    assert_eq!(boxed(&s[3]), (360.0, 270.0, 0.0, 72.0));
+}
+
+/// A group is one shape spanning its members, whose child space is its own box, so its members,
+/// shapes, lines and freeforms alike, stay where they would be ungrouped.
+#[test]
+fn groups_span_their_members() {
+    let red = Format { fill: Some([0xFF, 0, 0, 0xFE]), ..PLAIN };
+    let members = [
+        autoshape(-3, 0, [-2304, -1584, -1728, -1008], 0, red),
+        line_95([-1440, -1296, -864, -1008], Some(PLAIN)),
+        freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [0, 0], Some(PLAIN)),
+    ];
+    let ungrouped = deck_of(members.to_vec(), &[]);
+    let p = deck_of(vec![group_95(&members)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 1);
+    assert!(s[0].name.starts_with("Group"));
+    let m = group_members(&s[0]);
+    assert_eq!(m.iter().map(boxed).collect::<Vec<_>>(), ungrouped.slides[0].shapes.iter().map(boxed).collect::<Vec<_>>());
+    assert_eq!(boxed(&m[0]), (72.0, 72.0, 72.0, 72.0));
+    assert_eq!(boxed(&m[1]), (180.0, 108.0, 72.0, 36.0));
+    assert_eq!(boxed(&s[0]), (72.0, 72.0, 180.0, 144.0));
+    assert_eq!((preset_of(&m[0]).0, preset_of(&m[1]).0, preset_of(&m[2]).0), ("rect", "line", "custom"));
+    assert_eq!(m[0].fill, Some(Fill::solid(rgb(0xFF, 0, 0))));
+
+    // A group of nothing drawn is left out, and one in a master is the master's shape.
+    let p = deck_of(vec![group_95(&[]), group_95(&[autoshape(-3, 0, [0, 0, 8, 8], 0, Format { line: None, fill: None, ..PLAIN })])], &[]);
+    assert!(p.slides[0].shapes.is_empty());
+    let p = deck_of(vec![], &[group_95(&members)]);
+    assert_eq!(p.masters[0].shapes.iter().filter(|s| matches!(s.kind, craft_pptx::ShapeKind::Group { .. })).count(), 1);
+}
+
+/// A group in a group: the probe's rectangle and ellipse, grouped with a triangle.
+#[test]
+fn groups_nest() {
+    let inner = group_95(&[autoshape(-3, 0, [-2304, -1584, -1728, -1008], 0, PLAIN), autoshape(-1, 0, [-1440, -1296, -864, -1008], 0, PLAIN)]);
+    let p = deck_of(vec![group_95(&[inner, autoshape(1, 10800, [-576, -1584, 0, -1008], 0, PLAIN)])], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!(s.len(), 1);
+    let outer = group_members(&s[0]);
+    assert_eq!(boxed(&s[0]), (72.0, 72.0, 288.0, 72.0));
+    assert_eq!(outer.len(), 2);
+    let inner = group_members(&outer[0]);
+    assert_eq!(boxed(&outer[0]), (72.0, 72.0, 180.0, 72.0));
+    assert_eq!(inner.iter().map(|s| preset_of(s).0).collect::<Vec<_>>(), ["rect", "ellipse"]);
+    assert_eq!((preset_of(&outer[1]).0, boxed(&outer[1])), ("triangle", (288.0, 72.0, 72.0, 72.0)));
+}
+
+/// Groups nested 1000 deep read [`super::MAX_DEPTH`] of them and leave the rest out, without
+/// recursing further, on a stack of 1 MiB (a Windows main thread's); members count towards the
+/// page's object cap.
+#[test]
+fn groups_are_bounded() {
+    let rect = autoshape(-3, 0, [0, 0, 576, 576], 0, PLAIN);
+    let mut g = group_95(std::slice::from_ref(&rect));
+    for _ in 1..1000 {
+        g = group_95(&[rect.clone(), g]);
+    }
+    let p = std::thread::Builder::new().stack_size(1 << 20).spawn(move || deck_of(vec![g], &[])).unwrap().join().unwrap();
+    let (mut depth, mut s) = (0, &p.slides[0].shapes[0]);
+    loop {
+        depth += 1;
+        let m = group_members(s);
+        match m.iter().find(|c| matches!(c.kind, craft_pptx::ShapeKind::Group { .. })) {
+            Some(inner) => s = inner,
+            None => break,
+        }
+    }
+    assert_eq!(depth, super::MAX_DEPTH);
+
+    let line = line_95([0, 0, 8, 8], None);
+    let many = vec![line; super::MAX_OBJECTS + 10];
+    let p = deck_of(vec![group_95(&many), line_95([0, 0, 8, 8], None)], &[]);
+    let s = &p.slides[0].shapes;
+    assert_eq!((s.len(), group_members(&s[0]).len()), (1, super::MAX_OBJECTS - 1));
+}
+
+/// Damaged freeforms and groups never panic: every word of a page of them set to hostile values,
+/// or the page cut anywhere.
+#[test]
+fn hostile_freeforms_and_groups_never_panic() {
+    let huge = [i32::MIN, i32::MAX, i32::MAX, i32::MIN];
+    let p = deck_of(vec![freeform_95(huge, &[(i32::MIN, i32::MAX), (i32::MAX, i32::MIN), (0, 0)], true, [0xFF, 0xFF], Some(PLAIN))], &[]);
+    let (w, h, d) = path_of(&p.slides[0].shapes[0]);
+    assert!(w.is_finite() && h.is_finite() && !d.contains("inf") && !d.contains("NaN"));
+
+    let mut s = SlideSpec::new(0x100, 0);
+    s.objects = vec![group_95(&[
+        freeform_95(TRIANGLE_BOX, &TRIANGLE, false, [4, 1], Some(PLAIN)),
+        group_95(&[line_95([0, 0, 576, 288], Some(PLAIN)), autoshape(-1, 0, [0, 0, 576, 576], 0, PLAIN)]),
+    ])];
+    let stream = stream_of(
+        document_atom(5760, 4320, 1),
+        &[slide(&s)],
+        &[master_with(MASTER, DEFAULT, [0; 4], &[group_95(&[freeform_95(TRIANGLE_BOX, &SQUARE, true, [0, 0], None)])])],
+    );
+    for at in (0..stream.len() - 4).step_by(4) {
+        for v in [0u32, 1, 2, 0xBB8, 0xBC8, 0x7D0, 0x7FFF_FFFF, 0xFFFF_FFFF] {
+            let mut d = stream.clone();
+            d[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            let _ = import(&d);
+        }
+    }
+    for cut in 0..stream.len() {
+        let _ = import(&stream[..cut]);
+    }
+}
+
+/// The presets of the object model's shape types 1 to 12, as PowerPoint 95 rendered them ("custom" for
+/// the trapezoid, which has its own outline).
+const SHAPE_PRESETS: [&str; 12] =
+    ["rect", "roundRect", "ellipse", "diamond", "triangle", "rtTriangle", "parallelogram", "custom", "hexagon", "octagon", "plus", "star5"];
+
 /// What one PowerPoint 95 sample shows, by its case name ([`powerpoint_95_samples`]).
 fn check_sample(name: &str, p: &Presentation) {
     // Every master places the defaults' title and body, and the footer row on every layout.
@@ -1167,8 +2056,438 @@ fn check_text_extras(name: &str, p: &Presentation) {
             // The automation reported 1295, 1367.5, 4610 × 720 twips.
             assert_eq!(boxed(s), (64.75, 68.375, 230.5, 36.0));
         }
+        _ => check_shape_sample(name, p),
+    }
+}
+
+/// The text of the PowerPoint 95 samples with text in a turned shape or a balloon: its insets and
+/// whether it is drawn upright; false for any other sample.
+fn check_text_frame_sample(name: &str, shapes: &[Shape]) -> bool {
+    // AddShape(n, 1440, 1440, 2880, 1440) in twips.
+    let wide = (72.0, 72.0, 144.0, 72.0);
+    let insets = |s: &Shape| {
+        let b = &body_of(s).body;
+        (b.inset_l.unwrap(), b.inset_t.unwrap(), b.inset_r.unwrap(), b.inset_b.unwrap())
+    };
+    let upright = |s: &Shape| (body_of(s).body.upright, body_of(s).body.rot);
+    match name {
+        // A rectangle with text, then the same turned 90° after its text was typed: PowerPoint 95
+        // keeps the box unturned and the text turns with it (4003 +16), insets 66 × 37 units.
+        "recttext" | "rot90text" => {
+            assert_eq!((boxed(&shapes[0]), insets(&shapes[0])), (wide, (8.25, 4.625, 8.25, 4.625)), "{name}");
+        }
+        // Turned 90° before its text was typed: the box and the text rectangle are held turned and
+        // the text is drawn upright, its insets on the held box's edges.
+        "rot90thentext" => {
+            let x = shapes[0].xfrm.unwrap();
+            assert_eq!((x.rot, x.w, x.h), (270.0, 144.0, 72.0));
+            assert_eq!((upright(&shapes[0]), insets(&shapes[0])), ((Some(true), None), (8.25, 4.625, 8.25, 4.625)));
+        }
+        // An up arrow with text: a right arrow turned a quarter, its head at the held box's top
+        // (329 units in), its text upright.
+        "rot90arrowtext" | "wrap-arrow" => {
+            assert_eq!((upright(&shapes[0]), insets(&shapes[0])), ((Some(true), None), (26.125, 41.125, 26.0, 4.625)), "{name}");
+        }
+        // Wrapping text (the Text Anchor dialog's word wrap): drawn upright in the held box when
+        // turned before it was typed, turned with the shape when turned after, and at the 30° the
+        // geometry holds when turned a quarter, typed, then turned on to 120° (`rotmix2` likewise).
+        // Turned 30°, typed, then on to 90° (`rotmix`), the geometry holds the box unturned and the
+        // whole angle, and the text turns with the shape.
+        "wrap-none" | "wrap-after" | "rotmix" | "rot30text" => assert_eq!(upright(&shapes[0]), (None, None), "{name}"),
+        "wrap-before" => assert_eq!(upright(&shapes[0]), (Some(true), None)),
+        // Trapezoids with text, turned or flipped before or after it was typed: the shape ends at the
+        // text's own angle, upright or upside down as PowerPoint 95 drew it, so nothing more is set.
+        "traptext" | "trap180before" | "traptexthflip" | "traptextvflip" | "traptexthflipafter" | "trap180after" | "traptextvflipafter" => {
+            let rot = if matches!(name, "trap180after" | "traptextvflipafter") { 180.0 } else { 0.0 };
+            assert_eq!((shapes[0].xfrm.unwrap().rot, upright(&shapes[0])), (rot, (None, None)), "{name}");
+        }
+        "wrap-mix" | "rotmix2" => assert_eq!(upright(&shapes[0]), (Some(true), Some(330.0)), "{name}"),
+        // A balloon's box is its body (the square's top 120 of 144 pt); its text's bottom edge,
+        // 307 units above the square's, is 14.375 pt above the body's.
+        "balloontext" => {
+            assert_eq!(boxed(&shapes[0]), (288.0, 198.0, 144.0, 120.0));
+            assert_eq!(insets(&shapes[0]), (15.125, 11.375, 15.125, 14.375));
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// What one PowerPoint 95 shape sample shows, by its case name.
+fn check_shape_sample(name: &str, p: &Presentation) {
+    // Every sample comes here; one with no slide has no shapes to check.
+    let Some(shapes) = p.slides.first().map(|s| &s.shapes) else { return };
+    let flips = |s: &Shape| (s.xfrm.unwrap().flip_h, s.xfrm.unwrap().flip_v);
+    // AddShape(n, 5760, 3960, 2880, 2880) in twips: 2 in square at 4 in, 2.75 in.
+    let square = (288.0, 198.0, 144.0, 144.0);
+    // AddShape(n, 1440, 1440, 2880, 1440) in twips.
+    let wide = (72.0, 72.0, 144.0, 72.0);
+    if check_text_frame_sample(name, shapes) {
+        return;
+    }
+    match name {
+        "base" => assert!(shapes.is_empty()),
+        "shapes" => {
+            let names: Vec<_> = shapes.iter().map(|s| preset_of(s).0).collect();
+            assert_eq!(names, SHAPE_PRESETS);
+        }
+        _ if name.strip_prefix("shape").and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| (1..=12).contains(&n)) => {
+            let n: usize = name[5..].parse().unwrap();
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, SHAPE_PRESETS[n - 1]), "{name}");
+            if n == 8 {
+                // Wide at the top, as PowerPoint 95 drew it, with no flip of its own.
+                assert_eq!(s.geom, trapezoid_95(5400));
+            }
+            assert_eq!(flips(s), (false, false), "{name}");
+            assert_eq!(boxed(s), square, "{name}");
+        }
+        _ if name.strip_prefix("shape").and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| (13..=24).contains(&n)) => {
+            let n: usize = name[5..].parse().unwrap();
+            let s = &shapes[0];
+            let kind = ["homePlate", "cube", "wedgeRoundRectCallout", "star16"]
+                .get(n.saturating_sub(21))
+                .filter(|_| n > 20)
+                .copied()
+                .unwrap_or("rightArrow");
+            assert_eq!((shapes.len(), preset_of(s).0), (1, kind), "{name}");
+            // Right, up, left and down: the up arrow turned a quarter counter-clockwise, the left one
+            // mirrored, the down one turned three quarters and mirrored.
+            let (rot, flip_h) = match n {
+                14 | 18 => (270.0, false),
+                15 | 19 => (0.0, true),
+                16 | 20 => (270.0, true),
+                _ => (0.0, false),
+            };
+            assert_eq!((s.xfrm.unwrap().rot, flips(s)), (rot, (flip_h, false)), "{name}");
+            let want = if n == 23 { (288.0, 198.0, 144.0, 120.0) } else { square };
+            assert_eq!(boxed(s), want, "{name}");
+        }
+        "vflip" => {
+            // AddShape(5) is the isosceles triangle; flipped, it is drawn mirrored and turned a half.
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s), flips(s), s.xfrm.unwrap().rot), (1, "triangle", wide, (true, false), 180.0));
+        }
+        "rectvflip" | "rthflip" | "rtvflip" | "rtboth" | "rtrot" | "rtrotb" | "rthfliprot" | "trapvflip" | "traphflip" => {
+            let s = &shapes[0];
+            let kind = match name {
+                "rectvflip" => "rect",
+                "traphflip" => "custom",
+                "trapvflip" => "trapezoid",
+                _ => "rtTriangle",
+            };
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s), flips(s)), (1, kind, square, (false, false)), "{name}");
+            if kind == "custom" {
+                assert_eq!(s.geom, trapezoid_95(5400));
+            }
+            // The right triangle's flips and turns are all turns of it.
+            let rot = match name {
+                "rthflip" | "rtrot" | "rtrotb" => 270.0,
+                "rtboth" | "rthfliprot" => 180.0,
+                "rtvflip" => 90.0,
+                _ => 0.0,
+            };
+            assert_eq!(s.xfrm.unwrap().rot, rot, "{name}");
+        }
+        "rot120wide" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s), s.xfrm.unwrap().rot), (1, "rtTriangle", wide, 240.0));
+        }
+        "arrowrot30" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s), s.xfrm.unwrap().rot), (1, "rightArrow", (288.0, 198.0, 144.0, 72.0), 330.0));
+        }
+        "shadowoff1" | "shadowoff2" => {
+            let s = &shapes[0];
+            let sh = s.effects.as_ref().and_then(|e| e.outer_shadow.clone()).unwrap();
+            let (dx, dy) = (sh.dist * sh.dir.to_radians().cos(), sh.dist * sh.dir.to_radians().sin());
+            // 3 pt right and 10 pt down; 5 pt left, 2 pt up and semi-transparent.
+            let (want, semi) = if name == "shadowoff1" { ((3.0, 10.0), false) } else { ((-5.0, -2.0), true) };
+            assert!((dx - want.0).abs() < 1e-9 && (dy - want.1).abs() < 1e-9, "{name}: {dx}, {dy}");
+            assert_eq!(sh.color.mods.contains(&craft_pptx::ColorTransform::Alpha(50_000)), semi, "{name}");
+            assert_eq!((preset_of(s).0, boxed(s)), ("rect", (144.0, 144.0, 216.0, 144.0)), "{name}");
+        }
+        _ => check_drawn_sample(name, shapes),
+    }
+}
+
+/// What one PowerPoint 95 sample of a rectangle's or line's look shows, by its case name.
+fn check_drawn_sample(name: &str, shapes: &[Shape]) {
+    let flips = |s: &Shape| (s.xfrm.unwrap().flip_h, s.xfrm.unwrap().flip_v);
+    let black = rgb(0, 0, 0);
+    // AddShape(n, 1440, 1440, 2880, 1440) in twips.
+    let wide = (72.0, 72.0, 144.0, 72.0);
+    match name {
+        "rect" | "fill" | "fill2" | "linecolor" | "nofill" | "shadow" | "rotate" | "flip" | "lineoff" | "shadowcolor" | "rot90wide" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, "rect"), "{name}");
+            assert_eq!(boxed(s), wide, "{name}");
+            let fill = match name {
+                "fill" => Fill::solid(rgb(0xFF, 0, 0)),
+                "fill2" => Fill::solid(rgb(0, 0xFF, 0)),
+                "nofill" => Fill::None,
+                _ => Fill::solid(rgb(0, 0xCC, 0x99)),
+            };
+            assert_eq!(s.fill, Some(fill), "{name}");
+            let line = match name {
+                "lineoff" => craft_pptx::Line::none(),
+                "linecolor" => craft_pptx::Line::solid(rgb(0, 0, 0xFF), 1.0),
+                _ => craft_pptx::Line::solid(black.clone(), 1.0),
+            };
+            assert_eq!(s.line, Some(line), "{name}");
+            let shadow = s.effects.as_ref().and_then(|e| e.outer_shadow.as_ref()).map(|sh| sh.color.clone());
+            let want = match name {
+                // The scheme's shadow colour, and the red the object model set (BGR 255).
+                "shadow" => Some(rgb(0x96, 0x96, 0x96)),
+                "shadowcolor" => Some(rgb(0xFF, 0, 0)),
+                _ => None,
+            };
+            assert_eq!(shadow, want, "{name}");
+            // Turned counter-clockwise; a rectangle's flip doesn't change it.
+            let rot = match name {
+                "rotate" => 330.0,
+                "rot90wide" => 270.0,
+                _ => 0.0,
+            };
+            assert_eq!((s.xfrm.unwrap().rot, flips(s)), (rot, (false, false)), "{name}");
+        }
+        _ if name.starts_with("lstyle") || name.starts_with("dash") => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s)), (1, "rect", wide), "{name}");
+            let line = s.line.clone().unwrap();
+            let (width, dash) = match name {
+                "lstyle2" => (2.0, None),
+                "lstyle3" => (4.0, None),
+                "lstyle4" => (6.0, None),
+                "lstyle5" => (8.0, None),
+                "lstyle6" => (10.0, None),
+                "dash1" => (1.0, Some("sysDot")),
+                "dash2" => (1.0, Some("dash")),
+                "dash3" => (1.0, Some("lgDash")),
+                "dash4" => (1.0, Some("dashDot")),
+                _ => return,
+            };
+            let dash = dash.map(|n| craft_pptx::style::Dash::Preset { name: n.into() });
+            assert_eq!((line.width, line.dash, line.fill), (Some(width), dash, Some(Fill::solid(black))), "{name}");
+        }
+        "line" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), preset_of(s).0), (1, "line"));
+            // AddLine(1440, 1440, 4320, 2880): from 1 in, 1 in to 4 in, 3 in.
+            assert_eq!(boxed(s), (72.0, 72.0, 216.0, 144.0));
+            assert_eq!(flips(s), (false, false));
+            assert_eq!(s.line, Some(craft_pptx::Line::solid(black, 1.0)));
+        }
+        "linebase" | "arrow1" | "arrow2" | "arrow3" | "arrow4" => {
+            let s = &shapes[0];
+            // AddLine(1440, 1440, 4320, 0): 3 in across from 1 in, 1 in.
+            assert_eq!((shapes.len(), preset_of(s).0, boxed(s), flips(s)), (1, "line", (72.0, 72.0, 216.0, 0.0), (false, false)), "{name}");
+            let end = |kind: &str, size: &str| Some(craft_pptx::style::LineEnd { kind: kind.into(), w: size.into(), len: size.into() });
+            let stealth = end("stealth", "med");
+            let want = match name {
+                "arrow1" => (None, stealth),
+                "arrow2" => (stealth, None),
+                "arrow3" => (stealth.clone(), stealth),
+                "arrow4" => (None, end("triangle", "lg")),
+                _ => (None, None),
+            };
+            let line = s.line.clone().unwrap();
+            assert_eq!((line.head, line.tail), want, "{name}");
+            assert_eq!((line.width, line.fill), (Some(1.0), Some(Fill::solid(black))), "{name}");
+        }
+        _ => check_object_sample(name, shapes),
+    }
+}
+
+/// What one PowerPoint 95 sample of a freeform or group shows, by its case name.
+fn check_object_sample(name: &str, shapes: &[Shape]) {
+    // AddShape(1, 1440, 1440, 1440, 1440) and AddShape(3, 3600, 2160, 1440, 720) in twips, and the
+    // third, AddShape(5, 5760, 1440, 1440, 1440): where they were before they were grouped.
+    let (rect, ellipse, triangle) = ((72.0, 72.0, 72.0, 72.0), (180.0, 108.0, 72.0, 36.0), (288.0, 72.0, 72.0, 72.0));
+    match name {
+        "freeform" | "freeform-closed" | "freeform-filled" => {
+            let s = &shapes[0];
+            assert_eq!((shapes.len(), boxed(s)), (1, (72.0, 72.0, 144.0, 144.0)), "{name}");
+            let (fill, d) = if name == "freeform" {
+                (Fill::None, "M 0 0 L 1152 0 L 576 1152")
+            } else {
+                (Fill::solid(rgb(0x00, 0xCC, 0x99)), "M 0 0 L 1152 0 L 1152 1152 L 0 1152 Z")
+            };
+            assert_eq!((path_of(s), s.fill.clone()), ((1152.0, 1152.0, d), Some(fill)), "{name}");
+            assert_eq!(s.line.as_ref().and_then(|l| l.fill.clone()), Some(Fill::solid(rgb(0, 0, 0))), "{name}");
+        }
+        "group" | "group-rot" => {
+            assert_eq!(shapes.len(), 1, "{name}");
+            let m = group_members(&shapes[0]);
+            assert_eq!(m.iter().map(|s| (preset_of(s).0, boxed(s))).collect::<Vec<_>>(), [("rect", rect), ("ellipse", ellipse)], "{name}");
+            assert_eq!(m[0].fill, Some(Fill::solid(rgb(0xFF, 0, 0))), "{name}");
+            assert_eq!((boxed(&shapes[0]), shapes[0].xfrm.unwrap().rot), ((72.0, 72.0, 180.0, 72.0), 0.0), "{name}");
+        }
+        "group-nested" => {
+            assert_eq!(shapes.len(), 1);
+            let outer = group_members(&shapes[0]);
+            assert_eq!((outer.len(), boxed(&shapes[0])), (2, (72.0, 72.0, 288.0, 72.0)));
+            let inner = group_members(&outer[0]);
+            assert_eq!(inner.iter().map(boxed).collect::<Vec<_>>(), [rect, ellipse]);
+            assert_eq!((preset_of(&outer[1]).0, boxed(&outer[1])), ("triangle", triangle));
+        }
         _ => {}
     }
+}
+
+/// The polygons of a placeable WMF (its META_POLYGON records, and its META_RECTANGLE records as
+/// four corners) in points on a slide of size `slide`: the WMF PowerPoint 95 saved a slide as is in
+/// master units about the slide's centre, y down.
+fn wmf_polygons(b: &[u8], slide: craft_pptx::Size) -> Vec<Vec<(f64, f64)>> {
+    let mut polygons = vec![];
+    // The placeable header (22 bytes), then the standard one (18).
+    let mut at = 40;
+    // Each record is read only within its size (in 16-bit words), so a short one can't take its
+    // values from the next.
+    while let Some(size) = b.get(at..at + 4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) as usize) {
+        let Some(rec) = b.get(at..at + size * 2).filter(|_| size >= 3) else { break };
+        let word = |i: usize| rec.get(i..i + 2).map(|w| i16::from_le_bytes([w[0], w[1]]));
+        let pt = |x: i16, y: i16| (f64::from(x) / 8.0 + slide.width / 2.0, f64::from(y) / 8.0 + slide.height / 2.0);
+        match word(4).map(|f| f as u16) {
+            // META_POLYGON: a count, then that many points; one whose points don't fit is skipped.
+            Some(0x0324) => {
+                let n = word(6).unwrap_or(0).max(0) as usize;
+                if 8 + 4 * n <= rec.len() {
+                    polygons.push((0..n).filter_map(|i| Some(pt(word(8 + 4 * i)?, word(10 + 4 * i)?))).collect());
+                }
+            }
+            // META_RECTANGLE: bottom, right, top and left, in that order.
+            Some(0x041B) => {
+                if let (Some(bottom), Some(right), Some(top), Some(left)) = (word(6), word(8), word(10), word(12)) {
+                    polygons.push(vec![pt(left, top), pt(right, top), pt(right, bottom), pt(left, bottom)]);
+                }
+            }
+            _ => {}
+        }
+        at += size * 2;
+    }
+    polygons
+}
+
+/// The corners of a shape's outline on the slide, for the presets whose outline is straight lines
+/// (and the trapezoid's own outline): each flipped about the box's centre, then turned clockwise
+/// about it, as DrawingML draws it. `None` for an outline with curves.
+fn outline_corners(s: &Shape) -> Option<Vec<(f64, f64)>> {
+    const STRAIGHT: [&str; 6] = ["rect", "rtTriangle", "triangle", "rightArrow", "trapezoid", "homePlate"];
+    let x = s.xfrm?;
+    let local: Vec<(f64, f64)> = match &s.geom {
+        Geom::Preset { name, adj } if STRAIGHT.contains(&name.as_str()) => {
+            let g = craft_drawingml::preset::build(name, x.w, x.h, adj)?;
+            g.outline().elements().iter().filter_map(|e| e.end_point()).map(|p| (p.x, p.y)).collect()
+        }
+        Geom::Custom { paths } => {
+            let p = paths.first()?;
+            let v: Vec<f64> = p.d.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+            v.as_chunks::<2>().0.iter().map(|[u, v]| (u * x.w / p.w, v * x.h / p.h)).collect()
+        }
+        _ => return None,
+    };
+    let (sin, cos) = x.rot.to_radians().sin_cos();
+    let (cx, cy) = (x.x + x.w / 2.0, x.y + x.h / 2.0);
+    Some(
+        local
+            .into_iter()
+            .map(|(u, v)| {
+                let (mut dx, mut dy) = (u - x.w / 2.0, v - x.h / 2.0);
+                if x.flip_h {
+                    dx = -dx;
+                }
+                if x.flip_v {
+                    dy = -dy;
+                }
+                (cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+            })
+            .collect(),
+    )
+}
+
+/// Whether the model's outline and the polygon PowerPoint 95 drew have the same vertices in the same
+/// order, from any vertex and in either direction. The pen is drawn inside the frame, so the
+/// polygon sits half a line width inside the outline, and its vertices are rounded to whole units.
+fn outline_matches(corners: &[(f64, f64)], polygon: &[(f64, f64)], width: f64) -> bool {
+    let tol = width / 2.0 + 1.0;
+    let same = |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() <= tol && (a.1 - b.1).abs() <= tol;
+    // Each vertex once: no repeats in a row, and no closing repeat of the first. Only a vertex
+    // repeated is dropped; the pen's tolerance is for comparing the two outlines, not for merging
+    // the close corners of a narrow one.
+    let repeat = |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
+    let ring = |v: &[(f64, f64)]| {
+        let mut out: Vec<(f64, f64)> = vec![];
+        for p in v {
+            if out.last().is_none_or(|q| !repeat(p, q)) {
+                out.push(*p);
+            }
+        }
+        if out.len() > 1 && repeat(&out[0], &out[out.len() - 1]) {
+            out.pop();
+        }
+        out
+    };
+    let (a, b) = (ring(corners), ring(polygon));
+    let n = a.len();
+    n >= 3 && b.len() == n && (0..n).any(|k| (0..n).all(|i| same(&a[i], &b[(k + i) % n])) || (0..n).all(|i| same(&a[i], &b[(k + n - i) % n])))
+}
+
+/// The outline check compares vertices in order: from any vertex, either way round, with or
+/// without a closing repeat, but a crossed contour through the same vertices is not a match.
+#[test]
+fn outlines_match_in_order() {
+    let square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)];
+    assert!(outline_matches(&square, &[(10.0, 10.0), (10.0, 0.0), (0.0, 0.0), (0.0, 10.0), (10.0, 10.0)], 1.0));
+    assert!(!outline_matches(&square, &[(0.0, 0.0), (10.0, 10.0), (10.0, 0.0), (0.0, 10.0)], 1.0));
+    assert!(!outline_matches(&square, &square[..3], 1.0));
+    // A 2 pt-wide rectangle drawn with a 1 pt pen: the drawn corners sit half a point inside, and
+    // its short edges' corners are within the tolerance of each other but stay four vertices.
+    let narrow = [(0.0, 0.0), (2.0, 0.0), (2.0, 10.0), (0.0, 10.0)];
+    assert!(outline_matches(&narrow, &[(0.5, 0.5), (1.5, 0.5), (1.5, 9.5), (0.5, 9.5)], 1.0));
+}
+
+/// The WMF reader takes each record's values from within its own size: a polygon whose points
+/// don't fit, and a rectangle cut short, are skipped rather than read from the next record.
+#[test]
+fn the_wmf_reader_stays_in_each_record() {
+    let record = |func: u16, words: &[i16]| {
+        let mut r = ((3 + words.len()) as u32).to_le_bytes().to_vec();
+        r.extend_from_slice(&func.to_le_bytes());
+        r.extend(words.iter().flat_map(|w| w.to_le_bytes()));
+        r
+    };
+    let wmf = |records: &[Vec<u8>]| {
+        let mut b = vec![0u8; 40];
+        b.extend(records.concat());
+        b.extend(record(0, &[]));
+        wmf_polygons(&b, craft_pptx::Size::new(720.0, 540.0))
+    };
+    // A polygon of 2 points that says it has 3, and a rectangle without its left.
+    assert!(wmf(&[record(0x0324, &[3, 0, 0, 8, 8]), record(0x041B, &[8, 8, 0])]).is_empty());
+    // Whole, both read.
+    let got = wmf(&[record(0x0324, &[3, 0, 0, 8, 8, 16, 0]), record(0x041B, &[8, 8, 0, 0])]);
+    assert_eq!(got, [vec![(360.0, 270.0), (361.0, 271.0), (362.0, 270.0)], vec![(360.0, 270.0), (361.0, 270.0), (361.0, 271.0), (360.0, 271.0)]]);
+}
+
+/// For a sample with a rendering beside it (`<case>.wmf`), each shape on its first slide with a
+/// straight outline matches a polygon PowerPoint 95 drew. The number of shapes checked.
+fn check_outlines(name: &str, p: &Presentation, wmf: &[u8]) -> usize {
+    let polygons = wmf_polygons(wmf, p.slide_size);
+    let Some(slide) = p.slides.first() else { return 0 };
+    let mut checked = 0;
+    for s in &slide.shapes {
+        let Some(corners) = outline_corners(s) else { continue };
+        // A dashed line is drawn dash by dash.
+        if s.line.as_ref().is_some_and(|l| l.dash.is_some()) {
+            continue;
+        }
+        let width = s.line.as_ref().and_then(|l| l.width).unwrap_or(1.0);
+        let near = polygons.iter().min_by_key(|poly| poly.len().abs_diff(corners.len()));
+        assert!(polygons.iter().any(|poly| outline_matches(&corners, poly, width)), "{name}: {corners:?} is not drawn; nearest {near:?}");
+        checked += 1;
+    }
+    checked
 }
 
 /// A file holding fewer slides than its DocumentAtom counts names the missing ones by position,
@@ -1197,12 +2516,12 @@ fn slides_the_count_says_are_missing_are_named() {
 }
 
 /// Real PowerPoint 95 files, when `CRAFT_PPT95_SAMPLES` names a directory of them (they are not in
-/// the repository). Each imports with the slide count and size its DocumentAtom gives, and nothing
-/// lost.
+/// the repository). Each imports with the slide count and size its DocumentAtom gives and nothing
+/// lost, and its shapes' outlines match the rendering PowerPoint 95 saved beside it, if any.
 #[test]
 fn powerpoint_95_samples() {
     let Some(dir) = std::env::var_os("CRAFT_PPT95_SAMPLES") else { return };
-    let mut seen = 0;
+    let (mut seen, mut outlines) = (0, 0);
     for entry in std::fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("ppt")) {
@@ -1220,8 +2539,14 @@ fn powerpoint_95_samples() {
         let side = |at: usize| f64::from(atom.u32(at).unwrap()) / 8.0;
         assert_eq!((p.slide_size.width, p.slide_size.height), (side(0), side(4)), "{name}");
         check_sample(&name, &p);
+        // The rendering is optional; one that is there but can't be read is a failure.
+        match std::fs::read(path.with_extension("wmf")) {
+            Ok(wmf) => outlines += check_outlines(&name, &p, &wmf),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("{name}.wmf: {e}"),
+        }
         seen += 1;
     }
-    eprintln!("read {seen} PowerPoint 95 samples");
+    eprintln!("read {seen} PowerPoint 95 samples, {outlines} outlines checked against their renderings");
     assert!(seen > 0);
 }
