@@ -575,15 +575,7 @@ endstream endobj
         .unwrap();
         assert_eq!(seen, 1);
         assert!(matches!(
-            separate(
-                &pdf,
-                0,
-                f32::NAN,
-                &Options::default(),
-                banded_scale,
-                BandLimit { pixels: cap, rows: None },
-                &mut |_| ControlFlow::Continue(()),
-            ),
+            separate(&pdf, 0, f32::NAN, &Options::default(), banded_scale, BandLimit { pixels: cap, rows: None }, &mut |_| ControlFlow::Continue(()),),
             Err(Error::InvalidDpi)
         ));
     }
