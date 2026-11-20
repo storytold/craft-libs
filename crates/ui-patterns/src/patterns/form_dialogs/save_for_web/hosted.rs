@@ -7,6 +7,7 @@ use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of, save_re
 use crate::contract::Bind;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::host_requests::HostRequests;
+use crate::runtime::env::Label;
 use crate::runtime::memory::SaveKey;
 use crate::runtime::requests::{ColorRequest, PathRequest};
 use craft_behavior::PixelSize;
@@ -42,6 +43,7 @@ pub struct HostedSaveForWeb {
     open: bool,
     /// The document's slices.
     slices: Vec<WebSlice>,
+    slice_warning: Option<Label>,
     /// The view tab: bound to the dialog's `view` prop, so automation reads and writes it here.
     view: WebView,
     /// The path the app answered the save request with.
@@ -55,6 +57,13 @@ impl HostedSaveForWeb {
     #[must_use]
     pub fn slices(mut self, slices: Vec<WebSlice>) -> Self {
         self.slices = slices;
+        self
+    }
+
+    /// A notice placed below the preview captions when the host omits slices.
+    #[must_use]
+    pub fn slice_warning(mut self, warning: Option<Label>) -> Self {
+        self.slice_warning = warning;
         self
     }
 
@@ -81,6 +90,7 @@ impl HostedSaveForWeb {
             saving: false,
             open: true,
             slices: Vec::new(),
+            slice_warning: None,
             view: WebView::default(),
             path: None,
             pixels: size,
@@ -229,6 +239,7 @@ impl StackDialog for HostedSaveForWeb {
             animation: self.animation,
             remember: self.remember.clone(),
             slices: &self.slices,
+            slice_warning: self.slice_warning.clone(),
             view: Some(Bind::bound(&mut self.view)),
             frame: Some(Bind::bound(&mut self.frame)),
             open: Some(Bind::bound(&mut self.open)),

@@ -78,6 +78,23 @@ fn gif(colors: u16) -> SaveForWebOptions {
 }
 
 #[trial]
+fn a_slice_warning_appears_once_below_the_preview_captions() {
+    let warning = "5 stored slices past the first 10000 were ignored";
+    let web = || HostedSaveForWeb::new("poster.psd", IMAGE, texture()).slices(slices());
+    let (_, normal) = open(web());
+    assert!(!normal.texts().iter().any(|run| run.text == warning));
+
+    let (_, mut overflow) = open(web().slice_warning(Some(warning.into())));
+    let four_up = overflow.by_label("4-Up").expect("the 4-Up view");
+    overflow.click(&four_up).idle(4);
+    let notices = overflow.texts().iter().filter(|run| run.text == warning).collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "the dialog shows one warning before Save is pressed");
+    let captions = overflow.texts().iter().filter(|run| run.text == "Encoding").collect::<Vec<_>>();
+    assert_eq!(captions.len(), 3, "the three encoded preview captions");
+    assert!(captions.iter().all(|caption| notices[0].rect.top() >= caption.rect.bottom()), "the warning follows both rows");
+}
+
+#[trial]
 fn slices_and_palette_edits_follow_the_settings() {
     let start = gif(8);
     let preset = WebPreset::new("GIF 16", gif(16));
