@@ -599,6 +599,29 @@ mod nested {
         ("src/bin/tool/child.rs", call),
     ]);
     assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("src/bin/child/mod.rs", 1)]);
+    // A file in `tests` or `src/bin` is its own crate's root also when another target declares it as a module.
+    let found = predefined_quit([
+        ("tests/foo.rs", "mod part;\n"),
+        ("tests/part.rs", local),
+        ("src/bin/tool.rs", "mod helper;\n"),
+        ("src/bin/helper.rs", local),
+    ]);
+    assert_eq!(found.iter().map(|f| (f.path.as_str(), f.line)).collect::<Vec<_>>(), vec![("tests/part.rs", 2), ("src/bin/helper.rs", 2)]);
+    // A `tests` folder inside a test's module folder holds modules, so a declared file there is not a root.
+    assert!(
+        predefined_quit([
+            ("tests/support/mod.rs", "mod tests;\n"),
+            ("tests/support/tests/mod.rs", "mod helper;\n"),
+            ("tests/support/tests/helper.rs", local)
+        ])
+        .is_empty()
+    );
+    // A child's own `menu` module, imported through `self::`, is not the crate.
+    let found = predefined_quit([
+        ("src/lib.rs", "extern crate muda as menu;\nmod child;\n"),
+        ("src/child.rs", "mod menu {}\nuse self::menu as other;\nfn f() { other::PredefinedMenuItem::quit(None); }\n"),
+    ]);
+    assert!(found.is_empty());
 }
 
 #[test]
