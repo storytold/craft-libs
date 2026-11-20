@@ -135,6 +135,9 @@ pub struct NumberField<'a, V: NumberValue + 'static = Option<f64>> {
     /// value at once, as far as the slider would, and the release closes the slider.
     #[prop]
     popup_slider: Option<RangeInclusive<f64>>,
+    /// Whether the popup slider snaps to the configured step; defaults to true.
+    #[prop]
+    snap_popup_slider: bool,
     /// A typed value goes to the nearest multiple of the step when it commits.
     #[prop]
     snap_typed: bool,
@@ -202,6 +205,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             unit_placement: UnitPlacement::Inside,
             presets: None,
             popup_slider: None,
+            snap_popup_slider: true,
             snap_typed: false,
             automatic: false,
             commit_decimals: None,

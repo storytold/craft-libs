@@ -95,6 +95,21 @@ fn a_popup_slider_opens_from_a_typed_range_row() {
     assert_eq!(standard.by_role(Role::SLIDER).len(), 1, "standard range uses its visible slider");
 }
 
+#[trial]
+fn a_short_popup_slider_can_select_its_midpoint_without_explicit_precision() {
+    let param = Param::new("scale", "Scale", ParamKind::range(0.0, 0.001, 0.0, SliderScale::Linear)).popup_slider();
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let mut fixture = rows(vec![param], &values);
+    let chevron = fixture.by_label("Slider").expect("the slider arrow");
+    fixture.click(&chevron).settle();
+    let slider = fixture.by_role(Role::SLIDER).into_iter().next().expect("the popup slider");
+
+    fixture.click_at(slider.center()).settle();
+
+    let value = values.borrow().number("scale").expect("the selected value");
+    assert!((value - 0.0005).abs() <= 0.00002, "linear midpoint: {value}");
+}
+
 // A row with `visible_when` is there only while its condition holds, and one with `enabled_when` takes input only
 // while its condition holds; a tooltip is the description of its row.
 #[trial]

@@ -478,6 +478,7 @@ impl<'p> Pass<'p> {
                 let mut field = NumberField::new(line.name.clone(), Bind::given(Some(value)))
                     .range(range.clone())
                     .popup_slider(range.clone())
+                    .snap_popup_slider(places.is_some())
                     .commit_decimals(decimals_for_step(step))
                     .scrub_by_label();
                 if places.is_some() || default_step != 1.0 {
