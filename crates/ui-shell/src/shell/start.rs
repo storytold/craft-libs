@@ -24,7 +24,7 @@ use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::Section;
-use crate::style::{Corners, SurfaceKind, SurroundLook, TypeRole};
+use crate::style::{Corners, DataColor, SurfaceKind, SurroundLook, TypeRole};
 use crate::tile_grid::{CaptionPlace, Tile, TileGrid};
 use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
 use craft_theme::Variant;
@@ -198,6 +198,16 @@ pub struct StartScreen<'a> {
     /// The text of the link that fires [`StartAction::MoreTemplates`].
     #[prop(into)]
     more_templates: Option<Label>,
+    /// The width and height parts of a card and row picture (16:9 unless the pictures are another shape, as a page 3:4).
+    picture: (u16, u16),
+    /// The zoom of a card's picture, a factor on the card thumbnail: the cards keep that size and do not grow to fill
+    /// the row, so as many as fit stand side by side (default: twice the card thumbnail, grown to fill the row).
+    #[prop(quantity = "zoom factor")]
+    card_zoom: Option<f32>,
+    /// The pictures are opaque pages on this paper, which is document data: no transparency grid shows, and a file
+    /// without a picture shows its icon on the card, not on a sunken tile (default: photos).
+    #[prop]
+    page_paper: Option<DataColor>,
 }
 
 /// A link on the start screen's rail.
@@ -251,7 +261,18 @@ impl<'a> StartScreen<'a> {
             layout: StartLayout::default(),
             title: None,
             more_templates: None,
+            picture: (PICTURE_WIDE, PICTURE_HIGH),
+            card_zoom: None,
+            page_paper: None,
         }
+    }
+
+    /// The shape of the pictures of cards and rows, wide to high (default 16:9). A zero part keeps the default.
+    pub fn picture_aspect(mut self, wide: u16, high: u16) -> Self {
+        if wide > 0 && high > 0 {
+            self.picture = (wide, high);
+        }
+        self
     }
 
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
@@ -276,6 +297,12 @@ pub(super) struct Page<'p> {
     pub(super) env: &'p Env,
     pub(super) words: &'p ShellWords,
     pub(super) thumbnails: Option<ThumbHost<'p>>,
+    /// The width and height parts of a picture.
+    pub(super) picture: (u16, u16),
+    /// The zoom of a card's picture, when the app sets one.
+    pub(super) card_zoom: Option<f32>,
+    /// The paper of page pictures, when the app's pictures are pages.
+    pub(super) paper: Option<DataColor>,
     pub(super) drop_hint: Option<&'p Label>,
     pub(super) now: Option<i64>,
     pub(super) actions: &'p RefCell<Vec<StartAction>>,
@@ -303,39 +330,54 @@ impl<'p> Page<'p> {
             tile = tile.detail(detail);
         }
         match self.thumbnails {
-            Some((thumbnails, source)) => {
-                tile.thumb(ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key))
-            }
+            Some((thumbnails, source)) => tile.thumb(ThumbAspect::new(self.picture.0, self.picture.1), {
+                let paper = self.paper;
+                move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key, paper)
+            }),
             None => tile.icon(IconId::new("file")),
         }
     }
 
     pub(super) fn grid<K: Clone + Eq + std::hash::Hash + Send + Sync + 'static>(&self, label: Label, deletable: bool) -> TileGrid<'static, K> {
-        TileGrid::<K>::new(label)
+        let grid = TileGrid::<K>::new(label)
             .select(SelectMode::Single)
             .deletable(deletable)
             .activate(ActivateOn::Click)
             .caption(CaptionPlace::Below)
             .detail_line()
             .card()
-            .aspect(f32::from(PICTURE_WIDE) / f32::from(PICTURE_HIGH))
-            .zoom(CARD_ZOOM)
-            .fill_row()
-            .sizing(Sizing::FillWidth)
-            .natural_height(true)
+            .aspect(f32::from(self.picture.0) / f32::from(self.picture.1));
+        let grid = match self.card_zoom {
+            Some(zoom) => grid.zoom(zoom),
+            None => grid.zoom(CARD_ZOOM).fill_row(),
+        };
+        grid.sizing(Sizing::FillWidth).natural_height(true)
     }
 }
 
 /// The thumbnail of `key` in `rect`, asked for at the size it paints. The store paints the placeholder while the
 /// picture is not ready and the failure mark when it failed; a key the source has no picture for (`Blank`) gets the
 /// file icon on the sunken tile.
-pub(super) fn paint_thumb(cx: &ContentPainterCx, rect: Rect, thumbnails: &Thumbnails<ThumbKey>, source: &dyn ThumbSource<ThumbKey>, key: &ThumbKey) {
+pub(super) fn paint_thumb(
+    cx: &ContentPainterCx,
+    rect: Rect,
+    thumbnails: &Thumbnails<ThumbKey>,
+    source: &dyn ThumbSource<ThumbKey>,
+    key: &ThumbKey,
+    paper: Option<DataColor>,
+) {
     let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
     let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
-    if thumbnails.paint(cx, rect, &state, &ThumbPaint::default()) {
+    let paint = match paper {
+        Some(paper) => ThumbPaint::default().checker(false).paper(paper),
+        None => ThumbPaint::default(),
+    };
+    if thumbnails.paint(cx, rect, &state, &paint) {
         return;
     }
-    cx.surface(rect, SurfaceKind::Sunken, Corners::None);
+    if paper.is_none() {
+        cx.surface(rect, SurfaceKind::Sunken, Corners::None);
+    }
     let side = cx.style_cx().tokens.size.icon.lg;
     cx.icon(Rect::from_center_size(rect.center(), Vec2::splat(side)), &IconSpec::svg(IconId::new("file")));
 }
@@ -370,13 +412,39 @@ pub(super) fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead:
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint, layout, title, more_templates } =
-            self;
+        let StartScreen {
+            view,
+            sort,
+            recent,
+            pinned,
+            templates,
+            max_recent,
+            now,
+            thumbnails,
+            links,
+            drop_hint,
+            layout,
+            title,
+            more_templates,
+            picture,
+            card_zoom,
+            page_paper,
+        } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
         let actions = RefCell::new(Vec::new());
-        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, actions: &actions };
+        let page = Page {
+            env: &env,
+            words: &words,
+            thumbnails,
+            picture,
+            card_zoom,
+            paper: page_paper,
+            drop_hint: drop_hint.as_ref(),
+            now,
+            actions: &actions,
+        };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 

@@ -844,11 +844,17 @@ impl Component for Tile<'_> {
             let placeholder = if cx.env.surface() == SurfaceKind::Sunken { style.placeholder_on_sunken } else { style.placeholder };
             ui.draw().fill(&PaintShape::Rect(picture, flat), placeholder);
         }
+        let framed = style.sizes.card && (self.first.is_some() || self.picture.is_some());
         if let Some(paint) = self.first.take() {
             let _ = ui.child("picture", picture, RowThumb::new(paint));
         }
         if let Some(shown) = self.picture.take() {
             let _ = ui.child("picture", picture, shown);
+        }
+        if framed {
+            // A picture covers the sunken well under it, which would leave only its top and bottom edge showing: the
+            // frame goes over the picture so all four sides show.
+            ui.draw().surface(picture, SurfaceKind::Frame, Corners::All);
         }
         {
             let draw = ui.draw();
