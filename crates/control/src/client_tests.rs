@@ -78,9 +78,36 @@ fn addr(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
 
-/// A port nothing listens on.
+/// A candidate port: another process may bind it after this listener is dropped.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Check a closed port, trying another candidate only when a successful TCP connection proves
+/// that a listener took this one. A wrong error for a port we never reached still fails.
+fn assert_not_running_on_unused_port(mut next_port: impl FnMut() -> u16) -> (u16, Vec<u16>) {
+    let mut occupied = Vec::new();
+    for _ in 0..10 {
+        let port = next_port();
+        let mut c = Connection::new(APP, &addr(port), Some(TOKEN));
+        let result = c.call(Request::new("document.inspect", json!({})));
+        if c.serial() != 0 {
+            occupied.push(port);
+            continue;
+        }
+        let e = result.unwrap_err();
+        let CallError::NotRunning(m) = &e else { panic!("{e:?}") };
+        assert!(m.starts_with(&format!("no Probe app is listening at 127.0.0.1:{port}")), "{m}");
+        assert!(m.contains(&format!("`probe --control {port}`")), "{m}");
+        let connected = c.try_connect();
+        if c.serial() != 0 {
+            occupied.push(port);
+            continue;
+        }
+        assert_eq!(connected.unwrap_err().kind(), std::io::ErrorKind::NotConnected);
+        return (port, occupied);
+    }
+    panic!("another listener took every candidate port");
 }
 
 #[test]
@@ -115,13 +142,20 @@ fn a_wrong_token_or_none_is_refused() {
 
 #[test]
 fn an_app_not_running_says_how_to_start_it() {
-    let port = free_port();
-    let mut c = Connection::new(APP, &addr(port), Some(TOKEN));
-    let e = c.call(Request::new("document.inspect", json!({}))).unwrap_err();
-    let CallError::NotRunning(m) = &e else { panic!("{e:?}") };
-    assert!(m.starts_with(&format!("no Probe app is listening at 127.0.0.1:{port}")), "{m}");
-    assert!(m.contains(&format!("`probe --control {port}`")), "{m}");
-    assert_eq!(c.try_connect().unwrap_err().kind(), std::io::ErrorKind::NotConnected);
+    assert_not_running_on_unused_port(free_port);
+}
+
+#[test]
+fn the_not_running_fixture_retries_a_port_taken_by_another_server() {
+    let rival = serve(0, Duration::ZERO, Duration::from_secs(10));
+    let mut candidates = 0;
+    let (port, occupied) = assert_not_running_on_unused_port(|| {
+        candidates += 1;
+        if candidates == 1 { rival.port() } else { free_port() }
+    });
+    assert!(candidates >= 2);
+    assert_eq!(occupied.first(), Some(&rival.port()));
+    assert_ne!(port, rival.port());
 }
 
 /// An app that goes away during a call is lost, not "not running"; the next call says it is not
