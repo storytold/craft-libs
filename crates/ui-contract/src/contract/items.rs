@@ -6,9 +6,57 @@ use super::collection::{CollectionEvent, ColumnLayout, LeadSource, ShownRow};
 use super::{Collection, ItemFn};
 use crate::runtime::egui::areas;
 use craft_behavior::{Axis, GestureId, ItemSource, ScrollPos, TypeAhead};
-use egui::{Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Runs `body` with the item facts of the item at `at` of a set installed and the id that position gives the item, so
+/// measuring and showing an item see one id and one environment.
+fn with_item_facts<R>(ui: &mut Ui, at: crate::runtime::access::SetPosition, body: impl FnOnce(&mut Ui, egui::Id) -> R) -> R {
+    use crate::runtime::env::{Env, ItemFacts};
+    // The id comes from the position so two items of one set never share one, and an item keeps its id while its
+    // position holds.
+    let id = ui.scope_id().with(("shown item", at.index));
+    let facts = ItemFacts {
+        item: id,
+        flags: crate::style::Flags::empty(),
+        position: at,
+        columns: Vec::new(),
+        toggles: Vec::new(),
+        toggle_keys: Vec::new(),
+        aligns: Vec::new(),
+        pressed: None,
+        menu_open: false,
+    };
+    let installed = Env::install_for(ui, Env::of(ui).derive_local(|scoped| scoped.item_facts = Some(Arc::new(facts))));
+    let shown = body(ui, id);
+    Env::restore(ui.ctx(), installed);
+    shown
+}
+
+/// Measures `item` as the item at `at` of a set, under the id and the item facts [`show_item`] shows it with.
+pub fn measure_item<C>(ui: &mut Ui, item: &mut C, at: crate::runtime::access::SetPosition, proposal: craft_behavior::Proposal) -> Vec2
+where
+    C: super::Component + super::Props + super::Show,
+{
+    with_item_facts(ui, at, |ui, id| super::run::measure_under(item, ui, Some(id), proposal, None))
+}
+
+/// Shows `item` in `rect` as the item at `at` of a set, with the item facts a collection installs.
+pub fn show_item<C>(ui: &mut Ui, rect: Rect, item: C, at: crate::runtime::access::SetPosition) -> C::Output
+where
+    C: super::Component + super::Props + super::Show,
+{
+    with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show_at(ui, rect))
+}
+
+/// Shows `item` in the flow of `ui` as the item at `at` of a set, taking the room the flow gives it.
+pub fn show_item_in_flow<C>(ui: &mut Ui, item: C, at: crate::runtime::access::SetPosition) -> C::Output
+where
+    C: super::Component + super::Props + super::Show,
+{
+    with_item_facts(ui, at, |ui, id| super::Props::id(item, id).show(ui))
+}
 
 mod drag;
 mod edge;
@@ -273,4 +321,15 @@ fn key_hash<K: std::hash::Hash>(key: &K) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     key.hash(&mut hasher);
     hasher.finish()
+}
+
+// `StyleCx::face` sits here, with the measuring it calls, not in `style`: `style` is below `contract`.
+impl crate::style::StyleCx<'_> {
+    /// The size `face` has, measured from the `Ui` the collection hook fills this context from, so a collection's
+    /// `item_layout` measures a button's label and icon in the pass it lays out in. Zero in a context no collection
+    /// filled, which has nothing to measure in.
+    pub fn face<S: crate::contract::Show>(&self, mut face: S) -> egui::Vec2 {
+        let Some(ui) = self.measuring else { return egui::Vec2::ZERO };
+        crate::contract::measure_under(&mut face, ui, None, craft_behavior::Proposal::Ideal, None)
+    }
 }

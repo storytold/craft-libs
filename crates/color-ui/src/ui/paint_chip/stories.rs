@@ -70,7 +70,7 @@ fn paint_chip_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 }
 
 /// The Solid popover with the recent colours, two swatch folders and the Color Picker… button.
-#[story(PaintChip<'static>, covers = [], drive = Drive::Custom(open_popover))]
+#[story(PaintChip<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
 fn paint_chip_open_with_recents_and_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entry = |name: &str, rgb: [f32; 3]| SwatchEntry::new(name, SwatchColor::Rgb(rgb));
     let groups = vec![

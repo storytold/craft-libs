@@ -1,6 +1,8 @@
 //! Stories of `PasswordDialog`.
 
 use super::{PasswordDialog, PasswordPurpose};
+use crate::buttons::Button;
+use crate::contract::{Show as _, clicked};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -21,6 +23,16 @@ fn password_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let dialog = PasswordDialog::new(purpose).opened(data.bind("open", true));
     let dialog = if wrong { dialog.error(crate::runtime::env::Label::Static("That password is not correct.")) } else { dialog };
     dialog.show(ui).into()
+}
+
+/// A new password that two empty fields clear; the dialog opens from its button.
+#[story(PasswordDialog<'static>, covers = [], drive = Drive::Never)]
+fn set_or_clear(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (open, open_at) = data.value_at("open", false);
+    if clicked(&Button::new("Set Password…").show(ui)) {
+        *open = true;
+    }
+    PasswordDialog::new(PasswordPurpose::SetOrClear).opened(open_at.bind(open)).show(ui).into()
 }
 
 #[story(PasswordDialog<'static>, covers = [], drive = Drive::Never)]

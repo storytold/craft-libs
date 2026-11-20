@@ -129,6 +129,28 @@ struct Inner {
     /// rects for the shell that shows it.
     reveals: egui::Id,
     dialog: DialogRecord,
+    page_band: Option<PageBandRoom>,
+}
+
+/// The room of the page band while a full-window page shows: the title-bar-high strip at the window's top and the room
+/// the window's ends take in it.
+#[derive(Clone, Copy, Debug, PartialEq, crate::contract::MemoProps)]
+#[non_exhaustive]
+pub struct PageBandRoom {
+    /// The band's rect.
+    pub rect: Rect,
+    /// The width the window's start end takes (the traffic lights' inset or the caption buttons), from the band's
+    /// reading start.
+    pub start: f32,
+    /// The width the window's end end takes, from the band's reading end.
+    pub end: f32,
+}
+
+impl PageBandRoom {
+    /// The band at `rect`, the window's start end taking `start` of it and its end end `end`.
+    pub const fn new(rect: Rect, start: f32, end: f32) -> Self {
+        PageBandRoom { rect, start, end }
+    }
 }
 
 /// The rects that content registered on the running pass of a viewport for the edge it was revealed from, each with
@@ -180,6 +202,7 @@ impl ShellCx {
             region: None,
             reveals,
             dialog: DialogRecord::default(),
+            page_band: None,
         };
         ShellCx { inner: Arc::new(inner) }
     }
@@ -335,6 +358,17 @@ impl ShellCx {
     pub fn float_bounds(&self) -> Rect {
         self.inner.float_bounds
     }
+
+    /// The page band's room while a full-window page shows, else `None`.
+    pub fn page_band(&self) -> Option<PageBandRoom> {
+        self.inner.page_band
+    }
+
+    /// The page band's room while a full-window page shows; `None` when no page shows or the window is full screen.
+    pub fn with_page_band(mut self, room: Option<PageBandRoom>) -> Self {
+        Arc::make_mut(&mut self.inner).page_band = room;
+        self
+    }
 }
 
 /// The env entry that carries the shell to its slots and body. A context with no shell holds `None`.
@@ -342,13 +376,14 @@ impl ShellCx {
 #[doc(hidden)]
 pub struct ShellEntry(#[doc(hidden)] pub Option<ShellCx>);
 
-/// The shell's input fields: the window, the body's mode, the reveal and visibility flags, the regions and the float
-/// bounds. The registries the body writes into (revealed rects, the dialog count) are its output, not an input; the
+/// The shell's input fields: the window, the body's mode, the reveal and visibility flags, the regions, the float
+/// bounds and the room of a full-window page's band. The registries the body writes into (revealed rects, the dialog count) are its output, not an input; the
 /// revealed rects' key is fixed for the shell's life.
 impl crate::contract::MemoProps for ShellEntry {
     fn key(&self, key: &mut crate::contract::MemoKey) {
         let Some(shell) = &self.0 else { return key.write_u32(0) };
-        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, reveals: _, dialog: _ } = &*shell.inner;
+        let Inner { window, mode, tab_reveal, edges, tabs, panels_hidden, regions, float_bounds, region, page_band, reveals: _, dialog: _ } =
+            &*shell.inner;
         key.write_u32(1);
         key.feed_hash(window);
         key.feed_hash(&std::mem::discriminant(mode));
@@ -361,6 +396,7 @@ impl crate::contract::MemoProps for ShellEntry {
         }
         float_bounds.key(key);
         region.key(key);
+        page_band.key(key);
     }
 }
 

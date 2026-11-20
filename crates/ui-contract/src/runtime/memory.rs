@@ -98,7 +98,8 @@ pub trait Remember {
     /// The result of the job `start` returns, one per `key`: it is submitted once, cancelled when the owner is
     /// evicted, and a landed result asks for a pass.
     fn pending<K: Hash, T: Slot, E: Slot>(&mut self, key: K, start: impl FnOnce() -> Job<T, E>) -> &Pending<T, E>;
-    /// True on the first pass a shown stage exists for this id.
+    /// True on the first pass a shown stage exists for this id, and on the first pass after the id was left unshown
+    /// for a frame of its viewport (a page left and opened again), through that frame's passes.
     fn appeared(&self) -> bool;
 }
 
@@ -232,10 +233,35 @@ pub(crate) struct Registry {
     written: usize,
 }
 
-/// Marks a base whose stage was written back: the frame it was first shown in, for `appeared`. A discard pass
-/// repeats the frame, so `appeared` stays true through it.
+/// Marks a base whose stage was written back, for `appeared`: the frame it appeared in and the last frame it was
+/// shown in. A discard pass repeats the frame, so `appeared` stays true through it. A frame of its viewport that did
+/// not show the base (a page left and opened again before its owner was evicted) makes its next showing an
+/// appearance again, as WordCraft told a reopened page by a gap in the frames it was drawn in.
 #[derive(Clone, Copy)]
-struct Seen(u64);
+struct Seen {
+    first: u64,
+    last: u64,
+}
+
+impl Seen {
+    /// Whether the frames since the base was last shown leave a gap before `frame`.
+    fn gap_before(self, frame: u64) -> bool {
+        self.last.saturating_add(1) < frame
+    }
+
+    /// Whether a stage of this base in `frame` is the base appearing.
+    fn appears(self, frame: u64) -> bool {
+        self.first == frame || self.gap_before(frame)
+    }
+
+    /// The mark after a write-back in `frame`.
+    fn shown(old: Option<Seen>, frame: u64) -> Seen {
+        match old {
+            Some(seen) if !seen.gap_before(frame) => Seen { first: seen.first, last: frame.max(seen.last) },
+            _ => Seen { first: frame, last: frame },
+        }
+    }
+}
 
 /// Registers `owner`'s pass, at step 3: eviction tests only owners. Shown entries of an owner not registered
 /// for 3 passes of the viewport that last showed it and 0.5 s are evicted by `evict`.
@@ -544,14 +570,15 @@ impl MemoryStage {
         self.owner
     }
 
-    /// True for the first pass a base id is shown; per base id, so a body and its component differ.
+    /// True for the first pass a base id is shown, and for the first after a frame that did not show it; per base id,
+    /// so a body and its component differ.
     pub(crate) fn appeared_at(&self, base: Id) -> bool {
         let mut touched = self.touched.borrow_mut();
         if !touched.contains(&base) {
             touched.push(base);
         }
         let frame = pass::frame_nr(&self.ctx, pass::current_viewport(&self.ctx));
-        store::peek_copy::<Seen>(&self.ctx, base).is_none_or(|seen| seen.0 == frame)
+        store::peek_copy::<Seen>(&self.ctx, base).is_none_or(|seen| seen.appears(frame))
     }
 
     fn entry(&mut self, key: (u8, TypeId, Id), create: fn(&Context, bool, Id) -> Entry) -> &mut Entry {
@@ -704,7 +731,7 @@ impl MemoryStage {
                 replaced.extend((entry.write_back)(entry.value, data, id));
             }
             for base in touched {
-                if store::mark_seen(data, base, Seen(frame)) || retags {
+                if store::mark_seen(data, base, |old| Seen::shown(old, frame)) || retags {
                     record.push(((base, SHOWN, TypeId::of::<Seen>()), take_raw::<Seen>));
                 }
             }
@@ -816,6 +843,14 @@ impl<T: Hash> Hash for Sub<T> {
         TypeId::of::<Sub<()>>().hash(state);
         self.0.hash(state);
     }
+}
+
+/// A salt for an id made from `key`, a value that is only `Hash`: the ids egui makes also ask for `Debug`, which an
+/// app's key type need not have. Equal keys give equal salts within a run, so the id stays the same from pass to pass.
+pub fn key_salt(key: &impl Hash) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// The runtime sub-id of `base` for `tag`: the one derivation of every id the runtime makes from a component

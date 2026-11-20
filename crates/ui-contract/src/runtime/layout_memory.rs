@@ -1151,6 +1151,14 @@ pub fn forget_kept(ctx: &Context) {
     });
 }
 
+/// How many component entries the valid kept measurements hold, each body counting only the components directly in
+/// it.
+#[cfg(feature = "testing")]
+pub fn kept_leaves(ctx: &Context) -> usize {
+    let moment = Moment::of(ctx);
+    with(ctx, &moment, |memory| memory.kept.values().filter(|kept| kept.valid).map(|kept| kept.transcript.leaves.len()).sum())
+}
+
 /// Asks the end hook for the frame's discard pass, as a change of measured size does.
 #[track_caller]
 pub(crate) fn ask_discard(ctx: &Context) {

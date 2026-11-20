@@ -1,9 +1,9 @@
 //! Stories of `SwatchTable`.
 
-use super::{SwatchTable, SwatchTableOutput};
+use super::{SwatchArrangement, SwatchTable, SwatchTableOutput};
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
-use craft_behavior::Selection;
+use craft_behavior::{Preview, Selection};
 use craft_theme::Srgba;
 use egui::Ui;
 
@@ -44,6 +44,35 @@ fn swatch_table_multiple(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entries = table_entries();
     let start = Selection::new(vec![2usize, 3, 18], Some(18), Some(2));
     let shown = SwatchTable::new("Color Table", &entries).multiple(true).selection(data.bind("selected", start)).per_row(16).show_all(ui);
+    with_readout(data, shown)
+}
+
+/// The readout follows the preview: the cell under the pointer while it shows, the selection once it ends.
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_preview(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries().into_iter().take(64).collect::<Vec<_>>();
+    let shown = SwatchTable::new("Color Table", &entries).selection(data.bind("selected", Selection::single(5usize))).per_row(16).show_all(ui);
+    let previewed = data.note("previewed", None::<usize>);
+    match shown.preview {
+        Preview::Shows(index) => *previewed = Some(index),
+        Preview::Ended => *previewed = None,
+        _ => {}
+    }
+    let readout = match *previewed {
+        Some(index) => format!("Previewing: Index {index}"),
+        None => "Previewing: nothing".to_owned(),
+    };
+    StoryOutput::from(shown).readout(readout)
+}
+
+/// 127 entries, the full honeycomb of side 7.
+#[story(SwatchTable<'static>, covers = [], drive = Drive::Never)]
+fn swatch_table_honeycomb(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = table_entries().into_iter().take(127).collect::<Vec<_>>();
+    let shown = SwatchTable::new("Color Table", &entries)
+        .arrangement(SwatchArrangement::Honeycomb)
+        .selection(data.bind("selected", Selection::single(5usize)))
+        .show_all(ui);
     with_readout(data, shown)
 }
 

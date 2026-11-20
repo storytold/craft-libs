@@ -2071,6 +2071,7 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
+ "web-time",
 ]
 
 [[package]]
@@ -2359,6 +2360,7 @@ dependencies = [
  "block2 0.6.2",
  "craft-atomic",
  "craft-behavior",
+ "craft-browse",
  "craft-host",
  "craft-i18n",
  "craft-platform",
@@ -2371,6 +2373,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "raw-window-handle",
  "rfd",
+ "serde_json",
  "zbus",
 ]
 
@@ -2816,8 +2819,12 @@ dependencies = [
 name = "craft-gpu"
 version = "0.1.0"
 dependencies = [
+ "egui-wgpu",
+ "log",
+ "pollster 1.0.1",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -3007,6 +3014,8 @@ dependencies = [
  "craft-keymap",
  "craft-theme",
  "craft-ui",
+ "craft-ui-test-kit",
+ "craft-window",
  "egui",
  "egui_kittest",
  "kurbo",
@@ -3422,6 +3431,7 @@ version = "0.1.0"
 dependencies = [
  "craft-behavior",
  "craft-i18n",
+ "craft-keymap",
  "craft-text",
  "craft-theme",
  "craft-ui",
@@ -3598,11 +3608,13 @@ dependencies = [
  "craft-docpath",
  "craft-host",
  "craft-theme",
+ "fmv-macos-events",
  "futures-lite",
  "js-sys",
  "log",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "rfd",
  "serde",
  "serde_json",
  "sysinfo",
@@ -3611,6 +3623,7 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "web-time",
+ "windows",
  "wl-clipboard-rs",
  "x11rb",
  "xcap",
@@ -3697,14 +3710,19 @@ name = "craft-print"
 version = "0.1.0"
 dependencies = [
  "craft-behavior",
+ "craft-host",
  "craft-ui",
  "craft-winprint-gdi",
  "egui",
+ "js-sys",
  "log",
  "miniz_oxide 0.9.1",
  "roxmltree 0.21.2",
+ "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "web-sys",
  "winprint",
  "winsafe",
 ]
@@ -3821,6 +3839,7 @@ dependencies = [
  "craft-host",
  "craft-i18n",
  "craft-keymap",
+ "craft-pages",
  "craft-theme",
  "craft-ui",
  "egui",
@@ -3873,11 +3892,15 @@ dependencies = [
  "craft-host",
  "craft-settings",
  "dirs",
+ "log",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "toml_edit",
+ "wasm-bindgen-test",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -4260,6 +4283,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "craft-behavior",
+ "craft-codepage",
  "craft-font-catalog",
  "craft-fonts-build",
  "craft-host",
@@ -6051,6 +6075,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fmv-macos-events"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90642cf66dde7f205dc8b42dfe57b47d0f3a29f571b832742883ef512e23fe55"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

@@ -168,13 +168,13 @@ pub(crate) fn press_flags(response: &mut Response, view: PressView) {
 
 /// Rewrites the click flags of the root's `Response` at step 17: egui's fake click on Enter, Space or AccessKit
 /// `Click` is cleared, and set again only when the pipeline activated the component by key or by an AccessKit click on a part. A command-bound
-/// component reports no click, because the command fires instead.
-pub(crate) fn rewrite_clicks(response: &mut Response, activated_by_key: bool, command_bound: bool) {
+/// component reports no click on a pass where its command fired, because the command fires instead.
+pub(crate) fn rewrite_clicks(response: &mut Response, activated_by_key: bool, command_fired: bool) {
     response.flags.remove(Flags::FAKE_PRIMARY_CLICKED);
     if activated_by_key {
         response.flags.insert(Flags::FAKE_PRIMARY_CLICKED);
     }
-    if command_bound {
+    if command_fired {
         response.flags.remove(Flags::CLICKED | Flags::FAKE_PRIMARY_CLICKED);
     }
 }

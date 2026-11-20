@@ -102,7 +102,11 @@ fn standard_prompt_without_apply(ui: &mut Ui, data: &mut StoryData) -> StoryOutp
 #[story(UnsavedChangesDialog, covers = [], drive = Drive::Never)]
 fn unsaved_changes_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let remaining = if *data.value("several_documents", true) { 3 } else { 1 };
-    UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").remaining(remaining).show(ui).into()
+    let mut dialog = UnsavedChangesDialog::new(CloseScope::Close, "poster.psd").remaining(remaining);
+    if *data.value("save_failed", false) {
+        dialog = dialog.reason("Couldn't save “poster.psd”: the disk is full.");
+    }
+    dialog.show(ui).into()
 }
 
 #[story(RecoveryDialog, covers = [], drive = Drive::Never)]

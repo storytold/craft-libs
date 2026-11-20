@@ -22,6 +22,11 @@ pub enum SlotSize {
     OptionsBarNarrow,
     /// `size.rail.width`: the default extent of a start or end slot.
     RailWidth,
+    /// As tall (a top or bottom slot) or as wide (a start or end slot) as its content: the extent the content took the
+    /// last time the slot showed, and the edge's default until it first shows. The slot stacks its content from its
+    /// outer edge instead of centring one line in it, so content of more than one line (a ribbon: a tab strip over a
+    /// group row) gets its own height and the slot's full width. Outside a shell it resolves to `size.bar.options`.
+    Content,
 }
 
 impl SlotSize {
@@ -37,7 +42,7 @@ impl SlotSize {
             SlotSize::TitleBar => size.bar.title,
             SlotSize::TabBar => size.bar.tab,
             SlotSize::StatusBar => size.bar.status,
-            SlotSize::OptionsBar => size.bar.options,
+            SlotSize::OptionsBar | SlotSize::Content => size.bar.options,
             SlotSize::OptionsBarNarrow => size.bar.options_narrow,
             SlotSize::RailWidth => size.rail.width,
         }
@@ -55,13 +60,15 @@ pub struct Slot {
     visible: bool,
     reveal: bool,
     label: Option<Label>,
+    screen_bar: bool,
+    drops: bool,
 }
 
 impl Slot {
     /// A slot with a key that is stable and unique in the window. It is visible and does not show in a reveal. Without a
     /// [`size`](Self::size) it takes the default of its edge: the title bar, options bar, status bar or rail width.
     pub fn new(key: SlotKey) -> Self {
-        Self { key, size: None, visible: true, reveal: false, label: None }
+        Self { key, size: None, visible: true, reveal: false, label: None, screen_bar: false, drops: false }
     }
 
     /// The size along the slot's edge, in place of the default of the edge.
@@ -87,6 +94,31 @@ impl Slot {
     pub fn reveal_if(mut self, reveal: bool) -> Self {
         self.reveal = reveal;
         self
+    }
+
+    /// Marks the slot as the screen bar: it shows in Focus and Immersive, and only there, whatever its `visible` flag,
+    /// and takes its room from the body although those modes show the body only. It needs no
+    /// [`reveal`](Self::reveal).
+    pub fn screen_bar(mut self) -> Self {
+        self.screen_bar = true;
+        self
+    }
+
+    /// Marks the slot as the drop-down slot of Focus: in Focus it shows while the shell's `dropped` flag is set and
+    /// covers the body, leaving the body's rect as it is. A press in the body or a mode change clears the flag.
+    pub fn drops(mut self) -> Self {
+        self.drops = true;
+        self
+    }
+
+    /// Whether the slot is the screen bar ([`screen_bar`](Self::screen_bar)).
+    pub fn is_screen_bar(&self) -> bool {
+        self.screen_bar
+    }
+
+    /// Whether the slot is the drop-down slot of Focus ([`drops`](Self::drops)).
+    pub fn drops_down(&self) -> bool {
+        self.drops
     }
 
     /// The name of the slot's AccessKit region ("Options", "Tools", "Status").

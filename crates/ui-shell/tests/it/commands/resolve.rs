@@ -305,6 +305,27 @@ fn a_memoized_view_runs_when_the_focused_stops_answer_changes() {
     assert!(!frames.tree().is_disabled(cut.get()), "which shows Cut enabled");
 }
 
+/// A kept resolution of a command the focused stop answers for (Cut, which a text field takes) follows that stop's
+/// answer as the pass's end hook records it, so a read between passes (a test after its frames) is current: with the
+/// field's text selected, Cut is enabled at once, not only once another pass begins.
+#[trial]
+fn a_read_between_passes_follows_the_focused_stops_answer() {
+    let text = RefCell::new("hello".to_owned());
+    let field = Cell::new(Id::NULL);
+    let mut show = |ui: &mut Ui| {
+        field.set(TextField::new("Name", Bind::bound(&mut *text.borrow_mut())).show(ui).response.id);
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    request(&frames.ctx, FocusTarget::Id(field.get()));
+    frames.idle(30, &mut show);
+    assert!(!resolve(&frames.ctx, EditCommands::Cut).enabled, "Cut does nothing with no text selected");
+    frames.frame(vec![key_press(Key::A, Modifiers::COMMAND)], &mut show);
+    // The field's new answer reaches the focus record in the next pass's end hook; no pass has begun since.
+    frames.frame(vec![], &mut show);
+    assert!(resolve(&frames.ctx, EditCommands::Cut).enabled, "Cut is enabled with the text selected");
+}
+
 /// The testing check every 100th pass compares every kept resolution with a full one, and every kept gate answer with
 /// the gate's. The script changes, a few passes before each check, every kind of input a resolution reads: app and
 /// published states, the gate, the keymap, the focus and the focused stop's edits, a menu and a modal layer with readers

@@ -2,10 +2,13 @@
 
 #[cfg(target_os = "macos")]
 mod appkit;
+mod keytips;
 mod layout;
 mod memo;
 mod mnemonic;
 mod native;
+mod ribbon;
+mod ribbon_gallery;
 mod sample;
 mod shortcuts;
 

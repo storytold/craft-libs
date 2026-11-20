@@ -55,7 +55,7 @@ fn date_picker_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     DatePicker::new("From", data.bind("open", Some(today()))).today(today()).show(ui).into()
 }
 
-#[story(DatePicker<'static>, covers = [], drive = Drive::Custom(open_calendar))]
+#[story(DatePicker<'static>, covers = [Open], drive = Drive::Custom(open_calendar))]
 fn date_picker_days_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let min = PickedDate::day(EARLIEST.0, EARLIEST.1, EARLIEST.2);
     DatePicker::new("From", data.bind("days", None)).precisions(&[DatePrecision::Day]).min(min).today(today()).show(ui).into()

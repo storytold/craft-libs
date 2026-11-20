@@ -1,6 +1,6 @@
 //! The things a ruler edits (the indent markers and the stops), their parts, and the edits on [`RulerValues`].
 
-use super::{RulerValues, SAME_POSITION, TabStop};
+use super::{GapEdge, RulerValues, SAME_POSITION, TabStop};
 use craft_behavior::PartKey;
 use craft_behavior::part::PartRef;
 
@@ -16,10 +16,27 @@ pub(super) const RIGHT: PartKey = PartKey::new("right");
 pub(super) const STOP: PartKey = PartKey::new("stop");
 /// One table column border, `COLUMN.at(i)`.
 pub(super) const COLUMN: PartKey = PartKey::new("column");
+/// One edge of a column gap, `GAP.at(gap_part(i, edge))`: below the stops and indents in priority, so a marker sitting
+/// on a gap edge still wins the press.
+pub(super) const GAP: PartKey = PartKey::new("gap");
+/// The rank of a gap edge among the handles.
+pub(super) const GAP_RANK: u8 = 0;
+/// The rank of the markers, stops and table column borders, above [`GAP_RANK`].
+pub(super) const MARKER_RANK: u8 = 1;
 /// The tab selector in the corner.
 pub(super) const SELECTOR: PartKey = PartKey::new("selector");
 /// The strip: a press on the empty column places a stop.
 pub(super) const STRIP: PartKey = PartKey::new("strip");
+
+/// The part index of `edge` of gap `index`: two per gap.
+pub(super) fn gap_part(index: usize, edge: GapEdge) -> u64 {
+    index as u64 * 2 + u64::from(edge == GapEdge::Start)
+}
+
+/// The gap and edge a part index of [`GAP`] stands for.
+pub(super) fn gap_of_part(part: u64) -> (usize, GapEdge) {
+    ((part / 2) as usize, if part.is_multiple_of(2) { GapEdge::End } else { GapEdge::Start })
+}
 
 /// A marker or stop on the ruler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

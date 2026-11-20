@@ -20,18 +20,27 @@ pub(crate) fn resolve_anchor(ctx: &Context, id: Id, overlay: &Overlay, own: Rect
         return match opener_anchor(opener, opening, &overlay.place) {
             Anchor::Rect(rect) | Anchor::Corner(rect, _) => to_screen * rect,
             Anchor::Point(at) => to_screen * Rect::from_min_max(at, at),
+            Anchor::Parent => parent_rect(ctx).unwrap_or(to_screen * opener.rect),
             _ => to_screen * opener.rect,
         };
     }
     match &overlay.place {
         Place::Anchored { anchor: Anchor::Rect(rect) | Anchor::Corner(rect, _), .. } => own_to_screen * *rect,
         Place::Anchored { anchor: Anchor::Point(at), .. } => own_to_screen * Rect::from_min_max(*at, *at),
+        Place::Anchored { anchor: Anchor::Parent, .. } => parent_rect(ctx).unwrap_or(own_to_screen * own),
         _ => own_to_screen * own,
     }
 }
 
+/// The placed panel rect, in screen space, of the layer whose body is running: the parent a layer opened now has.
+/// `None` outside a layer or before the parent has been placed.
+fn parent_rect(ctx: &Context) -> Option<Rect> {
+    let parent = overlay::drawing_parent(ctx)?;
+    overlay::entry(ctx, parent).map(|entry| entry.rect)
+}
+
 /// The overlay with the place's anchor that of the opener that opened it, for the anchors the host reads from the
-/// place (`Pointer`, `Corner`).
+/// place (`Pointer`, `Corner`, `Parent`).
 pub(super) fn opened_overlay(ctx: &Context, overlay: &Overlay, stored: Option<Opening>) -> Option<(Overlay, Opening)> {
     let first = overlay.opener.as_ref()?;
     let (opener, opening) = first.active(ctx, stored);
@@ -243,7 +252,7 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
         Place::Float(float) => {
             let kept = within_bounds(layer.overlay, bounds);
             let size = size.unwrap_or(egui::Vec2::ZERO);
-            let min = float.pos.unwrap_or_else(|| kept.center() - size / 2.0);
+            let min = float.top_left(size).unwrap_or_else(|| kept.center() - size / 2.0);
             let at = crate::contract::body::keep_inside(Rect::from_min_size(min, size), kept).min;
             Placed { at, side: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
         }

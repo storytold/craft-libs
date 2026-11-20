@@ -2264,7 +2264,7 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
   - `pub fn cell_width(&self, column: &craft_behavior::ColumnKey, width: f32)`. Reports, from the `Ideal` measure of a collection's item, the width its content in `column` takes unclipped,
   - `pub fn layout(&self, run: &TextRun<'_>) -> TextLayout`. Lays `run` out in the content's room, as `Draw::text` will paint it.
   - `pub fn layout_at(&self, run: &TextRun<'_>, width: f32) -> TextLayout`. Lays `run` out `width` wide, for a text that paints in a band narrower than the room.
-  - `pub fn least_width(&self, run: &TextRun<'_>) -> f32`. The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
+  - `pub fn least(&self, run: &TextRun<'_>) -> LeastLayout`. `run`, a run that elides, laid out whole and its width at its readable least
   - `pub fn field_text(&self, run: &TextRun<'_>) -> Vec2`. The room an editable text in a control sized by its text needs for `run`: the laid-out text and the caret the
   - `pub fn layout_doc(&self, text: &crate::primitives::DocText<'_>) -> TextLayout`. Lays document `text` out `text.wrap` wide, as `ContentPainterCx::layout` will paint it: the galley a content
   - `pub fn child<D: Show>(&self, key: impl Hash + Debug, child: &mut D, proposal: Proposal) -> Vec2`. Measures a child under the composite's resolved `enabled` and `size`, as `PaintUi::child` will show it.
@@ -2921,6 +2921,8 @@ Painters, `Draw`, the sensing core, the text adapter and `ImeSurface`.
   - `pub fn badge(mut self, color: DataColor) -> Self`. Adds a dot of `color` at the bottom-trailing corner of an SVG or glyph icon, ringed in the icon's colour: the
 - `craft_ui::primitives::ImeSurface`: `pub struct ImeSurface`. The handle of an editor part's focus widget.
 - `craft_ui::primitives::LayoutRun`: `pub struct LayoutRun { pub bytes: Range<usize>, pub rtl: bool, pub positions: Vec<f32>, pub widths: Vec<f32> }`. One direction run of a single-row layout, owned.
+- `craft_ui::primitives::LeastLayout`: `pub struct LeastLayout { pub whole: TextLayout, pub width: f32 }`. A run laid out whole on its line, and its width at its readable least: what a text that elides measures at
+  - `pub fn size(&self) -> egui::Vec2`. The size the run takes at its least: its least width and its whole line's height.
 - `craft_ui::primitives::LoadFailure`: `pub enum LoadFailure { Missing, Unreadable, Panicked, Message(String) }`. Why a job made no picture. A job carries no text: the state carries this value and the painter words it at run
   - `pub fn text<'a>(&'a self, words: &'a TextureWords) -> &'a str`. The failure tooltip in the words of the scope (`cx.words::<TextureWords>()`).
 - `craft_ui::primitives::LoadResult`: `pub type LoadResult = Result<LoadedPicture, LoadFailure>`. What a loader job returns: a `LoadedPicture`, or why there is none.
@@ -3388,9 +3390,20 @@ The command board: the registry and typed sets, per-frame state, the queue, firi
   - `pub const fn toggle(self) -> ChromeToggle`. The toggle the command writes to the output.
 - `craft_ui::runtime::commands::ClipContent`: `pub struct ClipContent { pub text: Option<Arc<str>> }`. What a paste delivers.
 - `craft_ui::runtime::commands::ClipError`: `pub struct ClipError(pub String)`. Why a paste has no content.
-- `craft_ui::runtime::commands::ClipItem`: `pub enum ClipItem { Text(Arc<str>), Html(Arc<str>), Image(Arc<ColorImage>), Custom { mime: Arc<str>, bytes: Arc<[u8]> } }`. One clipboard item.
-- `craft_ui::runtime::commands::ClipboardHandle`: `pub struct ClipboardHandle`. The component's paste slot over the system clipboard. egui carries text and images, so `Html` and `Custom`
-  - `pub fn put(&self, items: &[ClipItem])`. Writes every flavour of `items` that the clipboard carries.
+- `craft_ui::runtime::commands::ClipItem`: `pub enum ClipItem { Text(Arc<str>), Html(Arc<str>), Image(Arc<ColorImage>), Rtf(Arc<str>), MathMl(Arc<str>), Custom { mime: Arc<str>, bytes: Arc<[u8]> } }`. One clipboard item.
+  - `pub fn custom(mime: impl Into<Arc<str>>, bytes: impl Into<Arc<[u8]>>) -> ClipItem`. An item of an app-defined type: `bytes` under the MIME type `mime`.
+- `craft_ui::runtime::commands::ClipboardHandle`: `pub struct ClipboardHandle`. The component's paste slot over the installed clipboard (the host's, else egui's). Every call goes to the
+  - `pub fn of(ctx: &Context) -> ClipboardHandle`. The clipboard handle of `ctx`, over the installed clipboard, for code outside a component; its paste slot
+  - `pub fn offer(&self, items: &[ClipItem]) -> Result<Written, ClipboardError>`. Offers `items` in the caller's order, as one offer, and says which flavour the clipboard kept. A measuring run
+  - `pub fn read(&self, mimes: &[&str]) -> Result<Option<Flavor>, ClipboardError>`. The first of `mimes` the installed clipboard holds.
+  - `pub fn read_text(&self) -> Result<Option<String>, ClipboardError>`. The clipboard's text.
+  - `pub fn read_image(&self) -> Result<Option<ClipboardImage>, ClipboardError>`. The clipboard's image as straight-alpha RGBA8 pixels; `ColorImage::from_rgba_unmultiplied` turns them back.
+  - `pub fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError>`. The files the clipboard holds.
+  - `pub fn has(&self, mimes: &[&str]) -> bool`. Whether the clipboard holds one of `mimes`.
+  - `pub fn holds_ours(&self) -> bool`. Whether the clipboard still holds what this app last offered.
+  - `pub fn formats(&self) -> Vec<String>`. The MIME names of the formats on the clipboard.
+  - `pub fn arrived(&self) -> bool`. Whether a late paste offer arrived this frame; true in every pass of that frame.
+  - `pub fn put(&self, items: &[ClipItem])`. Offers `items` as one offer ([`offer`](Self::offer)), for a caller that does not ask what was kept.
   - `pub fn paste(&self) -> &Pending<ClipContent, ClipError>`. The pasted content: ready in the pass that delivers the paste to the focused component that lists Paste.
 - `craft_ui::runtime::commands::CommandDef`: re-export of `craft_keymap::CommandDef` (outside these crates).
 - `craft_ui::runtime::commands::CommandDefError`: `pub enum CommandDefError { Binding { command: &'static str, error: BindingError }, Scope { command: &'static str }, Duplicate { command: String }, NotApp { command: String } }`. Why a command definition is unusable.
@@ -3863,6 +3876,7 @@ Decision records and findings. Inspected regions ([`record`]) collect pipeline s
 - `craft_ui::runtime::install::WheelModifiers`: `pub struct WheelModifiers { pub zoom: egui::Modifiers, pub sideways: egui::Modifiers }`. The modifiers the mouse wheel zooms and scrolls sideways with.
   - `pub const fn new(zoom: egui::Modifiers, sideways: egui::Modifiers) -> Self`. The wheel zooms with `zoom` held and scrolls sideways with `sideways` held.
 - `craft_ui::runtime::install::install`: `pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError>`. Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, quit goes
+  - `pub fn clipboard(mut self, clipboard: craft_platform::clipboard::Clipboard) -> Self`. Installs the host's clipboard (system, browser event, memory) in place of the runtime's own.
 
 ## `craft_ui::runtime::keys`
 
@@ -3898,6 +3912,7 @@ Layout memory: sizes one pass measures and the next pass places by, the one disc
 
 - `craft_ui::runtime::layout_memory::emit_text`: `pub fn emit_text(ctx: &Context, id: Id, text: Option<&str>)`. Hands forward a text a run found under `id` that content outside the body it runs in shows, as `emit_record`
 - `craft_ui::runtime::layout_memory::forget_kept`: `pub fn forget_kept(ctx: &Context)`. Drops every kept measurement, so the next pass measures each body as a first pass would.
+- `craft_ui::runtime::layout_memory::kept_leaves`: `pub fn kept_leaves(ctx: &Context) -> usize`. How many component entries the valid kept measurements hold, each body counting only the components directly in
 - `craft_ui::runtime::layout_memory::text`: `pub fn text(ctx: &Context, id: Id) -> Option<Arc<str>>`. The text a run of this pass handed forward under `id` ([`emit_text`]), or a kept transcript gave this pass.
 
 ## `craft_ui::runtime::memory`
@@ -4325,6 +4340,7 @@ The fixture, the suite runner and the story helpers.
 - `craft_ui::testing::is_measuring`: re-export of `craft_ui::runtime::measure::active` (defined outside these crates).
 - `craft_ui::testing::last_frame_memo_runs`: re-export of `craft_ui::runtime::measure::last_frame_memo_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_measure_asks`: re-export of `craft_ui::runtime::measure::last_pass_measure_asks` (defined outside these crates).
+- `craft_ui::testing::kept_measurement_leaves`: re-export of `craft_ui::runtime::layout_memory::kept_leaves`.
 - `craft_ui::testing::last_pass_measuring_runs`: re-export of `craft_ui::runtime::measure::last_pass_body_runs` (defined outside these crates).
 - `craft_ui::testing::last_pass_memo_key_bytes`: re-export of `craft_ui::runtime::measure::last_pass_memo_key_bytes` (defined outside these crates).
 - `craft_ui::testing::last_pass_memo_runs`: re-export of `craft_ui::runtime::measure::last_pass_memo_runs` (defined outside these crates).

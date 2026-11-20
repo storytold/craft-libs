@@ -2,7 +2,11 @@
 
 mod colours;
 mod edit_policy;
+mod pointers;
 mod stories;
+mod surfaces;
 
 pub use colours::Colours;
 pub use edit_policy::EditPolicy;
+pub use pointers::PointerLooks;
+pub use surfaces::Surfaces;

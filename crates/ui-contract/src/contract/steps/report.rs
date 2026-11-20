@@ -9,7 +9,7 @@ use crate::runtime::access::{self, Access, FaceFacts, Own, Politeness, Role, Set
 use crate::runtime::commands::ResolvedCommand;
 use crate::runtime::env::{Label, Message};
 use crate::runtime::focus::{self};
-use crate::runtime::keys;
+use crate::runtime::{inspect, keys, pass_state};
 use crate::style::Flags;
 use craft_behavior::Sense;
 use egui::Id;
@@ -99,6 +99,9 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     debug_assert!(access.role.is_none_or(|alt| facts.alt_roles.contains(&alt)), "`Access::role` picks one of `ALT_ROLES`");
     let flags = core.state.flags;
     let resolved = core.resolved;
+    // Before any return: a component without an AccessKit node (merged, or AccessKit off) still records its command
+    // for the inspected region, which keytips place their badges by.
+    inspect::note_command(ctx, id, core.command.as_deref().map(|command| command.command.clone()));
     let paint = core.paint.borrow();
     if role == Role::Merged {
         let facts = scope::Merged {
@@ -108,11 +111,18 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
             enabled: resolved.enabled,
         };
         scope::finish(ctx, id, Some(facts));
+        scope::leave(ctx, id);
         return;
     }
     scope::finish(ctx, id, None);
     let carried = scope::carried_name(ctx, id);
+    // Step 8 created the node by the type's role; the role this pass reports may be none (`Access::role`). The node
+    // then stays only as the place of the children shown inside it, which assistive technology passes over: left
+    // unwritten it would be reported as a node of unknown role.
     let Role::Node(role) = role else {
+        if input.node {
+            access::pass_through(ctx, id);
+        }
         scope::leave(ctx, id);
         return;
     };
@@ -199,8 +209,14 @@ fn report_access(p: &dyn ErasedPass<'_>, facts: &TypeFacts, input: &ReportIn<'_>
     if let Some(folded) = &folded {
         keys::register_node(ctx, id, folded.inner, None, focusable);
     }
-    if let Some(facts) = core.text_access.take() {
+    let editor_record = || {
+        let widget = core.editor.as_ref()?.widget;
+        pass_state::with::<EditorRecords, _>(ctx, |records| records.0.remove(&widget))
+    };
+    if let Some(facts) = core.text_access.take().or_else(editor_record) {
         crate::runtime::access::text::report_text(ctx, id, &facts);
+    } else if let Some(editor) = &core.editor {
+        crate::runtime::access::text::fold_editor(ctx, editor.widget, id);
     }
     if core.member_of.is_some() && flags.contains(Flags::FOCUSED) {
         access::set_focus(ctx, id);
@@ -304,4 +320,16 @@ pub(crate) fn report_inert(core: &CxCore<'_>, facts: &TypeFacts) {
             ltr_axis: core.resolved.ltr_axis,
         },
     );
+}
+
+/// The text facts an editor body reported through its `EditorHandle` in the running pass, by editor widget: the
+/// owning component's report step reads its own (owed by ribbon-w5, S-L168). Pass-local, so nothing outlives the pass.
+#[derive(Default)]
+pub(crate) struct EditorRecords(std::collections::HashMap<egui::Id, crate::runtime::access::text::TextFacts>);
+
+/// Puts `facts` in the running pass's record for the editor part `widget`.
+pub(crate) fn note_editor_facts(ctx: &egui::Context, widget: egui::Id, facts: crate::runtime::access::text::TextFacts) {
+    pass_state::with::<EditorRecords, _>(ctx, |records| {
+        records.0.insert(widget, facts);
+    });
 }

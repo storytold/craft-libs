@@ -546,7 +546,6 @@ pub(crate) fn note_pressed_outside(ctx: &Context, id: Id) {
 }
 
 /// Whether a primary press landed outside the layer `id` in this pass while its dismissal kept it open.
-#[doc(hidden)]
 pub fn pressed_outside(ctx: &Context, id: Id) -> bool {
     with_pass(ctx, |pass| pass.pressed_outside.contains(&id))
 }

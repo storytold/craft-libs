@@ -1,10 +1,10 @@
 //! Stories of the scroll bars.
 
-use super::{CanvasScrollbars, HORIZONTAL};
+use super::{CanvasScrollbars, HORIZONTAL, VERTICAL};
 use crate::canvas::Canvas;
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_with, story_view};
 use crate::contract::{Show as _, Validity};
-use crate::runtime::env::Message;
+use crate::runtime::env::{Label, Message};
 use crate::testing::stage;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, Target, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
@@ -43,6 +43,27 @@ fn drag_thumb(fixture: &mut Fixture) {
     let grip =
         Target { node: track.node, rect: Rect::from_center_size(track.rect.left_center() + vec2(GRIP_THRESHOLDS * threshold, 0.0), Vec2::ZERO) };
     fixture.drag(&grip, Vec2::new(DRAG_THRESHOLDS * threshold, 0.0));
+}
+
+/// Presses the vertical thumb, drags it down and releases it: the gesture the shared drive cases expect to end once.
+fn drag_vertical_thumb(fixture: &mut Fixture) {
+    let Some(id) = fixture.root_id() else { return };
+    let Some(track) = fixture.part(id, VERTICAL) else { return };
+    let threshold = crate::testing::input::slop(fixture.ctx());
+    let grip = track.rect.center_top() + vec2(0.0, GRIP_THRESHOLDS * threshold);
+    fixture.drag_at(grip, Vec2::new(0.0, DRAG_THRESHOLDS * threshold));
+}
+
+/// The tip beside a dragged vertical thumb: the bars show it on the reading-start side while the thumb drags.
+#[story(CanvasScrollbars<'static>, covers = [Default, Open], drive = Drive::Custom(drag_vertical_thumb))]
+fn tip_while_dragging(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let full = stage(ui);
+    let shown = view_over(ui, full);
+    let (view, view_at) = data.value_at("view", shown);
+    on_canvas_with(ui, full, Canvas::new("Document").view(shown), Some(&SHOWN), |ui, at| {
+        let page = |_: &CanvasView| Label::from("Page 2 of 6");
+        CanvasScrollbars::new("Scroll bars", view_at.bind(&mut *view), DOCUMENT).tip(&page).show_at(ui, at)
+    })
 }
 
 #[story(CanvasScrollbars<'static>, covers = [Default], drive = Drive::Custom(drag_thumb))]

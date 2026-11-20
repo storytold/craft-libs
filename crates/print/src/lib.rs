@@ -8,14 +8,20 @@
 #![warn(missing_docs)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Printing in the browser.
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
 /// Direct local-CUPS transport, independent of command-line spooler selection.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cups;
+pub mod spool;
 
 #[cfg(any(test, windows))]
 mod progress;
 #[cfg(any(test, windows))]
 mod sheets;
+#[cfg(test)]
+mod spool_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, windows))]
@@ -859,7 +865,9 @@ pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicU8>);
 
 const PENDING: u8 = 0;
 const CANCELLED: u8 = 1;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const SENDING: u8 = 2;
+#[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
 const CANCELLED_MESSAGE: &str = "the print job was cancelled before anything was sent to the printer";
 
 impl Cancel {
@@ -881,6 +889,7 @@ impl Cancel {
 
     /// The last point before anything reaches the spooler: the job is being sent from here on,
     /// unless it was cancelled.
+    #[cfg(any(test, windows, all(unix, not(target_arch = "wasm32"))))]
     pub(crate) fn start_sending(&self) -> Result<(), Error> {
         use std::sync::atomic::Ordering::{AcqRel, Acquire};
         match self.0.compare_exchange(PENDING, SENDING, AcqRel, Acquire) {

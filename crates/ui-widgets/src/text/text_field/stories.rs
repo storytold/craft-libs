@@ -2,8 +2,10 @@
 
 use super::TextField;
 use crate::contract::LabelScheme;
-use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
+use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing, Validity};
+use crate::display::{Shade, Text};
 use crate::form::{Field, FieldGroup};
+use crate::layout_components::Stack;
 use crate::primitives::{Completer, Completion, IconSpec};
 use crate::runtime::env::Message;
 use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
@@ -129,6 +131,51 @@ fn text_field_adorned(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     TextField::new("Font", data.bind("font", "Inter".to_owned())).leading(IconSpec::svg(IconId::new("search"))).trailing_arrow().show(ui).into()
 }
 
+/// Fields that ask for a width in characters over the field length: a short one, the field length, and a wide one
+/// (a watermark's text), one over the other so their ends show the difference.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
+fn text_field_width_chars(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let (text, text_at) = data.value_at("text", "CONFIDENTIAL".to_owned());
+    let shown = Stack::new().show(ui, |ui, _| {
+        let short = TextField::new("Short, 12 characters", text_at.bind(&mut *text)).width_chars(12).show(ui);
+        TextField::new("Field length", text_at.bind(&mut *text)).show(ui);
+        TextField::new("Wide, 40 characters", text_at.bind(&mut *text)).width_chars(40).show(ui);
+        short
+    });
+    shown.inner.map(StoryOutput::from).unwrap_or_default()
+}
+
+const NOTES: &str = "Shot list\nGolden hour, wide\nDetail of the hands\nThe crowd at the gate\nClosing frame on the sign";
+
+/// A multi-line field that grows to four lines and then scrolls, and one that fills its room, both over one text and
+/// one bound caret shown under them: moving the caret in either moves it in the other.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
+fn text_field_filling(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let ((notes, notes_at), (caret, caret_at)) = data.pair_at(("notes", NOTES.to_owned()), ("caret", 0usize));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let capped = TextField::new("Notes", notes_at.bind(&mut *notes)).lines(2).max_lines(4).caret(caret_at.bind(&mut *caret)).show(ui);
+        TextField::new("Notes, filling", notes_at.bind(&mut *notes)).lines(2).caret(caret_at.bind(&mut *caret)).sizing(Sizing::Fill).show(ui);
+        Text::new(format!("Caret at byte {caret}")).shade(Shade::Muted).show(ui);
+        capped
+    });
+    shown.inner.map(StoryOutput::from).unwrap_or_default()
+}
+
+/// A field whose Tab stays in it and is reported: the readout shows the direction of the last one.
+#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Never)]
+fn text_field_tab_reports(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let ((cell, cell_at), (last, _)) = data.pair_at(("cell", "Revenue".to_owned()), ("last", String::from("none")));
+    let shown = Stack::new().show(ui, |ui, _| {
+        let field = TextField::new("Cell", cell_at.bind(&mut *cell)).tab_reports().show(ui);
+        if let Some(forward) = field.tab {
+            *last = String::from(if forward { "Tab" } else { "Shift+Tab" });
+        }
+        Text::new(format!("Last key: {last}")).shade(Shade::Muted).show(ui);
+        field
+    });
+    shown.inner.map(StoryOutput::from).unwrap_or_default()
+}
+
 /// Completes spreadsheet functions: each candidate marked "ƒ", with what it does under the list.
 struct Functions;
 
@@ -155,7 +202,7 @@ fn open_functions(fixture: &mut Fixture) {
 }
 
 /// A formula cell: the marked list with the highlighted function's description; Enter commits the cell, Tab completes.
-#[story(TextField<'static, PlainText>, covers = [], drive = Drive::Custom(open_functions))]
+#[story(TextField<'static, PlainText>, covers = [Open], drive = Drive::Custom(open_functions))]
 fn text_field_formula(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     TextField::new("Formula", Bind::given(String::new())).complete(Functions).show(ui).into()
 }

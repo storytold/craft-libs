@@ -1,5 +1,6 @@
 //! The integration binary of craft-table: every test is a registered trial.
 
+mod conditions;
 mod grid;
 mod outline;
 mod refpick;

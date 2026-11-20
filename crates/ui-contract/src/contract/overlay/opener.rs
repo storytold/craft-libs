@@ -186,7 +186,7 @@ pub(super) fn opener_anchor(opener: &Opener, opening: Opening, place: &Place) ->
         return anchor.clone();
     }
     match (place, opening) {
-        (Place::Anchored { anchor: anchor @ (Anchor::Pointer | Anchor::Corner(..)), .. }, _) => anchor.clone(),
+        (Place::Anchored { anchor: anchor @ (Anchor::Pointer | Anchor::Corner(..) | Anchor::Parent), .. }, _) => anchor.clone(),
         (_, Opening::Pointer) => Anchor::Pointer,
         (_, Opening::At(rect)) => Anchor::Rect(rect),
         (_, Opening::Plain) => Anchor::Response,

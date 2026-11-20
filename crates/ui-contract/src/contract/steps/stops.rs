@@ -41,6 +41,17 @@ pub(crate) struct StopsIn<'a> {
 }
 
 /// The id of the roving group a container's body forms.
+/// The roving group of a component's own parts.
+fn roving_group(id: Id) -> Id {
+    sub(id, "roving")
+}
+
+/// The roving group a stop shown among a component's parts joins: the body group `joined` when the component joined it
+/// in this pass (`Cx::join_roving`), else the group of the component's own parts. The one source for the parts'
+/// registration and for a component the header hosts in its cells.
+pub(crate) fn parts_group(id: Id, joined: Option<Id>) -> Id {
+    joined.unwrap_or_else(|| roving_group(id))
+}
 pub(crate) fn body_group(id: Id) -> Id {
     sub(id, "body_roving")
 }
@@ -51,7 +62,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     let ctx = input.ctx;
     debug_assert!(input.parts.rovings.len() <= 1, "a component declares one roving group; a second would be dropped");
     let row_parts = if input.item { input.row } else { None };
-    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| sub(input.id, "roving"));
+    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| roving_group(input.id));
     if let (Some(group), Some(roving)) = (group, input.parts.rovings.first()) {
         let arrival = input.parts.decls.iter().rev().find(|(_, extras)| extras.selected && extras.focusable);
         let group = Group::new(group, *roving).rtl(input.rtl);
@@ -86,8 +97,8 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
             let stop = if extras.nudges { stop.role(input.role.nudge(true)) } else { stop };
             let stop = if extras.default_stop { stop.default_stop() } else { stop };
             // A part group that joined the body's roving group has its parts registered there.
-            let joined = group.and(input.group);
-            let stop = if let Some(group) = row_parts.or(joined).or(group).or(input.row) { stop.in_group(group) } else { stop };
+            let joined = group.map(|_| parts_group(input.id, input.group));
+            let stop = if let Some(group) = row_parts.or(joined).or(input.row) { stop.in_group(group) } else { stop };
             if extras.after_header {
                 after_header.push(stop);
             } else {
@@ -98,8 +109,11 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     after_header
 }
 
-/// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which
-/// shows its reason on keyboard focus (testing 22.4). Step 9 still drops its activations and edits.
+/// Whether the component is a focus stop: an enabled one, or a disabled one with a reason to show on keyboard focus
+/// (testing 22.4): its tooltip's `disabled_text`, or its bound command's hint, which its tooltip shows. Step 9 still
+/// drops its activations and edits.
 pub(crate) fn takes_focus(resolved: &Resolved<'_>) -> bool {
-    resolved.enabled || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+    resolved.enabled
+        || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+        || resolved.command.and_then(|command| command.hint.as_deref()).is_some_and(|hint| !hint.is_empty())
 }

@@ -649,6 +649,27 @@ pub struct EditResponse<T> {
     /// The shown value as the component words it to assistive technology ("40.0", "50 %"); `None` for a component
     /// that gives no such text.
     pub value_text: Option<String>,
+    /// A `TabKey::Reports` text part kept focus on Tab (`Some(true)`) or Shift+Tab (`Some(false)`) in this pass;
+    /// `left_by_tab` stays the fact that focus left by Tab, which such a part never does.
+    pub tab: Option<bool>,
+    /// The bound caret (byte offset) after the pass.
+    pub caret: Option<usize>,
+    /// The pointer's stay over the control.
+    pub hover: Hover,
+}
+
+/// A command-bound control's report of the pointer's stay over it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Hover {
+    /// The pointer is over the control in this pass.
+    pub over: bool,
+    /// The pointer entered the control in this pass.
+    pub entered: bool,
+    /// The pointer left the control in this pass.
+    pub left: bool,
+    /// The control was clicked with the pointer, which has stayed over it since.
+    pub clicked: bool,
 }
 
 impl<T> EditResponse<T> {
@@ -664,6 +685,9 @@ impl<T> EditResponse<T> {
             validity,
             shown: None,
             value_text: None,
+            tab: None,
+            caret: None,
+            hover: Hover::default(),
         }
     }
 
@@ -683,6 +707,9 @@ impl<T> EditResponse<T> {
             validity: Validity::Ok,
             shown,
             value_text: None,
+            tab: None,
+            caret: None,
+            hover: Hover::default(),
         }
     }
 
@@ -720,6 +747,9 @@ impl<T: Clone> EditResponse<T> {
             validity,
             shown,
             value_text: self.value_text,
+            tab: self.tab,
+            caret: self.caret,
+            hover: self.hover,
         }
     }
 }

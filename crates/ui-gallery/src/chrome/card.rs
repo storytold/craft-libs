@@ -310,6 +310,9 @@ pub struct StoryBody {
 pub struct BodyShown {
     /// Where the story shows in flow: its surface; `None` while the button that opens the story's dialog shows.
     pub flow: Option<Rect>,
+    /// The story's output when the pass ran it for real: not in a sizing pass or a replay of its view, nor held back
+    /// behind its button.
+    pub output: Option<StoryOutput>,
 }
 
 impl StoryBody {
@@ -360,8 +363,12 @@ impl StoryBody {
             reported: Outbox::new(&mut reported),
         };
         let surface = MemoView::new((host.id, "story"), props, story_view).show(ui);
-        // Whether a dialog of the story showed in a real run of it in this pass; `None` when it did not run for real.
-        let ran = reported.pop().and_then(|run| run.dialog);
+        // What a real run of the story in this pass reported; `None` when it did not run for real.
+        let run = reported.pop();
+        // Whether a dialog of the story showed in that run.
+        let ran = run.as_ref().and_then(|run| run.dialog);
+        // The story's output of that run.
+        let real = run.and_then(|run| run.output);
         if !runs {
             ui.ctx().request_repaint();
         }
@@ -394,7 +401,7 @@ impl StoryBody {
             // only the measuring run or held the story back has not made them yet.
             state.note_start();
         }
-        BodyShown { flow: surface }
+        BodyShown { flow: surface, output: real }
     }
 
     /// The shown value as the story's component words it ([`StoryOutput::value_text`]), as this pass's run of the
@@ -453,9 +460,10 @@ impl Host<'_> {
     }
 }
 
-/// What a story's run reported: whether a dialog of it showed, `None` in a sizing run.
+/// What a story's run reported: whether a dialog of it showed and the story's output, both `None` in a sizing run.
 struct StoryRun {
     dialog: Option<bool>,
+    output: Option<StoryOutput>,
 }
 
 /// What a story's view shows: the story's surface with the story under its caption, in the card's direction and control
@@ -509,8 +517,9 @@ fn story_view(props: &mut StoryProps<'_>, ui: &mut Ui) -> Rect {
                 Text::new(readout.clone()).shade(Shade::Muted).show(ui);
             }
             layout_memory::emit_text(ui.ctx(), value_key, output.value_text.as_deref());
-            let dialog = (!ui.is_sizing_pass()).then(|| shell.is_some_and(|shell| shell.dialogs_shown() > before));
-            reported.send(StoryRun { dialog });
+            let real = !ui.is_sizing_pass();
+            let dialog = real.then(|| shell.is_some_and(|shell| shell.dialogs_shown() > before));
+            reported.send(StoryRun { dialog, output: real.then_some(output) });
         })
         .output
         .rect

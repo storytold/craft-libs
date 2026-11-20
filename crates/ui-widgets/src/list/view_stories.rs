@@ -598,7 +598,7 @@ fn open_undo_history(fixture: &mut Fixture) {
 }
 
 /// The list as WordCraft hosts it: a button opens it in a popover.
-#[story(UndoList<'static>, covers = [], drive = Drive::Custom(open_undo_history))]
+#[story(UndoList<'static>, covers = [Open], drive = Drive::Custom(open_undo_history))]
 fn undo_list_in_a_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let opener = Button::new("Undo History").show(ui);
     let ((open, open_at), (mark, mark_at)) = data.pair_at(("open", false), ("mark", UndoMark::at(2)));

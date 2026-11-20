@@ -2,6 +2,8 @@
 
 mod crop;
 
+mod editor;
+
 mod navigate;
 
 mod navigator;
