@@ -680,18 +680,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
-        // `<=` so a boundary inside a skipped stretch is still emitted (late) rather than
-        // blocking every later one.
-        while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
-            if let Some((_, m)) = marks.next() {
-                let obj = match m {
-                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
-                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
-                };
-                pb.push('\u{FFFC}', CharProps::default());
-                pb.objects.push(obj);
-            }
-        }
+        marks_at(cp, &mut marks, &mut pb, field.as_mut());
         let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
             Ok(found) => found,
             Err(next) => {
@@ -794,7 +783,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     && f.depth == 1
                     && f.sep.is_none()
                 {
-                    f.sep = Some(FieldResult::default());
+                    // The instruction is complete here: a hyperlink's result keeps the
+                    // boundaries met inside it, at their places in its text.
+                    let link = hyperlink_target(f.instr.trim()).is_some();
+                    f.sep = Some(FieldResult { marks: link.then(Vec::new), ..FieldResult::default() });
                 }
                 cp = cp.saturating_add(1);
                 continue;
@@ -872,6 +864,11 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
+    // A hyperlink left unfinished at the end of the walk still writes its boundaries, so no
+    // bookmark loses its start or its end.
+    for (_, obj) in field.and_then(|f| f.sep).and_then(|r| r.marks).unwrap_or_default() {
+        push_mark(&mut pb, obj, CharProps::default());
+    }
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
@@ -881,6 +878,31 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         });
     }
     out
+}
+
+/// Writes the bookmark boundaries at or before `cp`. `<=` so a boundary inside a skipped stretch
+/// is still written (late) rather than blocking every later one. Inside a hyperlink's result a
+/// boundary stays with the result text, which is written only when the field ends (#2286).
+fn marks_at<'m>(
+    cp: u32,
+    marks: &mut std::iter::Peekable<std::slice::Iter<'m, (u32, notes::Mark)>>,
+    pb: &mut ParaBuild,
+    field: Option<&mut FieldBuild>,
+) {
+    let mut result = field.and_then(|f| f.sep.as_mut());
+    while let Some((_, m)) = marks.next_if(|&(mcp, _)| *mcp <= cp) {
+        let obj = match m {
+            notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
+            notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+        };
+        let left = match result.as_deref_mut() {
+            Some(result) => result.keep_mark(obj),
+            None => Some(obj),
+        };
+        if let Some(obj) = left {
+            push_mark(pb, obj, CharProps::default());
+        }
+    }
 }
 
 /// Field assembly: `instr` collects everything before the separator (nested fields
@@ -901,6 +923,9 @@ struct FieldResult {
     text: String,
     /// (byte length in `text`, formatting) in order; adjacent runs differ.
     runs: Vec<(usize, CharProps)>,
+    /// For a hyperlink, the bookmark boundaries met inside the result: (byte offset in `text`,
+    /// boundary), in order. `None` for other fields, whose boundaries are written as met.
+    marks: Option<Vec<(usize, InlineObject)>>,
 }
 
 impl FieldResult {
@@ -912,6 +937,25 @@ impl FieldResult {
         }
         self.text.push(c);
     }
+
+    /// Keeps a boundary at the current end of the text, if this result keeps them; otherwise
+    /// hands it back to be written now.
+    fn keep_mark(&mut self, obj: InlineObject) -> Option<InlineObject> {
+        match self.marks.as_mut() {
+            Some(marks) => {
+                marks.push((self.text.len(), obj));
+                None
+            }
+            None => Some(obj),
+        }
+    }
+}
+
+/// Writes a bookmark boundary: an object anchored at a U+FFFC of its own, with `props` (the link
+/// it is inside, if any).
+fn push_mark(pb: &mut ParaBuild, obj: InlineObject, props: CharProps) {
+    pb.push('\u{FFFC}', props);
+    pb.objects.push(obj);
 }
 
 /// Bytes a clone of `obj` copies: the object itself plus a picture's alt text, a group with all
@@ -939,30 +983,53 @@ fn anchor_props(ctx: &WalkCtx<'_>, cp: u32) -> CharProps {
 ///
 /// The target is copied once per run of equally formatted result text, not per character,
 /// and each copy is charged to `work` ([`MAX_WORK`]); once that is spent the rest of the
-/// result is kept as plain text (#3708).
+/// result is kept as plain text (#3708). Bookmark boundaries met inside the result are written
+/// at their places in its text, splitting a run where one falls inside it, and are inside the
+/// link as a `w:hyperlink`'s are, so one field is written back (#2286).
 fn finish_field(pb: &mut ParaBuild, f: FieldBuild, work: &Work) {
     let instr = f.instr.trim().to_string();
     let result = f.sep.unwrap_or_default();
+    let mut marks = result.marks.unwrap_or_default().into_iter().peekable();
     if let Some(target) = hyperlink_target(&instr) {
         let cost = target.len() as u64;
-        let mut chars = result.text.chars();
-        for (len, props) in result.runs {
-            let mut linked = props;
+        let in_link = || {
+            let mut props = CharProps::default();
             if work.charge(cost, Cost::LinkTarget) {
-                linked.link = Some(target.clone());
+                props.link = Some(target.clone());
             }
-            let mut left = len;
-            let Some(first) = chars.next() else { break };
-            pb.push(first, linked);
-            left = left.saturating_sub(first.len_utf8());
-            while left > 0 {
-                let Some(c) = chars.next() else { break };
-                pb.extend(c);
-                left = left.saturating_sub(c.len_utf8());
+            props
+        };
+        let mut at = 0usize;
+        'runs: for (len, mut props) in result.runs {
+            let end = at.saturating_add(len);
+            loop {
+                while let Some((_, obj)) = marks.next_if(|(o, _)| *o <= at) {
+                    push_mark(pb, obj, in_link());
+                }
+                // The text up to the next boundary inside this run, or to the run's end.
+                let stop = marks.peek().map_or(end, |(o, _)| (*o).min(end));
+                let Some(piece) = result.text.get(at..stop) else { break 'runs };
+                let last = stop >= end;
+                let mut linked = if last { std::mem::take(&mut props) } else { props.clone() };
+                if work.charge(cost, Cost::LinkTarget) {
+                    linked.link = Some(target.clone());
+                }
+                let mut chars = piece.chars();
+                if let Some(first) = chars.next() {
+                    pb.push(first, linked);
+                    chars.for_each(|c| pb.extend(c));
+                }
+                at = stop;
+                if last {
+                    break;
+                }
             }
         }
+        marks.for_each(|(_, obj)| push_mark(pb, obj, in_link()));
         return;
     }
+    // Other fields become one object; their boundaries (none are kept today) go before it.
+    marks.for_each(|(_, obj)| push_mark(pb, obj, CharProps::default()));
     pb.push('\u{FFFC}', f.anchor);
     pb.objects.push(InlineObject::Field { instr, result: result.text, locked: false, dirty: false, code: false, form: String::new() });
 }

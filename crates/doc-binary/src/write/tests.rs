@@ -297,6 +297,33 @@ fn fields_links_and_bookmarks_round_trip() {
     assert!(q.objects.iter().any(|o| matches!(o, InlineObject::BookmarkEnd { name } if name == "Spot")));
 }
 
+/// #2286: a bookmark inside a link is written inside its one HYPERLINK field and read back at its
+/// place, still inside the link.
+#[test]
+fn a_bookmark_inside_a_link_round_trips_in_one_field() {
+    let mut p = para("see abc.");
+    let at = p.text.find("abc").unwrap();
+    p.format(at, at + 3, &|c| c.link = Some("https://example.org/".into())).unwrap();
+    let linked = CharProps { link: Some("https://example.org/".into()), ..Default::default() };
+    p.insert_object(at + 2, InlineObject::BookmarkEnd { name: "B".into() }, &linked).unwrap();
+    p.insert_object(at + 1, InlineObject::BookmarkStart { name: "B".into() }, &linked).unwrap();
+    let r = round(&doc_of(vec![p]));
+    let q = r.body[0].as_para().unwrap();
+    assert_eq!(q.text, "see a\u{FFFC}b\u{FFFC}c.");
+    assert!(
+        matches!(q.objects.as_slice(), [InlineObject::BookmarkStart { name: s }, InlineObject::BookmarkEnd { name: e }] if s == "B" && e == "B"),
+        "{:?}",
+        q.objects
+    );
+    let start = q.text.find('a').unwrap();
+    let end = q.text.find('c').unwrap() + 1;
+    let mut i = start;
+    while i < end {
+        assert_eq!(q.props_of_char(i).link.as_deref(), Some("https://example.org/"), "byte {i} of {:?}", q.text);
+        i += q.text[i..].chars().next().unwrap().len_utf8();
+    }
+}
+
 /// A 2×1 PNG.
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([10, 200, 30, 255]));

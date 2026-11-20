@@ -1646,6 +1646,88 @@ fn fields_and_hyperlinks() {
     assert_eq!(result, "3");
 }
 
+/// A document whose only bookmark, `bm`, runs from `start` to `end` (CPs in `text`).
+fn bookmarked(text: &'static str, start: u32, end: u32) -> craft_wordmodel::Document {
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm"])), (22, plc(&[start, ccp], &[0, 0, 0, 0])), (23, plc(&[end, ccp], &[0, 0]))],
+        ..structured_spec(text, ccp)
+    };
+    read(&struct_doc(&spec)).expect("opens")
+}
+
+/// The CP of the first `c` in `text`.
+fn cp_of(text: &str, c: char) -> u32 {
+    text.chars().position(|x| x == c).expect("in text") as u32
+}
+
+/// #2286: a bookmark inside a hyperlink's result stays around the text it marks, not before
+/// the whole result, and it and the text on both sides of it keep the link's target.
+#[test]
+fn a_bookmark_inside_a_hyperlink_result_stays_at_its_place() {
+    let text = "Go \u{13}HYPERLINK http://x\u{14}abc\u{15}.\r";
+    let b = cp_of(text, 'b');
+    let doc = bookmarked(text, b, b + 1);
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "Go a\u{FFFC}b\u{FFFC}c.");
+    assert!(
+        matches!(
+            p0.objects.as_slice(),
+            [craft_wordmodel::para::InlineObject::BookmarkStart { name: s }, craft_wordmodel::para::InlineObject::BookmarkEnd { name: e }]
+                if s == "bm" && e == "bm"
+        ),
+        "objects: {:?}",
+        p0.objects
+    );
+    let mut at = 0;
+    let linked: String = p0
+        .runs
+        .iter()
+        .filter_map(|r| {
+            let piece = p0.text.get(at..at + r.len);
+            at += r.len;
+            r.props.link.as_deref().filter(|l| *l == "http://x").and(piece)
+        })
+        .collect();
+    // The boundaries are inside the link too, so it is written back as one field.
+    assert_eq!(linked, "a\u{FFFC}b\u{FFFC}c");
+}
+
+/// #2286: a bookmark that ends where the result ends is written after the link's text, and one
+/// in a field that is not a hyperlink is still written before the field's object.
+#[test]
+fn bookmarks_at_a_hyperlink_results_end_and_in_other_fields() {
+    let text = "\u{13}HYPERLINK http://x\u{14}ab\u{15}\r";
+    let doc = bookmarked(text, cp_of(text, 'b'), cp_of(text, '\u{15}'));
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "a\u{FFFC}b\u{FFFC}");
+
+    let text = "\u{13}PAGE\u{14}12\u{15}\r";
+    let doc = bookmarked(text, cp_of(text, '2'), cp_of(text, '\u{15}'));
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "\u{FFFC}\u{FFFC}\u{FFFC}");
+    assert!(matches!(p0.objects.last(), Some(craft_wordmodel::para::InlineObject::Field { .. })), "objects: {:?}", p0.objects);
+}
+
+/// #2286: a hyperlink the walk never sees end still writes the boundaries kept in its result.
+#[test]
+fn an_unfinished_hyperlink_still_writes_its_bookmarks() {
+    let text = "Go \u{13}HYPERLINK http://x\u{14}abc";
+    let doc = bookmarked(text, cp_of(text, 'b'), cp_of(text, 'c'));
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let kinds: Vec<_> = p0
+        .objects
+        .iter()
+        .map(|o| match o {
+            craft_wordmodel::para::InlineObject::BookmarkStart { .. } => "start",
+            craft_wordmodel::para::InlineObject::BookmarkEnd { .. } => "end",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["start", "end"]);
+}
+
 #[test]
 fn hyperlink_target_sublocation_and_quotes() {
     assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com" \l "heading""#), Some("http://example.com#heading".into()));
