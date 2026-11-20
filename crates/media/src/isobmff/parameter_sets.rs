@@ -207,8 +207,9 @@ impl AvcConfig {
     /// The record of a stream with the one SPS and the one PPS an encoder wrote (NAL units with
     /// their headers, without start codes), with `length_size` bytes (1, 2 or 4) before each NAL
     /// unit in the samples. The profile, compatibility flags and level come from the SPS, and for
-    /// the High profiles 100, 110, 122 and 144 so do the chroma format and bit depths that
-    /// ISO/IEC 14496-15 5.3.2.1 adds after the PPS list.
+    /// every profile except Baseline (66), Main (77) and Extended (88) so do the chroma format and
+    /// bit depths that ISO/IEC 14496-15 5.3.2.1 adds after the PPS list. An SPS of a profile that
+    /// H.264 does not define is refused.
     pub fn from_parameter_sets(sps: &[u8], pps: &[u8], length_size: u8) -> Result<Self> {
         check_length_size(length_size)?;
         for (nal, nal_type, name) in [(sps, 7u8, "SPS"), (pps, 8, "PPS")] {
@@ -218,7 +219,9 @@ impl AvcConfig {
             check_length(nal, 1, name)?;
         }
         let s = AvcSps::parse(sps)?;
-        let ext = if matches!(s.profile_idc, 100 | 110 | 122 | 144) {
+        let ext = if matches!(s.profile_idc, 66 | 77 | 88) {
+            Vec::new()
+        } else if has_chroma_info(s.profile_idc) {
             check_record_fields(s.chroma_format_idc, s.bit_depth_luma, s.bit_depth_chroma)?;
             vec![
                 0xFC | (s.chroma_format_idc as u8 & 3),
@@ -228,7 +231,7 @@ impl AvcConfig {
                 0,
             ]
         } else {
-            Vec::new()
+            return invalid(format!("an SPS of the unknown H.264 profile_idc {}", s.profile_idc));
         };
         Ok(AvcConfig {
             profile: s.profile_idc,
@@ -445,6 +448,16 @@ mod tests {
         let high444 = [0x67, 144, 0, 40, 0b1001_0001, 0b1000_0000];
         let c = AvcConfig::from_parameter_sets(&high444, &PPS, 4).unwrap();
         assert_eq!(c.ext.first().map(|b| b & 3), Some(3));
+        // profile 244 (High 4:4:4 Predictive) at 4:2:0 (`010`) with both bit depths 10 (`011`)
+        let high244 = [0x67, 244, 0, 40, 0b1010_0110, 0b1100_0000];
+        assert_eq!(AvcConfig::from_parameter_sets(&high244, &PPS, 4).unwrap().ext, [0xFD, 0xFA, 0xFA, 0]);
+        // only the Baseline, Main and Extended profiles leave the fields out
+        for profile in [66, 77, 88] {
+            let sps = [0x67, profile, 0, 30, 0x80];
+            assert!(AvcConfig::from_parameter_sets(&sps, &PPS, 4).unwrap().ext.is_empty(), "profile {profile}");
+        }
+        // a profile H.264 does not define has no known place for the fields
+        assert!(AvcConfig::from_parameter_sets(&[0x67, 1, 0, 30, 0x80], &PPS, 4).is_err());
         // HEVC allows bit depths up to 16; the record's 3-bit fields hold 8 to 15
         let (v, p) = (unhex(VPS), unhex(HEVC_PPS));
         let ten = hevc_sps_at((64, 48), (0, 0, 0, 0), 2, 0);
