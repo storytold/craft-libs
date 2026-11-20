@@ -16,100 +16,111 @@ pub fn import(bytes: &[u8]) -> Document {
     d
 }
 
-/// Commands dropped together with their arguments (layout and definitions, not text).
-const DROP_WITH_ARGS: &[&str] = &[
-    "documentclass",
-    "usepackage",
-    "RequirePackage",
-    "newcommand",
-    "renewcommand",
-    "providecommand",
-    "newcommand*",
-    "renewcommand*",
-    "providecommand*",
-    "newenvironment",
-    "renewenvironment",
-    "DeclareMathOperator",
-    "DeclareMathOperator*",
-    "def",
-    "let",
-    "setlength",
-    "addtolength",
-    "setcounter",
-    "addtocounter",
-    "stepcounter",
-    "refstepcounter",
-    "vspace",
-    "vspace*",
-    "hspace",
-    "hspace*",
-    "vskip",
-    "hskip",
-    "pagestyle",
-    "thispagestyle",
-    "pagenumbering",
-    "bibliographystyle",
-    "bibliography",
-    "addbibresource",
-    "printbibliography",
-    "input",
-    "include",
-    "includeonly",
-    "graphicspath",
-    "hypersetup",
-    "definecolor",
-    "geometry",
-    "numberwithin",
-    "newtheorem",
-    "newtheorem*",
-    "theoremstyle",
-    "phantom",
-    "hphantom",
-    "vphantom",
-    "index",
-    "nocite",
-    "addcontentsline",
-    "markboth",
-    "markright",
-    "linespread",
-    "setstretch",
-    "fancyhf",
-    "fancyhead",
-    "fancyfoot",
-    "lstset",
-    "captionsetup",
-    "setmainfont",
-    "setsansfont",
-    "setmonofont",
-    "newfontfamily",
-    "date",
-    "thanks",
-    "maketitle*",
-    "tableofcontents",
-    "listoffigures",
-    "listoftables",
-    "appendix",
-    "frontmatter",
-    "mainmatter",
-    "backmatter",
-    "cline",
-    "hline",
-    "toprule",
-    "midrule",
-    "bottomrule",
-    "cmidrule",
-    "addlinespace",
-    "endhead",
-    "endfirsthead",
-    "endfoot",
-    "endlastfoot",
-    "rowcolor",
-    "arraystretch",
-    "smallskip",
-    "medskip",
-    "bigskip",
-    "today",
-    "and",
+/// Commands dropped together with their arguments (layout and definitions, not text), each with
+/// the arguments it takes in order: `m` is one `{…}` group or command, and `o` is every `[…]` there.
+/// Text after the last argument stays text.
+pub(super) const DROP_WITH_ARGS: &[(&str, &str)] = &[
+    ("documentclass", "omo"),
+    ("usepackage", "omo"),
+    ("RequirePackage", "omo"),
+    ("newcommand", "mom"),
+    ("renewcommand", "mom"),
+    ("providecommand", "mom"),
+    ("newcommand*", "mom"),
+    ("renewcommand*", "mom"),
+    ("providecommand*", "mom"),
+    ("newenvironment", "momm"),
+    ("renewenvironment", "momm"),
+    ("DeclareMathOperator", "mm"),
+    ("DeclareMathOperator*", "mm"),
+    ("def", "m"),
+    ("let", ""),
+    ("setlength", "mm"),
+    ("addtolength", "mm"),
+    ("setcounter", "mm"),
+    ("addtocounter", "mm"),
+    ("stepcounter", "m"),
+    ("refstepcounter", "m"),
+    ("vspace", "m"),
+    ("vspace*", "m"),
+    ("hspace", "m"),
+    ("hspace*", "m"),
+    ("vskip", "m"),
+    ("hskip", "m"),
+    ("pagestyle", "m"),
+    ("thispagestyle", "m"),
+    ("pagenumbering", "m"),
+    ("bibliographystyle", "m"),
+    ("bibliography", "m"),
+    ("addbibresource", "om"),
+    ("printbibliography", "o"),
+    ("input", "m"),
+    ("include", "m"),
+    ("includeonly", "m"),
+    ("graphicspath", "m"),
+    ("hypersetup", "m"),
+    ("definecolor", "ommm"),
+    ("geometry", "m"),
+    ("numberwithin", "omm"),
+    ("newtheorem", "momo"),
+    ("newtheorem*", "mm"),
+    ("theoremstyle", "m"),
+    ("phantom", "m"),
+    ("hphantom", "m"),
+    ("vphantom", "m"),
+    ("index", "om"),
+    ("nocite", "m"),
+    ("addcontentsline", "mmm"),
+    ("markboth", "mm"),
+    ("markright", "m"),
+    ("linespread", "m"),
+    ("setstretch", "m"),
+    ("fancyhf", "om"),
+    ("fancyhead", "om"),
+    ("fancyfoot", "om"),
+    ("lstset", "m"),
+    ("captionsetup", "om"),
+    ("setmainfont", "omo"),
+    ("setsansfont", "omo"),
+    ("setmonofont", "omo"),
+    ("newfontfamily", "momo"),
+    ("date", "m"),
+    ("thanks", "m"),
+    ("hyphenation", "m"),
+    ("addvspace", "m"),
+    ("enlargethispage", "m"),
+    ("enlargethispage*", "m"),
+    ("selectlanguage", "m"),
+    ("newcounter", "mo"),
+    ("settowidth", "mm"),
+    ("settoheight", "mm"),
+    ("settodepth", "mm"),
+    ("maketitle*", ""),
+    ("tableofcontents", ""),
+    ("listoffigures", ""),
+    ("listoftables", ""),
+    ("appendix", ""),
+    ("frontmatter", ""),
+    ("mainmatter", ""),
+    ("backmatter", ""),
+    ("cline", "m"),
+    ("hline", ""),
+    ("toprule", "o"),
+    ("midrule", "o"),
+    ("bottomrule", "o"),
+    ("cmidrule", "om"),
+    ("addlinespace", "o"),
+    ("endhead", ""),
+    ("endfirsthead", ""),
+    ("endfoot", ""),
+    ("endlastfoot", ""),
+    ("rowcolor", "omo"),
+    ("arraystretch", ""),
+    ("smallskip", ""),
+    ("medskip", ""),
+    ("bigskip", ""),
+    ("today", ""),
+    ("and", ""),
 ];
 
 /// Paragraph-level context from the enclosing environments.
@@ -128,8 +139,9 @@ pub(super) struct Parser<'a> {
     fmt: Fmt,
     /// Paragraph context of the enclosing environments.
     ctx: Ctx,
-    /// Text that followed an optional argument's `]` in the same token, emitted next.
-    pending: Option<String>,
+    /// Text that followed an optional argument's `]` in the same token, emitted next. A slice
+    /// of the token, so reading `[]` after `[]` copies nothing.
+    pending: Option<&'a str>,
     /// Open lists: ordered?
     lists: Vec<bool>,
     page_break: bool,
@@ -228,48 +240,78 @@ impl<'a> Parser<'a> {
 
     /// The tokens of an optional `[…]` argument, if one follows.
     pub(super) fn opt_arg(&mut self) -> Option<String> {
-        let save = self.pos;
-        self.skip_spaces();
-        let Some(Tok::Text(s)) = self.t.get(self.pos) else {
-            self.pos = save;
-            return None;
-        };
-        if !s.starts_with('[') {
-            self.pos = save;
-            return None;
+        let t = self.t;
+        let mut out = String::new();
+        if let Some(p) = self.pending.take() {
+            // Text left after the previous argument's `]` comes first: in `\makebox[3cm][l]` the
+            // second argument is in the first one's token and waits there.
+            let Some(body) = p.trim_start().strip_prefix('[') else {
+                self.pending = Some(p);
+                return None;
+            };
+            if self.close_opt(body, &mut out) {
+                return Some(out);
+            }
+        } else {
+            let save = self.pos;
+            self.skip_spaces();
+            let Some(Tok::Text(s)) = t.get(self.pos) else {
+                self.pos = save;
+                return None;
+            };
+            // LaTeX skips spaces before an optional argument, and in `\\begin{figure} [h]` the
+            // space and the `[` share one text token.
+            let Some(body) = s.trim_start().strip_prefix('[') else {
+                self.pos = save;
+                return None;
+            };
+            self.pos += 1;
+            if self.close_opt(body, &mut out) {
+                return Some(out);
+            }
         }
         // Collect raw text up to the matching `]` (no nested brackets across tokens).
-        let mut out = String::new();
-        let mut first = true;
-        while let Some(tok) = self.t.get(self.pos) {
+        while let Some(tok) = t.get(self.pos) {
+            if matches!(tok, Tok::Par) {
+                break;
+            }
+            self.pos += 1;
             match tok {
                 Tok::Text(s) => {
-                    let s = if first { s.get(1..).unwrap_or("") } else { s.as_str() };
-                    first = false;
-                    if let Some(end) = s.find(']') {
-                        out.push_str(s.get(..end).unwrap_or(""));
-                        let rest = s.get(end + 1..).unwrap_or("").to_string();
-                        self.pos += 1;
-                        if !rest.trim().is_empty() {
-                            // The text after `]` comes next (tokens are shared, so it waits here).
-                            self.pending = Some(rest);
-                        }
+                    if self.close_opt(s, &mut out) {
                         return Some(out);
                     }
-                    out.push_str(s);
                 }
                 Tok::Open => out.push('{'),
                 Tok::Close => out.push('}'),
+                // A control space (`\ `, or `\` before a tab or a line end) is a space, as TeX
+                // sets it in a label.
+                Tok::Cmd(c) if c == " " => out.push(' '),
                 Tok::Cmd(c) => {
                     out.push('\\');
                     out.push_str(c);
                 }
-                Tok::Par => break,
                 _ => {}
             }
-            self.pos += 1;
         }
         Some(out)
+    }
+
+    /// Adds `s` to an optional argument's text up to its `]`. True when the `]` was there; the
+    /// text after it then comes next (tokens are shared, so it waits in `pending`).
+    fn close_opt(&mut self, s: &'a str, out: &mut String) -> bool {
+        let Some(end) = s.find(']') else {
+            out.push_str(s);
+            return false;
+        };
+        out.push_str(s.get(..end).unwrap_or(""));
+        let rest = s.get(end + 1..).unwrap_or("");
+        // Checked from the start only: a no-break space stays in its token, so the end can be a
+        // long run of whitespace that every argument in a row would read again.
+        if !rest.trim_start().is_empty() {
+            self.pending = Some(rest);
+        }
+        true
     }
 
     /// The tokens of a `{…}` argument (or a single token), consumed.
@@ -355,45 +397,44 @@ impl<'a> Parser<'a> {
         self.fmt = saved_fmt;
     }
 
-    /// Skip every `[…]` and `{…}` argument that follows (and, for definitions, the macro name).
+    /// Skip a dropped command's arguments, as its `DROP_WITH_ARGS` entry lists them.
     fn drop_args(&mut self, name: &str) {
-        if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "newcommand*" | "renewcommand*" | "providecommand*" | "def" | "let") {
-            self.skip_spaces();
-            if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
-                self.pos += 1;
-            }
-            if name == "let" {
+        if name == "let" {
+            for _ in 0..2 {
                 self.skip_spaces();
                 if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
                     self.pos += 1;
                 }
-                return;
             }
-            if name == "def" {
-                // `\def\x#1{…}`: the parameter text, then the body.
-                while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
-                    self.pos += 1;
-                }
+            return;
+        }
+        if name == "def" {
+            // `\def\x#1{…}`: the macro name and its parameter text come before the body.
+            self.skip_spaces();
+            if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
+                self.pos += 1;
+            }
+            while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
+                self.pos += 1;
             }
         }
-        loop {
+        let args = DROP_WITH_ARGS.iter().find(|(n, _)| *n == name).map_or("", |(_, a)| *a);
+        for kind in args.chars() {
+            if kind == 'o' {
+                // Text after a `]` waits in `pending`: another `[…]`, or the text that follows.
+                while self.opt_arg().is_some() {}
+                continue;
+            }
+            if self.pending.is_some() {
+                return;
+            }
             let save = self.pos;
             self.skip_spaces();
-            match self.t.get(self.pos) {
-                Some(Tok::Open) => {
-                    let _ = self.arg_tokens();
-                }
-                Some(Tok::Text(s)) if s.starts_with('[') => {
-                    let _ = self.opt_arg();
-                    if self.pending.is_some() {
-                        return;
-                    }
-                }
-                _ => {
-                    self.pos = save;
-                    return;
-                }
+            if !matches!(self.t.get(self.pos), Some(Tok::Open | Tok::Cmd(_))) {
+                self.pos = save;
+                return;
             }
+            let _ = self.arg_tokens();
         }
     }
 
@@ -409,7 +450,7 @@ impl<'a> Parser<'a> {
     /// Parse until `\end{env}` (when given), a closing brace at this level, or the end.
     fn flush_pending(&mut self) {
         if let Some(p) = self.pending.take() {
-            self.text(&ligatures(&p));
+            self.text(&ligatures(p));
         }
     }
 
@@ -512,7 +553,7 @@ impl<'a> Parser<'a> {
                     let mut chars = t.chars();
                     let first = chars.next().map(String::from).unwrap_or_default();
                     if !chars.as_str().is_empty() {
-                        self.pending = Some(chars.as_str().to_string());
+                        self.pending = Some(chars.as_str());
                     }
                     first
                 }
@@ -707,6 +748,36 @@ impl<'a> Parser<'a> {
                 self.flush();
                 self.text(&format!("[{}] ", label.unwrap_or(key)));
             }
+            "parbox" | "raisebox" | "scalebox" | "resizebox" | "resizebox*" | "rotatebox" => {
+                // The box's position, size, scale or angle place it; only its last argument is
+                // text.
+                match name {
+                    "parbox" => {
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                        let _ = self.arg_raw();
+                    }
+                    "raisebox" => {
+                        let _ = self.arg_raw();
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                    }
+                    "scalebox" => {
+                        let _ = self.arg_raw();
+                        let _ = self.opt_arg();
+                    }
+                    "rotatebox" => {
+                        let _ = self.opt_arg();
+                        let _ = self.arg_raw();
+                    }
+                    _ => {
+                        let _ = self.arg_raw();
+                        let _ = self.arg_raw();
+                    }
+                }
+                self.with_arg(|_| {});
+            }
             "multicolumn" | "multirow" => {
                 // Outside a tabular: keep the content.
                 let _ = self.arg_raw();
@@ -715,7 +786,7 @@ impl<'a> Parser<'a> {
                 self.with_arg(|_| {});
             }
             "begin" | "end" => {}
-            n if DROP_WITH_ARGS.contains(&n) => self.drop_args(n),
+            n if DROP_WITH_ARGS.iter().any(|(d, _)| *d == n) => self.drop_args(n),
             _ => {
                 // Unknown: drop the command, keep its arguments' text.
                 let _ = self.opt_arg();
@@ -815,6 +886,11 @@ impl<'a> Parser<'a> {
             | "proposition" => {
                 // Floats and boxes: their content, in order.
                 let _ = self.opt_arg();
+                if name == "minipage" {
+                    // `[position][height][inner position]`.
+                    let _ = self.opt_arg();
+                    let _ = self.opt_arg();
+                }
                 if matches!(name, "minipage" | "subfigure" | "multicols" | "multicols*") {
                     let _ = self.arg_raw();
                 }

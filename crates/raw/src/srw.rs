@@ -186,12 +186,14 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: crate::LevelSources { black: black_source, white: white_source },
+        notices: crate::RawNotices::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

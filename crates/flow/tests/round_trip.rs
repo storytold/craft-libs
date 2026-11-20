@@ -99,3 +99,25 @@ fn pictures_are_sniffed_and_sized_from_their_headers() {
     let wide = make_img(PNG.to_vec(), Some(1000.0), Some(500.0), "").unwrap();
     assert_eq!((wide.w, wide.h), (468.0, 234.0));
 }
+
+#[test]
+fn drop_cap_not_repeated_after_page_break() {
+    let mut doc = craft_wordmodel::Document::default();
+    let mut para = craft_wordmodel::Paragraph::with_text("Before\x0cAfter", craft_wordmodel::props::CharProps::default());
+    para.props.drop_cap = Some(3);
+    para.props.drop_cap_distance = Some(72.0);
+    para.props.shading = Some(craft_wordmodel::Rgb(255, 0, 0));
+    doc.body = vec![std::sync::Arc::new(craft_wordmodel::Block::Para(para))];
+
+    let flow = craft_flow::from_doc_with(&doc, craft_flow::FlowOpts { paras: true, ..Default::default() });
+    let paras: Vec<_> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert_eq!(paras.len(), 2);
+    // First paragraph keeps drop cap and shading
+    assert_eq!(paras[0].extra.as_ref().and_then(|x| x.drop_cap), Some(3));
+    assert_eq!(paras[0].extra.as_ref().and_then(|x| x.drop_cap_distance), Some(72.0));
+    assert_eq!(paras[0].extra.as_ref().and_then(|x| x.shading), Some(craft_wordmodel::Rgb(255, 0, 0)));
+    // Continuation clears drop cap, but preserves shading
+    assert_eq!(paras[1].extra.as_ref().and_then(|x| x.drop_cap), None);
+    assert_eq!(paras[1].extra.as_ref().and_then(|x| x.drop_cap_distance), None);
+    assert_eq!(paras[1].extra.as_ref().and_then(|x| x.shading), Some(craft_wordmodel::Rgb(255, 0, 0)));
+}
