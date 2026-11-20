@@ -432,6 +432,16 @@ impl Fixture {
         self
     }
 
+    /// One frame whose pointer button events carry the modifiers held by the fixture.
+    pub fn frame_held(&mut self, mut events: Vec<Event>) -> &mut Self {
+        for event in &mut events {
+            if let Event::PointerButton { modifiers, .. } = event {
+                *modifiers = self.frames.held();
+            }
+        }
+        self.frame(events)
+    }
+
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
     pub fn frame_shapes(&mut self) -> Vec<egui::Shape> {
         self.frames.record_paint();

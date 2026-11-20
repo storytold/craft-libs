@@ -71,8 +71,8 @@ impl DockPanels<usize> for Demo {
     }
 
     fn rail_footer(&mut self, _: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
-        IconButton::new(IconId::new("chevron-up")).label("Previous").show(ui);
-        IconButton::new(IconId::new("chevron-down")).label("Next").show(ui);
+        IconButton::new(IconId::new("chevron_up")).label("Previous").show(ui);
+        IconButton::new(IconId::new("chevron_down")).label("Next").show(ui);
     }
 
     fn panel_rows(&mut self, panel: &usize) -> Vec<PanelRow> {

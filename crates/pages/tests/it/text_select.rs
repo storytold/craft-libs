@@ -205,7 +205,7 @@ impl Rig {
 
     fn click(&mut self, at: Pos2) {
         self.fixture.frame(vec![pointer::moved(at)]);
-        self.fixture.frame(vec![pointer::press(at)]);
+        self.fixture.frame_held(vec![pointer::press(at)]);
         self.fixture.frame(vec![pointer::release(at)]);
         self.fixture.frame(Vec::new());
     }

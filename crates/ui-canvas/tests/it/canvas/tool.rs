@@ -723,7 +723,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     let at = rig.centre();
 
     // Command at the press, up mid-drag: the stand-in keeps the gesture to the release.
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
     rig.fixture.hold(Modifiers::NONE).frame(vec![pointer::moved(at + BY * 2.0)]).frame(vec![pointer::release(at + BY * 2.0)]);
     let calls = rig.calls();
     assert_eq!(calls.first().map(String::as_str), Some("command press"), "{calls:?}");
@@ -758,7 +758,11 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     main.ignores = Some(StandInKey::Command);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
+    rig.fixture
+        .hold(Modifiers::COMMAND)
+        .frame_held(vec![pointer::press(at)])
+        .frame(vec![pointer::moved(at + BY)])
+        .frame(vec![pointer::release(at + BY)]);
     let calls = rig.calls();
     assert_eq!(&calls[..2], ["main press", "command press"], "{calls:?}");
     assert_eq!(calls.last().map(String::as_str), Some("command release"), "{calls:?}");
@@ -769,7 +773,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     main.refuses = Some(StandInKey::Alt);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::ALT).frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
+    rig.fixture.hold(Modifiers::ALT).frame_held(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
     assert_eq!(rig.calls().first().map(String::as_str), Some("alt press"), "{:?}", rig.calls());
 
     // The hover cursor is the stand-in's while its key is held, no gesture runs and the selected tool does not take
@@ -791,7 +795,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     let mut rig = Rig::with(main, &log, None, Setup { momentary: Some(Momentary::new(NavigationOptions::default())), ..Setup::default() });
     let at = rig.centre();
     rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::COMMAND)]);
-    rig.fixture.frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
+    rig.fixture.frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]).frame(vec![pointer::release(at + BY)]);
     assert!(rig.calls().is_empty(), "neither the selected tool nor a stand-in sees a press under a momentary tool: {:?}", rig.calls());
 
     // With the Hand selected, Cmd at a press is Zoom In, not the Command stand-in.
@@ -802,7 +806,7 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     momentary.hand_selected(true);
     let mut rig = Rig::with(main, &log, None, Setup { momentary: Some(momentary), ..Setup::default() });
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at)]).frame_held(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
     assert!(!rig.calls().iter().any(|call| call == "command press"), "Cmd over the selected Hand is Zoom In: {:?}", rig.calls());
 }
 
@@ -815,7 +819,7 @@ fn a_gesture_a_stand_in_holds_is_cancelled_on_the_stand_in() {
     main.refuses = Some(StandInKey::Command);
     let mut rig = Rig::new(main, &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
+    rig.fixture.hold(Modifiers::COMMAND).frame_held(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
     rig.log.borrow_mut().clear();
     let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
     let cancelled = {
@@ -1359,7 +1363,7 @@ fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
     let log = Log::default();
     let mut rig = Rig::new(Probe::new("main", &log), &log, None);
     let at = rig.centre();
-    rig.fixture.hold(Modifiers::SHIFT).frame(vec![pointer::secondary(at, true)]);
+    rig.fixture.hold(Modifiers::SHIFT).frame_held(vec![pointer::secondary(at, true)]);
     rig.fixture.hold(Modifiers::NONE).frame(vec![pointer::secondary(at, false)]);
     let asked = rig.contexts.borrow().clone();
     assert_eq!(asked.len(), 1, "{asked:?}");
