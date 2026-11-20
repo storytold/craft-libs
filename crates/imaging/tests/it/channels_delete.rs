@@ -2,7 +2,7 @@
 
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Event, Key, Modifiers, PointerButton, Vec2};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::ui::channels::{ChannelKind, ChannelRow, ChannelsCommands, ChannelsEvent, ChannelsFooterButton, ChannelsPanel};
@@ -13,16 +13,22 @@ const BLUE: u8 = 2;
 type Events = Rc<RefCell<Vec<ChannelsEvent<u8>>>>;
 
 fn panel(targets: &[u8], allow_color_deletion: bool) -> (Fixture, Events) {
-    let rows =
+    panel_with_permission(targets, Rc::new(Cell::new(allow_color_deletion)))
+}
+
+fn panel_with_permission(targets: &[u8], allow_color_deletion: Rc<Cell<bool>>) -> (Fixture, Events) {
+    let mut rows =
         [(RGB, ChannelKind::Composite, "RGB"), (GREEN, ChannelKind::Color, "Green"), (BLUE, ChannelKind::Color, "Blue")].map(|(key, kind, name)| {
             let mut row = ChannelRow::new(key, kind, name);
             row.targeted = targets.contains(&key);
-            row.allow_color_deletion = allow_color_deletion;
             row
         });
     let events = Events::default();
     let reported = Rc::clone(&events);
     let mut fixture = Fixture::new(move |ui| {
+        for row in &mut rows {
+            row.allow_color_deletion = allow_color_deletion.get();
+        }
         reported.borrow_mut().extend(ChannelsPanel::new(&rows).show(ui).events);
     });
     fixture.room(Vec2::new(900.0, 700.0)).idle(6);
@@ -97,4 +103,21 @@ fn process_channel_delete_from_the_keyboard_and_footer_requires_one_target() {
             assert!(blocked.by_label("Delete Channel").is_none(), "this row's context menu keeps the default");
         }
     }
+}
+
+#[trial]
+fn revoking_process_channel_delete_during_a_drag_blocks_the_drop() {
+    let allow = Rc::new(Cell::new(true));
+    let (mut fixture, events) = panel_with_permission(&[GREEN], Rc::clone(&allow));
+    let row = fixture.by_label("Green").expect("the Green row").center();
+    let trash = fixture.by_label("Delete current channel").expect("the trash button").center();
+    fixture.frame(vec![pointer::moved(row)]);
+    fixture.frame(vec![Event::PointerButton { pos: row, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+    fixture.frame(vec![pointer::moved(row + Vec2::new(16.0, 0.0))]);
+    fixture.frame(vec![pointer::moved(trash)]);
+    allow.set(false);
+    fixture.frame(Vec::new());
+    fixture.frame(vec![Event::PointerButton { pos: trash, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+    fixture.idle(3);
+    assert!(deleted(&events).is_empty(), "the current row revokes delete before the drop");
 }

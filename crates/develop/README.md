@@ -12,9 +12,11 @@ craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "<commi
 
 | Module | From LightCraft (`a75497d6`) | Contents |
 |---|---|---|
-| `color::spline` | `crates/color/src/spline.rs` | `MonotoneCurve` (a tone curve through points that does not overshoot) and `Lut1`. |
+| `color::spline` | `crates/color/src/spline.rs` | Re-exports `craft_color_transform::curve` (`MonotoneCurve`, `Lut1`). |
 | `curve` | `crates/pipeline` | The parametric tone curve and its regions. |
+| `finish` | `crates/pipeline` | Pure-Rust finishing helpers: sharpening masks/limits, vignette parameters, value grain, gamut mapping, and curve saturation refinement. |
 | `lut` | `crates/pipeline` | 3D lookup tables and the `.cube` reader. |
+| `tone` | `crates/pipeline` | Global tone mapping (`ToneMap` and `CameraTone`) from scene luminance to display-linear luminance, SDR and HDR. |
 | `inpaint` | `crates/inpaint` | Content-aware hole filling for spot removal: `complete` (multi-scale patch completion with PatchMatch) and `membrane_fill` (a smooth harmonic fill, its seed and fallback). Interleaved `f32` buffers of any channel count, a fixed-seed RNG, the same result on any number of threads. |
 
 ## Parity with LightCraft

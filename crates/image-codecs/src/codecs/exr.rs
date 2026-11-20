@@ -402,9 +402,21 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
     let channels = AnyChannels::sort(list.into_iter().collect());
     let layer = Layer::new((w, h), LayerAttributes::default(), encoding, channels);
-    let image = exr::image::Image::from_layer(layer);
+    let mut image = exr::image::Image::from_layer(layer);
+    if let Some([red, green, blue, white]) = opts.exr_chromaticities {
+        use exr::math::Vec2;
+        image.attributes.chromaticities = Some(exr::meta::attribute::Chromaticities {
+            red: Vec2(red[0], red[1]),
+            green: Vec2(green[0], green[1]),
+            blue: Vec2(blue[0], blue[1]),
+            white: Vec2(white[0], white[1]),
+        });
+    }
     let mut cursor = Cursor::new(Vec::new());
-    image.write().to_buffered(&mut cursor).map_err(|e| CodecError::encode(F, e))?;
+    let writer = image.write();
+    #[cfg(target_arch = "wasm32")]
+    let writer = writer.non_parallel();
+    writer.to_buffered(&mut cursor).map_err(|e| CodecError::encode(F, e))?;
     Ok(cursor.into_inner())
 }
 
@@ -447,5 +459,16 @@ mod preview_tests {
         }
         // A header cut off mid-attribute is left to the crate.
         check_previews(&good[..at]).unwrap();
+    }
+
+    #[test]
+    fn encode_writes_chromaticities_attribute() {
+        let img = Image::from_f32(2, 2, ChannelLayout::Rgb, &[0.5; 12]).unwrap();
+        let chroma = [[0.713, 0.293], [0.165, 0.830], [0.128, 0.044], [0.32168, 0.33767]];
+        let opts = EncodeOptions { exr_chromaticities: Some(chroma), ..EncodeOptions::default() };
+        let encoded = encode(&img, Plan { layout: ChannelLayout::Rgb, sample: SampleType::F32 }, &opts).unwrap();
+        let meta = MetaData::read_from_buffered(Cursor::new(&encoded), false).unwrap();
+        let c = meta.headers[0].shared_attributes.chromaticities.unwrap();
+        assert_eq!([[c.red.0, c.red.1], [c.green.0, c.green.1], [c.blue.0, c.blue.1], [c.white.0, c.white.1]], chroma);
     }
 }

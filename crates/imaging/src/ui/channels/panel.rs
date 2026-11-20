@@ -172,7 +172,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                 let lead = targeted_row(rows).map(|row| row.key.clone());
                 let mut selection = Selection::new(rows.iter().filter(|row| row.targeted).map(|row| row.key.clone()).collect(), lead.clone(), lead);
                 let kinds: Vec<(K, ChannelKind)> = rows.iter().map(|row| (row.key.clone(), row.kind)).collect();
-                let payload_rows: Vec<_> = rows.iter().map(|row| (row.key.clone(), row.kind, row.can_delete_color())).collect();
+                let payload_rows: Vec<K> = rows.iter().map(|row| row.key.clone()).collect();
                 let kind_of = |key: &K| kinds.iter().find(|(k, _)| k == key).map(|(_, kind)| *kind);
                 let columns = vec![
                     ColumnSpec::toggle(EYE, Label::Empty, ToggleColumn::sweepable()).icon(IconId::new("eye")),
@@ -198,8 +198,7 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                         lands(&remaining, insert.saturating_sub(moved_before))
                     })
                     .drag_payload(move |drag: &ListDrag<K>| {
-                        let (_, kind, can_delete_color) = payload_rows.iter().find(|(key, _, _)| *key == drag.grabbed)?;
-                        Some(ChannelDrag { list: drag.list, grabbed: drag.grabbed.clone(), kind: *kind, can_delete_color: *can_delete_color })
+                        payload_rows.contains(&drag.grabbed).then(|| ChannelDrag { list: drag.list, grabbed: drag.grabbed.clone() })
                     })
                     .show_items(ui, &order, &mut |_key, item| {
                         let at = item.at;

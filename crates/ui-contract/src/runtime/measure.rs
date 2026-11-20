@@ -297,6 +297,43 @@ pub fn chord_texts(ctx: &Context) -> u32 {
     last_totals(ctx, |log| log.chord_texts, 0)
 }
 
+/// What a command resolution was for.
+#[cfg(feature = "testing")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Resolve {
+    /// A resolution nothing kept: a reader's first, or one for a key press or a fire.
+    New,
+    /// A kept resolution made again because an input of it changed.
+    Again,
+    /// A kept resolution compared with a full one by the testing check every 100th pass.
+    Checked,
+}
+
+/// Counts a command resolution in this pass.
+#[cfg(feature = "testing")]
+pub(crate) fn count_resolve(ctx: &Context, what: Resolve) {
+    totals(ctx, |log| log.resolves[what as usize] += 1);
+}
+
+/// The command resolutions of the last pass of kind `what`.
+#[cfg(feature = "testing")]
+pub fn last_pass_resolves(ctx: &Context, what: Resolve) -> u32 {
+    last_totals(ctx, |log| log.resolves[what as usize], 0)
+}
+
+/// Counts a kept resolution a wake walked to compare its key.
+#[cfg(feature = "testing")]
+pub(crate) fn count_wake_walk(ctx: &Context) {
+    totals(ctx, |log| log.wake_walks += 1);
+}
+
+/// The kept resolutions the wakes of the last pass walked.
+#[cfg(feature = "testing")]
+pub fn last_pass_wake_walks(ctx: &Context) -> u32 {
+    last_totals(ctx, |log| log.wake_walks, 0)
+}
+
 /// Counts a sweep of the row `id` that asks its body units for their least widths in this pass.
 #[cfg(feature = "testing")]
 pub(crate) fn count_least(ctx: &Context, id: Id) {
@@ -362,29 +399,49 @@ pub fn last_pass_settles(ctx: &Context) -> Vec<(Id, Settle)> {
 /// Bytes fed into memo keys in one pass, and the layouts, measure asks and chord texts of that pass.
 #[cfg(feature = "testing")]
 #[derive(Default)]
-pub(crate) struct PassTotals {
+pub(crate) struct Totals {
     pass: u64,
     key_bytes: usize,
     text_layouts: u32,
     chord_texts: u32,
+    resolves: [u32; 3],
+    wake_walks: u32,
     asks: Vec<(&'static str, u32)>,
 }
 
+/// The totals of the running pass and of the one before it, which a pass's own counting does not overwrite: a pass
+/// that counts in its begin hook keeps the last pass readable.
 #[cfg(feature = "testing")]
-fn totals<R>(ctx: &Context, f: impl FnOnce(&mut PassTotals) -> R) -> R {
+#[derive(Default)]
+pub(crate) struct PassTotals {
+    current: Totals,
+    previous: Totals,
+}
+
+#[cfg(feature = "testing")]
+fn totals<R>(ctx: &Context, f: impl FnOnce(&mut Totals) -> R) -> R {
     let pass = ctx.cumulative_pass_nr();
     pass_state::with::<PassTotals, _>(ctx, |log| {
-        if log.pass != pass {
-            *log = PassTotals { pass, ..PassTotals::default() };
+        if log.current.pass != pass {
+            let current = std::mem::replace(&mut log.current, Totals { pass, ..Totals::default() });
+            log.previous = current;
         }
-        f(log)
+        f(&mut log.current)
     })
 }
 
 #[cfg(feature = "testing")]
-fn last_totals<R>(ctx: &Context, f: impl FnOnce(&PassTotals) -> R, none: R) -> R {
+fn last_totals<R>(ctx: &Context, f: impl FnOnce(&Totals) -> R, none: R) -> R {
     let last = ctx.cumulative_pass_nr().saturating_sub(1);
-    pass_state::with::<PassTotals, _>(ctx, |log| if log.pass == last { f(log) } else { none })
+    pass_state::with::<PassTotals, _>(ctx, |log| {
+        if log.current.pass == last {
+            f(&log.current)
+        } else if log.previous.pass == last {
+            f(&log.previous)
+        } else {
+            none
+        }
+    })
 }
 
 /// Counts `bytes` fed into a memo key in this pass. Fed by `MemoKey`; until it exists, by `lazy::settled` (8 bytes
