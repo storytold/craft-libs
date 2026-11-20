@@ -391,6 +391,7 @@ fn new_codec_errors_keep_their_category() {
 }
 
 #[test]
+#[allow(irrefutable_let_patterns)]
 fn track_decoder_options_and_draft_persist_across_reset() {
     #[allow(unused_variables)]
     let opts = TrackDecoderOptions { threads: Some(0), draft: true };
