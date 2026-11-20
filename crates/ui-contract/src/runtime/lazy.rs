@@ -212,8 +212,7 @@ impl Place {
             && now.pixels_per_point == self.pixels_per_point
             && now.atlas == self.atlas
             && now.env == self.env;
-        let placeable =
-            offset == Vec2::ZERO || (keeps_placement(rect.union(self.room), offset, now.pixels_per_point) && movable && !transformed);
+        let placeable = offset == Vec2::ZERO || (keeps_placement(rect.union(self.room), offset, now.pixels_per_point) && movable && !transformed);
         if !same || !placeable {
             return None;
         }
