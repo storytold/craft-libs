@@ -66,8 +66,7 @@ fn frame(s: usize, size: usize, key: bool, n: usize) -> (Vec<u8>, Vec<u8>) {
         1 => {
             let mut d = vec![0xFC];
             fill(&mut d, size.min(1500), seed);
-            let e = opus_unit(&d);
-            (d, e)
+            (d.clone(), d)
         }
         2 => {
             let mut d = Vec::new();

@@ -247,6 +247,8 @@ pub(crate) fn scan<S: ByteSource + ?Sized>(src: &S, mpeg1: bool) -> Result<File>
                         language: None,
                         units: Vec::new(),
                         lpcm,
+                        opus: None,
+                        av1c: None,
                         pes_packets: 0,
                         skipped_bytes: 0,
                     };

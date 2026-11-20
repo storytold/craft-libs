@@ -5,6 +5,7 @@
 use super::*;
 
 mod hostile;
+mod opus_av1_mpeg4;
 
 fn ts_bytes(prefix: u8, v: i64) -> [u8; 5] {
     let v = v & ((1 << 33) - 1);
@@ -1035,6 +1036,8 @@ fn oversized_unit_is_refused_without_reserving_it() {
             language: None,
             units: vec![Unit { pts: None, dts: None, key: true, disposable: false, size: u32::MAX, pos: 0, offset: 0, picture: None }],
             lpcm: None,
+            opus: None,
+            av1c: None,
             pes_packets: 0,
             skipped_bytes: 0,
         }],
