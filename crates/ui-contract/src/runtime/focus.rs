@@ -151,6 +151,9 @@ pub(crate) struct State {
     /// Last pass's `docs`: a focus request made between passes resolves against the components that last showed.
     pub(super) last_docs: FastMap<DocKey, Id>,
     pub(super) revealed: Option<StopKey>,
+    /// The stop a request of the running pass named before any pass registered it: it takes the focus when it
+    /// registers later in the pass. A component asks for its own focus from `update`, and its stops register after.
+    pub(super) awaited: Option<StopKey>,
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
     pub(super) entered: bool,
@@ -204,11 +207,20 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 
 /// Registers a stop of the running pass in the innermost open scope, in registration order.
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
-    with(ctx, |state| {
+    let acts = with(ctx, |state| {
         let scope = state.open.last().map(|(id, _)| *id);
         state.stop_ids.insert(stop.id);
-        state.stops.push(StopRec { stop, scope, group_position: false });
+        let rec = StopRec { stop, scope, group_position: false };
+        let acts = if state.awaited == Some(rec.stop.key()) {
+            state.awaited = None;
+            state.focus_stop(rec.clone())
+        } else {
+            Vec::new()
+        };
+        state.stops.push(rec);
+        acts
     });
+    apply(ctx, acts);
 }
 
 /// Registers the app's own egui widget `id`, drawn in the running pass, as its window's document canvas: a focus stop
@@ -881,6 +893,7 @@ pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach)
     };
     let tab_to_egui = input.nav.tab_to_egui;
     let (acts, announcements, host_focus) = with(ctx, |state| {
+        state.awaited = None;
         let host_focus = state.record.host_focus;
         state.tab_to_egui = tab_to_egui;
         let (acts, announcements) = nav::begin(state, input);

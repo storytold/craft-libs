@@ -363,8 +363,10 @@ impl State {
         let found = self.find_stop(key).or_else(|| self.stops.iter().chain(&self.last_stops).find(|rec| rec.stop.id == key.0).cloned());
         match found {
             Some(rec) => self.focus_stop(rec),
+            // An app's own widget, or a stop that registers later in this pass, which then takes the focus.
             None => {
                 self.revealed = Some(key);
+                self.awaited = Some(key);
                 self.focus_now = Some(key.0);
                 vec![Act::Focus(key.0, Default::default())]
             }
