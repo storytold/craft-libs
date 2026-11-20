@@ -10,7 +10,7 @@
 //! writes `0`–`9` without grouping.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod catalog;
+pub mod catalog;
 #[cfg(feature = "collate")]
 mod collate;
 mod fold;
@@ -691,6 +691,14 @@ fn bare(code: &str) -> Locale {
         plural: None,
         offered: false,
     }
+}
+
+/// The forms an `@plural` row of `locale`'s catalog lists, the `forms` of [`catalog::parse`]: one
+/// per category of `locale`'s CLDR plural rules that whole numbers 0 to 1000 reach (2 for `de`, 3
+/// for `ru`), or 1 for a language CLDR has no plural rules for. [`I18n`] checks rows with the same
+/// count.
+pub fn plural_forms(locale: &str) -> usize {
+    plural_rules(&locale.to_ascii_lowercase()).map_or(1, |(_, c)| c.len())
 }
 
 /// `code`'s CLDR cardinal rules and the categories whole numbers 0..=1000 reach, in CLDR order
