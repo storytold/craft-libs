@@ -69,23 +69,87 @@ pub fn frame_info(d: &[u8]) -> Result<(usize, usize, usize, u8), RawError> {
         let m = d[i + 1];
         let len = u16::from_be_bytes([d[i + 2], d[i + 3]]) as usize;
         if matches!(m, 0xc0 | 0xc1) {
-            let seg = d.get(i + 4..i + 2 + len).filter(|s| s.len() >= 6).ok_or_else(|| err("truncated SOF"))?;
-            let n = seg[5] as usize;
-            if !matches!(seg[0], 8 | 12) {
-                return Err(RawError::Unsupported(format!("{}-bit DCT JPEG", seg[0])));
-            }
-            if n == 0 || n > 4 || seg.len() < 6 + 3 * n {
-                return Err(err("bad frame header"));
-            }
-            if (0..n).any(|c| seg[7 + 3 * c] != 0x11) {
-                return Err(RawError::Unsupported("subsampled DCT JPEG".into()));
-            }
-            let (h, w) = (u16::from_be_bytes([seg[1], seg[2]]) as usize, u16::from_be_bytes([seg[3], seg[4]]) as usize);
-            return Ok((w, h, n, seg[0]));
+            let seg = d.get(i + 4..i + 2 + len).ok_or_else(|| err("truncated SOF"))?;
+            let f = parse_sof(seg)?;
+            return Ok((f.width, f.height, f.comps.len(), f.precision));
         }
         i += 2 + len;
     }
     Err(err("no frame header"))
+}
+
+/// A frame header (SOF0/SOF1 segment body) both [`frame_info`] and [`decode`] accept.
+struct Sof {
+    precision: u8,
+    width: usize,
+    height: usize,
+    /// (component id, quantisation table) per frame component, in frame order
+    comps: Vec<(u8, usize)>,
+}
+
+fn parse_sof(seg: &[u8]) -> Result<Sof, RawError> {
+    if seg.len() < 6 {
+        return Err(err("truncated SOF"));
+    }
+    let precision = seg[0];
+    if !matches!(precision, 8 | 12) {
+        return Err(RawError::Unsupported(format!("{precision}-bit DCT JPEG")));
+    }
+    let height = u16::from_be_bytes([seg[1], seg[2]]) as usize;
+    let width = u16::from_be_bytes([seg[3], seg[4]]) as usize;
+    let n = seg[5] as usize;
+    // a zero height would need a DNL segment (T.81 B.2.5), which DNG tiles don't use
+    if n == 0 || n > 4 || seg.len() < 6 + 3 * n || width == 0 || height == 0 {
+        return Err(err("bad frame header"));
+    }
+    if (0..n).any(|c| seg[7 + 3 * c] != 0x11) {
+        return Err(RawError::Unsupported("subsampled DCT JPEG".into()));
+    }
+    let comps = (0..n).map(|c| (seg[6 + 3 * c], (seg[8 + 3 * c] & 3) as usize)).collect();
+    Ok(Sof { precision, width, height, comps })
+}
+
+/// Where the entropy-coded data starting at `d[start..]` ends: the first marker that is not `FF 00` stuffing or
+/// `RSTn`, after any `FF` fill bytes. The marker stream after it must reach the outer EOI, skipping
+/// length-delimited segments (so an EOI inside, say, an APP segment's thumbnail does not count).
+fn entropy_end(d: &[u8], start: usize) -> Result<usize, RawError> {
+    let mut i = start;
+    let end = loop {
+        while i < d.len() && d[i] != 0xff {
+            i += 1;
+        }
+        let mut j = i;
+        while d.get(j + 1) == Some(&0xff) {
+            j += 1;
+        }
+        match d.get(j + 1) {
+            None => return Err(err("no EOI after the scan")),
+            Some(0) | Some(0xd0..=0xd7) => i = j + 2,
+            Some(_) => break i,
+        }
+    };
+    let mut i = end;
+    loop {
+        while d.get(i) == Some(&0xff) && d.get(i + 1) == Some(&0xff) {
+            i += 1;
+        }
+        let m = match (d.get(i), d.get(i + 1)) {
+            (Some(0xff), Some(&m)) => m,
+            _ => return Err(err("no EOI after the scan")),
+        };
+        match m {
+            0xd9 => return Ok(end),
+            0x01 => i += 2,
+            0xda | 0xc0..=0xc3 | 0xc5..=0xcb | 0xcd..=0xcf | 0xd0..=0xd8 | 0x00 => return Err(err("unexpected marker after the scan")),
+            _ => {
+                let len = d.get(i + 2..i + 4).map(|s| u16::from_be_bytes([s[0], s[1]]) as usize).ok_or_else(|| err("no EOI after the scan"))?;
+                if len < 2 {
+                    return Err(err("bad segment after the scan"));
+                }
+                i += 2 + len;
+            }
+        }
+    }
 }
 
 struct Comp {
@@ -169,25 +233,11 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
         let seg = &d[i + 2..i + len];
         match m {
             0xc0 | 0xc1 => {
-                if !comps.is_empty() || seg.len() < 6 {
+                if !comps.is_empty() {
                     return Err(err("bad SOF"));
                 }
-                precision = seg[0];
-                height = u16::from_be_bytes([seg[1], seg[2]]) as usize;
-                width = u16::from_be_bytes([seg[3], seg[4]]) as usize;
-                let n = seg[5] as usize;
-                if !matches!(precision, 8 | 12) {
-                    return Err(RawError::Unsupported(format!("{precision}-bit DCT JPEG")));
-                }
-                if n == 0 || n > 4 || seg.len() < 6 + 3 * n || width == 0 || height == 0 {
-                    return Err(err("bad frame header"));
-                }
-                for c in 0..n {
-                    if seg[7 + 3 * c] != 0x11 {
-                        return Err(RawError::Unsupported("subsampled DCT JPEG".into()));
-                    }
-                    comps.push((seg[6 + 3 * c], (seg[8 + 3 * c] & 3) as usize));
-                }
+                let f = parse_sof(seg)?;
+                (precision, width, height, comps) = (f.precision, f.width, f.height, f.comps);
             }
             0xc2 | 0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf => {
                 return Err(RawError::Unsupported(format!("JPEG process SOF{:X} (not sequential Huffman DCT)", m - 0xc0)));
@@ -235,18 +285,28 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                     return Err(err("SOS before SOF"));
                 }
                 let ns = *seg.first().ok_or_else(|| err("short SOS"))? as usize;
-                if ns != comps.len() || seg.len() < 1 + 2 * ns {
+                if ns != comps.len() {
                     return Err(RawError::Unsupported("multi-scan DCT JPEG".into()));
                 }
+                // T.81 B.2.3: the selectors, then Ss, Se and Ah/Al, which a sequential scan sets to 0, 63 and 0
+                if seg.len() != 4 + 2 * ns {
+                    return Err(err("bad scan header"));
+                }
+                if seg[1 + 2 * ns..] != [0, 63, 0] {
+                    return Err(err("scan parameters are not sequential (0, 63, 0)"));
+                }
                 let mut v = vec![];
-                for k in 0..ns {
+                for (k, &(id, q)) in comps.iter().enumerate() {
                     let (cid, tabs) = (seg[1 + 2 * k], seg[2 + 2 * k]);
-                    let ci = comps.iter().position(|c| c.0 == cid).ok_or_else(|| err("scan component not in frame"))?;
+                    // the one scan codes every frame component once, in frame order (T.81 B.2.3)
+                    if cid != id {
+                        return Err(err("scan components do not match the frame's"));
+                    }
                     // T.81 B.2.2: the frame's table must be installed before its scan; a zero table would decode flat
-                    if !quant_defined[comps[ci].1] {
+                    if !quant_defined[q] {
                         return Err(err("undefined quantisation table"));
                     }
-                    v.push(Comp { q: comps[ci].1, dc: (tabs >> 4) as usize & 3, ac: (tabs & 15) as usize & 3 });
+                    v.push(Comp { q, dc: (tabs >> 4) as usize & 3, ac: (tabs & 15) as usize & 3 });
                 }
                 scan = v;
                 data_start = i + len;
@@ -266,22 +326,25 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
     let maxv = (1i32 << precision) - 1;
     let shift = f64::from(1i32 << (precision - 1));
     let t = basis();
-    let mut out = vec![0u16; samples];
-    // a tile cut off inside its last blocks would otherwise decode from zero bits: its EOI must be there
-    if !d[data_start..].windows(2).any(|w| w == [0xff, 0xd9]) {
-        return Err(err("no EOI after the scan"));
+    // a tile cut off inside its last blocks would otherwise decode from zero bits: the outer EOI must be there
+    let data_end = entropy_end(d, data_start)?;
+    for c in &scan {
+        if dc_tab[c.dc].is_none() || ac_tab[c.ac].is_none() {
+            return Err(err("missing Huffman table"));
+        }
     }
-    let mut br = BitReader::new(&d[data_start..]);
+    let mut out = zeroed(samples)?;
+    let mut br = BitReader::new(&d[data_start..data_end]);
     let mut pred = vec![0i32; nc];
+    let mut rst = 0u8;
     for mcu in 0..bw * bh {
         if restart > 0 && mcu > 0 && mcu % restart == 0 {
-            if !br.restart() {
+            // T.81 F.1.2.3: RST0 first, then modulo 8, right after the interval's padding
+            if !br.restart_exact(rst) {
                 return Err(err("missing restart marker"));
             }
+            rst = (rst + 1) & 7;
             pred.fill(0);
-        }
-        if br.overrun > 64 {
-            return Err(err("entropy data ends early"));
         }
         let (bx, by) = (mcu % bw, mcu / bw);
         for (k, c) in scan.iter().enumerate() {
@@ -313,6 +376,10 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                 coef[n] = f64::from(extend(&mut br, s)) * f64::from(q[n]);
                 z += 1;
             }
+            // the reader feeds zeros past the data: a block that needed any of them is cut off
+            if br.consumed_synthetic() {
+                return Err(err("entropy data ends early"));
+            }
             let px = idct(&coef, &t);
             for y in 0..8 {
                 let yy = by * 8 + y;
@@ -330,6 +397,15 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
         }
     }
     Ok(Frame { width, height, components: nc, precision, predictor: 0, point_transform: 0, data: out })
+}
+
+/// `samples` zeros, or a limit error: a frame within the sample budget may still be more bytes than this target can
+/// allocate (a 32-bit one, say), and a failed infallible allocation aborts the process.
+fn zeroed(samples: usize) -> Result<Vec<u16>, RawError> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(samples).map_err(|_| RawError::Limit("JPEG too large"))?;
+    out.resize(samples, 0u16);
+    Ok(out)
 }
 
 /// Accumulate hostile DC differences without integer overflow, then dequantise exactly in `f64`.
@@ -377,16 +453,24 @@ mod tests {
         if v < 0 { (v - 1 + (1 << s)) as u32 & ((1 << s) - 1) } else { v as u32 }
     }
 
-    /// A minimal conforming encoder: unit quantiser, 4-bit DC codes (categories 0-15), 8-bit AC codes (255 symbols).
+    /// The fixtures' DC code for category `s`: 4 bits for 0-14, `11110` for 15, never the reserved all-ones code
+    /// (T.81 C.2). An 8-bit table lists categories 0-11 only, a 12-bit one 0-15 (T.81 F.1.2.1.1).
+    fn put_dc_category(bw: &mut BitWriter, s: u32) {
+        if s < 15 { bw.put(s, 4) } else { bw.put(0b11110, 5) }
+    }
+
+    /// A minimal conforming encoder: unit quantiser, the DC codes of [`put_dc_category`], 8-bit AC codes (255 symbols).
     fn encode(px: &[u16], w: usize, h: usize, precision: u8, sof: u8, restart: usize) -> Vec<u8> {
         let mut o = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
         o.extend(std::iter::repeat_n(1u8, 64));
         o.extend([0xff, 0xc0 + sof, 0, 11, precision, (h >> 8) as u8, h as u8, (w >> 8) as u8, w as u8, 1, 1, 0x11, 0]);
         let mut dc = [0u8; 16];
-        dc[3] = 16;
-        o.extend([0xff, 0xc4, 0, 2 + 17 + 16, 0x00]);
+        let categories: u8 = if precision == 8 { 12 } else { 16 };
+        dc[3] = categories.min(15);
+        dc[4] = categories - dc[3];
+        o.extend([0xff, 0xc4, 0, 2 + 17 + categories, 0x00]);
         o.extend(dc);
-        o.extend(0..16u8);
+        o.extend(0..categories);
         let mut ac = [0u8; 16];
         ac[7] = 255;
         let l = 2 + 17 + 255;
@@ -435,7 +519,7 @@ mod tests {
             let diff = co[0] - pred;
             pred = co[0];
             let s = category(diff);
-            bwr.put(s, 4);
+            put_dc_category(&mut bwr, s);
             bwr.put(magnitude_bits(diff, s), s);
             let mut run = 0u32;
             let last = (1..64).rev().find(|&z| co[ZIGZAG[z]] != 0).unwrap_or(0);
@@ -570,7 +654,7 @@ mod tests {
         jpg.truncate(entropy);
         let mut bits = BitWriter { out: vec![], acc: 0, n: 0 };
         for _ in 0..2 {
-            bits.put(15, 4); // category 15
+            put_dc_category(&mut bits, 15);
             bits.put(32767, 15);
             bits.put(0, 8); // EOB
         }
@@ -606,5 +690,154 @@ mod tests {
         jpg.extend(bits.out);
         jpg.extend([0xff, 0xd9]);
         assert!(matches!(decode(&jpg, 10_000_000), Err(RawError::Corrupt(_))));
+    }
+
+    /// SOI, a unit DQT, a `w`x`h` SOF1 frame with `ids` (1x1, table 0), and one-bit DC (category 0) and AC (EOB)
+    /// codes: every block is the single bit pair `0 0`.
+    fn flat_header(w: u16, h: u16, ids: &[u8]) -> Vec<u8> {
+        let mut jpg = vec![0xff, 0xd8, 0xff, 0xdb, 0, 67, 0];
+        jpg.extend([1; 64]);
+        jpg.extend([0xff, 0xc1, 0, 8 + 3 * ids.len() as u8, 12]);
+        jpg.extend(h.to_be_bytes());
+        jpg.extend(w.to_be_bytes());
+        jpg.push(ids.len() as u8);
+        for &id in ids {
+            jpg.extend([id, 0x11, 0]);
+        }
+        for class in [0x00, 0x10] {
+            jpg.extend([0xff, 0xc4, 0, 20, class, 1]);
+            jpg.extend([0; 15]);
+            jpg.push(0);
+        }
+        jpg
+    }
+
+    fn sos(ids: &[u8], params: [u8; 3]) -> Vec<u8> {
+        let mut s = vec![0xff, 0xda, 0, 6 + 2 * ids.len() as u8, ids.len() as u8];
+        for &id in ids {
+            s.extend([id, 0x00]);
+        }
+        s.extend(params);
+        s
+    }
+
+    #[test]
+    fn zero_dimensions_fail_frame_inspection() {
+        for (w, h) in [(8, 0), (0, 8)] {
+            let mut jpg = flat_header(w, h, &[1]);
+            jpg.extend(sos(&[1], [0, 63, 0]));
+            jpg.extend([0x3f, 0xff, 0xd9]);
+            assert!(matches!(frame_info(&jpg), Err(RawError::Corrupt(_))), "{w}x{h}");
+            assert!(matches!(decode(&jpg, 1 << 20), Err(RawError::Corrupt(_))), "{w}x{h}");
+        }
+        let mut jpg = flat_header(8, 8, &[1]);
+        jpg.extend(sos(&[1], [0, 63, 0]));
+        jpg.extend([0x3f, 0xff, 0xd9]);
+        assert_eq!(frame_info(&jpg), Ok((8, 8, 1, 12)));
+        assert_eq!(decode(&jpg, 64).unwrap().data, vec![2048; 64]);
+    }
+
+    #[test]
+    fn scan_header_must_be_complete_and_sequential() {
+        // one block, `0 0` padded with ones
+        let ok = |scan: &[u8]| {
+            let mut jpg = flat_header(8, 8, &[1]);
+            jpg.extend(scan);
+            jpg.extend([0x3f, 0xff, 0xd9]);
+            decode(&jpg, 64)
+        };
+        assert!(ok(&sos(&[1], [0, 63, 0])).is_ok());
+        // the selectors without Ss, Se and Ah/Al
+        assert!(matches!(ok(&[0xff, 0xda, 0, 5, 1, 1, 0]), Err(RawError::Corrupt(m)) if m.contains("scan header")));
+        for params in [[1, 63, 0], [0, 5, 0], [0, 63, 1], [0, 63, 0x10]] {
+            assert!(matches!(ok(&sos(&[1], params)), Err(RawError::Corrupt(m)) if m.contains("sequential")), "{params:?}");
+        }
+    }
+
+    #[test]
+    fn scan_must_code_each_frame_component_once_in_order() {
+        let run = |scan_ids: &[u8]| {
+            let mut jpg = flat_header(8, 8, &[1, 2]);
+            jpg.extend(sos(scan_ids, [0, 63, 0]));
+            jpg.extend([0x0f, 0xff, 0xd9]); // two blocks
+            decode(&jpg, 128)
+        };
+        assert_eq!(run(&[1, 2]).unwrap().data, vec![2048; 128]);
+        for ids in [[1, 1], [2, 1], [2, 2], [1, 3]] {
+            assert!(matches!(run(&ids), Err(RawError::Corrupt(m)) if m.contains("components")), "{ids:?}");
+        }
+    }
+
+    #[test]
+    fn an_unallocatable_frame_is_a_limit_error() {
+        // within any sample budget, past what `Vec` can hold: a limit error, not an allocation abort
+        assert!(matches!(zeroed(usize::MAX / 2), Err(RawError::Limit(_))));
+        assert_eq!(zeroed(3).unwrap(), vec![0; 3]);
+        let mut jpg = flat_header(65535, 65535, &[1, 2, 3, 4]);
+        jpg.extend(sos(&[1, 2, 3, 4], [0, 63, 0]));
+        jpg.extend([0xff, 0xd9]);
+        // 65535^2 x 4 samples is 34 GB of output: refused by the budget here, never allocated
+        assert!(matches!(decode(&jpg, 1 << 20), Err(RawError::Limit(_))));
+    }
+
+    #[test]
+    fn the_outer_eoi_is_required_after_the_scan() {
+        let mut jpg = flat_header(8, 8, &[1]);
+        jpg.extend(sos(&[1], [0, 63, 0]));
+        jpg.push(0x3f);
+        // an APP1 segment holding a thumbnail's EOI, then no outer EOI
+        let app = [0xff, 0xe1, 0, 8, 0xff, 0xd8, 0, 0, 0xff, 0xd9];
+        let mut cut = jpg.clone();
+        cut.extend(app);
+        assert!(matches!(decode(&cut, 64), Err(RawError::Corrupt(m)) if m.contains("EOI")));
+        // the same segment followed by the outer EOI decodes
+        cut.extend([0xff, 0xd9]);
+        assert_eq!(decode(&cut, 64).unwrap().data, vec![2048; 64]);
+        // a second scan is not this decoder's layout
+        let mut two = jpg.clone();
+        two.extend(sos(&[1], [0, 63, 0]));
+        two.extend([0x3f, 0xff, 0xd9]);
+        assert!(matches!(decode(&two, 64), Err(RawError::Corrupt(_))));
+    }
+
+    #[test]
+    fn restart_markers_follow_the_interval_sequence() {
+        // DRI 1 over three blocks: RST0 then RST1, each right after its interval's padded byte
+        let build = |markers: [u8; 2], gap: &[u8]| {
+            let mut jpg = flat_header(24, 8, &[1]);
+            jpg.extend([0xff, 0xdd, 0, 4, 0, 1]);
+            jpg.extend(sos(&[1], [0, 63, 0]));
+            jpg.push(0x3f);
+            jpg.extend(gap);
+            jpg.extend([0xff, markers[0], 0x3f, 0xff, markers[1], 0x3f, 0xff, 0xd9]);
+            decode(&jpg, 1 << 10)
+        };
+        assert_eq!(build([0xd0, 0xd1], &[]).unwrap().data, vec![2048; 192]);
+        // FF fill bytes may precede a marker
+        assert!(build([0xd0, 0xd1], &[0xff]).is_ok());
+        for markers in [[0xd3, 0xd4], [0xd1, 0xd2], [0xd0, 0xd0], [0xd0, 0xd2]] {
+            assert!(matches!(build(markers, &[]), Err(RawError::Corrupt(m)) if m.contains("restart")), "{markers:x?}");
+        }
+        // unrelated data between the interval and its marker is not skipped
+        assert!(matches!(build([0xd0, 0xd1], &[0x12, 0x34]), Err(RawError::Corrupt(m)) if m.contains("restart")));
+    }
+
+    #[test]
+    fn blocks_may_not_consume_bits_after_the_entropy_data() {
+        let mut jpg = flat_header(8, 8, &[1]);
+        jpg.extend(sos(&[1], [0, 63, 0]));
+        // no entropy bytes: the block's `0 0` would come from the zeros fed past the data
+        let mut empty = jpg.clone();
+        empty.extend([0xff, 0xd9]);
+        assert!(matches!(decode(&empty, 64), Err(RawError::Corrupt(m)) if m.contains("ends early")));
+        // five blocks, one byte (four blocks' bits): the fifth runs past the data
+        let mut short = flat_header(40, 8, &[1]);
+        short.extend(sos(&[1], [0, 63, 0]));
+        short.extend([0x00, 0xff, 0xd9]);
+        assert!(matches!(decode(&short, 320), Err(RawError::Corrupt(m)) if m.contains("ends early")));
+        // the block's real bits suffice even though the reader's lookahead reaches the EOI
+        let mut exact = jpg;
+        exact.extend([0x3f, 0xff, 0xd9]);
+        assert_eq!(decode(&exact, 64).unwrap().data, vec![2048; 64]);
     }
 }

@@ -604,6 +604,14 @@ fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
     shell(full)
 }
 
+/// Why the decoder for a compression-7 chunk's frame type (DCT or lossless JPEG) rejects its frame header, if it does.
+#[cfg(feature = "dng")]
+fn jpeg_frame_reason(src: &[u8]) -> Option<String> {
+    let (codec, e) =
+        if dctjpeg::is_dct(src) { ("DCT JPEG", dctjpeg::frame_info(src).err()?) } else { ("lossless JPEG", ljpeg::frame_info(src).err()?) };
+    Some(format!("raw image coded as {codec} that is not decoded yet ({e})"))
+}
+
 /// Why [`decode`] gives up on a file [`probe`] called [`RawFormat::OtherTiff`].
 fn other_tiff_reason(bytes: &[u8]) -> String {
     let t = Tiff::parse_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok();
@@ -613,9 +621,9 @@ fn other_tiff_reason(bytes: &[u8]) -> String {
         && let Some(info) = dng::raw_ifd(t).and_then(|i| i.image().ok())
         && info.compression == craft_tiff::tags::compression::JPEG
         && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| craft_tiff::image::chunk_bytes(bytes, c))
-        && let Err(e) = if dctjpeg::is_dct(src) { dctjpeg::frame_info(src) } else { ljpeg::frame_info(src) }
+        && let Some(reason) = jpeg_frame_reason(src)
     {
-        return format!("raw image coded as lossless JPEG that is not decoded yet ({e})");
+        return reason;
     }
     match t.as_ref().filter(|t| !has_raw_ifd(t)).and_then(|t| thumbnail_shell(t, bytes.len())) {
         Some(s) => format!(

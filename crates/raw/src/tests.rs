@@ -600,3 +600,14 @@ fn probe_rejects_junk() {
     assert!(decode(b"FUJIFILMCCD-RAW 0201").is_err());
     assert_eq!(decode(b"junk"), Err(RawError::NotRaw));
 }
+
+#[cfg(feature = "dng")]
+#[test]
+fn jpeg_frame_reason_names_the_codec_that_rejected_the_frame() {
+    // one 2x1-subsampled component: SOF0 (DCT) and SOF3 (lossless)
+    let frame = |sof: u8| vec![0xff, 0xd8, 0xff, sof, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x21, 0, 0xff, 0xd9];
+    let dct = jpeg_frame_reason(&frame(0xc0)).unwrap();
+    assert!(dct.starts_with("raw image coded as DCT JPEG that is not decoded yet"), "{dct}");
+    let lossless = jpeg_frame_reason(&frame(0xc3)).unwrap();
+    assert!(lossless.starts_with("raw image coded as lossless JPEG that is not decoded yet"), "{lossless}");
+}
