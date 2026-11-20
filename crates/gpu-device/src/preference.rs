@@ -4,7 +4,7 @@ use std::fmt;
 
 use wgpu::{Backend, PowerPreference};
 
-use crate::adapter::{Candidate, avoided, choose, corrected, intel_vulkan_crashes, type_order};
+use crate::adapter::{Candidate, avoided, choose, intel_vulkan_crashes, settled, type_order};
 
 /// Which adapter to draw with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -183,7 +183,8 @@ pub fn select(candidates: &[Candidate], preference: &Preference) -> Option<Selec
 /// GPU whose Vulkan entry [`choose`] never draws with. `None` when that Intel Vulkan entry has no
 /// usable DirectX 12 entry.
 fn drawn_with(candidates: &[Candidate], index: usize) -> Option<usize> {
-    let index = corrected(candidates, index, candidates.get(index)?);
+    candidates.get(index)?;
+    let index = settled(candidates, index);
     (!candidates.get(index).is_some_and(intel_vulkan_crashes)).then_some(index)
 }
 

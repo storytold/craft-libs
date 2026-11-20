@@ -160,20 +160,38 @@ pub fn native_descriptor() -> wgpu::InstanceDescriptor {
 
 /// The index of the adapter to draw with for `power`: [`wgpu_choice`], or the entry exposing the
 /// most features among those that are the same GPU listed by the same driver (the first of them
-/// when several expose as many). For an Intel Gen 9 to Gen 11 GPU on Intel's Windows Vulkan
-/// driver it is the same GPU's DirectX 12 entry, or without one the best other usable adapter.
-/// `None` without a usable adapter, and when that Intel Vulkan entry is the only one.
+/// when several expose as many), repeated until the entry is its own newest version. For an Intel
+/// Gen 9 to Gen 11 GPU on Intel's Windows Vulkan driver it is the same GPU's DirectX 12 entry, or
+/// without one the best other usable adapter. `None` without a usable adapter, and when that
+/// Intel Vulkan entry is the only one. The result is never an entry [`avoided`] excludes.
 pub fn choose(candidates: &[Candidate], power: PowerPreference) -> Option<usize> {
     let first = wgpu_choice(candidates, power)?;
-    let preferred = candidates.get(first)?;
-    let index = corrected(candidates, first, preferred);
+    let index = settled(candidates, first);
     if candidates.get(index).is_some_and(intel_vulkan_crashes) {
         // No usable DirectX 12 entry for that GPU: the best other adapter wgpu would take.
         let safe = candidates.iter().enumerate().filter(|(_, c)| c.usable && !intel_vulkan_crashes(c));
-        let (other, c) = safe.min_by_key(|(i, c)| (type_order(c.device_type, power), *i))?;
-        return Some(corrected(candidates, other, c));
+        let (other, _) = safe.min_by_key(|(i, c)| (type_order(c.device_type, power), *i))?;
+        return Some(settled(candidates, other));
     }
     Some(index)
+}
+
+/// [`corrected`] applied until it returns the entry it was given. An entry without a bus id can
+/// be the same GPU as two entries on different buses, so one correction can land on an entry that
+/// has a newer version of its own. Each step moves to an entry exposing more features (or the
+/// same number at a lower index), or to a DirectX 12 entry, so the loop ends.
+pub(crate) fn settled(candidates: &[Candidate], mut index: usize) -> usize {
+    for _ in 0..=candidates.len() {
+        let Some(c) = candidates.get(index) else {
+            return index;
+        };
+        let next = corrected(candidates, index, c);
+        if next == index {
+            return index;
+        }
+        index = next;
+    }
+    index
 }
 
 /// `index` (the entry `preferred`), or the entry to draw with instead of it.
@@ -339,6 +357,20 @@ pub(crate) mod tests {
         assert_eq!(choose(&three, HighPerformance), Some(2));
         // the stale entries are avoided, the newest is not
         assert!(avoided(&three, 0) && avoided(&three, 1) && !avoided(&three, 2));
+    }
+
+    #[test]
+    fn an_entry_without_a_bus_between_two_cards_is_never_drawn_with_when_avoided() {
+        // two cards of one model on their own buses, and an entry of the same driver without a bus
+        // id, which can be either card's other version
+        let radeon = |bus, features| gpu("AMD Radeon RX 6800M", Vulkan, DiscreteGpu, AMD, RX_6800M, bus, "AMD proprietary driver", "", features);
+        let adapters = vec![radeon("0000:03:00.0", 60), radeon("", 70), radeon("0000:04:00.0", 80)];
+        for power in POWERS {
+            let chosen = choose(&adapters, power);
+            assert_eq!(chosen, Some(2), "{power:?}");
+            assert!(chosen.is_some_and(|i| !avoided(&adapters, i)), "{power:?}");
+        }
+        assert!(avoided(&adapters, 0) && avoided(&adapters, 1) && !avoided(&adapters, 2));
     }
 
     #[test]
@@ -550,9 +582,10 @@ pub(crate) mod tests {
     }
 
     /// Against the adapters of the machine running the tests: [`wgpu_choice`] is what wgpu's
-    /// `request_adapter` returns, and [`choose`] returns that adapter too, a version of it exposing
-    /// more features, or for an Intel Gen 9 to Gen 11 GPU its DirectX 12 entry. Passes without
-    /// adapters.
+    /// `request_adapter` returns, and [`choose`] returns that adapter too, or, when wgpu's choice
+    /// is one [`avoided`] excludes, an adapter it does not exclude: a version exposing more
+    /// features, an Intel Gen 9 to Gen 11 GPU's DirectX 12 entry, or the best other adapter.
+    /// `None` only when every usable adapter is that Intel Vulkan entry. Passes without adapters.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn on_this_host_the_choice_is_wgpus_unless_a_correction_applies() {
@@ -564,15 +597,17 @@ pub(crate) mod tests {
             let options = wgpu::RequestAdapterOptions { power_preference: power, ..Default::default() };
             let wgpu_own = pollster::block_on(instance.request_adapter(&options)).ok().map(|a| Candidate::of(&a, None));
             assert_eq!(wgpu_choice(&candidates, power).and_then(|i| candidates.get(i)), wgpu_own.as_ref(), "{power:?} over {candidates:#?}");
-            let picked = choose(&candidates, power).and_then(|i| candidates.get(i));
-            match (&wgpu_own, picked) {
-                (Some(wgpu_own), Some(picked)) if wgpu_own != picked => {
-                    let newer_version = same_gpu_and_driver(wgpu_own, picked) && picked.features > wgpu_own.features;
-                    let intel_dx12 = wgpu_own.vendor == INTEL
-                        && intel_gen9_to_gen11(wgpu_own.device)
-                        && picked.backend == Backend::Dx12
-                        && picked.device == wgpu_own.device;
-                    assert!(newer_version || intel_dx12, "{power:?}: {picked} instead of {wgpu_own}");
+            let own_index = wgpu_choice(&candidates, power);
+            let chosen = choose(&candidates, power);
+            let picked = chosen.and_then(|i| candidates.get(i));
+            match (own_index, chosen) {
+                (Some(own), Some(index)) if own != index => {
+                    assert!(avoided(&candidates, own), "{power:?}: {picked:?} instead of {wgpu_own:?}, which is not avoided");
+                    assert!(!avoided(&candidates, index), "{power:?}: {picked:?} is avoided");
+                }
+                (Some(own), None) => {
+                    let only_intel_vulkan = candidates.iter().filter(|c| c.usable).all(intel_vulkan_crashes);
+                    assert!(only_intel_vulkan, "{power:?}: nothing instead of {:?}", candidates.get(own));
                 }
                 _ => assert_eq!(picked, wgpu_own.as_ref(), "{power:?}"),
             }

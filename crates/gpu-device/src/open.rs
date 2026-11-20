@@ -15,7 +15,9 @@ pub struct Request<'a> {
     pub label: Option<&'a str>,
     /// Features the device must have. An adapter without them is skipped.
     pub required_features: Features,
-    /// Features asked for when the adapter has them.
+    /// Features asked for when the adapter has them. Experimental features
+    /// (`Features::all_experimental_mask`) are left out here: the device descriptor does not
+    /// enable experimental features, and wgpu refuses a device that asks for one without that.
     pub optional_features: Features,
     /// The limits to ask for; `None` asks for the adapter's own limits.
     pub limits: Option<Limits>,
@@ -254,7 +256,7 @@ async fn open_on(adapter: &Adapter, request: &Request<'_>) -> Result<(wgpu::Devi
     let required_limits = request.limits.clone().unwrap_or_else(|| adapter.limits());
     let desc = wgpu::DeviceDescriptor {
         label: request.label,
-        required_features: request.required_features | (request.optional_features & has),
+        required_features: request.required_features | (request.optional_features & has & !Features::all_experimental_mask()),
         required_limits,
         ..Default::default()
     };
@@ -314,6 +316,18 @@ mod tests {
         desc.backends = wgpu::Backends::NOOP;
         let none = Instance::new(desc);
         assert_eq!(pollster::block_on(open_async(&none, None, &Preference::Auto, &Request::default())).unwrap_err(), OpenError::NoAdapter);
+    }
+
+    #[test]
+    fn an_optional_experimental_feature_does_not_stop_the_device_opening() {
+        let instance = noop(Some(Features::EXPERIMENTAL_RAY_QUERY | Features::TEXTURE_FORMAT_NV12));
+        let request = Request { optional_features: Features::EXPERIMENTAL_RAY_QUERY | Features::TEXTURE_FORMAT_NV12, ..Default::default() };
+        let opened = open(&instance, None, &Preference::Software, &request).unwrap();
+        assert!(opened.caps.nv12(), "{}", opened.caps);
+        assert!(!opened.device.features().contains(Features::EXPERIMENTAL_RAY_QUERY));
+        // a required one still fails as before
+        let required = Request { required_features: Features::EXPERIMENTAL_RAY_QUERY, ..Default::default() };
+        assert!(matches!(open(&instance, None, &Preference::Software, &required), Err(OpenError::NoDevice(_))));
     }
 
     #[test]
