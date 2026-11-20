@@ -1,5 +1,64 @@
-use craft_jsonrpc::{Limits, ParseError, RpcError, parse_error_response, parse_json, process};
+use craft_jsonrpc::{Handler, Limits, ParseError, Request, RpcError, parse_error_response, parse_json, process, process_legacy_with, process_with};
 use serde_json::{Value, json};
+
+#[derive(Default)]
+struct Session {
+    log: Vec<String>,
+    level: Value,
+}
+
+impl Handler for Session {
+    fn request(&mut self, request: Request<'_>) -> Result<Value, RpcError> {
+        self.log.push(format!("request {}", request.method));
+        match request.method {
+            "level" => Ok(self.level.clone()),
+            _ => Err(RpcError::new(-32601, "Method not found")),
+        }
+    }
+    fn notification(&mut self, request: Request<'_>) {
+        self.log.push(format!("notification {}", request.method));
+        if let Some(level) = request.params.and_then(|params| params.get("level")) {
+            self.level = level.clone();
+        }
+    }
+}
+
+#[test]
+fn one_handler_shares_state_between_requests_and_notifications_in_order() {
+    let input = json!([
+        {"jsonrpc":"2.0", "id":1, "method":"level"},
+        {"jsonrpc":"2.0", "method":"set", "params":{"level":"debug"}},
+        {"jsonrpc":"2.0", "id":2, "method":"level"},
+        {"jsonrpc":"2.0", "id":3, "method":"missing"}
+    ]);
+    let mut session = Session::default();
+    let result = process_with(&input, Limits::default(), &mut session).unwrap().unwrap();
+    assert_eq!(
+        result,
+        json!([
+            {"jsonrpc":"2.0", "id":1, "result":null},
+            {"jsonrpc":"2.0", "id":2, "result":"debug"},
+            {"jsonrpc":"2.0", "id":3, "error":{"code":-32601,"message":"Method not found"}}
+        ])
+    );
+    assert_eq!(session.log, ["request level", "notification set", "request level", "request missing"]);
+    let notification = json!({"jsonrpc":"2.0", "method":"set", "params":{"level":"trace"}});
+    assert!(process_with(&notification, Limits::default(), &mut session).unwrap().is_none());
+    assert_eq!(session.level, "trace");
+    let limits = Limits { max_batch_items: 1, ..Limits::default() };
+    let mut untouched = Session::default();
+    assert_eq!(process_with(&input, limits, &mut untouched), Err(ParseError::BatchTooLarge));
+    assert!(untouched.log.is_empty());
+}
+
+#[test]
+fn one_handler_serves_legacy_envelopes() {
+    let input = json!([{"method":"set", "params":{"level":"info"}}, {"id":"x", "method":"level"}, {"result":1}]);
+    let mut session = Session::default();
+    let result = process_legacy_with(&input, &mut session).unwrap();
+    assert_eq!(result, json!([{"jsonrpc":"2.0", "id":"x", "result":"info"}]));
+    assert_eq!(session.log, ["notification set", "request level"]);
+}
 
 #[test]
 fn batches_preserve_ids_order_and_suppress_notification_replies() {

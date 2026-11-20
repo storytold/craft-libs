@@ -18,6 +18,10 @@ which discourages fractional values. Set `integer_ids_only` and clear `allow_nul
 protocols such as MCP that require integer or string IDs. A legacy server can retain its previous
 null-ID behavior independently. An omitted ID is a notification: it calls the separate notification
 handler and gets no reply.
+`process_with` and `process_legacy_with` take one value that implements `Handler` in place of the
+two closures. Its `request` and `notification` methods both take `&mut self`, so a server can keep
+one session that requests and notifications both update, in message order, with each
+notification's `params`.
 Malformed batch entries receive an invalid-request error; an empty batch gets one error response;
 a batch containing only notifications has no response. Invalid parameter shapes receive an
 invalid-params error for requests and no reply for notifications. The handler decides whether
