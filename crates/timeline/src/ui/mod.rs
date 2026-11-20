@@ -92,7 +92,7 @@ impl<T> DragEvent<T> {
 
 /// The colours of the sixteen labels ([`MarkerColor`](crate::MarkerColor) indices), the app's Label preferences. The
 /// root value is Premiere's (FilmCraft `crates/project/src/label.rs:64`); an app sets its own through its app values.
-#[derive(Clone, Debug, PartialEq, EnvValue)]
+#[derive(Clone, Debug, PartialEq, EnvValue, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct LabelPalette(pub [egui::Color32; 16]);
 

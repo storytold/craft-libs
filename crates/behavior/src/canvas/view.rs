@@ -13,12 +13,14 @@ use kurbo::{Affine, Point, Rect, Vec2};
 /// [`aspect`](Self::aspect) stretches it along its x axis and before
 /// [`flip_x`](Self::flip_x) mirrors the result, PhotoCraft's `ViewXform`. DesignCraft's quarter
 /// turns are `rotation = 90 × q`; VectorCraft's radians are converted to degrees.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, craft_ui_macros::PlainData)]
 #[non_exhaustive]
 pub struct CanvasView {
     /// The canvas on screen, inside the rulers.
+    #[plain_data(assume = "screen geometry: plain numbers, no interior mutability")]
     pub rect: ScreenRect,
     /// The document point drawn at `rect.center()`.
+    #[plain_data(assume = "document geometry: plain numbers, no interior mutability")]
     pub center: Point,
     /// Screen points per document unit. In PhotoCraft's model this is the view zoom over the
     /// pixels per point, so 100 % shows one device pixel per document pixel.

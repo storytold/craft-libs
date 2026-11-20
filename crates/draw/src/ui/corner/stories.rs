@@ -9,7 +9,7 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 use crate::geometry::fillet::fillet;
 use craft_behavior::kurbo::{BezPath, Point, Vec2};
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Show as _;
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
 use craft_ui::testing::{Drive, EditKind, Grip, StoryData, StoryOutput, story};
@@ -144,12 +144,12 @@ fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let hide_above = *data.ranged("hide above", 177.0, 90.0..=180.0);
     let individual = *data.value("individual", true);
     let mut last = data.note::<Option<String>>("last", None).clone();
-    let targets = data.value("targets", edited(individual));
+    let (targets, targets_at) = data.value_at("targets", edited(individual));
     if let Some(path) = targets.iter_mut().find(|target| target.key == 3) {
         path.individual = individual;
     }
     let output = on_canvas(ui, targets, |ui, at, targets| {
-        let shown = CornerWidgets::new("Corner radius", Bind::bound(&mut *targets)).kinds(kinds).hide_above(hide_above).show_at(ui, at);
+        let shown = CornerWidgets::new("Corner radius", targets_at.bind(&mut *targets)).kinds(kinds).hide_above(hide_above).show_at(ui, at);
         let kind = shown.edit.events.iter().filter_map(EditKind::of).next_back().and_then(|kind| match kind {
             EditKind::Begin => Some(&words.began),
             EditKind::Update => Some(&words.updated),
@@ -181,6 +181,8 @@ fn edit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(CornerWidgets<'static>, covers = [], drive = Drive::Never)]
 fn cycling_kinds_and_a_wide_angle_limit(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let targets = data.value("kinds", targets());
-    on_canvas(ui, targets, |ui, at, targets| CornerWidgets::new("Corner radius", Bind::bound(targets)).kinds(true).hide_above(120.0).show_at(ui, at))
+    let (targets, targets_at) = data.value_at("kinds", targets());
+    on_canvas(ui, targets, |ui, at, targets| {
+        CornerWidgets::new("Corner radius", targets_at.bind(targets)).kinds(true).hide_above(120.0).show_at(ui, at)
+    })
 }

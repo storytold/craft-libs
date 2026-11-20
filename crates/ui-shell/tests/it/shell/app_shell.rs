@@ -1,26 +1,27 @@
-//! The app shell's named slots: a bar in a top or bottom slot fills it
-//! with its members on the slot's middle, and a slot with a content version settles. A full-window page hides the
-//! slots and the body, and its band keeps the window's ends and moves the window.
+//! The app shell's named slots: a bar in a top or bottom slot fills it with its members on the slot's middle, and a
+//! slot whose content is a memoized view runs only when its props change. A full-window page hides the slots and the
+//! body, and its band keeps the window's ends and moves the window.
 
 use craft_host::target::ShellInfo;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet, Scroll, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CommandSet, MemoProps, MemoView, Scroll, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::commands::{CommandScope, Commands as _};
-use craft_ui::runtime::env::{PageBandRoom, WindowKey};
+use craft_ui::runtime::env::{Env, PageBandRoom, RevealEdge, ShellEntry, WindowKey};
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
-use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar, slots};
+use craft_ui::shell::{AppShell, Caption, CaptionFamily, Captions, Frame, MacInset, Slot, SlotSize, Title, TitleBar};
+use craft_ui::testing::in_audit_run;
 use craft_ui::testing::pointer::{press, release};
 use craft_ui::testing::windows::NoWindows;
-use craft_ui::testing::{Fixture, Frames, trial};
+use craft_ui::testing::{Fixture, Frames, MemoRun, last_pass_memo_runs, trial};
 use craft_ui_test_kit::windows::Windows;
 use craft_window::policy::{Decision, Desktop, DesktopKind};
-use egui::{Event, Key, Modifiers, Rect, Vec2, ViewportId};
-use std::cell::Cell;
+use egui::{Event, Key, Modifiers, Rect, Ui, Vec2, ViewportId};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -174,40 +175,133 @@ fn a_title_bar_in_the_title_slot_shows_its_content_there() {
     assert!((member.center().y - slot.center().y).abs() <= 1.0, "the member {member:?} sits on the slot's middle {slot:?}");
 }
 
-/// A status slot that gives a content version runs only in the frame its version changes: frames with no input and a
-/// click in the body leave it settled.
+thread_local! {
+    /// The memoized slots that ran on this trial's thread, in order.
+    static SLOT_RUNS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Takes the memoized slots that ran since the last call.
+fn slot_runs() -> Vec<&'static str> {
+    SLOT_RUNS.with(|runs| std::mem::take(&mut *runs.borrow_mut()))
+}
+
+/// What a memoized slot shows.
+#[derive(MemoProps)]
+struct SlotText {
+    name: &'static str,
+    text: String,
+}
+
+fn slot_text(props: &mut SlotText, ui: &mut Ui) {
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push(props.name));
+    }
+    Text::new(props.text.clone()).show(ui);
+}
+
+/// Slots whose content is a memoized view run only when their props change: at rest and for a click in the body they
+/// replay, a new status runs the status slot alone (one real run, one measuring run), and a slot the app does not
+/// memoize runs every pass.
 #[trial]
-fn a_slot_with_a_content_version_runs_only_when_its_version_changes() {
-    let (runs, version, body) = (Cell::new(0), Cell::new(1), Cell::new(Rect::NOTHING));
+fn memoized_slots_run_only_when_their_props_change() {
+    let (version, plain, body) = (Cell::new(1), Cell::new(0), Cell::new(Rect::NOTHING));
     let frame = |frames: &mut Frames, events| {
-        runs.set(0);
+        plain.set(0);
         frames.frame(events, |ui| {
             let out = AppShell::new(WindowKey::main())
-                .status(true, |ui, _, _: &mut ()| {
-                    runs.set(runs.get() + 1);
-                    Text::new("Ready").show(ui);
+                .options_bar(true, |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("options", SlotText { name: "options", text: "Options".to_owned() }, slot_text).show(ui);
                 })
-                .content(slots::STATUS, version.get())
+                .status(true, |ui, _, _| {
+                    let _ = MemoView::new("status", SlotText { name: "status", text: format!("Ready {}", version.get()) }, slot_text).show(ui);
+                })
+                .start(Slot::new("tools"), |ui, _, _| {
+                    plain.set(plain.get() + 1);
+                    Text::new("Tools").show(ui);
+                })
                 .body(|ui, _, _| {
                     Button::new("Body").show(ui);
                 })
                 .show(ui, &mut ());
             body.set(out.regions.body);
         });
-        runs.get()
+        (slot_runs(), plain.get())
     };
     let mut frames = Frames::new();
     for _ in 0..30 {
         frame(&mut frames, vec![]);
     }
-    assert_eq!(frame(&mut frames, vec![]), 0, "the status slot settles");
+    let (ran, plain_runs) = frame(&mut frames, vec![]);
+    assert_eq!(ran, Vec::<&str>::new(), "the memoized slots replay at rest");
+    assert!(plain_runs > 0, "the slot the app does not memoize runs every pass");
     let at = body.get().center();
     for events in [vec![press(at)], vec![release(at)], vec![]] {
-        assert_eq!(frame(&mut frames, events.clone()), 0, "a click in the body ({events:?}) leaves the slot settled");
+        assert_eq!(frame(&mut frames, events.clone()).0, Vec::<&str>::new(), "a click in the body ({events:?}) leaves the slots replaying");
     }
     version.set(2);
-    assert!(frame(&mut frames, vec![]) > 0, "a new version runs the slot");
-    assert_eq!(frame(&mut frames, vec![]), 0, "and it settles at it");
+    // One real run, then one measuring run in the first sizing pass that measures the new content: the discard pass its
+    // new size asks for, whose real run replays the first. A container that measures before the real run of one pass
+    // makes the same two runs in the other order (ui-widgets body::memo_view, the stack measured first).
+    assert_eq!(
+        frame(&mut frames, vec![]).0,
+        vec!["status", "status"],
+        "a new status runs the status slot alone: one real run and one measuring run in the sizing pass that measures it"
+    );
+    assert!(
+        last_pass_memo_runs(&frames.ctx).iter().all(|(_, _, run)| *run == MemoRun::Replayed),
+        "the discard pass's real run replays every slot: {:?}",
+        last_pass_memo_runs(&frames.ctx)
+    );
+    assert_eq!(frame(&mut frames, vec![]).0, Vec::<&str>::new(), "and it replays at it");
+}
+
+/// What a slot that registers a revealed rect shows: the rect.
+#[derive(MemoProps)]
+struct Revealing {
+    at: Rect,
+}
+
+fn revealing(props: &mut Revealing, ui: &mut Ui) {
+    // An audit run is the replay audit's, not the pass's: the trials count none.
+    if !in_audit_run(ui.ctx()) {
+        SLOT_RUNS.with(|runs| runs.borrow_mut().push("revealing"));
+    }
+    if let Some(shell) = Env::of(ui).view().get::<ShellEntry>().0 {
+        shell.reveal_rect(ui.ctx(), RevealEdge::Start, props.at);
+    }
+    Text::new("Tools").show(ui);
+}
+
+/// A memoized view in a slot that registers a revealed rect registers it again when it replays: the shell reads the
+/// same rects in a replayed pass as in the run.
+#[trial]
+fn a_replayed_view_in_a_slot_registers_its_revealed_rects() {
+    let at = Rect::from_min_size(egui::pos2(0.0, 40.0), Vec2::new(40.0, 120.0));
+    let seen = RefCell::new(Vec::new());
+    let frame = |frames: &mut Frames| {
+        frames.frame(vec![], |ui| {
+            AppShell::new(WindowKey::main())
+                .start(Slot::new("tools"), |ui, _, _: &mut ()| {
+                    let _ = MemoView::new("tools", Revealing { at }, revealing).show(ui);
+                })
+                .body(|ui, bcx, _| {
+                    *seen.borrow_mut() = bcx.shell().map(|shell| shell.revealed_rects(ui.ctx())).unwrap_or_default();
+                })
+                .show(ui, &mut ());
+        });
+        (slot_runs(), seen.borrow().clone())
+    };
+    let mut frames = Frames::new();
+    let (ran, first) = frame(&mut frames);
+    assert!(ran.contains(&"revealing"), "the slot runs in its first frame");
+    assert_eq!(first, vec![(RevealEdge::Start, at)], "its run registers the rect");
+    for _ in 0..30 {
+        frame(&mut frames);
+    }
+    let (ran, replayed) = frame(&mut frames);
+    assert_eq!(ran, Vec::<&str>::new(), "the slot replays");
+    assert_eq!(replayed, first, "the replay registers the same rects as the run");
 }
 
 /// What the page trial's shell ran in one frame, and the band room the page read.

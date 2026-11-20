@@ -54,51 +54,51 @@ fn with_readout(data: &mut StoryData, output: impl Into<StoryOutput>, latest: Op
 
 #[story(StrokeEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn stroke_editor_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("panel", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::PANEL | StrokeSections::DASH_ALIGN).show(ui);
+    let (style, style_at) = data.value_at("panel", StrokeStyle::default());
+    let out = StrokeEditor::new("Stroke", style_at.bind(style)).sections(StrokeSections::PANEL | StrokeSections::DASH_ALIGN).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_popover_dash_align(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("popover-align", StrokeStyle::default().with_line_style(super::LineStyle::Dashed));
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).show(ui);
+    let (style, style_at) = data.value_at("popover-align", StrokeStyle::default().with_line_style(super::LineStyle::Dashed));
+    let out = StrokeEditor::new("Stroke", style_at.bind(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_popover(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("popover", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).show(ui);
+    let (style, style_at) = data.value_at("popover", StrokeStyle::default());
+    let out = StrokeEditor::new("Stroke", style_at.bind(style)).sections(StrokeSections::POPOVER).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_open_path(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("open", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).closed(false).show(ui);
+    let (style, style_at) = data.value_at("open", StrokeStyle::default());
+    let out = StrokeEditor::new("Stroke", style_at.bind(style)).sections(StrokeSections::POPOVER).closed(false).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_dashed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("dashed", StrokeStyle::default().with_line_style(super::LineStyle::Dashed));
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).show(ui);
+    let (style, style_at) = data.value_at("dashed", StrokeStyle::default().with_line_style(super::LineStyle::Dashed));
+    let out = StrokeEditor::new("Stroke", style_at.bind(style)).sections(StrokeSections::POPOVER).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeEditor<'static>, covers = [Mixed], drive = Drive::Never)]
 fn stroke_editor_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (style, mixed) = data.value("mixed", {
+    let ((style, mixed), mixed_at) = data.value_at("mixed", {
         let base = StrokeStyle::default();
         StrokeMixed::of([&base, &other_than(&base)]).expect("two styles")
     });
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).mixed(mixed).show(ui);
+    let out = StrokeEditor::new("Stroke", mixed_at.bind(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).mixed(mixed).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
@@ -158,8 +158,8 @@ struct Picks {
 
 #[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
 fn stroke_editor_choice_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let picks =
-        data.value("rows", Picks { style: StrokeStyle::default(), start: "none".into(), end: "arrow".into(), profile: "uniform".into(), last: None });
+    let (picks, picks_at) = data
+        .value_at("rows", Picks { style: StrokeStyle::default(), start: "none".into(), end: "arrow".into(), profile: "uniform".into(), last: None });
     let heads = [
         StrokeChoice::new("none", "None"),
         StrokeChoice::new("arrow", "Arrow"),
@@ -179,7 +179,7 @@ fn stroke_editor_choice_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             .selected(Mixed::Same(picks.profile.as_str()))
             .paint(ChoicePainter::new(|cx, rect, choice| paint_profile(cx, rect, &choice.id))),
     ];
-    let out = StrokeEditor::new("Stroke", Bind::bound(&mut picks.style)).rows(&rows).show(ui);
+    let out = StrokeEditor::new("Stroke", picks_at.bind(&mut picks.style)).rows(&rows).show(ui);
     let picked = out.choice.clone();
     let story: StoryOutput = out.into();
     if let Some((row, choice)) = &picked {
@@ -206,25 +206,25 @@ fn stroke_editor_choice_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 #[story(StrokeButton<'static>, covers = [Default], drive = Drive::Never)]
 fn stroke_button(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (style, open) = data.value("button", (StrokeStyle::default(), false));
-    let out = StrokeButton::new("Stroke Options", Bind::bound(style), Bind::bound(open)).show(ui);
+    let ((style, open), button_at) = data.value_at("button", (StrokeStyle::default(), false));
+    let out = StrokeButton::new("Stroke Options", button_at.bind(style), button_at.bind(open)).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeButton<'static>, covers = [Mixed], drive = Drive::Never)]
 fn stroke_button_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (style, open) = data.value("button mixed", (Mixed::<StrokeStyle>::Mixed, false));
-    let out = StrokeButton::new("Stroke Options", Bind::bound_mixed(style), Bind::bound(open)).show(ui);
+    let ((style, open), style_open_at) = data.value_at("button mixed", (Mixed::<StrokeStyle>::Mixed, false));
+    let out = StrokeButton::new("Stroke Options", style_open_at.bind_mixed(style), style_open_at.bind(open)).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
 
 #[story(StrokeButton<'static>, covers = [Invalid], drive = Drive::Never)]
 fn stroke_button_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let (style, open) = data.value("button refused", (StrokeStyle::default().with_line_style(super::LineStyle::Dashed), false));
+    let ((style, open), style_open_at) = data.value_at("button refused", (StrokeStyle::default().with_line_style(super::LineStyle::Dashed), false));
     let refuse_dashes = |style: &StrokeStyle| if style.dashes.is_empty() { Validity::Ok } else { Validity::Refuse(Message::new("Solid lines only")) };
-    let out = StrokeButton::new("Stroke Options", Bind::bound(style).check(refuse_dashes), Bind::bound(open)).show(ui);
+    let out = StrokeButton::new("Stroke Options", style_open_at.bind(style).check(refuse_dashes), style_open_at.bind(open)).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
@@ -243,8 +243,8 @@ fn pick_dashed(fixture: &mut Fixture) {
 
 #[story(StrokeButton<'static>, covers = [Open], drive = Drive::Custom(pick_dashed))]
 fn stroke_button_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let style = data.value("button open", StrokeStyle::default());
-    let out = StrokeButton::new("Stroke Options", Bind::bound(style), Bind::given(false)).show(ui);
+    let (style, style_at) = data.value_at("button open", StrokeStyle::default());
+    let out = StrokeButton::new("Stroke Options", style_at.bind(style), Bind::given(false)).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }

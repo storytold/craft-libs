@@ -2,7 +2,6 @@
 
 use super::{HueRangeValue, HueSaturation, HueSaturationEditor};
 use craft_theme::Srgba;
-use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
@@ -22,8 +21,8 @@ fn shifted(degrees: f64) -> Srgba {
 
 #[story(HueSaturationEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn hue_saturation_master(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("master", HueSaturation { hue: 40.0, saturation: 20.0, ..HueSaturation::default() });
-    HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).adjusted_spectrum(&shifted).show(ui).into()
+    let (value, value_at) = data.value_at("master", HueSaturation { hue: 40.0, saturation: 20.0, ..HueSaturation::default() });
+    HueSaturationEditor::new("Hue/Saturation", value_at.bind(value)).adjusted_spectrum(&shifted).show(ui).into()
 }
 
 /// The Reds range with its four thumbs and the readout.
@@ -31,13 +30,13 @@ fn hue_saturation_master(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn hue_saturation_range(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut start = HueSaturation::default();
     start.ranges[0] = HueRangeValue { hue: 15.0, ..HueRangeValue::neutral(0) };
-    let value = data.value("range", start);
-    HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).range(Some(0)).adjusted_spectrum(&shifted).show(ui).into()
+    let (value, value_at) = data.value_at("range", start);
+    HueSaturationEditor::new("Hue/Saturation", value_at.bind(value)).range(Some(0)).adjusted_spectrum(&shifted).show(ui).into()
 }
 
 /// Colorize on: the range select is off and the Hue runs 0 to 360.
 #[story(HueSaturationEditor<'static>, covers = [], drive = Drive::Never)]
 fn hue_saturation_colorize(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let value = data.value("colorize", HueSaturation { hue: 210.0, saturation: 40.0, colorize: true, ..HueSaturation::default() });
-    HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).show(ui).into()
+    let (value, value_at) = data.value_at("colorize", HueSaturation { hue: 210.0, saturation: 40.0, colorize: true, ..HueSaturation::default() });
+    HueSaturationEditor::new("Hue/Saturation", value_at.bind(value)).show(ui).into()
 }

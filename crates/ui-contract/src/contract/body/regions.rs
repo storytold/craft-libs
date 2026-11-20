@@ -1,6 +1,7 @@
 //! Where the header, body, footer and end regions sit inside the container, and the rules between them.
 
 use super::BodyHooks;
+use super::scroll::scroll_of;
 use crate::contract::cx::BodyCx;
 use crate::contract::{Container, ContainerProps, FooterPlace, Gap, HeaderParts, LeastWidth, Mount, Pad, PadEdges, Sizing};
 use crate::layout::{ColumnGroup, Columns, Reached};
@@ -355,9 +356,11 @@ impl<'b> BodyHooks<'b> {
         self.rules.under + if header_h > 0.0 { self.header_gap * self.presence.t } else { 0.0 }
     }
 
-    /// The regions inside `inner` (the rect minus padding and the padding tier), placed from `sizes`. A header with a
-    /// band spreads over the `bleed` the padding leaves around `inner` at the top and the sides.
-    pub(super) fn regions(&self, props: &ContainerProps, inner: Rect, bleed: Vec2, room: Vec2, rtl: bool, sizes: RegionSizes) -> Regions {
+    /// The regions inside `inner` (the rect minus padding and the padding tier), placed from `sizes`, in a real run when
+    /// `real` (not a measuring run: the `Ui` is no sizing pass). A header with a band spreads over the `bleed` the
+    /// padding leaves around `inner` at the top and the sides.
+    #[allow(clippy::too_many_arguments, reason = "the regions' rect, room and sizes beside the run they are placed for")]
+    pub(super) fn regions(&self, props: &ContainerProps, inner: Rect, bleed: Vec2, room: Vec2, rtl: bool, sizes: RegionSizes, real: bool) -> Regions {
         let inline = props.header.is_some_and(|header| header.inline);
         let (in_end, full) = (footer_in_end(props), end_full_height(props));
         let header_h = if props.header.is_some() { sizes.header.unwrap_or(Vec2::ZERO).y } else { 0.0 };
@@ -382,7 +385,13 @@ impl<'b> BodyHooks<'b> {
             let line_h = if inline { body_h.max(header_h) } else { body_h };
             // A full-height end region stands beside the footer too, so only the part of it under the line counts.
             let end_line = if full { (end_h - across_h).max(0.0) } else { end_h };
-            (top + body_room, top + line_h.max(end_line).min(body_room))
+            let line_bottom = top + line_h.max(end_line).min(body_room);
+            // A scrolling body offered no bound (a content-sized container in a body that scrolls) shows all of its
+            // content: in the real run its view is the line this pass measured, never an unbounded band. Its measuring
+            // run keeps the unbounded band, in which the content takes its whole extent.
+            let unbounded_view = real && !body_room.is_finite() && scroll_of(props).is_some();
+            let bottom = if unbounded_view { line_bottom } else { top + body_room };
+            (bottom, line_bottom)
         } else {
             // A fill-width body is offered the room the parent gives this pass, never the height its content took last
             // pass: a collection that scrolls takes its rows up to that room, and from zero it would stay at zero.

@@ -8,7 +8,7 @@ use craft_keymap::{Chord, CommandRef, Mods};
 use craft_theme::Srgba;
 
 /// The app's menus, in order, and its open documents.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct MenuBar {
     /// The top-level menus, left to right.
@@ -18,7 +18,7 @@ pub struct MenuBar {
 }
 
 /// An open document, listed in the Window menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Document {
     /// What choosing it runs (bring the document to the front).
@@ -51,7 +51,7 @@ impl Document {
 }
 
 /// A top-level menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Menu {
     /// The title in the bar.
@@ -64,7 +64,7 @@ pub struct Menu {
 
 /// What a top-level menu is for, set by the app. macOS treats the app, Window and Help menus
 /// specially; File is where the system Close Window item goes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum MenuRole {
     /// Any menu without a fixed place.
@@ -85,7 +85,7 @@ pub enum MenuRole {
 }
 
 /// The platforms an item or submenu is shown on. All of them by default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 pub struct Platforms(u8);
 
 impl Platforms {
@@ -132,7 +132,7 @@ impl BitOr for Platforms {
 }
 
 /// One entry of a menu.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Node {
     /// An item the user can choose.
@@ -162,7 +162,7 @@ pub enum Node {
 }
 
 /// One menu item: a command with its label, shortcut and state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Item {
     /// What the item runs: the app's command (`file.open`), with its parameters
@@ -198,7 +198,7 @@ pub struct Item {
 
 /// The command a row runs while `mods` are held as it is chosen (Alt on Merge Visible runs Stamp
 /// Visible).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct Alternate {
     /// The modifiers that select the alternate.
@@ -222,7 +222,7 @@ impl Alternate {
 }
 
 /// A plain item, or one with a checked state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ItemKind {
     /// An ordinary item.
@@ -247,7 +247,7 @@ impl ItemKind {
 
 /// Items the layouts put in fixed places. The app tags its own About, Settings, Quit, Appearance
 /// and Language items; the Mac layout adds Hide and Minimize.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum ItemRole {
     /// The About item.
@@ -268,7 +268,7 @@ pub enum ItemRole {
 }
 
 /// The items AppKit provides.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Standard {
     #[allow(missing_docs)]
@@ -307,7 +307,7 @@ pub(crate) fn label_or_system(label: &str, english: &str, system: impl FnOnce(&s
 
 /// The commands of the items the crate adds itself. The crate runs them; an app sees them only
 /// in a layout's result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub enum Builtin {
     /// Hide the app: a custom item, because AppKit's own always takes ⌘H, which apps often bind.

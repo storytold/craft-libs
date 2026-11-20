@@ -51,3 +51,22 @@ fn a_number_field_that_keeps_its_name_is_described_by_its_caption() {
         }
     }
 }
+
+/// A number field whose value is not a number shows the dash and its node carries no numeric value, only the range;
+/// with a number it carries that number.
+#[trial]
+fn a_number_field_with_no_number_has_no_numeric_value() {
+    use craft_ui::text::NumberField;
+
+    for (value, read) in [(f64::NAN, None), (12.0, Some(12.0))] {
+        let field = Rc::new(Cell::new(egui::Id::NULL));
+        let seen = field.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut shown = Some(value);
+            seen.set(NumberField::new("Offset", Bind::bound(&mut shown)).id_salt("offset").show(ui).response.id);
+        });
+        fixture.settle();
+        let numeric = fixture.tree().numeric(field.get()).expect("the field's node is numeric");
+        assert_eq!(numeric.value, read, "the numeric value of a field holding {value}");
+    }
+}

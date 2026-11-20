@@ -99,5 +99,5 @@ fn navigator_between_keys(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(AnimationToggle<'static>, covers = [Default])]
 fn stopwatch(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    AnimationToggle::new(Bind::bound(data.value("animated", false))).show(ui).into()
+    AnimationToggle::new(data.bind("animated", false)).show(ui).into()
 }
