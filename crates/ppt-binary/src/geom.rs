@@ -196,7 +196,7 @@ const TRAPEZOID: u16 = 8;
 /// bottom edge inset by `adjust` (5400 unless the file says otherwise) at each end. PowerPoint
 /// writes the shape the same way when it saves a `.ppt` trapezoid as `.pptx`. A preset flipped
 /// upright would turn the shape's text upside down.
-fn trapezoid(adjust: Option<u32>) -> Geom {
+pub(crate) fn trapezoid(adjust: Option<u32>) -> Geom {
     let a = adjust.map_or(5400, |v| (v as i32).clamp(0, 10800));
     let d = format!("M 0 0 L {a} 21600 L {} 21600 L 21600 0 Z", 21600 - a);
     Geom::Custom { paths: vec![CustomPath { w: 21600.0, h: 21600.0, d, ..Default::default() }] }
