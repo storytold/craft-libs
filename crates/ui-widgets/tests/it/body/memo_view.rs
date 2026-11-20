@@ -7,12 +7,12 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, MemoProps, MemoView, Props as _, Show as _, ShowContainer as _, Tracked};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
+use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{BodyMode, RevealEdge, ShellCx, WindowKey};
 use craft_ui::runtime::memory::{SaveKey, set_saved_value};
 use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::in_audit_run;
 use craft_ui::testing::input::key_press;
-use craft_ui::popover::Popover;
 use craft_ui::testing::layout::{allocate, in_region, measured_block};
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{
