@@ -5,7 +5,7 @@ use super::{Last, percent_of};
 #[cfg(doc)]
 use super::{SaveForWebDialog, four_up_variants};
 use crate::patterns::form_dialogs::host_requests::PreviewRequest;
-use crate::patterns::form_dialogs::{LinkedSize, Resample, resize_from_scale};
+use crate::patterns::form_dialogs::{LinkedSize, MAX_DOCUMENT_SIDE, Resample, resize_from_scale};
 use crate::runtime::env::Label;
 use crate::runtime::env::UnitKind;
 use crate::runtime::memory::SaveKey;
@@ -308,7 +308,19 @@ impl SaveForWebOptions {
         self.size.or_else(|| resize_from_scale(original, self.percent).ok()).unwrap_or(original)
     }
 
-    pub(super) fn apply_size(&self, link: &mut LinkedSize) {
+    /// Keeps supplied exact dimensions within the same bounds as the width and height fields.
+    pub(super) fn clamp_exact_size(&mut self, original: PixelSize) {
+        let Some(size) = self.size else { return };
+        let clamp = |side: u32| side.clamp(1, MAX_DOCUMENT_SIDE as u32);
+        let clamped = PixelSize::new(clamp(size.width), clamp(size.height));
+        if clamped != size {
+            self.size = Some(clamped);
+            self.percent = percent_of(clamped, original);
+        }
+    }
+
+    pub(super) fn apply_size(&mut self, link: &mut LinkedSize) {
+        self.clamp_exact_size(link.original());
         let size = self.output_size(link.original());
         if size != link.pixels() {
             set_pixels(link, size);

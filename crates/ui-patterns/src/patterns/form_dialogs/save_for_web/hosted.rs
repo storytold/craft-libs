@@ -89,6 +89,7 @@ impl HostedSaveForWeb {
     #[must_use]
     pub fn options(mut self, options: SaveForWebOptions) -> Self {
         self.options = options;
+        self.options.clamp_exact_size(self.size);
         self
     }
 
@@ -238,7 +239,11 @@ impl StackDialog for HostedSaveForWeb {
                 self.options.size = None;
                 Ok(())
             }
-            _ => set_serde_field(&mut self.options, field, value),
+            _ => {
+                set_serde_field(&mut self.options, field, value)?;
+                self.options.clamp_exact_size(self.size);
+                Ok(())
+            }
         }
     }
 

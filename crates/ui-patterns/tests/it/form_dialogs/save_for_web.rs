@@ -2,9 +2,11 @@
 
 use craft_behavior::PixelSize;
 use craft_theme::Srgba;
+use craft_ui::contract::Bind;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    Animation, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebOptions, WebFormat, WebPreset, WebSlice, WebSlices, WebVariant,
+    Animation, HostedSaveForWeb, PALETTE_COLOR_KEY, SAVE_PATH_KEY, SaveForWebDialog, SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice,
+    WebSlices, WebVariant,
 };
 use craft_ui::testing::{Fixture, trial};
 use egui::load::SizedTexture;
@@ -87,6 +89,56 @@ fn image_size_can_unlink_and_preserves_exact_pixels() {
     web.answer_path(SAVE_PATH_KEY, PathBuf::from("wide.png"));
     let result = web.confirm(fixture.ctx()).expect("Save returns the exact unlinked size");
     assert_eq!((result.width, result.height), (22_501, 37));
+}
+
+#[trial]
+fn initial_exact_size_respects_the_document_side_limits() {
+    let mut options = SaveForWebOptions::default();
+    options.size = Some(PixelSize::new(300_001, 0));
+    let (host, fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options));
+    let normalized = Some(PixelSize::new(300_000, 1));
+
+    let mut host = host.borrow_mut();
+    let web = host.get_mut::<HostedSaveForWeb>().expect("the dialog is open");
+    let wanted = web.wanted_variants();
+    assert_eq!(wanted[0].request.options.size, normalized);
+    assert_eq!(web.current().size, normalized);
+    let fields = web.json_fields().expect("the dialog fields");
+    assert_eq!(fields["width"], 300_000);
+    assert_eq!(fields["height"], 1);
+
+    web.answer_path(SAVE_PATH_KEY, PathBuf::from("poster.jpg"));
+    let result = web.confirm(fixture.ctx()).expect("Save returns the preview size");
+    assert_eq!((result.width, result.height), (300_000, 1));
+    assert_eq!(result.options.size, normalized);
+
+    let input = serde_json::json!({ "width": 0, "height": 300_001 });
+    web.set_json_field(fixture.ctx(), "size", input).expect("the automation accepts supplied dimensions");
+    let result = web.confirm(fixture.ctx()).expect("Save uses the new dimensions before the next frame");
+    assert_eq!((result.width, result.height), (1, 300_000));
+    assert_eq!(result.options.size, Some(PixelSize::new(1, 300_000)));
+}
+
+#[trial]
+fn bound_exact_size_matches_preview_size() {
+    let mut options = SaveForWebOptions::default();
+    options.size = Some(PixelSize::new(300_001, 0));
+    let options = Rc::new(RefCell::new(options));
+    let bound = Rc::clone(&options);
+    let size = Rc::new(RefCell::new(None));
+    let shown = Rc::clone(&size);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut options = bound.borrow_mut();
+        let output = SaveForWebDialog::new("poster.psd", IMAGE, WebPictures::new().original(texture()), Bind::bound(&mut *options)).show(ui);
+        if let Some(variant) = output.wanted_variants.first() {
+            *shown.borrow_mut() = Some((output.size, variant.request.options.size));
+        }
+    });
+    fixture.room(Vec2::new(1400.0, 1000.0)).idle(10);
+
+    let expected = PixelSize::new(300_000, 1);
+    assert_eq!(*size.borrow(), Some((expected, Some(expected))));
+    assert_eq!(options.borrow().size, Some(expected));
 }
 
 /// Shows the pictures at 100% and clicks the point `at` of the Original pane's picture.
