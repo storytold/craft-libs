@@ -1,6 +1,6 @@
 //! The transform box: corner, edge, turn and distort drags.
 
-use craft_behavior::geometry::{BoxPart, BoxRules, BoxState, ScaleRule, drag};
+use craft_behavior::geometry::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode, drag};
 use craft_keymap::Mods;
 use kurbo::{Point, Rect, Vec2};
 
@@ -395,4 +395,15 @@ fn far_edge_drags_in_perspective_stay_near_the_reference() {
     let reference = [(310.6, 238.38), (392.0, 197.14), (452.0, 254.86), (310.6, 267.83)];
     let worst = sliver.quad.iter().zip(reference).map(|(a, (x, y))| a.distance(p(x, y))).fold(0.0, f64::max);
     assert!(worst < 45.0, "{worst} px off: {:?}", sliver.quad);
+}
+
+/// A Perspective corner drag on a turned box (measured on the reference): the corner moves along the box's top edge,
+/// not along the document's axis, and its partner on the top edge the other way.
+#[test]
+fn a_perspective_corner_on_a_turned_box_moves_along_its_top_edge() {
+    let turned = [p(181.5, 89.18), p(473.08, 167.79), p(420.5, 362.82), p(128.92, 284.21)];
+    let start = BoxState::new(turned, p(301.0, 226.0));
+    let rules = BoxRules::in_mode(TransformMode::Perspective);
+    let got = drag(&start, &start, BoxPart::Corner(0), p(182.0, 89.0), p(240.0, 105.0), Mods::NONE, &rules);
+    assert!(within(&got, [(239.59, 104.84), (414.99, 152.13), (420.5, 362.82), (128.92, 284.21)], 0.05), "{:?}", got.quad);
 }

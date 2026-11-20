@@ -457,10 +457,16 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
             BoxState { quad: q0.map(|q| turn * q), pivot: c }
         }
         BoxPart::Corner(i) if mods.cmd && mods.alt && mods.shift => {
-            // Perspective: the corner moves along the dominant axis and the corner sharing that
-            // side moves the opposite way.
+            // Perspective: the corner moves along the box's dominant axis (along its top edge or
+            // across it, as on the reference: a turned box keeps its top edge's direction) and the
+            // corner sharing that side moves the opposite way.
             let i = usize::from(i) % 4;
-            let horizontal = d.x.abs() >= d.y.abs();
+            let top = q0[1] - q0[0];
+            let len = top.hypot();
+            let uh = if len.is_finite() && len > 1e-9 { top / len } else { Vec2::new(1.0, 0.0) };
+            let nh = Vec2::new(-uh.y, uh.x);
+            let (along, across) = (d.dot(uh), d.dot(nh));
+            let horizontal = along.abs() >= across.abs();
             let j = match (i, horizontal) {
                 (0, true) => 1,
                 (1, true) => 0,
@@ -471,7 +477,7 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
                 (1, false) => 2,
                 _ => 1,
             };
-            let m = if horizontal { Vec2::new(d.x, 0.0) } else { Vec2::new(0.0, d.y) };
+            let m = if horizontal { uh * along } else { nh * across };
             let mut q = q0;
             q[i] = q0[i] + m;
             q[j] = q0[j] - m;
