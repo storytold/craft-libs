@@ -1,12 +1,19 @@
 [package]
 name = "craft-testkit"
+description = "Test support shared by the Craft apps and the craft-libs crates: source-level platform regression guards, test deadlines, hostile-input hammering, and locating a package's binaries from its integration tests and running them with bounded output. Test support only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Source-level platform regression guards and verification utilities for the Craft application suite"
 publish = false
+
+# A small program that the `bin` tests start as a child. It is not used outside this crate's tests.
+[[bin]]
+name = "craft-testkit-fixture"
+path = "tests/fixture/child.rs"
+test = false
+doc = false
 
 [dependencies]
 

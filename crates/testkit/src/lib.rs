@@ -1,10 +1,15 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-//! Source-level platform regression guards and verification utilities for the Craft application suite.
+//! Test support shared by the Craft apps and the craft-libs crates. Apps and craft-libs crates
+//! take it under `[dev-dependencies]`.
 //!
-//! This crate provides non-panicking source analysis guards that detect known platform hazards
-//! and lifecycle regressions across Craft applications:
+//! [`bin`] finds the executable of one of the package's binaries from an integration test, also
+//! when the test runs from a relocated nextest archive ([`bin_path!`]), and runs it with a limit on
+//! the bytes it may write to stdout and stderr ([`bin::run`]). It is native only.
+//!
+//! The source-level platform regression guards detect known platform hazards and lifecycle
+//! regressions across Craft applications:
 //!
 //! * [`guards::predefined_quit`]: flags direct calls to `muda`'s predefined Quit item that bypass
 //!   dirty document save prompts and window teardown on macOS.
@@ -35,6 +40,8 @@
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bin;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
 pub mod guards;

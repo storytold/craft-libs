@@ -370,7 +370,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
-- [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
+- [`craft-testkit`](crates/testkit/README.md): test support for the apps and the craft-libs crates. Its `bin` module
+  finds a package's binary from its integration tests, also from a relocated nextest archive, and runs it with a
+  limit on its output; SoundCraft, VectorCraft, TextureCraft, FilmCraft and DeckCraft each carry a copy of the
+  lookup today. Its `guards` module
   reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
   out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
