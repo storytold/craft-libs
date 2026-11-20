@@ -292,7 +292,7 @@ impl<'a> AboutDialog<'a> {
             AboutLayout::Centred => common.ok.clone(),
             AboutLayout::Listed => words.close.clone(),
         };
-        let enter = !enter_requires_no_focus || ui.memory(|memory| memory.focused().is_none());
+        let enter = !enter_requires_no_focus || crate::runtime::egui::focus::focused(ui.ctx()).is_none();
         let mut dialog = Dialog::new(title.clone()).collection_body().close_on_enter(enter).buttons([FooterButton::new(button, DialogRole::Accept)]);
         if let Some(open) = open {
             dialog = dialog.opened(open);

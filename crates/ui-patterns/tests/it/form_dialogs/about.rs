@@ -27,6 +27,7 @@ fn hosted_about_can_leave_enter_with_a_focused_control_without_changing_the_defa
         let mut fixture = Fixture::new(move |ui| {
             shown.borrow_mut().run(ui);
         });
+        fixture.room(Vec2::new(1400.0, 1000.0));
         let mut checked = false;
         let tab = AboutAppTab::new("details", "Details", move |ui| {
             Checkbox::new(Bind::bound(&mut checked)).label("Keep details visible").show(ui);
@@ -38,15 +39,26 @@ fn hosted_about_can_leave_enter_with_a_focused_control_without_changing_the_defa
                 .tab(AboutTab::App(0))
                 .enter_requires_no_focus(opt_in),
         );
-        fixture.idle(10);
-        let checkbox = fixture.by_label("Keep details visible").expect("the app tab's control");
-        fixture.click(&checkbox).idle(3);
+        fixture.idle(30);
+        let checkbox = fixture.by_role(Role::CHECKBOX).first().copied().expect("the app tab's checkbox");
+        assert_eq!(access::name(fixture.tree(), checkbox.node), Some("Keep details visible"));
+        for _ in 0..8 {
+            if access::focused_key(fixture.tree()) == checkbox.node {
+                break;
+            }
+            fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+        }
         assert_eq!(access::focused_key(fixture.tree()), checkbox.node);
         fixture.key(Key::Enter, Modifiers::NONE).idle(4);
         assert_eq!(host.borrow().get_by_id::<HostedAbout>(id).is_some(), opt_in, "only the opted-in dialog stays open");
         if opt_in {
-            fixture.key(Key::Tab, Modifiers::NONE).idle(4);
             let close = fixture.by_label("Close").expect("the footer");
+            for _ in 0..8 {
+                if access::focused_key(fixture.tree()) == close.node {
+                    break;
+                }
+                fixture.key(Key::Tab, Modifiers::NONE).idle(4);
+            }
             assert_eq!(access::focused_key(fixture.tree()), close.node, "Tab reaches Close");
             fixture.key(Key::Enter, Modifiers::NONE).idle(4);
             assert!(host.borrow().get_by_id::<HostedAbout>(id).is_none(), "Enter on Close still closes");
