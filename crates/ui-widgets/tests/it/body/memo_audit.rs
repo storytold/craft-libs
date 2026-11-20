@@ -3,13 +3,14 @@
 //! no count.
 
 use craft_ui::buttons::Button;
-use craft_ui::contract::{MemoProps, MemoView, Show as _};
+use craft_ui::contract::{ContainerProps, Lazy, MemoProps, MemoView, Props as _, Scroll, Show as _, ShowContainer as _};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::moved;
 use craft_ui::testing::{
     Frames, MemoRun, audit_replays, in_audit_run, last_frame_memo_runs, last_pass_memo_runs, last_pass_runs, last_pass_text_layouts, trial,
 };
 use egui::{Color32, Pos2, Rect, Ui, Vec2};
+use craft_ui_test_kit::body::Slab;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -198,4 +199,39 @@ fn a_view_painting_a_callback_runs_every_pass() {
         let runs: Vec<MemoRun> = last_pass_memo_runs(&frames.ctx).into_iter().map(|(_, _, run)| run).collect();
         assert_eq!(runs, [MemoRun::Ran], "frame {frame}");
     }
+}
+
+/// A view holding a scrolling body of rows that run only in view.
+#[derive(MemoProps)]
+struct ScrolledRows {
+    rows: usize,
+}
+
+fn scrolled_rows(props: &mut ScrolledRows, ui: &mut Ui) {
+    Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("rows").show(ui, |ui, _| {
+        for at in 0..props.rows {
+            Lazy::new(at, 20.0).show(ui, |ui| {
+                Button::new(format!("Row {at}")).show(ui);
+            });
+        }
+    });
+}
+
+/// A view whose run measured the scrolling body inside it replays in passes that measure nothing: its record holds what
+/// its real run registered, not what the body's measuring run did, so the audit finds the replay equal to a run.
+#[trial]
+fn a_view_whose_body_measured_in_its_run_replays_as_a_run_in_a_pass_that_does_not_measure() {
+    let mut frames = Frames::new();
+    audit_replays(&frames.ctx, true);
+    let rows = Cell::new(12);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(160.0, 100.0)), |ui| {
+            MemoView::new("rows", ScrolledRows { rows: rows.get() }, scrolled_rows).show(ui);
+        });
+    };
+    frames.idle(SETTLE, &mut show);
+    rows.set(16);
+    frames.idle(SETTLE, &mut show);
+    let ran: Vec<_> = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran).collect();
+    assert!(ran.is_empty(), "the view settles: {ran:?}");
 }

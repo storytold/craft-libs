@@ -2,7 +2,8 @@
 //! again in place of running the view. A measuring run of a measure-only child (a page `Pages` holds out of view) opens
 //! a record too; only the values it read are kept, so a later run in the pass takes its size and notes them. A record
 //! holds the view's paint, egui widget rects and AccessKit nodes (egui's pass records), what it registered with the
-//! focus service (`focus::Transcript`), and a journal of every other registration the services below take per pass:
+//! focus service (`focus::Transcript`), and a journal of every other registration the services below take per pass in
+//! the real run (`journaling`):
 //! each service that keeps one notes it here while a record is open, as the call that makes it again. Records nest: a
 //! view's record holds the records of the views inside it that replayed.
 //!
@@ -350,10 +351,18 @@ where
     F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
 {
     const { assert!(std::mem::size_of::<F>() == 0, "`journal`'s `again` captures nothing: pass its state in `args`") };
-    if recording(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying) {
+    if journaling(ctx) {
         let entry = Entry(Arc::new(Note { args: args(), again }));
         pass_state::with::<Recorder, _>(ctx, |recorder| recorder.journal.push(entry));
     }
+}
+
+/// Whether a registration the running code makes goes into the open records' journal: a record is open, no replay is
+/// adding its journal, and no measuring run is in progress. A journal holds what the real run registered: a measuring
+/// run inside it (a body measuring its content) runs only in a pass that measures, and what it hands forward lives in
+/// that body's kept transcript, so a replay in a pass that measures nothing adds only what the real run added.
+fn journaling(ctx: &Context) -> bool {
+    recording(ctx) && !crate::runtime::measure::active(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying)
 }
 
 /// `journal` for a registration that a second equal one adds nothing to: the innermost open record keeps it once, so
@@ -364,7 +373,7 @@ where
     F: Fn(&Context, &A) + Copy + Send + Sync + 'static,
 {
     const { assert!(std::mem::size_of::<F>() == 0, "`journal_distinct`'s `again` captures nothing: pass its state in `args`") };
-    if recording(ctx) && !pass_state::with::<Recorder, _>(ctx, |recorder| recorder.replaying) {
+    if journaling(ctx) {
         let entry = Entry(Arc::new(Note { args: args(), again }));
         pass_state::with::<Recorder, _>(ctx, |recorder| {
             let from = recorder.open.last().map_or(0, |open| open.from);
