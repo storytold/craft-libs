@@ -932,12 +932,53 @@ fn keep_convex(from: [Point; 4], to: [Point; 4]) -> [Point; 4] {
 }
 
 /// Where the reference point lands when the box goes from `quad0` to `quad`: the same place within
-/// the box. A box that has collapsed leaves it where it was.
+/// the box, read bilinearly between the corners (the reference's: a centred reference point stays
+/// at the corners' mean on a box in perspective; on a parallelogram this is the affine place). A
+/// box that has collapsed leaves it where it was.
 fn carry_pivot(quad0: [Point; 4], quad: [Point; 4], pivot0: Point) -> Point {
     let (Some(h0), Some(h1)) = (Homography::unit_to_quad(quad0), Homography::unit_to_quad(quad)) else { return pivot0 };
     let Some(inv) = h0.inverse() else { return pivot0 };
-    let p = h1.apply(inv.apply(pivot0));
-    if p.is_finite() { p } else { pivot0 }
+    let projective = inv.apply(pivot0);
+    let at = bilinear_inverse(quad0, pivot0, projective).unwrap_or(projective);
+    let p = bilinear(quad, at);
+    if p.is_finite() {
+        p
+    } else {
+        let p = h1.apply(projective);
+        if p.is_finite() { p } else { pivot0 }
+    }
+}
+
+/// The point at `(u, v)` of the unit square spread bilinearly over `q`'s corners.
+fn bilinear(q: [Point; 4], at: Point) -> Point {
+    let (u, v) = (at.x, at.y);
+    let top = q[0].lerp(q[1], u);
+    let bottom = q[3].lerp(q[2], u);
+    top.lerp(bottom, v)
+}
+
+/// The `(u, v)` that [`bilinear`] takes to `p` on `q`, by Newton's method from `guess`; `None` where it does not
+/// settle (a folded box).
+fn bilinear_inverse(q: [Point; 4], p: Point, guess: Point) -> Option<Point> {
+    let mut at = if guess.is_finite() { guess } else { Point::new(0.5, 0.5) };
+    for _ in 0..16 {
+        let (u, v) = (at.x, at.y);
+        let r = bilinear(q, at) - p;
+        if r.hypot() < 1e-10 {
+            return Some(at);
+        }
+        let du = (q[1] - q[0]) * (1.0 - v) + (q[2] - q[3]) * v;
+        let dv = (q[3] - q[0]) * (1.0 - u) + (q[2] - q[1]) * u;
+        let det = du.cross(dv);
+        if !(det.is_finite() && det.abs() > 1e-12) {
+            return None;
+        }
+        at = Point::new(u - r.cross(dv) / det, v - du.cross(r) / det);
+        if !at.is_finite() {
+            return None;
+        }
+    }
+    (bilinear(q, at).distance(p) < 1e-6).then_some(at)
 }
 
 /// `v`, kept off zero with its sign: a divisor for a W or H scale that may be negative.

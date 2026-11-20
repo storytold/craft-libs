@@ -407,3 +407,16 @@ fn a_perspective_corner_on_a_turned_box_moves_along_its_top_edge() {
     let got = drag(&start, &start, BoxPart::Corner(0), p(182.0, 89.0), p(240.0, 105.0), Mods::NONE, &rules);
     assert!(within(&got, [(239.59, 104.84), (414.99, 152.13), (420.5, 362.82), (128.92, 284.21)], 0.05), "{:?}", got.quad);
 }
+
+/// The reference point stays at the corners' mean when a Perspective drag turns a box into a trapezoid (measured on
+/// the reference through the ⌥ drag that follows, which scales about it).
+#[test]
+fn the_reference_point_stays_at_the_corners_mean_through_a_perspective_drag() {
+    let start = BoxState::from_rect(Rect::new(150.0, 125.0, 452.0, 327.0));
+    let perspective = BoxRules::in_mode(TransformMode::Perspective);
+    let trapezoid = drag(&start, &start, BoxPart::Corner(0), p(150.0, 125.0), p(210.0, 125.0), Mods::NONE, &perspective);
+    assert!(trapezoid.pivot.distance(p(301.0, 226.0)) < 1e-6, "{:?}", trapezoid.pivot);
+    let alt = Mods { alt: true, ..Mods::NONE };
+    let got = drag(&trapezoid, &trapezoid, BoxPart::Edge(0), p(301.0, 125.0), p(301.0, 95.0), alt, &BoxRules::default());
+    assert!(within(&got, [(182.97, 95.0), (419.03, 95.0), (419.03, 357.0), (182.97, 357.0)], 0.01), "{:?}", got.quad);
+}
