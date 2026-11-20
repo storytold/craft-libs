@@ -449,6 +449,10 @@ page yet. Damage recovery may read bytes again up to twice the file's length plu
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
+`VorbisTiming` gives each Vorbis packet's start and duration (from the block sizes of the modes that
+`VorbisModes` reads from the setup header), the samples to discard before a negative starting
+position, the offset of a stream that starts after 0, and the end trimming of the final page
+(Vorbis I §4.3.8 and §A.2).
 
 The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
 (storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
