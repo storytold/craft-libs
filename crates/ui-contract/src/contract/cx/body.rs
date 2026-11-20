@@ -28,6 +28,7 @@ pub struct BodyCx<'a> {
     gate: Option<&'a mut bool>,
     gate_mixed: bool,
     close: Option<CloseReason>,
+    exiting: bool,
     field_message: Option<(Message, craft_theme::variant::Tone)>,
     owner: Option<BodyOwner<'a>>,
 }
@@ -47,7 +48,7 @@ impl<'a> BodyCx<'a> {
         memory.claim(id);
         let (gate_mixed, field_message, owner) =
             shared.map_or((false, None, None), |shared| (shared.gate_mixed, shared.field_message, Some(shared.owner)));
-        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, field_message, owner }
+        BodyCx { id, env, resolved, rect, memory, open, gate, gate_mixed, close: None, exiting: false, field_message, owner }
     }
 
     /// Asks the platform to open `url`, in a new tab where the platform has tabs and `new_tab` is set: the opener
@@ -63,6 +64,17 @@ impl<'a> BodyCx<'a> {
             return None;
         }
         self.env.host()?.files().take_answer(ticket)
+    }
+
+    pub(crate) fn with_exiting(mut self, exiting: bool) -> Self {
+        self.exiting = exiting;
+        self
+    }
+
+    /// Whether the container has closed and its body only stays on screen while it fades out. `is_open` reads true
+    /// then; a region that belongs to the open container (a companion layer) is not shown.
+    pub fn is_exiting(&self) -> bool {
+        self.exiting
     }
 
     /// The validity message of the first control in the container's label scope, recorded last frame, with the

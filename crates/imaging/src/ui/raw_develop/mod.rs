@@ -548,6 +548,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
 
         let shown = FullWindowDialog::new(title)
             .own_window(WindowSpec::dialog())
+            .remember(SaveKey::new("craft_imaging.raw_develop.window"))
             .opened(open)
             .command_scope(RawDevelopCommands::SCOPE)
             .buttons(buttons)

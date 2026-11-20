@@ -1,10 +1,10 @@
 //! Stories of `StartScreen`.
 
-use super::{StartLink, StartScreen};
+use super::{StartLayout, StartLink, StartScreen};
 use crate::contract::Bind;
 use crate::primitives::{FakeThumbSource, ThumbnailOptions, Thumbnails};
 use crate::runtime::env::Label;
-use crate::shell::{RecentFile, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
+use crate::shell::{RecentFile, RecentList, RecentSort, RecentView, ScreenModeCommands, Template, ThumbKey};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::IconId;
 use egui::Ui;
@@ -137,6 +137,32 @@ fn start_screen_list_sorted_by_name(ui: &mut Ui, data: &mut StoryData) -> StoryO
 fn start_screen_without_files(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let extras = Extras { drop_hint: Some("Drop a file here or click to open one"), ..Extras::default() };
     screen(ui, data, Choice::default(), &[], &[], &picture_templates(), extras)
+}
+
+#[story(StartScreen<'static>, covers = [], drive = Drive::Never)]
+fn start_screen_greeting(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let (files, templates) = (plain_files(), plain_templates());
+    let (mut view, mut sort) = (RecentView::default(), RecentSort::default());
+    StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &files)
+        .templates(&templates)
+        .now(NOW)
+        .layout(StartLayout::Greeting)
+        .title("Good afternoon")
+        .more_templates("More templates")
+        .show(ui)
+        .into()
+}
+
+#[story(RecentList<'static>, covers = [], drive = Drive::Never)]
+fn recent_list(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let files = plain_files();
+    RecentList::new(&files).now(Some(NOW)).empty("No recent files").show(ui).into()
+}
+
+/// No recent files: the muted line under the heading, at the reading start.
+#[story(RecentList<'static>, covers = [], drive = Drive::Never)]
+fn recent_list_empty(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    RecentList::new(&[]).empty("Documents you open will show up here.").show(ui).into()
 }
 
 #[story(StartScreen<'static>, covers = [], drive = Drive::Never)]

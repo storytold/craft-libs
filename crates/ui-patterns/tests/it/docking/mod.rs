@@ -25,6 +25,7 @@ mod group_view;
 mod workspace_dialogs;
 
 mod native;
+mod panes;
 
 /// The docking sizes of the default theme with the given divider gap, least pane and strip height.
 fn sizes(gap: f32, least_pane: f32, strip: f32) -> DockSizes {

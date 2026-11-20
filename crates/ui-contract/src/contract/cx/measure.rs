@@ -1,7 +1,7 @@
 //! `MeasureCx`: step 5's read view of a component.
 
 use crate::contract::{Component, Resolved, Show, ValueOf};
-use crate::primitives::{TextEnv, TextLayout, TextRun};
+use crate::primitives::{LeastLayout, TextEnv, TextLayout, TextRun};
 use crate::runtime::commands::{self, CommandRef, ResolvedCommand};
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::layout_memory;
@@ -112,10 +112,10 @@ impl<C: Component> MeasureCx<'_, C> {
         run.layout(self.ui.ctx(), &self.text_env(), width)
     }
 
-    /// The width of `run`, a run that elides, at its readable least ([`TextRun::READABLE_CHARACTERS`]): the least
-    /// width an elidable text reports at `Proposal::Min`.
-    pub fn least_width(&self, run: &TextRun<'_>) -> f32 {
-        run.least_width(self.ui.ctx(), &self.text_env())
+    /// `run`, a run that elides, laid out whole and its width at its readable least
+    /// ([`TextRun::READABLE_CHARACTERS`]): what an elidable text reports at `Proposal::Min`. Each is laid out once.
+    pub fn least(&self, run: &TextRun<'_>) -> LeastLayout {
+        run.least(self.ui.ctx(), &self.text_env())
     }
 
     fn text_env(&self) -> TextEnv<'_> {
@@ -162,6 +162,9 @@ impl<C: Component> MeasureCx<'_, C> {
     /// The size `face` has when `PaintUi::face` shows it as the look of a part: steps 1, 2 and 4 of the face run
     /// under the composite's resolved `enabled`, `size` and sizing. A composite measured at its least measures the face at
     /// its least; otherwise the face has no proposal.
+    /// The face is measured inside the composite's own run (measure, parts or header parts). Only the composite's
+    /// measure call sizes the composite: its answer and the inputs the face read are what the layout memory keeps,
+    /// and the face keeps no entry of its own.
     pub fn face<S: Show>(&self, mut face: S) -> Vec2 {
         // The face is the composite's look: a composite sized to its content sizes its face so.
         if let Some(sizing) = self.resolved.sizing {
@@ -169,7 +172,7 @@ impl<C: Component> MeasureCx<'_, C> {
         }
         let id = self.id.with("face");
         let proposal = if self.proposal == Proposal::Min { Proposal::Min } else { Proposal::Ideal };
-        crate::contract::measure_under(&mut face, self.ui, Some(id), proposal, Some(&self.under()))
+        crate::contract::run::measure_face(&mut face, self.ui, id, proposal, &self.under())
     }
 
     /// The icon side of the component's size.

@@ -97,6 +97,27 @@ fn round_trip_keeps_values_and_unknown_keys() {
     assert_eq!(format::write(&again).unwrap(), text, "writing is stable");
 }
 
+/// An app's own `shape` replaces the theme's for that app only (WordCraft's rounded-rectangle buttons under
+/// ArtCraft's capsules), and it is written back.
+#[test]
+fn an_apps_own_shape_replaces_the_themes_for_that_app() {
+    let mut v = full();
+    v["apps"]["photocraft"]["shape"] = json!({ "button_radius": 4 });
+    let file = parse_value(&v).unwrap();
+    let id = AppId::parse("photocraft").unwrap();
+    assert_eq!(file.theme.apps.get(&id).and_then(|app| app.shape).and_then(|shape| shape.button_radius), Some(4.0));
+    let appearance = super::semantic_tests::app(Mode::Light, Contrast::Standard);
+    let own = crate::resolve(&file.theme, appearance, Some(&id)).tokens.shape.radius.button;
+    let theirs = crate::resolve(&file.theme, appearance, None).tokens.shape.radius.button;
+    assert_eq!(own, 4.0, "the app's buttons take its own radius");
+    assert_ne!(theirs, 4.0, "other apps keep the theme's");
+    let written: Value = serde_json::from_str(&format::write(&file).unwrap()).unwrap();
+    assert_eq!(written.pointer("/apps/photocraft/shape/button_radius"), Some(&json!(4.0)));
+    let mut bad = full();
+    bad["apps"]["photocraft"]["shape"] = json!({ "button_radius": -1 });
+    assert!(!errors(&bad).is_empty(), "an app's shape is checked as a theme's");
+}
+
 /// A pack set on a file without one is written; clearing it removes the key and keeps the file's unknown keys; a
 /// value that is not a well-formed pack id is an error at its key.
 #[test]

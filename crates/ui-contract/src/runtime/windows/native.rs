@@ -48,6 +48,10 @@ pub enum WindowAction {
     SetOuterPosition(Pos2),
     /// Sizes the window's inner area in points.
     SetInnerSize(Vec2),
+    /// Restores a minimized window.
+    Restore,
+    /// Sets the smallest inner size the window can be given, in points.
+    SetMinInnerSize(Vec2),
     /// Changes the window's level.
     SetLevel(WindowLevel),
     /// Changes the window's title.
@@ -93,6 +97,8 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
         | WindowAction::StartMove
         | WindowAction::SetOuterPosition(_)
         | WindowAction::SetInnerSize(_)
+        | WindowAction::Restore
+        | WindowAction::SetMinInnerSize(_)
         | WindowAction::SetLevel(_)
         | WindowAction::SetTitle(_) => commands,
         WindowAction::SetOpacity(_) => false,
@@ -129,6 +135,8 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             viewports::command(ctx, viewport, egui::ViewportCommand::InnerSize(size));
             PerViewport::<Record>::with(ctx, viewport, |record| record.known = record.known.map(|known| Rect::from_min_size(known.min, size)));
         }
+        WindowAction::Restore => viewports::command(ctx, viewport, egui::ViewportCommand::Minimized(false)),
+        WindowAction::SetMinInnerSize(size) => viewports::command(ctx, viewport, egui::ViewportCommand::MinInnerSize(size)),
         WindowAction::SetLevel(level) => {
             // A window opened by `show_viewport` gets its level with the next build of its viewport; any other (the
             // root) is told now.
@@ -144,6 +152,9 @@ pub fn act(ctx: &Context, viewport: ViewportId, action: WindowAction) -> bool {
             }
         }
         WindowAction::SetTitle(title) => {
+            // X11 rejects a title holding a NUL, so the host drops it before the compare: a title that differs only by
+            // NULs is the one already sent.
+            let title: String = title.chars().filter(|c| *c != '\0').collect();
             // `ViewportInfo::title` is empty on X11 and Wayland, so the host remembers what it set itself.
             let fresh = PerViewport::<SentTitle>::with(ctx, viewport, |sent| {
                 let fresh = sent.0.as_deref() != Some(title.as_str());

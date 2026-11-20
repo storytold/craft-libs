@@ -18,7 +18,7 @@ use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::{DocKey, OwnerClass, PartRef};
-use egui::{Context, Id, ViewportId};
+use egui::{Context, Id, IdSet, ViewportId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -80,8 +80,11 @@ pub(crate) struct FocusedRecord {
     pub(crate) menu: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
-    /// The menu bar the last pass registered, which takes F10, a lone Alt and Alt with a letter.
+    /// The component that registered as the window's menu bar (`register_menu_bar`) in the last pass: it takes the
+    /// menu-bar keys, and its state-dependent claims (the letters keytips badges take) hold beside the focused one's.
     pub(crate) menu_bar: Option<Id>,
+    /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics (`register_menu_bar_by_claim`).
+    pub(crate) menu_bar_by_claim: bool,
     /// egui focus is on a widget no framework component made, or an egui popup is open, and no framework press or
     /// drag is captured: an app's own focused widget or popup keeps the keys a focused component keeps (Tab, Escape,
     /// the clipboard events). Written by the end hook after its focus moves.
@@ -127,6 +130,7 @@ pub(crate) struct RowGroups {
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) stops: Vec<StopRec>,
+    stop_ids: IdSet,
     pub(crate) last_stops: Vec<StopRec>,
     pub(crate) scopes: FastMap<Id, ScopeRec>,
     pub(crate) last_scopes: FastMap<Id, ScopeRec>,
@@ -152,6 +156,8 @@ pub(crate) struct State {
     pub(crate) visible: bool,
     pub(crate) record: FocusedRecord,
     pub(super) menu_bar: Option<Id>,
+    /// The registered menu bar takes only the Alt+letter chords it claims as mnemonics.
+    pub(super) menu_bar_by_claim: bool,
     /// The menu bar that took focus and the stop it took focus from, for the bar or a menu pick to give back.
     pub(super) bar_return: Option<(Id, StopKey)>,
     pub(crate) press: press::PressState,
@@ -201,6 +207,7 @@ pub(crate) fn apply(ctx: &Context, acts: Vec<Act>) {
 pub(crate) fn register_stop(ctx: &Context, stop: Stop) {
     with(ctx, |state| {
         let scope = state.open.last().map(|(id, _)| *id);
+        state.stop_ids.insert(stop.id);
         state.stops.push(StopRec { stop, scope });
     });
 }
@@ -345,7 +352,10 @@ pub(crate) fn replay(ctx: &Context, transcript: &Transcript) {
             state.scopes.insert(id, scope);
             state.scope_order.push(id);
         }
-        state.stops.extend(placed.stops);
+        for rec in placed.stops {
+            state.stop_ids.insert(rec.stop.id);
+            state.stops.push(rec);
+        }
         for group in placed.groups {
             state.groups.insert(group.id, group);
         }
@@ -359,11 +369,17 @@ pub(crate) fn targets(ctx: &Context) -> [Option<Id>; 2] {
     [focused_stop(ctx).map(|key| key.0), with(ctx, |state| state.revealed.map(|key| key.0))]
 }
 
+/// Whether the component `id` registered a stop this pass that Tab or a request can reach, its own or one of its
+/// parts': a segmented control's stops are its segments. A press-only stop (the selection of a display text) is not one.
+pub(crate) fn has_reachable_stop(ctx: &Context, id: Id) -> bool {
+    with(ctx, |state| state.stops.iter().any(|rec| rec.stop.id == id && !rec.stop.press_only))
+}
+
 /// Where a request for the component `id` goes when it has no stop of its own: the first stop registered since
 /// `from` (a `stop_count`), which a component inside it holds.
 pub(crate) fn first_stop_inside(ctx: &Context, id: Id, from: usize) -> Option<FocusTarget> {
     with(ctx, |state| {
-        if state.stops.iter().any(|rec| rec.stop.id == id) {
+        if state.stop_ids.contains(&id) {
             return None;
         }
         let rec = state.stops.get(from..)?.first()?;
@@ -453,11 +469,27 @@ pub(crate) fn pop_scope(ctx: &Context) {
     apply(ctx, acts);
 }
 
-/// Registers that the menu bar `bar` takes the menu-bar keys of the next input hook (spec 9.7). A settled bar
-/// registers again when it replays its last run, and the keys it takes run it (`keys::routed_to`).
-pub(crate) fn register_menu_bar(ctx: &Context, bar: Id) {
-    crate::runtime::replay::journal(ctx, || bar, |ctx, &bar| register_menu_bar(ctx, bar));
-    with(ctx, |state| state.menu_bar = Some(bar));
+/// Registers the component `id` as the menu bar that can take the menu-bar keys of the next input hook (spec 9.7).
+/// Its claims hold as the focused component's do, so a bar that is not a focus stop (keytips) keeps the letters it
+/// takes from the focused field. The last registration of a pass wins. A settled bar registers again when it replays
+/// its last run, and the keys it takes run it (`keys::routed_to`).
+///
+/// With `by_claim` the bar has no mnemonic letters of its own: an Alt+letter reaches it only as a chord it claims, and
+/// any other stays the app's shortcut. A menu bar's titles name their letters, so it registers without.
+pub(crate) fn register_menu_bar(ctx: &Context, id: Id, by_claim: bool) {
+    crate::runtime::replay::journal(ctx, || (id, by_claim), |ctx, &(id, by_claim)| register_menu_bar(ctx, id, by_claim));
+    with(ctx, |state| {
+        state.menu_bar = Some(id);
+        state.menu_bar_by_claim = by_claim;
+    });
+}
+
+/// Whether a stop with these keys takes typed letters: a text field or a shortcut recorder. The letters a keytip or a
+/// menu mnemonic would take are then the stop's own. A document canvas's editor part (`KeyUse::is_document_editor`)
+/// does not count: the menu bar and keytips work over the document, as a word processor's do, and its letters still
+/// type while no lone Alt or F10 has started them.
+pub fn takes_letters(keys: &KeyUse) -> bool {
+    matches!(keys.owner, OwnerClass::Text | OwnerClass::Recorder) && !keys.is_document_editor()
 }
 
 /// A registered menu bar takes the keyboard (F10, a lone Alt): focus moves to `target`, a stop of the bar, in this
@@ -578,6 +610,12 @@ pub fn request(ctx: &Context, target: FocusTarget) -> bool {
     with(ctx, |state| state.pending = Some(target));
     crate::runtime::egui::repaint::request_of(ctx, crate::runtime::egui::pass::current_viewport(ctx));
     true
+}
+
+/// Whether focus is on the component `id` or on one of its parts (a canvas's editor part), from the focus record of
+/// the stop focus is on. An app asks it of a component it shows, such as whether its document canvas has focus.
+pub fn has(ctx: &Context, id: Id) -> bool {
+    focused_rec(ctx).is_some_and(|rec| rec.stop.id == id)
 }
 
 /// Applies `target` now, for an AccessKit `Focus` action, which moves focus in the pass that carries it.
@@ -897,6 +935,29 @@ pub(crate) fn menu_scope(ctx: &Context, from: Option<Id>) -> Option<Id> {
 pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
     let rec = focused_rec(ctx)?;
     Some(with(ctx, |state| state.within(rec.scope, scope)))
+}
+
+/// Whether the focused stop's innermost layer-like scope (groups and panes skipped) is a dialog whose Escape closes it
+/// and which is the top layer, so the dialog's own Escape rule decides this pass's Escape. A text field holding a
+/// draft there passes Escape on: one Escape cancels the dialog and its typing goes with it, as Word's dialogs do. A
+/// field in a popup or menu inside the dialog, or in no dialog (a ribbon box), keeps the Escape to revert its draft.
+pub(crate) fn escape_closes_dialog(ctx: &Context) -> bool {
+    let Some(rec) = focused_rec(ctx) else {
+        return false;
+    };
+    let dialog = with(ctx, |state| {
+        let mut at = rec.scope;
+        while let Some(id) = at {
+            let scope = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id))?;
+            match scope.policy.kind {
+                craft_behavior::ScopeKind::Group | craft_behavior::ScopeKind::Pane => at = scope.parent,
+                craft_behavior::ScopeKind::Dialog => return (scope.policy.cancel == craft_behavior::CancelRule::Close).then_some(id),
+                _ => return None,
+            }
+        }
+        None
+    });
+    dialog.is_some_and(|id| crate::runtime::overlay::top(ctx) == Some(id))
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop

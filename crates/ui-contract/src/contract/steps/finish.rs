@@ -14,7 +14,7 @@ use egui::{Context, Id, Response, Ui, Vec2};
 /// `changed` is `value_changed` of the pass's events.
 pub(crate) fn before_finish(core: &mut CxCore<'_>, activated: bool, injected: Option<FireSource>, changed: bool) {
     let by_key = activated && core.activation.is_some_and(|activation| activation.by_key);
-    response::rewrite_clicks(&mut core.response, by_key || core.part_clicked, core.command.is_some());
+    response::rewrite_clicks(&mut core.response, by_key || core.part_clicked, core.command.is_some() && activated);
     if changed {
         response::mark_changed(&mut core.response);
     }

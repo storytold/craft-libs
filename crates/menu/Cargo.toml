@@ -8,7 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [lib]
-# Every test lives in the `it` integration binary, except the AppKit one (`mac_appkit`, no harness), so `cargo test` builds the library once.
+# All tests share the integration binary, including the AppKit main-thread probe.
 test = false
 
 [dependencies]
@@ -34,13 +34,6 @@ egui = { workspace = true }
 [[test]]
 name = "it"
 path = "tests/it/main.rs"
-harness = false
-required-features = ["screen-testing"]
-
-# AppKit end to end: runs on the main thread, so no harness; on other platforms it does nothing.
-[[test]]
-name = "mac_appkit"
-path = "tests/mac_appkit.rs"
 harness = false
 required-features = ["screen-testing"]
 

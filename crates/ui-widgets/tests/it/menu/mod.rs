@@ -4,6 +4,8 @@ mod bar;
 
 mod closed;
 
+mod companion;
+
 mod native;
 
 mod openers;
@@ -13,6 +15,8 @@ mod overflow;
 mod pick_focus;
 
 mod rows;
+
+mod search;
 
 mod submenus;
 

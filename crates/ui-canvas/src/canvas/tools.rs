@@ -117,6 +117,9 @@ fn with_area(rect: Option<Rect>) -> Option<Rect> {
 /// each can run. The commands are scoped: a canvas container and a full-window dialog can be instances of the
 /// `canvasView` scope, and a fired command goes to the instance that holds the key focus, else the one that held it
 /// last, so a chord acts on the dialog's view while the dialog is open. The zoom commands also fire inside a dialog.
+/// Their chords are defaults: a command the canvas does not offer now leaves its chord to the next binding, and an app
+/// whose own command owns one of them (a word processor's Ctrl+= Subscript) drops or replaces it with
+/// `AppCatalog::replace_defaults`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
 #[command(prefix = "canvasView", scope = "canvasView")]
 #[non_exhaustive]

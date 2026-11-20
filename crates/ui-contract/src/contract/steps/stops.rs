@@ -49,6 +49,18 @@ pub(crate) fn join_group(ctx: &Context, group: Id, id: Id) {
     crate::runtime::memory::adopt::<u64>(ctx, id, slot);
 }
 
+/// The roving group of a component's own parts.
+fn roving_group(id: Id) -> Id {
+    sub(id, "roving")
+}
+
+/// The roving group a stop shown among a component's parts joins: the group of the component's own parts, or the body
+/// group they joined. The one source for the parts' registration and for a component the header hosts in its cells.
+pub(crate) fn parts_group(ctx: &Context, id: Id) -> Id {
+    let own = roving_group(id);
+    focus::registration::part_group(ctx, own).unwrap_or(own)
+}
+
 /// `group` when `id` joined it in this pass or the one before, else `None`: a component that is no member keeps its
 /// own Tab stop.
 pub(crate) fn member_group(ctx: &Context, group: Option<Id>, id: Id) -> Option<Id> {
@@ -68,7 +80,7 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     let ctx = input.ctx;
     debug_assert!(input.parts.rovings.len() <= 1, "a component declares one roving group; a second would be dropped");
     let row_parts = if input.item { input.row } else { None };
-    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| sub(input.id, "roving"));
+    let group = (!input.parts.rovings.is_empty() && row_parts.is_none()).then(|| roving_group(input.id));
     if let (Some(group), Some(roving)) = (group, input.parts.rovings.first()) {
         let arrival = input.parts.decls.iter().rev().find(|(_, extras)| extras.selected && extras.focusable);
         let group = Group::new(group, *roving).rtl(input.rtl);
@@ -115,8 +127,11 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     after_header
 }
 
-/// Whether the component is a focus stop: an enabled one, or a disabled one whose tooltip has a `disabled_text`, which
-/// shows its reason on keyboard focus (testing 22.4). Step 9 still drops its activations and edits.
+/// Whether the component is a focus stop: an enabled one, or a disabled one with a reason to show on keyboard focus
+/// (testing 22.4): its tooltip's `disabled_text`, or its bound command's hint, which its tooltip shows. Step 9 still
+/// drops its activations and edits.
 pub(crate) fn takes_focus(resolved: &Resolved<'_>) -> bool {
-    resolved.enabled || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+    resolved.enabled
+        || resolved.tooltip.is_some_and(|tooltip| tooltip.spec().disabled_text.is_some())
+        || resolved.command.and_then(|command| command.hint.as_deref()).is_some_and(|hint| !hint.is_empty())
 }

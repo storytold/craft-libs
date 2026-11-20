@@ -3,8 +3,8 @@
 use crate::runtime::commands::{self, CommandInput, CommandSet as _, Fired};
 use crate::runtime::egui::input::{self as raw_input, Arrived, HeldInput, RawInput};
 use crate::runtime::egui::memory as store;
-use crate::runtime::egui::{pass, scale, style};
-use crate::runtime::env::{Env, RootEnv, WindowKey};
+use crate::runtime::egui::{clipboard, pass, scale, style};
+use crate::runtime::env::{AltCodePages, Env, RootEnv, WheelSpeed, WindowKey};
 use crate::runtime::pass_state;
 use crate::runtime::{access, cursor, drag, focus, ime, keys, layout_memory, measure, memory, motion, overlay, pointer, toast, wheel, windows};
 use craft_behavior::{DocKey, GestureId};
@@ -234,12 +234,27 @@ impl<T: Stored> Stored for Stamped<T> {
 impl<T: Stored> PerViewport<T> {
     /// Runs `f` on the record of `viewport`, created on first use.
     pub(crate) fn with<R>(ctx: &Context, viewport: ViewportId, f: impl FnOnce(&mut T) -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        Self::visit(ctx, viewport, &mut |value| {
+            if let Some(f) = f.take() {
+                out = Some(f(value));
+            }
+        });
+        #[expect(clippy::expect_used, reason = "visit calls its visitor once on the viewport's record")]
+        out.expect("the viewport record was visited")
+    }
+
+    fn visit(ctx: &Context, viewport: ViewportId, f: &mut dyn FnMut(&mut T)) {
         // The prune registration runs outside the records' borrow: it reaches the context.
-        let (registered, out) = T::records(ctx, |records| (std::mem::replace(&mut records.pruning, true), f(records.record(viewport))));
+        let registered = T::records(ctx, |records| {
+            let registered = std::mem::replace(&mut records.pruning, true);
+            f(records.record(viewport));
+            registered
+        });
         if !registered {
             Self::register_prune(ctx);
         }
-        out
     }
 
     /// Runs `f` on the record of every viewport that has one.
@@ -259,13 +274,37 @@ impl<T: Stored> PerViewport<Stamped<T>> {
     /// Runs `f` on the record of `viewport` for its pass `pass_nr`; `reset` runs first when the pass changed.
     #[doc(hidden)]
     pub fn with_pass<R>(ctx: &Context, viewport: ViewportId, pass_nr: u64, reset: impl FnOnce(&mut T, PassStep), f: impl FnOnce(&mut T) -> R) -> R {
-        Self::with(ctx, viewport, |record| {
+        let mut reset = Some(reset);
+        let mut f = Some(f);
+        let mut out = None;
+        Self::visit_pass(
+            ctx,
+            viewport,
+            pass_nr,
+            &mut |value, step| {
+                if let Some(reset) = reset.take() {
+                    reset(value, step);
+                }
+            },
+            &mut |value| {
+                if let Some(f) = f.take() {
+                    out = Some(f(value));
+                }
+            },
+        );
+        #[expect(clippy::expect_used, reason = "visit_pass visits the current record exactly once")]
+        out.expect("the stamped viewport record was visited")
+    }
+
+    // Callers share stamp validation and reset ordering, including the parked-record lookup.
+    fn visit_pass(ctx: &Context, viewport: ViewportId, pass_nr: u64, reset: &mut dyn FnMut(&mut T, PassStep), f: &mut dyn FnMut(&mut T)) {
+        Self::visit(ctx, viewport, &mut |record| {
             if record.pass != pass_nr {
                 reset(&mut record.value, if record.pass + 1 == pass_nr { PassStep::Next } else { PassStep::Skipped });
                 record.pass = pass_nr;
             }
-            f(&mut record.value)
-        })
+            f(&mut record.value);
+        });
     }
 }
 
@@ -299,6 +338,7 @@ pub fn set_input(ctx: &Context, input: FrameInput) {
         ran
     });
     commands::set_input(ctx, &commands);
+    clipboard::begin_frame(ctx);
     windows::set_input(ctx);
     debug_assert!(hooks_ran, "the runtime plugin's hooks did not run for the previous pass: drive frames with `Context::run_ui` or `run_pass`");
     scale::set_interface_scale(ctx, scale.0);
@@ -333,6 +373,11 @@ fn suite_default_theme() -> &'static ThemeDef {
 /// The tolerances of the running frame: the app's, else the default density's.
 fn frame_hit(ctx: &Context) -> HitSizes {
     pass_state::with::<FrameState, _>(ctx, |state| state.hit.as_ref().map(|(_, hit)| *hit)).unwrap_or_else(|| resolved_hit(&AppSizes::default()))
+}
+
+/// The wheel speed and Alt-code pages of the frame's root values; the defaults before the app sets any input.
+pub(crate) fn root_input(ctx: &Context) -> (WheelSpeed, AltCodePages) {
+    pass_state::with::<FrameState, _>(ctx, |state| state.input.as_ref().map(|input| (input.root.wheel, input.root.alt_codes))).unwrap_or_default()
 }
 
 /// How far a press may move and still be a click, in points: the app's hit tolerances (`HitSizes::slop`). egui's own

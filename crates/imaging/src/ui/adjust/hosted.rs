@@ -1,16 +1,13 @@
 //! [`HostedAdjustDialog`]: an Image › Adjustments dialog on the dialog host, around any adjustment editor.
 
 use craft_behavior::{GestureId, Value};
-use craft_theme::variant::Tone;
-use craft_ui::contract::{Bind, Sampler as _, Show as _};
+use craft_ui::contract::{Bind, Sampler as _};
 use craft_ui::dialog::{
     DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
-use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::SaveKey;
-use craft_ui::runtime::overlay::CloseReason;
 use egui::{Context, Ui};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -348,9 +345,6 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             held,
             ..
         } = self;
-        // The app accepted the held OK: this pass closes the dialog with it. A measuring run closes nothing.
-        let finish = held.is_accepted() && !craft_ui::runtime::measure::active(ui.ctx());
-        let refusal = held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone()));
         // The request to select a point is this pass's alone: a rerun of the pass in the frame finds none.
         let (canvas, select_point) = (*canvas, select_point.take());
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
@@ -360,8 +354,6 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut *preview)))
             .opening(opening.clone())
-            .accept_stays_open(*hold)
-            .ok_enabled(!held.is_waiting())
             .shaped(move |dialog| {
                 let dialog = dialog.resizable(resizable);
                 match remember {
@@ -373,6 +365,8 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             Some(target) => form.reset_with(target),
             None => form,
         };
+        // A held OK files the value for the app; the form shows the app's refusal and closes with the accepted value.
+        let form = if *hold { form.held(&mut *held) } else { form };
         let shown = form.show(ui, |ui, form, value| {
             if let Some(canvas) = canvas {
                 form.keep_view_open(canvas);
@@ -380,31 +374,15 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             let mut cx =
                 AdjustDialogCx { context, canvas, picker: &mut *picker, channel: &mut *channel, select_point, clipping: &mut *clipping, edit: None };
             asks.extend(editor(ui, value, &mut cx));
-            if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| refused == value) {
-                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
-            }
-            if finish {
-                form.request_close_as(CloseReason::Activated);
-            }
             true
         });
         *comparing = shown.comparing;
         *edited |= *value != before;
-        if held.refusal().is_some_and(|(_, refused)| refused != value) {
-            held.clear_refusal();
-        }
-        // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
-        if *hold && shown.picked == Some(0) && !held.is_waiting() {
-            held.file(value.clone());
-        }
-        if finish && shown.closed == Some(CloseReason::Activated) {
-            return Some(held.finish().map_or(DialogResult::Cancel, DialogResult::Ok));
-        }
         #[cfg(feature = "screen-testing")]
         {
             self.facts = craft_ui::contract::Outcome::story_facts(&shown.response);
         }
-        let accepted = shown.accepted.filter(|_| !*hold).map(DialogResult::Ok);
+        let accepted = shown.accepted.map(DialogResult::Ok);
         accepted.or(shown.closed.map(|_| DialogResult::Cancel))
     }
 

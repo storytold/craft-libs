@@ -10,7 +10,7 @@ use crate::contract::ValueOf;
 use crate::contract::collection::{
     CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
 };
-use crate::contract::cx::{BodyCx, Pointer as _};
+use crate::contract::cx::{BodyCx, CxCore, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
 use crate::contract::steps::ShapeKind;
 use crate::contract::{Bind, Collection, Cx, Internal, ItemCx, ItemOutput as _, PartsCx, Props, Show as _, Sizing};
@@ -107,7 +107,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             _ => ColumnLayout::default(),
         });
         self.column_layout_at_read = bound.clone();
-        self.header.read(stage, id, comp.items(), bound);
+        let hosted: Vec<_> = comp.items().columns.iter().map(|spec| spec.key.clone()).filter(|key| comp.hosts_header(key)).collect();
+        self.header.read(stage, id, comp.items(), bound, hosted);
         self.drags = stage.session::<Drags<C::Key>>(sub(id, "drags")).clone();
         self.lead = stage.session::<Lead<C::Key>>(sub(id, "lead")).clone();
         // A collection in a layer starts from `lead_on_open` at every opening of the layer, not only the first.
@@ -178,9 +179,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             ShowAt::Rect(rect) => rect.size(),
             ShowAt::Flow => crate::layout::flow_room(ui),
         };
+        let env = Env::of(ui);
+        // The layout reads the component's own motion memory (`StyleCx::exiting`): an item leaving its source keeps
+        // its room until its exit ends.
+        let scx = &scx.measured_by(ui).owned_by(id, env.motion);
         self.room = room;
         self.indent_step = scx.control().icon;
-        let env = Env::of(ui);
         let room = Self::inner_room(comp, scx.tokens, room);
         // Where the enclosing body does not give the width, the collection takes its width from its content, whether
         // it fills or fills the width, as a container does. Held in a content-sized column it measures so, and shows
@@ -212,7 +216,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 // Columns side by side at their own widths: a `Content` column takes its widest cell, not the share of
                 // the widest row it would get.
                 let columns = if self.header.has_columns() { self.header.content_width() } else { 0.0 };
-                widest.max(columns).max(comp.ideal_width(item, scx)).max(floor).min(room.x)
+                widest.max(columns).max(comp.ideal_width(item, self.source.len(), scx)).max(floor).min(room.x)
             }
         };
         let previous = self.layout.take().or_else(|| self.previous.take()).map(|held| Arc::try_unwrap(held).unwrap_or_else(|held| (*held).clone()));
@@ -257,7 +261,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         match comp.props(Internal::new()).sizing {
             // Under a body sized from its content along the height, the rows take up to the room, as a content-sized
             // collection's do: the body has no room of its own to hand it.
-            Sizing::Fill => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
+            Sizing::Fill | Sizing::FillHeight => Vec2::new(wide, if self.from_content.1 || self.capped { height.min(room.y) } else { 0.0 }),
             Sizing::Content | Sizing::FillWidth => Vec2::new(wide, height.min(room.y)),
         }
     }
@@ -275,8 +279,8 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
         };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
-            (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
-            (true, Sizing::Fill) => size.y.min(self.room.y),
+            (true, Sizing::Fill | Sizing::FillHeight) if !self.from_content.1 && !self.capped => self.room.y,
+            (true, Sizing::Fill | Sizing::FillHeight) => size.y.min(self.room.y),
             (true, Sizing::Content | Sizing::FillWidth) => size.y.min(self.room.y),
             (false, _) => size.y,
         };
@@ -341,29 +345,11 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
     }
 
     fn updated(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
-        use crate::contract::Pointer as _;
         let rect = self.rows_rect(cx);
         let view = rect.height();
         let rtl = cx.core.flow.is_rtl();
         self.xf = comp.props(Internal::new()).transform.map(|zoom| areas::body_map(rect.min, zoom.scale, zoom.offset));
-        if let Some(range) = cx.scroll_moved(SCROLL) {
-            self.offset = range.start;
-        }
-        if self.scrolls {
-            // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
-            let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
-            let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx);
-            if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
-                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
-                let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
-                let (by, shown) = crate::contract::steps::reveal_move(asked, along);
-                self.offset += f64::from(by.y);
-                if !quiet {
-                    crate::contract::Focus::reveal(cx, shown);
-                }
-            }
-        }
-        self.offset = self.offset.clamp(0.0, self.max_offset(view));
+        self.offset = scroll_rows(cx.core, rect, self.scrolls, self.offset, self.max_offset(view));
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
@@ -456,15 +442,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         let offset = ScrollPos { x: self.offset_x, y: self.offset };
         Arc::make_mut(&mut layout).set_view(rect.size(), offset);
         if self.scrolls {
-            let size = self.content.max(rect.size());
-            let left = if rtl { rect.max.x + self.offset_x as f32 - size.x } else { rect.min.x - self.offset_x as f32 };
-            let content = Rect::from_min_size(Pos2::new(left, rect.min.y - self.offset as f32), size);
-            crate::runtime::egui::widgets::note_scroll_region(&ctx, rect.intersect(ui.clip_rect()), content);
-            // The header row scrolls sideways with the rows.
-            if let Some(header) = self.header.view() {
-                let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
-                crate::runtime::egui::widgets::note_scroll_region(&ctx, header.intersect(ui.clip_rect()), row);
-            }
+            note_scroll_regions(ui, rect, self.content, offset, rtl, self.header.view());
         }
         let sheet = Self::selects_cells(comp);
         let columns: Vec<u64> = match layout.grid() {
@@ -478,7 +456,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(scope) = command_scope {
             crate::runtime::commands::register_instance(&ctx, scope, id);
         }
-        self.header.paint(ui, cx, env, id, rtl);
+        self.header.paint(ui, cx, comp, env, id, rtl);
         let len = self.source.len();
         let tree = matches!(layout.nav(), craft_behavior::NavShape::Tree);
         focus::registration::record_tree(&ctx, id, tree);
@@ -664,7 +642,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                         row = self.screen(&layout, rect, at, offset, rtl);
                     }
                 }
-                shown_rows.push(ShownRow::new(key.clone(), row, shown_cells.clone()));
+                // A member has no node of its own: it reports as a sub-node of the collection's.
+                let row_node = if C::MEMBERS { super::members::lead_node(id, &key) } else { item_id };
+                shown_rows.push(ShownRow::new(key.clone(), row_node, row, shown_cells.clone()).with_hover(state.hovered));
                 let Some((mut row_ui, installed)) = row_ui else {
                     debug_assert!(tip.is_none(), "a member of a collection's run takes no rich tooltip");
                     let shown = shown_rows.len() - 1;
@@ -879,29 +859,11 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let editor = comp.rename_editor(row_ui, Bind::bound(&mut draft), label, &name);
         self.renaming.draft = draft;
         if let Some(editor) = editor {
-            if !self.renaming.focused {
-                focus::request_now(ctx, focus::FocusTarget::Id(editor.response.id));
-                self.renaming.focused = true;
-            }
             let gesture = self.renaming.gesture;
             let before = Mixed::Same(Rename { key: key.clone(), name: name.clone() });
-            // The editor's gesture end, if the pass has one, ends the rename.
-            let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
-            let edited = !editor.events.is_empty();
-            if end.is_some() {
-                self.refocus = focus::is_focused(ctx, editor.response.id);
-            }
-            // The editor claims Escape for the whole rename, as a text part with a draft does: Escape does not leave the
-            // row. One the editor leaves untaken (it holds no draft yet) cancels the rename.
-            keys::hold_escape(ctx, editor.response.id);
-            let escaped = !edited && focus::is_focused(ctx, editor.response.id) && {
-                let mut intents = keys::intents_of(ctx, Some(editor.response.id), rtl);
-                let left = intents.take(Intent::Cancel);
-                keys::settle(ctx, Some(editor.response.id), &intents);
-                left
-            };
+            let (end, escaped) = rename_input(ctx, &editor, rtl, &mut self.renaming.focused, &mut self.refocus);
             match end {
-                None if edited => {}
+                None if !editor.events.is_empty() => {}
                 None if escaped => {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, CancelReason::Escape, Some(before))));
                     self.ended_rename = true;
@@ -943,6 +905,68 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
         }
     }
+}
+
+/// Apply the collection's wheel displacement and any reveal left by a descendant.
+fn scroll_rows(core: &mut CxCore<'_>, rect: Rect, scrolls: bool, mut offset: f64, maximum: f64) -> f64 {
+    if let Some(range) = core.scroll_moved(SCROLL) {
+        offset = range.start;
+    }
+    if scrolls {
+        // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
+        let (ctx, id) = (core.ctx.clone(), core.id);
+        let quiet = core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+        if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
+            // The rows scroll along y only: the reveal moves them along it and passes the rest on.
+            let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
+            let (by, shown) = crate::contract::steps::reveal_move(asked, along);
+            offset += f64::from(by.y);
+            if !quiet {
+                crate::contract::Focus::reveal(core, shown);
+            }
+        }
+    }
+    offset.clamp(0.0, maximum)
+}
+
+/// Record the scrolled rows and their header at the same horizontal offset.
+fn note_scroll_regions(ui: &Ui, rect: Rect, content_size: Vec2, offset: ScrollPos, rtl: bool, header: Option<Rect>) {
+    let size = content_size.max(rect.size());
+    let left = if rtl { rect.max.x + offset.x as f32 - size.x } else { rect.min.x - offset.x as f32 };
+    let content = Rect::from_min_size(Pos2::new(left, rect.min.y - offset.y as f32), size);
+    crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), rect.intersect(ui.clip_rect()), content);
+    // The header row scrolls sideways with the rows.
+    if let Some(header) = header {
+        let row = Rect::from_x_y_ranges(content.x_range(), header.y_range());
+        crate::runtime::egui::widgets::note_scroll_region(ui.ctx(), header.intersect(ui.clip_rect()), row);
+    }
+}
+
+/// Focus and Escape belong to the editor until the rename ends, independent of the row's key type.
+fn rename_input(
+    ctx: &Context,
+    editor: &crate::contract::EditResponse<String>,
+    rtl: bool,
+    focused: &mut bool,
+    refocus: &mut bool,
+) -> (Option<EditEvent<String>>, bool) {
+    let id = editor.response.id;
+    if !*focused {
+        focus::request_now(ctx, focus::FocusTarget::Id(id));
+        *focused = true;
+    }
+    let end = editor.events.iter().rev().find(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Cancel { .. })).cloned();
+    if end.is_some() {
+        *refocus = focus::is_focused(ctx, id);
+    }
+    keys::hold_escape(ctx, id);
+    let escaped = editor.events.is_empty() && focus::is_focused(ctx, id) && {
+        let mut intents = keys::intents_of(ctx, Some(id), rtl);
+        let left = intents.take(Intent::Cancel);
+        keys::settle(ctx, Some(id), &intents);
+        left
+    };
+    (end, escaped)
 }
 
 /// The height of the first `rows` rows of `layout` over `len` items: the rows it lays out, and the row height `row` for

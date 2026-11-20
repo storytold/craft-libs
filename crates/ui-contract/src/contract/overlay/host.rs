@@ -11,8 +11,10 @@ use crate::runtime::env::Env;
 use crate::runtime::focus::{self, FocusPolicy};
 use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, sub};
+use crate::runtime::motion::{self, Driver};
 use crate::runtime::overlay::{self, Backdrop, CloseReason, OpenEntry, Rank};
-use egui::{Context, Id, Pos2, Rect, Ui};
+use craft_behavior::{MotionKind, Playback};
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
 
 /// What the host reads for one layer.
 pub(crate) struct Layer<'a> {
@@ -108,7 +110,8 @@ fn area_id(id: Id) -> Id {
 pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut Ui)) -> LayerOut {
     // A layer that appears starts with nothing it remembered while shown before, also when it opens again during its
     // exit fade or its host never saw it hide: the focus that was inside it does not close it as `focus_left`.
-    let mut memory = if overlay::appears(ctx, layer.id, layer.exiting) { LayerMemory::default() } else { recall(layer, ctx) };
+    let appears = overlay::appears(ctx, layer.id, layer.exiting);
+    let mut memory = if appears { LayerMemory::default() } else { recall(layer, ctx) };
     // A right-click on a context opener while its layer is open hangs the layer at the new pointer.
     let pointed = layer
         .overlay
@@ -144,7 +147,11 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         Some(size) => Some(egui::vec2(size.x.max(min_width), size.y)),
         None => areas::layer_rect(ctx, area).map(|rect| rect.size()),
     };
-    let placed = placement(ctx, layer, size, bounds, anchor);
+    let mut placed = placement(ctx, layer, size, bounds, anchor);
+    let nudge = Nudge::of(ctx, layer, appears);
+    if let Some(nudge) = &nudge {
+        placed.at += nudge.offset();
+    }
     let tier = overlay::layer_tier(ctx, overlay.rank);
     if (sized || layer.size.is_some()) && areas::layer_rect(ctx, area).is_none() {
         areas::seed_area(ctx, areas::layer_of(tier, area), placed.at, placed.room);
@@ -177,6 +184,11 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         let recorded = overlay.opener.as_ref().and_then(|first| focus::stop_rec(ctx, (first.id, None))).map(|rec| rec.stop.key());
         owned.map(|rec| rec.stop.key()).or(pressed).or(recorded).or_else(|| focus::focused_stop(ctx))
     });
+    // A modal closes the popups beneath it in the pass it first shows; `appears` is false in a discard pass that repeats
+    // the frame, so the close is queued once. A popup opened above it later is not touched.
+    if overlay.rank.is_modal() && appears {
+        overlay::close_popups_outside(ctx, &[layer.id]);
+    }
     overlay::begin_layer(ctx, layer.id, tier, layer.exiting, placed.side);
     let shown = areas::show_layer(ctx, &spec, |ui| {
         if let Some(region) = layer.region {
@@ -190,16 +202,22 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         if real && (layer.exiting || matches!(overlay.rank, Rank::Popup | Rank::Modal { .. })) {
             access::report_layer(ctx, layer.id, ui.unique_id(), ui.max_rect(), overlay.rank.is_modal(), layer.exiting);
         }
-        if let (Some(policy), true) = (scope, real) {
+        // Every layer is a focus scope, one without a policy (`FocusPolicy::NONE`) included: its stops are the layer's,
+        // not those of the scope it was opened in, so a trap around it leaves them out (a menu's companion bar).
+        if real {
             let entering = !std::mem::replace(&mut memory.scope_entered, true);
-            focus::push_scope_from(ctx, layer.id, policy, None, opener, layer.exiting, Some(entering));
+            focus::push_scope_from(ctx, layer.id, overlay.focus, None, opener, layer.exiting, Some(entering));
         }
         areas::bound(ui, placed.room, min_width.min(placed.room.x));
         if overlay.fit == OverlayFit::Resizable {
             ui.set_min_size(overlay.size_limits.min.min(placed.room));
         }
-        access::scope::outside(ctx, || body(ui));
-        if scope.is_some() && real {
+        // The layer's content is not part of the flow of the body it was shown from (a tooltip shown at step 16 of a
+        // control inside a body's content): no enclosing transcript takes its measure calls and no enclosing body
+        // checks them. Without the boundary a tooltip's text was checked against the body's kept transcript, which
+        // asked for a discard pass every other frame while the tooltip showed.
+        access::scope::outside(ctx, || layout_memory::boundary(ctx, true, || body(ui)));
+        if real {
             focus::pop_scope(ctx);
         }
         Env::restore(ctx, installed);
@@ -219,9 +237,106 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     entry.absorbs = overlay.dismiss.outside == Outside::Absorb;
     overlay::record(ctx, entry);
     let dismissed = if layer.exiting { None } else { dismissal(ctx, layer, shown.rect, anchor, scope, &mut memory) };
+    if let Some(nudge) = &nudge {
+        // `dismissal` above records the press beside the layer (`dismissal.rs`, `note_pressed_outside`), so the nudge
+        // starts after it and moves the layer from the next pass on.
+        nudge.start_on_press(ctx, layer);
+        nudge.flash(ctx, &shown, layer.env);
+    }
     close_family(ctx, layer, layer.exiting || dismissed.is_some(), &mut memory);
     remember(layer, ctx, memory);
     LayerOut { dismissed }
+}
+
+/// The motion slot of a layer's nudge, under the layer's id.
+// PLAN: the decision names a `NUDGE_SPEC`; `MotionSpec::new` (`runtime/motion.rs:39`) is a private `const fn` of a file outside this set, so
+// the nudge runs on `spec::OPEN_FADE` (a fade, which reduced motion still runs) over the open token's duration.
+const NUDGE: &str = "nudge";
+
+/// The swings of a nudge's shake either way, dying away.
+const NUDGE_SWINGS: f32 = 3.0;
+
+/// The edge flashes of a nudge under reduced motion.
+const NUDGE_FLASHES: f32 = 2.0;
+
+/// A press beside a modal layer that stays open (`Outside::Keep`) nudges it, so the user sees why nothing behind it
+/// reacts: a short damped shake, or two accent edge flashes when the motion policy snaps travel. `left` runs from 1 at
+/// the press to 0 at rest on the motion clock, in the layer's motion memory, which goes with the layer; a layer that
+/// appears starts at rest. With motion off the fade the nudge steps by snaps too, so nothing shows.
+struct Nudge {
+    /// How much of the nudge is left: 1 at the press, 0 at rest.
+    left: f32,
+    /// The layer shakes; otherwise its edge flashes.
+    shakes: bool,
+    /// The widest swing of the shake: the gap between neighbouring controls.
+    amplitude: f32,
+}
+
+impl Nudge {
+    /// The nudge of `layer` in this pass, stepped on the pass clock; `None` for a layer that never nudges. A second
+    /// pass of one frame reads the same clock, so it repeats the first pass's value.
+    fn of(ctx: &Context, layer: &Layer<'_>, appears: bool) -> Option<Nudge> {
+        if !layer.overlay.rank.is_modal() || layer.overlay.dismiss.outside != Outside::Keep || layer.exiting {
+            return None;
+        }
+        let policy = layer.env.motion;
+        let stage = MemoryStage::open_owned(ctx, sub(layer.id, NUDGE), layer.owner);
+        let left = Nudge::driven(stage, layer, |driver| {
+            if appears {
+                driver.jump(NUDGE, 0.0_f32);
+            }
+            driver.anim(NUDGE, 0.0_f32, motion::spec::OPEN_FADE)
+        });
+        let shakes = policy.mode.playback(MotionKind::Travel) == Playback::Run;
+        Some(Nudge { left, shakes, amplitude: layer.env.tokens.space.gap.item })
+    }
+
+    /// Runs `f` with the motion driver of `layer`'s nudge in `stage`, which its owner keeps, and writes the stage back.
+    fn driven<R>(stage: MemoryStage, layer: &Layer<'_>, f: impl FnOnce(&Driver<'_>) -> R) -> R {
+        let result = f(&Driver { stage: &stage, base: layer.id, policy: layer.env.motion });
+        stage.write_back();
+        result
+    }
+
+    /// How far through the nudge it is, 0 at the press to 1 at rest.
+    fn through(&self) -> f32 {
+        1.0 - self.left.clamp(0.0, 1.0)
+    }
+
+    /// The layer's sideways offset: the shake's swing, none at rest and none when the edge flashes instead.
+    fn offset(&self) -> Vec2 {
+        if !self.shakes || self.left <= 0.0 {
+            return Vec2::ZERO;
+        }
+        let swing = (self.through() * NUDGE_SWINGS * std::f32::consts::TAU).sin() * self.left;
+        Vec2::new(self.amplitude * swing, 0.0)
+    }
+
+    /// Starts the nudge when a press landed beside the layer in this pass and none runs; a press while one runs leaves
+    /// it alone. A later pass of the frame gets no press (`pressed_outside` is per pass), so it starts nothing.
+    fn start_on_press(&self, ctx: &Context, layer: &Layer<'_>) {
+        if self.left > 0.0 || !overlay::pressed_outside(ctx, layer.id) {
+            return;
+        }
+        // `of` claimed the nudge's stage in this pass and wrote it back, so this one claims nothing.
+        let stage = MemoryStage::open_after(ctx, sub(layer.id, NUDGE), layer.owner);
+        Nudge::driven(stage, layer, |driver| {
+            driver.jump(NUDGE, 1.0_f32);
+            // Aims it at rest from this pass's clock, so it runs and asks for the passes that step it.
+            driver.anim(NUDGE, 0.0_f32, motion::spec::OPEN_FADE);
+        });
+    }
+
+    /// Paints the edge flash on the layer's rect while the nudge runs without the shake: on in the first and third
+    /// quarters, so it flashes twice.
+    fn flash(&self, ctx: &Context, shown: &areas::LayerShown, env: &Env) {
+        if self.shakes || self.left <= 0.0 || (self.through() * NUDGE_FLASHES * 2.0).floor() % 2.0 != 0.0 {
+            return;
+        }
+        let stroke = egui::Stroke::new(env.tokens.stroke.medium, crate::style::rgba_color(env.tokens.color.accent.solid));
+        let radius = egui::CornerRadius::from(env.tokens.shape.radius.window);
+        ctx.layer_painter(shown.layer).rect_stroke(shown.rect, radius, stroke, egui::StrokeKind::Inside);
+    }
 }
 
 /// The layer-stack side of an OS-window mount: records the window as an entry of its viewport's stack (rank, key

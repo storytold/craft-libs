@@ -1,4 +1,5 @@
 mod access;
+mod alt_text;
 mod chips;
 mod edit_menu;
 mod fields;

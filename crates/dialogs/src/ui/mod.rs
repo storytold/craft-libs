@@ -1,9 +1,11 @@
 //! The file service's UI part: [`PathField`], and the words of the service's native boxes.
 
+mod chooser;
 mod path_field;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
+pub use chooser::{ChooserWords, FileChooser};
 pub use path_field::{PathField, PathFieldOutput, PathFieldWords};
 
 craft_ui::words! {

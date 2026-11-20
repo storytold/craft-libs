@@ -29,8 +29,8 @@ use std::sync::Arc;
 mod typed;
 
 pub(crate) use typed::{
-    MemberNode, MemberPrep, MemberShown, measure_container, measure_under, measured_extent, member_prepare, member_show, paint_face, show_container,
-    show_container_taking, show_items, show_leaf,
+    MemberNode, MemberPrep, MemberShown, measure_container, measure_face, measure_under, measured_extent, member_prepare, member_show, paint_face,
+    show_container, show_container_taking, show_items, show_leaf,
 };
 
 /// Where a component is placed.
@@ -665,9 +665,11 @@ fn expand_for_overflow(ui: &mut Ui, at: ShowAt, rect: Rect, overflow: f32, rtl: 
 }
 
 /// What the component senses itself: a disabled one that shows a reason on focus stays a Tab stop and senses nothing else.
+/// One bound to an edit command keeps the focus where it is on a press, so the edit reaches the focused component.
 fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense {
     match (inert, resolved.enabled) {
         (true, _) => Sense::HOVER,
+        (false, true) if resolved.command.is_some_and(|command| command.edit) => e.sense().difference(Sense::TAKE_FOCUS).union(Sense::KEEP_FOCUS),
         (false, true) => e.sense(),
         (false, false) if steps::takes_focus(resolved) => Sense::HOVER | e.comp_sense().intersection(Sense::FOCUS),
         (false, false) => Sense::HOVER,
@@ -677,9 +679,11 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
 fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
+        let decl = &decl.part;
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
         let held = crate::contract::text::held_selection(memory, id);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
+        let draft = crate::contract::text::draft(memory, id);
+        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, draft.as_deref().unwrap_or(&decl.shown), base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));
@@ -1284,7 +1288,8 @@ fn report_steps(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, env: &Env, h: &HostStep) 
         },
     );
     let shows_label = e.shows_label();
-    tooltip::run(e.core_ref(), tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, message });
+    let tip_in = tooltip::TipIn { ui: &*ui, env, rich: p.tip.take(), parts: &h.decls, shows_label, canvas_control: facts.canvas_control, message };
+    tooltip::run(e.core_ref(), tip_in);
     // Activations accumulate across the passes of a viewport mount; step 17 fires the bound command once, with the
     // injected source when there is one.
     let natural = e.activated() && resolved.enabled;
@@ -1391,6 +1396,14 @@ fn measured(t: &mut dyn Erased, input: &MeasureIn<'_>, style: &dyn StyleView, re
 /// The pipeline: steps 1 to 17 for one component, whatever its type and shape. A component that takes a cell of a
 /// `Grid` runs under the column group of its cell's column (`ColumnGroup::cell`).
 pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
+    if crate::runtime::pass_state::in_component_tree() {
+        return run_in_context(t, ui, at, tip);
+    }
+    let ctx = ui.ctx().clone();
+    crate::runtime::pass_state::with_component_tree(&ctx, || run_in_context(t, ui, at, tip));
+}
+
+fn run_in_context(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, tip: Option<TipFn<'_>>) {
     let cell = (matches!(at, ShowAt::Flow) && t.in_flow()).then(|| crate::layout::grid_cell(ui)).flatten();
     match cell {
         Some((grid, column, sized)) => {
@@ -1813,10 +1826,28 @@ fn scoped_env(ctx: &Context, env: Env, theme: Option<ThemeScope>) -> Env {
     }
 }
 
+/// What a measure outside the component's own show is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MeasureFor {
+    /// A component its caller shows, or sizes a rect by: a leaf of the transcript of the body it is measured in.
+    Component,
+    /// A composite's face (`MeasureCx::face`), measured inside the composite's own run (measure, parts or header
+    /// parts). Only the composite's measure call sizes the composite, and its answer and inputs are the transcript's
+    /// record, so the face keeps no leaf of its own.
+    Face,
+}
+
 /// Measures the component in `t` as `show` will show it, without allocating: steps 1 to 5 under the id `show` would
 /// use next (or `id`). It reads memory through a peek, registers no id and applies nothing. `under` is the
 /// composite's resolved `(enabled, size)` when it measures a child it shows with `PaintUi::child`.
-pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposal: Proposal, under: Option<&super::cx::Under>) -> Vec2 {
+pub(super) fn measure_shape(
+    t: &mut dyn Erased,
+    ui: &Ui,
+    id: Option<Id>,
+    proposal: Proposal,
+    under: Option<&super::cx::Under>,
+    purpose: MeasureFor,
+) -> Vec2 {
     let facts = t.facts();
     let env = match under {
         Some(under) => super::cx::child_env(&Env::of(ui), under),
@@ -1846,7 +1877,7 @@ pub(super) fn measure_shape(t: &mut dyn Erased, ui: &Ui, id: Option<Id>, proposa
     };
     let ask = |t: &mut dyn Erased, proposal: Proposal| measured(t, &MeasureIn { ui, env: &env, proposal, room: None }, &*style, &resolved, extent);
     let (took, inputs) = ask(&mut *t, proposal);
-    if leaf && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
+    if leaf && purpose == MeasureFor::Component && (!ui.is_sizing_pass() || crate::runtime::measure::active(ui.ctx())) {
         let calls = &mut [Call { proposal, room: None, inputs, took }];
         crate::runtime::layout_memory::leaf_call(ui.ctx(), id, calls, |proposal, _| ask(&mut *t, proposal).0);
     }
