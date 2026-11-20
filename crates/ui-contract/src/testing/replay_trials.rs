@@ -90,6 +90,21 @@ fn a_transcript_with_one_changed_stop_compares_unequal() {
     assert_ne!(first.focus, changed.focus, "the second stop's keys changed");
 }
 
+#[trial]
+fn replayed_focus_stops_keep_their_own_target() {
+    let mut frames = Frames::new();
+    let parent = fixture::named_id("parent");
+    let child = fixture::named_id("child");
+    let recorded = record(&mut frames, |ctx| focus::register_stop(ctx, Stop::new(child, KeyUse::CODE)));
+    frames.frame(Vec::new(), |ui| {
+        let ctx = ui.ctx();
+        let from = focus::stop_count(ctx);
+        focus::replay(ctx, &recorded.focus);
+        assert_eq!(focus::first_stop_inside(ctx, parent, from), Some(focus::FocusTarget::Id(child)));
+        assert_eq!(focus::first_stop_inside(ctx, child, from), None);
+    });
+}
+
 /// Records `stops` run inside a record, with `entering` the first-pass flag of the layer scope it pushes, inside the
 /// scope `outer` when one is given.
 fn layer_scope_record(frames: &mut Frames, outer: Option<egui::Id>, entering: bool) -> replay::Record {

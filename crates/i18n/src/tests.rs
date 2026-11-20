@@ -31,6 +31,19 @@ fn lang(i: &I18n, code: &str) -> Lang {
     i.from_code(code).unwrap()
 }
 
+#[test]
+fn translated_labels_share_storage_across_clones_and_follow_their_own_overlay() {
+    let word = Word::plain("Save");
+    let words = Words::new(|_| Some("Enregistrer".to_owned()));
+    let first = words.translated_label(word).unwrap();
+    let cloned = words.clone().translated_label(word).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &cloned));
+
+    let overlay = words.overlay(&WordRows::new().row(word, "Sauvegarder"));
+    assert_eq!(overlay.translated_label(word).as_deref(), Some("Sauvegarder"));
+    assert_eq!(words.translated_label(word).as_deref(), Some("Enregistrer"));
+}
+
 static P: &Embedded = &[
     ("fr", "@plural\t{n} page|{n} pages\t{n} page|{n} pages\n", ""),
     ("ru", "@plural\t{n} file|{n} files\t{n} файл|{n} файла|{n} файлов\n", ""),

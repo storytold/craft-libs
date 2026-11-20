@@ -25,6 +25,8 @@ mod orientation;
 mod pcx;
 mod png_jpeg;
 mod pnm_headers;
+#[cfg(target_os = "linux")]
+mod pnm_peak_memory;
 mod resolution;
 mod roundtrip;
 mod source_settings;
@@ -41,3 +43,7 @@ mod tiff_ycbcr;
 mod webp_frames;
 mod webp_lossy;
 mod xpm;
+
+mod jxl_decode;
+mod jxl_export;
+mod legacy_tiff_raw;

@@ -39,16 +39,16 @@ pub(super) fn register_instances(ctx: &Context, props: &ContainerProps, id: Id, 
 impl BodyHooks<'_> {
     /// What the container's regions inherit from the env: its enabled state, window and reorder commands, values, axis
     /// and ink. The container's token scope is in the env already (step 1).
-    pub(super) fn scope_regions<C: Container>(
+    pub(super) fn scope_regions(
         &self,
         scoped: &mut Scoped,
         props: &ContainerProps,
-        cx: &Cx<'_, C>,
+        core: &crate::contract::CxCore<'_>,
         window: Option<Id>,
         values: &AppValues,
         real: bool,
     ) {
-        let id = cx.core.id;
+        let id = core.id;
         // A layer's content starts from its opener's scope with the layer-local fields fresh, in a measure under the
         // opener's env as in the run under the layer's.
         if matches!(props.mount, Mount::Layer(_) | Mount::Viewport { .. } | Mount::FullWindow) {
@@ -57,7 +57,7 @@ impl BodyHooks<'_> {
             scoped.inherited_mut().values.set(crate::contract::overlay::LayerFloor(floor));
         }
         // The container's own `enabled(false)` greys everything inside it, as a scope would.
-        scoped.enabled &= cx.core.resolved.enabled;
+        scoped.enabled &= core.resolved.enabled;
         if let Some(window) = window {
             scoped.inherited_mut().commands = scoped.commands.pushed(WindowCommand::SCOPE, window);
         }
@@ -65,11 +65,10 @@ impl BodyHooks<'_> {
         if let Some(scheme) = props.labels {
             scoped.inherited_mut().values.set(scheme);
         }
-        if cx.core.resolved.ltr_axis {
+        if core.resolved.ltr_axis {
             scoped.direction = Direction::Ltr;
         }
-        scoped.ink = cx.core.ink;
-        scoped.surface = SurfaceKind::under(own_surface(props, cx), scoped.surface);
+        scoped.ink = core.ink;
         scoped.start_room();
         // An inside label and a filling cell are their control's alone: a container shows neither to what it holds.
         scoped.inside_label = None;

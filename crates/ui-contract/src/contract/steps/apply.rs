@@ -1,15 +1,15 @@
 //! Steps 11 and 15, apply: the events written to the binding.
 
 use super::measure::{MeasureIn, measure};
-use crate::contract::cx::gesture_key;
+use crate::contract::cx::{CxCore, gesture_key};
 use crate::contract::props::Resolved;
 use crate::contract::run::ErasedPass;
 use crate::contract::values::Checked;
-use crate::contract::{Component, Cx, ValueOf};
+use crate::contract::{BindMut, Component, Cx, Validity};
 use crate::runtime::egui::sizing;
 use crate::runtime::reads::{self, BindKey};
 use crate::style::StyleView;
-use craft_behavior::{Applied, CancelReason, EditEvent, Gesture, Mixed};
+use craft_behavior::{Applied, CancelReason, EditEvent, Gesture, Mixed, Value};
 use egui::Vec2;
 use std::sync::Arc;
 
@@ -43,34 +43,55 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
         return ValueEdit::default();
     }
     let shown_before = cx.shown.clone();
-    let Some(mut bind) = comp.bind() else { return ValueEdit::default() };
-    let key = bind.key(cx.core.id);
-    let slot = gesture_key(cx.core.id);
+    let Some(bind) = comp.bind() else { return ValueEdit::default() };
+    let state =
+        BindingState { events: &mut cx.events, applied: &mut cx.applied, shown: &mut cx.shown, mixed: &mut cx.mixed, validity: &mut cx.validity };
+    apply_binding(bind, cx.core, state, from, shown_before)
+}
+
+/// Mutable value state for the apply step, shared by components that bind the same value type.
+struct BindingState<'a, V> {
+    events: &'a mut Vec<EditEvent<V>>,
+    applied: &'a mut usize,
+    shown: &'a mut Option<Arc<V>>,
+    mixed: &'a mut bool,
+    validity: &'a mut Validity<V>,
+}
+
+fn apply_binding<V: Value>(
+    mut bind: BindMut<'_, V>,
+    core: &mut CxCore<'_>,
+    state: BindingState<'_, V>,
+    from: usize,
+    shown_before: Option<Arc<V>>,
+) -> ValueEdit {
+    let key = bind.key(core.id);
+    let slot = gesture_key(core.id);
     let (mut emitted, mut began, mut landing, mut last_update) = (None, false, None, None);
     let (mut given, mut written) = (false, false);
     let mut at = from;
-    while at < cx.events.len() {
-        match bind.checked(&mut cx.events[at]) {
+    while at < state.events.len() {
+        match bind.checked(&mut state.events[at]) {
             Checked::Keep => {}
             Checked::Cancel => {
-                if let EditEvent::Commit { id, before, .. } = cx.events[at].clone() {
-                    cx.events[at] = EditEvent::cancel(id, CancelReason::Refused, Some(before));
-                    let dead = cx.core.press_held();
-                    let gesture = cx.core.memory.shown::<Gesture<ValueOf<C>>>(slot);
+                if let EditEvent::Commit { id, before, .. } = state.events[at].clone() {
+                    state.events[at] = EditEvent::cancel(id, CancelReason::Refused, Some(before));
+                    let dead = core.press_held();
+                    let gesture = core.memory.shown::<Gesture<V>>(slot);
                     *gesture = gesture.ended(dead);
-                    if matches!(cx.events[at], EditEvent::Cancel { before: Some(Mixed::Mixed), .. }) {
-                        cx.shown = None;
-                        cx.mixed = true;
+                    if matches!(state.events[at], EditEvent::Cancel { before: Some(Mixed::Mixed), .. }) {
+                        *state.shown = None;
+                        *state.mixed = true;
                     }
                 }
             }
             Checked::Drop => {
-                cx.events.remove(at);
-                cx.applied = cx.events.len();
+                state.events.remove(at);
+                *state.applied = state.events.len();
                 continue;
             }
         }
-        let event = &cx.events[at];
+        let event = &state.events[at];
         match event {
             EditEvent::Begin { before: Mixed::Same(value), .. } => {
                 emitted = Some(value.clone());
@@ -105,10 +126,10 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
     } else {
         None
     };
-    let gesture = cx.core.memory.shown::<Gesture<ValueOf<C>>>(slot);
+    let gesture = core.memory.shown::<Gesture<V>>(slot);
     let (running, watched) = (gesture.is_running().then_some(gesture.id), gesture.watched);
     if running.is_some() {
-        crate::runtime::edit::note_running(&cx.core.ctx);
+        crate::runtime::edit::note_running(&core.ctx);
     }
     if gesture.is_running() {
         gesture.emitted = emitted.or(gesture.emitted.take());
@@ -121,8 +142,8 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
     // The owner's eviction while the gesture runs ends it as removed (7.2).
     if running.is_some() || watched {
         gesture.watched = running.is_some();
-        let ctx = cx.core.ctx.clone();
-        let watch = cx.core.memory.shown::<crate::runtime::edit::RemovalWatch>(slot);
+        let ctx = core.ctx.clone();
+        let watch = core.memory.shown::<crate::runtime::edit::RemovalWatch>(slot);
         match running {
             Some(id) => watch.arm(&ctx, id),
             None => watch.disarm(),
@@ -130,17 +151,17 @@ pub(crate) fn apply_values<C: Component>(comp: &mut C, cx: &mut Cx<'_, C>) -> Va
     }
     if let Some(value) = landing {
         if bind.is_kept() {
-            let id = cx.core.id;
-            written |= cx.shown.as_deref() != Some(&value);
-            bind.keep(&mut *cx.core.memory, id, value.clone());
+            let id = core.id;
+            written |= state.shown.as_deref() != Some(&value);
+            bind.keep(&mut *core.memory, id, value.clone());
         }
-        cx.shown = Some(Arc::new(value));
-        cx.mixed = false;
+        *state.shown = Some(Arc::new(value));
+        *state.mixed = false;
     }
-    if let Some(value) = cx.shown.as_deref() {
-        cx.validity = bind.validity(value);
+    if let Some(value) = state.shown.as_deref() {
+        *state.validity = bind.validity(value);
     }
-    let shown = cx.shown.as_deref() != shown_before.as_deref();
+    let shown = state.shown.as_deref() != shown_before.as_deref();
     ValueEdit { key, given, written, shown }
 }
 

@@ -1,12 +1,14 @@
 //! Viewport mounts: opening a mount's OS viewport and its close requests.
 
+use super::host::monitors;
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
-use super::shell::{app_id, os_of, refresh};
+use super::shell::{app_id, base_shell, os_of, refresh};
 use super::spec::{WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
 use crate::runtime::frame::PerViewport;
+use craft_behavior::placement::{Defaults, place};
 use craft_host::target::{Os, WindowChrome, WindowKind};
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 
@@ -45,13 +47,9 @@ pub(crate) struct ViewportOpen<'a> {
 /// resizable window's size goes out only to open it (`ViewportOpen::follows_size`).
 pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: impl FnMut(&mut Ui)) {
     let viewport = viewports::viewport_id(open.id);
-    let saved = open.save.and_then(|key| saved_placement(ctx, key));
-    let (size, pos) = match &saved {
-        Some(placement) => (Some(Vec2::from(placement.normal.size)), placement.position().map(Pos2::from)),
-        None => (open.size, None),
-    };
-    let pos = pos.or(open.position);
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
+    let (size, pos) = saved_geometry(ctx, open, opened).map_or((open.size, None), |(size, pos)| (Some(size), pos));
+    let pos = pos.or(open.position);
     if opened {
         keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
@@ -120,6 +118,21 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     if PerViewport::<Record>::with(ctx, viewport, |record| std::mem::take(&mut record.awaiting_first_paint)) {
         viewports::show(ctx, viewport);
     }
+}
+
+/// Fits saved geometry to the current display layout once, before the viewport opens.
+fn saved_geometry(ctx: &Context, open: &ViewportOpen<'_>, opened: bool) -> Option<(Vec2, Option<Pos2>)> {
+    let saved = saved_placement(ctx, open.save?)?.repaired()?;
+    let positions = base_shell(ctx).window_positions();
+    let placement = if opened {
+        saved
+    } else {
+        let min = open.limits.0.map_or([1.0; 2], Into::into);
+        let defaults = Defaults::new(saved.normal.size, min).with_no_position(!positions);
+        place(Some(&saved), &monitors(ctx), None, &defaults)
+    };
+    let pos = placement.position().filter(|_| positions).map(Pos2::from);
+    Some((placement.normal.size.into(), pos))
 }
 
 /// Whether the OS asked the viewport of container `id` to close in this root frame; once.
