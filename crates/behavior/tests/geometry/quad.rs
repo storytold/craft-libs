@@ -465,3 +465,33 @@ fn an_edge_dragged_past_the_opposite_one_flips_the_box_both_ways() {
         assert!(within(&got, want, 0.02), "edge {edge} of {quad:?}: {:?}", got.quad);
     }
 }
+
+/// ⌥⇧ drags (free stretch about the reference point, its centre here) on boxes in perspective, measured on the
+/// reference: a corner stretches the box along its top edge and across it; an edge and the opposite one each go where
+/// a ⇧ drag puts them, the opposite one by the pointer mirrored about the reference point.
+#[test]
+fn an_alt_shift_drag_stretches_about_the_reference_point() {
+    let narrow_top = [(210.0, 125.0), (392.0, 125.0), (452.0, 327.0), (150.0, 327.0)];
+    let parallel_sides = [(150.0, 125.0), (452.0, 165.0), (452.0, 287.0), (150.0, 327.0)];
+    let cases = [
+        (narrow_top, BoxPart::Corner(2), (452.0, 327.0), (482.0, 357.0), [(192.0, 95.0), (410.1, 95.0), (482.0, 357.0), (120.1, 357.0)], 0.2),
+        (
+            parallel_sides,
+            BoxPart::Corner(2),
+            (452.0, 287.0),
+            (482.0, 317.0),
+            [(122.19, 69.9), (488.69, 118.44), (482.0, 317.0), (111.12, 398.66)],
+            0.05,
+        ),
+        (narrow_top, BoxPart::Edge(2), (301.0, 327.0), (301.0, 367.0), [(222.0, 85.0), (380.24, 85.0), (464.0, 367.0), (138.24, 367.0)], 0.2),
+        // The reference's sides land 0.4 px left of the lines through the pointer and its mirror image.
+        (narrow_top, BoxPart::Edge(1), (422.0, 226.0), (472.0, 226.0), [(172.0, 125.0), (429.21, 125.0), (514.0, 327.0), (87.21, 327.0)], 0.5),
+    ];
+    let alt_shift = Mods { alt: true, shift: true, ..Mods::NONE };
+    for (quad, part, from, to, want, tol) in cases {
+        let quad = quad.map(|(x, y)| p(x, y));
+        let start = BoxState::new(quad, p(301.0, 226.0));
+        let got = drag(&start, &start, part, p(from.0, from.1), p(to.0, to.1), alt_shift, &BoxRules::default());
+        assert!(within(&got, want, tol), "{part:?} of {quad:?}: {:?}", got.quad);
+    }
+}

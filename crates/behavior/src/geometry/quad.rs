@@ -550,6 +550,13 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxSta
             return quad.iter().all(|q| q.is_finite()).then_some(BoxState { quad, pivot: g.pivot0 });
         }
     }
+    if mods.shift
+        && mods.alt
+        && min_side <= 0.0
+        && let Some(stretched) = centred_stretch(g, p)
+    {
+        return Some(stretched);
+    }
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -707,6 +714,58 @@ fn side_run_scale(g: &Gesture, p: Point, min_side: f64) -> Option<BoxState> {
         }
     }
     quad.iter().all(|c| c.is_finite()).then(|| BoxState { quad, pivot: carry_pivot(g.quad0, quad, g.pivot0) })
+}
+
+/// An ⌥⇧ drag (free stretch about the reference point) as the reference does it, also on a box in perspective:
+/// - a corner scales the box about the reference point along the top edge's direction and across it, each by where
+///   the pointer is against where the corner was;
+/// - an edge goes where a ⇧ drag puts it (onto the box's line through the pointer, its corners on the edges beside
+///   it), and the opposite edge onto the line through the pointer mirrored about the reference point.
+///
+/// `None` for a collapsed box or a reference point on the dragged part's axis. Boxes with a minimum side (a text frame)
+/// keep the frame scaling, which holds that minimum.
+fn centred_stretch(g: &Gesture, p: Point) -> Option<BoxState> {
+    let (q, c) = (g.quad0, g.pivot0);
+    let d = p - g.start;
+    let quad = match g.part {
+        BoxPart::Corner(i) => {
+            let corner = *q.get(usize::from(i))?;
+            let top = q[1] - q[0];
+            let len = top.hypot();
+            if !(len.is_finite() && len > 1e-9) {
+                return None;
+            }
+            let uh = top / len;
+            let nh = Vec2::new(-uh.y, uh.x);
+            let (r, to) = (corner - c, corner + d - c);
+            let (ru, rv) = (r.dot(uh), r.dot(nh));
+            if ru.abs() <= 1e-9 || rv.abs() <= 1e-9 {
+                return None;
+            }
+            let (ku, kv) = (to.dot(uh) / ru, to.dot(nh) / rv);
+            q.map(|x| {
+                let x = x - c;
+                c + uh * (x.dot(uh) * ku) + nh * (x.dot(nh) * kv)
+            })
+        }
+        BoxPart::Edge(i) => {
+            let i = usize::from(i) % 4;
+            let h = Homography::unit_to_quad(q)?;
+            let inv = h.inverse()?;
+            let at = q[i].midpoint(q[(i + 1) % 4]) + d;
+            let (a, b) = (inv.apply(at), inv.apply(c + (c - at)));
+            let ([u0, u1], [v0, v1]) = match i {
+                0 => ([0.0, 1.0], [a.y, b.y]),
+                1 => ([b.x, a.x], [0.0, 1.0]),
+                2 => ([0.0, 1.0], [b.y, a.y]),
+                _ => ([a.x, b.x], [0.0, 1.0]),
+            };
+            let at = |u: f64, v: f64| h.apply(Point::new(u, v));
+            [at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)]
+        }
+        _ => return None,
+    };
+    quad.iter().all(|x| x.is_finite()).then_some(BoxState { quad, pivot: c })
 }
 
 /// An ⌥ edge drag (both sides move, about the reference point) on a box whose top and bottom are parallel, as the
