@@ -26,4 +26,4 @@ pub use tree_picker::{TreeEntry, TreePicker, TreePickerStyle};
 pub use unit_select::{UnitSelect, UnitSelectOutput, UnitSelectStyle};
 
 pub use craft_behavior::Anchor9;
-pub use reference_point::{ReferencePoint, ReferencePointStyle};
+pub use reference_point::{PointPresentation, ReferencePoint, ReferencePointStyle};
