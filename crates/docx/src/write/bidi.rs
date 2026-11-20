@@ -92,9 +92,10 @@ fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
         if off || m.font_cs.is_none() {
             c.font_cs = Some(f.clone());
         }
-    } else if off && m.font_cs.is_some() {
+    } else if (off && m.font_cs.is_some()) || (m.font_cs.is_none() && m.font_cs_theme.is_none()) {
         // Nothing names an ordinary font: it was drawn in the body font, not the complex-script
-        // one it inherits (without one, a right-to-left piece falls back to the body font itself).
+        // one it inherits, nor, where nothing names that either, the one Word's run defaults give
+        // a `w:rtl` run.
         c.font_cs = Some(craft_wordmodel::styles::BODY_FONT.to_string());
     }
     if off || m.size_cs.is_none() {

@@ -30,12 +30,17 @@ fn paragraph(d: &Document) -> &Paragraph {
     d.body.iter().find_map(|b| b.as_para()).unwrap()
 }
 
-/// `runs` without run direction and bidi language (in the formatting change too), adjacent equal
+/// `runs` without run direction and bidi language (in the formatting change too) and without the
+/// body font the first save names as a right-to-left piece's complex-script font where nothing
+/// names one, adjacent equal
 /// runs merged.
 fn undirected(runs: &[Run]) -> Vec<Run> {
     let strip = |c: &mut CharProps| {
         c.rtl = None;
         c.lang_bidi = None;
+        if c.font_cs.as_deref() == Some(craft_wordmodel::styles::BODY_FONT) {
+            c.font_cs = None;
+        }
     };
     let mut out: Vec<Run> = Vec::new();
     for r in runs {
@@ -60,7 +65,8 @@ fn check_generations(bytes: &[u8], check: impl Fn(&Document)) {
         assert_eq!(paragraph(&next).text, paragraph(&d).text);
         if generation == 0 {
             // The first save splits the mixed Hebrew/Latin run by direction and names the
-            // Hebrew's language (#1543); apart from that nothing changes.
+            // Hebrew's language (#1543), and its body font where nothing names a font; apart from
+            // that nothing changes.
             assert_eq!(undirected(&paragraph(&next).runs), undirected(&paragraph(&d).runs));
         } else {
             assert_eq!(paragraph(&next).runs, paragraph(&d).runs);

@@ -392,6 +392,29 @@ fn hebrew_outside_a_complex_script_run_keeps_its_body_font_after_a_save() {
     assert_eq!(drawn(&again), want, "saved and read back");
 }
 
+/// Hebrew in a run that says neither `w:rtl` nor `w:cs`, where nothing names a font at all,
+/// ordinary or complex script: WordCraft draws it in its body font, and saving names that font as
+/// the complex-script one of the `w:rtl` piece, or the saved file draws whatever the run defaults
+/// give a right-to-left run instead (Times New Roman, read back).
+#[test]
+fn hebrew_with_no_font_named_anywhere_keeps_its_body_font_after_a_save() {
+    let mut d = Document::new();
+    let sheet = std::sync::Arc::make_mut(&mut d.styles);
+    sheet.default_chr = CharProps { size: Some(12.0), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("שלום עולם", CharProps::default()))];
+    let drawn = |d: &Document| {
+        let p = paras(d)[0];
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        assert!(rc.uses_complex('ש'));
+        (rc.font_cs.clone(), rc.size_cs)
+    };
+    let want = (craft_wordmodel::styles::BODY_FONT.to_string(), 12.0);
+    assert_eq!(drawn(&d), want, "in WordCraft");
+    let bytes = craft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(&format!(r#"w:cs="{}""#, craft_wordmodel::styles::BODY_FONT)), "the right-to-left piece names the body font: {xml}");
+    assert_eq!(drawn(&craft_docx::read(&bytes).unwrap()), want, "saved and read back");
+}
 /// A table whose grid holds more columns than a file can (63): the file gets the first 63, and a
 /// cell's table style parts are those of the written grid, so Hebrew in its last column keeps the
 /// Last Column part's size (30 pt over the whole table's 10 pt) after a save.
