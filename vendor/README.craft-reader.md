@@ -369,6 +369,18 @@ fonts without Encoding) and #1499 (byte-aligned packed TIFF predictor rows).
 Synthetic tests cover 1/2/4/8-bit RGB rows and rendering, plus embedded TrueType
 text with absent or partial ToUnicode maps and explicit encoding precedence.
 
+## Pattern, clip, stroke and annotation fixes from open PdfCraft pull requests
+
+Ported from PdfCraft pull requests by mtlcl410 that were open when they were ported (craft-libs
+#2676). Only their `hayro-interpret` and `hayro` part is ported. Code comments keep each pull
+request's `PdfCraft patch` number; `hayro` and `hayro-interpret` number their patches apart, so
+hayro patch 35 here is not hayro-interpret's plate-mode patch 35. The tests are in the files they
+name.
+
+| PdfCraft PR | Files | Change | Tests |
+|---|---|---|---|
+| [#4290](https://github.com/storytold/pdfcraft/pull/4290) | hayro-interpret `interpret/mod.rs`; hayro `no_zoom_tests.rs` | Patch 54: `InterpreterSettings::magnification`, the on-screen magnification of the page. An annotation with the NoZoom flag, and a text annotation whatever its flags, keeps its size on the screen, scaled by `1/m` about the upper-left corner of `/Rect` (ISO 32000-2 §12.5.3, §12.5.6.4); a Highlight drawn from its `/QuadPoints` too. Links and form fields stay in `/Rect`. `None`, or a magnification that isn't finite and positive, draws every annotation as before, as does a pivot that isn't finite | hayro `no_zoom_tests::*` (10 tests) |
+
 ## Cooperative opening cancellation
 
 The syntax reader also supports cooperative cancellation scoped to one open operation through
