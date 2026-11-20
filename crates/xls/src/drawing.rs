@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use craft_officeart::blip::{Decode, Format, fbse_record, parse, store_entries};
 use craft_officeart::props::{entries, prop};
-use craft_officeart::record::{MAX_DEPTH, MAX_RECORDS, Records};
+use craft_officeart::record::{MAX_DEPTH, Records};
 use craft_officeart::{dib, rt, wmf};
 
 use crate::model::ClientAnchor;
@@ -65,10 +65,11 @@ pub(crate) struct PictureShape {
     pub anchor: ClientAnchor,
 }
 
-/// The picture shapes in a sheet's drawing (its MsoDrawing records joined).
-pub(crate) fn picture_shapes(dg: &[u8]) -> Vec<PictureShape> {
+/// The picture shapes in a sheet's drawing (its MsoDrawing records joined), reading at most
+/// `budget` records more (one budget for the whole workbook, [`craft_officeart::record::MAX_RECORDS`] to start with).
+pub(crate) fn picture_shapes(dg: &[u8], budget: &mut usize) -> Vec<PictureShape> {
     let mut out = Vec::new();
-    walk(dg, 0, &mut out, &mut MAX_RECORDS.clone());
+    walk(dg, 0, &mut out, budget);
     out
 }
 
@@ -128,6 +129,7 @@ fn shape(sp: &[u8], budget: &mut usize) -> Option<PictureShape> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_officeart::record::MAX_RECORDS;
 
     fn rec(vi: u16, ty: u16, body: &[u8]) -> Vec<u8> {
         [&vi.to_le_bytes()[..], &ty.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body].concat()
@@ -165,13 +167,13 @@ mod tests {
         let sp = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         let dg = rec(0x000F, 0xF002, &rec(0x000F, 0xF003, &sp));
         let anchor = ClientAnchor { col1: 1, dx1: 512, row1: 1, dy1: 0, col2: 3, dx2: 0, row2: 4, dy2: 0 };
-        assert_eq!(picture_shapes(&dg), vec![PictureShape { pib: 1, anchor }]);
+        assert_eq!(picture_shapes(&dg, &mut MAX_RECORDS.clone()), vec![PictureShape { pib: 1, anchor }]);
         // Truncated or nonsense drawings give nothing, never a panic.
         for bad in [&[][..], &[0xFF; 8][..], &[0; 70][..], &fbse_of(&[0xFF; 60])[..]] {
             let _ = fbse_blip(bad, &mut Decode::new(usize::MAX));
         }
         for bad in [&dg[..dg.len() - 5], &[0xFF; 40][..], &[][..], &dgg[..20]] {
-            let _ = picture_shapes(bad);
+            let _ = picture_shapes(bad, &mut MAX_RECORDS.clone());
             let _ = blip_store(bad);
         }
     }
@@ -219,19 +221,22 @@ mod tests {
         assert_eq!(bmp.len(), 14 + dib.len());
     }
 
-    /// A drawing reads at most the shared limit of records, and containers nested at most the
-    /// shared depth.
+    /// A workbook's drawings read at most the shared limit of records together, and containers
+    /// nested at most the shared depth.
     #[test]
     fn a_drawing_walk_is_bounded() {
         let opt = rec(0x0013, 0xF00B, &[&0x4104u16.to_le_bytes()[..], &1u32.to_le_bytes()].concat());
         let anchor_body: Vec<u8> = [0u16; 9].iter().flat_map(|v| v.to_le_bytes()).collect();
         let picture = rec(0x000F, 0xF004, &[opt, rec(0x0000, 0xF010, &anchor_body)].concat());
         // Three records a picture: half as many pictures as the limit need half again its records.
-        let count = MAX_RECORDS / 2;
+        let count = MAX_RECORDS / 4;
         let many = rec(0x000F, 0xF003, &vec![picture.clone(); count].concat());
-        assert!(picture_shapes(&many).len() < count);
+        let mut budget = MAX_RECORDS;
+        let first = picture_shapes(&many, &mut budget).len();
+        let second = picture_shapes(&many, &mut budget).len();
+        assert!(first == count && second < count, "{first} then {second}: the second sheet gets what is left");
         let nested = |levels: usize| (0..levels).fold(picture.clone(), |inner, _| rec(0x000F, 0xF003, &inner));
-        assert_eq!(picture_shapes(&nested(MAX_DEPTH)).len(), 1);
-        assert!(picture_shapes(&nested(MAX_DEPTH + 2)).is_empty(), "past the depth limit");
+        assert_eq!(picture_shapes(&nested(MAX_DEPTH), &mut MAX_RECORDS.clone()).len(), 1);
+        assert!(picture_shapes(&nested(MAX_DEPTH + 2), &mut MAX_RECORDS.clone()).is_empty(), "past the depth limit");
     }
 }

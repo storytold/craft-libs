@@ -28,8 +28,8 @@ assert!(Records::new(&fopt[..5]).next().is_none());
 - `props`: a property table's entries (id, operand, complex bytes), and `Props`, a merged property
   set (a shape's tables, its master shape's and the drawing defaults') with boolean words merged
   flag by flag, at most 1024 properties and 4096 UTF-16 units a string.
-- `record` also sets the limits of a drawing walk: groups nested at most 12 deep, at most 200,000
-  records.
+- `record` also sets the limits of drawing walks: groups nested at most 12 deep, and at most
+  200,000 records read from all of a document's drawings together.
 - `blip`: BLIP records read (only the two instances [MS-ODRAW] gives each type; a metafile
   deflated or stored, cut to its saved size and at most 64 MiB), the BLIP store (at most 4096
   entries; an entry of size 0 holds nothing; its picture embedded or in a delay stream), and a
