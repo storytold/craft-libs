@@ -324,7 +324,7 @@ pub(super) fn hexagon(rect: Rect) -> Vec<Pos2> {
     ]
 }
 
-/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetBrowser::thumb`). It paints
+/// The face of a swatch outside a `Swatch`: a preset thumbnail of a colour (`PresetFns::thumb`). It paints
 /// what a non-cell `Swatch` of the same colour paints, from the style that `Swatch` resolves, with the selected
 /// ring when `selected`.
 #[derive(Clone, Copy, Debug)]

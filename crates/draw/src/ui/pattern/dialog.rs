@@ -7,9 +7,8 @@ use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::form_dialogs::FormDialog;
-use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Env;
-use egui::{Rect, Ui};
+use egui::Ui;
 use serde_json::{Value, json};
 
 /// Photoshop's Pattern Fill dialog (Layer, New Fill Layer, Pattern...; a Pattern Fill layer's thumbnail; Layer Content
@@ -49,8 +48,8 @@ impl PatternFillDialog {
 
     /// Paints a swatch's tile (see [`PatternFillEditor::thumbnails`]).
     #[must_use]
-    pub fn thumbnails(mut self, paint: impl Fn(&ContentPainterCx<'_>, Rect, &PatternSwatch) + Send + Sync + 'static) -> Self {
-        self.thumbnails = Some(SwatchPainter::new(paint));
+    pub fn thumbnails(mut self, paint: SwatchPainter) -> Self {
+        self.thumbnails = Some(paint);
         self
     }
 
@@ -160,8 +159,8 @@ impl StackDialog for PatternFillDialog {
                     cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
                 }
                 let mut editor = PatternFillEditor::new(words.pattern.clone(), Bind::bound(&mut *value), swatches);
-                if let Some(painter) = thumbnails.clone() {
-                    editor = editor.thumbnails(move |cx, rect, swatch| painter.paint(cx, rect, swatch));
+                if let Some(paint) = *thumbnails {
+                    editor = editor.thumbnails(paint);
                 }
                 editor.show(ui);
             });

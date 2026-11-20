@@ -951,6 +951,20 @@ impl MemoProps for craft_theme::Srgba {
     }
 }
 
+impl MemoProps for craft_theme::Rgba {
+    fn key(&self, key: &mut MemoKey) {
+        let craft_theme::Rgba(channels) = *self;
+        channels.key(key);
+    }
+}
+
+/// Derived `Hash` over a unit enum.
+impl MemoProps for craft_theme::TypeRole {
+    fn key(&self, key: &mut MemoKey) {
+        key.feed_hash(self);
+    }
+}
+
 /// Derived `Hash` (`#[non_exhaustive]`).
 impl MemoProps for craft_theme::variant::Tone {
     fn key(&self, key: &mut MemoKey) {
@@ -1045,13 +1059,6 @@ impl MemoProps for craft_host::target::WindowKind {
 impl MemoProps for egui::LayerId {
     fn key(&self, key: &mut MemoKey) {
         key.feed_hash(self);
-    }
-}
-
-/// By what the scope's numbers and units are written with: its words, its format and its point size.
-impl MemoProps for crate::runtime::env::Units {
-    fn key(&self, key: &mut MemoKey) {
-        self.feed(key);
     }
 }
 

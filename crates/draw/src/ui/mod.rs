@@ -79,7 +79,7 @@ pub use crop::{
 pub use crop::{PerspectiveCropQuad, PerspectiveQuad};
 pub use gradient::{
     FocusOutline, GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette,
-    GradientRef, GradientSwatch, GradientTile, LineGradient, LinePart,
+    GradientRef, GradientSwatch, GradientTile, LineGradient, LinePart, RampSampler,
 };
 pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use measure::{

@@ -606,7 +606,6 @@ impl<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static> PresetBrowser<'_,
                 query: local.filter.trim().to_owned(),
                 view: view_lock.unwrap_or(local.view),
                 zoom: local.zoom,
-                default_open,
                 selected: selected.clone(),
                 menu_target,
                 cell_shape,
@@ -676,7 +675,6 @@ struct ListProps<'p, 'a, K: 'static> {
     query: String,
     view: PresetView,
     zoom: f64,
-    default_open: DefaultOpen,
     selected: Option<K>,
     menu_target: Option<K>,
     cell_shape: CellShape,
@@ -711,10 +709,9 @@ fn list_view<K: Clone + Eq + Hash + Send + Sync + MemoProps + 'static>(props: &m
     let source = props.source;
     let kept = source.rows(ui.ctx(), &env);
     let rows = kept.as_slice();
-    let ListProps { label, list_id, view, zoom, default_open, cell_shape, tiles: tile_size, columns, max_rows, reorder, drop_zone, row_menu, .. } =
-        &*props;
-    let (list_id, view, zoom, default_open, cell_shape, tile_size, columns, max_rows, reorder, drop_zone, row_menu) =
-        (*list_id, *view, *zoom, *default_open, *cell_shape, *tile_size, *columns, *max_rows, *reorder, *drop_zone, *row_menu);
+    let ListProps { label, list_id, view, zoom, cell_shape, tiles: tile_size, columns, max_rows, reorder, drop_zone, row_menu, .. } = &*props;
+    let (list_id, view, zoom, cell_shape, tile_size, columns, max_rows, reorder, drop_zone, row_menu) =
+        (*list_id, *view, *zoom, *cell_shape, *tile_size, *columns, *max_rows, *reorder, *drop_zone, *row_menu);
     let label = label.clone();
     let actions = props.actions;
     let extra_items = props.extra_items;

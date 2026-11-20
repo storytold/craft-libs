@@ -17,7 +17,7 @@ pub use words::PatternWords;
 /// A pattern the editor offers: the app's pattern library (PhotoCraft's Patterns, a bitmap each)
 /// or its preset patterns (PowerPoint's "pct25", "dkHorz", …). The app paints each swatch's tile
 /// ([`PatternFillEditor::thumbnails`]).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, craft_ui::contract::MemoProps)]
 #[non_exhaustive]
 pub struct PatternSwatch {
     /// The app's id, which [`PatternFillOptions::pattern`] holds.

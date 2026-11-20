@@ -1147,6 +1147,42 @@ fn a_drag_on_a_popover_over_a_view_replays_the_view() {
     assert!(runs.iter().all(Vec::is_empty), "the board replays in every drag frame: {runs:?}");
 }
 
+/// A view inside an open popover: the popover's body is on its own layer.
+struct InPopover {
+    /// Where the view's button was shown in the last frame.
+    button: Option<Rect>,
+}
+
+impl InPopover {
+    fn frame(&mut self, frames: &mut Frames, events: Vec<egui::Event>) -> Vec<&'static str> {
+        let button = &mut self.button;
+        frames.frame(events, |ui| {
+            Popover::new("Presets", Bind::given(true)).at_point(Pos2::new(80.0, 80.0)).show(ui, |ui, _| {
+                *button = MemoView::new("presets", Title { title: "Inside".to_owned() }, title).show(ui);
+            });
+        });
+        let ran = last_frame_memo_runs(&frames.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Ran);
+        ran.map(|(name, _, _)| short_name(name)).collect()
+    }
+}
+
+/// A memoized view inside an open popover replays while nothing changes, still painted, and runs when the pointer
+/// moves over it.
+#[trial]
+fn a_view_in_an_open_popover_replays_while_nothing_changes() {
+    let mut scene = InPopover { button: None };
+    let mut frames = Frames::new();
+    for _ in 0..SETTLE {
+        scene.frame(&mut frames, vec![]);
+    }
+    let idle: Vec<Vec<&str>> = (0..WARM).map(|_| scene.frame(&mut frames, vec![])).collect();
+    assert!(idle.iter().all(Vec::is_empty), "the view in the popover ran in idle frames: {idle:?}");
+    assert_eq!(runs_of(&frames, "Title"), [MemoRun::Replayed], "{:?}", last_pass_memo_runs(&frames.ctx));
+    assert!(painted(&frames, "Inside"), "the replayed view is painted");
+    let over = scene.button.expect("the popover shows the view").center();
+    assert_eq!(scene.frame(&mut frames, vec![moved(over)]), ["Title"], "the pointer over the view runs it");
+}
+
 #[derive(MemoProps)]
 struct Centred {
     label: String,

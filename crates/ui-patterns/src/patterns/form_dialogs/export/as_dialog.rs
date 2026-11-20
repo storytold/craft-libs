@@ -11,7 +11,7 @@ use crate::contract::clicked;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::form::{read_bind, write_bind};
 use crate::patterns::presets::{
-    GroupPath, NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState,
+    GroupPath, NameCheck, NamedPresetEvent, NamedPresetRow, PickerField, PresetFns, PresetLibrary, PresetPicker, PresetRow, PresetSource, PresetState,
 };
 use crate::runtime::requests::{HostAnswer, PathFilter, PathKind, PathRequest};
 use crate::text::TextField;
@@ -720,7 +720,8 @@ impl Pass<'_> {
         let words = self.words;
         let shown = {
             let presets = library.borrow();
-            let rows: Vec<PresetRow<String>> = presets.items().iter().map(|item| PresetRow::item(item.name.clone(), item.name.clone(), 0)).collect();
+            let names: Vec<String> = presets.items().iter().map(|item| item.name.clone()).collect();
+            let rows = PresetSource::new(names, PresetFns::new(name_rows));
             let current = presets.items().iter().find(|item| item.value == *options).map(|item| item.name.clone());
             let picker = PresetPicker::new(words.preset.clone(), Bind::given(current), &rows, Bind::bound(&mut held.picker)).field(PickerField::Name);
             NamedPresetRow::new(words.preset.clone(), picker)
@@ -957,4 +958,9 @@ fn choose<T: craft_behavior::Value>(ui: &mut Ui, name: &Label, salt: &str, entri
             *value = picked;
         }
     });
+}
+
+/// One preset row per name, keyed by it.
+fn name_rows(names: &Vec<String>, _: &Env) -> Vec<PresetRow<String>> {
+    names.iter().map(|name| PresetRow::item(name.clone(), name.clone(), 0)).collect()
 }

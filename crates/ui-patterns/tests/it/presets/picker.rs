@@ -5,9 +5,9 @@
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::Button;
 use craft_ui::contract::{Bind, Role, Show as _, ShowContainer as _};
-use craft_ui::patterns::presets::{PickerField, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState};
+use craft_ui::patterns::presets::{PickerField, PresetFns, PresetPicker, PresetRow, PresetSource, PresetState, PresetView};
 use craft_ui::popover::Popover;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, last_pass_runs, trial};
 use egui::{Key, Modifiers, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -133,4 +133,36 @@ fn a_chip_with_a_caption_range_keeps_its_width_as_the_caption_grows() {
         assert_eq!(fixture.passes(), 1, "caption {next}: the frame runs one pass");
         assert_eq!(place(&fixture), first, "caption {next}: the chip and the button after it stay in place");
     }
+}
+
+/// The list views and component runs of the last frame: the views of `props` that ran, and the list rows that ran.
+fn list_runs(fixture: &Fixture, props: &str) -> (usize, u32) {
+    let views = last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(name, _, run)| name.contains(props) && *run == MemoRun::Ran).count();
+    let rows = last_pass_runs(fixture.ctx()).into_iter().filter(|(name, _)| *name == "ListRow").map(|(_, runs)| runs).sum();
+    (views, rows)
+}
+
+/// An open picker's list runs its rows when it opens, then, while nothing changes, replays: no list row runs.
+#[trial]
+fn an_open_picker_with_nothing_changing_runs_no_list_row() {
+    let mut value = Some(CORAL);
+    let mut state = PresetState::<u32>::new();
+    let rows = PresetSource::new((), PresetFns::new(|_, _| (0..12).map(|key| PresetRow::item(CORAL + key, format!("Preset {key}"), 0)).collect()));
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = PresetPicker::new("Swatch", Bind::bound(&mut value), &rows, Bind::bound(&mut state)).view(PresetView::List).show(ui);
+    });
+    fixture.room(Vec2::new(800.0, 800.0));
+    fixture.settle();
+    let field = fixture.by_role(Role::COMBO_BOX).first().copied().expect("the field shows");
+    fixture.click(&field);
+    let mut opened = list_runs(&fixture, "ListProps").0;
+    for _ in 0..4 {
+        fixture.idle(1);
+        opened += list_runs(&fixture, "ListProps").0;
+    }
+    assert!(opened > 0, "the list view runs when the popover opens");
+    fixture.settle();
+    fixture.frame(vec![]);
+    assert!(fixture.by_label("Preset 3").is_some(), "the popover stays open");
+    assert_eq!(list_runs(&fixture, "ListProps"), (0, 0), "an idle frame runs neither the list view nor a row");
 }

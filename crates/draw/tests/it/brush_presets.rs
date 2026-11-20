@@ -7,7 +7,8 @@ use craft_draw::ui::brush_settings::TipAngle;
 use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::Env;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::{Fixture, MemoRun, last_frame_memo_runs, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -221,4 +222,36 @@ fn escape_reverts_size_hardness_angle_and_roundness() {
     fixture.key(Key::Escape, Modifiers::NONE);
     fixture.idle(3);
     assert_eq!(host.borrow().values, OPENED, "Escape puts all four back");
+}
+
+/// The memoized views of `props` that ran in the last frame.
+fn views_ran(fixture: &Fixture, props: &str) -> usize {
+    last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(name, _, run)| name.contains(props) && *run == MemoRun::Ran).count()
+}
+
+/// The memoized views of `props` that replayed in the last frame.
+fn views_replayed(fixture: &Fixture, props: &str) -> usize {
+    last_frame_memo_runs(fixture.ctx()).into_iter().filter(|(name, _, run)| name.contains(props) && *run == MemoRun::Replayed).count()
+}
+
+/// While nothing changes the open picker's head and preset list replay; each move of a Size drag runs the head's view
+/// and replays the list.
+#[trial]
+fn a_size_drag_runs_the_head_and_replays_the_preset_list() {
+    let (mut fixture, host) = opened_rig(true, false);
+    fixture.frame(vec![]);
+    assert_eq!((views_ran(&fixture, "HeadProps"), views_ran(&fixture, "ListProps")), (0, 0), "an idle frame runs neither view");
+    let slider = fixture.by_role(Role::SLIDER).into_iter().find(|target| fixture.tree().name_of(target.node) == Some("Size"));
+    let slider = slider.expect("the Size slider shows").rect;
+    let from = slider.left_center() + Vec2::new(slider.width() * 0.3, 0.0);
+    fixture.frame(vec![moved(from)]);
+    fixture.frame(vec![press(from)]);
+    for step in 1..=4 {
+        fixture.frame(vec![moved(from + Vec2::new(8.0 * step as f32, 0.0))]);
+        assert!(views_ran(&fixture, "HeadProps") > 0, "move {step} runs the head");
+        assert_eq!(views_ran(&fixture, "ListProps"), 0, "move {step} runs no list view");
+        assert!(views_replayed(&fixture, "ListProps") > 0, "move {step} replays the list");
+    }
+    fixture.frame(vec![release(from + Vec2::new(32.0, 0.0))]);
+    assert_ne!(host.borrow().values.diameter, OPENED.diameter, "the drag edited the size");
 }

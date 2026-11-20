@@ -103,7 +103,7 @@ impl<'a, K: Clone + PartialEq + Send + Sync + 'static> PresetSource<'a, K> {
         let mut key = MemoKey::new();
         self.0.key(&mut key);
         crate::contract::MemoProps::key(&units, &mut key);
-        let id = Id::new(("preset-rows", key.finish()));
+        let id = Id::NULL.with(("preset-rows", key.finish()));
         derived(ctx, id, &RowsKey { source: self, units: &units }, || self.0.rows(env))
     }
 

@@ -24,14 +24,13 @@ use crate::contract::{
 use crate::layout_components::Stack;
 use crate::pickers::{FaceKind, SelectFace};
 use crate::popover::Popover;
-use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{Env, EnvView, Label};
 use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
 use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, NumberCodec, PartKey, PressPhase, Sense, Value};
-use egui::{Pos2, Rect, Response, Ui, Vec2};
+use egui::{Pos2, Response, Ui, Vec2};
 use std::hash::Hash;
 use std::ops::RangeInclusive;
 

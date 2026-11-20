@@ -4,7 +4,7 @@
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
-use craft_ui::patterns::presets::PresetRow;
+use craft_ui::patterns::presets::{PresetFns, PresetRow, PresetSource};
 use craft_ui::runtime::env::{Label, Scale, UnitKind};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
@@ -350,11 +350,16 @@ fn paired_parameter_fields_15539_leave_no_gap_when_both_are_hidden() {
 /// id, and a group header takes no pick.
 #[trial]
 fn a_pattern_row_picks_its_pattern() {
-    let rows = vec![
-        PresetRow::group("nature".to_owned(), "Nature", 0),
-        PresetRow::item("grass".to_owned(), "Grass", 1),
-        PresetRow::item("sand".to_owned(), "Sand", 1),
-    ];
+    let rows = PresetSource::new(
+        (),
+        PresetFns::new(|_, _| {
+            vec![
+                PresetRow::group("nature".to_owned(), "Nature", 0),
+                PresetRow::item("grass".to_owned(), "Grass", 1),
+                PresetRow::item("sand".to_owned(), "Sand", 1),
+            ]
+        }),
+    );
     let values = Rc::new(RefCell::new(DialogFields::from_pairs([("fill", "ghost")])));
     let shown = values.clone();
     let params = vec![Param::new("fill", "Fill", ParamKind::pattern(None))];
