@@ -15,6 +15,7 @@ use craft_ui::pickers::Select;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::layout::in_region;
+use craft_ui::testing::pointer;
 use craft_ui::testing::{Fixture, Frames, MemoRun, last_frame_memo_runs, trial};
 use craft_ui::value_drag::Slider;
 use egui::{Pos2, Rect, Shape, Ui, Vec2};
@@ -224,6 +225,31 @@ fn a_settled_bar_replays_the_rule_it_took_back() {
         assert_eq!(runs(&frames), 0, "settled frame {frame} ran the view");
         assert!(!draws_rule(&shapes, wide), "settled frame {frame} replays the rule the run took back");
     }
+}
+
+/// A bar too short for its members knows it overflows from the content it measured in its first frame: a wheel turned
+/// over it in the next frame scrolls the button it hides into view.
+#[trial]
+fn a_bar_too_short_for_its_members_takes_the_wheel_from_its_first_frame() {
+    let (_, wide) = rule_bar_shapes(900.0);
+    let width = cutting_width(wide);
+    let rects = Cell::new((Rect::NOTHING, Rect::NOTHING));
+    let scene = |ui: &mut Ui| rule_bar(ui, width, &rects);
+    let mut frames = Frames::new();
+    frames.frame(vec![pointer::moved(Pos2::new(width / 2.0, 40.0))], scene);
+    let hidden = rects.get().1;
+    assert!(!hidden.is_positive(), "the first frame shows the second button at {hidden:?} in a bar that ends inside it");
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: Vec2::new(-40.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    frames.frame(vec![wheel], scene);
+    frames.idle(2, scene);
+    let shown = rects.get().1;
+    assert!(shown.is_positive(), "the wheel in the second frame left the second button out of the bar");
 }
 
 /// A bar `width` wide holding an icon button, a rule, a labelled checkbox, a rule and a second icon button; `rects`

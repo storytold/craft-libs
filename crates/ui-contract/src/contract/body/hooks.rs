@@ -344,12 +344,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let mut stage = MemoryStage::open_peek(&ctx, id);
             let mut fresh = self.measuring_hooks(fading);
             crate::contract::run::measured_extent(comp, &mut fresh, at, &mut stage, style, shown);
-            // The strips show in the pass whose content first overflows: the measuring run's content decides them.
-            if let Some(extent) = fresh.extent.filter(|_| scroll_of(&props).is_some_and(|scroll| scroll.has_strips())) {
-                self.last_extent = (extent.x, extent.y);
-            }
         }
         let took = |key: Id| layout_memory::measured(&ctx, key).map(|measured| measured.took);
+        // The real run decides the scroll from the content this pass measured: whether it overflows (the wheel, the
+        // bars, the strips) and how far it scrolls.
+        if let Some(extent) = took(sub(id, "extent")).filter(|_| scroll_of(&props).is_some()) {
+            self.last_extent = (extent.x, extent.y);
+        }
         self.measured_body = took(id);
         self.measured_header = props.header.and_then(|_| took(sub(id, "header")));
         self.measured_footer = props.footer.as_ref().and_then(|_| took(sub(id, "footer"))).unwrap_or(Vec2::ZERO);
@@ -823,6 +824,10 @@ impl BodyHooks<'_> {
         }
         if let Some(content) = content {
             record(sub(id, "content"), content);
+        }
+        // What a scrolling body's content took, for the real run's scroll (`pass_extent`).
+        if let Some(extent) = self.extent.filter(|_| scroll_of(&props).is_some()) {
+            record(sub(id, "extent"), extent);
         }
         // The rows of a content-sized body reach past the columns of the group around by as much more as the
         // container does: a box's padding, or a row's members after its labelled one. The group measures its extent

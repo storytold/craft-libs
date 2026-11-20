@@ -103,7 +103,8 @@ pub(super) struct BodyHooks<'b> {
     scroll_bound: bool,
     moved: bool,
     last: BodyView,
-    /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
+    /// The content's extent. Step 4 and the measuring run read the last pass's, kept with the offset it bounds
+    /// (`ScrollState`); from step 5 the real run takes what this pass's measuring run found.
     last_extent: (f32, f32),
     /// The height of a scroll strip (`ScrollIndicator::Strips`).
     strip: f32,
