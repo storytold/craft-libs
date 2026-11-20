@@ -984,18 +984,33 @@ fn perspective_push(
     }
     let r2 = rho * rho;
     let row = r2 / (1.0 + r2);
-    let (frame, row, inv_s) = if edge % 2 == 1 {
+    let (x, lean) = (1.0 / across - 1.0, rho.ln());
+    let place = 2.0 * (1.0 + r2) * (1.0 + r2) / ((1.0 + rho) * (1.0 + rho) * (1.0 + rho));
+    let centre = if edge % 2 == 1 {
         // Far from the start the centre drifts with `x = 1 / s_m - 1`, both ways by how far `rho` is from 1.
-        let x = 1.0 / across - 1.0;
-        let (spread, lean) = (row * (1.0 - row), rho.ln());
+        let spread = row * (1.0 - row);
         let drift_row = spread * lean * (0.75 - 0.25 * rho);
         let drift_place = 2.0 * spread * lean * lean;
-        let place = 2.0 * (1.0 + r2) * (1.0 + r2) / ((1.0 + rho) * (1.0 + rho) * (1.0 + rho));
-        (h, row + drift_row * x, (place + drift_place * x) * x)
+        let inv_s = (place + drift_place * x) * x;
+        apply(&h, unit(1.0, (row + drift_row * x) * inv_s, inv_s))
+    } else if edge == 2 {
+        // A bottom drag, in the start box's frame: the centre's row sits at `frac` of the middle row in document
+        // units and drifts with `x` by a term odd in ln rho; its 1/s bends away from the side drags' `place * x` as x
+        // grows (fitted on the reference with boxes in perspective from rho 0.26 to 2.5).
+        let (frac, bend) = if rho <= 1.0 {
+            (0.5 - (1.0 - rho) * (1.0 - rho) / 4.0, lean * lean * (0.78 - 0.19 * lean))
+        } else {
+            let k = 1.0 - 1.0 / rho;
+            (0.5 + 0.47 * k * k, lean * lean * (0.80 - 0.12 * lean))
+        };
+        let t = frac * rho / (1.0 - frac + frac * rho) + 0.25 * lean / (1.0 + 0.25 * lean * lean) * x;
+        // Homogeneous, so a centre passing through infinity (1/s = 0) stays defined.
+        let lam = place * x;
+        apply(&h, unit(1.0 - bend * x, t * lam, lam))
     } else {
-        (Homography::unit_to_quad(first)?, row, (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across))
+        let inv_s = (1.0 + r2 * rho) / (1.0 + r2) * (1.0 - across);
+        apply(&Homography::unit_to_quad(first)?, unit(1.0, row * inv_s, inv_s))
     };
-    let centre = apply(&frame, unit(1.0, row * inv_s, inv_s));
     let homog = |p: Point| [p.x, p.y, 1.0];
     let along = cross3(homog(v), homog(mid));
     let mut out = first;
@@ -1006,7 +1021,9 @@ fn perspective_push(
         }
         out[i] = Point::new(p[0] / p[2], p[1] / p[2]);
     }
-    let reach = first[dragged[0]].distance(first[dragged[1]]) * 2.0;
+    // A push past this is a runaway, so the first step stands; bottom drags on boxes in strong perspective move their
+    // corners several edge lengths on the reference.
+    let reach = first[dragged[0]].distance(first[dragged[1]]) * if edge == 2 { 6.0 } else { 2.0 };
     (out.iter().all(|c| c.is_finite()) && dragged.iter().all(|&i| out[i].distance(first[i]) <= reach)).then_some(out)
 }
 

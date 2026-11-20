@@ -581,3 +581,55 @@ fn an_alt_side_drag_on_a_box_converging_both_ways_levels_top_and_bottom() {
         assert!(within(&got, want, tol), "{quad:?}: {:?}", got.quad);
     }
 }
+
+/// Bottom drags that shrink a box in perspective to half or grow it far (measured on the reference): the push's centre
+/// follows the bottom-drag law in the start box's frame, for boxes narrowing to the right and to the left.
+#[test]
+fn a_long_bottom_drag_on_a_box_in_perspective_follows_the_reference() {
+    let cases = [
+        // Right side 142 of 202, shrunk by 100: was 22.5 px off.
+        (
+            [(150.0, 125.0), (452.0, 155.0), (452.0, 297.0), (150.0, 327.0)],
+            (301.0, 312.0),
+            (301.0, 212.0),
+            [(224.75, 132.43), (377.25, 147.57), (345.18, 213.5), (216.3, 211.54)],
+            1.5,
+        ),
+        // Right side 52 of 202, grown by 120: was 193 px off.
+        (
+            [(150.0, 125.0), (452.0, 200.0), (452.0, 252.0), (150.0, 327.0)],
+            (301.0, 289.5),
+            (301.0, 409.5),
+            [(60.3, 102.72), (541.7, 222.28), (476.89, 275.64), (-39.95, 597.17)],
+            3.5,
+        ),
+        // Right side 52 of 202, shrunk by 60: its corners go 3.7 edge lengths, was 241 px off.
+        (
+            [(150.0, 125.0), (452.0, 200.0), (452.0, 252.0), (150.0, 327.0)],
+            (301.0, 289.5),
+            (301.0, 229.5),
+            [(194.9, 136.1), (407.1, 188.9), (506.1, 227.5), (191.9, 236.5)],
+            15.0,
+        ),
+        // Left side 122 of 202, shrunk by 60: was 15.3 px off.
+        (
+            [(150.0, 165.0), (452.0, 125.0), (452.0, 327.0), (150.0, 287.0)],
+            (301.0, 307.0),
+            (301.0, 247.0),
+            [(224.26, 155.16), (377.74, 134.84), (384.16, 251.35), (251.84, 246.53)],
+            1.0,
+        ),
+        // Left side 142 of 202, shrunk by 100: was 219 px off.
+        (
+            [(150.0, 155.0), (452.0, 125.0), (452.0, 327.0), (150.0, 297.0)],
+            (301.0, 312.0),
+            (301.0, 212.0),
+            [(256.34, 144.44), (345.66, 135.56), (363.1, 212.2), (321.25, 212.2)],
+            7.5,
+        ),
+    ];
+    for (quad, from, to, want, tol) in cases {
+        let got = edge_dragged(quad.map(|(x, y)| p(x, y)), 2, p(from.0, from.1), p(to.0, to.1));
+        assert!(within(&got, want, tol), "{quad:?} to {to:?}: {:?}", got.quad);
+    }
+}
