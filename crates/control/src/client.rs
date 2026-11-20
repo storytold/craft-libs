@@ -117,13 +117,10 @@ impl Request {
     }
 }
 
-/// A control reply as a call's result: its `result`, or its `error`.
+/// A control reply as a call's result: its `result`, or its `error`
+/// ([`craft_control_protocol::reply_result`]).
 pub fn outcome(v: &Value) -> Result<Value, String> {
-    if v.get("ok").and_then(Value::as_bool) == Some(true) {
-        Ok(v.get("result").cloned().unwrap_or(Value::Null))
-    } else {
-        Err(v.get("error").and_then(Value::as_str).unwrap_or("error").to_string())
-    }
+    craft_control_protocol::reply_result(v)
 }
 
 /// A request the app said is still running. Its reply will come on this connection, through
