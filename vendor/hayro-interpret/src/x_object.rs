@@ -10,7 +10,7 @@ use crate::function::{Function, interpolate};
 use crate::interpret::path::{get_paint, set_overprint};
 use crate::interpret::state::ActiveTransferFunction;
 use crate::{BlendMode, CacheKey, ClipPath, Image, Paint, RasterImage, StencilImage};
-use crate::{FillRule, InterpreterWarning, WarningSinkFn, interpret};
+use crate::{ExtendedWarning, ExtendedWarningSinkFn, FillRule, InterpreterWarning, WarningSinkFn, interpret};
 use crate::{ImageData, InkImage, LumaData, RgbData};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::content::TypedIter;
@@ -39,6 +39,7 @@ impl<'a> XObject<'a> {
     pub(crate) fn new(
         stream: &Stream<'a>,
         warning_sink: &WarningSinkFn,
+        extended_warning_sink: Option<&ExtendedWarningSinkFn>,
         cache: &Cache,
         decoded_cache: Option<&DecodedImageCache>,
         transfer_function: Option<ActiveTransferFunction>,
@@ -50,6 +51,7 @@ impl<'a> XObject<'a> {
                 stream,
                 |_| None,
                 warning_sink,
+                extended_warning_sink,
                 cache,
                 decoded_cache,
                 false,
@@ -574,6 +576,7 @@ impl<'a> ImageXObject<'a> {
         stream: &Stream<'a>,
         resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
         warning_sink: &WarningSinkFn,
+        extended_warning_sink: Option<&ExtendedWarningSinkFn>,
         cache: &Cache,
         decoded_cache: Option<&DecodedImageCache>,
         mut is_mask: bool,
@@ -634,7 +637,9 @@ impl<'a> ImageXObject<'a> {
             .as_ref()
             .is_some_and(ColorSpace::is_tableless_indexed)
         {
-            warning_sink(InterpreterWarning::MalformedIndexedImage);
+            if let Some(sink) = extended_warning_sink {
+                sink(ExtendedWarning::MalformedIndexedImage);
+            }
             return None;
         }
 
@@ -650,8 +655,8 @@ impl<'a> ImageXObject<'a> {
             return None;
         }
 
-        if malformed_indexed {
-            warning_sink(InterpreterWarning::MalformedIndexedImage);
+        if malformed_indexed && let Some(sink) = extended_warning_sink {
+            sink(ExtendedWarning::MalformedIndexedImage);
         }
 
         Some(Self {
@@ -1568,7 +1573,7 @@ fn resolve_alpha(
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
-        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, None, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         // PdfCraft patch (82): averaged down when far larger than where it is drawn, and cached.
         obj.decoded_soft_mask(target_dimension, (width, *height)).map(|decoded| decoded.luma)
@@ -1630,7 +1635,7 @@ fn resolve_matte(
     let mut matte_rgb = [0_u8; 3];
     color_space.convert_f32(&matte, &mut matte_rgb, false);
 
-    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
+    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, None, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
     let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
 
     Some((alpha, matte_rgb))

@@ -123,7 +123,6 @@ pub fn render_into<'a>(
                 InterpreterWarning::ImageDecodeFailure => 1,
                 InterpreterWarning::UnsupportedFont => 2,
                 InterpreterWarning::ContentTruncated => 4,
-                InterpreterWarning::ColorFallback | InterpreterWarning::MalformedIndexedImage | InterpreterWarning::Type3WidthsMissing => 0,
             };
             sink.fetch_or(bit, Ordering::Relaxed);
             original(warning);

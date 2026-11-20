@@ -663,7 +663,7 @@ impl<'a> Context<'a> {
         // PdfCraft patch (90): tell the caller a Type 3 font lacks the /Widths it requires,
         // so the spacing taken from its glyph procedures can be reported.
         if resolved.as_ref().is_some_and(Font::type3_widths_missing) {
-            (self.settings.warning_sink)(InterpreterWarning::Type3WidthsMissing);
+            (self.settings.extended_warning_sink)(crate::ExtendedWarning::Type3WidthsMissing);
         }
 
         if let Some(resolved) = resolved {
