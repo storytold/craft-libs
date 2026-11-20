@@ -118,6 +118,8 @@ pub(crate) struct Splitter {
     // rest of the PES packet belongs to the open unit) or, once one is read, where its payload
     // ends
     next_frame: Option<u64>,
+    /// Opus: how far the payload size of a control header cut off by the end of a chunk was read.
+    opus_scan: OpusSizeScan,
     /// Opus: the open unit's start and end trims.
     open_trim: (u16, u16),
     /// Opus: the trims of the units so far.
@@ -364,10 +366,24 @@ enum OpusHeader {
     Found { len: usize, size: u64, trim: (u16, u16) },
 }
 
-/// The opus_control_header at the start of `b` (Opus transport draft §6.2): the 11-bit prefix
-/// 0x3FF, the start trim, end trim and extension flags, the payload size as bytes of 0xFF and a
-/// last byte, then the 13-bit trims and the extension.
-fn opus_control_header(b: &[u8]) -> OpusHeader {
+/// How far the payload size of the control header at ES offset `at` was read: `next` is the
+/// header index of the next size byte to read, and `size` is the sum of the bytes before it.
+#[derive(Debug, Default)]
+struct OpusSizeScan {
+    at: u64,
+    next: usize,
+    size: u64,
+    /// Size bytes read, by every header.
+    #[cfg(test)]
+    reads: u64,
+}
+
+/// The opus_control_header at the start of `b`, which is ES offset `at` (Opus transport draft
+/// §6.2): the 11-bit prefix 0x3FF, the start trim, end trim and extension flags, the payload size
+/// as bytes of 0xFF and a last byte, then the 13-bit trims and the extension. When `b` ends
+/// before the header does, `scan` keeps the size read so far, and a call with more bytes of the
+/// same header goes on from there, so each size byte is read once.
+fn opus_control_header(b: &[u8], at: u64, scan: &mut OpusSizeScan) -> OpusHeader {
     match b {
         [] => return OpusHeader::Incomplete,
         [0x7F] => return OpusHeader::Incomplete,
@@ -375,18 +391,37 @@ fn opus_control_header(b: &[u8]) -> OpusHeader {
         _ => return OpusHeader::Absent,
     }
     let flags = b[1];
-    let mut i = 2;
-    let mut size = 0u64;
+    if scan.at != at || scan.next < 2 {
+        scan.at = at;
+        scan.next = 2;
+        scan.size = 0;
+    }
+    let mut i = scan.next;
+    let mut size = scan.size;
     loop {
-        let Some(&x) = b.get(i) else { return OpusHeader::Incomplete };
-        i += 1;
-        size += u64::from(x);
-        if size > u64::from(super::MAX_UNIT_BYTES) {
+        let Some(&x) = b.get(i) else {
+            scan.next = i;
+            scan.size = size;
+            return OpusHeader::Incomplete;
+        };
+        #[cfg(test)]
+        {
+            scan.reads += 1;
+        }
+        if size + u64::from(x) > u64::from(super::MAX_UNIT_BYTES) {
             return OpusHeader::Invalid;
         }
         if x != 0xFF {
+            // the trims or the extension may still be cut off: a later call reads this last
+            // size byte again
+            scan.next = i;
+            scan.size = size;
+            size += u64::from(x);
+            i += 1;
             break;
         }
+        size += u64::from(x);
+        i += 1;
     }
     let mut trim = [0u16; 2];
     for (k, bit) in [0x10u8, 0x08].into_iter().enumerate() {
@@ -526,6 +561,7 @@ impl Splitter {
             pending: None,
             open_field: None,
             next_frame: None,
+            opus_scan: OpusSizeScan::default(),
             open_trim: (0, 0),
             trims: Vec::new(),
         }
@@ -980,10 +1016,15 @@ impl Splitter {
             if self.open.is_none() {
                 self.skipped += data.len() as u64;
             }
+            // no later header can refer back to these bytes: `feed` may forget their chunks
+            self.buf.clear();
+            self.buf_start = end;
             return;
         };
         if next >= end {
             // inside the open unit's payload
+            self.buf.clear();
+            self.buf_start = end;
             return;
         }
         self.window(start, data);
@@ -996,7 +1037,7 @@ impl Splitter {
             if i >= self.buf.len() {
                 break;
             }
-            match opus_control_header(&self.buf[i..]) {
+            match opus_control_header(&self.buf[i..], at, &mut self.opus_scan) {
                 OpusHeader::Incomplete => {
                     self.trim(self.buf.len() - i);
                     return;
@@ -1166,6 +1207,48 @@ mod tests {
             assert_eq!(s.units.len(), 5000, "{codec:?}");
             assert!(s.units.iter().enumerate().all(|(k, u)| u.pos == k as u64 * 188 && u.offset == 0), "{codec:?}");
         }
+    }
+
+    #[test]
+    fn a_long_opus_control_header_is_read_once() {
+        // a payload size of 100,000 bytes of 0xFF, cut into transport stream payloads
+        let mut s = Splitter::new(&Codec::Opus);
+        s.pes_start(Some(0), None);
+        let mut es = vec![0x7F, 0xE0];
+        es.extend(std::iter::repeat_n(0xFF, 100_000));
+        es.push(0);
+        for (k, c) in es.chunks(184).enumerate() {
+            s.feed(k as u64 * 188, c);
+        }
+        assert!(s.opus_scan.reads <= es.len() as u64, "{} size bytes read for a {}-byte header", s.opus_scan.reads, es.len());
+        assert_eq!(s.next_frame, Some(es.len() as u64 + 255 * 100_000));
+    }
+
+    #[test]
+    fn opus_chunks_are_forgotten_inside_a_unit_and_after_a_headerless_one() {
+        // an access unit whose payload spans 500 chunks, then a PES packet without a control
+        // header
+        let mut s = Splitter::new(&Codec::Opus);
+        s.pes_start(Some(0), None);
+        let size = 184 * 500;
+        let mut es = vec![0x7F, 0xE0];
+        es.extend(std::iter::repeat_n(0xFF, size / 255));
+        es.push((size % 255) as u8);
+        es.resize(es.len() + size, 0x11);
+        let mut pos = 0;
+        for (k, c) in es.chunks(184).enumerate() {
+            s.feed(pos, c);
+            pos += 188;
+            assert!(k < 3 || s.chunks.len() <= 2, "chunk {k}: {} chunks retained", s.chunks.len());
+        }
+        s.pes_start(Some(1800), None);
+        for k in 0..500 {
+            s.feed(pos, &[0xFC; 184]);
+            pos += 188;
+            assert!(s.chunks.len() <= 2, "headerless chunk {k}: {} chunks retained", s.chunks.len());
+        }
+        s.finish();
+        assert_eq!(s.units.iter().map(|u| u.size as usize).collect::<Vec<_>>(), [size, 184 * 500]);
     }
 
     #[test]

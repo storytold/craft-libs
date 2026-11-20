@@ -58,6 +58,15 @@ fn random_access_packet(mux: &mut TsMux, pid: u16, payload: &[u8]) {
     mux.out.extend(p);
 }
 
+/// A transport stream packet on `pid` that sets the unit start indicator and carries only an
+/// adaptation field, with the random access indicator set when `random_access` is.
+fn adaptation_only_start(mux: &mut TsMux, pid: u16, random_access: bool) {
+    let cc = *mux.cc.entry(pid).or_insert(0);
+    let mut p = vec![0x47, 0x40 | (pid >> 8) as u8, pid as u8, 0x20 | cc, 183, if random_access { 0x40 } else { 0 }];
+    p.extend(std::iter::repeat_n(0xFF, 182));
+    mux.out.extend(p);
+}
+
 /// Opus, AV1 and MPEG-4 Part 2 streams in one program, for the hostile-input sweep.
 pub(super) fn seed() -> Vec<u8> {
     let mut mux = TsMux::new(false);
@@ -221,6 +230,31 @@ fn av1_units_come_back_as_obus() {
     assert_eq!(s.units.iter().map(|u| u.key).collect::<Vec<_>>(), [true, false]);
     assert_eq!(f.read_unit(&mux.out, 0, 0).unwrap(), [0x0A, 0x04, 0, 0, 0, 0x7F, 0x32, 0x03, 0x10, 0x20, 0x30]);
     assert_eq!(f.read_unit(&mux.out, 0, 1).unwrap(), [0x32, 0x02, 0xAA, 0xBB]);
+}
+
+#[test]
+fn an_adaptation_field_only_unit_start_keeps_the_random_access_indicator_of_the_pes_packet() {
+    let tu = [0, 0, 1, 0x12, 0x00, 0, 0, 1, 0x32, 0x02, 0xAA, 0xBB];
+    for first_is_key in [true, false] {
+        let mut mux = TsMux::new(false);
+        let desc = vec![0x05, 4, b'A', b'V', b'0', b'1', 0x80, 4, 0x81, 0x08, 0x0C, 0xC0];
+        mux.psi_full(&[(0x06, AV1_PID, desc)], AV1_PID);
+        // the PES header ends in the next packet; an adaptation-field-only unit start with the
+        // other indicator comes between the two
+        let first = pes(0xBD, Some(3600), None, &tu, true);
+        if first_is_key {
+            random_access_packet(&mut mux, AV1_PID, &first[..5]);
+        } else {
+            mux.packet(AV1_PID, true, &first[..5]);
+        }
+        adaptation_only_start(&mut mux, AV1_PID, !first_is_key);
+        mux.packet(AV1_PID, false, &first[5..]);
+        mux.pes(AV1_PID, &pes(0xBD, Some(7200), None, &tu, true));
+        mux.pes(0x1FFF, &[0xFF; 184 * 2]);
+        let f = open(&mux.out).unwrap();
+        let s = &f.streams[0];
+        assert_eq!(s.units.iter().map(|u| u.key).collect::<Vec<_>>(), [first_is_key, false], "first is key: {first_is_key}");
+    }
 }
 
 #[test]

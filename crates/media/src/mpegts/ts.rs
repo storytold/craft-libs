@@ -242,7 +242,9 @@ impl EsState {
     /// Reassemble PES packets from packet `pk` (at file offset `pos`) and pass their payload to
     /// the splitter.
     fn feed(&mut self, pk: &Packet<'_>, pos: u64, unwrap: &mut Unwrap) {
-        if pk.pusi {
+        // `PesAsm` passes over an adaptation-field-only unit start, so its indicator does not
+        // belong to the PES packet being assembled
+        if pk.pusi && !pk.payload.is_empty() {
             self.random_access = pk.random_access;
         }
         let (hdr, bytes) = self.asm.packet(pk.pusi, pk.payload);
