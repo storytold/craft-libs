@@ -263,3 +263,22 @@ fn every_document_of_keyed_source_text_is_read_in_key_order() {
     assert_eq!(docs.iter().map(Option::is_some).collect::<Vec<_>>(), [true, false, true]);
     assert!(TextDocument::parse_all(b"/0 1 /1 2").is_empty());
 }
+
+#[test]
+fn keyed_source_text_documents_share_one_font_table() {
+    // The font table `/0/1/0` is stored once per `btdk`. Many small documents over a large table
+    // must not each hold a decoded copy of it (memory would grow with documents x fonts).
+    let long = "F".repeat(4096);
+    let fonts: Vec<Vec<u8>> =
+        (0..64).map(|i| [b"<< /0 << /0 << /0 ".as_slice(), &utf16_string(&format!("{long}{i}")), b" >> >> >>"].concat()).collect();
+    let runs: Vec<Vec<u8>> = (0..500).map(|i| keyed_run(&format!("k{i}"), 10.0, [1.0, 1.0, 1.0])).collect();
+    let body = [b"/0 << /1 << /0 [ ".as_slice(), &fonts.join(&b' '), b" ] >> >> /1 << /1 [ ", &runs.join(&b' '), b" ] >>"].concat();
+    let docs: Vec<TextDocument> = TextDocument::parse_all(&body).into_iter().map(Option::unwrap).collect();
+    assert_eq!(docs.len(), 500);
+    assert_eq!(docs[0].fonts.len(), 64);
+    assert_eq!(docs[0].fonts[63], format!("{long}63\r"));
+    assert!(docs.iter().all(|d| std::sync::Arc::ptr_eq(&d.fonts, &docs[0].fonts)), "every document shares one table");
+    assert_eq!(docs[499].text, "k499");
+    // The single-document path reads the same table and the first document.
+    assert_eq!(TextDocument::parse(&body).as_ref(), Some(&docs[0]));
+}

@@ -6,7 +6,7 @@
 //! limited, never panics) and [`Layer::text_document`] pulls out the verified fields.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use crate::bytes::{be_u32, text};
 use crate::index::Node;
@@ -537,8 +537,9 @@ pub struct TextDocument {
     pub font: Option<String>,
     /// The document's font list, in stored order (an entry whose name is unreadable is empty, so
     /// the indices of the style runs stay valid). It always holds entries no run uses
-    /// (`Myriad-Roman`, `MyriadPro-Regular`, `AdobeInvisFont` in every sample).
-    pub fonts: Vec<String>,
+    /// (`Myriad-Roman`, `MyriadPro-Regular`, `AdobeInvisFont` in every sample). The list is stored
+    /// once per `btdk`, so the documents of a keyed Source Text share it.
+    pub fonts: Arc<[String]>,
     /// The paragraph runs: one per paragraph, with its length in characters (including the
     /// terminating `\r`) and its justification.
     pub paragraphs: Vec<ParagraphRun>,
@@ -967,10 +968,22 @@ fn text_box(top: &V<'_>, index: usize) -> Option<TextBox> {
     Some(TextBox { x, y, width: max(|p| p[0]) - x, height: max(|p| p[1]) - y })
 }
 
+/// The font table `/0/1/0` of a parsed `btdk` body, in stored order (an unreadable name is empty, so
+/// the style runs' indices stay valid).
+fn font_table(top: &V<'_>) -> Arc<[String]> {
+    match top.get("0").and_then(|v| v.get("1")).and_then(|v| v.get("0")) {
+        Some(V::Array(list)) => {
+            list.iter().map(|f| f.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("0")).and_then(V::string).unwrap_or_default()).collect()
+        }
+        _ => Arc::from(Vec::new()),
+    }
+}
+
 impl TextDocument {
     /// Decodes the body of a `btdk` list: its first text document.
     pub fn parse(body: &[u8]) -> Option<Self> {
-        Self::from_top(&parse_dict(body), 0)
+        let top = parse_dict(body);
+        Self::from_top(&top, 0, &font_table(&top))
     }
 
     /// Decodes every text document of the body of a `btdk` list, in order: the entries of `/1/1`.
@@ -984,21 +997,22 @@ impl TextDocument {
             Some(V::Array(runs)) => runs.len().min(MAX_TEXT_DOCUMENTS),
             _ => 0,
         };
-        (0..count).map(|i| Self::from_top(&top, i)).collect()
+        if count == 0 {
+            return Vec::new();
+        }
+        // The font table is stored once for all documents: decode it once and share it, so memory
+        // does not grow with documents x fonts.
+        let fonts = font_table(&top);
+        (0..count).map(|i| Self::from_top(&top, i, &fonts)).collect()
     }
 
-    /// Text document `index` of a parsed `btdk` body.
-    fn from_top(top: &V<'_>, index: usize) -> Option<Self> {
+    /// Text document `index` of a parsed `btdk` body, with the body's font table.
+    fn from_top(top: &V<'_>, index: usize, fonts: &Arc<[String]>) -> Option<Self> {
         let run = top.get("1")?.get("1")?.at(index)?.get("0")?;
         let raw_text = run.get("0")?.string()?;
         let style = run.get("6")?.get("0")?.at(0)?.get("0")?.get("0")?.get("6")?;
         let fill_argb = colour_of(style, "53")?;
         let font_index = usize::try_from(style.get("0")?.as_i64()?).ok()?;
-        let mut fonts = Vec::new();
-        if let Some(V::Array(list)) = top.get("0").and_then(|v| v.get("1")).and_then(|v| v.get("0")) {
-            fonts =
-                list.iter().map(|f| f.get("0").and_then(|v| v.get("0")).and_then(|v| v.get("0")).and_then(V::string).unwrap_or_default()).collect();
-        }
         let mut notes = RunNotes::default();
         let paragraphs = paragraph_runs(run, &mut notes);
         let style_runs = style_runs(run, &mut notes);
@@ -1009,7 +1023,7 @@ impl TextDocument {
             fill_argb,
             font_index,
             font: fonts.get(font_index).filter(|f| !f.is_empty()).cloned(),
-            fonts,
+            fonts: Arc::clone(fonts),
             paragraphs,
             style_runs,
             text_box: text_box(top, index),
@@ -1672,7 +1686,7 @@ mod tests {
     fn a_realistic_document_is_read_in_full() {
         let doc = TextDocument::parse(DOC).expect("a document");
         assert_eq!((doc.text.as_str(), doc.font_size, doc.fill_argb, doc.font.as_deref()), ("Hi", 36.5, [1.0, 0.5, 0.0, 1.0], Some("A)b")));
-        assert_eq!(doc.fonts, ["Myr", "A)b"]);
+        assert_eq!(*doc.fonts, ["Myr", "A)b"]);
         assert_eq!(doc.paragraphs.first().map(|p| (p.length, p.justification, p.auto_hyphenate)), Some((3, Justification::Center, false)));
         // `/68 1` and `/34 7` are neutral; `/90 /x`, `/91 (plain)` and `/92 word` differ from the
         // (missing, neutral) default; `/79` equals its default.
