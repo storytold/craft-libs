@@ -7,6 +7,7 @@ mod shape_cells;
 
 // draw-gradient-b
 mod gradient_fill;
+mod gradient_map;
 mod gradient_overlay;
 
 // draw-connector

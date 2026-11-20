@@ -91,8 +91,7 @@ pub struct MenuItemOutput {
     pub opens_submenu: bool,
     /// A submenu row's submenu is the open one of its level: show the `Menu` after the row.
     pub submenu_open: bool,
-    /// The row is its level's active row and paints with the row fill: the pointer moved onto it, or the keyboard
-    /// moved to it.
+    /// The row is its level's active row: the pointer moved onto it, or the keyboard moved to it.
     pub active: bool,
     /// The row's rect grown by the menu's padding: where a submenu hangs from, so its first row is level with this one
     /// and it starts at the popup's edge.
@@ -102,6 +101,10 @@ pub struct MenuItemOutput {
 }
 
 impl MenuItemOutput {
+    pub(super) fn sibling_submenu_open(&self) -> bool {
+        self.level.sibling_submenu_open(self.id)
+    }
+
     /// A submenu row's menu was shown at `rect` (`open`), or closed itself (`!open`).
     pub(crate) fn note_submenu(&self, open: bool, rect: Rect) {
         self.level.note_submenu(self.id, open, rect);
@@ -241,6 +244,7 @@ pub struct MenuItem<'a> {
     opens: bool,
     open: bool,
     active: bool,
+    submenu_engaged: bool,
 }
 
 impl<'a> MenuItem<'a> {
@@ -266,6 +270,7 @@ impl<'a> MenuItem<'a> {
             opens: false,
             open: false,
             active: false,
+            submenu_engaged: false,
         }
         .label(label)
     }
@@ -560,13 +565,21 @@ impl Component for MenuItem<'_> {
         let asked = enabled && (typed || cx.activation().is_some());
         if self.submenu {
             self.opens = asked || (enabled && forward) || (enabled && takes_over);
-            if self.opens && level.open_submenu(cx.id) {
-                frame::request_repaint(&ctx);
+            if self.opens {
+                let replaces_sibling = level.sibling_submenu_open(cx.id);
+                if level.open_submenu(cx.id) {
+                    // An earlier row may already have drawn the old submenu in this pass.
+                    if replaces_sibling && frame::discardable(&ctx) {
+                        frame::discard_pass(&ctx, "menu: a sibling replaced the open submenu");
+                    }
+                    frame::request_repaint(&ctx);
+                }
             }
             self.open = level.submenu_open(cx.id);
-            // The active row is in the open submenu: this row keeps only the open-submenu tint.
             if self.open && level.descended(cx.id, focused) {
+                // The active row is in the submenu. Keep the accent on its parent so the active path stays visible.
                 self.active = false;
+                self.submenu_engaged = enabled;
             }
             return;
         }
@@ -600,9 +613,10 @@ impl Component for MenuItem<'_> {
     fn flags(&self) -> Flags {
         let mut flags = Flags::empty();
         flags.set(Flags::CHECKED, self.check == Some(true) || self.radio_mark == Some(true) || self.entry == Some(true));
-        flags.set(Flags::LEAD, self.active);
-        // The row whose submenu is open keeps the hover tint while another row is active.
-        flags.set(Flags::EMPHASIZED, self.open && !self.active);
+        let highlighted = self.active || self.submenu_engaged;
+        flags.set(Flags::LEAD, highlighted);
+        // If aim holds an open submenu while a sibling takes the highlight, keep the parent's quieter tint.
+        flags.set(Flags::EMPHASIZED, self.open && !highlighted);
         flags
     }
 

@@ -219,7 +219,7 @@ impl<'a> StatusReadout<'a> {
             };
             let field = Field::new(words.readout_zoom.clone())
                 .side(SideLabel::new().kind(LabelKind::Hidden))
-                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).show(ui));
+                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).status_bar().show(ui));
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;
                 events = zoom.view;
