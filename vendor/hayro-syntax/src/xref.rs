@@ -787,11 +787,26 @@ impl XRef {
 
         let mut r = Reader::new(repr.data.get().as_ref());
 
-        let entry = *locked.xref_map.get(&id).or({
-            // An indirect reference to an undefined object shall not be considered an error by a PDF processor; it
-            // shall be treated as a reference to the null object.
-            None
-        })?;
+        // PdfCraft patch: (hayro-syntax (52)) a member of an object stream has generation 0
+        // (ISO 32000-2 7.5.7), so a reference to it by another generation can't name some other,
+        // deleted version of it that is still compressed. PDFium, MuPDF, Poppler and qpdf follow
+        // `n 1 R` to it, and so does the document model, which lists each one it follows: the
+        // object is read as `n 0`. A generation the table holds for the number is still read as
+        // that object. The table keeps no free entries, so a member that a newer revision frees
+        // stays readable here, through `n 0 R` as before and now through other generations too.
+        let (id, entry) = match locked.xref_map.get(&id) {
+            Some(entry) => (id, *entry),
+            None => {
+                let own = ObjectIdentifier::new(id.obj_number, 0);
+                match locked.xref_map.get(&own) {
+                    Some(entry @ EntryType::ObjStream(..)) if id.gen_number != 0 => (own, *entry),
+                    // An indirect reference to an undefined object shall not be considered an
+                    // error by a PDF processor; it shall be treated as a reference to the null
+                    // object.
+                    _ => return None,
+                }
+            }
+        };
         let repaired = locked.repaired;
         drop(locked);
 
@@ -1741,6 +1756,27 @@ mod tests {
             (2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec()),
             (3, b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>".to_vec()),
         ]
+    }
+
+    /// PdfCraft patch (52, storytold/pdfcraft#7405): a member of an object stream has generation 0
+    /// (ISO 32000-2 §7.5.7), so a reference to it by another generation reaches it: the page tree
+    /// lists page 4 as `4 1 R`. An object stored on its own is still not reached by a generation
+    /// it doesn't have (page 6 as `6 1 R`), and `4 0 R` still reaches the member.
+    #[test]
+    fn a_member_of_an_object_stream_is_reached_by_another_generation() {
+        let page = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>";
+        for (kids, expected) in [("3 0 R 4 1 R 6 1 R", &[3, 4][..]), ("4 7 R", &[4][..]), ("4 0 R", &[4][..]), ("6 1 R 3 0 R", &[3][..])] {
+            let stored = vec![
+                (1, b"<< /Type /Catalog /Pages 2 0 R >>".to_vec()),
+                (2, alloc::format!("<< /Type /Pages /Kids [{kids}] /Count 3 >>").into_bytes()),
+                (3, page.to_vec()),
+                (5, object_stream_of(&[(4, page)], "")),
+                (6, page.to_vec()),
+            ];
+            let pdf = Pdf::new(with_xref_stream(&stored, &[(4, 5, 0)])).unwrap();
+            let ids: Vec<_> = pdf.pages().iter().map(|page| page.raw().obj_id().unwrap().obj_number).collect();
+            assert_eq!(ids, expected, "{kids}");
+        }
     }
 
     /// An object stream is a stream stored as that object, however many references lead to one.
