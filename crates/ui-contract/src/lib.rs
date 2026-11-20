@@ -29,3 +29,19 @@ pub mod __private {
     pub use egui;
     pub use inventory;
 }
+
+/// Emits generated suite-only items when this dependency enables the suite.
+#[doc(hidden)]
+#[macro_export]
+#[cfg(feature = "suite")]
+macro_rules! __suite_items {
+    ($($item:item)*) => { $($item)* };
+}
+
+/// Discards generated suite-only items in fixture-only consumers.
+#[doc(hidden)]
+#[macro_export]
+#[cfg(not(feature = "suite"))]
+macro_rules! __suite_items {
+    ($($item:item)*) => {};
+}

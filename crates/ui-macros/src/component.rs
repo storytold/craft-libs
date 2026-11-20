@@ -236,8 +236,10 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
     let helper = registry_helper(types)?;
     Ok(quote! {
         #gate
-        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
-            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        #k::__suite_items! {
+            pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+                #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+            }
         }
 
         // Outside the gate: the sample exists in every build, so it is never dead code where the registration is absent.
@@ -261,8 +263,10 @@ pub(crate) fn pattern_registrations(k: &TokenStream, types: &[Type], purpose: &s
     };
     quote! {
         #gate
-        pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
-            #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+        #k::__suite_items! {
+            pub(crate) fn #helper(registry: &mut #k::testing::Registry) {
+                #(registry.add_registration(<#types as #k::testing::Registered>::registration());)*
+            }
         }
         #gate
         const _: () = {

@@ -23,7 +23,7 @@ pub use craft_ui_canvas::{canvas, canvas_controls, dialog};
 #[cfg(feature = "testing")]
 pub use craft_ui_contract::registry;
 #[doc(hidden)]
-pub use craft_ui_contract::{__private, __register_command_set, __register_contract, __register_pattern};
+pub use craft_ui_contract::{__private, __register_command_set, __register_contract, __register_pattern, __suite_items};
 pub use craft_ui_contract::{InstallError, InstallSpec, contract, fonts, install, layout, primitives, runtime, style, words};
 pub use craft_ui_panels::{docking, rails, sections};
 pub use craft_ui_shell::shell;
